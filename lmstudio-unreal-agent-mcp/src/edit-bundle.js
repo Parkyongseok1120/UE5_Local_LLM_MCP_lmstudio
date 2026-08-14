@@ -13,6 +13,8 @@ const {
   completedEntries,
   archiveJournal,
   saveJournal,
+  pathIdentity,
+  requiresBuildValidation,
 } = require("./transaction-journal");
 const { ensureStateRootLayout, resolveAgentStateRoot } = require("./state-root");
 
@@ -268,23 +270,35 @@ async function rollbackJournal(journal) {
         currentHash = sha256Text(await fsp.readFile(abs, "utf8"));
       }
       if (entry.existedBefore) {
-        if (!existsNow) {
+        if (entry.deletedAfter && !existsNow) {
+          const backup = entry.preContentBackupPath;
+          if (backup && fs.existsSync(backup)) {
+            atomicWriteText(abs, fs.readFileSync(backup, "utf8"));
+          } else {
+            throw new Error(`missing backup for ${rel}`);
+          }
+        } else if (!existsNow) {
           externalChangeDetected.push(rel);
           unrestored.push(rel);
           upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
           continue;
-        }
-        if (entry.postHash && currentHash !== entry.postHash) {
+        } else if (entry.deletedAfter) {
           externalChangeDetected.push(rel);
           unrestored.push(rel);
           upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
           continue;
-        }
-        const backup = entry.preContentBackupPath;
-        if (backup && fs.existsSync(backup)) {
-          atomicWriteText(abs, fs.readFileSync(backup, "utf8"));
+        } else if (entry.postHash && currentHash !== entry.postHash) {
+          externalChangeDetected.push(rel);
+          unrestored.push(rel);
+          upsertEntry(journal, { relativePath: rel, rollbackSkippedReason: "external_change_detected" });
+          continue;
         } else {
-          throw new Error(`missing backup for ${rel}`);
+          const backup = entry.preContentBackupPath;
+          if (backup && fs.existsSync(backup)) {
+            atomicWriteText(abs, fs.readFileSync(backup, "utf8"));
+          } else {
+            throw new Error(`missing backup for ${rel}`);
+          }
         }
       } else if (!existsNow) {
         restored.push(rel);
@@ -377,9 +391,20 @@ async function applyBundleTransaction(bundle, resolvePathFn, options = {}) {
       };
     }
 
-    journal.status = "completed";
-    saveJournal(journal);
-    await archiveJournal(journal.transactionId, stateRoot);
+    const buildValidationRequired = (journal.entries || []).some(
+      (entry) => requiresBuildValidation(entry.relativePath)
+    );
+    if (options.deferFinalization === true && buildValidationRequired) {
+      journal.status = "awaiting_build";
+      journal.projectRoot = pathIdentity(options.projectRoot || process.cwd());
+      journal.taskSessionId = String(options.taskSessionId || "").trim();
+      journal.mutationGeneration = Number(options.mutationGeneration || 0);
+      saveJournal(journal);
+    } else {
+      journal.status = "completed";
+      saveJournal(journal);
+      await archiveJournal(journal.transactionId, stateRoot);
+    }
 
     return {
       ok: true,

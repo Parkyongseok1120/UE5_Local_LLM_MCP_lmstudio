@@ -126,6 +126,7 @@ def test_feature_intent_schema_is_compact_for_local_tool_calling(monkeypatch, tm
         "slices",
         "activeSliceId",
         "targetFiles",
+        "frontierClaims",
         "taskAuthorization",
     }
     assert properties["slices"]["maxItems"] == 24
@@ -1214,7 +1215,7 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
 
     started = task_start(
         tmp_path,
-        request="Inspect the implementation and select the earliest incomplete feature",
+        request="Inspect the existing RuleEngine implementation and bind one bounded local fix",
         mode="agent_edit",
         project_file=str(project),
         plan_payload={
@@ -1298,7 +1299,7 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
     )
 
     probe = mod.resolve_feature_intent(
-        "Inspect the implementation and select the earliest incomplete feature",
+        "Inspect the existing RuleEngine implementation and bind one bounded local fix",
         write_intent=True,
     )
     selected = probe["candidates"][0]["intentId"]
@@ -1309,7 +1310,7 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
     feature_args = {
         "taskAuthorization": before_auth,
         "selectedIntentId": selected,
-        "selectionRationale": "Bind the earliest incomplete bounded implementation slice.",
+        "selectionRationale": "Bind the bounded local RuleEngine implementation slice.",
         "blockingQuestionAnswers": answers,
         "slices": [
             {
@@ -1347,6 +1348,11 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
             encoding="utf-8"
         )
     )
+    assert evidence_blocked["control"]["version"] == 2
+    assert evidence_blocked["control"]["epoch"] == persisted["controlEpoch"]
+    assert evidence_blocked["control"]["disposition"] == "require_tool"
+    assert evidence_blocked["control"]["requiredTool"]["name"] == "read_file"
+    assert evidence_blocked["control"]["allowedTools"] == ["read_file"]
     relative = "Source/Demo/RuleEngine.cpp"
     persisted["directSourceEvidence"]["files"][relative.casefold()] = {
         "path": relative,

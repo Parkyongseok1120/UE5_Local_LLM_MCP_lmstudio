@@ -527,6 +527,185 @@ test("provider-qualified required feature gate is forced with server-owned auth"
   }
 });
 
+test("shared system-rule upsert replaces dynamic server requirements without adding a system message", () => {
+  const { injectServerRequiredToolRule } = require("../dist/generator.js");
+  const history = Chat.empty();
+  history.append("system", "base rules");
+  history.append("user", "implement the bounded feature");
+
+  assert.equal(injectServerRequiredToolRule(history, "read_file", { path: "Source/A.cpp" }), true);
+  assert.equal(injectServerRequiredToolRule(history, "build_unreal_project", { target: "DemoEditor" }), true);
+
+  const systemMessages = history.getMessagesArray().filter((message) => message.getRole() === "system");
+  const systemText = systemMessages.map((message) => message.getText()).join("\n");
+  assert.equal(systemMessages.length, 1);
+  assert.equal((systemText.match(/\[UNREAL_SERVER_REQUIRED_TOOL\]/g) || []).length, 1);
+  assert.doesNotMatch(systemText, /Source\/A\.cpp/);
+  assert.match(systemText, /build_unreal_project/);
+  assert.match(systemText, /DemoEditor/);
+});
+
+test("control v2 disables local handoffs and projects only server allowed schemas", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-control-v2-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const model = {
+      identifier: "control-v2-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        assert.deepEqual(
+          (opts.rawTools?.tools || []).map((tool) => tool.function.name),
+          ["read_file"],
+        );
+        assert.equal(opts.rawTools?.force, undefined);
+        opts.onPredictionFragment({ content: "continue with bounded discovery", reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const payload = {
+      ok: true,
+      taskAuthorization: {
+        taskSessionId: "task-control-v2",
+        ownerCapability: "owner-control-v2",
+      },
+      control: {
+        version: 2,
+        epoch: 12,
+        taskSessionId: "task-control-v2",
+        routeHash: "route-control-v2",
+        phase: "planner",
+        disposition: "continue",
+        allowedTools: ["read_file"],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
+      nestedLegacy: {
+        requiredNextTool: "unreal_evidence_first_contract",
+        nextAction: "unreal_feature_intent_resolve",
+        nextActionIsTool: true,
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "implement the missing feature completely" }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "route-v2",
+        name: "unreal_agent_plan",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+    const tools = [
+      "read_file",
+      "search_files",
+      "unreal_evidence_first_contract",
+      "unreal_feature_intent_resolve",
+      "unreal_agent_plan",
+    ].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.equal(emitted.some((event) => event.kind === "failure"), false);
+    assert.match(emitted.find((event) => event.kind === "fragment").content, /bounded discovery/);
+    const persisted = activeCheckpoint(stateRoot);
+    assert.equal(persisted.serverControl.epoch, 12);
+    assert.equal(persisted.requiredNextTool, null);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("control v2 required tool is forced as one exact schema with server arguments", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-control-v2-required-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const model = {
+      identifier: "control-v2-required-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name), ["replace_in_file"]);
+        opts.onToolCallRequestStart(1, { toolCallId: "write-v2" });
+        opts.onToolCallRequestNameReceived(1, "replace_in_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "write-v2",
+            type: "function",
+            name: "replace_in_file",
+            arguments: { oldText: "old", newText: "new" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const ownership = { taskSessionId: "task-control-v2", ownerCapability: "owner-control-v2" };
+    const payload = {
+      ok: true,
+      taskAuthorization: ownership,
+      control: {
+        version: 2,
+        epoch: 13,
+        taskSessionId: "task-control-v2",
+        routeHash: "route-control-v2",
+        phase: "implementation",
+        disposition: "require_tool",
+        requiredTool: { name: "replace_in_file", args: { path: "Source/Demo/Rule.cpp" } },
+        allowedTools: ["replace_in_file"],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "apply the bounded fix" }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "route-v2-required",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+    const tools = [{
+      type: "function",
+      function: {
+        name: "replace_in_file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            oldText: { type: "string" },
+            newText: { type: "string" },
+            taskAuthorization: { type: "object" },
+          },
+          required: ["path", "oldText", "newText", "taskAuthorization"],
+        },
+      },
+    }, {
+      type: "function",
+      function: { name: "read_file", parameters: { type: "object", properties: {} } },
+    }];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    const end = emitted.find((event) => event.kind === "end");
+    assert.equal(end.request.arguments.path, "Source/Demo/Rule.cpp");
+    assert.deepEqual(end.request.arguments.taskAuthorization, ownership);
+    assert.equal(emitted.some((event) => event.kind === "failure"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("required feature intent is suspended until completion-audit evidence is grounded", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-refill-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;

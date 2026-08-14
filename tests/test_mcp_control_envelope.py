@@ -70,6 +70,120 @@ def test_existing_server_control_survives_a_second_envelope_pass() -> None:
     }
 
 
+def test_task_control_v2_projects_one_exact_required_tool() -> None:
+    payload = attach_control_envelope(
+        {
+            "ok": True,
+            "taskSessionId": "task-v2",
+            "controlEpoch": 7,
+            "toolRoute": {
+                "phase": "implementation",
+                "routeHash": "route-7",
+                "activeTools": ["read_file", "replace_in_file"],
+            },
+            "requiredNextTool": {
+                "name": "replace_in_file",
+                "args": {"path": "Source/Demo.cpp"},
+            },
+        },
+        tool_name="task_api",
+    )
+
+    assert payload["control"] == {
+        "version": 2,
+        "epoch": 7,
+        "taskSessionId": "task-v2",
+        "routeHash": "route-7",
+        "phase": "implementation",
+        "disposition": "require_tool",
+        "requiredTool": {
+            "name": "replace_in_file",
+            "args": {"path": "Source/Demo.cpp"},
+        },
+        "allowedTools": ["replace_in_file"],
+        "retryPolicy": {"sameSemanticInput": "allowed"},
+    }
+
+
+def test_task_control_v2_survives_a_second_transport_pass() -> None:
+    first = attach_control_envelope(
+        {
+            "ok": True,
+            "taskSessionId": "task-v2",
+            "controlEpoch": 8,
+            "toolRoute": {
+                "phase": "validation",
+                "routeHash": "route-8",
+                "activeTools": ["build_project", "run_tests"],
+            },
+            "requiredNextTool": "build_project",
+        },
+        tool_name="task_api",
+    )
+    second = attach_control_envelope(first, tool_name="bridge")
+
+    assert second["control"] == first["control"]
+    assert second["control"]["requiredTool"]["name"] == "build_project"
+    assert second["control"]["allowedTools"] == ["build_project"]
+
+
+def test_rc2_replay_a_repeated_gate_blocker_forces_rediscovery_without_stale_action() -> None:
+    payload = attach_control_envelope(
+        {
+            "ok": False,
+            "taskSessionId": "task-v2",
+            "controlEpoch": 9,
+            "errorCode": "REPEATED_GATE_BLOCKER",
+            "retryable": False,
+            "requiredNextTool": "replace_in_file",
+            "toolRoute": {
+                "phase": "implementation",
+                "routeHash": "route-9",
+                "activeTools": [
+                    "search_files",
+                    "read_file_range",
+                    "replace_in_file",
+                ],
+            },
+        },
+        tool_name="task_api",
+    )
+
+    assert payload["control"]["disposition"] == "rediscover"
+    assert "requiredTool" not in payload["control"]
+    assert payload["control"]["allowedTools"] == [
+        "search_files",
+        "read_file_range",
+    ]
+    assert payload["control"]["retryPolicy"] == {
+        "sameSemanticInput": "forbidden"
+    }
+    assert payload["control"]["blocker"]["code"] == "REPEATED_GATE_BLOCKER"
+
+
+def test_terminal_task_control_exposes_no_tools() -> None:
+    payload = attach_control_envelope(
+        {
+            "ok": True,
+            "taskSessionId": "task-v2",
+            "controlEpoch": 10,
+            "status": "completed",
+            "taskRouteTerminal": True,
+            "toolRoute": {
+                "phase": "complete",
+                "routeHash": "route-10",
+                "activeTools": ["read_file"],
+            },
+        },
+        tool_name="task_api",
+    )
+
+    assert payload["control"]["disposition"] == "complete"
+    assert payload["control"]["allowedTools"] == []
+    assert "requiredTool" not in payload["control"]
+    assert "blocker" not in payload["control"]
+
+
 def test_tool_shaped_next_action_requires_an_explicit_executable_contract() -> None:
     payload = attach_control_envelope(
         {

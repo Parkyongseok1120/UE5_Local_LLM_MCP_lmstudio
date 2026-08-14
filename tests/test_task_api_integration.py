@@ -115,6 +115,32 @@ def test_task_status_hides_future_expiry_route_from_public_state(tmp_path: Path)
     assert "expiryTransition" not in status["state"]["toolRoute"]
 
 
+def test_task_status_exposes_evidence_once_at_the_top_level(tmp_path: Path) -> None:
+    started = task_start(tmp_path, request="Inspect Demo.cpp", start_background_job=False)
+    task_id = started["taskSessionId"]
+    state_path = task_root(tmp_path, task_id) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["sourceEvidence"]["files"]["source/demo.cpp"] = {
+        "evidenceId": "evidence-one",
+        "path": "Source/Demo.cpp",
+        "contentHash": "a" * 64,
+        "coveredRanges": [[1, 10]],
+    }
+    state["absentEvidence"]["files"]["source/missing.cpp"] = {
+        "evidenceId": "absence-one",
+        "path": "Source/Missing.cpp",
+        "searchComplete": True,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    status = task_status(tmp_path, task_id)
+
+    assert status["sourceEvidence"]["files"]["source/demo.cpp"]["evidenceId"] == "evidence-one"
+    assert status["absentEvidence"]["files"]["source/missing.cpp"]["searchComplete"] is True
+    assert "sourceEvidence" not in status["state"]
+    assert "absentEvidence" not in status["state"]
+
+
 def test_legacy_feature_task_drops_spurious_runtime_debug_gate(tmp_path: Path) -> None:
     started = task_start(
         tmp_path,

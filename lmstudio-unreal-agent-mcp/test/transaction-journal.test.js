@@ -10,7 +10,12 @@ const {
   upsertEntry,
   saveJournal,
   recoverIncompleteJournals,
+  beginMutationJournal,
+  commitMutationJournal,
+  pendingBuildJournals,
+  finalizePendingBuildJournals,
 } = require("../src/transaction-journal");
+const { rollbackJournal } = require("../src/edit-bundle");
 
 function tempStateRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tx-journal-"));
@@ -64,6 +69,7 @@ test("recoverIncompleteJournals flags recoveryRequired for external change", asy
     path.join(stateRoot, "transactions", `${journal.transactionId}.json`),
     JSON.stringify(journal, null, 2)
   );
+  atomicWriteText(path.join(stateRoot, "missing.cpp"), "external-change");
   const report = await recoverIncompleteJournals(stateRoot);
   assert.ok(report.recoveryRequired.length > 0);
   delete process.env.AGENT_STATE_ROOT;
@@ -105,5 +111,206 @@ test("recoverIncompleteJournals isolates corrupt json", async () => {
   saveJournal(journal, stateRoot);
   const report = await recoverIncompleteJournals(stateRoot);
   assert.strictEqual(report.skippedCorrupt.length, 1);
+  delete process.env.AGENT_STATE_ROOT;
+});
+
+test("crash after filesystem write but before journal commit restores the pre-image", async () => {
+  const stateRoot = tempStateRoot();
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const target = path.join(stateRoot, "Demo.cpp");
+  fs.writeFileSync(target, "before", "utf8");
+  beginMutationJournal({
+    operation: "replace_in_file",
+    projectRoot: stateRoot,
+    relativePath: "Demo.cpp",
+    canonicalAbsolutePath: target,
+    existedBefore: true,
+    preContent: "before",
+    intendedPostContent: "after",
+  });
+  fs.writeFileSync(target, "after", "utf8");
+
+  const report = await recoverIncompleteJournals(stateRoot);
+  assert.ok(report.recovered.includes("Demo.cpp"));
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "before");
+  delete process.env.AGENT_STATE_ROOT;
+});
+
+test("prepared journal with an untouched pre-image is archived without false recovery conflict", async () => {
+  const stateRoot = tempStateRoot();
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const target = path.join(stateRoot, "Untouched.cpp");
+  fs.writeFileSync(target, "before", "utf8");
+  beginMutationJournal({
+    operation: "replace_in_file",
+    projectRoot: stateRoot,
+    relativePath: "Untouched.cpp",
+    canonicalAbsolutePath: target,
+    existedBefore: true,
+    preContent: "before",
+    intendedPostContent: "after",
+  });
+
+  const report = await recoverIncompleteJournals(stateRoot);
+  assert.deepStrictEqual(report.recoveryRequired, []);
+  assert.ok(report.recovered.includes("Untouched.cpp"));
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "before");
+  delete process.env.AGENT_STATE_ROOT;
+});
+
+test("RC2 replay H: terminal build recovery rolls a matching mutation post-image back", async () => {
+  const stateRoot = tempStateRoot();
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const target = path.join(stateRoot, "Source", "Demo.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "before", "utf8");
+  const journal = beginMutationJournal({
+    operation: "replace_in_file",
+    projectRoot: stateRoot,
+    taskSessionId: "task_demo",
+    relativePath: "Source/Demo.cpp",
+    canonicalAbsolutePath: target,
+    existedBefore: true,
+    preContent: "before",
+    intendedPostContent: "after",
+  });
+  fs.writeFileSync(target, "after", "utf8");
+  commitMutationJournal(journal, "after", { mutationGeneration: 7 });
+
+  assert.strictEqual(pendingBuildJournals({ projectRoot: stateRoot }).length, 1);
+  const rollback = await rollbackJournal(journal);
+  assert.strictEqual(rollback.rolledBack, true);
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "before");
+  delete process.env.AGENT_STATE_ROOT;
+});
+
+test("pending rollback never overwrites an external post-write change", async () => {
+  const stateRoot = tempStateRoot();
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const target = path.join(stateRoot, "Source", "Demo.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "before", "utf8");
+  const journal = beginMutationJournal({
+    operation: "replace_in_file",
+    projectRoot: stateRoot,
+    relativePath: "Source/Demo.cpp",
+    canonicalAbsolutePath: target,
+    existedBefore: true,
+    preContent: "before",
+    intendedPostContent: "after",
+  });
+  fs.writeFileSync(target, "after", "utf8");
+  commitMutationJournal(journal, "after", { mutationGeneration: 8 });
+  fs.writeFileSync(target, "external", "utf8");
+
+  const rollback = await rollbackJournal(journal);
+  assert.strictEqual(rollback.rollbackIncomplete, true);
+  assert.deepStrictEqual(rollback.externalChangeDetected, ["Source/Demo.cpp"]);
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "external");
+  delete process.env.AGENT_STATE_ROOT;
+});
+
+test("multiple failed generations roll back newest-first to the original pre-image", async () => {
+  const stateRoot = tempStateRoot();
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const target = path.join(stateRoot, "Source", "Chain.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "A", "utf8");
+  const first = beginMutationJournal({
+    operation: "replace_in_file",
+    projectRoot: stateRoot,
+    relativePath: "Source/Chain.cpp",
+    canonicalAbsolutePath: target,
+    existedBefore: true,
+    preContent: "A",
+    intendedPostContent: "B",
+  });
+  fs.writeFileSync(target, "B", "utf8");
+  commitMutationJournal(first, "B", { mutationGeneration: 1 });
+  first.status = "build_failed";
+  saveJournal(first);
+
+  const second = beginMutationJournal({
+    operation: "replace_in_file",
+    projectRoot: stateRoot,
+    relativePath: "Source/Chain.cpp",
+    canonicalAbsolutePath: target,
+    existedBefore: true,
+    preContent: "B",
+    intendedPostContent: "C",
+  });
+  fs.writeFileSync(target, "C", "utf8");
+  commitMutationJournal(second, "C", { mutationGeneration: 2 });
+  second.status = "build_failed";
+  saveJournal(second);
+
+  const failed = pendingBuildJournals({
+    projectRoot: stateRoot,
+    mutationGeneration: 2,
+    statuses: ["build_failed"],
+  }).reverse();
+  assert.deepStrictEqual(failed.map((item) => item.transactionId), [
+    second.transactionId,
+    first.transactionId,
+  ]);
+  for (const journal of failed) {
+    assert.strictEqual((await rollbackJournal(journal)).rolledBack, true);
+  }
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "A");
+  delete process.env.AGENT_STATE_ROOT;
+});
+
+test("deleted source is restored when its pending build is rolled back", async () => {
+  const stateRoot = tempStateRoot();
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const target = path.join(stateRoot, "Source", "Deleted.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "before", "utf8");
+  const journal = beginMutationJournal({
+    operation: "delete_file",
+    projectRoot: stateRoot,
+    relativePath: "Source/Deleted.cpp",
+    canonicalAbsolutePath: target,
+    existedBefore: true,
+    preContent: "before",
+    deleteTarget: true,
+  });
+  fs.unlinkSync(target);
+  commitMutationJournal(journal, null, { mutationGeneration: 9, deletedAfter: true });
+
+  const rollback = await rollbackJournal(journal);
+  assert.strictEqual(rollback.rolledBack, true);
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "before");
+  delete process.env.AGENT_STATE_ROOT;
+});
+
+test("successful build finalization archives only matching pending journals", async () => {
+  const stateRoot = tempStateRoot();
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const target = path.join(stateRoot, "Source", "Final.cpp");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const journal = beginMutationJournal({
+    operation: "write_file",
+    projectRoot: stateRoot,
+    taskSessionId: "task_final",
+    relativePath: "Source/Final.cpp",
+    canonicalAbsolutePath: target,
+    existedBefore: false,
+    intendedPostContent: "final",
+  });
+  fs.writeFileSync(target, "final", "utf8");
+  commitMutationJournal(journal, "final", {
+    mutationGeneration: 10,
+    taskSessionId: "task_final",
+  });
+
+  const finalized = await finalizePendingBuildJournals({
+    projectRoot: stateRoot,
+    taskSessionId: "task_final",
+    mutationGeneration: 10,
+  });
+  assert.deepStrictEqual(finalized, [journal.transactionId]);
+  assert.strictEqual(pendingBuildJournals({ projectRoot: stateRoot }).length, 0);
+  assert.ok(fs.existsSync(path.join(stateRoot, "transactions", "archive", `${journal.transactionId}.json`)));
   delete process.env.AGENT_STATE_ROOT;
 });

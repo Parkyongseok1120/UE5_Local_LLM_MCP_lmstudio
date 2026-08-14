@@ -95,6 +95,49 @@ test("existing server control survives a second envelope pass", () => {
   });
 });
 
+test("task recovery responses use control v2 with the current epoch and one allowed tool", () => {
+  const payload = attachControlEnvelope({
+    ok: false,
+    taskSessionId: "task-v2",
+    controlEpoch: 7,
+    errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+    nextAction: "unreal_task_checkpoint",
+    nextActionIsTool: true,
+    nextActionArgs: { action: "record" },
+    toolRoute: {
+      routeHash: "route-v2",
+      phase: "planner",
+      activeTools: ["read_file", "unreal_feature_intent_resolve"],
+    },
+  }, "read_file");
+
+  assert.deepStrictEqual({
+    ...payload.control,
+    blocker: {
+      ...payload.control.blocker,
+      fingerprint: "<fingerprint>",
+    },
+  }, {
+    version: 2,
+    epoch: 7,
+    taskSessionId: "task-v2",
+    routeHash: "route-v2",
+    phase: "planner",
+    disposition: "checkpoint",
+    requiredTool: {
+      name: "unreal_task_checkpoint",
+      args: { action: "record" },
+    },
+    allowedTools: ["unreal_task_checkpoint"],
+    retryPolicy: { sameSemanticInput: "allowed" },
+    blocker: {
+      code: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+      fingerprint: "<fingerprint>",
+    },
+  });
+  assert.match(payload.control.blocker.fingerprint, /^[a-f0-9]{24}$/);
+});
+
 test("concise text points to structured content instead of duplicating payload", () => {
   const payload = attachControlEnvelope({
     ok: false,

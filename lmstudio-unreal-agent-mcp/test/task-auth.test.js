@@ -21,9 +21,25 @@ const {
   reserveRouteCall,
   commitRouteReservation,
   rollbackRouteReservation,
+  scopedAbsentEvidencePath,
   selectionBindingForState,
   validateMutationAuth,
 } = require("../src/task-auth");
+
+test("complete absent filename evidence is scoped to its project-relative search root", () => {
+  assert.strictEqual(
+    scopedAbsentEvidencePath("Source/Portable", "MissingRule.cpp"),
+    "Source/Portable/MissingRule.cpp"
+  );
+  assert.strictEqual(
+    scopedAbsentEvidencePath("Source/Portable", "Generated/MissingRule.cpp"),
+    "Generated/MissingRule.cpp"
+  );
+  assert.strictEqual(
+    scopedAbsentEvidencePath("Source/Portable", "../MissingRule.cpp"),
+    ""
+  );
+});
 
 test("mutation auth normalizes workspace-prefixed active-project paths", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-path-normalize-"));
@@ -1241,7 +1257,7 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
       true
     );
 
-    writeRouteState(stateRoot, routeState(projectFile));
+    writeRouteState(stateRoot, routeState(projectFile, { controlEpoch: 7 }));
     assert.strictEqual(
       discoverActiveTaskContext(workspace, projectFile).status,
       "active"
@@ -1265,6 +1281,8 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
       exhausted.errorCode,
       "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
     );
+    assert.strictEqual(exhausted.taskSessionId, authorization.taskSessionId);
+    assert.strictEqual(exhausted.controlEpoch, 7);
     assert.strictEqual(exhausted.nextAction, "unreal_task_checkpoint");
     assert.deepStrictEqual(exhausted.nextActions, [
       "unreal_task_checkpoint",
@@ -1437,7 +1455,7 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
       status: "active",
       routeHash: "route-budget",
       phase: "executor",
-      activeTools: ["read_file"],
+      activeTools: ["read_file", "read_file_range"],
       allowedPathScopes: ["Source"],
       maxToolCallsPerPhase: 2,
     },
@@ -2030,9 +2048,9 @@ test("successful direct source reads persist bounded target evidence on commit",
       status: "active",
       routeHash: "route-source-evidence",
       phase: "planner",
-      activeTools: ["read_file"],
+      activeTools: ["read_file", "read_file_range"],
       allowedPathScopes: ["Source"],
-      maxToolCallsPerPhase: 2,
+      maxToolCallsPerPhase: 3,
     },
     toolRouteUsage: {
       routeHash: "route-source-evidence",
@@ -2066,6 +2084,7 @@ test("successful direct source reads persist bounded target evidence on commit",
           projectRelativePath: "Source/Demo/RuleEngine.cpp",
           contentHash,
           lineRange: "1-80",
+          declarations: ["FRuleEngine"],
         },
       }
     );
@@ -2083,6 +2102,245 @@ test("successful direct source reads persist bounded target evidence on commit",
         recordedAt: state.directSourceEvidence.files["source/demo/ruleengine.cpp"].recordedAt,
       }
     );
+    const ranged = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file_range"
+    );
+    assert.strictEqual(ranged.ok, true);
+    const rangedCommit = commitRouteReservation(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file_range",
+      ranged.reservationId,
+      {
+        directSourceEvidence: {
+          projectRelativePath: "Source/Demo/RuleEngine.cpp",
+          contentHash,
+          lineRange: "70-120",
+          implementations: ["FRuleEngine::Evaluate"],
+        },
+      }
+    );
+    assert.strictEqual(rangedCommit.ok, true);
+    const rangedState = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    const source = rangedState.sourceEvidence.files["source/demo/ruleengine.cpp"];
+    assert.strictEqual(rangedState.sourceEvidence.version, 2);
+    assert.match(source.evidenceId, /^[0-9a-f]{24}$/u);
+    assert.deepStrictEqual(source.coveredRanges, [[1, 120]]);
+    assert.deepStrictEqual(source.declarations, ["FRuleEngine"]);
+    assert.deepStrictEqual(source.implementations, ["FRuleEngine::Evaluate"]);
+    assert.deepStrictEqual(source.tools, ["read_file", "read_file_range"]);
+    const changed = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file_range"
+    );
+    assert.strictEqual(changed.ok, true);
+    const changedCommit = commitRouteReservation(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file_range",
+      changed.reservationId,
+      {
+        directSourceEvidence: {
+          projectRelativePath: "Source/Demo/RuleEngine.cpp",
+          contentHash: "b".repeat(64),
+          lineRange: "5-10",
+        },
+      }
+    );
+    assert.strictEqual(changedCommit.ok, true);
+    const changedState = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    const changedSource = changedState.sourceEvidence.files["source/demo/ruleengine.cpp"];
+    assert.deepStrictEqual(changedSource.coveredRanges, [[5, 10]]);
+    assert.deepStrictEqual(changedSource.declarations, []);
+    assert.deepStrictEqual(changedSource.implementations, []);
+    assert.deepStrictEqual(
+      changedState.directSourceEvidence.files["source/demo/ruleengine.cpp"].lineRanges,
+      ["5-10"]
+    );
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("required evidence read advances the control epoch before gate handoff", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-evidence-epoch-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-evidence-epoch-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    ownerCapability: "owner-capability",
+    status: "running",
+    controlEpoch: 4,
+    planRevision: "1",
+    pendingGates: ["unreal_feature_intent_resolve"],
+    failedGateAttempts: {
+      unreal_feature_intent_resolve: {
+        validationErrorCode: "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED",
+        nextAction: "read_file",
+        attemptCount: 1,
+      },
+    },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-evidence-epoch",
+      phase: "verifier",
+      activeTools: ["read_file", "unreal_feature_intent_resolve"],
+      allowedPathScopes: ["Source"],
+      maxToolCallsPerPhase: 3,
+    },
+    toolRouteUsage: {
+      routeHash: "route-evidence-epoch",
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = { routeHash: "route-evidence-epoch", routePhase: "verifier" };
+  try {
+    const reserved = reserveRouteCall(
+      workspace, authorization.taskSessionId, fields, {}, "read_file"
+    );
+    assert.strictEqual(reserved.ok, true);
+    const committed = commitRouteReservation(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file",
+      reserved.reservationId,
+      {
+        directSourceEvidence: {
+          projectRelativePath: "Source/Demo/RuleEngine.cpp",
+          contentHash: "c".repeat(64),
+          lineRange: "1-80",
+        },
+      }
+    );
+    assert.strictEqual(committed.ok, true);
+    assert.strictEqual(committed.state.controlEpoch, 5);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("RC2 replay D: NOT_FOUND then complete zero-result search records final absence without reread", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-absent-evidence-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-absent-evidence-state-"));
+  const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
+  fs.mkdirSync(taskDir, { recursive: true });
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+    ...authorization,
+    ownerCapability: "owner-capability",
+    status: "running",
+    planRevision: "5",
+    writeGate: { writesAllowed: true },
+    toolRoute: {
+      status: "active",
+      routeHash: "route-absent-evidence",
+      phase: "planner",
+      activeTools: ["read_file", "search_files"],
+      allowedPathScopes: ["Source"],
+      maxToolCallsPerPhase: 3,
+    },
+    toolRouteUsage: {
+      routeHash: "route-absent-evidence",
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    },
+  }));
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  const fields = { routeHash: "route-absent-evidence", routePhase: "planner" };
+  try {
+    const reserved = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file"
+    );
+    assert.strictEqual(reserved.ok, true);
+    const rolledBack = rollbackRouteReservation(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "read_file",
+      reserved.reservationId,
+      {
+        absentEvidence: {
+          projectRelativePath: "Source/Demo/MissingRule.cpp",
+          query: "MissingRule.cpp",
+          scopePath: "project://Source/Demo",
+          searchComplete: false,
+        },
+      }
+    );
+    assert.strictEqual(rolledBack.ok, true);
+    const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    const absent = state.absentEvidence.files["source/demo/missingrule.cpp"];
+    assert.strictEqual(state.toolRouteUsage.count, 0);
+    assert.strictEqual(state.toolRouteUsage.reserved, 0);
+    assert.strictEqual(absent.path, "Source/Demo/MissingRule.cpp");
+    assert.strictEqual(absent.searchComplete, false);
+    assert.deepStrictEqual(absent.scopes, ["project://Source/Demo"]);
+    assert.deepStrictEqual(absent.queries, ["MissingRule.cpp"]);
+    assert.deepStrictEqual(absent.tools, ["read_file"]);
+    assert.match(absent.evidenceId, /^[0-9a-f]{24}$/u);
+
+    const searchReserved = reserveRouteCall(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "search_files"
+    );
+    assert.strictEqual(searchReserved.ok, true);
+    const searchCommitted = commitRouteReservation(
+      workspace,
+      authorization.taskSessionId,
+      fields,
+      {},
+      "search_files",
+      searchReserved.reservationId,
+      {
+        absentEvidence: {
+          projectRelativePath: "Source/Demo/MissingRule.cpp",
+          query: "MissingRule.cpp",
+          scopePath: "project://Source/Demo",
+          searchComplete: true,
+        },
+      }
+    );
+    assert.strictEqual(searchCommitted.ok, true);
+    const completedState = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
+    const completedAbsence = completedState.absentEvidence.files["source/demo/missingrule.cpp"];
+    assert.strictEqual(completedState.toolRouteUsage.count, 1);
+    assert.strictEqual(completedAbsence.searchComplete, true);
+    assert.deepStrictEqual(completedAbsence.tools, ["read_file", "search_files"]);
   } finally {
     if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
     else process.env.AGENT_STATE_ROOT = previous;

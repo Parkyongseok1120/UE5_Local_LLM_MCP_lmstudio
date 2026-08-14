@@ -1,0 +1,320 @@
+{
+  "mode": "audit",
+  "baseline": "ae99d3abbaf433e857b6d39ea390dca1094d8420",
+  "branch": "codex/rc2-control-plane-stabilization",
+  "auditRounds": [
+    {
+      "round": 1,
+      "focus": "Control/data-flow persistence",
+      "findingsFixed": [
+        "Read-only route refreshes were advancing a transient control epoch without persisting it.",
+        "One route authorization comparison reused the same mutable object and could miss a persisted transition.",
+        "Public task status duplicated internal evidence ledgers."
+      ]
+    },
+    {
+      "round": 2,
+      "focus": "Rollback failure injection and host/project portability",
+      "findingsFixed": [
+        "Multiple failed mutation generations needed newest-first rollback.",
+        "Build infrastructure and engine-selection failures needed same-generation retry without treating the mutation as bad.",
+        "A build-executor exception could leave bookkeeping stuck.",
+        "An untouched pre-image journal could be misreported as a recovery conflict."
+      ]
+    },
+    {
+      "round": 3,
+      "focus": "Compaction/protocol corruption and evidence freshness",
+      "findingsFixed": [
+        "Malformed declared control v2 could otherwise fall back to nested legacy actions.",
+        "Same-hash source symbol evidence needed accumulation while changed hashes needed a reset.",
+        "Complete absent filename evidence needed the project-relative search scope in its canonical path.",
+        "Completion-audit intent detection was narrowed so generic broad validation requests are not over-gated."
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "ControlEnvelope v2 makes the persisted Python task state authoritative and prevents stale or nested legacy actions from reopening an older route.",
+      "claimType": "state_transition",
+      "verdict": "ByDesign",
+      "severity": "P0",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/mcp_control_envelope.py:189",
+          "observation": "The task control projection owns epoch, disposition, exact required tool, allowed tools, retry policy, and blocker fingerprint."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-core.js:310",
+          "observation": "The compactor projects authoritative server control before considering legacy action fields."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/compaction-core.test.js:45",
+          "observation": "Highest-epoch, terminal, malformed-v2, checkpoint-resume, and hard-compaction route replays passed in the 148-test Compactor suite."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/mcp_control_envelope.py:255",
+          "symbol": "attach_control_envelope"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/mcp_control_envelope.py:152",
+          "symbol": "_task_disposition"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-core.js:310",
+          "symbol": "projectServerControl"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/compaction-core.test.js:117",
+          "observation": "A declared but malformed v2 envelope is explicitly tested to fail closed instead of mining a nested legacy tool action."
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "claim": "Direct-source and absent evidence are server-owned, hash/range bound, and completion-frontier validation is limited to explicit missing-implementation audits.",
+      "claimType": "data_flow",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/task-auth.js:845",
+          "observation": "Successful source reads merge covered ranges and symbols only while the content hash remains current."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/feature_frontier_contract.py:21",
+          "observation": "Completion-audit detection uses narrow explicit missing/incomplete-feature phrases; generic all-patches or all-tests requests do not activate it."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_feature_frontier_contract.py:38",
+          "observation": "Positive and negative English/Korean request boundaries, current hash/range evidence, and complete absence are covered by deterministic tests."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/task-auth.test.js:2034",
+          "observation": "Same-hash range/symbol accumulation, changed-hash reset, scoped absence, and NOT_FOUND-to-complete-search transitions passed."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/task-auth.js:845",
+          "symbol": "recordDirectSourceEvidence"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/feature_frontier_contract.py:109",
+          "symbol": "validate_feature_frontier"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "scripts/unreal_rag_mcp.py:2093",
+          "symbol": "featureFrontier write-gate projection"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "tests/test_feature_intent_mcp.py:105",
+          "observation": "Free text cannot replace typed frontier claims for a true completion audit."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_feature_frontier_contract.py:38",
+          "observation": "Generic broad validation wording remains outside the completion-frontier gate."
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "claim": "A failed mutation is recoverable through a per-generation journal and terminal validation/build failures roll back matching post-images without overwriting external changes.",
+      "claimType": "state_transition",
+      "verdict": "ByDesign",
+      "severity": "P0",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/transaction-journal.js:244",
+          "observation": "Startup recovery inspects incomplete journals and preserves external-change conflicts."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/edit-bundle.js:257",
+          "observation": "Rollback uses pre/post-image checks for create, replace, and delete entries."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/transaction-journal.test.js:117",
+          "observation": "Crash recovery, terminal build rollback, external-change CAS protection, reverse multi-generation rollback, delete restore, and successful finalization passed."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/transaction-journal.js:244",
+          "symbol": "recoverIncompleteJournals"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/server.js:632",
+          "symbol": "terminal validation/build status selection"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/edit-bundle.js:257",
+          "symbol": "rollbackJournal"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/transaction-journal.test.js:194",
+          "observation": "An external post-write change is retained and reported instead of being overwritten by rollback."
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "claim": "Every local Unreal project and every supported Unreal minor is runtime-compatible on this host.",
+      "claimType": "behavior",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "local multi-project runtime/build-plan run on 2026-08-14",
+          "observation": "All seven descriptors were discovered; six UE 5.8 projects resolved exact engine/editor/build capabilities, while the UE 5.4 installation lacked Build.version, UBT, and editor binaries."
+        },
+        {
+          "kind": "build",
+          "location": "local UE 5.8 UBT run on 2026-08-14",
+          "observation": "CiCiWuwaEditor and Project_MJSEditor built successfully. JRPG, O_Mock, PosisonFrog, and TPSPrototype failed in their current project source or TargetRules state."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_runtime_verify.py:57",
+          "observation": "Injected Win64, Linux, and Mac plans bind exactly across UE 5.4 through 5.8."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/unreal-detect-portability.test.js:155",
+          "observation": "Native Mac/Linux Build.sh layouts and host-specific path semantics are covered."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/unreal-detect.js:843",
+          "symbol": "resolveBuildPlan"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/build-executor.js:219",
+          "symbol": "runUnrealBuildFromPlan"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "unknown",
+          "location": "physical Linux/macOS hosts and local UE 5.4 installation",
+          "symbol": "all-project runtime result"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "build",
+          "location": "local UE 5.8 UBT run on 2026-08-14",
+          "observation": "Only two of six buildable UE 5.8 projects passed; the four failures are outside this repository's changed files but prevent an all-project PASS claim."
+        }
+      ],
+      "unknowns": [
+        "No physical Linux or macOS execution was performed in this Windows session.",
+        "The local UE 5.4 directory is incomplete, so its project cannot be built or launched here.",
+        "Four UE 5.8 projects have pre-existing or user-owned build failures."
+      ]
+    },
+    {
+      "claim": "The RC2 completion condition of one native LM Studio O-Mock session reaching Final without a P0 is satisfied.",
+      "claimType": "behavior",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P0",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "lms status/ps on 2026-08-14",
+          "observation": "LM Studio API server was ON at port 1234 and the configured Qwen model was loaded and idle."
+        },
+        {
+          "kind": "runtime",
+          "location": "local O_MockEditor UBT run on 2026-08-14",
+          "observation": "The build stopped in current dirty O-Mock source because GomokuGameState.cpp includes missing DevTest/Test.h."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/compaction-core.test.js:145",
+          "observation": "All P0 A-H deterministic transition replays passed without invoking a model."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "LM Studio native chat",
+          "symbol": "O-Mock implementation request"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "unknown",
+          "location": "LM Studio native GUI session",
+          "symbol": "MCP and Compactor live orchestration"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "expected_missing",
+          "location": "O_MockEditor UBT result",
+          "symbol": "Final completion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/compaction-core.test.js:145",
+          "observation": "Server-response-to-checkpoint replays cover the known precedence failures and all passed."
+        }
+      ],
+      "unknowns": [
+        "The available automation interface cannot drive the native LM Studio chat UI in this task.",
+        "O-Mock cannot currently reach Automation or Final because its user-owned dirty source does not compile."
+      ]
+    }
+  ]
+}

@@ -872,6 +872,49 @@ def _task_authorization_schema() -> dict[str, Any]:
     return _checkpoint_authorization_schema()
 
 
+def _feature_frontier_claims_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "maxItems": 32,
+        "description": (
+            "Completion-audit only. Typed missing-work claims whose evidenceRefs "
+            "must resolve to current server source/absence evidence ids. Free-text "
+            "statement is informational and never opens the write gate."
+        ),
+        "items": {
+            "type": "object",
+            "properties": {
+                "claimType": {
+                    "type": "string",
+                    "enum": [
+                        "missing_definition",
+                        "missing_call_edge",
+                        "missing_branch",
+                        "missing_file",
+                        "missing_required_behavior",
+                    ],
+                },
+                "subjectSymbol": {"type": "string"},
+                "objectSymbol": {"type": "string"},
+                "path": {"type": "string"},
+                "targetPath": {"type": "string"},
+                "evidenceRefs": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "items": {"type": "string"},
+                },
+                "statement": {
+                    "type": "string",
+                    "description": "Human-readable explanation only; not gate authority.",
+                },
+            },
+            "required": ["claimType", "evidenceRefs"],
+            "additionalProperties": False,
+        },
+    }
+
+
 def _architecture_proposal_patch_schema() -> dict[str, Any]:
     schema = _architecture_proposal_schema()
     schema.pop("required", None)
@@ -1278,6 +1321,9 @@ def _reconcile_gate_completion(
         "nextAction",
         "nextActionArgs",
         "nextActionIsTool",
+        "taskSessionId",
+        "controlEpoch",
+        "taskRouteTerminal",
         "taskAuthorization",
         "toolRoute",
         "retryable",
@@ -1506,6 +1552,7 @@ def _feature_intent_target_snapshots(
                 "path": relative,
                 "absolutePath": str(candidate),
                 "exists": exists,
+                "parentExists": candidate.parent.is_dir(),
                 "fileHash": digest,
             }
         )
@@ -1804,9 +1851,30 @@ def _handle_unreal_feature_intent_resolve(
         project_root,
         target_files,
     )
+    evidence_ledger = task_direct_source_evidence(server.workspace, task_session_id)
     direct_source_evidence = _feature_intent_direct_source_evidence(
         target_snapshots,
-        task_direct_source_evidence(server.workspace, task_session_id),
+        evidence_ledger,
+    )
+    from feature_frontier_contract import (
+        is_completion_audit_request,
+        validate_feature_frontier,
+    )
+
+    completion_audit = is_completion_audit_request(request)
+    frontier_validation = (
+        validate_feature_frontier(
+            arguments.get("frontierClaims"),
+            project_root=project_root,
+            evidence_ledger=evidence_ledger,
+        )
+        if completion_audit
+        else {
+            "ok": True,
+            "claims": [],
+            "fingerprint": "",
+            "authority": "not_required",
+        }
     )
     from feature_intent_fast_path import (
         bounded_local_question_answers,
@@ -1821,7 +1889,13 @@ def _handle_unreal_feature_intent_resolve(
     failure_input_context = {
         "_serverDirectSourceEvidenceFingerprint": str(
             direct_source_evidence.get("fingerprint") or ""
-        )
+        ),
+        "_serverFeatureFrontierFingerprint": str(
+            frontier_validation.get("fingerprint") or ""
+        ),
+        "_serverFeatureFrontierErrorCode": str(
+            frontier_validation.get("errorCode") or ""
+        ),
     }
     gate_input = {
         key: value
@@ -1898,10 +1972,15 @@ def _handle_unreal_feature_intent_resolve(
         snapshot_issues=snapshot_issues,
         explicit_semantic_input=explicit_semantic_input,
     )
+    requested_intent_id = str(arguments.get("selectedIntentId") or "").strip()
+    fast_path_semantic_conflict = bool(
+        explicit_semantic_input
+        and (requested_intent_id != "bounded_local" or question_answers)
+    )
     use_fast_path = bool(
         fast_path.get("eligible")
         and not snapshot_issues
-        and not explicit_semantic_input
+        and not fast_path_semantic_conflict
         and not has_architecture_provenance
     )
     effective_selected_intent = str(arguments.get("selectedIntentId") or "")
@@ -2020,6 +2099,27 @@ def _handle_unreal_feature_intent_resolve(
         payload["error"] = "Selected acceptance criteria require explicit observer and oracle."
         payload.setdefault("writeGate", {})["writesAllowed"] = False
 
+    if completion_audit:
+        payload["featureFrontier"] = frontier_validation
+        if payload.get("ok") and not frontier_validation.get("ok"):
+            payload["ok"] = False
+            payload["status"] = "blocked"
+            payload["errorCode"] = str(
+                frontier_validation.get("errorCode")
+                or "FEATURE_FRONTIER_TYPED_CLAIMS_INVALID"
+            )
+            payload["error"] = (
+                "Completion-audit intent cannot open the write gate without valid typed "
+                "frontier claims bound to current server source/absence evidence."
+            )
+            payload.setdefault("writeGate", {})["writesAllowed"] = False
+            payload["retryable"] = True
+            payload["doNotRetryUnchanged"] = True
+            payload["agentInstruction"] = (
+                "Replace free-text incompleteness statements with supported frontierClaims and "
+                "reference current evidenceId values. Do not retry unchanged claims."
+            )
+
     if payload.get("ok") and not snapshot_issues and not direct_source_evidence.get("ok"):
         missing = list(direct_source_evidence.get("missingTargetFiles") or [])
         stale = list(direct_source_evidence.get("staleTargetFiles") or [])
@@ -2069,6 +2169,8 @@ def _handle_unreal_feature_intent_resolve(
         "resolutionAction": str(
             (full_resolution.get("ambiguity") or {}).get("recommendedAction") or ""
         ),
+        "frontierFingerprint": str(frontier_validation.get("fingerprint") or ""),
+        "frontierClaims": list(frontier_validation.get("claims") or []),
     }
     atomic_slice_plan = (
         {
@@ -4007,6 +4109,7 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                     "maxItems": 2,
                     "items": {"type": "string"},
                 },
+                "frontierClaims": _feature_frontier_claims_schema(),
                 "taskAuthorization": _task_authorization_schema(),
             },
             handler=_handle_unreal_feature_intent_resolve,
@@ -5719,6 +5822,7 @@ class McpServer:
                             "items": {"type": "string"},
                             "description": "Single-slice shorthand when a broad plan has exactly one bounded target set.",
                         },
+                        "frontierClaims": _feature_frontier_claims_schema(),
                         "taskAuthorization": _task_authorization_schema(),
                     },
                     ["taskAuthorization"],

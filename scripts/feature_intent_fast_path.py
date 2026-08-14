@@ -77,6 +77,8 @@ def evaluate_bounded_local_fast_path(
     """Return an auditable decision; defaults to ineligible on uncertainty."""
 
     reasons: list[str] = []
+    text = re.sub(r"\s+", " ", str(request or "")).strip().casefold()
+    requests_automation_test = "test" in text or "테스트" in text
     normalized_targets = list(
         dict.fromkeys(str(path or "").strip().replace("\\", "/") for path in target_files)
     )
@@ -87,6 +89,7 @@ def evaluate_bounded_local_fast_path(
         for item in target_snapshots
         if isinstance(item, dict)
     }
+    new_automation_tests: list[str] = []
     for path in normalized_targets:
         lowered = path.casefold()
         snapshot = snapshot_by_path.get(path)
@@ -94,13 +97,25 @@ def evaluate_bounded_local_fast_path(
             reasons.append(f"{path}: only existing C++ source files are eligible")
         if lowered.endswith((".build.cs", ".target.cs")):
             reasons.append(f"{path}: build/module policy files require explicit intent")
-        if not snapshot or snapshot.get("exists") is not True:
+        path_parts = tuple(part.casefold() for part in PurePosixPath(path).parts)
+        is_new_automation_test = bool(
+            snapshot
+            and snapshot.get("exists") is False
+            and snapshot.get("parentExists") is True
+            and lowered.endswith(".cpp")
+            and "tests" in path_parts
+            and requests_automation_test
+        )
+        if is_new_automation_test:
+            new_automation_tests.append(path)
+        elif not snapshot or snapshot.get("exists") is not True:
             reasons.append(f"{path}: fast path cannot create a new target")
+    if len(new_automation_tests) > 1:
+        reasons.append("fast path can add at most one bounded automation test source")
     owners = {_scope_owner(path) for path in normalized_targets}
     if "" in owners or len(owners) != 1:
         reasons.append("targets must stay inside one existing Source module owner")
 
-    text = re.sub(r"\s+", " ", str(request or "")).strip().casefold()
     marker_hits = [marker for marker in _DISALLOWED_MARKERS if marker in text]
     if marker_hits:
         reasons.append(
@@ -115,11 +130,12 @@ def evaluate_bounded_local_fast_path(
     eligible = not reasons
     return {
         "eligible": eligible,
-        "policy": "bounded_local_existing_owner_v1",
+        "policy": "bounded_local_existing_owner_v2",
         "selectedIntentId": "bounded_local" if eligible else "",
         "reasons": reasons,
         "targetFiles": normalized_targets,
         "owner": next(iter(owners), "") if len(owners) == 1 else "",
+        "newAutomationTestFiles": new_automation_tests,
         "serverOwnedPhases": [
             "SelectIntent",
             "ResolveSlice",

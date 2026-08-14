@@ -8,6 +8,7 @@ const {
   recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
+  cancelBuildAttempt,
   recordBuildRecoveryContract,
   recordRecoveryEvidenceCall,
   resetWorkflowLoopGuardForTests,
@@ -59,6 +60,13 @@ test("only one build runs per mutation generation", () => {
   finishBuildAttempt(project, 10, { commandSucceeded: false, error: "UBT failed" });
   assert.equal(beginBuildAttempt(project, 10).ok, false);
   assert.equal(beginBuildAttempt(project, 11).ok, true);
+});
+
+test("environmental build cancellation permits a corrected same-generation retry", () => {
+  const project = "/tmp/Demo";
+  assert.equal(beginBuildAttempt(project, 10).ok, true);
+  cancelBuildAttempt(project, 10);
+  assert.equal(beginBuildAttempt(project, 10).ok, true);
 });
 
 test("failed build caps evidence reads until a mutation changes generation", () => {

@@ -2,6 +2,27 @@
 
 const crypto = require("crypto");
 
+const CONTROL_VERSION = 2;
+const CONTROL_DISPOSITIONS = new Set([
+  "continue",
+  "require_tool",
+  "rediscover",
+  "checkpoint",
+  "await_user",
+  "workflow_stop",
+  "complete",
+]);
+const DISCOVERY_TOOL_NAMES = new Set([
+  "unreal_rag_search",
+  "unreal_symbol_lookup",
+  "list_directory",
+  "search_files",
+  "read_file",
+  "read_file_range",
+  "read_symbol",
+  "read_unreal_logs",
+]);
+
 function actionName(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return String(value.name || value.tool || "");
@@ -28,9 +49,166 @@ function blockerFingerprint(payload) {
     .slice(0, 24);
 }
 
+function cleanToolNames(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 32);
+}
+
+function taskContext(result, existing) {
+  const taskAuthorization = result.taskAuthorization && typeof result.taskAuthorization === "object"
+    ? result.taskAuthorization
+    : {};
+  const state = result.state && typeof result.state === "object" ? result.state : {};
+  const route = result.toolRoute && typeof result.toolRoute === "object"
+    ? result.toolRoute
+    : (state.toolRoute && typeof state.toolRoute === "object" ? state.toolRoute : {});
+  const taskSessionId = String(
+    taskAuthorization.taskSessionId
+      || result.taskSessionId
+      || state.taskSessionId
+      || existing.taskSessionId
+      || ""
+  ).trim();
+  const rawEpoch = Object.prototype.hasOwnProperty.call(result, "controlEpoch")
+    ? result.controlEpoch
+    : Object.prototype.hasOwnProperty.call(state, "controlEpoch")
+      ? state.controlEpoch
+      : existing.epoch;
+  const parsedEpoch = Number(rawEpoch == null ? 0 : rawEpoch);
+  return {
+    taskSessionId,
+    route,
+    state,
+    epoch: Number.isInteger(parsedEpoch) && parsedEpoch >= 0 ? parsedEpoch : 0,
+  };
+}
+
+function requiredTool(result, existing) {
+  const raw = result.requiredNextTool;
+  let name = "";
+  let args = {};
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    name = String(raw.name || raw.tool || "").trim();
+    args = raw.args && typeof raw.args === "object" && !Array.isArray(raw.args)
+      ? raw.args
+      : {};
+  } else {
+    name = String(raw || "").trim();
+    args = result.requiredNextToolArgs
+      && typeof result.requiredNextToolArgs === "object"
+      && !Array.isArray(result.requiredNextToolArgs)
+      ? result.requiredNextToolArgs
+      : {};
+  }
+  if (!name && result.nextActionIsTool === true) {
+    name = String(result.nextAction || "").trim();
+    args = result.nextActionArgs
+      && typeof result.nextActionArgs === "object"
+      && !Array.isArray(result.nextActionArgs)
+      ? result.nextActionArgs
+      : {};
+  }
+  if (!name && existing.requiredTool && typeof existing.requiredTool === "object") {
+    name = String(existing.requiredTool.name || "").trim();
+    args = existing.requiredTool.args
+      && typeof existing.requiredTool.args === "object"
+      && !Array.isArray(existing.requiredTool.args)
+      ? existing.requiredTool.args
+      : {};
+  }
+  if (!name) return null;
+  if (name.includes(":")) {
+    const [toolName, action] = name.split(":", 2);
+    name = toolName;
+    if (action && !Object.prototype.hasOwnProperty.call(args, "action")) {
+      args = { ...args, action };
+    }
+  }
+  return { name: name.slice(0, 160), args };
+}
+
+function taskDisposition(result, existing, required) {
+  const errorCode = String(result.errorCode || "").trim().toUpperCase();
+  const status = String(result.status || "").trim().toLowerCase();
+  const phase = String(result.phase || "").trim().toLowerCase();
+  if (errorCode === "REPEATED_GATE_BLOCKER") return "rediscover";
+  if (status === "completed" || status === "complete" || phase === "complete") return "complete";
+  if (result.taskRouteTerminal === true) {
+    return status === "completed" || status === "complete" ? "complete" : "workflow_stop";
+  }
+  if (result.stopCurrentWorkflow === true) return "workflow_stop";
+  if (["pending_approval", "awaiting_approval", "await_user"].includes(status)) return "await_user";
+  if (["FEATURE_INTENT_BLOCKING_QUESTIONS", "FEATURE_FRONTIER_USER_CONTRACT_REQUIRED"].includes(errorCode)) {
+    return "await_user";
+  }
+  if (required) return required.name === "unreal_task_checkpoint" ? "checkpoint" : "require_tool";
+  if (result.ok === false && result.retryable === false) return "workflow_stop";
+  const prior = String(existing.disposition || "").trim().toLowerCase();
+  return CONTROL_DISPOSITIONS.has(prior) ? prior : "continue";
+}
+
+function attachTaskControlEnvelope(result, existing) {
+  const context = taskContext(result, existing);
+  let required = requiredTool(result, existing);
+  const disposition = taskDisposition(result, existing, required);
+  if (["rediscover", "workflow_stop", "complete", "await_user", "continue"].includes(disposition)) {
+    required = null;
+  }
+  let allowedTools = cleanToolNames(context.route.activeTools);
+  if (!allowedTools.length) allowedTools = cleanToolNames(existing.allowedTools);
+  if (disposition === "rediscover") {
+    allowedTools = allowedTools.filter((name) => DISCOVERY_TOOL_NAMES.has(name));
+  } else if (required) {
+    allowedTools = [required.name];
+  } else if (["workflow_stop", "complete", "await_user"].includes(disposition)) {
+    allowedTools = [];
+  }
+  let sameSemanticInput = "allowed";
+  if (result.doNotRetryUnchanged === true || result.retryable === false) sameSemanticInput = "forbidden";
+  else if (result.retryable === true) sameSemanticInput = "once";
+  else if (["allowed", "once", "forbidden"].includes(existing.retryPolicy?.sameSemanticInput)) {
+    sameSemanticInput = existing.retryPolicy.sameSemanticInput;
+  }
+  const errorCode = String(result.errorCode || "").trim();
+  const fingerprint = blockerFingerprint(result) || String(existing.blocker?.fingerprint || "");
+  const hasBlocker = Boolean(errorCode || existing.blocker || ["rediscover", "workflow_stop"].includes(disposition));
+  const control = {
+    version: CONTROL_VERSION,
+    epoch: context.epoch,
+    taskSessionId: context.taskSessionId,
+    routeHash: String(context.route.routeHash || existing.routeHash || ""),
+    phase: String(context.route.phase || existing.phase || result.phase || "unknown"),
+    disposition,
+    requiredTool: required,
+    allowedTools,
+    retryPolicy: { sameSemanticInput },
+    blocker: hasBlocker
+      ? { code: errorCode || String(existing.blocker?.code || "SERVER_BLOCKED"), fingerprint }
+      : null,
+  };
+  result.control = Object.fromEntries(
+    Object.entries(control).filter(([, value]) => value !== null && value !== "")
+  );
+  return result;
+}
+
 function attachControlEnvelope(payload, toolName = "") {
   const result = { ...(payload || {}) };
   const existing = result.control && typeof result.control === "object" ? result.control : {};
+  const context = taskContext(result, existing);
+  const hasTaskControlContext = Boolean(
+    Number(existing.version || 0) >= CONTROL_VERSION
+      || (
+        context.taskSessionId
+        && (
+          Object.keys(context.route).length
+          || Object.prototype.hasOwnProperty.call(result, "controlEpoch")
+          || Object.prototype.hasOwnProperty.call(context.state, "controlEpoch")
+          || result.taskRouteTerminal === true
+        )
+      )
+  );
+  if (hasTaskControlContext) return attachTaskControlEnvelope(result, existing);
   const taskAuthorization = result.taskAuthorization && typeof result.taskAuthorization === "object"
     ? result.taskAuthorization
     : {};
@@ -81,7 +259,7 @@ function conciseControlText(payload) {
   const control = payload.control && typeof payload.control === "object" ? payload.control : {};
   const ok = payload.ok !== false;
   const phase = String(control.phase || payload.tool || "tool");
-  const status = String(control.status || (ok ? "Completed" : "Blocked"));
+  const status = String(control.disposition || control.status || (ok ? "Completed" : "Blocked"));
   const errorCode = String(payload.errorCode || "");
   const lines = [`${ok ? "OK" : "FAILED"} [${phase}] ${status}${errorCode ? ` (${errorCode})` : ""}`];
   const summary = String(
@@ -93,8 +271,9 @@ function conciseControlText(payload) {
       || ""
   ).trim();
   if (summary) lines.push(summary.slice(0, 800));
-  if (control.nextAction) {
-    lines.push(`nextAction=${control.nextAction} (tool=${Boolean(control.nextActionIsTool)})`);
+  const nextAction = String(control.requiredTool?.name || control.nextAction || "");
+  if (nextAction) {
+    lines.push(`nextAction=${nextAction} (tool=${Boolean(control.requiredTool || control.nextActionIsTool)})`);
   }
   lines.push("Detailed result is available in structuredContent.control and structuredContent data.");
   return lines.join("\n");
@@ -173,8 +352,9 @@ function modelVisibleControlText(
 
   const minimalControl = boundedControl && typeof boundedControl === "object"
     ? Object.fromEntries([
-      "version", "taskId", "phase", "status", "nextAction", "nextActionIsTool",
-      "retryPolicy", "blockerFingerprint", "continuationToken",
+      "version", "epoch", "taskSessionId", "routeHash", "phase", "disposition",
+      "requiredTool", "allowedTools", "retryPolicy", "blocker", "taskId", "status",
+      "nextAction", "nextActionIsTool", "blockerFingerprint", "continuationToken",
     ].filter((key) => boundedControl[key] !== undefined && boundedControl[key] !== "")
       .map((key) => [
         key,

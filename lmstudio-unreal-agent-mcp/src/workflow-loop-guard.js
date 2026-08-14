@@ -117,6 +117,14 @@ function finishBuildAttempt(projectRoot, mutationGeneration, outcome) {
   return state;
 }
 
+function cancelBuildAttempt(projectRoot, mutationGeneration) {
+  const state = stateFor(projectRoot, mutationGeneration);
+  state.buildAttempted = false;
+  state.buildFailed = false;
+  state.buildFingerprint = "";
+  return state;
+}
+
 function recordBuildRecoveryContract(projectRoot, mutationGeneration, recovery) {
   const state = stateFor(projectRoot, mutationGeneration);
   if (!state.buildFailed || !recovery || typeof recovery !== "object") {
@@ -229,6 +237,7 @@ module.exports = {
   recordBuildGateFailure,
   beginBuildAttempt,
   finishBuildAttempt,
+  cancelBuildAttempt,
   recordBuildRecoveryContract,
   recordRecoveryEvidenceCall,
   resetWorkflowLoopGuardForTests,

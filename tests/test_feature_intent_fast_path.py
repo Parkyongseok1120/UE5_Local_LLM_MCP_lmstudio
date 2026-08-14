@@ -44,3 +44,23 @@ def test_fast_path_rejects_new_or_cross_authority_work() -> None:
     assert decision["selectedIntentId"] == ""
     assert any("cannot create" in reason for reason in decision["reasons"])
     assert any("authority" in reason for reason in decision["reasons"])
+
+
+def test_fast_path_accepts_one_new_test_source_under_existing_module_tests() -> None:
+    target = "Source/O_Mock/Tests/GomokuStage1CoreRules.spec.cpp"
+    decision = evaluate_bounded_local_fast_path(
+        "Complete the local-play rule and add the required automated test.",
+        target_files=[target],
+        target_snapshots=[
+            {
+                "path": target,
+                "exists": False,
+                "parentExists": True,
+                "fileHash": "",
+            }
+        ],
+    )
+
+    assert decision["eligible"] is True
+    assert decision["selectedIntentId"] == "bounded_local"
+    assert decision["newAutomationTestFiles"] == [target]

@@ -8,6 +8,32 @@ import os
 from typing import Any
 
 
+CONTROL_VERSION = 2
+CONTROL_DISPOSITIONS = frozenset(
+    {
+        "continue",
+        "require_tool",
+        "rediscover",
+        "checkpoint",
+        "await_user",
+        "workflow_stop",
+        "complete",
+    }
+)
+_DISCOVERY_TOOL_NAMES = frozenset(
+    {
+        "unreal_rag_search",
+        "unreal_symbol_lookup",
+        "list_directory",
+        "search_files",
+        "read_file",
+        "read_file_range",
+        "read_symbol",
+        "read_unreal_logs",
+    }
+)
+
+
 def _action_name(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("name") or value.get("tool") or "")
@@ -31,6 +57,201 @@ def _fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()[:24]
 
 
+def _clean_tool_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return list(
+        dict.fromkeys(
+            str(item or "").strip()
+            for item in value
+            if str(item or "").strip()
+        )
+    )[:32]
+
+
+def _task_context(payload: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    task_auth = (
+        payload.get("taskAuthorization")
+        if isinstance(payload.get("taskAuthorization"), dict)
+        else {}
+    )
+    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+    route = (
+        payload.get("toolRoute")
+        if isinstance(payload.get("toolRoute"), dict)
+        else state.get("toolRoute")
+        if isinstance(state.get("toolRoute"), dict)
+        else {}
+    )
+    task_session_id = str(
+        task_auth.get("taskSessionId")
+        or payload.get("taskSessionId")
+        or state.get("taskSessionId")
+        or existing.get("taskSessionId")
+        or ""
+    ).strip()
+    raw_epoch = (
+        payload.get("controlEpoch")
+        or state.get("controlEpoch")
+        or existing.get("epoch")
+        or 0
+    )
+    try:
+        epoch = max(0, int(raw_epoch))
+    except (TypeError, ValueError):
+        epoch = 0
+    return {
+        "taskSessionId": task_session_id,
+        "route": route,
+        "state": state,
+        "epoch": epoch,
+    }
+
+
+def _required_tool(
+    payload: dict[str, Any],
+    existing: dict[str, Any],
+) -> dict[str, Any] | None:
+    raw = payload.get("requiredNextTool")
+    if isinstance(raw, dict):
+        name = str(raw.get("name") or raw.get("tool") or "").strip()
+        args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
+    else:
+        name = str(raw or "").strip()
+        args = (
+            payload.get("requiredNextToolArgs")
+            if isinstance(payload.get("requiredNextToolArgs"), dict)
+            else {}
+        )
+    if not name and payload.get("nextActionIsTool") is True:
+        name = str(payload.get("nextAction") or "").strip()
+        args = (
+            payload.get("nextActionArgs")
+            if isinstance(payload.get("nextActionArgs"), dict)
+            else {}
+        )
+    if not name:
+        existing_required = existing.get("requiredTool")
+        if not isinstance(existing_required, dict):
+            return None
+        name = str(existing_required.get("name") or "").strip()
+        args = (
+            existing_required.get("args")
+            if isinstance(existing_required.get("args"), dict)
+            else {}
+        )
+        if not name:
+            return None
+    if ":" in name:
+        name, action = name.split(":", 1)
+        if action and "action" not in args:
+            args = {**args, "action": action}
+    return {"name": name[:160], "args": args}
+
+
+def _task_disposition(
+    payload: dict[str, Any],
+    existing: dict[str, Any],
+    required_tool: dict[str, Any] | None,
+) -> str:
+    error_code = str(payload.get("errorCode") or "").strip().upper()
+    status = str(payload.get("status") or "").strip().casefold()
+    phase = str(payload.get("phase") or "").strip().casefold()
+    if error_code == "REPEATED_GATE_BLOCKER":
+        return "rediscover"
+    if status in {"completed", "complete"} or phase == "complete":
+        return "complete"
+    if payload.get("taskRouteTerminal") is True:
+        return "complete" if status in {"completed", "complete"} else "workflow_stop"
+    if payload.get("stopCurrentWorkflow") is True:
+        return "workflow_stop"
+    if status in {"pending_approval", "awaiting_approval", "await_user"}:
+        return "await_user"
+    if error_code in {
+        "FEATURE_INTENT_BLOCKING_QUESTIONS",
+        "FEATURE_FRONTIER_USER_CONTRACT_REQUIRED",
+    }:
+        return "await_user"
+    if required_tool:
+        return (
+            "checkpoint"
+            if required_tool["name"] == "unreal_task_checkpoint"
+            else "require_tool"
+        )
+    if payload.get("ok") is False and payload.get("retryable") is False:
+        return "workflow_stop"
+    explicit = str(existing.get("disposition") or "").strip().casefold()
+    if explicit in CONTROL_DISPOSITIONS:
+        return explicit
+    return "continue"
+
+
+def _task_control_envelope(
+    payload: dict[str, Any],
+    existing: dict[str, Any],
+) -> dict[str, Any]:
+    context = _task_context(payload, existing)
+    route = context["route"]
+    required_tool = _required_tool(payload, existing)
+    disposition = _task_disposition(payload, existing, required_tool)
+    if disposition in {"rediscover", "workflow_stop", "complete", "await_user", "continue"}:
+        required_tool = None
+
+    allowed_tools = _clean_tool_names(route.get("activeTools"))
+    if disposition == "rediscover":
+        allowed_tools = [name for name in allowed_tools if name in _DISCOVERY_TOOL_NAMES]
+    elif required_tool:
+        # A required action is an exact projection. The wider route remains in
+        # toolRoute for legacy clients, but the v2 consumer must see one schema.
+        allowed_tools = [required_tool["name"]]
+    elif disposition in {"workflow_stop", "complete", "await_user"}:
+        allowed_tools = []
+
+    retry_value = "allowed"
+    if payload.get("doNotRetryUnchanged") is True or payload.get("retryable") is False:
+        retry_value = "forbidden"
+    elif payload.get("retryable") is True:
+        retry_value = "once"
+    existing_blocker = (
+        existing.get("blocker")
+        if isinstance(existing.get("blocker"), dict)
+        else {}
+    )
+    error_code = str(payload.get("errorCode") or "").strip()
+    has_blocker = bool(
+        error_code
+        or existing_blocker
+        or disposition in {"rediscover", "workflow_stop"}
+    )
+    blocker_fingerprint = (
+        _fingerprint(payload)
+        if has_blocker
+        else ""
+    ) or str(existing_blocker.get("fingerprint") or "")
+    blocker = (
+        {"code": error_code or "SERVER_BLOCKED", "fingerprint": blocker_fingerprint}
+        if has_blocker
+        else None
+    )
+    control = {
+        "version": CONTROL_VERSION,
+        "epoch": context["epoch"],
+        "taskSessionId": context["taskSessionId"],
+        "routeHash": str(route.get("routeHash") or existing.get("routeHash") or ""),
+        "phase": str(route.get("phase") or existing.get("phase") or payload.get("phase") or "unknown"),
+        "disposition": disposition,
+        "requiredTool": required_tool,
+        "allowedTools": allowed_tools,
+        "retryPolicy": {"sameSemanticInput": retry_value},
+        "blocker": blocker,
+    }
+    return {
+        key: value
+        for key, value in control.items()
+        if value not in (None, "")
+    }
+
+
 def attach_control_envelope(
     payload: dict[str, Any],
     *,
@@ -39,6 +260,18 @@ def attach_control_envelope(
 ) -> dict[str, Any]:
     result = dict(payload)
     existing = result.get("control") if isinstance(result.get("control"), dict) else {}
+    task_context = _task_context(result, existing)
+    if int(existing.get("version") or 0) >= CONTROL_VERSION or (
+        task_context["taskSessionId"]
+        and (
+            task_context["route"]
+            or task_context["state"]
+            or "controlEpoch" in result
+            or result.get("taskRouteTerminal") is True
+        )
+    ):
+        result["control"] = _task_control_envelope(result, existing)
+        return result
     architecture = (
         result.get("architectureState")
         if isinstance(result.get("architectureState"), dict)
@@ -127,7 +360,11 @@ def concise_control_text(payload: dict[str, Any]) -> str:
     control = payload.get("control") if isinstance(payload.get("control"), dict) else {}
     ok = payload.get("ok") is not False
     phase = str(control.get("phase") or payload.get("tool") or "tool")
-    status = str(control.get("status") or ("Completed" if ok else "Blocked"))
+    status = str(
+        control.get("disposition")
+        or control.get("status")
+        or ("Completed" if ok else "Blocked")
+    )
     error_code = str(payload.get("errorCode") or "")
     headline = f"{'OK' if ok else 'FAILED'} [{phase}] {status}"
     if error_code:
@@ -143,10 +380,11 @@ def concise_control_text(payload: dict[str, Any]) -> str:
     lines = [headline]
     if summary:
         lines.append(summary[:800])
-    next_action = str(control.get("nextAction") or "")
+    required = control.get("requiredTool") if isinstance(control.get("requiredTool"), dict) else {}
+    next_action = str(required.get("name") or control.get("nextAction") or "")
     if next_action:
         lines.append(
-            f"nextAction={next_action} (tool={str(bool(control.get('nextActionIsTool'))).lower()})"
+            f"nextAction={next_action} (tool=true)"
         )
     lines.append("Detailed result is available in structuredContent.control and structuredContent data.")
     return "\n".join(lines)
@@ -228,8 +466,14 @@ def model_visible_control_text(
         )
         for key in (
             "version",
+            "epoch",
+            "taskSessionId",
+            "routeHash",
             "taskId",
             "phase",
+            "disposition",
+            "requiredTool",
+            "allowedTools",
             "status",
             "nextAction",
             "nextActionIsTool",

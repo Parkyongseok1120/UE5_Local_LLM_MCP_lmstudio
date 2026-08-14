@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import os
@@ -55,6 +56,7 @@ from mcp_connection import (
     task_owns_active_tool_route,
 )
 from task_phase import task_phase_from_state
+from mcp_control_envelope import attach_control_envelope
 from task_continuation_state import apply_user_continuation
 from task_gate_history import apply_failed_gate_attempt, repeated_gate_input_preflight
 from route_recovery_policy import (
@@ -484,7 +486,18 @@ def _migrate_gate_policy(state: dict[str, Any]) -> bool:
     return narrowed
 
 
-def _refresh_server_owned_state(state: dict[str, Any]) -> dict[str, Any]:
+def _control_epoch(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _refresh_server_owned_state(
+    state: dict[str, Any],
+    *,
+    bump_control_epoch: bool = False,
+) -> dict[str, Any]:
     """Refresh selection bindings and the route after every persisted transition."""
 
     gate_set_narrowed = _migrate_gate_policy(state)
@@ -593,6 +606,13 @@ def _refresh_server_owned_state(state: dict[str, Any]) -> dict[str, Any]:
     elif previous_route and previous_route.get("routeHash") != route.get("routeHash"):
         state["toolRouteUsage"]["count"] = 0
         state["toolRouteUsage"]["calls"] = []
+    # One monotonic server epoch orders route/gate/checkpoint responses across
+    # both MCP providers. It is deliberately independent from routeHash because
+    # a blocker or checkpoint may change the action while retaining one route.
+    if bump_control_epoch:
+        state["controlEpoch"] = _control_epoch(state.get("controlEpoch")) + 1
+    else:
+        state["controlEpoch"] = _control_epoch(state.get("controlEpoch"))
     return state
 
 
@@ -802,17 +822,12 @@ def active_task_route_context(
                 with _task_lock(workspace, task_dir.name):
                     latest = _read_state(workspace, task_dir.name)
                     if latest:
-                        prior_hash = str(
-                            (latest.get("toolRoute") or {}).get("routeHash") or ""
-                        )
+                        prior_state = copy.deepcopy(latest)
                         latest = _refresh_server_owned_state(latest)
-                        if (
-                            str(
-                                (latest.get("toolRoute") or {}).get("routeHash")
-                                or ""
+                        if latest != prior_state:
+                            latest["controlEpoch"] = (
+                                _control_epoch(prior_state.get("controlEpoch")) + 1
                             )
-                            != prior_hash
-                        ):
                             usage = dict(latest.get("toolRouteUsage") or {})
                             usage["resetReason"] = "gate_ttl_expired"
                             latest["toolRouteUsage"] = usage
@@ -1229,7 +1244,7 @@ def _mutate_task_state(
         updated = mutator(state)
         if updated is None:
             return {"ok": False, "error": "Task mutation rejected", "taskSessionId": task_session_id}
-        updated = _refresh_server_owned_state(updated)
+        updated = _refresh_server_owned_state(updated, bump_control_epoch=True)
         _write_state(workspace, task_session_id, updated)
         response = _task_response(workspace, updated)
         if str(updated.get("status") or "") in TERMINAL_TASK_STATUSES:
@@ -1273,6 +1288,8 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
     public.pop("authToken", None)
     public.pop("ownerCapability", None)
     public.pop("directSourceEvidence", None)
+    public.pop("sourceEvidence", None)
+    public.pop("absentEvidence", None)
     # expiryTransition contains a speculative future route, including a phase
     # that may intentionally hide the current executor/build tools. Exposing
     # that internal fallback through task_status made compact models reason
@@ -1296,9 +1313,22 @@ def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
         # longer callable and must not be rebound by a client-side compactor.
         public_state.pop("toolRoute", None)
         public_state.pop("toolRouteUsage", None)
-    return {
+    source_evidence = (
+        state.get("sourceEvidence")
+        if isinstance(state.get("sourceEvidence"), dict)
+        else state.get("directSourceEvidence")
+        if isinstance(state.get("directSourceEvidence"), dict)
+        else {}
+    )
+    absent_evidence = (
+        state.get("absentEvidence")
+        if isinstance(state.get("absentEvidence"), dict)
+        else {}
+    )
+    payload = {
         "ok": True,
         "taskSessionId": state.get("taskSessionId"),
+        "controlEpoch": _control_epoch(state.get("controlEpoch")),
         "status": state.get("status"),
         "taskRouteTerminal": terminal,
         **ux,
@@ -1314,6 +1344,47 @@ def _task_response(workspace: Path, state: dict[str, Any]) -> dict[str, Any]:
         "state": public_state,
         "job": job,
     }
+    if source_evidence:
+        payload["sourceEvidence"] = source_evidence
+    if absent_evidence:
+        payload["absentEvidence"] = absent_evidence
+    return attach_control_envelope(payload, tool_name="task_api")
+
+
+def _task_outcome_with_control(
+    outcome: dict[str, Any],
+    mutation_response: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind a custom mutation outcome to the same authoritative v2 epoch.
+
+    Several gate/checkpoint functions intentionally return a smaller outcome
+    than ``_task_response``.  Rebuilding control here prevents those paths from
+    silently falling back to legacy client-side action inference.
+    """
+
+    payload = dict(outcome)
+    response = mutation_response if isinstance(mutation_response, dict) else {}
+    response_control = (
+        response.get("control")
+        if isinstance(response.get("control"), dict)
+        else {}
+    )
+    for key in (
+        "taskSessionId",
+        "controlEpoch",
+        "toolRoute",
+        "taskRouteTerminal",
+        "sourceEvidence",
+        "absentEvidence",
+    ):
+        if key not in payload and key in response:
+            payload[key] = response[key]
+    if "controlEpoch" not in payload and "epoch" in response_control:
+        payload["controlEpoch"] = response_control["epoch"]
+    required = response_control.get("requiredTool")
+    if "requiredNextTool" not in payload and isinstance(required, dict):
+        payload["requiredNextTool"] = required
+    return attach_control_envelope(payload, tool_name="task_api")
 
 
 def _continuity_project_root(workspace: Path, state: dict[str, Any]) -> Path:
@@ -2122,7 +2193,7 @@ def task_record_build_recovery(
                 current_state,
                 authorization,
             )
-        return outcome
+        return _task_outcome_with_control(outcome, result)
     return result
 
 
@@ -2395,7 +2466,7 @@ def task_complete_after_successful_build(
         if current:
             outcome["taskAuthorization"] = task_authorization_for_state(current)
             outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result
 
 
 def task_require_automation_after_build(
@@ -2497,7 +2568,7 @@ def task_require_automation_after_build(
         if current:
             outcome["taskAuthorization"] = task_authorization_for_state(current)
             outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result
 
 
 def task_mark_build_recovery_evidence(
@@ -2542,7 +2613,7 @@ def task_mark_build_recovery_evidence(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result
 
 
 _LINKER_SEMANTIC_EXTENSIONS = frozenset(
@@ -3216,6 +3287,16 @@ def task_start(
             "planRevision": resolved_plan_revision,
             "files": {},
         },
+        "sourceEvidence": {
+            "version": 2,
+            "planRevision": resolved_plan_revision,
+            "files": {},
+        },
+        "absentEvidence": {
+            "version": 1,
+            "planRevision": resolved_plan_revision,
+            "files": {},
+        },
         "createdAt": _utc_now(),
         "updatedAt": _utc_now(),
         "toolDiscoveryCandidates": [
@@ -3269,7 +3350,7 @@ def task_start(
         state,
         retry_budgets=supervisor_config,
     )
-    state = _refresh_server_owned_state(state)
+    state = _refresh_server_owned_state(state, bump_control_epoch=True)
     (task_root(workspace, task_session_id) / "logs").mkdir(parents=True, exist_ok=True)
     with _task_lock(workspace, task_session_id):
         _write_state(workspace, task_session_id, state)
@@ -5151,6 +5232,16 @@ def task_replan(
             "planRevision": next_revision,
             "files": {},
         }
+        state["sourceEvidence"] = {
+            "version": 2,
+            "planRevision": next_revision,
+            "files": {},
+        }
+        state["absentEvidence"] = {
+            "version": 1,
+            "planRevision": next_revision,
+            "files": {},
+        }
         _append_log(
             workspace,
             task_session_id,
@@ -5177,7 +5268,7 @@ def task_replan(
             "retryable": True,
         }
     if not outcome.get("ok"):
-        return outcome or result
+        return _task_outcome_with_control(outcome, result) if outcome else result
     current_state = result.get("state") or {}
     outcome.update(
         {
@@ -5204,7 +5295,8 @@ def task_replan(
             outcome["status"] = str(completed_state.get("status") or "completed")
             outcome["planOnlyCompleted"] = True
             outcome = _strip_plan_only_authorization(outcome)
-    return outcome
+            return _task_outcome_with_control(outcome, completed)
+    return _task_outcome_with_control(outcome, result)
 
 
 def _validate_task_slice_plan(
@@ -5450,7 +5542,7 @@ def task_define_slices(
             current = result.get("state") or {}
         outcome["taskAuthorization"] = task_authorization_for_state(current)
         outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
-    return outcome
+    return _task_outcome_with_control(outcome, result)
 
 
 def task_checkpoint(
@@ -5939,7 +6031,7 @@ def task_checkpoint(
                         "requiredNextToolArgs",
                         dict(mutation_result.get("nextActionArgs") or {}),
                     )
-                return mutation_result
+                return _task_outcome_with_control(mutation_result, result)
             current_route = dict(mutation_result.get("toolRoute") or {})
             pending_gates = [
                 str(item) for item in current_route.get("pendingGates") or []
@@ -5998,7 +6090,7 @@ def task_checkpoint(
                         mutation_result.get("taskAuthorization") or {}
                     )
                 }
-        return mutation_result
+        return _task_outcome_with_control(mutation_result, result)
     return result
 
 
@@ -6657,7 +6749,7 @@ def task_record_gate(
                 owner_capability=authorization_identity.get("ownerCapability", ""),
                 conversation_id=authorization_identity.get("conversationId", ""),
             )
-        return record_result
+        return _task_outcome_with_control(record_result, result)
     return result
 
 
@@ -6959,14 +7051,12 @@ def authorize_task_tool(
                 "errorCode": "TASK_STATE_MISSING",
                 "error": f"Unknown task: {task_session_id}",
             }
-        previous_route_hash = str(
-            (state.get("toolRoute") or {}).get("routeHash") or ""
-        )
+        prior_state = copy.deepcopy(state)
         refreshed = _refresh_server_owned_state(state)
-        if (
-            str((refreshed.get("toolRoute") or {}).get("routeHash") or "")
-            != previous_route_hash
-        ):
+        if refreshed != prior_state:
+            refreshed["controlEpoch"] = (
+                _control_epoch(prior_state.get("controlEpoch")) + 1
+            )
             _write_state(workspace, task_session_id, refreshed)
         state = refreshed
         mismatches = _task_authorization_mismatches(state, authorization)
@@ -7209,6 +7299,8 @@ def authorize_task_tool(
                 checkpoint_authorization = task_authorization_for_state(state)
                 return {
                     "ok": False,
+                    "taskSessionId": task_session_id,
+                    "controlEpoch": _control_epoch(state.get("controlEpoch")),
                     "errorCode": "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
                     "error": (
                         f"Phase tool-call budget exhausted ({count}/{limit}); "
@@ -7467,8 +7559,12 @@ def expand_compact_task_authorization(
                     "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
                     "error": "ownerCapability does not own this task session",
                 }
+            prior_state = copy.deepcopy(state)
             refreshed = _refresh_server_owned_state(state)
-            if refreshed != state:
+            if refreshed != prior_state:
+                refreshed["controlEpoch"] = (
+                    _control_epoch(prior_state.get("controlEpoch")) + 1
+                )
                 _write_state(workspace, task_session_id, refreshed)
             return {
                 "ok": True,
@@ -7646,7 +7742,7 @@ def task_record_gate_failure(
                 owner_capability=authorization_identity.get("ownerCapability", ""),
                 conversation_id=authorization_identity.get("conversationId", ""),
             )
-        return outcome
+        return _task_outcome_with_control(outcome, result)
     return result
 
 
@@ -7754,7 +7850,7 @@ def task_set_runtime_session(
                 owner_capability=authorization_identity.get("ownerCapability", ""),
                 conversation_id=authorization_identity.get("conversationId", ""),
             )
-        return mutation_result
+        return _task_outcome_with_control(mutation_result, result)
     return result
 
 
@@ -7792,9 +7888,25 @@ def task_direct_source_evidence(
         return _task_state_error(task_session_id, exc)
     if not state:
         return {"ok": False, "error": f"Unknown task: {task_session_id}"}
-    ledger = (
+    source_ledger = (
+        state.get("sourceEvidence")
+        if isinstance(state.get("sourceEvidence"), dict)
+        else {}
+    )
+    legacy_ledger = (
         state.get("directSourceEvidence")
         if isinstance(state.get("directSourceEvidence"), dict)
+        else {}
+    )
+    source_files = (
+        source_ledger.get("files")
+        if isinstance(source_ledger.get("files"), dict)
+        else {}
+    )
+    ledger = source_ledger if source_files else legacy_ledger
+    absent_ledger = (
+        state.get("absentEvidence")
+        if isinstance(state.get("absentEvidence"), dict)
         else {}
     )
     raw_files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
@@ -7808,7 +7920,9 @@ def task_direct_source_evidence(
         "taskSessionId": task_session_id,
         "planRevision": str(state.get("planRevision") or ""),
         "evidencePlanRevision": str(ledger.get("planRevision") or ""),
+        "evidenceVersion": int(ledger.get("version") or 1),
         "files": files,
+        "absentEvidence": absent_ledger,
     }
 
 
@@ -8130,7 +8244,7 @@ def task_issue_feature_approval(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
-    return issued or result
+    return _task_outcome_with_control(issued, result) if issued else result
 
 
 def task_approve_feature_intent(
@@ -8195,7 +8309,7 @@ def task_approve_feature_intent(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result
 
 
 def task_consume_feature_approval(
@@ -8262,4 +8376,4 @@ def task_consume_feature_approval(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
-    return outcome or result
+    return _task_outcome_with_control(outcome, result) if outcome else result

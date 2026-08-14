@@ -563,6 +563,20 @@ def test_invalidated_code_gate_clears_derived_compiler_proof() -> None:
     }
 
 
+def test_control_epoch_changes_only_for_persisted_server_transitions() -> None:
+    state = _state(writes=True)
+    state["controlEpoch"] = "corrupt-legacy-value"
+
+    refreshed = _refresh_server_owned_state(state)
+    assert refreshed["controlEpoch"] == 0
+
+    transitioned = _refresh_server_owned_state(
+        refreshed,
+        bump_control_epoch=True,
+    )
+    assert transitioned["controlEpoch"] == 1
+
+
 def test_build_recovery_scope_is_shared_and_fail_closed(
     tmp_path: Path,
     monkeypatch,
@@ -973,6 +987,9 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     )
     assert exhausted["ok"] is False
     assert exhausted["errorCode"] == "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
+    assert exhausted["taskSessionId"] == started["taskSessionId"]
+    assert isinstance(exhausted["controlEpoch"], int)
+    assert exhausted["controlEpoch"] >= 0
     assert "action=record" in exhausted["agentInstruction"]
     assert exhausted["nextAction"] == "unreal_task_checkpoint"
     assert exhausted["nextActionArgs"]["action"] == "record"
