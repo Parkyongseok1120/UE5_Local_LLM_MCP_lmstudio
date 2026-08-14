@@ -413,11 +413,18 @@ test("Automation log persistence failure resolves as a bounded failure", async (
     const engineRoot = path.join(root, "EngineRoot");
     const editorCmd = resolveEditorCmdPaths(engineRoot, process.platform)[0];
     fs.mkdirSync(path.dirname(editorCmd), { recursive: true });
-    try {
-      fs.linkSync(process.execPath, editorCmd);
-    } catch {
+    if (process.platform === "win32") {
+      // A hard link shares the loaded parent Node executable's file record.
+      // Windows therefore refuses to unlink the temporary editor fixture until
+      // the entire test runner exits, even after the spawned child has closed.
       fs.copyFileSync(process.execPath, editorCmd);
-      if (process.platform !== "win32") fs.chmodSync(editorCmd, 0o755);
+    } else {
+      try {
+        fs.linkSync(process.execPath, editorCmd);
+      } catch {
+        fs.copyFileSync(process.execPath, editorCmd);
+        fs.chmodSync(editorCmd, 0o755);
+      }
     }
     const blockedParent = path.join(root, "not-a-directory");
     fs.writeFileSync(blockedParent, "blocked", "utf8");
