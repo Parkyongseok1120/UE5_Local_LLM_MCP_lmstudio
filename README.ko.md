@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC2
+# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC3
 
-> **GitHub 프리릴리스 (stable 배포 준비 전):** 제품 메타데이터는 **1.3.0 RC2**로 맞췄지만, Windows 실기 설치와 남은 릴리스 게이트가 끝날 때까지 `releaseReady`는 `false`입니다. portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows·Ubuntu Linux에서 통합 workflow로 설치할 수 있습니다. **Apple Silicon macOS** 실기 FULL 설치는 **PASS**이고, **Intel macOS**는 LM Studio 구성 설치가 초기에 차단됩니다(custom Codex/Cline-only는 허용). `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.0 RC2 노트](docs/Release_Notes_1_3_0_RC2.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
+> **GitHub 프리릴리스 (stable 배포 준비 전):** 제품 메타데이터는 **1.3.0 RC3**로 맞췄지만, Windows 실기 설치와 남은 릴리스 게이트가 끝날 때까지 `releaseReady`는 `false`입니다. portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows·Ubuntu Linux에서 통합 workflow로 설치할 수 있습니다. **Apple Silicon macOS** 실기 FULL 설치는 **PASS**이고, **Intel macOS**는 LM Studio 구성 설치가 초기에 차단됩니다(custom Codex/Cline-only는 허용). `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.0 RC3 노트](docs/Release_Notes_1_3_0_RC3.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
@@ -28,9 +28,9 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 > **프로젝트 현황 — 2026년 8월**
 >
-> **현재 제품 라벨은 1.3.0 RC2 GitHub 프리릴리스입니다.** RC2는 task state transition과 public next-action을 중앙화하고, semantic control fingerprint에 따라 epoch를 갱신하며, 성공 gate의 동일 재실행을 막고, Mutation부터 Complete까지 후반부 transition을 replay로 검증합니다. Apple Silicon 실기 FULL 설치는 PASS지만 Windows 실기 설치는 아직 미검증이라 `releaseReady`는 false입니다.
+> **현재 제품 라벨은 1.3.0 RC3 GitHub 프리릴리스입니다.** RC3는 RC2 이후 검증한 recovery state machine, atomic mutation journal, canonical project/build proof, Automation 범위, Windows/POSIX 경로 identity를 배포합니다. Apple Silicon 실기 FULL 설치는 PASS지만 Windows 실기 설치는 아직 미검증이라 `releaseReady`는 false입니다.
 >
-> 서버 handoff가 명확해진 뒤에는 긴 근거·복구 상태 유지와 정확한 tool schema 생성이 작은 로컬 모델의 더 뚜렷한 병목으로 남습니다. 이 한계는 관찰됐지만 RC2에서 새로 수치화하지 않았으며, 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline입니다.
+> 서버 handoff가 명확해진 뒤에는 긴 근거·복구 상태 유지와 정확한 tool schema 생성이 작은 로컬 모델의 더 뚜렷한 병목으로 남습니다. 이 한계는 관찰됐지만 RC3에서 새로 수치화하지 않았으며, 아래 최신 모델 결과는 v1.2.5 UE 5.8 baseline입니다.
 
 ---
 
@@ -38,7 +38,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0_RC2.md"><img alt="1.3.0 RC2 Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC2-orange?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_0_RC3.md"><img alt="1.3.0 RC3 Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC3-orange?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
   <a href="docs/Roadmap_1_3_0.md"><img alt="v1.3.0 Roadmap" src="https://img.shields.io/badge/Roadmap-v1.3.0-orange?logo=gitbook"></a>
@@ -47,7 +47,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 ## 최신 결과
 
-아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 RC2 paired live 재측정은 아직 완료되지 않았습니다.
+아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 RC3 paired live 재측정은 아직 완료되지 않았습니다.
 
 | 모델 / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
@@ -161,6 +161,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 | 주제 | 파일 |
 |---|---|
+| 1.3.0 RC3 릴리스 노트 | [docs/Release_Notes_1_3_0_RC3.md](docs/Release_Notes_1_3_0_RC3.md) |
 | 1.3.0 RC2 릴리스 노트 | [docs/Release_Notes_1_3_0_RC2.md](docs/Release_Notes_1_3_0_RC2.md) |
 | 1.3.0 Beta5 릴리스 노트 (과거 RC2) | [docs/Release_Notes_1_3_0_Beta5.md](docs/Release_Notes_1_3_0_Beta5.md) |
 | 1.3.0 Beta4 릴리스 노트 (과거 RC1) | [docs/Release_Notes_1_3_0_Beta4.md](docs/Release_Notes_1_3_0_Beta4.md) |
@@ -184,7 +185,7 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 ## 요약
 
-1.3.0 RC2는 GitHub prerelease입니다(`releaseReady` false). 새 `v1.3.0-rc2` 태그는 Beta5 이력의 `v1.3.0-rc.2`를 이동하지 않습니다. control transition·설치·릴리스 위생은 자동 검증으로 보호하지만 GUI E2E와 새 paired live-model 점수는 주장하지 않습니다.
+1.3.0 RC3는 GitHub prerelease입니다(`releaseReady` false). 새 `v1.3.0-rc3` 태그는 기존 RC/Beta 태그를 이동하지 않습니다. control transition·복구·원자적 rollback·project proof·설치·릴리스 위생은 자동 검증으로 보호하지만 GUI E2E와 새 paired live-model 점수는 주장하지 않습니다.
 
 좁은 UE 5.8 compile-fix 작업에서는 현재 community fine-tuned Qwen 3.6 27B local workflow가 live UBT validation에서 강한 결과를 냈습니다(36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B도 compact-model 결과를 저장했습니다(35/36 Pass@K, 33/36 Pass@1). 이 결과는 내부 workflow 측정이며, Claude/GPT 계열과의 일반 모델 동등성 주장이 아닙니다.
 

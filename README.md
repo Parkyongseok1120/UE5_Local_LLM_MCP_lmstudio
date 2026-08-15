@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC2
+# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC3
 
-> **GitHub prerelease (not stable/release-ready yet):** product metadata is aligned to **1.3.0 RC2**, while `releaseReady` remains `false` until Windows physical install and the remaining release gates pass. The portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows and Ubuntu Linux; **Apple Silicon macOS** physical FULL install is **PASS**; **Intel macOS** cannot install LM Studio-based components (custom Codex/Cline-only is allowed). Host **Python 3.10+** is required before `./install.sh` can start. See [1.3.0 RC2 notes](docs/Release_Notes_1_3_0_RC2.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **GitHub prerelease (not stable/release-ready yet):** product metadata is aligned to **1.3.0 RC3**, while `releaseReady` remains `false` until Windows physical install and the remaining release gates pass. The portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows and Ubuntu Linux; **Apple Silicon macOS** physical FULL install is **PASS**; **Intel macOS** cannot install LM Studio-based components (custom Codex/Cline-only is allowed). Host **Python 3.10+** is required before `./install.sh` can start. See [1.3.0 RC3 notes](docs/Release_Notes_1_3_0_RC3.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -28,15 +28,15 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — August 2026**
 >
-> **Current product label: 1.3.0 RC2 (prerelease).** Metadata is aligned across README, manifest, and VERSIONING. RC2 centralizes task-state transitions and public next-action publication, makes semantic control fingerprint changes advance the epoch, redirects repeated successful gates without rerunning them, and replay-tests the mutation-to-completion pipeline. Apple Silicon physical FULL install is recorded as PASS; Windows physical install is still unverified, so stable distribution remains blocked and `releaseReady` stays false.
+> **Current product label: 1.3.0 RC3 (prerelease).** RC3 packages the verified recovery state machine, atomic mutation journal, canonical project/build proof, Automation scope hardening, and Windows/POSIX path identity from the post-RC2 Develop line. Apple Silicon physical FULL install is recorded as PASS; Windows physical install is still unverified, so stable distribution remains blocked and `releaseReady` stays false.
 >
-> RC2 exposes a clearer model-side bottleneck: once the server supplies an exact obligation, smaller local models must still retain long evidence/recovery state and emit the exact tool schema. That limitation is observed but not newly quantified. Do not reuse the v1.2.5 score as an RC2 result, and do not treat RC2 as stable until Windows validation and remaining gates close.
+> RC3 exposes a clearer model-side bottleneck: once the server supplies an exact obligation, smaller local models must still retain long evidence/recovery state and emit the exact tool schema. That limitation is observed but not newly quantified. Do not reuse the v1.2.5 score as an RC3 result, and do not treat RC3 as stable until Windows validation and remaining gates close.
 
 ## Documentation Hub
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0_RC2.md"><img alt="1.3.0 RC2 Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC2-orange?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_0_RC3.md"><img alt="1.3.0 RC3 Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC3-orange?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
   <a href="docs/Roadmap_1_3_0.md"><img alt="v1.3.0 Roadmap" src="https://img.shields.io/badge/Roadmap-v1.3.0-orange?logo=gitbook"></a>
@@ -45,7 +45,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 ## Latest Results
 
-These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 RC2 live rerun has not been completed yet.
+These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 RC3 live rerun has not been completed yet.
 
 | Model / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
@@ -68,7 +68,7 @@ The 9B profile is the current **minimum floor**, not a reliability target. It is
 
 For autonomous multi-step Unreal work, prefer a **24B–27B instruction/tool-calling model**. Keep 9B for bounded, short tasks after the target file, symbol, and intended change are already known. For Korean-first use, validate the exact local checkpoint: Qwen3 advertises support for 100+ languages and tool calling, while coding-specialized models such as Devstral Small 2 may be stronger at codebase operations but should not be assumed to have the same Korean fluency. See the [Qwen3 model card](https://huggingface.co/Qwen/Qwen3-30B-A3B) and [Devstral Small 2 model card](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512).
 
-RC2's deterministic control plane removes ambiguous server handoffs, but it cannot make a model retain long evidence chains or produce an exact tool schema reliably. As server-side transition loops are closed, context retention, recovery judgment, and exact tool-call generation become a more visible model-side bottleneck.
+RC3's deterministic control plane removes ambiguous server handoffs, but it cannot make a model retain long evidence chains or produce an exact tool schema reliably. As server-side transition loops are closed, context retention, recovery judgment, and exact tool-call generation become a more visible model-side bottleneck.
 
 > `Harness average attempts=0.389` in the best run means many cases were solved by deterministic static autofix before an LLM edit attempt. It is not a general model reasoning-depth metric.
 
@@ -181,6 +181,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 | Topic | File |
 |---|---|
+| 1.3.0 RC3 release notes | [docs/Release_Notes_1_3_0_RC3.md](docs/Release_Notes_1_3_0_RC3.md) |
 | 1.3.0 RC2 release notes | [docs/Release_Notes_1_3_0_RC2.md](docs/Release_Notes_1_3_0_RC2.md) |
 | 1.3.0 Beta5 release notes (was RC2) | [docs/Release_Notes_1_3_0_Beta5.md](docs/Release_Notes_1_3_0_Beta5.md) |
 | 1.3.0 Beta4 release notes (was RC1) | [docs/Release_Notes_1_3_0_Beta4.md](docs/Release_Notes_1_3_0_Beta4.md) |
@@ -204,7 +205,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 ## Summary
 
-1.3.0 RC2 is a GitHub prerelease (`releaseReady` false). The new `v1.3.0-rc2` tag does not rewrite the historical `v1.3.0-rc.2` tag retained for Beta5. Control transitions, installer paths, and release hygiene remain guarded by automated checks; GUI E2E and a new paired live-model score are not claimed.
+1.3.0 RC3 is a GitHub prerelease (`releaseReady` false). The new `v1.3.0-rc3` tag does not rewrite any earlier RC/Beta tag. Control transitions, recovery, atomic rollback, project proof, installer paths, and release hygiene remain guarded by automated checks; GUI E2E and a new paired live-model score are not claimed.
 
 For narrow UE 5.8 compile-fix work, the current community fine-tuned Qwen 3.6 27B local workflow is strong in live UBT validation (36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B also has a saved compact-model result (35/36 Pass@K, 33/36 Pass@1). Treat these as internal workflow results, not general model equivalence to Claude or GPT-class systems.
 
