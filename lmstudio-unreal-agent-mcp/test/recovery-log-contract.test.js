@@ -92,3 +92,28 @@ test("build-loop log obligation remains executable and engine mismatch comment i
   assert.ok(block.includes('requiredNextTool: "read_unreal_logs"'));
   assert.doesNotMatch(source, /Permit one corrected retry without forcing a fake edit/);
 });
+
+test("range recovery binds cursor, byte window, and filter exactly", () => {
+  const rangeArgs = {
+    mode: "range",
+    fileName: "latest-build.log",
+    cursorByte: 4_194_304,
+    maxBytes: 4_194_304,
+    maxFiles: 1,
+    maxLines: 200,
+    summaryOnly: false,
+    filter: "fatal error",
+  };
+  const rangeState = taskState({
+    requiredTool: { name: "read_unreal_logs", args: rangeArgs },
+  });
+  assert.strictEqual(exactRecoveryLogObligation(rangeState, rangeArgs).matched, true);
+  assert.strictEqual(
+    exactRecoveryLogObligation(rangeState, { ...rangeArgs, cursorByte: 0 }).matched,
+    false
+  );
+  assert.strictEqual(
+    exactRecoveryLogObligation(rangeState, { ...rangeArgs, maxBytes: 65_536 }).matched,
+    false
+  );
+});

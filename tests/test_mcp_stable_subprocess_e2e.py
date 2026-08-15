@@ -1861,3 +1861,63 @@ def test_failed_static_scan_stamps_generation_and_project_build_log_is_readable(
         assert continued_payload["logs"][0]["nextCursorByte"] == second_range_end
     finally:
         client.close()
+
+def test_nonwriting_multitool_plan_starts_durable_read_only_task(tmp_path: Path) -> None:
+    require_agent_mcp_deps()
+    workspace_dir = tmp_path / "read-only-workspace"
+    workspace_dir.mkdir()
+    project_dir = tmp_path / "PortableProject"
+    project_dir.mkdir()
+    uproject = project_dir / "PortableProject.uproject"
+    uproject.write_text(json.dumps({"FileVersion": 3}), encoding="utf-8")
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(json.dumps({"activeProject": str(uproject)}), encoding="utf-8")
+    state_root = tmp_path / "state" / "unreal-agent"
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "ALLOW_CONTROL_PLANE_TOOLS": "1",
+            "WORKSPACE_ROOT": str(workspace_dir),
+            "SHARED_UNREAL_CONFIG": str(shared_config),
+            "AGENT_STATE_ROOT": str(state_root),
+        }
+    )
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"")
+    rag = _StdioJsonRpc([_python_exe(), str(RAG_SCRIPT), "--index", str(index)], env=env)
+    try:
+        rag.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "read-only-e2e", "version": "1.0"},
+            },
+            1,
+        )
+        response = rag.request(
+            "tools/call",
+            {
+                "name": "unreal_agent_plan",
+                "arguments": {
+                    "request": "Draft a verified C++ subsystem sketch without editing files",
+                    "mode": "code_sketch",
+                },
+            },
+            2,
+        )
+        assert response["result"].get("isError") is not True, response
+        payload = _tool_payload(response)
+        assert payload["taskKind"] == "code_sketch"
+        assert payload["writeGate"]["writesAllowed"] is False
+        authorization = payload.get("taskAuthorization") or {}
+        assert authorization.get("taskSessionId")
+        assert authorization.get("ownerCapability")
+        assert payload["control"]["taskMode"] == "read_only"
+        state_path = state_root / "tasks" / authorization["taskSessionId"] / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["status"] == "running"
+        assert state["mode"] == "read_only"
+    finally:
+        rag.close()

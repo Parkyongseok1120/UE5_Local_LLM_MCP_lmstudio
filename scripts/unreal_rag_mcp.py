@@ -9883,7 +9883,7 @@ class McpServer:
                 from agent_orchestrator import (
                     build_agent_plan,
                     is_continuation_request,
-                    is_plan_only_request,
+                    resolve_task_lifecycle_mode,
                     normalize_objective_for_hash,
                     parse_project_control_intent,
                     resolve_plan_request,
@@ -10283,23 +10283,7 @@ class McpServer:
                         },
                     )
                     return
-                explicit_plan_only = (
-                    mode == "plan_only" or is_plan_only_request(request, mode)
-                )
-                if (payload.get("writeGate") or {}).get("writesAllowed") is True:
-                    task_mode = "agent_edit"
-                elif explicit_plan_only:
-                    task_mode = "plan_only"
-                elif str(payload.get("taskKind") or "").strip().casefold() in {
-                    "inspect_only",
-                    "cpp_analysis",
-                }:
-                    # Project-bound source analysis owns a durable evidence and
-                    # synthesis lifecycle.  A plan-only session is completed
-                    # immediately and cannot survive compaction/output retry.
-                    task_mode = "read_only"
-                else:
-                    task_mode = "plan_only"
+                task_mode = resolve_task_lifecycle_mode(payload, request, mode)
                 active_task_session_id = str(
                     self._active_route_context.get("taskSessionId") or ""
                 ).strip()

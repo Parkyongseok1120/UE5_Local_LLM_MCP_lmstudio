@@ -4863,13 +4863,21 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     "unreal_task_commit_synthesis",
     tool?.function?.name || tool?.name || "",
   ));
-  const synthesisCommitRequired = Boolean(
-    !detachedSideQueryActive
-    && serverControlV2Active
-    && String(serverControlV2?.phase || "").trim().toLowerCase() === "synthesis"
+  const directReadOnlyFinal = Boolean(
+    String(serverControlV2?.taskMode || "").trim().toLowerCase() === "read_only"
+    && String(serverControlV2?.disposition || "").trim().toLowerCase() === "continue"
+    && !serverControlV2?.requiredTool
+  );
+  const explicitSynthesisFinal = Boolean(
+    String(serverControlV2?.phase || "").trim().toLowerCase() === "synthesis"
     && !serverControlV2?.requiredTool
     && Array.isArray(serverControlV2?.allowedTools)
     && serverControlV2.allowedTools.length === 0
+  );
+  const synthesisCommitRequired = Boolean(
+    !detachedSideQueryActive
+    && serverControlV2Active
+    && (explicitSynthesisFinal || directReadOnlyFinal)
     && requests.length === 0
     && events.some((event: any) => (
       event?.kind === "fragment"

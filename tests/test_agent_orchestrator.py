@@ -815,3 +815,36 @@ def test_verify_edit_limit_from_profile():
     result = verify_edit_allowed(plan, files_count=max_files + 1, patches_count=0)
     assert result["ok"] is False
     assert any("maxFilesPerEdit" in issue for issue in result["issues"])
+
+def test_task_lifecycle_mode_is_intent_driven_for_every_nonwriting_plan() -> None:
+    from agent_orchestrator import resolve_task_lifecycle_mode
+
+    for task_kind in (
+        "inspect_only",
+        "cpp_analysis",
+        "code_sketch",
+        "runtime_debug",
+        "answer_only",
+        "refactor",
+        "future_nonwriting_kind",
+    ):
+        assert resolve_task_lifecycle_mode(
+            {
+                "taskKind": task_kind,
+                "writeGate": {"writesAllowed": False},
+            },
+            "Collect the required project evidence and report the result",
+        ) == "read_only"
+
+    assert resolve_task_lifecycle_mode(
+        {"taskKind": "edit", "writeGate": {"writesAllowed": True}},
+        "Implement the requested change",
+    ) == "agent_edit"
+    assert resolve_task_lifecycle_mode(
+        {"taskKind": "inspect_only", "writeGate": {"writesAllowed": False}},
+        "Create an implementation plan only; do not edit files",
+    ) == "plan_only"
+    assert resolve_task_lifecycle_mode(
+        {"taskKind": "project_control", "writeGate": {"writesAllowed": False}},
+        "Show the active project",
+    ) == "plan_only"

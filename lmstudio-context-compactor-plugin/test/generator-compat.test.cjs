@@ -6609,7 +6609,10 @@ test("model readiness waits for one model and keeps a model-independent conversa
     assert.equal(maxTokens, 8192, "tool-free synthesis must receive the dynamic minimum reserve");
     const checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.predictionState.status, "committed");
-    assert.equal(checkpoint.synthesisState.status, "committed");
+    // This readiness-only conversation has no server-owned synthesis task or
+    // commit tool. The answer is durably generated, but must not be marked as
+    // server-committed without the explicit handshake.
+    assert.equal(checkpoint.synthesisState.status, "completed");
     assert.equal(checkpoint.objective, "Inspect the current project state.");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -6913,6 +6916,85 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
     assert.equal(persisted.synthesisState.outputDigest, commit.arguments.outputDigest);
     assert.equal(persisted.pendingToolCalls[0].id, commit.id);
     assert.equal(persisted.pendingToolCalls[0].dispatchState, "emitted");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("tool-free read-only planner final emits a durable server-owned commit handshake", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-read-only-final-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = {
+      taskSessionId: "task-read-only-final-1",
+      ownerCapability: "owner-read-only-final-1",
+    };
+    const payload = {
+      ok: true,
+      taskAuthorization: ownership,
+      control: {
+        version: 2,
+        epoch: 22,
+        taskSessionId: ownership.taskSessionId,
+        routeHash: "route-read-only-final-1",
+        taskMode: "read_only",
+        phase: "planner",
+        disposition: "continue",
+        allowedTools: ["read_file", "read_file_range"],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
+    };
+    const model = {
+      identifier: "read-only-final-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onPredictionFragment({ content: "Verified findings from the collected source evidence.", reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const commitTool = {
+      type: "function",
+      function: {
+        name: "unreal_task_commit_synthesis",
+        parameters: {
+          type: "object",
+          properties: {
+            taskAuthorization: { type: "object" },
+            objectiveHash: { type: "string" },
+            controlEpoch: { type: "integer" },
+            outputDigest: { type: "string" },
+          },
+        },
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Inspect the project source and report verified issues." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "read-only-final-route",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, [commitTool]), history);
+
+    const fragmentIndex = emitted.findIndex((event) => event.kind === "fragment");
+    const endIndex = emitted.findIndex((event) => event.kind === "end");
+    assert.ok(fragmentIndex >= 0 && endIndex > fragmentIndex);
+    const commit = emitted[endIndex].request;
+    assert.equal(commit.name, "unreal_task_commit_synthesis");
+    assert.deepEqual(commit.arguments.taskAuthorization, ownership);
+    assert.equal(commit.arguments.controlEpoch, 22);
+    assert.match(commit.arguments.outputDigest, /^[a-f0-9]{64}$/);
+    const persisted = activeCheckpoint(stateRoot);
+    assert.equal(persisted.synthesisState.status, "committed");
+    assert.equal(persisted.pendingToolCalls[0].id, commit.id);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });

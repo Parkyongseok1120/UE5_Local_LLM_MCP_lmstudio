@@ -504,6 +504,7 @@ function deriveNextObligation(state) {
     version: 2,
     authoritative: true,
     taskSessionId: String(state.taskSessionId || ""),
+    taskMode: String(state.mode || "").trim().toLowerCase(),
     planRevision: String(state.planRevision || ""),
     activeSliceId: String(state.activeSliceId || ""),
     phase,

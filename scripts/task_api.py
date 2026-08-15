@@ -8571,11 +8571,81 @@ def task_commit_synthesis(
             if isinstance(state.get("controlState"), dict)
             else {}
         )
-        synthesis_ready = bool(
+        source_ledger = (
+            state.get("sourceEvidence")
+            if isinstance(state.get("sourceEvidence"), dict)
+            else {}
+        )
+        absent_ledger = (
+            state.get("absentEvidence")
+            if isinstance(state.get("absentEvidence"), dict)
+            else {}
+        )
+        source_files = (
+            source_ledger.get("files")
+            if isinstance(source_ledger.get("files"), dict)
+            else {}
+        )
+        absent_files = (
+            absent_ledger.get("files")
+            if isinstance(absent_ledger.get("files"), dict)
+            else {}
+        )
+        last_outcome = (
+            state.get("lastToolOutcome")
+            if isinstance(state.get("lastToolOutcome"), dict)
+            else {}
+        )
+        evidence_tools = {
+            "unreal_rag_search",
+            "unreal_symbol_lookup",
+            "list_directory",
+            "search_files",
+            "read_file",
+            "read_file_range",
+            "read_symbol",
+            "read_unreal_logs",
+        }
+        current_plan_revision = str(state.get("planRevision") or "")
+        explicit_synthesis_ready = bool(
             str(recovery.get("status") or "").casefold() == "evidence_complete"
             and str(control.get("phase") or "").casefold() == "synthesis"
             and control.get("requiredTool") is None
             and not list(control.get("allowedTools") or [])
+        )
+        direct_evidence_ready = bool(
+            not list(state.get("pendingGates") or [])
+            and str(recovery.get("status") or "").casefold()
+            in {"", "evidence_complete"}
+            and control.get("authoritative") is True
+            and str(control.get("disposition") or "").casefold() == "continue"
+            and control.get("requiredTool") is None
+            and (
+                (
+                    str(source_ledger.get("planRevision") or "")
+                    == current_plan_revision
+                    and bool(source_files)
+                )
+                or (
+                    str(absent_ledger.get("planRevision") or "")
+                    == current_plan_revision
+                    and bool(absent_files)
+                )
+                or (
+                    str(last_outcome.get("status") or "").casefold() == "succeeded"
+                    and str(last_outcome.get("tool") or "") in evidence_tools
+                    and str(last_outcome.get("planRevision") or "")
+                    == current_plan_revision
+                    and str(last_outcome.get("activeSliceId") or "")
+                    == str(state.get("activeSliceId") or "")
+                )
+            )
+        )
+        synthesis_ready = explicit_synthesis_ready or direct_evidence_ready
+        synthesis_entry_mode = (
+            "explicit_evidence_complete"
+            if explicit_synthesis_ready
+            else "direct_evidence_final"
         )
         if not synthesis_ready:
             outcome = {
@@ -8598,6 +8668,7 @@ def task_commit_synthesis(
         lifecycle = {
             "version": 1,
             "status": "committed",
+            "entryMode": synthesis_entry_mode,
             "taskSessionId": task_session_id,
             "objectiveHash": objective_identity,
             "controlEpoch": observed_epoch,

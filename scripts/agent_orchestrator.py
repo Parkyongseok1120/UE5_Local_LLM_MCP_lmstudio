@@ -855,6 +855,32 @@ def is_plan_only_request(request: str, mode: str = "auto") -> bool:
 
     return _is_plan_only_request(f"{mode} {request}".lower())
 
+def resolve_task_lifecycle_mode(
+    plan_payload: dict[str, Any],
+    request: str,
+    mode: str = "auto",
+) -> Literal["agent_edit", "read_only", "plan_only"]:
+    """Choose task durability from execution intent, not a task-kind allow-list.
+
+    ``plan_only`` is terminal by design, so it is reserved for an explicit
+    request for a plan. Every other non-writing Agent plan may span evidence
+    tools, compaction, retries, and a final synthesis handshake and therefore
+    owns a durable ``read_only`` lifecycle. This keeps newly added task kinds
+    from silently regressing to an immediately-completed task.
+    """
+
+    write_gate = plan_payload.get("writeGate")
+    if isinstance(write_gate, dict) and write_gate.get("writesAllowed") is True:
+        return "agent_edit"
+    if mode == "plan_only" or is_plan_only_request(request, mode):
+        return "plan_only"
+    if str(plan_payload.get("taskKind") or "").strip().casefold() == "project_control":
+        # Pure project control is normally returned before task_start. Keep the
+        # fallback terminal if a caller bypasses that no-session handoff.
+        return "plan_only"
+    return "read_only"
+
+
 
 def _is_compile_fix_request(text: str) -> bool:
     if any(m in text for m in COMPILE_MARKERS):

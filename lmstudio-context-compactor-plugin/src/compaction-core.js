@@ -505,6 +505,7 @@ function compactServerControl(value) {
     version: 2,
     epoch,
     taskSessionId,
+    taskMode: String(value.taskMode || "").trim().toLowerCase().slice(0, 40),
     controlFingerprint: String(value.controlFingerprint || value.fingerprint || "").trim().slice(0, 160),
     routeHash: String(value.routeHash || "").slice(0, 160),
     phase: String(value.phase || "unknown").slice(0, 160),

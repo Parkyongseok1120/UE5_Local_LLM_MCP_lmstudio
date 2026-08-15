@@ -145,7 +145,7 @@ def test_capability_detection_composes_official_cqtest_directory_and_name(
     }
 
 
-def test_automation_filter_persistence_accepts_limit_and_rejects_overflow(
+def test_automation_filter_persistence_batches_total_limit_and_rejects_overflow(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -163,7 +163,7 @@ def test_automation_filter_persistence_accepts_limit_and_rejects_overflow(
             ],
         },
     )
-    bounded = [f"Portable.Filter{index:03d}" for index in range(256)]
+    bounded = [f"Portable.Filter{index:04d}" for index in range(4096)]
     state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
     post_static = json.loads(state_path.read_text(encoding="utf-8"))
     post_static["controlState"] = {
@@ -192,8 +192,8 @@ def test_automation_filter_persistence_accepts_limit_and_rejects_overflow(
 
     assert overflow["ok"] is False
     assert overflow["errorCode"] == "AUTOMATION_FILTER_SET_TOO_LARGE"
-    assert overflow["filterCount"] == 257
-    assert overflow["maxFilters"] == 256
+    assert overflow["filterCount"] == 4097
+    assert overflow["maxFilters"] == 4096
     after_overflow = json.loads(state_path.read_text(encoding="utf-8"))
     assert "buildVerification" not in after_overflow
 
@@ -208,6 +208,9 @@ def test_automation_filter_persistence_accepts_limit_and_rejects_overflow(
     )
 
     assert accepted["ok"] is True
-    assert accepted["testFilters"] == bounded
+    assert accepted["testFilters"] == bounded[:256]
+    assert accepted["filterBatchCount"] == 16
     before_overflow = json.loads(state_path.read_text(encoding="utf-8"))
-    assert before_overflow["buildVerification"]["testFilters"] == bounded
+    assert before_overflow["buildVerification"]["testFilters"] == bounded[:256]
+    assert before_overflow["buildVerification"]["allFilterCount"] == 4096
+    assert len(before_overflow["buildVerification"]["remainingFilterBatches"]) == 15

@@ -110,6 +110,7 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
     assert committed["active"] is False
     committed_state = task_status(tmp_path, started["taskSessionId"])["state"]
     assert committed_state["status"] == "completed"
+    assert committed_state["synthesisLifecycle"]["entryMode"] == "explicit_evidence_complete"
     assert committed_state["synthesisLifecycle"]["outputDigest"] == digest
 
     replay = task_commit_synthesis(
@@ -121,6 +122,70 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
     )
     assert replay["ok"] is True
     assert replay["idempotentReplay"] is True
+
+
+def test_read_only_tool_free_final_requires_durable_evidence_before_direct_commit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_file = tmp_path / "Sample.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Inspect the current project source and report the findings",
+        mode="read_only",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "cpp_analysis",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "inspect", "files": ["Source/Sample/Foo.cpp"]}
+            ],
+        },
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["controlState"]["taskMode"] == "read_only"
+    digest = "e" * 64
+
+    rejected = task_commit_synthesis(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        objective_hash_value=state["objectiveHash"],
+        control_epoch=state["controlState"]["epoch"],
+        output_digest=digest,
+    )
+    assert rejected["ok"] is False
+    assert rejected["errorCode"] == "SYNTHESIS_NOT_READY"
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["sourceEvidence"] = {
+        "version": 2,
+        "planRevision": state["planRevision"],
+        "files": {
+            "source/sample/foo.cpp": {
+                "path": "Source/Sample/Foo.cpp",
+                "contentHash": "f" * 64,
+                "coveredRanges": [[1, 20]],
+                "tools": ["read_file_range"],
+            }
+        },
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    committed = task_commit_synthesis(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        objective_hash_value=state["objectiveHash"],
+        control_epoch=state["controlState"]["epoch"],
+        output_digest=digest,
+    )
+
+    assert committed["ok"] is True
+    completed = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert completed["status"] == "completed"
+    assert completed["synthesisLifecycle"]["entryMode"] == "direct_evidence_final"
 
 
 def test_checkpoint_rebase_resolves_bound_transaction_before_releasing_control(
