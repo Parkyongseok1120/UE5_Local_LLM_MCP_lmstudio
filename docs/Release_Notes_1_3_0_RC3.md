@@ -29,7 +29,7 @@ The release tag is **`v1.3.0-rc3`**. Existing RC and historical Beta-alias tags 
 
 RC3 does not make every optional argument or recovery path maximally strict. Server-owned proof fields must match exactly, while harmless caller options remain allowed. Source/test failures receive one bounded evidence-and-repair path, infrastructure failures receive one corrected retry, and unchanged repeated failures become stable blockers rather than infinite loops.
 
-Project and engine selection is derived from the active `.uproject`, module/plugin metadata, task slice, and host filesystem. No production path depends on O-Mock, Project_MJS, or a developer-local absolute directory.
+Project and engine selection is derived from the active `.uproject`, module/plugin metadata, task slice, and host filesystem. No production path depends on a named test fixture, a single project layout, or a developer-local absolute directory.
 
 ## Model-side bottleneck
 
