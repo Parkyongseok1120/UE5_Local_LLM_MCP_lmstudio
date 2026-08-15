@@ -11,7 +11,7 @@ from pathlib import Path
 from rag_context import assemble_context
 from rag_search import SearchOptions, search_hybrid
 from resolve_genre_adapters import resolve_genre_adapters
-from workspace_paths import load_shared_config
+from workspace_paths import load_shared_config, resolve_index_path
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
@@ -26,12 +26,14 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=6)
     parser.add_argument("--hybrid", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--include-matches", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--index", type=Path, default=Path("data/unreal58/rag.sqlite"))
+    parser.add_argument("--index", type=Path, default=None, help="RAG index (default: configured workspace index).")
     parser.add_argument("--session-id", default="")
     args = parser.parse_args()
 
     rag_root = Path(__file__).resolve().parent.parent
-    index = args.index if args.index.is_absolute() else rag_root / args.index
+    index = args.index or resolve_index_path(rag_root)
+    if not index.is_absolute():
+        index = rag_root / index
     if not index.is_file():
         print(json.dumps({"ok": False, "error": f"index missing: {index}"}, ensure_ascii=False))
         return 2

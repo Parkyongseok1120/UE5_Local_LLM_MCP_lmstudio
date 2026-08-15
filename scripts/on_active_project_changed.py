@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -14,8 +13,7 @@ from active_project_sync import sync_active_project
 from editor_metadata_status import editor_metadata_status
 from incremental_build import manifest_stale
 from install_editor_graph_plugin import (
-    install_plugin,
-    maybe_build_plugin,
+    install_and_build_plugin,
     plugin_needs_setup,
     resolve_project,
 )
@@ -296,22 +294,18 @@ def ensure_editor_plugin(
             "ok": True,
         }
 
-    install_payload = install_plugin(
+    setup_payload = install_and_build_plugin(
         project=project,
         workspace=workspace,
         enable=True,
         dry_run=dry_run,
         update=True,
     )
-    build_payload = maybe_build_plugin(
-        project=project,
-        workspace=workspace,
-        install_payload=install_payload,
-        dry_run=dry_run,
-    )
+    install_payload = setup_payload["install"]
+    build_payload = setup_payload["build"]
     copied_or_present = bool(install_payload.get("copied")) or bool(install_payload.get("pluginAlreadyExisted"))
-    build_ok = bool(build_payload.get("ok", True)) or bool(build_payload.get("skipped"))
-    ok = bool(install_payload.get("ok")) and (build_ok or copied_or_present)
+    build_ok = bool(build_payload.get("ok"))
+    ok = bool(setup_payload.get("ok")) and bool(install_payload.get("ok")) and build_ok
     result: dict[str, Any] = {
         "skipped": False,
         "reason": reason,
@@ -319,8 +313,14 @@ def ensure_editor_plugin(
         "install": install_payload,
         "build": build_payload,
     }
+    if setup_payload.get("rollback"):
+        result["rollback"] = setup_payload["rollback"]
+    if setup_payload.get("commit", {}).get("cleanupPending"):
+        result["commit"] = setup_payload["commit"]
     if not build_ok and copied_or_present:
-        result["warning"] = "Plugin copied but compile step failed or was skipped; Editor export may be unavailable until UBT build succeeds."
+        result["warning"] = "Plugin install was rolled back because the UnrealBuildTool compile step failed; Editor export remains unavailable until UBT build succeeds."
+    elif not ok:
+        result["warning"] = "Plugin install/build failed; Editor export remains unavailable until the error is resolved."
     return result
 
 
@@ -395,6 +395,7 @@ def ensure_active_project_ready(
         payload["plugin"] = ensure_editor_plugin(resolved, workspace, dry_run=dry_run)
         payload["plugin"]["needed"] = True
         if not payload["plugin"].get("ok", True):
+            payload["ok"] = False
             payload["plugin"]["warning"] = payload["plugin"].get(
                 "warning",
                 "Plugin install/build did not fully succeed; continuing with project sync when needed.",

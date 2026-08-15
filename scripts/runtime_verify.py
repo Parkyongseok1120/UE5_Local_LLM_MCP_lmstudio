@@ -11,21 +11,24 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from editor_export_runner import resolve_editor_executable
 from runtime_experiment_runner import (
     build_unreal_experiment_plan,
     run_unreal_experiment_plan,
 )
-from workspace_paths import discover_engine_roots, resolve_engine_root
+from workspace_paths import (
+    engine_association_version,
+    resolve_engine_root_for_association,
+)
 
 SUPPORTED_SCENARIOS = frozenset(
     {"automation", "network_replication", "travel_lifecycle", "asset_contract"}
 )
 SUPPORTED_NET_MODES = frozenset({"standalone", "listen_server", "dedicated_server"})
-SUPPORTED_ENGINE_MINORS = frozenset({"5.4", "5.5", "5.6", "5.7", "5.8"})
 _ASSERTION_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
 
 
@@ -37,7 +40,7 @@ def _engine_version(root: Path) -> str:
         minor = int(payload.get("MinorVersion"))
         return f"{major}.{minor}"
     except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
-        match = re.search(r"UE[_ -]?(5\.[4-8])(?:\D|$)", root.name, re.IGNORECASE)
+        match = re.search(r"UE[_ -]?(\d+(?:\.\d+)+)(?:\D|$)", root.name, re.IGNORECASE)
         return match.group(1) if match else ""
 
 
@@ -55,32 +58,6 @@ def _project_descriptor(project_file: str | Path) -> tuple[Path | None, dict[str
     if not isinstance(payload, dict):
         issues.append("projectFile root must be a JSON object")
     return path.resolve(), payload if isinstance(payload, dict) else {}, issues
-
-
-def _matching_engine_root(
-    *,
-    association: str,
-    explicit: str | Path | None,
-    host_platform: str,
-) -> Path:
-    candidates: list[Path] = []
-    if explicit and str(explicit).strip():
-        candidates.append(Path(explicit).expanduser().resolve())
-    else:
-        configured = resolve_engine_root()
-        if str(configured) not in {"", "."}:
-            candidates.append(configured.resolve())
-        candidates.extend(discover_engine_roots(host_platform=host_platform))
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate).casefold() if host_platform == "win32" else str(candidate)
-        if key not in seen:
-            seen.add(key)
-            unique.append(candidate)
-    if association in SUPPORTED_ENGINE_MINORS:
-        return next((item for item in unique if _engine_version(item) == association), unique[0] if unique else Path())
-    return unique[0] if unique else Path()
 
 
 def _normalize_assertions(value: Any) -> tuple[list[dict[str, str]], list[str]]:
@@ -153,17 +130,20 @@ def build_runtime_verify_plan(
         issues.append("automationFilter is required and cannot contain command separators")
 
     association = str(descriptor.get("EngineAssociation") or "").strip()
-    if association.startswith("5.") and association not in SUPPORTED_ENGINE_MINORS:
-        issues.append("numeric EngineAssociation must be between 5.4 and 5.8")
-    resolved_root = _matching_engine_root(
-        association=association,
-        explicit=engine_root,
+    resolution = resolve_engine_root_for_association(
+        association,
+        explicit_engine_root=engine_root,
         host_platform=host,
     )
+    if not bool(resolution.get("ok")):
+        issues.append(str(resolution.get("error") or "ENGINE_ASSOCIATION_UNRESOLVED"))
+    resolved_root_text = str(resolution.get("engineRoot") or "")
+    resolved_root = Path(resolved_root_text) if resolved_root_text else Path()
     resolved_version = _engine_version(resolved_root) if str(resolved_root) not in {"", "."} else ""
-    if association in SUPPORTED_ENGINE_MINORS and resolved_version != association and not allow_engine_fallback:
+    requested_version = engine_association_version(association)
+    if requested_version and resolved_version != requested_version and not allow_engine_fallback:
         issues.append(
-            f"exact engine binding required: project={association}, resolved={resolved_version or 'missing'}"
+            f"exact engine binding required: project={requested_version}, resolved={resolved_version or 'missing'}"
         )
     resolved_editor = Path(editor_cmd).expanduser().resolve() if editor_cmd and str(editor_cmd).strip() else None
     if resolved_editor is None and str(resolved_root) not in {"", "."}:
@@ -171,7 +151,7 @@ def build_runtime_verify_plan(
             resolved_editor = resolve_editor_executable(resolved_root, host)
         except FileNotFoundError as exc:
             issues.append(str(exc))
-    if resolved_editor is None or not resolved_editor.is_file():
+    if (resolved_editor is None or not resolved_editor.is_file()) and bool(resolution.get("ok")):
         issues.append("UnrealEditor-Cmd executable could not be resolved")
 
     experiment = build_unreal_experiment_plan(
@@ -200,6 +180,7 @@ def build_runtime_verify_plan(
     )
     return {
         "ok": not issues,
+        "errorCode": "" if not issues else str(resolution.get("errorCode") or "INVALID_RUNTIME_VERIFY_PLAN"),
         "issues": list(dict.fromkeys(issues)),
         "manifest": {
             "scenario": scenario,
@@ -218,8 +199,11 @@ def build_runtime_verify_plan(
             "engineRoot": str(resolved_root) if str(resolved_root) != "." else "",
             "editorCmd": str(resolved_editor or ""),
             "exactEngineBinding": bool(
-                not association or association not in SUPPORTED_ENGINE_MINORS or association == resolved_version
+                bool(resolution.get("ok"))
+                and (not requested_version or requested_version == resolved_version or allow_engine_fallback)
             ),
+            "engineResolutionSource": str(resolution.get("source") or ""),
+            "engineResolutionErrorCode": str(resolution.get("errorCode") or ""),
             "capabilities": capabilities,
         },
         "experimentPlan": experiment,

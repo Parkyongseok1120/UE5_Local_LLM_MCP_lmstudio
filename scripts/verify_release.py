@@ -20,6 +20,7 @@ DEFAULT_TIMEOUT_SEC = 180
 sys.path.insert(0, str(SCRIPTS))
 
 from atomic_io import atomic_write_text  # noqa: E402
+from workspace_paths import resolve_index_path  # noqa: E402
 
 
 def check(
@@ -209,7 +210,7 @@ def main() -> int:
         )
     )
 
-    index = ROOT / "data" / "unreal58" / "rag.sqlite"
+    index = resolve_index_path(ROOT)
     if args.repo_only:
         results.append(
             check(

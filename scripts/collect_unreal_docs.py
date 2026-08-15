@@ -28,6 +28,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
+from workspace_paths import find_workspace_root, resolve_engine_version, resolve_index_dir
 
 USER_AGENT = "UE5-Local-LLM-MCP/0.1 (+https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio; local RAG index build)"
 BLOCK_TAGS = {
@@ -289,17 +290,45 @@ def crawl(args: argparse.Namespace) -> None:
     print(f"done: wrote {written} pages to {out_path}")
 
 
-def parse_args() -> argparse.Namespace:
+def _default_seed_path(workspace: Path, version: str) -> Path:
+    """Select a version-specific seed file when one is available.
+
+    Older workspaces ship a single seed file.  Falling back to any curated
+    seed keeps that install usable while allowing new engine versions to add
+    their own file without changing code.
+    """
+
+    config_dir = workspace / "config"
+    digits = "".join(character for character in version if character.isdigit())
+    versioned = config_dir / f"unreal_{digits}_seed_urls.txt"
+    if versioned.is_file():
+        return versioned
+    generic = config_dir / "unreal_seed_urls.txt"
+    if generic.is_file():
+        return generic
+    candidates = sorted(config_dir.glob("unreal_*_seed_urls.txt"))
+    return candidates[0] if candidates else generic
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect Unreal Engine docs pages as JSONL.")
-    parser.add_argument("--seeds", default="config/unreal_58_seed_urls.txt")
-    parser.add_argument("--out", default="data/unreal58/raw_docs.jsonl")
-    parser.add_argument("--version", default="5.8")
+    parser.add_argument("--seeds", default="", help="Seed URL list (default: version-aware workspace seed).")
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
+    parser.add_argument("--version", default="", help="Unreal docs version (default: configured engine version).")
     parser.add_argument("--max-pages", type=int, default=50)
     parser.add_argument("--min-chars", type=int, default=500)
     parser.add_argument("--delay", type=float, default=0.5)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--resume", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    workspace = find_workspace_root()
+    if not args.version:
+        args.version = resolve_engine_version(workspace)
+    if not args.seeds:
+        args.seeds = str(_default_seed_path(workspace, args.version))
+    if not args.out:
+        args.out = str(resolve_index_dir(workspace) / "raw_docs.jsonl")
+    return args
 
 
 if __name__ == "__main__":

@@ -226,6 +226,79 @@ def test_agent_plan_compaction_preserves_authorization_and_bounds_repeated_reque
     assert len(json.dumps(compact, ensure_ascii=False)) < len(json.dumps(payload, ensure_ascii=False))
 
 
+def test_read_only_plan_compaction_drops_verbose_planning_but_keeps_task_control() -> None:
+    authorization = {
+        "taskSessionId": "read-session",
+        "authToken": "read-token",
+        "planId": "read-plan",
+        "planRevision": "4",
+        "activeSliceId": "inspect",
+        "routeHash": "read-route",
+        "routePhase": "planner",
+    }
+    payload = {
+        "request": "inspect " + "source " * 20_000,
+        "taskKind": "cpp_analysis",
+        "editStrategy": "no_edit",
+        "evidencePlan": {
+            "task_kind": "cpp_analysis",
+            "queries": ["query " * 10_000],
+            "rag_modes": ["review", "planning"],
+            "gates": ["direct_source_evidence", "unreal_review_claim_validate"],
+            "writes_allowed": False,
+            "files_to_read": ["project://Example/Source/Foo.cpp"] * 40,
+        },
+        "projectContext": {
+            "ok": True,
+            "projectName": "Example",
+            "projectDir": "/projects/Example",
+            "uprojectPath": "/projects/Example/Example.uproject",
+            "sourceBrowsePath": "project://Example/Source",
+            "hugeDiscoveryCache": {"rows": ["x" * 1_000 for _ in range(80)]},
+        },
+        "writeGate": {"writesAllowed": False, "forbiddenWhen": ["no_edit"]},
+        "suggestedToolCalls": [
+            {"tool": "search_files", "args": {"query": "Foo", "path": "project://Example/Source"}},
+            {"tool": "read_file", "args": {"path": "Source/Example/Foo.cpp"}},
+        ],
+        "sourceEvidence": {
+            "required": True,
+            "sourceReadSucceeded": False,
+            "filesRead": [{"path": "Source/Example/Foo.cpp", "text": "x" * 20_000}],
+            "claimPolicy": "fail_closed",
+        },
+        "toolRoute": {"activeTools": ["search_files", "read_file"], "routeHash": "read-route"},
+        "taskAuthorization": authorization,
+        "taskAuthorizationRequiredForWrites": True,
+        "writeToolAuthorizationArgs": {"taskAuthorization": authorization},
+        "authorizationRetryPolicy": {"reuseExistingAuthorization": True},
+        "control": {"version": 2, "epoch": 4, "allowedTools": ["search_files"]},
+        "nextAction": "search_files",
+        "nextActionIsTool": True,
+        "requiredNextTool": "search_files",
+        "requiredNextToolArgs": {"taskAuthorization": authorization},
+        "domainProfile": {"verbose": "x" * 50_000},
+        "planSlices": [{"verbose": "x" * 50_000}],
+        "featureIntent": {"verbose": "x" * 50_000},
+        "toolDiscoveryCandidates": [{"verbose": "x" * 50_000}],
+    }
+
+    compact = compact_agent_plan_payload(payload, max_bytes=8_000)
+
+    assert compact["taskAuthorization"] == authorization
+    assert compact["writeToolAuthorizationArgs"] == {"taskAuthorization": authorization}
+    assert compact["toolRoute"] == payload["toolRoute"]
+    assert compact["control"] == payload["control"]
+    assert compact["requiredNextToolArgs"] == {"taskAuthorization": authorization}
+    assert compact["projectContext"]["uprojectPath"] == "/projects/Example/Example.uproject"
+    assert "hugeDiscoveryCache" not in compact["projectContext"]
+    assert "domainProfile" not in compact
+    assert "planSlices" not in compact
+    assert "featureIntent" not in compact
+    assert "toolDiscoveryCandidates" not in compact
+    assert len(json.dumps(compact, ensure_ascii=False)) <= 8_000
+
+
 def test_generic_plan_compaction_never_shrinks_authorization_for_tiny_budget() -> None:
     authorization = {
         "taskSessionId": "session",

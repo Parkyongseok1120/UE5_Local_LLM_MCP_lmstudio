@@ -20,6 +20,7 @@ from workspace_paths import (  # noqa: E402
     active_project_names,
     normalize_locator,
     resolve_engine_root,
+    resolve_index_dir,
     resolve_index_path,
     resolve_ubt_path,
 )
@@ -131,6 +132,48 @@ def test_index_path_normalizes_foreign_relative_separators(tmp_path):
         }),
         encoding="utf-8",
     )
+
+    assert resolve_index_path(workspace) == (
+        workspace / "data" / "unreal59" / "rag.sqlite"
+    ).resolve()
+
+
+def test_shared_index_config_drives_unconfigured_workspace(tmp_path, monkeypatch):
+    workspace = tmp_path / "UE5_Local_LLM_MCP_lmstudio"
+    workspace.mkdir()
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(
+        json.dumps(
+            {
+                "engineVersion": "5.10",
+                "indexNamespace": "unreal510",
+                "indexPath": r"data\unreal510\rag.sqlite",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+
+    assert resolve_index_path(workspace) == (
+        workspace / "data" / "unreal510" / "rag.sqlite"
+    ).resolve()
+    assert resolve_index_dir(workspace) == (workspace / "data" / "unreal510").resolve()
+
+
+def test_workspace_index_config_overrides_shared_selection(tmp_path, monkeypatch):
+    workspace = tmp_path / "UE5_Local_LLM_MCP_lmstudio"
+    config_dir = workspace / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.json").write_text(
+        json.dumps({"engineVersion": "5.9", "indexNamespace": "unreal59"}),
+        encoding="utf-8",
+    )
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(
+        json.dumps({"engineVersion": "5.10", "indexNamespace": "unreal510"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
 
     assert resolve_index_path(workspace) == (
         workspace / "data" / "unreal59" / "rag.sqlite"

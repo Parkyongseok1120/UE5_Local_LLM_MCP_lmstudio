@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from workspace_paths import load_shared_config
+from workspace_paths import load_shared_config, resolve_index_dir
 
 MISSING_CLAIM_RE = re.compile(
     r"(없음|없다|누락|미사용|missing|not\s+used|unused|does\s+not\s+exist|no\s+such)",
@@ -154,7 +154,7 @@ def load_pab(project_root: Path, pab_path: Path | None = None) -> dict[str, Any]
     candidates = [
         pab_path,
         project_root / "project_architecture.json",
-        Path("data/unreal58/project_architecture.json"),
+        resolve_index_dir() / "project_architecture.json",
     ]
     for candidate in candidates:
         if candidate and candidate.exists():

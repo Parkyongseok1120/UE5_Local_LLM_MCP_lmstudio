@@ -22,7 +22,15 @@ from load_sampling_preset import preset_for_wrapper, profile_edit_limits, set_sa
 from preflight_lmstudio import extract_assistant_text
 from rag_search import SearchOptions, search as search_index
 import token_budget
-from workspace_paths import active_project_names, resolve_active_project_path, resolve_ubt_path
+from workspace_paths import (
+    active_project_names,
+    find_workspace_root,
+    resolve_active_project_path,
+    resolve_engine_root_for_association,
+    resolve_index_dir,
+    resolve_index_path,
+    resolve_ubt_path,
+)
 from error_taxonomy import mode_from_error_kind as taxonomy_mode_from_error_kind, route_error_action
 from module_resolver import build_cs_has_module, resolve_modules_from_error, resolve_modules_from_text
 from retry_state import make_attempt_record, make_validation_rejection_record, recommend_retry_action
@@ -145,7 +153,6 @@ def host_unreal_platform(host: str | None = None) -> str:
 
 
 DEFAULT_LMSTUDIO_URL = "http://localhost:1234/v1"
-DEFAULT_UBT_PATH = str(resolve_ubt_path())
 WRAPPER_RULES_PATH = Path("RAG_Project_Guidelines/Unreal_Programming/07_Wrapper_Mandatory_Rules.md")
 PROMPT_PATH = Path("prompts/unreal_cpp_assistant.md")
 BUILD_CS_UNSUPPORTED_FOR_ROUTE_WARNING = (
@@ -396,31 +403,135 @@ def diff_snapshots(before: dict[str, str], after: dict[str, str]) -> str:
     return "\n".join(lines).strip() or "No file changes detected."
 
 
-def create_minimal_unreal_project(root: Path, project_name: str) -> Path:
+def project_engine_association(project_file: Path) -> str:
+    """Return a descriptor's exact engine association or stop before a guess."""
+
+    try:
+        descriptor = json.loads(project_file.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Could not read project descriptor {project_file}: {exc}") from exc
+    if not isinstance(descriptor, dict):
+        raise SystemExit(f"Project descriptor is not a JSON object: {project_file}")
+    association = descriptor.get("EngineAssociation")
+    if association is None:
+        return ""
+    if not isinstance(association, str):
+        raise SystemExit(f"Project EngineAssociation must be a string: {project_file}")
+    return association.strip()
+
+
+def _ubt_path_for_engine_root(engine_root: Path) -> Path:
+    """Choose the native UBT layout for a resolved engine root."""
+
+    ubt_dir = engine_root / "Engine" / "Binaries" / "DotNET" / "UnrealBuildTool"
+    names = (
+        ("UnrealBuildTool.exe", "UnrealBuildTool.dll")
+        if sys.platform == "win32"
+        else ("UnrealBuildTool.dll", "UnrealBuildTool.exe")
+    )
+    candidates = [ubt_dir / name for name in names]
+    return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+
+
+def resolve_engine_association(
+    association: str,
+    workspace: Path | None = None,
+) -> dict[str, Any]:
+    """Resolve a requested engine binding, failing before project creation."""
+
+    association = str(association or "").strip()
+    if not association:
+        return {
+            "ok": True,
+            "engineRoot": "",
+            "source": "",
+            "requestedEngineAssociation": "",
+            "errorCode": "",
+            "error": "",
+        }
+    resolution = dict(
+        resolve_engine_root_for_association(
+            association,
+            workspace or find_workspace_root(),
+        )
+    )
+    if not resolution.get("ok"):
+        raise SystemExit(
+            str(
+                resolution.get("error")
+                or "ENGINE_ASSOCIATION_UNRESOLVED: Could not resolve the project's engine."
+            )
+        )
+    return resolution
+
+
+def resolve_prepared_project_engine(
+    project_file: Path,
+    workspace: Path | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Resolve only the descriptor-bound engine for a wrapper run.
+
+    An association-free scratch project may use the workspace default.  A
+    numeric, custom, or GUID association must be resolved exactly; it is never
+    replaced with the newest installed engine.
+    """
+
+    association = project_engine_association(project_file)
+    return association, resolve_engine_association(association, workspace)
+
+
+def configure_ubt_path_for_project(
+    args: argparse.Namespace,
+    association: str,
+    engine_resolution: dict[str, Any],
+) -> None:
+    """Preserve an explicit UBT path, otherwise bind it to the project engine."""
+
+    configured = str(getattr(args, "ubt_path", "") or "").strip()
+    if configured:
+        args.ubt_path = configured
+        return
+    if association:
+        engine_root = str(engine_resolution.get("engineRoot") or "").strip()
+        if not engine_root:
+            raise SystemExit("ENGINE_ASSOCIATION_UNRESOLVED: Engine root was not returned.")
+        args.ubt_path = str(_ubt_path_for_engine_root(Path(engine_root)))
+        return
+    # No EngineAssociation is the one case where the generic workspace engine
+    # selection is permitted.
+    args.ubt_path = str(resolve_ubt_path())
+
+
+def create_minimal_unreal_project(
+    root: Path,
+    project_name: str,
+    *,
+    engine_association: str = "",
+) -> Path:
     project_name = sanitize_module_name(project_name)
+    engine_association = str(engine_association or "").strip()
     source_dir = root / "Source" / project_name
     (root / "Config").mkdir(parents=True, exist_ok=True)
     source_dir.mkdir(parents=True, exist_ok=True)
 
+    descriptor: dict[str, Any] = {
+        "FileVersion": 3,
+        "Category": "",
+        "Description": "Scratch project generated by LM Studio Unreal wrapper.",
+        "Modules": [
+            {
+                "Name": project_name,
+                "Type": "Runtime",
+                "LoadingPhase": "Default",
+            }
+        ],
+    }
+    if engine_association:
+        descriptor["EngineAssociation"] = engine_association
+
     write_file(
         root / f"{project_name}.uproject",
-        json.dumps(
-            {
-                "FileVersion": 3,
-                "EngineAssociation": "5.8",
-                "Category": "",
-                "Description": "Scratch project generated by LM Studio Unreal wrapper.",
-                "Modules": [
-                    {
-                        "Name": project_name,
-                        "Type": "Runtime",
-                        "LoadingPhase": "Default",
-                    }
-                ],
-            },
-            indent=2,
-        )
-        + "\n",
+        json.dumps(descriptor, indent=2) + "\n",
     )
     write_file(
         root / "Config" / "DefaultEngine.ini",
@@ -439,8 +550,6 @@ def create_minimal_unreal_project(root: Path, project_name: str) -> Path:
                 f"    public {project_name}Target(TargetInfo Target) : base(Target)",
                 "    {",
                 "        Type = TargetType.Game;",
-                "        DefaultBuildSettings = BuildSettingsVersion.Latest;",
-                "        IncludeOrderVersion = EngineIncludeOrderVersion.Latest;",
                 f"        ExtraModuleNames.Add(\"{project_name}\");",
                 "    }",
                 "}",
@@ -460,8 +569,6 @@ def create_minimal_unreal_project(root: Path, project_name: str) -> Path:
                 f"    public {project_name}EditorTarget(TargetInfo Target) : base(Target)",
                 "    {",
                 "        Type = TargetType.Editor;",
-                "        DefaultBuildSettings = BuildSettingsVersion.Latest;",
-                "        IncludeOrderVersion = EngineIncludeOrderVersion.Latest;",
                 f"        ExtraModuleNames.Add(\"{project_name}\");",
                 "    }",
                 "}",
@@ -485,8 +592,7 @@ def create_minimal_unreal_project(root: Path, project_name: str) -> Path:
                 "            \"Core\",",
                 "            \"CoreUObject\",",
                 "            \"Engine\",",
-                "            \"InputCore\",",
-                "            \"EnhancedInput\"",
+                "            \"InputCore\"",
                 "        });",
                 "",
                 "        PrivateDependencyModuleNames.AddRange(new string[]",
@@ -1760,18 +1866,32 @@ def run_ubt(
         configuration,
         log_file=log_path,
     )
-    completed = subprocess.run(
-        command,
-        cwd=str(project_file.parent),
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=timeout,
-        check=False,
-        env=ubt_subprocess_env(),
-    )
+    # Installed UE on Linux/macOS normally distributes UBT as a managed DLL.
+    # Windows can execute the .exe directly, while every host can run a .dll
+    # through dotnet.
+    if ubt_path.suffix.lower() == ".dll":
+        command = ["dotnet", *command]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(project_file.parent),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=False,
+            env=ubt_subprocess_env(),
+        )
+    except subprocess.TimeoutExpired:
+        message = f"UnrealBuildTool timed out after {timeout}s."
+        write_file(log_path, message + "\n")
+        return BuildResult(False, 124, log_path, message)
+    except OSError as exc:
+        message = f"Could not launch UnrealBuildTool: {exc}"
+        write_file(log_path, message + "\n")
+        return BuildResult(False, 127, log_path, message)
     output = completed.stdout or ""
     write_file(log_path, output)
     return BuildResult(completed.returncode == 0, completed.returncode, log_path, output)
@@ -2242,9 +2362,9 @@ def system_prompt_static_prefix(rules_text: str, edit_limits: dict[str, Any] | N
     if recommended:
         base_prompt = read_text(Path(recommended), "")
         if not base_prompt.strip():
-            base_prompt = read_text(PROMPT_PATH, "You are an Unreal Engine 5.8 C++ assistant.")
+            base_prompt = read_text(PROMPT_PATH, "You are an Unreal Engine C++ assistant.")
     else:
-        base_prompt = read_text(PROMPT_PATH, "You are an Unreal Engine 5.8 C++ assistant.")
+        base_prompt = read_text(PROMPT_PATH, "You are an Unreal Engine C++ assistant.")
     return f"""{base_prompt}
 
 You are now running inside an automated compile wrapper.
@@ -2595,6 +2715,13 @@ def prepare_run(args: argparse.Namespace, request: str) -> PreparedRun:
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     source_project_file: Path | None = Path(args.project_file).resolve() if args.project_file else None
     project_name = sanitize_module_name(source_project_file.stem if source_project_file else args.project_name)
+    scratch_engine_association = str(getattr(args, "engine_association", "") or "").strip()
+    scratch_engine_resolution: dict[str, Any] | None = None
+    if source_project_file is None:
+        # Validate an explicitly requested custom/GUID association before
+        # creating a scratch tree.  A failed lookup must not leave a project
+        # that appears bound to a different default engine.
+        scratch_engine_resolution = resolve_engine_association(scratch_engine_association)
     run_dir = Path(args.run_dir) if args.run_dir else Path(args.scratch_root) / f"{timestamp}_{project_name}"
     run_dir = run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -2608,7 +2735,18 @@ def prepare_run(args: argparse.Namespace, request: str) -> PreparedRun:
             project_file = copy_project_subset(source_project_file, run_dir)
     else:
         project_root = run_dir / project_name
-        project_file = create_minimal_unreal_project(project_root, project_name)
+        project_file = create_minimal_unreal_project(
+            project_root,
+            project_name,
+            engine_association=scratch_engine_association,
+        )
+
+    if scratch_engine_resolution is not None:
+        engine_association = scratch_engine_association
+        engine_resolution = scratch_engine_resolution
+    else:
+        engine_association, engine_resolution = resolve_prepared_project_engine(project_file)
+    configure_ubt_path_for_project(args, engine_association, engine_resolution)
 
     target = args.target or f"{project_name}Editor"
     write_file(run_dir / "request.txt", request + "\n")
@@ -2619,6 +2757,10 @@ def prepare_run(args: argparse.Namespace, request: str) -> PreparedRun:
         "target": target,
         "source_project_file": str(source_project_file) if source_project_file else "",
         "direct_project_write": direct_project_write,
+        "engine_association": engine_association,
+        "engine_root": str(engine_resolution.get("engineRoot") or ""),
+        "engine_resolution_source": str(engine_resolution.get("source") or ""),
+        "ubt_path": str(args.ubt_path),
     }
     write_json(run_dir / "run_metadata.json", metadata)
     return PreparedRun(run_dir, project_file, project_name, target, source_project_file, direct_project_write)
@@ -4253,8 +4395,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate, apply, validate, and compile Unreal C++ files through LM Studio.")
     parser.add_argument("--request", default="", help="User implementation request.")
     parser.add_argument("--request-file", default="", help="Text file containing the user request.")
-    parser.add_argument("--index", default="data/unreal58/rag.sqlite")
-    parser.add_argument("--module-graph", default="data/unreal58/raw_module_graph.jsonl")
+    parser.add_argument("--index", default="", help="RAG index (default: configured workspace index).")
+    parser.add_argument("--module-graph", default="", help="Module graph (default: configured RAG data directory).")
     parser.add_argument("--mode", default="agent_edit")
     parser.add_argument("--top-k", type=int, default=8)
     parser.add_argument("--lmstudio-url", default=DEFAULT_LMSTUDIO_URL)
@@ -4275,7 +4417,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target", default="")
     parser.add_argument("--platform", default=host_unreal_platform())
     parser.add_argument("--configuration", default="Development")
-    parser.add_argument("--ubt-path", default=DEFAULT_UBT_PATH)
+    parser.add_argument(
+        "--engine-association",
+        default="",
+        help="Exact EngineAssociation for a new scratch project; unresolved custom IDs fail closed.",
+    )
+    parser.add_argument(
+        "--ubt-path",
+        default="",
+        help="Explicit UnrealBuildTool path; defaults to the exact project engine when associated.",
+    )
     parser.add_argument("--build-timeout", type=int, default=1200)
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-static-gate", action="store_true")
@@ -4289,6 +4440,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--orchestrate", action="store_true", help="Inject agent orchestrator plan into prompts")
     parser.add_argument("--no-orchestrate", action="store_true", help="Disable orchestrator even when env enabled")
     args = parser.parse_args()
+    if not args.index:
+        args.index = str(resolve_index_path())
+    if not args.module_graph:
+        args.module_graph = str(resolve_index_dir() / "raw_module_graph.jsonl")
     if args.no_orchestrate:
         args.orchestrate = False
     elif not args.orchestrate:

@@ -13,8 +13,6 @@ from rag_search import SearchOptions, search
 from project_routing import resolve_project_filters
 from workspace_paths import load_shared_config, resolve_index_path
 
-FALLBACK_INDEX = Path("data/unreal58/rag.sqlite")
-
 
 OPTION_ALIASES = {
     "source": "sources",
@@ -225,10 +223,7 @@ def main(args: argparse.Namespace) -> int:
 
 
 def default_index_path() -> Path:
-    try:
-        return resolve_index_path()
-    except Exception:
-        return FALLBACK_INDEX
+    return resolve_index_path()
 
 
 def parse_args() -> argparse.Namespace:

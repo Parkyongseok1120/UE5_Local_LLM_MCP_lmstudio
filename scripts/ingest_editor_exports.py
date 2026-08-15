@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from workspace_paths import active_project_names, find_workspace_root, load_shared_config
+from workspace_paths import active_project_names, find_workspace_root, load_shared_config, resolve_index_dir
 
 EXPORT_PATTERNS: tuple[tuple[str, str], ...] = (
     ("blueprint*.jsonl", "blueprint"),
@@ -66,15 +66,15 @@ def discover_exports(export_dir: Path) -> list[tuple[Path, str]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ingest Editor export JSONL files from a directory.")
     parser.add_argument("--export-dir", required=True, help="Directory containing Editor export JSONL files.")
-    parser.add_argument("--out-dir", default="data/unreal58")
+    parser.add_argument("--out-dir", default="", help="Output directory (default: configured RAG data directory).")
     parser.add_argument("--project-name", default="")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     workspace = find_workspace_root()
     export_dir = Path(args.export_dir).expanduser().resolve()
-    out_dir = Path(args.out_dir)
-    if not out_dir.is_absolute():
+    out_dir = Path(args.out_dir) if args.out_dir else resolve_index_dir(workspace)
+    if args.out_dir and not out_dir.is_absolute():
         out_dir = workspace / out_dir
     project_name = resolve_project_name(args.project_name)
 

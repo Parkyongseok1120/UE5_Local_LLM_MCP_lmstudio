@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 from load_sampling_preset import profile_agent_policy, set_sampling_profile_for_model
 from rag_context import assemble_context
 from rag_search import SearchOptions, search as search_index
-from workspace_paths import active_project_names
+from workspace_paths import active_project_names, resolve_index_path
 
 
 SOURCE_TYPE_LABELS = {
@@ -152,7 +152,7 @@ SECTION_LABELS = [
 ]
 
 
-DEFAULT_SYSTEM_PROMPT = """You are an Unreal Engine 5.8 C++ assistant.
+DEFAULT_SYSTEM_PROMPT = """You are an Unreal Engine C++ assistant.
 Use the provided context first. If context is insufficient, say what is missing.
 Answer in Korean by default. Include C++ examples when useful and cite sources."""
 
@@ -399,7 +399,7 @@ def main(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Search the RAG index and optionally call LM Studio.")
     parser.add_argument("query")
-    parser.add_argument("--index", default="data/unreal58/rag.sqlite")
+    parser.add_argument("--index", default="", help="RAG index (default: configured workspace index).")
     parser.add_argument("--top-k", type=int, default=0, help="Defaults to the active model profile.")
     from rag_modes import MODE_ENUM
 
@@ -425,7 +425,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model")
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--timeout", type=int, default=120)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.index:
+        args.index = str(resolve_index_path())
+    return args
 
 
 if __name__ == "__main__":

@@ -242,6 +242,7 @@ def _state_corpus() -> list[dict]:
         [
             _recovery_obligation_state("external_blocker"),
             _recovery_obligation_state("await_user"),
+            _recovery_obligation_state("evidence_complete"),
             _recovery_obligation_state(
                 "environment_recovery",
                 required_tool=recovery_tool,
@@ -313,6 +314,19 @@ process.stdout.write(JSON.stringify(states.map(deriveNextObligation)));
     python_controls = [derive_next_obligation(state) for state in states]
 
     assert node_controls == python_controls
+
+
+def test_evidence_complete_is_a_no_tool_synthesis_transition() -> None:
+    control = derive_next_obligation(_recovery_obligation_state("evidence_complete"))
+
+    assert control["disposition"] == "continue"
+    assert control["requiredTool"] is None
+    assert control["allowedTools"] == []
+    assert control["retryPolicy"] == {"sameSemanticInput": "forbidden"}
+    assert control["blocker"] == {
+        "code": "RECOVERY_EVIDENCE_COMPLETE",
+        "fingerprint": "fingerprint-evidence_complete-0",
+    }
 
 
 def test_failed_gate_recovery_preserves_exact_tool_args_before_repeat_block() -> None:

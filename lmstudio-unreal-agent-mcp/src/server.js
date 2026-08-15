@@ -39,6 +39,7 @@ const { attachCommittedToolOutcomeControl } = require("./post-read-route-control
 const { verifyRuntimeComponent } = require("./runtime-identity.js");
 const { deriveValidationScope } = require("./validation-scope.js");
 const { absolutePathIsWithin } = require("./filesystem-path-identity.js");
+const { getMcpIdentityStatus } = require("./mcp-connection.js");
 
 const {
   Server
@@ -62,7 +63,8 @@ const {
   getActiveProject,
   setActiveProject,
   listUnrealProjects,
-  buildProjectBrowsePaths
+  buildProjectBrowsePaths,
+  resolveAgentWorkspaceRoot,
 } = require("./unreal-detect.js");
 const {
   scanSymbolImpact,
@@ -477,9 +479,7 @@ function launchProjectPicker(explorer = false) {
       message: "The project picker requires Windows (PowerShell). Use rag.ps1 pick-project manually or set activeProject in the shared config."
     };
   }
-  const ragRoot = process.env.UNREAL58_ROOT
-    ? path.resolve(process.env.UNREAL58_ROOT)
-    : path.join(os.homedir(), ".lmstudio", "Unreal58-RAG");
+  const ragRoot = resolveAgentWorkspaceRoot();
   const script = path.join(ragRoot, "scripts", "pick_active_project.ps1");
   const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script];
   if (explorer) {
@@ -1787,6 +1787,7 @@ function buildToolCatalogDiagnostics(tools, context = null) {
     routeContextStatus: String(resolved.status || "none"),
     routeErrorCode: String(resolved.errorCode || ""),
     stateRoot: ensureStateRootLayout(resolveAgentStateRoot()),
+    identity: getMcpIdentityStatus(),
   };
 }
 
@@ -1803,6 +1804,7 @@ function emitCatalogInitializedDiagnostic(context = null) {
     routeErrorCode: catalog.routeErrorCode,
     stateRoot: catalog.stateRoot,
     activeProject: getActiveProject(CONFIG_PATH) || "",
+    mcpIdentity: catalog.identity,
     runtimeComponent: runtimeComponentStatus?.running || null,
     runtimeVerified: runtimeComponentStatus?.verified === true,
   }));
@@ -2144,6 +2146,88 @@ function cachedReadSuccess(content, options = {}) {
   return text(JSON.stringify(payload, null, 2));
 }
 
+function evidenceStagnationTargetFiles(taskState, context = {}) {
+  const selected = taskState?.toolRoute?.selectedSlice;
+  const selectedFiles = Array.isArray(selected?.files)
+    ? selected.files.map((value) => String(value || "").replace(/\\/g, "/").replace(/^\/+/, "").trim())
+      .filter(Boolean)
+      .slice(0, 4)
+    : [];
+  if (selectedFiles.length) return selectedFiles;
+  const activeProject = String(context.activeProject || "").trim();
+  const fileAbsPath = String(context.fileAbsPath || "").trim();
+  if (!activeProject || !fileAbsPath) return [];
+  try {
+    const projectRoot = path.dirname(path.resolve(activeProject));
+    const relative = path.relative(projectRoot, path.resolve(fileAbsPath));
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      return [relative.replace(/\\/g, "/")];
+    }
+  } catch {
+    // An evidence guard must not fail merely because a stale context cannot be
+    // converted to a project-relative repair target.
+  }
+  return [];
+}
+
+function recordTaskBoundEvidenceStagnation(context = {}, errorCode, recoveryHint = null) {
+  const authorization = context.taskAuthorization && typeof context.taskAuthorization === "object"
+    ? context.taskAuthorization
+    : null;
+  const taskSessionId = String(authorization?.taskSessionId || context.taskSessionId || "").trim();
+  if (!authorization || !taskSessionId || context.detachedReadOnlyObservation === true) return null;
+  const taskState = readTaskState(WORKSPACE_ROOT, taskSessionId);
+  if (!taskState || String(taskState.status || "").toLowerCase() !== "running") return null;
+  const writesAllowed = taskState.writesAllowed === true
+    || taskState.writeGate?.writesAllowed === true;
+  const targetFiles = evidenceStagnationTargetFiles(taskState, context);
+  const recovery = writesAllowed || recoveryHint
+    ? {
+      source: "evidence",
+      status: "repair_planning_required",
+      scopeDisposition: "in_slice",
+      errorCode,
+      mutationGeneration: Number(taskState.mutationGeneration || context.mutationGeneration || 0),
+      requiredTool: {
+        name: "unreal_code_sketch_claim_validate",
+        args: targetFiles.length ? { targetFiles } : {},
+      },
+      targetFiles,
+      message: "Evidence reads are exhausted. Reuse retained source evidence and validate the bounded repair claim before writing.",
+    }
+    : {
+      source: "evidence",
+      status: "evidence_complete",
+      scopeDisposition: "in_slice",
+      errorCode,
+      mutationGeneration: Number(taskState.mutationGeneration || context.mutationGeneration || 0),
+      requiredTool: {},
+      targetFiles,
+      message: "Evidence reads are exhausted. Answer from retained source evidence; no additional tool call is permitted for this turn.",
+    };
+  // The read route was already authorized above. Persist with the freshly
+  // loaded server-owned credential instead of echoing a model-provided compact
+  // handle back into the Python transaction; that handle may intentionally
+  // omit rotating route fields and must not downgrade this P0 transition.
+  const lifecycle = recordRecoveryObligationViaPython(
+    WORKSPACE_ROOT,
+    { taskAuthorization: taskAuthorizationForState(taskState) },
+    recovery,
+  );
+  if (!lifecycle || typeof lifecycle !== "object") {
+    return {
+      ok: false,
+      active: true,
+      errorCode: "EVIDENCE_RECOVERY_RECORD_FAILED",
+      error: "Task-bound evidence recovery returned no lifecycle result.",
+    };
+  }
+  // Any record attempt for an existing active task is authoritative.  Do not
+  // silently fall through to a v1 blocker just because a bridge error omitted
+  // its optional `active` flag.
+  return { ...lifecycle, active: lifecycle.active !== false };
+}
+
 function evidenceStagnationFail(tool, guard, options = {}) {
   const errorCode = guard.reason || "EVIDENCE_STAGNATION";
   recordReadStagnation(tool, guard.normalizedArgs, options.context || {});
@@ -2167,55 +2251,82 @@ function evidenceStagnationFail(tool, guard, options = {}) {
     } : null,
   });
   // #endregion
+  const lifecycle = recordTaskBoundEvidenceStagnation(options.context || {}, errorCode, recoveryHint);
+  const lifecycleFailed = lifecycle
+    && lifecycle.active === true
+    && lifecycle.ok !== true;
+  if (lifecycleFailed) {
+    const payload = {
+      errorCode: String(lifecycle.errorCode || "EVIDENCE_RECOVERY_RECORD_FAILED"),
+      retryable: false,
+      stopCurrentWorkflow: true,
+      doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
+      agentInstruction: "Do not retry an evidence read. The task recovery state could not be committed; report the control error.",
+    };
+    bindAuthoritativeLifecycleControl(payload, lifecycle);
+    return fail(String(lifecycle.error || "Could not commit task-bound evidence recovery."), payload);
+  }
   if (recoveryHint) {
+    const payload = {
+      ...(lifecycle?.ok === true ? {
+        taskRecoveryRecorded: true,
+        recoveryDisposition: String(lifecycle?.control?.disposition || ""),
+      } : {}),
+      errorCode,
+      retryable: lifecycle?.control?.disposition === "require_tool",
+      stopCurrentWorkflow: false,
+      stopCurrentPhase: true,
+      phaseBoundary: "evidence",
+      doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
+      nextAction: "replace_in_file",
+      nextActionIsTool: true,
+      agentInstruction:
+        "Do not call another evidence tool. Reuse the file content already in context and apply a bounded "
+        + `replace_in_file (newText <= ${MAX_PATCH_CHANGED_LINES} lines, oldText+newText <= ${MAX_PATCH_ARGUMENT_CHARS} chars).`,
+      userMessage:
+        "Re-read blocked. Continue with a smaller replace_in_file using evidence already returned.",
+      nextSteps: [
+        "Do not call another evidence tool.",
+        "Apply one bounded replace_in_file using exact text already in context.",
+      ],
+      readAttempts: guard.attempts,
+      pingPong: Boolean(guard.pingPong),
+      recoveryReason: recoveryHint.reason,
+    };
+    bindAuthoritativeLifecycleControl(payload, lifecycle);
     return fail(
       "Evidence re-read blocked after a bounded mutation rejection. Use existing evidence and emit a smaller replace_in_file.",
-      {
-        errorCode,
-        retryable: true,
-        stopCurrentWorkflow: false,
-        stopCurrentPhase: true,
-        phaseBoundary: "evidence",
-        doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
-        nextAction: "replace_in_file",
-        nextActionIsTool: true,
-        agentInstruction:
-          "Do not call another evidence tool. Reuse the file content already in context and apply a bounded "
-          + `replace_in_file (newText <= ${MAX_PATCH_CHANGED_LINES} lines, oldText+newText <= ${MAX_PATCH_ARGUMENT_CHARS} chars).`,
-        userMessage:
-          "Re-read blocked. Continue with a smaller replace_in_file using evidence already returned.",
-        nextSteps: [
-          "Do not call another evidence tool.",
-          "Apply one bounded replace_in_file using exact text already in context.",
-        ],
-        readAttempts: guard.attempts,
-        pingPong: Boolean(guard.pingPong),
-        recoveryReason: recoveryHint.reason,
-      }
+      payload
     );
   }
+  const payload = {
+    ...(lifecycle?.ok === true ? {
+      taskRecoveryRecorded: true,
+      recoveryDisposition: String(lifecycle?.control?.disposition || ""),
+    } : {}),
+    errorCode,
+    retryable: lifecycle?.control?.disposition === "require_tool",
+    doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
+    // Evidence exhaustion is a phase boundary, not a reason to abandon an
+    // implementation request. Mutations and validation remain available.
+    stopCurrentWorkflow: false,
+    stopCurrentPhase: true,
+    phaseBoundary: "evidence",
+    agentInstruction: cachedReadInstruction(errorCode),
+    userMessage: cachedReadInstruction(errorCode),
+    nextSteps: [
+      "Do not call another evidence tool.",
+      "For implementation, continue with a supported write/validation step; for analysis-only work, answer from retained evidence.",
+    ],
+    readAttempts: guard.attempts,
+    pingPong: Boolean(guard.pingPong),
+  };
+  bindAuthoritativeLifecycleControl(payload, lifecycle);
   return fail(
     errorCode === "EVIDENCE_STAGNATION_REPEAT"
       ? `identical ${tool} evidence call blocked after stagnation.`
       : "Evidence read stagnating — no new line coverage or soft budget exhausted.",
-    {
-      errorCode,
-      retryable: false,
-      doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
-      // Evidence exhaustion is a phase boundary, not a reason to abandon an
-      // implementation request. Mutations and validation remain available.
-      stopCurrentWorkflow: false,
-      stopCurrentPhase: true,
-      phaseBoundary: "evidence",
-      agentInstruction: cachedReadInstruction(errorCode),
-      userMessage: cachedReadInstruction(errorCode),
-      nextSteps: [
-        "Do not call another evidence tool.",
-        "For implementation, continue with a supported write/validation step; for analysis-only work, answer from retained evidence.",
-      ],
-      readAttempts: guard.attempts,
-      pingPong: Boolean(guard.pingPong),
-    }
+    payload
   );
 }
 
@@ -3074,8 +3185,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       lastObservedRouteFingerprint = currentRouteFingerprint;
       try {
         await server.sendToolListChanged();
-      } catch {
-        // Older clients may not accept list-changed notifications.
+      } catch (error) {
+        // Route enforcement remains server-side, but a failed advisory refresh
+        // must be visible during diagnosis instead of looking like success.
+        console.warn(
+          `[unreal-agent] TOOLS_LIST_CHANGED_NOTIFY_FAILED: ${String(error?.message || error || "unknown notification failure").slice(0, 500)}`
+        );
       }
     }
     const toolDefinitions = allAgentTools();
@@ -7309,6 +7424,9 @@ async function main() {
     notify: async (context, fingerprint) => {
       lastObservedRouteFingerprint = fingerprint;
       await server.sendToolListChanged();
+    },
+    onNotifyError: (diagnostic) => {
+      console.warn(`[unreal-agent] ${diagnostic.code}: ${diagnostic.message}`);
     },
   });
 }

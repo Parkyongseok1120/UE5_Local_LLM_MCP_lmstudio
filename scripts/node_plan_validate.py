@@ -8,13 +8,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import find_workspace_root, resolve_index_dir
+
 
 def _resolve_catalog_path(catalog_path: str | Path | None) -> Path:
-    workspace = Path(__file__).resolve().parent.parent
+    workspace = find_workspace_root()
     if catalog_path:
         path = Path(catalog_path)
         return path if path.is_absolute() else workspace / path
-    return workspace / "data" / "unreal58" / "node_catalog.json"
+    return resolve_index_dir() / "node_catalog.json"
 
 
 def _load_catalog(catalog_path: Path) -> dict[str, Any]:

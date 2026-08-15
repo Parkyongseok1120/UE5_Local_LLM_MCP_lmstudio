@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from workspace_paths import load_shared_config
+from workspace_paths import load_shared_config, resolve_index_dir
 from parse_build_cs import parse_build_cs_file
 
 SOURCE_EXTENSIONS = {".h", ".hpp", ".hh", ".cpp", ".cxx", ".cc", ".cs"}
@@ -369,7 +369,7 @@ def write_outputs(arch: dict[str, Any], out_dir: Path, jsonl_path: Path | None) 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect project architecture brief (PAB).")
     parser.add_argument("--project", help="Project root or .uproject path")
-    parser.add_argument("--out-dir", default="data/unreal58", help="Output directory for project_architecture.json")
+    parser.add_argument("--out-dir", default="", help="Output directory (default: configured RAG data directory).")
     parser.add_argument("--jsonl", default="", help="Optional JSONL path for RAG index input")
     return parser.parse_args()
 
@@ -378,7 +378,7 @@ def main() -> int:
     args = parse_args()
     project_root = resolve_project_root(args.project)
     arch = scan_architecture(project_root)
-    out_dir = Path(args.out_dir)
+    out_dir = Path(args.out_dir) if args.out_dir else resolve_index_dir()
     jsonl = Path(args.jsonl) if args.jsonl else None
     write_outputs(arch, out_dir, jsonl)
     return 0

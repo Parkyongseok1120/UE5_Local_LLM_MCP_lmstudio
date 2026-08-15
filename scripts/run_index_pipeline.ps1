@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "unreal_workspace_config.ps1")
+. (Join-Path $PSScriptRoot "installer_support\Install-PathHelpers.ps1")
 
 function Find-Python {
     param([string]$Preferred = "")
@@ -43,7 +44,6 @@ function Read-SharedConfigJson {
 function Get-EngineSourceRoot {
     param($SharedConfig, [string]$Workspace)
 
-    . (Join-Path $PSScriptRoot "installer_support\Install-PathHelpers.ps1")
     return Get-WorkspaceEngineSourcePath -RagRoot $Workspace
 }
 
@@ -84,23 +84,25 @@ else {
 }
 
 $py = Find-Python -Preferred $PythonExe
-$sharedConfigPath = Join-Path (Join-Path (Join-Path $HOME ".lmstudio") "config") "unreal-workspace.json"
+$sharedConfigPath = if ($env:SHARED_UNREAL_CONFIG) {
+    [string]$env:SHARED_UNREAL_CONFIG
+}
+else {
+    Join-Path (Join-Path (Join-Path $HOME ".lmstudio") "config") "unreal-workspace.json"
+}
 $shared = Read-SharedConfigJson -Path $sharedConfigPath
 
 $resolvedTier = if ($Tier) { $Tier.ToLowerInvariant() } else { [string]$shared.indexingTier }
 if ([string]::IsNullOrWhiteSpace($resolvedTier)) { $resolvedTier = "standard" }
 if ($resolvedTier -notin @("lite", "standard", "full")) { $resolvedTier = "standard" }
 
-$namespace = "unreal58"
-$cfgPath = Join-Path (Join-Path $workspace "config") "workspace.json"
-if (Test-Path $cfgPath) {
-    try {
-        $cfg = Get-Content -LiteralPath $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($cfg.indexNamespace) { $namespace = [string]$cfg.indexNamespace }
-    }
-    catch { }
+$ragPaths = Get-RagDataPaths -RagRoot $workspace
+$namespace = [string]$ragPaths.Namespace
+$dataDir = [string]$ragPaths.DataDir
+$engineVersion = [string]$ragPaths.EngineVersion
+if ($engineVersion -match '^\d+\.\d+$') {
+    $env:UNREAL_ENGINE_VERSION = $engineVersion
 }
-$dataDir = Join-Path (Join-Path $workspace "data") $namespace
 $scriptsDir = Join-Path $workspace "scripts"
 $symbolsPath = Join-Path $dataDir "raw_symbols.jsonl"
 $sidecarPath = Join-Path $dataDir "sidecar_symbols_meta.jsonl"

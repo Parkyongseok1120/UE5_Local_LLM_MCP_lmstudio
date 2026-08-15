@@ -11,7 +11,7 @@ from typing import Any
 
 from material_graph_format import material_row_search_text
 from project_row_filter import filter_rows_by_project
-from workspace_paths import load_shared_config
+from workspace_paths import find_workspace_root, load_shared_config, resolve_index_dir
 
 MATERIAL_IDENT_RE = re.compile(
     r"\b(?:M_[A-Za-z0-9_]+|MI_[A-Za-z0-9_]+|Material(?:Instance)?(?:Constant)?_[A-Za-z0-9_]+)\b|/Game/[A-Za-z0-9_/]+",
@@ -50,8 +50,8 @@ def _asset_label(row: dict[str, Any]) -> str:
 
 
 def _resolve_index_dir(index_dir: str | Path | None) -> Path:
-    workspace = Path(__file__).resolve().parent.parent
-    idx = Path(index_dir) if index_dir else workspace / "data" / "unreal58"
+    workspace = find_workspace_root()
+    idx = Path(index_dir) if index_dir else resolve_index_dir()
     return idx if idx.is_absolute() else workspace / idx
 
 
@@ -178,7 +178,7 @@ def validate_material_claims(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate material graph claims against exported metadata.")
     parser.add_argument("--claim", action="append", default=[])
-    parser.add_argument("--index-dir", default="data/unreal58")
+    parser.add_argument("--index-dir", default=None)
     parser.add_argument("--project-name", default="")
     args = parser.parse_args()
     payload = validate_material_claims(args.claim, args.index_dir, args.project_name or None)

@@ -108,6 +108,22 @@ def test_engine_auto_detection_uses_semantic_version_order(
     sys.modules.pop("integrated_install", None)
 
 
+def test_engine_auto_detection_never_substitutes_latest_for_custom_association(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    parent = tmp_path / "engines"
+    for name in ("UE_4.27", "UE_5.10"):
+        (parent / name / "Engine" / "Source").mkdir(parents=True)
+    monkeypatch.setattr(module, "_launcher_manifest_engine_locations", lambda: [])
+    monkeypatch.setattr(module, "_common_engine_locations", lambda: [parent])
+
+    assert module._detect_engine_root("UE_4.27") == (parent / "UE_4.27").resolve()
+    assert module._detect_engine_root("source-build-guid") is None
+    sys.modules.pop("integrated_install", None)
+
+
 def test_windows_launcher_manifest_adds_nondefault_engine_location(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -875,6 +891,7 @@ def test_full_agent_install_keeps_context_proxy_advisory(tmp_path: Path) -> None
         assert runtime_env["CONTROL_RUNTIME_REQUIRED"] == "1"
     assert rag_env["CONTROL_RUNTIME_COMPONENT"] == "rag"
     assert entries["unreal-agent"]["env"]["CONTROL_RUNTIME_COMPONENT"] == "agent"
+    assert entries["unreal-rag"]["args"] == [str(ROOT / "scripts" / "unreal_rag_mcp.py")]
     sys.modules.pop("integrated_install", None)
 
 
@@ -1090,6 +1107,108 @@ def test_explicit_engine_root_is_persisted_and_forwarded_to_mcp(tmp_path: Path) 
     assert shared["defaultEngineRoot"] == str(engine)
     assert mcp["mcpServers"]["unreal-rag"]["env"]["UNREAL_ENGINE_ROOT"] == str(engine)
     assert mcp["mcpServers"]["unreal-agent"]["env"]["UNREAL_ENGINE_ROOT"] == str(engine)
+
+
+def test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded(
+    tmp_path: Path,
+) -> None:
+    engine = tmp_path / "CustomEngine"
+    (engine / "Engine" / "Source").mkdir(parents=True)
+    project_dir = tmp_path / "projects" / "SourceBuildGame"
+    project_dir.mkdir(parents=True)
+    association = "{SOURCE-BUILD-IDENTITY}"
+    project = project_dir / "SourceBuildGame.uproject"
+    project.write_text(json.dumps({"FileVersion": 3, "EngineAssociation": association}), encoding="utf-8")
+
+    result = _run(
+        tmp_path,
+        "--profile",
+        "standard",
+        "--skip-deps",
+        "--active-project",
+        str(project),
+        "--engine-root",
+        str(engine),
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    shared = json.loads(
+        (tmp_path / "lmstudio" / "config" / "unreal-workspace.json").read_text(encoding="utf-8")
+    )
+    mcp = json.loads((tmp_path / "lmstudio" / "mcp.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (tmp_path / "lmstudio" / "config" / "control-runtime.json").read_text(encoding="utf-8")
+    )
+    commit = manifest["components"]["agent"]["gitCommit"]
+    assert shared["engineRootsByAssociation"][association] == str(engine)
+    assert mcp["mcpServers"]["unreal-rag"]["env"]["CONTROL_RUNTIME_GIT_COMMIT"] == commit
+    assert mcp["mcpServers"]["unreal-agent"]["env"]["CONTROL_RUNTIME_GIT_COMMIT"] == commit
+
+
+def test_custom_active_project_engine_fails_closed_without_an_exact_binding(tmp_path: Path) -> None:
+    project_dir = tmp_path / "projects" / "SourceBuildGame"
+    project_dir.mkdir(parents=True)
+    project = project_dir / "SourceBuildGame.uproject"
+    project.write_text(
+        json.dumps({"FileVersion": 3, "EngineAssociation": "source-build-guid"}),
+        encoding="utf-8",
+    )
+
+    result = _run(
+        tmp_path,
+        "--profile",
+        "standard",
+        "--skip-deps",
+        "--active-project",
+        str(project),
+    )
+
+    assert result.returncode == 1
+    assert "ENGINE_ASSOCIATION_UNRESOLVED" in result.stdout
+
+
+def test_selected_engine_writes_dynamic_index_config_for_unpinned_rag_mcp(tmp_path: Path) -> None:
+    engine = tmp_path / "UE_5.10"
+    (engine / "Engine" / "Source").mkdir(parents=True)
+    build_version = engine / "Engine" / "Build" / "Build.version"
+    build_version.parent.mkdir(parents=True, exist_ok=True)
+    build_version.write_text(
+        json.dumps({"MajorVersion": 5, "MinorVersion": 10}),
+        encoding="utf-8",
+    )
+
+    result = _run(
+        tmp_path,
+        "--profile",
+        "standard",
+        "--skip-deps",
+        "--engine-root",
+        str(engine),
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    shared = json.loads(
+        (tmp_path / "lmstudio" / "config" / "unreal-workspace.json").read_text(encoding="utf-8")
+    )
+    mcp = json.loads((tmp_path / "lmstudio" / "mcp.json").read_text(encoding="utf-8"))
+    assert shared["engineVersion"] == "5.10"
+    assert shared["indexNamespace"] == "unreal510"
+    assert shared["indexPath"] == "data/unreal510/rag.sqlite"
+    assert mcp["mcpServers"]["unreal-rag"]["args"] == [
+        str(ROOT / "scripts" / "unreal_rag_mcp.py")
+    ]
+
+
+def test_installer_keeps_nonstandard_shared_index_path(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    shared = {"indexNamespace": "custom", "indexPath": "indexes/project-rag.sqlite"}
+    engine = tmp_path / "UE_5.9"
+    (engine / "Engine" / "Source").mkdir(parents=True)
+
+    module._sync_installer_index_settings(shared, engine)
+    sys.modules.pop("integrated_install", None)
+
+    assert shared == {"indexNamespace": "custom", "indexPath": "indexes/project-rag.sqlite"}
 
 
 def test_invalid_unreal_engine_environment_fails_instead_of_silently_falling_back(

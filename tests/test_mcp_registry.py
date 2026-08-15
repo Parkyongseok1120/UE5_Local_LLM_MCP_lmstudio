@@ -58,6 +58,41 @@ def test_no_duplicate_tool_names(tmp_path):
     assert len(names) == len(set(names)), f"Duplicate tool names: {[n for n in names if names.count(n) > 1]}"
     registry = mod.build_mcp_tool_registry()
     assert len(registry.names()) == len(set(registry.names()))
+
+
+def test_runtime_index_defaults_follow_the_running_mcp_index(tmp_path, monkeypatch):
+    mod = _load_rag_mcp_module()
+    index = tmp_path / "data" / "unreal510" / "rag.sqlite"
+    index.parent.mkdir(parents=True)
+    server = mod.McpServer(index)
+    definitions = {tool["name"]: tool for tool in _tool_descriptions(server)}
+
+    for name in (
+        "unreal_editor_metadata_status",
+        "unreal_sync_editor_metadata",
+        "unreal_asset_graph_lookup",
+        "unreal_blueprint_claim_validate",
+        "unreal_material_claim_validate",
+    ):
+        assert definitions[name]["inputSchema"]["properties"]["indexDir"]["default"] == str(index.parent)
+    assert definitions["unreal_node_plan_validate"]["inputSchema"]["properties"]["catalogPath"][
+        "default"
+    ] == str(index.parent / "node_catalog.json")
+
+    captured = {}
+    monkeypatch.setattr(
+        mod,
+        "validate_node_plan",
+        lambda plan, *, catalog_path=None, domain="auto": captured.update(
+            {"catalogPath": catalog_path, "domain": domain}
+        )
+        or {"ok": True},
+    )
+    server.tool_result = lambda *_args, **_kwargs: None
+    mod._handle_unreal_node_plan_validate(server, "request", {"plan": {"nodes": []}})
+    assert captured["catalogPath"] == index.parent / "node_catalog.json"
+
+
 def test_public_schemas_cover_handler_consumed_arguments(tmp_path):
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")

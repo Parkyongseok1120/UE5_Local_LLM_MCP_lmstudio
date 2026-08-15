@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from workspace_paths import load_workspace_config, resolve_index_path
+from workspace_paths import resolve_engine_version, resolve_index_path
 
 REQUIRED_CHUNK_COLUMNS = {
     "chunk_id",
@@ -102,8 +102,7 @@ def check_manifest_engine_version(data_dir: Path, expected_version: str) -> list
 def validate_index(index: Path | None = None, *, strict_manifest: bool = True) -> dict[str, Any]:
     index_path = (index or resolve_index_path()).resolve()
     data_dir = index_path.parent
-    cfg = load_workspace_config()
-    expected_version = str(cfg.get("engineVersion") or "5.8").strip()
+    expected_version = resolve_engine_version()
 
     schema_errors = check_schema(index_path)
     manifest_errors = check_manifest_engine_version(data_dir, expected_version) if strict_manifest else []

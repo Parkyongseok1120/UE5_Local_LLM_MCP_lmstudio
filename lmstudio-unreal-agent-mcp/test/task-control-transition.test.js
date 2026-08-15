@@ -162,6 +162,40 @@ test("compile repair starts with one authoritative reproduction build", () => {
   assert.equal(requiredName(value), "unreal_code_sketch_claim_validate");
 });
 
+test("evidence exhaustion either routes a bounded repair or permits synthesis with no tools", () => {
+  const writeTask = state();
+  writeTask.recoveryObligation = {
+    source: "evidence",
+    status: "repair_planning_required",
+    fingerprint: "evidence-write",
+    errorCode: "EVIDENCE_STAGNATION",
+    requiredTool: {
+      name: "unreal_code_sketch_claim_validate",
+      args: { targetFiles: ["Source/Sample/Feature.cpp"] },
+    },
+  };
+  assert.deepEqual(deriveNextObligation(writeTask).requiredTool, {
+    name: "unreal_code_sketch_claim_validate",
+    args: { targetFiles: ["Source/Sample/Feature.cpp"] },
+  });
+
+  const readOnlyTask = state();
+  readOnlyTask.writesAllowed = false;
+  readOnlyTask.writeGate = { writesAllowed: false };
+  readOnlyTask.recoveryObligation = {
+    source: "evidence",
+    status: "evidence_complete",
+    fingerprint: "evidence-read",
+    errorCode: "EVIDENCE_STAGNATION",
+    requiredTool: {},
+  };
+  const control = deriveNextObligation(readOnlyTask);
+  assert.equal(control.disposition, "continue");
+  assert.equal(control.requiredTool, null);
+  assert.deepEqual(control.allowedTools, []);
+  assert.equal(control.retryPolicy.sameSemanticInput, "forbidden");
+});
+
 test("expired gate route fallback atomically recommits authoritative control", () => {
   const value = state();
   commitControlTransition(value);

@@ -14,7 +14,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from atomic_io import atomic_write_text
-from workspace_paths import find_workspace_root as resolve_workspace_root, resolve_index_path
+from workspace_paths import find_workspace_root as resolve_workspace_root
 
 DEFAULT_LMSTUDIO_ROOT = Path.home() / ".lmstudio"
 SHARED_CONFIG = DEFAULT_LMSTUDIO_ROOT / "config" / "unreal-workspace.json"
@@ -119,13 +119,11 @@ def patch_unreal_rag(
     *,
     context_compactor_advisory: bool | None = None,
 ) -> dict[str, Any]:
-    index = resolve_index_path(workspace)
     entry["command"] = str(python_exe)
-    entry["args"] = [
-        str(workspace / "scripts" / "unreal_rag_mcp.py"),
-        "--index",
-        str(index),
-    ]
+    # The RAG server resolves its index from workspace/shared configuration at
+    # startup.  Do not pin the generated MCP entry to the engine version that
+    # happened to be active when this repair command was run.
+    entry["args"] = [str(workspace / "scripts" / "unreal_rag_mcp.py")]
     entry = patch_server(entry, workspace, SHARED_CONFIG)
     env = dict(entry.get("env") or {})
     env["UNREAL58_ROOT"] = str(workspace)

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
+from workspace_paths import resolve_index_path
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBED_DIM = 384
 DEFAULT_BATCH_SIZE = 256
@@ -290,20 +291,21 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--index", type=Path, default=Path("data/unreal58/rag.sqlite"))
+    parser.add_argument("--index", type=Path, default=None, help="RAG index (default: configured workspace index).")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--priority-only", action="store_true")
     parser.add_argument("--status", action="store_true")
     args = parser.parse_args()
 
+    index = args.index or resolve_index_path()
     if args.status:
-        print(json.dumps(embedding_status(args.index), ensure_ascii=False, indent=2))
+        print(json.dumps(embedding_status(index), ensure_ascii=False, indent=2))
     else:
         print(
             json.dumps(
                 build_embeddings(
-                    args.index,
+                    index,
                     limit=args.limit or None,
                     batch_size=args.batch_size,
                     priority_only=args.priority_only,

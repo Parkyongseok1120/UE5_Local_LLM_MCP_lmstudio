@@ -62,8 +62,54 @@ test("route watcher swallows notification failures without losing new baseline",
     context = { status: "ambiguous_or_corrupt" };
     assert.strictEqual(await watcher.poll(), true);
     assert.strictEqual(attempts, 1);
+    assert.deepStrictEqual(watcher.lastNotificationError, {
+      code: "TOOLS_LIST_CHANGED_NOTIFY_FAILED",
+      message: "client does not support notifications",
+    });
+    assert.strictEqual(watcher.notificationFailureCount, 1);
     assert.strictEqual(await watcher.poll(), false);
     assert.strictEqual(attempts, 1);
+  } finally {
+    watcher.stop();
+  }
+});
+
+test("route watcher observes control changes even when a legacy routeHash is stable", async () => {
+  let context = {
+    status: "active",
+    taskSessionId: "task_12345678",
+    route: { routeHash: "stable-route", phase: "executor", activeTools: ["read_file"] },
+    state: {
+      controlEpoch: 1,
+      controlState: {
+        disposition: "continue",
+        allowedTools: ["read_file"],
+        requiredTool: null,
+      },
+    },
+  };
+  const notifications = [];
+  const watcher = startActiveRouteWatcher({
+    readContext: () => context,
+    notify: async (_next, fingerprint) => notifications.push(fingerprint),
+    intervalMs: 60_000,
+  });
+  try {
+    context = {
+      ...context,
+      state: {
+        ...context.state,
+        controlEpoch: 2,
+        controlState: {
+          disposition: "continue",
+          allowedTools: [],
+          requiredTool: null,
+          blocker: { code: "EVIDENCE_STAGNATION" },
+        },
+      },
+    };
+    assert.strictEqual(await watcher.poll(), true);
+    assert.strictEqual(notifications.length, 1);
   } finally {
     watcher.stop();
   }

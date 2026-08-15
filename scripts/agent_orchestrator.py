@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 TaskKind = Literal[
     "answer_only",
+    "project_control",
     "inspect_only",
     "cpp_analysis",
     "code_sketch",
@@ -179,6 +180,71 @@ PROJECT_SPECIFIC_MARKERS = (
     "current", "existing", "this code", "project",
     "\uD604\uC7AC", "\uAE30\uC874", "\uC774 \uCF54\uB4DC", "\uD504\uB85C\uC81D\uD2B8",
     "fix this", "improve this", "\uACE0\uCE58", "\uAC1C\uC120", "\uB9AC\uD329\uD130\uB9C1",
+)
+
+# Project selection/status is a control-plane concern, not a source-analysis
+# task.  Keep this deliberately narrow: an ordinary request that merely
+# mentions a project must still reach the normal evidence planner.
+PROJECT_CONTROL_PATTERNS = (
+    re.compile(
+        r"\b(?:set|select|switch|change|choose|activate|use)\s+"
+        r"(?:an?\s+|the\s+)?(?:active\s+|current\s+)?project\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:what(?:'s|\s+is)|which|get|show|tell\s+me|display|check)\s+"
+        r"(?:is\s+)?(?:the\s+)?(?:active|current)\s+project"
+        r"(?:\s+(?:path|name|status))?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:active|current)\s+project\s+(?:status|path|name)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:현재|활성)\s*프로젝트\s*(?:의\s*)?"
+        r"(?:상태|경로|이름)(?:\s*(?:을|를)?\s*(?:알려|보여|확인|조회|말해))?",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:현재|활성)\s*프로젝트\s*(?:가|는)?\s*(?:뭐|무엇|어디)", re.IGNORECASE),
+    re.compile(
+        r"(?:현재|활성)\s*프로젝트\s*(?:를|을)?\s*(?:확인|조회|알려|보여)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:현재|활성)?\s*프로젝트\s*(?:를|을)?\s*"
+        r"(?:지정|설정|선택|전환|변경|바꿔|바꾸|교체)(?:\s*해|해줘|해주세요)?",
+        re.IGNORECASE,
+    ),
+)
+PROJECT_CONTROL_SELECTION_PATTERNS = (
+    re.compile(
+        r"\b(?:set|select|switch|change|choose|activate|use|clear|unset|remove)\s+"
+        r"(?:an?\s+|the\s+)?(?:active\s+|current\s+)?project\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:현재|활성)?\s*프로젝트\s*(?:를|을)?\s*"
+        r"(?:지정|설정|선택|전환|변경|바꿔|바꾸|교체|해제|초기화)",
+        re.IGNORECASE,
+    ),
+)
+PROJECT_CONTROL_CLEAR_PATTERNS = (
+    re.compile(r"\b(?:clear|unset|remove)\s+(?:the\s+)?active\s+project\b", re.IGNORECASE),
+    re.compile(r"(?:현재|활성)?\s*프로젝트\s*(?:를|을)?\s*(?:해제|초기화|지워)", re.IGNORECASE),
+)
+PROJECT_CONTROL_WORK_MARKERS = (
+    "analyze", "analysis", "inspect", "review", "audit", "architecture",
+    "source", "code", "class", "function", "component", "subsystem",
+    "build", "compile", "test", "implement", "fix", "refactor",
+    "분석", "검토", "리뷰", "구조", "소스", "코드", "클래스", "함수",
+    "컴포넌트", "서브시스템", "빌드", "컴파일", "테스트", "구현", "수정",
+    "고쳐", "리팩터링", "리팩토링",
+)
+_PROJECT_CONTROL_PATH_RE = re.compile(
+    r"(?:[\"'](?P<quoted>[^\"'\r\n]+?\.uproject)[\"']|"
+    r"(?P<bare>(?:(?:[A-Za-z]:[\\/])|/|~[\\/])[^\r\n,;]*?\.uproject))",
+    re.IGNORECASE,
 )
 
 
@@ -539,8 +605,60 @@ def _has_sketch_intent(text: str) -> bool:
     return any(marker in natural_language for marker in SKETCH_MARKERS)
 
 
+def is_project_control_request(request: str, mode: str = "auto") -> bool:
+    """Recognize only explicit project selection/status requests.
+
+    The classifier intentionally refuses mixed requests such as "switch project
+    and analyze its source".  Those need the regular planner because the
+    analysis or implementation portion still needs a bounded task route.
+    """
+
+    if str(mode or "").strip().casefold() == "project_control":
+        return True
+    text = str(request or "").strip().casefold()
+    if not text or not any(pattern.search(text) for pattern in PROJECT_CONTROL_PATTERNS):
+        return False
+    # A user-supplied filesystem path can contain words such as ``Source`` or
+    # ``test``. It is data for the project controller, not an extra analysis
+    # instruction, so do not let it alter intent classification.
+    intent_text = _PROJECT_CONTROL_PATH_RE.sub(" <project-path> ", text)
+    if _has_write_intent(intent_text) or _is_compile_fix_request(intent_text) or _has_refactor_intent(intent_text):
+        return False
+    return not any(marker in intent_text for marker in PROJECT_CONTROL_WORK_MARKERS)
+
+
+def project_control_requests_selection(request: str) -> bool:
+    """Return whether an explicit project-control request changes selection."""
+
+    text = str(request or "").strip()
+    return bool(text and any(pattern.search(text) for pattern in PROJECT_CONTROL_SELECTION_PATTERNS))
+
+
+def project_control_requests_clear(request: str) -> bool:
+    """Return whether project control explicitly requests clearing the selection."""
+
+    text = str(request or "").strip()
+    return bool(text and any(pattern.search(text) for pattern in PROJECT_CONTROL_CLEAR_PATTERNS))
+
+
+def project_control_project_path_hint(request: str) -> str:
+    """Extract only an explicit absolute/tilde ``.uproject`` path from user text.
+
+    A project name alone is intentionally not resolved here: choosing a matching
+    project by name would reintroduce a machine-specific, potentially wrong
+    project selection.  The downstream project controller validates the path.
+    """
+
+    match = _PROJECT_CONTROL_PATH_RE.search(str(request or ""))
+    if not match:
+        return ""
+    return str(match.group("quoted") or match.group("bare") or "").strip().rstrip(".,;:)]}")
+
+
 def classify_task(request: str, mode: str = "auto") -> TaskKind:
     text = f"{mode} {request}".lower()
+    if is_project_control_request(request, mode):
+        return "project_control"
     if mode in {"refactor_r0", "refactor_r1", "refactor_r2", "refactor_r3", "refactor_r4"}:
         return "refactor"
     if mode in {"compile_fix", "module_fix", "reflection_fix", "multifile_refactor"}:
@@ -662,7 +780,7 @@ def _looks_like_invented_implementation_plan(text: str) -> bool:
 
 
 def choose_edit_strategy(task_kind: TaskKind, request: str, *, file_count_hint: int = 0) -> EditStrategy:
-    if task_kind in {"answer_only", "inspect_only", "cpp_analysis", "code_sketch"}:
+    if task_kind in {"answer_only", "project_control", "inspect_only", "cpp_analysis", "code_sketch"}:
         return "no_edit"
     if task_kind == "compile_fix":
         return "exact_patch"
@@ -683,7 +801,15 @@ def build_evidence_plan(request: str, task_kind: TaskKind, mode: str = "auto") -
         resolved_mode = resolve_mode(request, mode)
     except Exception:
         resolved_mode = mode
-    if task_kind == "answer_only":
+    if task_kind == "project_control":
+        # Selecting or reporting a project uses its dedicated control tool. It
+        # must never create source/RAG evidence obligations or write authority.
+        plan.queries = []
+        plan.rag_modes = []
+        plan.gates = []
+        plan.writes_allowed = False
+        plan.confidence = 1.0
+    elif task_kind == "answer_only":
         plan.rag_modes = ["api_lookup", "auto"]
         plan.gates = []
         plan.writes_allowed = False
@@ -988,7 +1114,7 @@ def build_write_gate(
         "mustReadBeforeWrite": bool(evidence.writes_allowed),
         "mustBuildAfterWrite": task_kind in {"edit", "compile_fix", "refactor"},
         "forbiddenWhen": [
-            "taskKind is answer_only, inspect_only, code_sketch, or runtime_debug",
+            "taskKind is answer_only, project_control, inspect_only, code_sketch, or runtime_debug",
             "editStrategy is no_edit",
             "target file was not read in this session",
             "human_approval_gate is required and has not been satisfied",
@@ -1015,6 +1141,12 @@ def build_checkpoints(task_kind: TaskKind, evidence: EvidencePlan, mode: str = "
         "Call unreal_agent_plan before edits and follow toolPolicy in order.",
         "Use RAG evidence before making Unreal API or Build.cs claims.",
     ]
+    if task_kind == "project_control":
+        return [
+            "Treat project selection/status as a control operation, not an implementation task.",
+            "Use unreal_set_active_project only with an exact user-supplied .uproject path (or clear=true).",
+            "Do not infer a project from its display name and do not start a task session.",
+        ]
     if task_kind == "answer_only":
         return common + ["Answer only after symbol/RAG evidence; do not write files."]
     if task_kind == "code_sketch":
@@ -1094,6 +1226,11 @@ def build_stop_conditions(
     runtime_write: bool = False,
     completion_contract: dict[str, Any] | None = None,
 ) -> list[str]:
+    if task_kind == "project_control":
+        return [
+            "Stop after reporting the active project or handing off one exact project-control action.",
+            "Do not start source analysis, RAG retrieval, or a task session for project control alone.",
+        ]
     if task_kind == "code_sketch":
         return [
             "Stop after presenting a labeled Proposed sketch backed by symbol evidence.",
@@ -1157,6 +1294,22 @@ def build_suggested_tool_calls(
     project_context: dict[str, Any],
 ) -> list[dict[str, Any]]:
     text = str(request or "")
+
+    if task_kind == "project_control":
+        if project_control_requests_clear(text):
+            return [{"tool": "unreal_set_active_project", "args": {"clear": True}}]
+        project_path = project_control_project_path_hint(text)
+        if project_path:
+            return [
+                {
+                    "tool": "unreal_set_active_project",
+                    "args": {"projectPath": project_path},
+                }
+            ]
+        # A name-only request is intentionally not turned into a guessed path.
+        # The caller reports the required user input instead of suggesting an
+        # unusable placeholder argument.
+        return []
 
     if task_kind == "refactor":
         symbols = _symbol_candidates_from_text(text)
@@ -1254,9 +1407,12 @@ def build_suggested_tool_calls(
         return calls
 
     if task_kind in {"inspect_only", "cpp_analysis"}:
-        browse_path = "project://Source"
+        browse_path = str(project_context.get("sourceBrowsePath") or "project://Source")
         search_tokens = _feature_search_tokens_from_text(text)
-        calls = [{"tool": "unreal_get_active_project", "args": {}}]
+        # build_agent_plan already resolved projectContext. Repeating the
+        # control-plane lookup here is redundant and can collide with another
+        # chat's task ownership without adding any source evidence.
+        calls: list[dict[str, Any]] = []
         if search_tokens:
             for token in search_tokens:
                 calls.append({"tool": "search_files", "args": {"query": token, "path": browse_path}})
@@ -1301,6 +1457,61 @@ def build_suggested_tool_calls(
     return [{"tool": "unreal_get_active_project", "args": {}}]
 
 
+def _build_project_control_plan(
+    request: str,
+    *,
+    project_context: dict[str, Any],
+    policy: dict[str, Any],
+) -> AgentPlan:
+    """Build a deliberately taskless plan for explicit project control only."""
+
+    evidence = build_evidence_plan(request, "project_control")
+    suggested = build_suggested_tool_calls(
+        request,
+        "project_control",
+        "project_control",
+        project_context,
+    )
+    selection_requested = project_control_requests_selection(request)
+    has_exact_target = bool(project_control_requests_clear(request) or project_control_project_path_hint(request))
+    notes = [
+        "Project control is handled directly; no task session, source scan, RAG query, or write authority is created.",
+    ]
+    if selection_requested and not has_exact_target:
+        notes.append(
+            "Project selection needs one exact absolute .uproject path; do not guess from a project name."
+        )
+    return AgentPlan(
+        request=request,
+        task_kind="project_control",
+        evidence=evidence,
+        edit_strategy="no_edit",
+        tool_policy=[str(call.get("tool") or "") for call in suggested if str(call.get("tool") or "")],
+        suggested_tool_calls=suggested,
+        project_context=project_context,
+        write_gate=build_write_gate(
+            "project_control",
+            evidence,
+            policy,
+            edit_strategy="no_edit",
+        ),
+        checkpoints=build_checkpoints("project_control", evidence),
+        stop_conditions=build_stop_conditions("project_control"),
+        retry_policy=["Do not retry through source or write tools for project control."],
+        notes=notes,
+        source_evidence={
+            "required": False,
+            "claimPolicy": "project_context_only",
+        },
+        orchestration={
+            "strategy": "project_control",
+            "riskTier": "control",
+            "requiredBeforeWrite": [],
+            "taskSessionRequired": False,
+        },
+    )
+
+
 def build_agent_plan(
     request: str,
     mode: str = "auto",
@@ -1317,8 +1528,14 @@ def build_agent_plan(
     request = str(resolved.get("request") or request)
     policy = profile_agent_policy()
     project_context = resolve_active_project_context()
-    resolved_mode = resolve_mode(request, mode)
     task_kind = classify_task(request, mode)
+    if task_kind == "project_control":
+        return _build_project_control_plan(
+            request,
+            project_context=project_context,
+            policy=policy,
+        )
+    resolved_mode = resolve_mode(request, mode)
     evidence = build_evidence_plan(request, task_kind, mode)
     runtime_write = bool(
         task_kind == "edit"

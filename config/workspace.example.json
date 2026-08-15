@@ -8,6 +8,7 @@
   "indexPath": "data/unreal5x/rag.sqlite",
   "embeddingsPath": "data/unreal5x/embeddings",
   "defaultEngineRoot": "",
+  "engineRootsByAssociation": {},
   "knowledgeRoots": {
     "guidelines": "RAG_Project_Guidelines",
     "gameDesign": "Game_Design_Docs",

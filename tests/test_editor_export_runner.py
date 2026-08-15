@@ -5,24 +5,27 @@ from __future__ import annotations
 
 import json
 import sys
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from editor_export_runner import (  # noqa: E402
+import editor_export_runner as runner
+from editor_export_runner import (
+    DONE_NAME,
+    REQUEST_NAME,
     build_export_job,
     project_editor_running,
+    project_engine_association,
+    resolve_editor_executable,
+    run_editor_export,
     submit_export_request,
     wait_for_export_markers,
-    resolve_editor_executable,
-    REQUEST_NAME,
-    DONE_NAME,
 )
-from workspace_paths import default_editor_export_dir, normalize_editor_export_dir  # noqa: E402
+from workspace_paths import default_editor_export_dir, normalize_editor_export_dir
 
 
 def test_build_export_job_writes_job_file(tmp_path):
@@ -172,3 +175,116 @@ def test_resolve_editor_executable_supports_mac_and_linux_layouts(tmp_path):
     bundled_executable.parent.mkdir(parents=True)
     bundled_executable.write_text("", encoding="utf-8")
     assert resolve_editor_executable(mac_bundle, "darwin") == bundled_executable
+
+
+def test_headless_export_binds_to_explicit_project_engine_association(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    project = tmp_path / "SourceBuildProject" / "SourceBuildProject.uproject"
+    project.parent.mkdir()
+    project.write_text(
+        json.dumps({"FileVersion": 3, "EngineAssociation": "{source-build-guid}"}),
+        encoding="utf-8",
+    )
+    engine = tmp_path / "SourceBuild"
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    calls = {}
+
+    def resolve_association(association, start):
+        calls["association"] = association
+        calls["workspace"] = start
+        return {
+            "ok": True,
+            "engineRoot": str(engine),
+            "source": "config.engineRootsByAssociation",
+            "requestedEngineAssociation": association,
+            "errorCode": "",
+            "error": "",
+        }
+
+    def headless(**kwargs):
+        calls["engineRoot"] = kwargs["engine_root"]
+        return {"ok": True, "mode": "headless"}
+
+    monkeypatch.setattr(runner, "find_workspace_root", lambda: workspace)
+    monkeypatch.setattr(runner, "resolve_engine_root_for_association", resolve_association)
+    monkeypatch.setattr(runner, "resolve_export_dir", lambda _value: export_dir)
+    monkeypatch.setattr(runner, "editor_export_content_path", lambda: "/Game")
+    monkeypatch.setattr(runner, "editor_export_maps_path", lambda: "/Game")
+    monkeypatch.setattr(runner, "editor_export_scope", lambda: "all")
+    monkeypatch.setattr(runner, "editor_export_timeout_sec", lambda: 120)
+    monkeypatch.setattr(runner, "build_export_job", lambda **_kwargs: {"jobId": "job"})
+    monkeypatch.setattr(runner, "project_editor_running", lambda _project: False)
+    monkeypatch.setattr(runner, "run_headless_export", headless)
+
+    result = run_editor_export(mode="headless", uproject=project)
+
+    assert result["ok"] is True
+    assert calls["association"] == "{source-build-guid}"
+    assert calls["workspace"] == workspace
+    assert calls["engineRoot"] == engine
+    assert result["engineRoot"] == str(engine)
+    assert result["engineResolutionSource"] == "config.engineRootsByAssociation"
+
+
+def test_headless_export_fails_closed_for_unresolved_custom_association(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    project = tmp_path / "Custom" / "Custom.uproject"
+    project.parent.mkdir()
+    project.write_text(
+        json.dumps({"FileVersion": 3, "EngineAssociation": "custom-source-build"}),
+        encoding="utf-8",
+    )
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+
+    monkeypatch.setattr(runner, "find_workspace_root", lambda: workspace)
+    monkeypatch.setattr(
+        runner,
+        "resolve_engine_root_for_association",
+        lambda association, start: {
+            "ok": False,
+            "engineRoot": "",
+            "source": "",
+            "requestedEngineAssociation": association,
+            "errorCode": "ENGINE_ASSOCIATION_UNRESOLVED",
+            "error": "custom source build is not mapped",
+        },
+    )
+    monkeypatch.setattr(runner, "resolve_export_dir", lambda _value: export_dir)
+    monkeypatch.setattr(runner, "editor_export_content_path", lambda: "/Game")
+    monkeypatch.setattr(runner, "editor_export_maps_path", lambda: "/Game")
+    monkeypatch.setattr(runner, "editor_export_scope", lambda: "all")
+    monkeypatch.setattr(runner, "editor_export_timeout_sec", lambda: 120)
+    monkeypatch.setattr(runner, "build_export_job", lambda **_kwargs: {"jobId": "job"})
+    monkeypatch.setattr(runner, "project_editor_running", lambda _project: False)
+    monkeypatch.setattr(
+        runner,
+        "run_headless_export",
+        lambda **_kwargs: pytest.fail("headless export must not use a default engine"),
+    )
+
+    result = run_editor_export(mode="headless", uproject=project)
+
+    assert result["ok"] is False
+    assert result["errorCode"] == "ENGINE_ASSOCIATION_UNRESOLVED"
+    assert result["engineRoot"] == ""
+    assert result["engineAssociation"] == "custom-source-build"
+
+
+def test_project_engine_association_rejects_invalid_descriptor(tmp_path):
+    project = tmp_path / "Broken.uproject"
+    project.write_text("not json", encoding="utf-8")
+
+    association, error = project_engine_association(project)
+
+    assert association == ""
+    assert "Could not read project descriptor" in error

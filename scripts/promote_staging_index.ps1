@@ -1,6 +1,11 @@
 $ErrorActionPreference = "Stop"
 
-$dataDir = Join-Path $PSScriptRoot "..\data\unreal58" | Resolve-Path
+$workspace = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $workspace "scripts\installer_support\Install-PathHelpers.ps1")
+$dataDir = (Get-RagDataPaths -RagRoot $workspace).DataDir
+if (-not (Test-Path -LiteralPath $dataDir)) {
+    throw "Configured RAG data directory not found: $dataDir"
+}
 $main = Join-Path $dataDir "rag.sqlite"
 $staging = Join-Path $dataDir "rag.staging.sqlite"
 $embeddings = Join-Path $dataDir "rag.embeddings.sqlite"
@@ -45,7 +50,6 @@ if (Test-Path $embeddings) {
     Write-Host "Backed up old embeddings to $embedBackup"
 }
 
-$workspace = Split-Path $PSScriptRoot -Parent
 Push-Location $workspace
 try {
     powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build-embeddings

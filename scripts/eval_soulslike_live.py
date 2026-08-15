@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 from eval_reasoning import load_cases, run_case  # noqa: E402
 from genre_scope_validate import validate_genre_scope  # noqa: E402
 from preflight_lmstudio import check_lmstudio, extract_assistant_text  # noqa: E402
+from workspace_paths import resolve_index_path  # noqa: E402
 
 
 def lmstudio_reachable(url: str) -> bool:
@@ -109,7 +110,7 @@ def main() -> int:
     args = parser.parse_args()
 
     workspace = SCRIPTS.parent
-    index_path = workspace / "data" / "unreal58" / "rag.sqlite"
+    index_path = resolve_index_path(workspace)
 
     live = args.no_dry_run
     if live:

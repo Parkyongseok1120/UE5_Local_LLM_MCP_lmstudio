@@ -10,8 +10,10 @@ sys.path.insert(0, str(SCRIPTS))
 
 from agent_orchestrator import (  # noqa: E402
     build_agent_plan,
+    build_suggested_tool_calls,
     classify_task,
     is_continuation_request,
+    project_control_project_path_hint,
     verify_edit_allowed,
 )
 
@@ -85,6 +87,42 @@ def test_implementation_status_inventory_is_not_write_intent():
 
 def test_classify_answer_only():
     assert classify_task("What is UActorComponent?", "api_lookup") == "answer_only"
+
+
+def test_project_control_classification_is_narrow_and_never_write_enabled():
+    for request in (
+        "What is the active project path?",
+        "Switch active project to C:/Unreal Projects/Example/Example.uproject",
+        "현재 활성 프로젝트 상태를 알려줘",
+        "현재 프로젝트를 확인해줘",
+        "프로젝트를 선택해줘",
+    ):
+        assert classify_task(request, "auto") == "project_control", request
+
+    # A mixed request still needs ordinary analysis/implementation planning.
+    assert classify_task(
+        "Switch active project and analyze the current source architecture",
+        "auto",
+    ) != "project_control"
+
+    plan = build_agent_plan("현재 활성 프로젝트 상태를 알려줘", "auto")
+    assert plan.task_kind == "project_control"
+    assert plan.edit_strategy == "no_edit"
+    assert plan.write_gate["writesAllowed"] is False
+    assert plan.evidence.rag_modes == []
+    assert plan.orchestration["taskSessionRequired"] is False
+
+
+def test_project_control_keeps_only_explicit_cross_platform_uproject_path():
+    windows_path = r"C:\Unreal Projects\Example\Example.uproject"
+    unix_path = "/Volumes/Work/Example Project/Example.uproject"
+    assert project_control_project_path_hint(
+        f'Switch active project to "{windows_path}"'
+    ) == windows_path
+    assert project_control_project_path_hint(
+        f"Set active project to '{unix_path}'"
+    ) == unix_path
+    assert project_control_project_path_hint("Select Example by name") == ""
 
 
 def test_classify_inspect_review():
@@ -272,6 +310,22 @@ def test_cinematic_analysis_plan_source_first():
     tools = [c["tool"] for c in payload["suggestedToolCalls"]]
     assert "search_files" in tools
     assert "read_file" in tools or any("read_file" in str(c) for c in payload["suggestedToolCalls"])
+
+
+def test_known_project_context_is_not_relooked_up_for_source_inspection():
+    calls = build_suggested_tool_calls(
+        "Analyze the current component source",
+        "cpp_analysis",
+        "auto",
+        {
+            "ok": True,
+            "sourceBrowsePath": "project://Example/Source",
+        },
+    )
+    assert calls
+    assert all(call["tool"] != "unreal_get_active_project" for call in calls)
+    first_search = next(call for call in calls if call["tool"] == "search_files")
+    assert first_search["args"]["path"] == "project://Example/Source"
 
 
 def test_refactor_r0_no_edit(monkeypatch):

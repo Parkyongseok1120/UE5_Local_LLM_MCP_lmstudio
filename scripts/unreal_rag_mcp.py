@@ -4940,7 +4940,7 @@ def _handle_unreal_runtime_verify(
             {
                 "ok": False,
                 "action": action,
-                "errorCode": "INVALID_RUNTIME_VERIFY_PLAN",
+                "errorCode": str(plan.get("errorCode") or "INVALID_RUNTIME_VERIFY_PLAN"),
                 "runtimeVerifyPlan": plan,
             },
         )
@@ -4977,7 +4977,10 @@ def _handle_unreal_node_plan_validate(server: McpServer, message_id: Any, argume
         return
     payload = validate_node_plan(
         plan,
-        catalog_path=str(arguments.get("catalogPath") or "").strip() or None,
+        catalog_path=(
+            str(arguments.get("catalogPath") or "").strip()
+            or server.index.parent / "node_catalog.json"
+        ),
         domain=str(arguments.get("domain") or "auto"),
     )
     server.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
@@ -5027,6 +5030,93 @@ def _handle_unreal_symbol_lookup(server: McpServer, message_id: Any, arguments: 
     server.handle_symbol_lookup(message_id, arguments)
 
 
+def _project_control_response(request: str) -> dict[str, Any]:
+    """Return a no-task handoff for an explicit project selection/status request."""
+
+    from agent_orchestrator import (
+        project_control_project_path_hint,
+        project_control_requests_clear,
+        project_control_requests_selection,
+    )
+
+    config = load_shared_config()
+    project_context = resolve_active_project_context()
+    payload: dict[str, Any] = {
+        "ok": True,
+        "status": "completed",
+        "taskKind": "project_control",
+        "taskSessionStarted": False,
+        "activeProject": config.get("activeProject"),
+        "activeProjectNames": active_project_names(),
+        "sharedConfigPath": str(shared_config_path()),
+        "projectContext": project_context,
+        "writeGate": {
+            "writesAllowed": False,
+            "reason": "Project selection/status is a control operation, not source editing.",
+        },
+    }
+    if project_control_requests_clear(request):
+        payload.update(
+            {
+                "nextAction": "unreal_set_active_project",
+                "nextActionIsTool": True,
+                "requiredNextTool": "unreal_set_active_project",
+                "nextActionArgs": {"clear": True},
+                "requiredNextToolArgs": {"clear": True},
+                "agentInstruction": (
+                    "Call unreal_set_active_project once with clear=true. Do not start "
+                    "unreal_agent_plan or a task session for this control request."
+                ),
+            }
+        )
+        return payload
+
+    project_path = project_control_project_path_hint(request)
+    if project_path:
+        set_args = {"projectPath": project_path}
+        payload.update(
+            {
+                "nextAction": "unreal_set_active_project",
+                "nextActionIsTool": True,
+                "requiredNextTool": "unreal_set_active_project",
+                "nextActionArgs": set_args,
+                "requiredNextToolArgs": dict(set_args),
+                "agentInstruction": (
+                    "Call unreal_set_active_project once with this exact user-supplied "
+                    ".uproject path. Do not start unreal_agent_plan or guess another project."
+                ),
+            }
+        )
+        return payload
+
+    if project_control_requests_selection(request):
+        payload.update(
+            {
+                "status": "await_user",
+                "requiredUserInput": "An exact absolute .uproject path, or an explicit request to clear activeProject.",
+                "nextAction": "provide_exact_project_path",
+                "nextActionIsTool": False,
+                "agentInstruction": (
+                    "Ask for one exact absolute .uproject path. Do not infer a project from "
+                    "its name, do not start unreal_agent_plan, and do not create a task session."
+                ),
+            }
+        )
+        return payload
+
+    payload.update(
+        {
+            "nextAction": "project_status_reported",
+            "nextActionIsTool": False,
+            "agentInstruction": (
+                "Report the active-project status above. Do not call unreal_agent_plan "
+                "or start a task session for a status-only request."
+            ),
+        }
+    )
+    return payload
+
+
 def _handle_unreal_get_active_project(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
     config = load_shared_config()
     project_context = resolve_active_project_context()
@@ -5039,17 +5129,17 @@ def _handle_unreal_get_active_project(server: McpServer, message_id: Any, argume
     if project_context.get("ok"):
         payload.update(
             {
-                # Project identity is the one safe pre-task lookup.  Once it
-                # succeeds, task ownership must be established before the
-                # model starts bounded discovery; otherwise capable models
-                # can recreate the observed list/read loop.
-                "nextAction": "unreal_agent_plan",
-                "nextActionIsTool": True,
-                "requiredNextTool": "unreal_agent_plan",
+                # A pure identity lookup does not itself create a task.  The
+                # caller may use this result directly for project status or
+                # switch control; a concrete analysis/implementation request
+                # can opt into one guarded planner call afterwards.
+                "nextAction": "project_context_ready",
+                "nextActionIsTool": False,
                 "agentInstruction": (
-                    "Call unreal_agent_plan exactly once with the current user's full "
-                    "request. The planner already receives this projectContext; do not "
-                    "call unreal_get_active_project again."
+                    "The active project is already resolved. For a concrete source-analysis "
+                    "or implementation request, call unreal_agent_plan once with the user's "
+                    "full request; do not call unreal_get_active_project again. For project "
+                    "status or selection alone, do not start a planner task."
                 ),
             }
         )
@@ -5291,7 +5381,10 @@ def build_mcp_tool_registry() -> McpToolRegistry:
                     "type": "object",
                     "description": "Blueprint/Material node plan with nodes[] entries.",
                 },
-                "catalogPath": {"type": "string", "default": "data/unreal58/node_catalog.json"},
+                "catalogPath": {
+                    "type": "string",
+                    "description": "Optional node catalog path. Defaults to the running MCP index directory.",
+                },
                 "domain": {
                     "type": "string",
                     "enum": ["auto", "blueprint", "material"],
@@ -6268,6 +6361,23 @@ class McpServer:
                 schema["properties"] = properties
         return tools
 
+    def _index_dir(self) -> Path:
+        """Return the running index directory without requiring full server startup.
+
+        Tool-manifest verification deliberately creates an uninitialised ``McpServer``
+        because schemas must remain a pure contract check.  Runtime instances always
+        have ``self.index``, while that verifier must fall back through the same
+        workspace-aware index resolver rather than reviving a fixed Unreal-version
+        directory.
+        """
+
+        configured_index = getattr(self, "index", None)
+        if isinstance(configured_index, Path):
+            return configured_index.parent
+        if isinstance(configured_index, str) and configured_index.strip():
+            return Path(configured_index).expanduser().parent
+        return resolve_index_path().parent
+
     def _all_tool_definitions_unfiltered(self) -> list[dict[str, Any]]:
         return [
             {
@@ -6922,7 +7032,11 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "projectRoot": {"type": "string", "description": "Optional .uproject or project root. Defaults to activeProject."},
-                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "indexDir": {
+                            "type": "string",
+                            "default": str(self._index_dir()),
+                            "description": "Defaults to the index directory selected for this MCP server.",
+                        },
                         "staleAfterHours": {"type": "number", "default": 24.0},
                     },
                 ),
@@ -6964,7 +7078,11 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "exportDir": {"type": "string", "description": "Override editorExportDir from shared config."},
-                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "indexDir": {
+                            "type": "string",
+                            "default": str(self._index_dir()),
+                            "description": "Defaults to the index directory selected for this MCP server.",
+                        },
                         "projectName": {"type": "string"},
                         "rebuildIndex": {"type": "boolean", "default": True},
                         "forceIngest": {"type": "boolean", "default": False},
@@ -7008,7 +7126,11 @@ class McpServer:
                             "default": "compact",
                             "description": "Graph payload size: compact (~12 nodes), medium (~36), large (~96), full (all exported).",
                         },
-                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "indexDir": {
+                            "type": "string",
+                            "default": str(self._index_dir()),
+                            "description": "Defaults to the index directory selected for this MCP server.",
+                        },
                         "projectName": {"type": "string"},
                         "folderHint": {
                             "type": "string",
@@ -7033,7 +7155,11 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "claims": {"type": "array", "items": {"type": "string"}},
-                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "indexDir": {
+                            "type": "string",
+                            "default": str(self._index_dir()),
+                            "description": "Defaults to the index directory selected for this MCP server.",
+                        },
                         "projectName": {"type": "string"},
                     },
                     ["claims"],
@@ -7048,7 +7174,11 @@ class McpServer:
                 "inputSchema": self._schema(
                     {
                         "claims": {"type": "array", "items": {"type": "string"}},
-                        "indexDir": {"type": "string", "default": "data/unreal58"},
+                        "indexDir": {
+                            "type": "string",
+                            "default": str(self._index_dir()),
+                            "description": "Defaults to the index directory selected for this MCP server.",
+                        },
                         "projectName": {"type": "string"},
                     },
                     ["claims"],
@@ -7246,12 +7376,16 @@ class McpServer:
                 "name": "unreal_node_plan_validate",
                 "title": "Validate Blueprint/Material Node Plan",
                 "description": (
-                    "Validate a planned node graph (nodes[] with class/pins) against data/unreal58/node_catalog.json."
+                    "Validate a planned node graph (nodes[] with class/pins) against the running MCP index catalog."
                 ),
                 "inputSchema": self._schema(
                     {
                         "plan": {"type": "object", "description": "Node plan JSON with nodes[] entries."},
-                        "catalogPath": {"type": "string", "default": "data/unreal58/node_catalog.json"},
+                        "catalogPath": {
+                            "type": "string",
+                            "default": str(self._index_dir() / "node_catalog.json"),
+                            "description": "Defaults to node_catalog.json beside the running MCP index.",
+                        },
                         "domain": {
                             "type": "string",
                             "enum": ["auto", "blueprint", "material"],
@@ -7475,7 +7609,8 @@ class McpServer:
                 "description": (
                     "Classify task and return evidencePlan, toolPolicy, writeGate, checkpoints, "
                     "stopConditions, retryPolicy, projectContext, and suggestedToolCalls before edits. "
-                    "LM Studio chat: call this FIRST after unreal_get_active_project. "
+                    "Call for a concrete source-analysis or implementation goal; do not use it only "
+                    "to report, select, switch, or clear the active project. "
                     "Pass request as the user's latest verbatim message (not a restated refactor/implementation plan). "
                     "If the chat already had another goal, also pass latestUserMessage with that same latest user text "
                     "so invented write/refactor requests cannot override a read-only bug-hunt. "
@@ -8342,13 +8477,41 @@ class McpServer:
 
                 payload = active_project_readiness(self.workspace)
                 from unreal_capability_detection import detect_unreal_capabilities
-                from workspace_paths import resolve_active_project_path, resolve_engine_root
+                from workspace_paths import (
+                    resolve_active_project_path,
+                    resolve_engine_root_for_association,
+                )
 
                 capability_project = resolve_active_project_path(self.workspace)
+                capability_engine_error = ""
                 if capability_project:
+                    descriptor: dict[str, Any] = {}
+                    try:
+                        candidate = json.loads(capability_project.read_text(encoding="utf-8-sig"))
+                        descriptor = candidate if isinstance(candidate, dict) else {}
+                    except (OSError, UnicodeError, json.JSONDecodeError):
+                        descriptor = {}
+                    association = str(descriptor.get("EngineAssociation") or "").strip()
+                    engine_resolution = resolve_engine_root_for_association(
+                        association,
+                        self.workspace,
+                    )
+                    payload["engineResolution"] = {
+                        key: engine_resolution.get(key)
+                        for key in (
+                            "ok",
+                            "engineRoot",
+                            "source",
+                            "requestedEngineAssociation",
+                            "errorCode",
+                            "error",
+                        )
+                    }
+                    resolved_engine_root = str(engine_resolution.get("engineRoot") or "")
+                    capability_engine_error = str(engine_resolution.get("errorCode") or "")
                     payload["capabilities"] = detect_unreal_capabilities(
                         capability_project,
-                        engine_root=resolve_engine_root(self.workspace),
+                        engine_root=resolved_engine_root or None,
                     )
                 agent_write_enabled = resolve_agent_write_enabled()
                 payload["agentWriteEnabled"] = agent_write_enabled
@@ -8357,6 +8520,8 @@ class McpServer:
                     blocking.append(str(payload.get("reason") or "project_not_ready"))
                 if not agent_write_enabled:
                     blocking.append("agent_write_mode_disabled")
+                if capability_engine_error:
+                    blocking.append(capability_engine_error)
                 index_path = resolve_index_path(self.workspace)
                 if not index_path.is_file():
                     blocking.append("rag_index_missing")
@@ -8781,7 +8946,7 @@ class McpServer:
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_editor_metadata_status":
                 payload = editor_metadata_status(
-                    arguments.get("indexDir") or "data/unreal58",
+                    arguments.get("indexDir") or self._index_dir(),
                     str(arguments.get("projectRoot") or "").strip() or None,
                     float(arguments.get("staleAfterHours") or 24.0),
                 )
@@ -8802,7 +8967,7 @@ class McpServer:
             elif name == "unreal_sync_editor_metadata":
                 common = {
                     "export_dir": str(arguments.get("exportDir") or "").strip() or None,
-                    "index_dir": arguments.get("indexDir") or "data/unreal58",
+                    "index_dir": arguments.get("indexDir") or self._index_dir(),
                     "project_name": str(arguments.get("projectName") or "").strip() or None,
                     "rebuild_index": arguments.get("rebuildIndex", True) is not False,
                     "content_path": str(arguments.get("contentPath") or "").strip() or None,
@@ -8827,7 +8992,7 @@ class McpServer:
                     payload = analyze_asset_folder(
                         folder_hint,
                         asset_kind=str(arguments.get("assetKind") or "auto"),  # type: ignore[arg-type]
-                        index_dir=arguments.get("indexDir") or "data/unreal58",
+                        index_dir=arguments.get("indexDir") or self._index_dir(),
                         project_name=str(arguments.get("projectName") or "").strip() or None,
                         limit=int(arguments.get("limit") or 24),
                         graph_detail=graph_detail,
@@ -8836,7 +9001,7 @@ class McpServer:
                     payload = search_asset_graphs(
                         search,
                         asset_kind=str(arguments.get("assetKind") or "auto"),  # type: ignore[arg-type]
-                        index_dir=arguments.get("indexDir") or "data/unreal58",
+                        index_dir=arguments.get("indexDir") or self._index_dir(),
                         project_name=str(arguments.get("projectName") or "").strip() or None,
                         limit=int(arguments.get("limit") or 12),
                     )
@@ -8850,7 +9015,7 @@ class McpServer:
                     payload = lookup_asset_graph(
                         asset_path,
                         asset_kind=str(arguments.get("assetKind") or "auto"),  # type: ignore[arg-type]
-                        index_dir=arguments.get("indexDir") or "data/unreal58",
+                        index_dir=arguments.get("indexDir") or self._index_dir(),
                         project_name=str(arguments.get("projectName") or "").strip() or None,
                         include_full_graph=include_full,
                         detail=graph_detail,
@@ -8867,14 +9032,14 @@ class McpServer:
             elif name == "unreal_blueprint_claim_validate":
                 payload = validate_blueprint_claims(
                     list(arguments.get("claims") or []),
-                    arguments.get("indexDir") or "data/unreal58",
+                    arguments.get("indexDir") or self._index_dir(),
                     str(arguments.get("projectName") or "").strip() or None,
                 )
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_material_claim_validate":
                 payload = validate_material_claims(
                     list(arguments.get("claims") or []),
-                    arguments.get("indexDir") or "data/unreal58",
+                    arguments.get("indexDir") or self._index_dir(),
                     str(arguments.get("projectName") or "").strip() or None,
                 )
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
@@ -8897,7 +9062,12 @@ class McpServer:
                 payload = document_symbols(project_root, rel)
                 self.tool_result(message_id, json.dumps(payload, ensure_ascii=False, indent=2), structured=payload)
             elif name == "unreal_agent_plan":
-                from agent_orchestrator import build_agent_plan, is_continuation_request
+                from agent_orchestrator import (
+                    build_agent_plan,
+                    is_continuation_request,
+                    is_project_control_request,
+                    resolve_plan_request,
+                )
 
                 request = str(arguments.get("request") or "").strip()
                 latest_user_message = str(
@@ -8944,6 +9114,15 @@ class McpServer:
                         active_task_session_id,
                     )
                     self.structured_tool_result(message_id, continued)
+                    return
+                effective_request = str(
+                    resolve_plan_request(request, latest_user_message).get("request") or request
+                )
+                if is_project_control_request(effective_request, mode):
+                    self.structured_tool_result(
+                        message_id,
+                        _project_control_response(effective_request),
+                    )
                     return
                 self.progress_phase(message_id, "Classifying task and building guarded plan")
                 payload = build_agent_plan(
@@ -9578,7 +9757,7 @@ class McpServer:
         )
 
     def handle_project_architecture(self, message_id: Any, arguments: dict[str, Any]) -> None:
-        index_dir = self.index.parent
+        index_dir = self._index_dir()
         if arguments.get("refresh"):
             from collect_project_architecture import scan_architecture, make_summary_text, write_outputs
 

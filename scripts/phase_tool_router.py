@@ -522,6 +522,7 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
     blocker_code = ""
     blocker_fingerprint = ""
     discovery_only = False
+    no_tools_for_synthesis = False
 
     if status == "completed":
         disposition = "complete"
@@ -604,6 +605,18 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             blocker_code = str(
                 recovery_obligation.get("errorCode")
                 or "RECOVERY_EXTERNAL_BLOCKER"
+            )
+            blocker_fingerprint = recovery_fingerprint
+        elif recovery_status == "evidence_complete":
+            # Keep an analysis task open for a source-backed final answer, but
+            # make the exhausted evidence route uncallable. This must mirror
+            # the Node transition table because the Python task transaction is
+            # the durable source of truth published by the Agent bridge.
+            disposition = "continue"
+            retry_value = "forbidden"
+            no_tools_for_synthesis = True
+            blocker_code = str(
+                recovery_obligation.get("errorCode") or "EVIDENCE_STAGNATION"
             )
             blocker_fingerprint = recovery_fingerprint
         elif recovery_status == "environment_recovery":
@@ -824,6 +837,8 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
         if required_name
         else []
         if disposition in {"complete", "workflow_stop", "await_user"}
+        else []
+        if no_tools_for_synthesis
         else [
             name
             for name in active_tools
@@ -909,6 +924,8 @@ def _phase_and_role(
         else {}
     )
     recovery_tool = str(required.get("name") or "").strip()
+    if recovery_status == "evidence_complete":
+        return "synthesis", "synthesis"
     if recovery_status == "repair_required" and pending_gates:
         return "verifier", "verifier"
     if recovery_status == "repair_required" or recovery_tool in MUTATION_TOOLS:
@@ -1012,6 +1029,12 @@ def _active_tools(
     automation_pending: bool = False,
     recovery_tool: str = "",
 ) -> list[str]:
+    # `evidence_complete` is an intentionally tool-free synthesis turn.  Do
+    # not let the generic planner branch repopulate a stale read route merely
+    # to satisfy MIN_ACTIVE_TOOLS: the durable v2 control is only authoritative
+    # if its route exposes the same empty tool surface.
+    if phase == "synthesis":
+        return []
     if phase == "runtime_analysis":
         tools = [
             "unreal_runtime_debug_session",
@@ -1168,6 +1191,10 @@ def _prompt_contract(role: str, task_session_id: str, phase: str) -> dict[str, A
             "Evaluate only the pending server gate or validation proof. "
             "Do not mutate project files or self-approve evidence."
         ),
+        "synthesis": (
+            "Answer from the already retained evidence. No MCP tool call is "
+            "permitted for this turn."
+        ),
     }
     return {
         "id": f"{role}-v1",
@@ -1285,6 +1312,7 @@ def derive_tool_route(
         "executor": 8,
         "runtime_analysis": 5,
         "verifier": 3,
+        "synthesis": 0,
     }[phase]
     route: dict[str, Any] = {
         "version": ROUTE_VERSION,

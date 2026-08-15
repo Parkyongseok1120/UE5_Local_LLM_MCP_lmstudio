@@ -44,3 +44,26 @@ test("agent runtime identity fails closed after source drift", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("agent runtime identity rejects a mismatched packaged commit", () => {
+  const componentRoot = path.resolve(__dirname, "..");
+  const expected = componentIdentity("agent", componentRoot);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-runtime-commit-"));
+  const manifestPath = path.join(root, "control-runtime.json");
+  const prior = process.env.CONTROL_RUNTIME_GIT_COMMIT;
+  try {
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({ components: { agent: { ...expected, gitCommit: "other-commit" } } })
+    );
+    process.env.CONTROL_RUNTIME_GIT_COMMIT = "different-commit";
+    assert.throws(
+      () => verifyRuntimeComponent("agent", { componentRoot, manifestPath, required: true }),
+      /CONTROL_RUNTIME_VERSION_MISMATCH: agent differs in gitCommit/
+    );
+  } finally {
+    if (prior === undefined) delete process.env.CONTROL_RUNTIME_GIT_COMMIT;
+    else process.env.CONTROL_RUNTIME_GIT_COMMIT = prior;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

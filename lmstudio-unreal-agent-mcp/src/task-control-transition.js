@@ -176,6 +176,7 @@ function deriveNextObligation(state) {
   let retryValue = "allowed";
   let blocker = null;
   let discoveryOnly = false;
+  let noToolsForSynthesis = false;
 
   if (status === "completed") disposition = "complete";
   else if (["cancelled", "failed", "cancellation_uncertain"].includes(status)) disposition = "workflow_stop";
@@ -236,6 +237,17 @@ function deriveNextObligation(state) {
       retryValue = "forbidden";
       blocker = {
         code: String(recoveryObligation.errorCode || "RECOVERY_EXTERNAL_BLOCKER"),
+        fingerprint: recoveryFingerprint,
+      };
+    } else if (recoveryStatus === "evidence_complete") {
+      // Read-only evidence exhaustion is not an infrastructure failure.  Keep
+      // the conversation available for a source-backed final answer while
+      // removing every tool from the current route so it cannot loop.
+      disposition = "continue";
+      retryValue = "forbidden";
+      noToolsForSynthesis = true;
+      blocker = {
+        code: String(recoveryObligation.errorCode || "EVIDENCE_STAGNATION"),
         fingerprint: recoveryFingerprint,
       };
     } else if (recoveryStatus === "environment_recovery") {
@@ -400,6 +412,8 @@ function deriveNextObligation(state) {
     ? [requiredName]
     : ["complete", "workflow_stop", "await_user"].includes(disposition)
       ? []
+      : noToolsForSynthesis
+        ? []
       : disposition === "rediscover" || discoveryOnly
         ? activeTools.filter((name) => (
           (blocker?.code === "REPEATED_GATE_BLOCKER"

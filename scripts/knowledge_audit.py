@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from rag_search import SearchOptions, search
+from workspace_paths import resolve_index_path
 
 DEFAULT_CONFIG = Path("config/knowledge_audit_queries.json")
 
@@ -45,10 +46,12 @@ def audit_category(index: Path, queries: list[dict], top_k: int = 5) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Knowledge audit")
-    parser.add_argument("--index", type=Path, default=Path("data/unreal58/rag.sqlite"))
+    parser.add_argument("--index", type=Path, default=None, help="RAG index (default: configured workspace index).")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
+    if args.index is None:
+        args.index = resolve_index_path()
 
     rag_root = Path(__file__).resolve().parent.parent
     index = args.index if args.index.is_absolute() else rag_root / args.index

@@ -18,11 +18,19 @@ from workspace_paths import (
     filesystem_path_identity,
     find_workspace_root,
     normalize_locator,
+    resolve_engine_version,
+    resolve_index_dir,
 )
 
 TOKEN_RE = re.compile(r"\S+")
 
 REPLACE_PROJECT_SOURCES = frozenset({"unreal_project_text", "unreal_symbol"})
+
+
+def resolved_engine_version(workspace_root: Path) -> str:
+    """Prefer an explicit build override, then the active workspace selection."""
+
+    return os.environ.get("UNREAL_ENGINE_VERSION", "").strip() or resolve_engine_version(workspace_root)
 
 
 def replace_project_enabled() -> bool:
@@ -813,7 +821,7 @@ def build_replace_project(args: argparse.Namespace) -> None:
         manifest.update(
             {
                 "workspaceRoot": str(canonical_workspace_root(workspace_root)),
-                "engineVersion": os.environ.get("UNREAL_ENGINE_VERSION", "5.8"),
+                "engineVersion": resolved_engine_version(workspace_root),
                 "builtAt": datetime.now(timezone.utc).isoformat(),
                 "replaceProject": project_name,
                 "replacedChunkDeletes": deleted,
@@ -996,7 +1004,7 @@ def build(args: argparse.Namespace) -> None:
 
     manifest = {
         "workspaceRoot": str(canonical_workspace_root(workspace_root)),
-        "engineVersion": os.environ.get("UNREAL_ENGINE_VERSION", "5.8"),
+        "engineVersion": resolved_engine_version(workspace_root),
         "builtAt": datetime.now(timezone.utc).isoformat(),
         "chunkCount": total_chunks,
         "moduleEdgeCount": module_edge_count,
@@ -1060,7 +1068,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description="Build SQLite RAG index from JSONL docs.")
     parser.add_argument("--input", nargs="+", required=True)
-    parser.add_argument("--out-dir", default="data/unreal58")
+    parser.add_argument("--out-dir", default="", help="Output directory (default: configured RAG data directory).")
     parser.add_argument("--workspace-root", default="", help="Normalize legacy locators to this workspace root.")
     parser.add_argument("--chunk-tokens", type=int, default=900)
     parser.add_argument("--overlap-tokens", type=int, default=120)
@@ -1088,6 +1096,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     args = parser.parse_args(raw_args)
+    if not args.out_dir:
+        args.out_dir = str(resolve_index_dir(args.workspace_root or None))
     args._explicit_args = _explicit_option_names(raw_args)
     return args
 

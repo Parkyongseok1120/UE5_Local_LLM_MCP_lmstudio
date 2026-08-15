@@ -74,6 +74,7 @@ def test_patch_unreal_rag_sets_long_tool_timeout(tmp_path) -> None:
     patched = mod.patch_unreal_rag(entry, workspace, python)
 
     assert patched["timeout"] == mod.DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
+    assert patched["args"] == [str(workspace / "scripts" / "unreal_rag_mcp.py")]
 
 
 def test_patch_unreal_rag_overwrites_existing_timeout(tmp_path) -> None:

@@ -434,6 +434,89 @@ test("semantic blocker clears only on a new goal or successful mutation", () => 
   assert.equal(mutated.semanticBlocker, null);
 });
 
+test("new user objective invalidates an old task route and ignores its delayed result", () => {
+  const control = {
+    version: 2,
+    epoch: 4,
+    taskSessionId: "task-old-goal",
+    routeHash: "route-old-goal",
+    phase: "inspect",
+    disposition: "require_tool",
+    requiredTool: { name: "read_file", args: { path: "Source/Old.cpp" } },
+    allowedTools: ["read_file"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
+  const initial = [
+    { role: "user", content: "Inspect the old implementation" },
+    { role: "tool", content: JSON.stringify({
+      control,
+      taskAuthorization: { taskSessionId: "task-old-goal", ownerCapability: "owner-old-goal" },
+      activeProject: "C:/Projects/Portable/Portable.uproject",
+    }) },
+  ];
+  const prior = core.buildCheckpoint(initial);
+  assert.equal(prior.serverControl?.taskSessionId, "task-old-goal");
+
+  const rebuilt = core.buildCheckpoint([
+    ...initial,
+    { role: "user", content: "Implement the new portable feature" },
+    // A late response from the previous task must not restore its route.
+    { role: "tool", content: JSON.stringify({
+      control,
+      taskAuthorization: { taskSessionId: "task-old-goal", ownerCapability: "owner-old-goal" },
+    }) },
+  ], prior);
+
+  assert.equal(rebuilt.objective, "Implement the new portable feature");
+  assert.equal(rebuilt.activeProject, "C:/Projects/Portable/Portable.uproject");
+  assert.equal(rebuilt.serverControl, null);
+  assert.equal(rebuilt.toolRoute, null);
+  assert.equal(rebuilt.taskRouteOwnership, null);
+  assert.equal(rebuilt.requiredNextTool, null);
+  assert.ok(rebuilt.invalidatedTaskSessionIds.includes("task-old-goal"));
+  assert.ok(rebuilt.diagnostics.includes("ignoredControlForInvalidatedTaskSession"));
+  assert.equal(core.validateCheckpoint(rebuilt), true);
+});
+
+test("conflicting v2 route and semantic evidence blocker fail closed", () => {
+  const staleRoute = {
+    version: 2,
+    epoch: 2,
+    taskSessionId: "task-stale-route",
+    routeHash: "route-stale",
+    phase: "evidence",
+    disposition: "require_tool",
+    requiredTool: { name: "read_file", args: { path: "Source/Replay.cpp" } },
+    allowedTools: ["read_file"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "Fix the replay issue" },
+    { role: "tool", content: JSON.stringify({ control: staleRoute }) },
+    { role: "assistant", toolCalls: [{ id: "stagnation", name: "read_file", arguments: {} }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "stagnation",
+      name: "read_file",
+      content: JSON.stringify({
+        ok: false,
+        errorCode: "EVIDENCE_STAGNATION",
+        stopCurrentPhase: true,
+        phaseBoundary: "evidence",
+        doNotRetry: ["read_file"],
+      }),
+    }] },
+  ]);
+
+  assert.equal(checkpoint.serverControl, null);
+  assert.equal(checkpoint.toolRoute, null);
+  assert.equal(checkpoint.taskRouteOwnership, null);
+  assert.equal(checkpoint.requiredNextTool, null);
+  assert.equal(checkpoint.semanticBlocker.errorCode, "CONTROL_BLOCKER_CONFLICT");
+  assert.equal(checkpoint.semanticBlocker.stopCurrentWorkflow, true);
+  assert.ok(checkpoint.invalidatedTaskSessionIds.includes("task-stale-route"));
+  assert.equal(core.validateCheckpoint(checkpoint), true);
+});
+
 test("workflow stop without a deny-list remains fail-closed", () => {
   const messages = [
     { role: "user", content: "Fix the linker failure without inventing behavior" },

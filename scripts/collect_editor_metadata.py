@@ -13,6 +13,7 @@ from material_graph_format import append_material_graph_text_parts
 from blueprint_graph_format import append_blueprint_graph_text_parts
 from structured_metadata_format import append_structured_metadata_text_parts
 from asset_taxonomy import taxonomy_text_lines
+from workspace_paths import find_workspace_root, resolve_index_dir
 
 
 SOURCE_MAP = {
@@ -240,7 +241,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Collect editor metadata exports.")
     parser.add_argument("--export", action="append", default=[], help="path:type e.g. C:/x/bp.jsonl:blueprint")
     parser.add_argument("--project-name", required=True)
-    parser.add_argument("--out-dir", default="data/unreal58")
+    parser.add_argument("--out-dir", default="", help="Output directory (default: configured RAG data directory).")
     parser.add_argument(
         "--replace-project",
         action=argparse.BooleanOptionalAction,
@@ -249,8 +250,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    root = Path(__file__).resolve().parent.parent
-    out_dir = root / args.out_dir
+    root = find_workspace_root()
+    out_dir = Path(args.out_dir) if args.out_dir else resolve_index_dir(root)
+    if args.out_dir and not out_dir.is_absolute():
+        out_dir = root / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     totals: dict[str, int] = {}
     for spec in args.export:

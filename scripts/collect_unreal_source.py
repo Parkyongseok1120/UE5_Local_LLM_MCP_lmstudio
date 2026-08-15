@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from workspace_paths import resolve_index_dir
 
 DEFAULT_EXTENSIONS = {
     ".h",
@@ -111,7 +112,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--root", required=True)
-    parser.add_argument("--out", default="data/unreal58/raw_source.jsonl")
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
     parser.add_argument("--extensions", nargs="+", default=sorted(DEFAULT_EXTENSIONS))
     parser.add_argument("--min-chars", type=int, default=100)
     parser.add_argument("--max-bytes", type=int, default=1_000_000)
@@ -129,7 +130,10 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Include ThirdParty/ when --no-exclude-editor is set.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.out:
+        args.out = str(resolve_index_dir() / "raw_source.jsonl")
+    return args
 
 
 if __name__ == "__main__":

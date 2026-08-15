@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 
+from workspace_paths import resolve_index_dir
 
 TEXT_EXTENSIONS = {".md", ".txt", ".json", ".yaml", ".yml"}
 SKIP_DIR_PREFIXES = (".", "_")
@@ -162,12 +163,15 @@ def collect(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect game design docs as JSONL.")
     parser.add_argument("--root", default="Game_Design_Docs")
-    parser.add_argument("--out", default="data/unreal58/raw_game_design.jsonl")
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
     parser.add_argument("--project")
     parser.add_argument("--min-chars", type=int, default=20)
     parser.add_argument("--max-bytes", type=int, default=250_000)
     parser.add_argument("--include-templates", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.out:
+        args.out = str(resolve_index_dir() / "raw_game_design.jsonl")
+    return args
 
 
 if __name__ == "__main__":

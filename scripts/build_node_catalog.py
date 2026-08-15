@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from blueprint_graph_format import iter_graph_nodes, iter_pin_links
+from workspace_paths import find_workspace_root, resolve_index_dir
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -149,12 +150,12 @@ def build_node_catalog(data_dir: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build node catalog from editor metadata exports.")
-    parser.add_argument("--data-dir", default="data/unreal58")
+    parser.add_argument("--data-dir", default="", help="Metadata directory (default: configured RAG data directory).")
     parser.add_argument("--out", default="")
     args = parser.parse_args()
-    workspace = Path(__file__).resolve().parent.parent
-    data_dir = Path(args.data_dir)
-    if not data_dir.is_absolute():
+    workspace = find_workspace_root()
+    data_dir = Path(args.data_dir) if args.data_dir else resolve_index_dir(workspace)
+    if args.data_dir and not data_dir.is_absolute():
         data_dir = workspace / data_dir
     catalog = build_node_catalog(data_dir)
     out_path = Path(args.out) if args.out else data_dir / "node_catalog.json"

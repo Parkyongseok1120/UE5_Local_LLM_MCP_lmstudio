@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from index_inputs import RAW_INPUT_FILES, existing_input_paths
-from workspace_paths import find_workspace_root
+from workspace_paths import find_workspace_root, resolve_index_dir
 
 
 def input_paths(data_dir: Path) -> list[Path]:
@@ -70,12 +70,14 @@ def manifest_stale(data_dir: Path, manifest_path: Path, sqlite_path: Path) -> tu
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out-dir", type=Path, default=Path("data/unreal58"))
+    parser.add_argument("--out-dir", type=Path, default=None, help="Output directory (default: configured RAG data directory).")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
     workspace = find_workspace_root()
-    data_dir = (workspace / args.out_dir).resolve()
+    data_dir = args.out_dir.resolve() if args.out_dir and args.out_dir.is_absolute() else (
+        (workspace / args.out_dir).resolve() if args.out_dir else resolve_index_dir(workspace)
+    )
     manifest_path = data_dir / "build_manifest.json"
     sqlite_path = data_dir / "rag.sqlite"
 

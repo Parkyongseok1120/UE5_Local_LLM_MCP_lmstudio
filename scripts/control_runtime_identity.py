@@ -176,7 +176,7 @@ def verify_runtime_component(
         )
     mismatches = [
         key
-        for key in ("buildHash", "componentVersion", "protocolVersion")
+        for key in ("buildHash", "componentVersion", "protocolVersion", "gitCommit")
         if str(expected.get(key) or "") != str(running.get(key) or "")
     ]
     if mismatches:

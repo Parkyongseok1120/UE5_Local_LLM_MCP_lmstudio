@@ -328,7 +328,6 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
     assert "read_unreal_logs" in executor["activeTools"]
     assert executor["maxToolCallsPerPhase"] == 8
     assert executor["selectedSlice"]["files"] == ["Source/Demo/Foo.cpp"]
-
     runtime_state = _state(writes=False)
     runtime_state["runtimeDebugSession"] = {"status": "ready_for_experiment"}
     runtime = derive_tool_route(runtime_state)
@@ -375,6 +374,24 @@ def test_server_route_is_deterministic_bounded_and_role_specific() -> None:
         assert 5 <= len(route["activeTools"]) <= 10
         assert 2 <= route["maxToolCallsPerPhase"] <= 12
         assert validate_phase_tool_route(route) == []
+
+
+def test_evidence_complete_route_is_a_tool_free_synthesis_turn() -> None:
+    state = _state(writes=False, files=["Source/Demo/Foo.cpp"])
+    state["recoveryObligation"] = {
+        "source": "evidence",
+        "status": "evidence_complete",
+        "errorCode": "EVIDENCE_STAGNATION",
+        "requiredTool": {},
+    }
+
+    route = derive_tool_route(state)
+
+    assert route["phase"] == "synthesis"
+    assert route["roleSession"] == "synthesis"
+    assert route["activeTools"] == []
+    assert route["maxToolCallsPerPhase"] == 0
+    assert "No MCP tool call" in route["promptContract"]["systemPrompt"]
 
 
 def test_compile_plan_exposes_diagnostics_but_enforces_one_control_obligation(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import stat
@@ -88,6 +89,57 @@ def _build(tmp_path: Path, name: str, *, legacy_stdout: bool = False) -> tuple[P
     return output, archive
 
 
+def _load_builder_module():
+    spec = importlib.util.spec_from_file_location("build_integrated_package", BUILDER)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_include_index_uses_configured_index_path(tmp_path: Path) -> None:
+    source = tmp_path / "portable-source"
+    index = source / "data" / "unreal510" / "rag.sqlite"
+    index.parent.mkdir(parents=True)
+    index.write_bytes(b"fixture")
+    config_dir = source / "config"
+    config_dir.mkdir()
+    (config_dir / "workspace.json").write_text(
+        json.dumps({"indexNamespace": "unreal510", "indexPath": "data/unreal510/rag.sqlite"}),
+        encoding="utf-8",
+    )
+    builder = _load_builder_module()
+    relative = builder._included_index_relative(source)
+
+    assert relative == Path("data/unreal510/rag.sqlite")
+    assert builder._include(relative, include_index=True, index_relative=relative) is True
+    assert builder._include(
+        Path("data/unreal58/rag.sqlite"),
+        include_index=True,
+        index_relative=relative,
+    ) is False
+
+
+def test_include_index_uses_the_supplied_source_not_another_mcp_workspace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "portable-source"
+    other = tmp_path / "running-mcp-workspace"
+    for root, namespace in ((source, "unreal510"), (other, "unreal58")):
+        config = root / "config"
+        config.mkdir(parents=True)
+        (config / "workspace.json").write_text(
+            json.dumps({"indexPath": f"data/{namespace}/rag.sqlite"}),
+            encoding="utf-8",
+        )
+    monkeypatch.setenv("UNREAL58_ROOT", str(other))
+
+    builder = _load_builder_module()
+
+    assert builder._included_index_relative(source) == Path("data/unreal510/rag.sqlite")
+
+
 def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -> None:
     output, archive = _build(tmp_path, "portable 한글 one", legacy_stdout=True)
     for relative in (
@@ -122,6 +174,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "scripts/mutation_semantic_guard.py",
         "scripts/unreal_api_denylist.py",
         "scripts/unreal_source_extensions.py",
+        "scripts/installer_support/Install-PathHelpers.ps1",
         "scripts/manage_runtime_manifest.py",
         "installer/runtime-manifest.json",
         "lmstudio-unreal-agent-mcp/src/server.js",

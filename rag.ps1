@@ -95,32 +95,6 @@ function Find-Python {
 
 $py = Find-Python
 
-function Get-WorkspaceIndexNamespace {
-    param([string]$Override)
-    if ($Override) {
-        return $Override
-    }
-    $cfgPath = Join-Path $PSScriptRoot "config\workspace.json"
-    if (Test-Path $cfgPath) {
-        try {
-            $cfg = Get-Content -LiteralPath $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($cfg.indexNamespace) {
-                return [string]$cfg.indexNamespace
-            }
-            if ($cfg.engineVersion) {
-                $digits = ($cfg.engineVersion -replace "[^\d]", "")
-                if ($digits) {
-                    return "unreal$digits"
-                }
-            }
-        }
-        catch {
-            Write-Warning "Could not read indexNamespace from $cfgPath"
-        }
-    }
-    return "unreal58"
-}
-
 function Get-WorkspaceEngineRoot {
     param([string]$Fallback)
     if ($env:UNREAL_ENGINE_ROOT -and (Test-Path -LiteralPath $env:UNREAL_ENGINE_ROOT)) {
@@ -224,7 +198,7 @@ if (($Command -in $commandsNeedingUbtPath) -and (-not $UbtPath)) {
 
 switch ($Command) {
     "collect-docs" {
-        & $py scripts\collect_unreal_docs.py --seeds config\unreal_58_seed_urls.txt --out "$dataDir\raw_docs.jsonl" --max-pages $MaxPages --delay 0.5
+        & $py scripts\collect_unreal_docs.py --out "$dataDir\raw_docs.jsonl" --max-pages $MaxPages --delay 0.5
     }
     "collect-source" {
         $sourceArgs = @("scripts\collect_unreal_source.py", "--root", $SourceRoot, "--out", "$dataDir\raw_source.jsonl")

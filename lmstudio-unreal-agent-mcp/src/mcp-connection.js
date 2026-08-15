@@ -17,11 +17,17 @@ let ownerId = "";
 let bridgePairId = "";
 let clientInstanceId = "";
 let localSessionId = "";
+let bridgePairSource = "";
+let clientInstanceSource = "";
 
 const BRIDGE_ID_RE = /^[A-Za-z0-9_.:-]{8,128}$/;
 
 function validBridgeId(value) {
   return Boolean(value && BRIDGE_ID_RE.test(String(value)));
+}
+
+function isLocalFallbackId(value) {
+  return /^mcp-(?:bridge|boot|client)-local-/.test(String(value || ""));
 }
 
 function stateRootOrEmpty() {
@@ -92,12 +98,14 @@ function getMcpBridgePairId() {
   const fromEnv = String(process.env.MCP_BRIDGE_PAIR_ID || "").trim();
   if (validBridgeId(fromEnv)) {
     bridgePairId = fromEnv;
+    bridgePairSource = "environment";
     return bridgePairId;
   }
   const filePath = bridgeConnectionPath();
   const legacyPath = legacyBridgeConnectionPath();
   if (!filePath) {
     bridgePairId = `mcp-bridge-local-${process.pid}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    bridgePairSource = "local-fallback";
     return bridgePairId;
   }
   try {
@@ -105,18 +113,21 @@ function getMcpBridgePairId() {
       const existing = String(fs.readFileSync(filePath, "utf8") || "").trim();
       if (validBridgeId(existing)) {
         bridgePairId = existing;
+        bridgePairSource = "state-root";
         return bridgePairId;
       }
     }
     const repaired = lockedSharedId(filePath, "mcp_bridge_pair", "mcp-bridge-", legacyPath);
     if (repaired) {
       bridgePairId = repaired;
+      bridgePairSource = "state-root";
       return bridgePairId;
     }
   } catch {
     // fall through
   }
   bridgePairId = `mcp-bridge-local-${process.pid}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  bridgePairSource = "local-fallback";
   return bridgePairId;
 }
 
@@ -124,18 +135,40 @@ function getMcpClientInstanceId() {
   const fromEnv = String(process.env.MCP_CLIENT_INSTANCE_ID || "").trim();
   if (validId(fromEnv) || validBridgeId(fromEnv)) {
     clientInstanceId = fromEnv;
+    clientInstanceSource = "environment";
     return clientInstanceId;
   }
   const renewed = resolveOrCreateBootInstanceId();
   if (renewed) {
     if (clientInstanceId && clientInstanceId !== renewed) ownerId = "";
     clientInstanceId = renewed;
+    clientInstanceSource = isLocalFallbackId(renewed) ? "local-fallback" : "state-root";
     return clientInstanceId;
   }
   if (!clientInstanceId) {
     clientInstanceId = `mcp-client-local-${process.pid}-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    clientInstanceSource = "local-fallback";
   }
   return clientInstanceId;
+}
+
+function getMcpIdentityStatus() {
+  // Deliberately return sources, not actual identifiers: startup diagnostics
+  // need to reveal a broken shared-state bridge without exposing task-owner
+  // material to client logs.
+  getMcpBridgePairId();
+  getMcpClientInstanceId();
+  const degradedSources = [bridgePairSource, clientInstanceSource]
+    .filter((source) => source === "local-fallback");
+  return {
+    bridgePairSource: bridgePairSource || "unknown",
+    clientInstanceSource: clientInstanceSource || "unknown",
+    degraded: degradedSources.length > 0,
+    degradationReasons: [
+      ...(bridgePairSource === "local-fallback" ? ["MCP_BRIDGE_LOCAL_FALLBACK"] : []),
+      ...(clientInstanceSource === "local-fallback" ? ["MCP_CLIENT_LOCAL_FALLBACK"] : []),
+    ],
+  };
 }
 
 function getMcpConversationId(explicit = "") {
@@ -242,6 +275,7 @@ module.exports = {
   getMcpClientInstanceId,
   getMcpConversationId,
   getMcpClientSessionId,
+  getMcpIdentityStatus,
   ownerCapabilityMatches,
   taskOwnsActiveToolRoute,
   taskConnectionMatches,

@@ -20,6 +20,7 @@ from unreal_static_validate import (
     resolve_write_scope_paths,
     validate_unreal_readiness,
 )
+from workspace_paths import resolve_index_dir
 
 
 @dataclass
@@ -103,7 +104,7 @@ def main() -> int:
 
     module_graph = args.module_graph
     if module_graph is None:
-        default_graph = Path(__file__).resolve().parent.parent / "data" / "unreal58" / "raw_module_graph.jsonl"
+        default_graph = resolve_index_dir() / "raw_module_graph.jsonl"
         module_graph = default_graph if default_graph.is_file() else None
 
     write_target = args.write_target

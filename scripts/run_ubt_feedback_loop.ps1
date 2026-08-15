@@ -54,12 +54,15 @@ function Resolve-UbtPath {
 $projectPath = (Resolve-Path -LiteralPath $ProjectFile).Path
 $projectRoot = Split-Path -Parent $projectPath
 $workspace = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $workspace "scripts\installer_support\Install-PathHelpers.ps1")
+$ragPaths = Get-RagDataPaths -RagRoot $workspace
+$dataDir = [string]$ragPaths.DataDir
 $py = Find-Python
 $resolvedUbtPath = Resolve-UbtPath -Workspace $workspace
 
 Set-Location -LiteralPath $workspace
 
-$logDir = Join-Path $workspace "data\unreal58\Logs"
+$logDir = Join-Path $dataDir "Logs"
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 $lastLog = Join-Path $logDir "ubt_feedback_last.log"
 
@@ -75,10 +78,10 @@ if (-not $SkipBuild) {
 }
 
 Write-Host "Collecting project profile..."
-& $py scripts\collect_unreal_project_profile.py --root $projectPath --out data\unreal58\raw_project_profiles.jsonl
+& $py scripts\collect_unreal_project_profile.py --root $projectPath --out (Join-Path $dataDir "raw_project_profiles.jsonl")
 
 Write-Host "Collecting build logs..."
-& $py scripts\collect_build_logs.py --root $projectRoot --root $logDir --out data\unreal58\raw_build_logs.jsonl --logs-only
+& $py scripts\collect_build_logs.py --root $projectRoot --root $logDir --out (Join-Path $dataDir "raw_build_logs.jsonl") --logs-only
 
 Write-Host "Rebuilding RAG index..."
 powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import resolve_index_dir
 
 def load_json(path: Path) -> dict | list | None:
     if not path.is_file():
@@ -40,7 +41,7 @@ def add_dependency_edges(edges: list[dict[str, Any]], source_id: str, dependenci
 
 
 def build_graph(workspace: Path, project_root: Path, project_name: str) -> dict[str, Any]:
-    index_dir = workspace / "data" / "unreal58"
+    index_dir = resolve_index_dir(workspace)
     pab_path = index_dir / "project_architecture.json"
     pab = load_json(pab_path) if isinstance(load_json(pab_path), dict) else {}
 

@@ -3,9 +3,7 @@
     "unreal-rag": {
       "command": "{PYTHON_EXE}",
       "args": [
-        "{REPO_ROOT}/scripts/unreal_rag_mcp.py",
-        "--index",
-        "{REPO_ROOT}/data/unreal58/rag.sqlite"
+        "{REPO_ROOT}/scripts/unreal_rag_mcp.py"
       ],
       "timeout": 420000,
       "env": {

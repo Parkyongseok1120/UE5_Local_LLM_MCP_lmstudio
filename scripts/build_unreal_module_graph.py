@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import find_workspace_root, resolve_index_dir
 
 PUBLIC_MARKERS = {"Public", "Classes"}
 PRIVATE_MARKERS = {"Private"}
@@ -372,7 +373,7 @@ def write_report(path: Path, docs_count: int, unresolved: Counter[str], missing:
 def build(args: argparse.Namespace) -> None:
     symbol_paths = [Path(value) for value in args.symbols]
     if not symbol_paths:
-        symbol_paths = [Path("data/unreal58/raw_symbols.jsonl")]
+        symbol_paths = [resolve_index_dir(find_workspace_root()) / "raw_symbols.jsonl"]
     include_maps, headers, module_deps = load_symbols(symbol_paths)
     owners = build_owner_index(headers)
     primary_symbols = symbol_paths[0]
@@ -401,7 +402,7 @@ def build(args: argparse.Namespace) -> None:
     if len(deduped) != len(docs):
         print(f"dedupe: removed {len(docs) - len(deduped)} duplicate module graph records")
 
-    out_path = Path(args.out)
+    out_path = Path(args.out) if args.out else resolve_index_dir(find_workspace_root()) / "raw_module_graph.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as handle:
         for doc in deduped:
@@ -423,7 +424,7 @@ def build(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build Unreal module/include graph RAG records from raw symbols.")
     parser.add_argument("--symbols", action="append", default=[], help="Raw symbol JSONL input(s). Repeat for multiple files.")
-    parser.add_argument("--out", default="data/unreal58/raw_module_graph.jsonl")
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
     parser.add_argument("--report", default="Reports/unreal_module_include_graph.md")
     parser.add_argument("--max-edges", type=int, default=12000)
     return parser.parse_args()

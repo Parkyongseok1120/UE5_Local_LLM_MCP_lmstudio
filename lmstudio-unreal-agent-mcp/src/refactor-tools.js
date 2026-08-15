@@ -5,13 +5,13 @@ const path = require("path");
 const os = require("os");
 const cp = require("child_process");
 const { promisify } = require("util");
-const { getActiveProject, resolveProjectSelection } = require("./unreal-detect.js");
+const {
+  getActiveProject,
+  resolveProjectSelection,
+  resolveAgentWorkspaceRoot,
+} = require("./unreal-detect.js");
 
 const execFile = promisify(cp.execFile);
-
-const UNREAL58_ROOT = path.resolve(
-  process.env.UNREAL58_ROOT || path.join(os.homedir(), ".lmstudio", "Unreal58-RAG")
-);
 
 function resolvePythonExe() {
   const bundled = path.join(
@@ -30,7 +30,7 @@ function resolvePythonExe() {
 }
 
 function resolveRefactorPlanScript() {
-  const repoScript = path.join(UNREAL58_ROOT, "scripts", "refactor_plan.py");
+  const repoScript = path.join(resolveAgentWorkspaceRoot(), "scripts", "refactor_plan.py");
   if (fs.existsSync(repoScript)) {
     return repoScript;
   }

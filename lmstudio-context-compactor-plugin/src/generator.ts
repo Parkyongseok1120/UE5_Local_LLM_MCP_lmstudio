@@ -276,10 +276,16 @@ async function compactToTarget(
   reservedTokens: number,
   options: {
     trailingMetaUser?: ChatMessage | null;
+    maxCurrentTurnMessages?: number | null;
   } = {},
 ): Promise<{ chat: Chat; inputTokens: number; remainingTokens: number; retainedTurns: number; currentTurnCap: number | null }> {
   let retainedTurns = Math.max(0, Math.floor(Number(config.recentCompleteTurns || 0)));
-  let currentTurnCap: number | null = null;
+  const requestedCurrentTurnCap = options.maxCurrentTurnMessages;
+  let currentTurnCap: number | null = typeof requestedCurrentTurnCap === "number"
+    && Number.isFinite(requestedCurrentTurnCap)
+    && requestedCurrentTurnCap >= 0
+    ? Math.floor(requestedCurrentTurnCap)
+    : null;
   let best: {
     chat: Chat;
     inputTokens: number;
@@ -1755,6 +1761,12 @@ function taskOwnedRequiredToolDefinition(
   if (Object.prototype.hasOwnProperty.call(properties, "sessionId")) {
     injected.sessionId = sessionId;
   }
+  const originalRequired = Array.isArray(schema.required)
+    ? schema.required.map((key: any) => String(key || "")).filter(Boolean)
+    : [];
+  const directCallSafe = originalRequired.every((key: string) => (
+    Object.prototype.hasOwnProperty.call(injected, key)
+  ));
   return {
     ...definition,
     function: {
@@ -1765,11 +1777,14 @@ function taskOwnedRequiredToolDefinition(
         // server-owned fields from `required`. The model may omit them and the
         // control plane overwrites any stale copy before LM Studio dispatches.
         properties,
-        required: (Array.isArray(schema.required) ? schema.required : [])
+        required: originalRequired
           .filter((key: string) => !Object.prototype.hasOwnProperty.call(injected, key)),
       },
     },
     __serverOwnedInjectedArgs: injected,
+    // Only an exact server-owned argument set may bypass model serialization.
+    // Optional model-authored fields are never fabricated by this path.
+    __serverOwnedDirectCallSafe: directCallSafe,
   };
 }
 
@@ -3051,8 +3066,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       networkedContract: networkedContractRequired,
     },
   );
-  const semanticForbiddenTools = !serverControlV2Active
-    && Array.isArray(nextCheckpoint?.semanticBlocker?.forbiddenTools)
+  // A legacy semantic recovery result can arrive after a v2 route was
+  // checkpointed.  V2 narrows authority, but it must never re-expose a tool
+  // explicitly forbidden by that newer recovery result.  Core normally turns
+  // a contradictory route into a terminal checkpoint; retain this intersection
+  // here as a second, generator-side barrier for mixed-version histories.
+  const semanticForbiddenTools = Array.isArray(nextCheckpoint?.semanticBlocker?.forbiddenTools)
     ? nextCheckpoint.semanticBlocker.forbiddenTools.map((name: any) => String(name || "").trim()).filter(Boolean)
     : [];
   const toolAllowedBySemanticBlocker = (tool: any): boolean => {
@@ -3067,7 +3086,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       allowed,
       tool?.function?.name || tool?.name || "",
     ))
-  ));
+  )).filter(toolAllowedBySemanticBlocker);
   const phaseToolDefinitions = serverControlV2Active
     ? serverProjectedToolDefinitions
     : workflowStopActive
@@ -3158,7 +3177,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ));
   const modelFacingToolDefinitions = effectiveToolDefinitions.map((tool: any) => {
     if (!tool?.__serverOwnedInjectedArgs) return tool;
-    const { __serverOwnedInjectedArgs: _injected, ...publicDefinition } = tool;
+    const {
+      __serverOwnedInjectedArgs: _injected,
+      __serverOwnedDirectCallSafe: _directCallSafe,
+      ...publicDefinition
+    } = tool;
     return publicDefinition;
   });
   const featureIntentModelFacingTool: any = modelFacingToolDefinitions.find((tool: any) => (
@@ -3199,6 +3222,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     normalToolResultReserve: finiteNumber(configValue(ctl, "normalToolResultReserve", 3000), 3000),
     buildToolResultReserve: finiteNumber(configValue(ctl, "buildToolResultReserve", 8000), 8000),
     recentCompleteTurns: Math.floor(finiteNumber(configValue(ctl, "recentCompleteTurns", 1), 1, 0, 100)),
+    // The schema supplies the production default.  Keep an omitted value at
+    // zero for older hosts/config adapters that do not expose newly-added
+    // fields yet, preserving their established behavior until migration.
+    maxCurrentTurnMessages: Math.floor(finiteNumber(configValue(ctl, "maxCurrentTurnMessages", 0), 0, 0, 256)),
     minimumTurnsBetweenCompactions: Math.floor(finiteNumber(configValue(ctl, "minimumTurnsBetweenCompactions", 0), 0, 0, 100)),
     targetRemainingTokensAfterCompaction: finiteNumber(
       configValue(ctl, "targetRemainingTokensAfterCompaction", 24000), 24000, hardRemainingTokens,
@@ -3209,6 +3236,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     preRouteDiscoveryLimit,
   };
   const decision = core.budgetDecision({ contextLength, inputTokens, nextToolName, config, toolSchemaTokens });
+  const currentTurnMessageCount = measureCurrentTurnLength(history);
+  const currentTurnCapForced = Boolean(
+    config.maxCurrentTurnMessages > 0
+    && currentTurnMessageCount > config.maxCurrentTurnMessages
+    && !trailingMetaUser,
+  );
 
   console.info(
     `[unreal-context-compactor] Proxy active: target=${resolvedTargetModel} `
@@ -3307,14 +3340,20 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const latestIsReadOnly = core.isReadOnlyUserGoal(latestObjective);
   const budgetPressed = decision.action === "soft_compact" || decision.action === "hard_compact";
   // Major mode flips may soft-compact even when the budget is healthy, but ordinary
-  // objective-string churn must not. Retained turns are never zeroed by goal change alone.
+  // objective-string churn must not. A real major objective change starts with
+  // no verbatim prior turns; the bounded checkpoint retains only verified facts.
   const goalChangeCompact = Boolean(
     enabled
     && !observeOnly
     && !trailingMetaUser
     && goalChanged,
   );
-  const zeroRetainedTurns = false;
+  const zeroRetainedTurns = Boolean(goalChangeCompact && priorObjective && latestObjective);
+  if (currentTurnCapForced) {
+    // This is an integrity bound, not a budget optimization: do not defer a
+    // growing active turn merely because the token estimate is still healthy.
+    effectiveAction = "soft_compact";
+  }
   if (goalChangeCompact && effectiveAction === "normal") {
     effectiveAction = "soft_compact";
   }
@@ -3350,7 +3389,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         compactConfig,
         contextLength,
         decision.reservedTokens,
-        { trailingMetaUser },
+        {
+          trailingMetaUser,
+          maxCurrentTurnMessages: currentTurnCapForced
+            ? config.maxCurrentTurnMessages
+            : null,
+        },
       );
       modelChat = compactedMetrics.chat;
       nextCheckpoint.lastCompactionSourceMessageCount = messages.length;
@@ -3363,6 +3407,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       effectiveAction,
       goalChangeCompact,
       zeroRetainedTurns,
+      currentTurnCapForced,
+      currentTurnMessageCount,
       answeringMeta: Boolean(trailingMetaUser),
       applied,
       checkpointGeneration: nextCheckpoint.checkpointGeneration,
@@ -3380,6 +3426,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       effectiveAction,
       goalChangeCompact,
       zeroRetainedTurns,
+      currentTurnCapForced,
+      currentTurnMessageCount,
       answeringMeta: Boolean(trailingMetaUser),
       applied: false,
       messagesSinceLastCompaction,
@@ -3666,23 +3714,67 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     });
   };
 
-  let stopReason = await runPrediction(
-    modelFacingToolDefinitions,
-    architectureToolForced
-      || featureIntentEvidenceRefillActive
-      || initialActiveProjectBootstrapForced
-      || preRoutePlannerForced
-      || catalogRefreshForced
-      || exactRequiredToolForced,
-    architectureToolForced
-      ? "Architecture validation"
-      : (architectureEvidenceRefillActive || featureIntentEvidenceRefillActive
-        ? "Source evidence analysis"
-        : (exactRequiredToolForced
-          ? `Running: ${exactRequiredToolName}`
-          : "Model reasoning")),
+  const exactServerOwnedDirectCall = Boolean(
+    exactRequiredToolForced
+    && serverControlV2Active
+    && serverControlV2?.requiredTool
+    && exactRequiredToolDefinition?.__serverOwnedDirectCallSafe === true,
   );
-  await recordPredictionCompletion(stopReason);
+  let stopReason = "";
+  if (exactServerOwnedDirectCall) {
+    // There is no model choice left: the server owns the exact tool and every
+    // schema-required argument.  Inject it directly so compact models cannot
+    // waste a turn serializing, correcting, or retrying an already-authorized
+    // request.  The normal control-plane validation below still guards commit.
+    const rawRequest = {
+      id: `server-owned-${String(sessionId).slice(0, 32)}-${String(nextCheckpoint?.controlEpoch || "0")}`,
+      type: "function",
+      name: String(exactRequiredToolDefinition?.function?.name || exactRequiredToolName),
+      arguments: mergeServerOwnedArguments(
+        {},
+        exactRequiredToolDefinition?.__serverOwnedInjectedArgs || {},
+      ),
+    };
+    const request = enrichToolRequestControl(
+      rawRequest,
+      sessionId,
+      nextCheckpoint,
+      authoritativeGoal,
+      modelFacingToolDefinitions,
+    );
+    const callId = 0;
+    requests.push({ callId, request });
+    recordEvent({ kind: "start", callId, toolCallId: rawRequest.id });
+    recordEvent({ kind: "name", callId, name: request.name });
+    recordEvent({ kind: "args", callId, content: JSON.stringify(request.arguments || {}) });
+    recordEvent({ kind: "end", callId, request });
+    stopReason = "server_owned_direct_tool";
+    await appendEventBestEffort(sessionId, {
+      type: "server_required_tool_direct_emitted",
+      at: new Date().toISOString(),
+      requiredTool: exactRequiredToolName,
+      taskSessionId: String(nextCheckpoint?.taskRouteOwnership?.taskSessionId || ""),
+    });
+    await recordPredictionCompletion(stopReason, "server_owned_direct_tool");
+  } else {
+    stopReason = await runPrediction(
+      modelFacingToolDefinitions,
+      architectureToolForced
+        || featureIntentEvidenceRefillActive
+        || initialActiveProjectBootstrapForced
+        || preRoutePlannerForced
+        || catalogRefreshForced
+        || exactRequiredToolForced,
+      architectureToolForced
+        ? "Architecture validation"
+        : (architectureEvidenceRefillActive || featureIntentEvidenceRefillActive
+          ? "Source evidence analysis"
+          : (exactRequiredToolForced
+            ? `Running: ${exactRequiredToolName}`
+            : "Model reasoning")),
+    );
+    await recordPredictionCompletion(stopReason);
+  }
   if (predictionTruncated(stopReason)) {
     const safelyBuffered = toolControlPlaneEnforced || bufferUntilPredictionComplete;
     throw new Error(
@@ -3701,7 +3793,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       requests[0]?.request?.arguments,
     )
   );
-  if (exactRequiredToolForced && !exactRequiredCallComplete()) {
+  if (exactRequiredToolForced && !exactServerOwnedDirectCall && !exactRequiredCallComplete()) {
     const rejectedToolNames = requests
       .map((entry) => requestedToolName(entry.request))
       .filter(Boolean);

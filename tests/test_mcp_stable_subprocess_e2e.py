@@ -852,6 +852,118 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
         client.close()
 
 
+def test_task_bound_evidence_stagnation_commits_v2_synthesis_control(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A guarded read must atomically replace its task route before replying.
+
+    This exercises the real Agent subprocess plus the Python task-state bridge:
+    a stale evidence route cannot keep `read_file` callable after the third
+    equivalent read reaches EVIDENCE_STAGNATION.
+    """
+    require_agent_mcp_deps()
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+    project_dir = tmp_path / "PortableDemo"
+    source_file = project_dir / "Source" / "PortableDemo" / "Demo.cpp"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("void FPortableDemo::Run() {}\n", encoding="utf-8")
+    uproject = project_dir / "PortableDemo.uproject"
+    uproject.write_text(json.dumps({"FileVersion": 3}), encoding="utf-8")
+    state_root = tmp_path / "state" / "unreal-agent"
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(json.dumps({"activeProject": str(uproject)}), encoding="utf-8")
+    agent_config = tmp_path / "agent-mcp.json"
+    agent_config.write_text(json.dumps({"projectSearchRoots": [str(tmp_path)]}), encoding="utf-8")
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared_config))
+    monkeypatch.setenv("MCP_CONNECTION_ID", "pytest-evidence-stagnation")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from task_api import task_root, task_start
+
+    started = task_start(
+        ROOT,
+        request="Inspect Source/PortableDemo/Demo.cpp",
+        mode="agent_inspect",
+        project_file=str(uproject),
+        plan_payload={
+            "taskKind": "inspect_only",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "inspect", "files": ["Source/PortableDemo/Demo.cpp"]}
+            ],
+        },
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(workspace_dir),
+            "SHARED_UNREAL_CONFIG": str(shared_config),
+            "AGENT_STATE_ROOT": str(state_root),
+            "AGENT_MCP_CONFIG": str(agent_config),
+            "MCP_CONNECTION_ID": "pytest-evidence-stagnation",
+            "ALLOW_WRITE": "0",
+            "ALLOW_COMMANDS": "0",
+            "ALLOW_UNREAL_BUILD": "0",
+        }
+    )
+    client = _StdioJsonRpc(
+        [_node_exe(), str(AGENT_SERVER)],
+        env=env,
+        cwd=ROOT / "lmstudio-unreal-agent-mcp",
+    )
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
+            },
+            1,
+        )
+        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        args = {
+            "taskAuthorization": started["taskAuthorization"],
+            "path": "Source/PortableDemo/Demo.cpp",
+        }
+        first = client.request("tools/call", {"name": "read_file", "arguments": args}, 2)
+        assert first["result"].get("isError") is not True, first
+        second = client.request("tools/call", {"name": "read_file", "arguments": args}, 3)
+        assert second["result"].get("isError") is not True, second
+        stagnated = client.request("tools/call", {"name": "read_file", "arguments": args}, 4)
+        assert stagnated["result"].get("isError") is True, stagnated
+        payload = _tool_payload(stagnated["result"])
+        assert payload["errorCode"] == "EVIDENCE_STAGNATION", json.dumps(payload, indent=2)
+        assert payload.get("taskRecoveryRecorded") is True, json.dumps(payload, indent=2)
+        assert payload["control"]["version"] == 2
+        assert payload["control"]["disposition"] == "continue"
+        assert payload["control"]["allowedTools"] == []
+        assert payload["control"]["retryPolicy"]["sameSemanticInput"] == "forbidden"
+
+        state_path = task_root(ROOT, started["taskSessionId"]) / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["recoveryObligation"]["status"] == "evidence_complete"
+        assert state["controlState"]["allowedTools"] == []
+        assert state["controlEpoch"] == payload["controlEpoch"]
+
+        # Authorization rejects the fourth attempt before the read handler can
+        # manufacture EVIDENCE_STAGNATION_REPEAT or touch the source again.
+        rejected = client.request("tools/call", {"name": "read_file", "arguments": args}, 5)
+        assert rejected["result"].get("isError") is True
+        rejected_payload = _tool_payload(rejected["result"])
+        # A synthesis transition has no required tool, so route authorization
+        # rejects the stale read as inactive rather than inventing a required
+        # tool obligation. Either path must occur before the read handler.
+        assert rejected_payload["errorCode"] == "TASK_TOOL_NOT_ACTIVE"
+        assert "EVIDENCE_STAGNATION_REPEAT" not in json.dumps(rejected_payload)
+    finally:
+        client.close()
+
+
 def _start_agent_client(tmp_path: Path, *, extra_env: dict[str, str] | None = None) -> _StdioJsonRpc:
     require_agent_mcp_deps()
     env = os.environ.copy()

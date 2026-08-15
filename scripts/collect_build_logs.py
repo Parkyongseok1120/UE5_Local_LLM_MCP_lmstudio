@@ -9,6 +9,7 @@ import json
 import re
 from pathlib import Path
 
+from workspace_paths import resolve_index_dir
 
 LOG_EXTENSIONS = {".log", ".txt"}
 SKIP_DIRS = {".git", ".vs", "DerivedDataCache", "Binaries"}
@@ -235,13 +236,16 @@ def collect(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect Unreal build/editor log errors as JSONL.")
     parser.add_argument("--root", action="append", default=None)
-    parser.add_argument("--out", default="data/unreal58/raw_build_logs.jsonl")
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
     parser.add_argument("--max-files", type=int, default=300)
     parser.add_argument("--max-bytes", type=int, default=25_000_000)
     parser.add_argument("--context-lines", type=int, default=3)
     parser.add_argument("--group-following-lines", type=int, default=2)
     parser.add_argument("--logs-only", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.out:
+        args.out = str(resolve_index_dir() / "raw_build_logs.jsonl")
+    return args
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import json
 import shutil
 from pathlib import Path
 
-from workspace_paths import canonical_absolute_path_identity
+from workspace_paths import canonical_absolute_path_identity, resolve_index_dir
 
 
 TEXT_EXTENSIONS = {
@@ -48,7 +48,6 @@ SKIP_DIRS = {
     "Intermediate",
     "Saved",
     "text_snapshot",
-    "unreal58",
     "unreal_projects",
 }
 
@@ -70,7 +69,7 @@ def read_text(path: Path) -> str | None:
 
 
 def has_skip_part(path: Path) -> bool:
-    return any(part in SKIP_DIRS for part in path.parts)
+    return any(part in SKIP_DIRS or part.lower().startswith("unreal") and part[6:].isdigit() for part in path.parts)
 
 
 def find_projects(root: Path) -> list[Path]:
@@ -237,12 +236,15 @@ def collect(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect Unreal project text and asset-path metadata as JSONL.")
     parser.add_argument("--root", action="append", required=True, help="Search root; repeat for multiple roots.")
-    parser.add_argument("--out", default="data/unreal58/raw_projects.jsonl")
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
     parser.add_argument("--copy-text-to")
     parser.add_argument("--min-chars", type=int, default=2)
     parser.add_argument("--max-text-bytes", type=int, default=1_000_000)
     parser.add_argument("--skip-asset-paths", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.out:
+        args.out = str(resolve_index_dir() / "raw_projects.jsonl")
+    return args
 
 
 if __name__ == "__main__":

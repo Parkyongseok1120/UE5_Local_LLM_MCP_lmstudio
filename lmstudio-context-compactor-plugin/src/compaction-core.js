@@ -17,6 +17,7 @@ const DEFAULT_COMPACTION_CONFIG = Object.freeze({
   normalToolResultReserve: 3000,
   buildToolResultReserve: 8000,
   recentCompleteTurns: 1,
+  maxCurrentTurnMessages: 12,
   minimumTurnsBetweenCompactions: 0,
   targetRemainingTokensAfterCompaction: 24000,
   maxCheckpointFacts: 32,
@@ -407,6 +408,63 @@ function compactTaskRouteOwnership(value) {
   return { taskSessionId, ownerCapability };
 }
 
+function rememberInvalidatedTaskSession(state, taskSessionId) {
+  const value = String(taskSessionId || "").trim();
+  if (!value) return;
+  if (!(state.invalidatedTaskSessionIds instanceof Set)) {
+    state.invalidatedTaskSessionIds = new Set();
+  }
+  // The id is deliberately retained across compactions so a delayed result
+  // from the previous user objective cannot silently reactivate its route.
+  state.invalidatedTaskSessionIds.add(value);
+  while (state.invalidatedTaskSessionIds.size > 16) {
+    state.invalidatedTaskSessionIds.delete(state.invalidatedTaskSessionIds.values().next().value);
+  }
+}
+
+function resetTaskScopedControl(state, reason = "new_user_objective") {
+  rememberInvalidatedTaskSession(state, compactServerControl(state.serverControl)?.taskSessionId);
+  rememberInvalidatedTaskSession(state, compactTaskRouteOwnership(state.taskRouteOwnership)?.taskSessionId);
+  state.serverControl = null;
+  state.protocolControl = null;
+  state.architectureControl = null;
+  state.architectureProposal = null;
+  state.taskRouteTerminal = false;
+  state.toolRoute = null;
+  state.taskRouteOwnership = null;
+  state.requiredNextTool = null;
+  state.requiredNextToolRef = null;
+  state.requiredNextToolArgs = null;
+  state.semanticBlocker = null;
+  state.selectedSlice = null;
+  state.sliceProgress = null;
+  state.buildState = {};
+  state.buildVerification = null;
+  state.sourceEvidence = null;
+  state.absentEvidence = null;
+  state.evidenceFacts = [];
+  state.editEvidence = [];
+  state.repeatEvidence = [];
+  state.exactSignatureContracts = [];
+  state.coverageEvidence = [];
+  state.touchedPaths = [];
+  state.failedToolResults = [];
+  state.mutationGeneration = 0;
+  state.lastDiagnostics.push(`taskScopedControlReset=${reason}`);
+}
+
+function payloadTargetsInvalidatedTask(value, state) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const invalidated = state.invalidatedTaskSessionIds;
+  if (!(invalidated instanceof Set) || invalidated.size === 0) return false;
+  const candidates = [
+    compactServerControl(value.control)?.taskSessionId,
+    compactTaskRouteOwnership(value.taskAuthorization)?.taskSessionId,
+    compactTaskRouteOwnership(value.routeAuthorization)?.taskSessionId,
+  ];
+  return candidates.some((candidate) => candidate && invalidated.has(candidate));
+}
+
 function normalizeToolNames(value, sourceTool = "") {
   const candidates = Array.isArray(value)
     ? value
@@ -495,9 +553,11 @@ function isContinuationUserMessage(text) {
   const directContinuation = /^(?:continue|resume|retry|keep\s+going|go\s+on|계속(?:해|해서|\s*진행(?:해|하세요)?|\s*작업(?:해|하세요)?)?|이어(?:서)?(?:\s*진행(?:해|하세요)?)?|재개(?:해|하세요)?|중단한\s*곳부터\s*(?:계속|진행)(?:해|하세요)?|다시\s*시도(?:해|하세요)?)[\s.!?]*$/i;
   const contextualContinuation = /^(?:(?:아까|이전|전에|기존|중단한)\s*(?:하던\s*)?(?:작업|일|것|내용)|그\s*(?:작업|일|것|내용))(?:을|를)?\s*(?:계속(?:해|하세요)?|재개(?:해|하세요)?|이어(?:서)?\s*진행(?:해|하세요)?)[\s.!?]*$/i;
   const englishContextualContinuation = /^(?:continue|resume)\s+(?:the\s+)?(?:previous|prior|active|same)\s+(?:task|work)[\s.!?]*$/i;
+  const englishShortContinuation = /^(?:continue|resume)\s+(?:this|that|the)\s+(?:validation|analysis|plan|replan|work|task)[\s.!?]*$/i;
   return directContinuation.test(source)
     || contextualContinuation.test(source)
-    || englishContextualContinuation.test(source);
+    || englishContextualContinuation.test(source)
+    || englishShortContinuation.test(source);
 }
 
 function mutationToolName(name) {
@@ -561,6 +621,10 @@ function boundedArchitecturePatchPreview(value) {
 
 function collectControlFields(value, state) {
   if (!value || typeof value !== "object") return;
+  if (payloadTargetsInvalidatedTask(value, state)) {
+    state.lastDiagnostics.push("ignoredControlForInvalidatedTaskSession");
+    return;
+  }
   const declaredServerControl = value.control
     && typeof value.control === "object"
     && !Array.isArray(value.control)
@@ -1021,7 +1085,7 @@ function classifyUserIntent(text) {
   if (classifyMutationIntent(source).isMutation) return "MUTATION";
   if (explicitNoWrite) return "READ_ONLY";
   const readOnlyIntent = Boolean(
-    /\b(?:what|which|where|show|list|describe|explain|summari[sz]e|inspect|analy[sz]e|review|report)\b/i.test(source)
+    /\b(?:what|which|where|show|list|describe|explain|summari[sz]e|inspect|analy[sz]e|review|report|look\s+up)\b/i.test(source)
     || /(?:구조|상태|현황|진행\s*상황|어디까지|의미|내용|목록|경로|문제점|원인)(?:을|를|이|가|은|는|만|부터|에)?\s*(?:알려|보여|설명|요약|분석|확인|말해|찾아|점검)/.test(source)
     || /(?:구조|상태|현황|진행\s*상황|내용|목록|경로)[\s\S]{0,100}(?:봐|살펴)/.test(source)
     || /(?:알려|보여|설명|요약|분석|확인|말해)\s*(?:줘|주세요|봐|보자)?[.!?\s]*$/.test(source)
@@ -1146,6 +1210,11 @@ function extractControlState(messages, prior = {}, options = {}) {
     evidenceFacts: canResume && Array.isArray(prior.evidenceFacts) ? [...prior.evidenceFacts] : [],
     editEvidence: canResume && Array.isArray(prior.editEvidence) ? [...prior.editEvidence] : [],
     repeatEvidence: canResume && Array.isArray(prior.repeatEvidence) ? [...prior.repeatEvidence] : [],
+    invalidatedTaskSessionIds: new Set(
+      canResume && Array.isArray(prior.invalidatedTaskSessionIds)
+        ? prior.invalidatedTaskSessionIds.map((value) => String(value || "").trim()).filter(Boolean).slice(-16)
+        : [],
+    ),
   };
   const toolCallsById = new Map();
   const anonymousToolCalls = [];
@@ -1172,6 +1241,14 @@ function extractControlState(messages, prior = {}, options = {}) {
         };
         continue;
       }
+      const objectiveChanged = Boolean(
+        state.objective
+        && userText !== state.objective
+        && !continuation,
+      );
+      if (objectiveChanged) {
+        resetTaskScopedControl(state);
+      }
       if (
         state.semanticBlocker?.active
         && state.objective
@@ -1188,7 +1265,6 @@ function extractControlState(messages, prior = {}, options = {}) {
         continue;
       }
       state.sideQuery = null;
-      if (state.objective && userText !== state.objective) state.repeatEvidence = [];
       state.objective = userText.slice(0, 1200);
       state.constraints = state.constraints.filter((item) =>
         typeof item === "string" && !item.startsWith("active_goal:") && !item.startsWith("read_only_"));
@@ -1486,6 +1562,61 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
   const control = extractControlState(messages, prior, options);
   const snapshots = snapshotMessages(messages || []);
   const generation = Number(prior.checkpointGeneration || 0) + 1;
+  const activeServerControl = compactServerControl(control.serverControl);
+  const semanticForbiddenTools = Array.isArray(control.semanticBlocker?.forbiddenTools)
+    ? control.semanticBlocker.forbiddenTools
+    : [];
+  const controlBlockerConflict = Boolean(
+    activeServerControl
+    && control.semanticBlocker?.active
+    && (
+      (
+        control.semanticBlocker.stopCurrentWorkflow === true
+        && !String(control.semanticBlocker.clearOnTool || "").trim()
+      )
+      || activeServerControl.allowedTools.some((name) => (
+        semanticForbiddenTools.some((forbidden) => toolNamesMatch(forbidden, name))
+      ))
+      || (
+        activeServerControl.requiredTool
+        && semanticForbiddenTools.some((forbidden) => (
+          toolNamesMatch(forbidden, activeServerControl.requiredTool.name)
+        ))
+      )
+    )
+  );
+  if (controlBlockerConflict) {
+    // Do not guess whether a stale v2 route or an evidence/recovery blocker is
+    // newer.  Their intersection can otherwise expose a tool that the same
+    // checkpoint expressly prohibits.  A new user objective or a fresh server
+    // control envelope is required to resume the task.
+    rememberInvalidatedTaskSession(control, activeServerControl.taskSessionId);
+    control.serverControl = null;
+    control.protocolControl = null;
+    control.architectureControl = null;
+    control.taskRouteTerminal = true;
+    control.toolRoute = null;
+    control.taskRouteOwnership = null;
+    control.requiredNextTool = null;
+    control.requiredNextToolRef = null;
+    control.requiredNextToolArgs = null;
+    control.semanticBlocker = {
+      active: true,
+      scope: "workflow",
+      errorCode: "CONTROL_BLOCKER_CONFLICT",
+      blockerFingerprint: String(
+        control.semanticBlocker?.blockerFingerprint || activeServerControl.blocker?.fingerprint || "",
+      ).slice(0, 160),
+      stopCurrentWorkflow: true,
+      stopCurrentPhase: true,
+      phaseBoundary: "control",
+      forbiddenTools: [...new Set(semanticForbiddenTools)].slice(-32),
+      clearOnTool: "",
+      clearOnToolArgs: null,
+      agentInstruction: "Conflicting stale task controls were discarded. Do not call a tool for this task; wait for a new user objective.",
+    };
+    control.lastDiagnostics.push("controlBlockerConflict=fail_closed");
+  }
   if (
     control.semanticBlocker?.active
     && control.requiredNextTool
@@ -1540,6 +1671,7 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     evidenceFacts: control.evidenceFacts,
     editEvidence: control.editEvidence,
     repeatEvidence: control.repeatEvidence,
+    invalidatedTaskSessionIds: [...control.invalidatedTaskSessionIds].slice(-16),
     pendingToolCall: prior.pendingToolCall || null,
     pendingToolCalls: Array.isArray(prior.pendingToolCalls) ? [...prior.pendingToolCalls] : [],
     completedToolCallIds: Array.isArray(prior.completedToolCallIds) ? [...prior.completedToolCallIds].slice(-256) : [],
@@ -2072,6 +2204,10 @@ function validateCheckpoint(checkpoint) {
       || typeof item.content !== "string"
       || item.content.length > MAX_REPEAT_EVIDENCE_CHARS
     ))) return false;
+  }
+  if (checkpoint.invalidatedTaskSessionIds !== undefined) {
+    if (!Array.isArray(checkpoint.invalidatedTaskSessionIds) || checkpoint.invalidatedTaskSessionIds.length > 16) return false;
+    if (checkpoint.invalidatedTaskSessionIds.some((value) => typeof value !== "string" || !value.trim())) return false;
   }
   if (checkpoint.editEvidence !== undefined) {
     if (!Array.isArray(checkpoint.editEvidence) || checkpoint.editEvidence.length > MAX_EDIT_EVIDENCE_FILES) return false;

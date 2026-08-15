@@ -58,9 +58,20 @@ function saveSharedConfig(config) {
 function loadMergedConfig(configPath) {
   const local = loadConfig(configPath);
   const shared = loadSharedConfig();
+  const localEngineRoots = local.engineRootsByAssociation && typeof local.engineRootsByAssociation === "object"
+    && !Array.isArray(local.engineRootsByAssociation)
+    ? local.engineRootsByAssociation
+    : {};
+  const sharedEngineRoots = shared.engineRootsByAssociation && typeof shared.engineRootsByAssociation === "object"
+    && !Array.isArray(shared.engineRootsByAssociation)
+    ? shared.engineRootsByAssociation
+    : {};
   return {
     ...local,
     ...shared,
+    // A project-local source-build mapping must take precedence over a
+    // machine-wide fallback so switching projects cannot retarget a GUID.
+    engineRootsByAssociation: { ...sharedEngineRoots, ...localEngineRoots },
     projectSearchRoots: shared.projectSearchRoots?.length
       ? shared.projectSearchRoots
       : local.projectSearchRoots,
@@ -88,15 +99,27 @@ function getActiveProject(configPath) {
   return config.activeProject || null;
 }
 
-function ragRootPath() {
-  if (process.env.UNREAL58_ROOT) {
-    return path.resolve(process.env.UNREAL58_ROOT);
+function resolveAgentWorkspaceRoot(options = {}) {
+  const env = options.env && typeof options.env === "object" ? options.env : process.env;
+  const configured = String(env.UNREAL_WORKSPACE_ROOT || env.UNREAL58_ROOT || "").trim();
+  if (configured) return path.resolve(configured);
+
+  // A packaged MCP is normally installed beside its workspace scripts. Prefer
+  // that portable layout over a historical user-home clone so a second project
+  // or checkout cannot accidentally execute another repository's controller.
+  const repositoryRoot = path.resolve(options.repositoryRoot || path.join(__dirname, "..", ".."));
+  if (fs.existsSync(path.join(repositoryRoot, "scripts", "project_controller.py"))) {
+    return repositoryRoot;
   }
-  return path.join(os.homedir(), ".lmstudio", "Unreal58-RAG");
+
+  // Retain the legacy location solely for older split installs that do not ship
+  // scripts with the MCP. It is never the first choice for a current checkout.
+  const home = options.homeDir ? path.resolve(options.homeDir) : os.homedir();
+  return path.join(home, ".lmstudio", "Unreal58-RAG");
 }
 
 async function invokeProjectController(argv) {
-  const script = path.join(ragRootPath(), "scripts", "project_controller.py");
+  const script = path.join(resolveAgentWorkspaceRoot(), "scripts", "project_controller.py");
   const python = process.env.PYTHON_EXE || (process.platform === "win32" ? "python" : "python3");
   try {
     const { stdout } = await execFile(python, [script, ...argv], {
@@ -288,13 +311,46 @@ function projectNameFromPath(uprojectPath) {
 function engineFolderFromAssociation(value) {
   if (!value) return null;
   const text = String(value).trim();
-  if (/^\d+\.\d+$/.test(text)) {
-    return `UE_${text}`;
-  }
-  if (/^UE_/i.test(text)) {
-    return text;
-  }
-  return null;
+  const match = text.match(/^(?:UE_)?(\d+(?:\.\d+)+)$/i);
+  return match ? `UE_${match[1]}` : null;
+}
+
+function configuredEngineRootForAssociation(engineAssociation, config) {
+  const association = String(engineAssociation || "").trim();
+  const roots = config?.engineRootsByAssociation;
+  if (!association || !roots || typeof roots !== "object" || Array.isArray(roots)) return "";
+  if (!Object.prototype.hasOwnProperty.call(roots, association)) return "";
+  return String(roots[association] || "").trim();
+}
+
+function engineAssociationUnresolved(engineAssociation, detail) {
+  const association = String(engineAssociation || "").trim();
+  return {
+    engineRoot: "",
+    buildTool: "",
+    buildToolKind: "",
+    buildBat: "",
+    source: "",
+    requestedEngineAssociation: association,
+    warning: null,
+    errorCode: "ENGINE_ASSOCIATION_UNRESOLVED",
+    error: `ENGINE_ASSOCIATION_UNRESOLVED: EngineAssociation ${JSON.stringify(association)} ${detail}. `
+      + "Set engineRoot, UNREAL_ENGINE_ROOT, or an exact engineRootsByAssociation entry."
+  };
+}
+
+function engineRootUnresolved(detail) {
+  return {
+    engineRoot: "",
+    buildTool: "",
+    buildToolKind: "",
+    buildBat: "",
+    source: "",
+    requestedEngineAssociation: "",
+    warning: null,
+    errorCode: "ENGINE_ROOT_UNRESOLVED",
+    error: detail,
+  };
 }
 
 function compareEngineFolders(left, right) {
@@ -410,50 +466,69 @@ async function findEngineInstalls(options = {}) {
 async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, options = {}) {
   const hostPlatform = options.hostPlatform || process.platform;
   const env = options.env || process.env;
-  const requestedFolder = engineFolderFromAssociation(engineAssociation);
+  const association = String(engineAssociation || "").trim();
+  const requestedFolder = engineFolderFromAssociation(association);
+  const configBase = options.workspaceRoot || process.cwd();
 
-  if (explicitEngineRoot) {
-    const resolved = path.resolve(explicitEngineRoot);
+  const resolveCandidate = async (value, source, { relativeToConfig = false } = {}) => {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const resolved = path.isAbsolute(raw)
+      ? path.resolve(raw)
+      : path.resolve(relativeToConfig ? configBase : process.cwd(), raw);
     const buildTool = await resolveEngineBuildTool(resolved, hostPlatform);
-    if (buildTool) {
-      return {
-        engineRoot: resolved,
-        buildTool: buildTool.path,
-        buildToolKind: buildTool.kind,
-        buildBat: buildTool.path,
-        source: "argument",
-        requestedEngineAssociation: engineAssociation,
-        warning: null
-      };
-    }
+    if (!buildTool) return null;
+    return {
+      engineRoot: resolved,
+      buildTool: buildTool.path,
+      buildToolKind: buildTool.kind,
+      buildBat: buildTool.path,
+      source,
+      requestedEngineAssociation: association,
+      warning: source === "environment" && association
+        ? `Using UNREAL_ENGINE_ROOT for EngineAssociation ${association}.`
+        : null,
+    };
+  };
+
+  const explicit = await resolveCandidate(explicitEngineRoot, "argument");
+  if (explicit) return explicit;
+  if (explicitEngineRoot && association) {
+    return engineAssociationUnresolved(association, "could not use the explicit engineRoot");
   }
 
   const environmentEngineRoot = String(env.UNREAL_ENGINE_ROOT || "").trim();
-  if (environmentEngineRoot) {
-    const resolved = path.resolve(environmentEngineRoot);
-    const buildTool = await resolveEngineBuildTool(resolved, hostPlatform);
-    if (buildTool) {
-      return {
-        engineRoot: resolved,
-        buildTool: buildTool.path,
-        buildToolKind: buildTool.kind,
-        buildBat: buildTool.path,
-        source: "environment",
-        requestedEngineAssociation: engineAssociation,
-        warning: requestedFolder && filesystemPathIdentity(
-          path.basename(resolved),
-          hostPlatform,
-          { stripProjectUri: false },
-        ) !== filesystemPathIdentity(requestedFolder, hostPlatform, { stripProjectUri: false })
-          ? `Using UNREAL_ENGINE_ROOT for EngineAssociation ${engineAssociation}.`
-          : null,
-      };
-    }
+  const environment = await resolveCandidate(environmentEngineRoot, "environment");
+  if (environment) return environment;
+  if (environmentEngineRoot && association) {
+    return engineAssociationUnresolved(association, "could not use UNREAL_ENGINE_ROOT");
   }
 
-  const installs = await findEngineInstalls({ ...options, hostPlatform, env });
+  if (association) {
+    const mappedEngineRoot = configuredEngineRootForAssociation(association, config);
+    if (mappedEngineRoot) {
+      const mapped = await resolveCandidate(
+        mappedEngineRoot,
+        "config.engineRootsByAssociation",
+        { relativeToConfig: true },
+      );
+      if (mapped) return mapped;
+      return engineAssociationUnresolved(
+        association,
+        "has an engineRootsByAssociation entry that is not a usable engine root",
+      );
+    }
 
-  if (requestedFolder) {
+    // A numeric association is allowed to discover only its exact install;
+    // a custom/GUID association must be bound explicitly or by the mapping.
+    if (!requestedFolder) {
+      return engineAssociationUnresolved(
+        association,
+        "is a custom/source-build identifier without an exact mapping",
+      );
+    }
+
+    const installs = await findEngineInstalls({ ...options, hostPlatform, env });
     const requestedKey = filesystemPathIdentity(requestedFolder, hostPlatform, {
       stripProjectUri: false,
     });
@@ -469,30 +544,24 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
         buildToolKind: exact.buildToolKind,
         buildBat: exact.buildBat,
         source: "EngineAssociation",
-        requestedEngineAssociation: engineAssociation,
-        warning: null
+        requestedEngineAssociation: association,
+        warning: null,
       };
     }
+    return engineAssociationUnresolved(
+      association,
+      `does not have an installed ${requestedFolder} engine`,
+    );
   }
 
-  if (config.defaultEngineRoot) {
-    const resolved = path.resolve(config.defaultEngineRoot);
-    const buildTool = await resolveEngineBuildTool(resolved, hostPlatform);
-    if (buildTool) {
-      return {
-        engineRoot: resolved,
-        buildTool: buildTool.path,
-        buildToolKind: buildTool.kind,
-        buildBat: buildTool.path,
-        source: "config.defaultEngineRoot",
-        requestedEngineAssociation: engineAssociation,
-        warning: requestedFolder
-          ? `EngineAssociation ${engineAssociation} not installed; using config.defaultEngineRoot.`
-          : null
-      };
-    }
-  }
+  const configured = await resolveCandidate(
+    config?.defaultEngineRoot,
+    "config.defaultEngineRoot",
+    { relativeToConfig: true },
+  );
+  if (configured) return configured;
 
+  const installs = await findEngineInstalls({ ...options, hostPlatform, env });
   const fallback = installs[installs.length - 1];
   if (fallback) {
     return {
@@ -501,14 +570,14 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
       buildToolKind: fallback.buildToolKind,
       buildBat: fallback.buildBat,
       source: fallback.source === "environment" ? "environment" : "latest-installed",
-      requestedEngineAssociation: engineAssociation,
-      warning: requestedFolder
-        ? `EngineAssociation ${engineAssociation} not installed; using ${fallback.folderName}.`
-        : null
+      requestedEngineAssociation: "",
+      warning: null,
     };
   }
 
-  return null;
+  return engineRootUnresolved(
+    "Could not resolve Unreal Engine installation. Set engineRoot, UNREAL_ENGINE_ROOT, or config.defaultEngineRoot.",
+  );
 }
 
 async function readUProject(uprojectPath) {
@@ -902,14 +971,17 @@ async function resolveBuildPlan(workspaceRoot, configPath, args = {}) {
   const engine = await resolveEngineRoot(
     project.engineAssociation,
     selection.config,
-    args.engineRoot
+    args.engineRoot,
+    { workspaceRoot }
   );
 
-  if (!engine) {
+  if (!engine || engine.errorCode) {
     return {
       ok: false,
       ...selection,
-      error: "Could not resolve Unreal Engine installation. Set engineRoot or config.defaultEngineRoot."
+      requestedEngineAssociation: engine?.requestedEngineAssociation || project.engineAssociation || null,
+      errorCode: engine?.errorCode || "ENGINE_ROOT_UNRESOLVED",
+      error: engine?.error || "Could not resolve Unreal Engine installation. Set engineRoot or config.defaultEngineRoot."
     };
   }
 
@@ -1041,11 +1113,15 @@ module.exports = {
   defaultEngineLocations,
   engineBuildToolCandidates,
   resolveEngineBuildTool,
+  engineFolderFromAssociation,
+  configuredEngineRootForAssociation,
+  resolveEngineRoot,
   findEngineInstalls,
   discoverProjects,
   resolveProjectSelection,
   resolveBuildPlan,
   defaultPlatform,
+  resolveAgentWorkspaceRoot,
   projectNameFromPath,
   buildProjectBrowsePaths
 };

@@ -483,9 +483,10 @@ def test_initial_active_project_lookup_bypasses_foreign_task_ownership(
     assert Path(payload["activeProject"]).resolve() == project_file.resolve()
     assert payload["projectContext"]["ok"] is True
     assert payload.get("errorCode") != "TASK_ROUTE_OWNERSHIP_REQUIRED"
-    assert payload["requiredNextTool"] == "unreal_agent_plan"
-    assert payload["control"]["nextAction"] == "unreal_agent_plan"
-    assert payload["control"]["nextActionIsTool"] is True
+    assert payload["nextAction"] == "project_context_ready"
+    assert payload["nextActionIsTool"] is False
+    assert "requiredNextTool" not in payload
+    assert payload["control"]["nextActionIsTool"] is False
     assert started["status"] == "running"
 
 
@@ -517,6 +518,52 @@ def test_active_project_lookup_without_selection_does_not_force_planner(
     assert payload["control"]["nextActionIsTool"] is False
     assert "requiredNextTool" not in payload
     assert payload["suggestedToolCalls"]
+
+
+def test_project_control_plan_bypasses_task_start_and_keeps_exact_user_path(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(state_root))
+    current = tmp_path / "Current" / "Current.uproject"
+    target = tmp_path / "Any Other Project" / "Other.uproject"
+    current.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    current.write_text("{}", encoding="utf-8")
+    target.write_text("{}", encoding="utf-8")
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(
+        json.dumps({"activeProject": str(current)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared_config))
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "missing.sqlite")
+    server.workspace = tmp_path
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        498,
+        {
+            "name": "unreal_agent_plan",
+            "arguments": {
+                "request": f'Switch active project to "{target}"',
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["taskKind"] == "project_control"
+    assert payload["taskSessionStarted"] is False
+    assert payload["writeGate"]["writesAllowed"] is False
+    assert payload["requiredNextTool"] == "unreal_set_active_project"
+    assert payload["requiredNextToolArgs"] == {"projectPath": str(target)}
+    assert payload["control"]["nextActionIsTool"] is True
+    tasks_root = state_root / "tasks"
+    assert not tasks_root.exists() or not list(tasks_root.iterdir())
 
 
 def test_active_task_control_surface_is_listed_and_callable_without_flag(
@@ -942,7 +989,8 @@ def test_unreal_agent_plan_description_mentions_chat_first(monkeypatch, tmp_path
     mod = _load_rag_mcp_module()
     server = mod.McpServer(tmp_path / "missing.sqlite")
     plan = next(t for t in server.all_tool_definitions() if t["name"] == "unreal_agent_plan")
-    assert "FIRST" in plan["description"]
+    assert "concrete source-analysis or implementation goal" in plan["description"]
+    assert "select, switch, or clear the active project" in plan["description"]
     assert "toolPolicy" in plan["description"]
     assert "server-issued taskAuthorization" in plan["description"]
 

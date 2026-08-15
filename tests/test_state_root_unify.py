@@ -120,6 +120,9 @@ def test_build_cline_mcp_config_includes_agent_state_root(tmp_path: Path) -> Non
     if ps.returncode != 0:
         pytest.skip(f"PowerShell unavailable: {ps.stderr or ps.stdout}")
     payload = json.loads(ps.stdout)
+    assert payload["mcpServers"]["unreal-rag"]["args"] == [
+        str(tmp_path / "rag" / "scripts" / "unreal_rag_mcp.py")
+    ]
     rag_env = payload["mcpServers"]["unreal-rag"]["env"]
     agent_env = payload["mcpServers"]["unreal-agent"]["env"]
     assert rag_env["AGENT_STATE_ROOT"] == agent_env["AGENT_STATE_ROOT"]

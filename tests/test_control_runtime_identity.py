@@ -79,6 +79,25 @@ def test_tampered_runtime_fails_closed(tmp_path: Path) -> None:
         )
 
 
+def test_runtime_commit_mismatch_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = build_runtime_manifest(ROOT)
+    manifest["components"]["rag"]["gitCommit"] = "different-commit"
+    manifest_path = tmp_path / "control-runtime.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setenv("CONTROL_RUNTIME_GIT_COMMIT", "installed-commit")
+
+    with pytest.raises(ControlRuntimeMismatch, match="gitCommit"):
+        verify_runtime_component(
+            "rag",
+            manifest_path=manifest_path,
+            repository_root=ROOT,
+            required=True,
+        )
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
 @pytest.mark.parametrize(
     ("component", "module_path"),

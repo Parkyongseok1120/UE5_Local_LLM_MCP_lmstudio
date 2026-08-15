@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from parse_build_cs import format_dependency_lines, parse_build_cs_text
+from workspace_paths import resolve_index_dir
 
 SOURCE_EXTENSIONS = {".h", ".hpp", ".hh", ".cpp", ".cxx", ".cc", ".inl"}
 SKIP_DIRS = {
@@ -487,7 +488,7 @@ def collect(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect Unreal C++ symbol metadata as JSONL.")
     parser.add_argument("--root", action="append", required=True)
-    parser.add_argument("--out", default="data/unreal58/raw_symbols.jsonl")
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
     parser.add_argument(
         "--tier",
         choices=("public", "full"),
@@ -519,7 +520,10 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Append symbol records to --out instead of overwriting.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.out:
+        args.out = str(resolve_index_dir() / "raw_symbols.jsonl")
+    return args
 
 
 if __name__ == "__main__":

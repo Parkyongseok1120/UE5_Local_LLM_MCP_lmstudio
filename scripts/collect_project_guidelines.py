@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from workspace_paths import resolve_index_dir
 
 def stable_id(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()
@@ -74,10 +75,13 @@ def collect(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect project guideline Markdown files as JSONL.")
     parser.add_argument("--root", default="RAG_Project_Guidelines")
-    parser.add_argument("--out", default="data/unreal58/raw_guidelines.jsonl")
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
     parser.add_argument("--min-chars", type=int, default=20)
     parser.add_argument("--max-bytes", type=int, default=250_000)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.out:
+        args.out = str(resolve_index_dir() / "raw_guidelines.jsonl")
+    return args
 
 
 if __name__ == "__main__":

@@ -19,8 +19,6 @@ from rag_index_ops import index_health
 from rag_search import SearchOptions, search, search_hybrid
 from workspace_paths import resolve_index_path, resolve_ubt_path
 
-FALLBACK_INDEX = Path("data/unreal58/rag.sqlite")
-
 DEFAULT_UBT = resolve_ubt_path()
 
 SEARCH_QUERIES = [
@@ -316,10 +314,7 @@ def main() -> int:
     if args.index:
         index = args.index.resolve()
     else:
-        try:
-            index = resolve_index_path(rag_root)
-        except Exception:
-            index = (rag_root / FALLBACK_INDEX).resolve()
+        index = resolve_index_path(rag_root)
     if not index.is_file():
         print(f"[FAIL] index missing: {index}")
         return 1

@@ -2,7 +2,8 @@ param(
     [ValidateSet("shooter", "action_combat", "platformer")]
     [string]$Genre = "shooter",
     [string]$ModuleName = "PrototypeModule",
-    [string]$OutputRoot = ""
+    [string]$OutputRoot = "",
+    [string]$EngineAssociation = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,40 @@ $source = Join-Path $OutputRoot "Source\$ModuleName"
 New-Item -ItemType Directory -Force -Path (Join-Path $source "Public") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $source "Private") | Out-Null
 
+function Get-ScaffoldEngineAssociation {
+    param([string]$RequestedAssociation)
+
+    $requested = ([string]$RequestedAssociation).Trim()
+    if ($requested) {
+        return $requested
+    }
+
+    # Reuse the selected project's exact association when one is configured.
+    # If no project is selected, omit EngineAssociation rather than guessing a
+    # version or the newest installed engine.
+    $configPath = ([string]$env:SHARED_UNREAL_CONFIG).Trim()
+    if (-not $configPath) {
+        $configPath = Join-Path $HOME ".lmstudio/config/unreal-workspace.json"
+    }
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        return ""
+    }
+    try {
+        $sharedConfig = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $activeProject = ([string]$sharedConfig.activeProject).Trim()
+        if (-not $activeProject -or -not (Test-Path -LiteralPath $activeProject -PathType Leaf)) {
+            return ""
+        }
+        $descriptor = Get-Content -LiteralPath $activeProject -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        return ([string]$descriptor.EngineAssociation).Trim()
+    }
+    catch {
+        return ""
+    }
+}
+
+$resolvedEngineAssociation = Get-ScaffoldEngineAssociation $EngineAssociation
+
 $buildCs = @"
 using UnrealBuildTool;
 public class $ModuleName : ModuleRules
@@ -22,7 +57,7 @@ public class $ModuleName : ModuleRules
     public $ModuleName(ReadOnlyTargetRules Target) : base(Target)
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
-        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput" });
+        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore" });
     }
 }
 "@
@@ -61,20 +96,18 @@ void U${ModuleName}Component::BeginPlay()
 "@
 Set-Content -Path (Join-Path $source "Private\${ModuleName}Component.cpp") -Value $cpp -Encoding UTF8
 
-$uproject = @"
-{
-    "FileVersion": 3,
-    "EngineAssociation": "5.8",
-    "Category": "",
-    "Description": "Scaffold $Genre prototype",
-    "Modules": [
-        { "Name": "$ModuleName", "Type": "Runtime", "LoadingPhase": "Default" }
-    ],
-    "Plugins": [
-        { "Name": "EnhancedInput", "Enabled": true }
-    ]
+$uprojectDescriptor = [ordered]@{
+    FileVersion = 3
+    Category = ""
+    Description = "Scaffold $Genre prototype"
+    Modules = @(
+        [ordered]@{ Name = $ModuleName; Type = "Runtime"; LoadingPhase = "Default" }
+    )
 }
-"@
+if ($resolvedEngineAssociation) {
+    $uprojectDescriptor["EngineAssociation"] = $resolvedEngineAssociation
+}
+$uproject = $uprojectDescriptor | ConvertTo-Json -Depth 6
 Set-Content -Path (Join-Path $OutputRoot "$ModuleName.uproject") -Value $uproject -Encoding UTF8
 
 $moduleCpp = @"
@@ -91,8 +124,6 @@ public class ${ModuleName}Target : TargetRules
     public ${ModuleName}Target(TargetInfo Target) : base(Target)
     {
         Type = TargetType.Game;
-        DefaultBuildSettings = BuildSettingsVersion.V7;
-        IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
         ExtraModuleNames.Add("$ModuleName");
     }
 }
@@ -105,8 +136,6 @@ public class ${ModuleName}EditorTarget : TargetRules
     public ${ModuleName}EditorTarget(TargetInfo Target) : base(Target)
     {
         Type = TargetType.Editor;
-        DefaultBuildSettings = BuildSettingsVersion.V7;
-        IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_8;
         ExtraModuleNames.Add("$ModuleName");
     }
 }
@@ -116,4 +145,10 @@ Set-Content -Path (Join-Path $sourceRoot "$ModuleName.Target.cs") -Value $target
 Set-Content -Path (Join-Path $sourceRoot "${ModuleName}Editor.Target.cs") -Value $targetEditor -Encoding UTF8
 
 Write-Host "Scaffold created: $OutputRoot"
-Write-Host "Next: open uproject in UE 5.8 and run build_unreal_project via unreal-agent."
+if ($resolvedEngineAssociation) {
+    Write-Host "Engine association: $resolvedEngineAssociation"
+}
+else {
+    Write-Host "Engine association: omitted (pass -EngineAssociation to bind a new project explicitly)."
+}
+Write-Host "Next: open the uproject in its selected Unreal Engine and run build_unreal_project via unreal-agent."

@@ -57,3 +57,40 @@ def test_get_rag_data_paths_unreal59(tmp_path: Path) -> None:
     )
     assert ps.returncode == 0, ps.stderr or ps.stdout
     assert "unreal59" in ps.stdout
+
+
+def test_get_rag_data_paths_uses_shared_index_selection_when_workspace_is_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rag_root = tmp_path / "rag"
+    rag_root.mkdir()
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(
+        json.dumps(
+            {
+                "engineVersion": "5.10",
+                "indexNamespace": "unreal510",
+                "indexPath": "data/unreal510/rag.sqlite",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    escaped_root = str(rag_root).replace("'", "''")
+    command = (
+        f". '{INSTALLER_SUPPORT / 'Install-PathHelpers.ps1'}'; "
+        f"$paths = Get-RagDataPaths -RagRoot '{escaped_root}'; "
+        "Write-Output $paths.Namespace; Write-Output $paths.IndexPath"
+    )
+    ps = subprocess.run(
+        [*powershell_prefix(), "-Command", command],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        timeout=180,
+    )
+
+    assert ps.returncode == 0, ps.stderr or ps.stdout
+    assert "unreal510" in ps.stdout
+    assert "data\\unreal510" in ps.stdout or "data/unreal510" in ps.stdout

@@ -17,6 +17,8 @@ import zipfile
 from pathlib import Path
 from typing import Iterable
 
+from workspace_paths import resolve_index_path_in_workspace
+
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE_ROOT = "Evidence-First-Integrated"
 
@@ -115,6 +117,7 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/mutation_semantic_guard.py",
     "scripts/unreal_api_denylist.py",
     "scripts/unreal_source_extensions.py",
+    "scripts/installer_support/Install-PathHelpers.ps1",
     "lmstudio-unreal-agent-mcp/src/filesystem-path-identity.js",
     "lmstudio-unreal-agent-mcp/src/recovery-log-contract.js",
     "lmstudio-unreal-agent-mcp/src/route-watcher.js",
@@ -122,6 +125,12 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/runtime-identity.js",
     "lmstudio-unreal-agent-mcp/src/task-control-transition.js",
     "lmstudio-context-compactor-plugin/src/runtime-identity.js",
+)
+
+# The portable RAG entry points dot-source this cross-platform path/index
+# resolver. Keep the rest of installer_support out of the release bundle.
+PORTABLE_INSTALLER_SUPPORT_FILES = frozenset(
+    {"scripts/installer_support/Install-PathHelpers.ps1"}
 )
 
 # Absolute home-path shapes across Windows / macOS / Linux.
@@ -174,7 +183,24 @@ def _validate_destination(path: Path, source: Path) -> Path:
     return resolved
 
 
-def _include(relative: Path, *, include_index: bool) -> bool:
+def _included_index_relative(source: Path) -> Path:
+    """Return the configured source-local index path for --include-index."""
+
+    index = resolve_index_path_in_workspace(source)
+    try:
+        return index.relative_to(source.resolve())
+    except ValueError as exc:
+        raise ValueError(
+            "--include-index requires workspace indexPath to remain under the package source"
+        ) from exc
+
+
+def _include(
+    relative: Path,
+    *,
+    include_index: bool,
+    index_relative: Path | None = None,
+) -> bool:
     parts = relative.parts
     if not parts:
         return False
@@ -183,7 +209,7 @@ def _include(relative: Path, *, include_index: bool) -> bool:
         return relative.name in ALLOWED_ROOT_FILES
 
     if parts[0] not in ALLOWED_TOP_LEVEL_DIRS:
-        if include_index and relative.as_posix() == "data/unreal58/rag.sqlite":
+        if include_index and index_relative is not None and relative == index_relative:
             return True
         return False
 
@@ -196,7 +222,7 @@ def _include(relative: Path, *, include_index: bool) -> bool:
     if lower.endswith((".pyc", ".pyo", ".log", ".tmp", ".bak")) or ".bak-" in lower:
         return False
     if lower.endswith((".sqlite", ".sqlite3", ".db")) and not (
-        include_index and relative.as_posix() == "data/unreal58/rag.sqlite"
+        include_index and index_relative is not None and relative == index_relative
     ):
         return False
 
@@ -205,15 +231,16 @@ def _include(relative: Path, *, include_index: bool) -> bool:
     if FORBIDDEN_PACKAGE_MARKERS.search(relative.as_posix()):
         return False
 
-    # Keep product scripts; omit installer-support PowerShell helpers that are Windows-dev only.
+    # Keep only the runtime helper needed by rag.ps1 and run_index_pipeline.ps1.
     if parts[:2] == ("scripts", "installer_support"):
-        return False
+        return relative.as_posix() in PORTABLE_INSTALLER_SUPPORT_FILES
 
     return True
 
 
 def _source_files(source: Path, *, include_index: bool) -> Iterable[tuple[Path, Path]]:
     """Prefer git-tracked files so ignored local overlays never enter the ZIP."""
+    index_relative = _included_index_relative(source) if include_index else None
     selected: list[tuple[Path, Path]] = []
     tracked: list[str] = []
     try:
@@ -228,7 +255,7 @@ def _source_files(source: Path, *, include_index: bool) -> Iterable[tuple[Path, 
     if tracked_paths:
         selected_relatives: set[str] = set()
         for relative in sorted(tracked_paths, key=lambda item: item.as_posix().lower()):
-            if not _include(relative, include_index=include_index):
+            if not _include(relative, include_index=include_index, index_relative=index_relative):
                 continue
             path = source / relative
             if not path.is_file():
@@ -245,7 +272,11 @@ def _source_files(source: Path, *, include_index: bool) -> Iterable[tuple[Path, 
                 continue
             relative = Path(required)
             path = source / relative
-            if path.is_file() and _include(relative, include_index=include_index):
+            if path.is_file() and _include(
+                relative,
+                include_index=include_index,
+                index_relative=index_relative,
+            ):
                 if path.is_symlink():
                     raise ValueError(
                         f"symlinks are not allowed in portable packages: {relative}"
@@ -253,10 +284,14 @@ def _source_files(source: Path, *, include_index: bool) -> Iterable[tuple[Path, 
                 selected.append((path, relative))
                 selected_relatives.add(required)
         if include_index:
-            index_rel = Path("data/unreal58/rag.sqlite")
-            index_path = source / index_rel
-            if index_path.is_file() and _include(index_rel, include_index=True):
-                selected.append((index_path, index_rel))
+            assert index_relative is not None
+            index_path = source / index_relative
+            if index_path.is_file() and _include(
+                index_relative,
+                include_index=True,
+                index_relative=index_relative,
+            ):
+                selected.append((index_path, index_relative))
         yield from sorted(selected, key=lambda item: item[1].as_posix().lower())
         return
 
@@ -270,12 +305,15 @@ def _source_files(source: Path, *, include_index: bool) -> Iterable[tuple[Path, 
             if not parts:
                 continue
             if parts[0] not in ALLOWED_TOP_LEVEL_DIRS and not (
-                include_index and parts[0] == "data"
+                include_index and index_relative is not None and parts[0] == index_relative.parts[0]
             ):
                 continue
             if name in ANY_DIR_EXCLUDES:
                 continue
-            if parts[:2] == ("scripts", "installer_support"):
+            if parts[:2] == ("scripts", "installer_support") and not any(
+                required.startswith(candidate.as_posix() + "/")
+                for required in PORTABLE_INSTALLER_SUPPORT_FILES
+            ):
                 continue
             path = directory_path / name
             if path.is_symlink():
@@ -285,7 +323,7 @@ def _source_files(source: Path, *, include_index: bool) -> Iterable[tuple[Path, 
         for name in sorted(filenames, key=str.lower):
             path = directory_path / name
             relative = path.relative_to(source)
-            if not _include(relative, include_index=include_index):
+            if not _include(relative, include_index=include_index, index_relative=index_relative):
                 continue
             if path.is_symlink():
                 raise ValueError(f"symlinks are not allowed in portable packages: {relative}")
@@ -319,7 +357,7 @@ def _write_launchers(staging: Path) -> None:
         "- **Windows**: supported for LM Studio and Unreal-integrated profiles.\n"
         "- **Ubuntu 22.04/24.04 with glibc**: supported; musl/Alpine is not.\n"
         "- **Apple Silicon macOS**: physical FULL install verified on darwin-arm64 "
-        "(runtimes, context compactor, LM Studio plugin activation, UE 5.8 auto-detect, "
+        "(runtimes, context compactor, LM Studio plugin activation, Unreal auto-detect, "
         "full RAG, evidence-first MCP smoke). Signing/notarization is not claimed; "
         "see docs/Release_Notes_1_3_0_RC3.md for known limitations.\n"
         "- **Intel macOS (x86_64)**: LM Studio is not supported by LM Studio upstream. "

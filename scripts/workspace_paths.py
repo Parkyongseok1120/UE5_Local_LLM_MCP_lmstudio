@@ -17,6 +17,7 @@ DEFAULT_SHARED_CONFIG: dict = {
     "activeProject": None,
     "projectSearchRoots": [],
     "defaultEngineRoot": "",
+    "engineRootsByAssociation": {},
     "autoEditorExport": True,
     "installEditorGraphPlugin": False,
     "autoSetupOnProjectSwitch": True,
@@ -211,6 +212,7 @@ def load_workspace_config(start: Path | None = None) -> dict:
         # the current host only when the value is resolved.
         "indexPath": FALLBACK_INDEX_REL.as_posix(),
         "defaultEngineRoot": "",
+        "engineRootsByAssociation": {},
         "knowledgeRoots": {
             "guidelines": "RAG_Project_Guidelines",
             "gameDesign": "Game_Design_Docs",
@@ -240,6 +242,87 @@ def load_workspace_config(start: Path | None = None) -> dict:
     return merged
 
 
+INDEX_CONFIG_KEYS = ("engineVersion", "indexNamespace", "indexPath")
+
+
+def _read_workspace_index_settings_at_root(root: Path) -> dict[str, str]:
+    """Return explicit index settings from *root*'s local workspace overlays.
+
+    The repository configuration is the portable, project-owned override.  The
+    per-user shared config is intentionally considered only when neither
+    workspace overlay selects an index, so installing one project cannot
+    silently replace another project's checked-in/local selection.
+    """
+
+    values: dict[str, str] = {}
+    for path in (root / "config" / "workspace.json", root / "config" / "workspace.local.json"):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for key in INDEX_CONFIG_KEYS:
+            value = str(data.get(key) or "").strip()
+            if value:
+                values[key] = value
+    return values
+
+
+def _read_workspace_index_settings(start: Path | None = None) -> dict[str, str]:
+    return _read_workspace_index_settings_at_root(find_workspace_root(start))
+
+
+def _index_settings_at_root(root: Path) -> dict[str, str]:
+    """Resolve index settings with workspace config before per-user config."""
+
+    workspace_values = _read_workspace_index_settings_at_root(root)
+    if workspace_values:
+        return workspace_values
+    shared = load_shared_config()
+    return {
+        key: value
+        for key in INDEX_CONFIG_KEYS
+        if (value := str(shared.get(key) or "").strip())
+    }
+
+
+def _index_settings(start: Path | None = None) -> dict[str, str]:
+    return _index_settings_at_root(find_workspace_root(start))
+
+
+def _resolve_configured_index_path(root: Path, value: str) -> Path:
+    """Resolve a portable configured index path relative to *root*."""
+
+    native_index_path = value.replace("\\", os.sep).replace("/", os.sep)
+    candidate = Path(native_index_path).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (root / candidate).resolve()
+
+
+def resolve_index_path_in_workspace(workspace: Path | str) -> Path:
+    """Resolve an index for an explicit workspace without reading UNREAL58_ROOT.
+
+    Packaging a supplied source tree must not accidentally bundle the index
+    selected by a different running MCP server through its environment.  This
+    deliberately uses the supplied root as the boundary and does not follow a
+    configured ``rootPath`` outside that tree.
+    """
+
+    root = Path(workspace).expanduser().resolve()
+    settings = _index_settings_at_root(root)
+    index_path = settings.get("indexPath", "")
+    if index_path:
+        return _resolve_configured_index_path(root, index_path)
+    namespace = settings.get("indexNamespace", "")
+    if not namespace:
+        namespace = index_namespace_from_version(settings.get("engineVersion", ""))
+    return (root / "data" / namespace / "rag.sqlite").resolve()
+
+
 def index_namespace_from_version(version: str) -> str:
     """Map engine semver minor to index namespace (e.g. 5.8 -> unreal58)."""
     text = str(version or "").strip()
@@ -256,15 +339,28 @@ def engine_version_to_namespace(engine_version: str) -> str:
 
 
 def resolve_engine_version(start: Path | None = None) -> str:
-    config = load_workspace_config(start)
-    version = str(config.get("engineVersion") or "").strip()
+    settings = _index_settings(start)
+    version = settings.get("engineVersion", "")
     if version:
         return version
-    engine_root = str(config.get("defaultEngineRoot") or "").strip()
-    if engine_root:
-        folder = Path(engine_root).name
-        if folder.upper().startswith("UE_"):
-            return folder[3:].replace("_", ".")
+
+    root = find_workspace_root(start)
+    engine_roots: list[str] = []
+    for path in (root / "config" / "workspace.json", root / "config" / "workspace.local.json"):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            engine_roots.append(str(data.get("defaultEngineRoot") or "").strip())
+    engine_roots.append(str(load_shared_config().get("defaultEngineRoot") or "").strip())
+    for engine_root in engine_roots:
+        if engine_root:
+            folder = Path(engine_root).name
+            if folder.upper().startswith("UE_"):
+                return folder[3:].replace("_", ".")
     return DEFAULT_ENGINE_VERSION
 
 
@@ -316,7 +412,10 @@ def _discover_engine_roots(
             continue
         roots = [location] if _is_engine_root(location) else []
         try:
-            roots.extend(path for path in location.glob("UE_5.*") if _is_engine_root(path))
+            # Do not bake a UE 5 minor range into discovery.  A workspace can
+            # legitimately target UE4, an older UE5 release, or a later UE
+            # release; the Engine layout is the compatibility contract here.
+            roots.extend(path for path in location.glob("UE_*") if _is_engine_root(path))
         except OSError:
             continue
         for root in roots:
@@ -336,15 +435,224 @@ def discover_engine_roots(
 ) -> list[Path]:
     """Return validated Unreal roots in newest-first order for the current host."""
 
+    # Keep the no-argument seam used by callers/tests that replace the local
+    # discovery implementation, while still allowing deterministic injected
+    # host/environment discovery for portability checks.
+    if host_platform is None and environ is None and home is None:
+        return _discover_engine_roots()
     return _discover_engine_roots(host_platform, environ, home)
 
 
-def resolve_index_namespace(start: Path | None = None) -> str:
+_NUMERIC_ENGINE_ASSOCIATION_RE = re.compile(
+    r"^(?:UE_)?(\d+(?:\.\d+)+)$", re.IGNORECASE
+)
+
+
+def engine_association_folder(association: object) -> str:
+    """Return the installed folder name for a numeric EngineAssociation.
+
+    Source-build GUIDs and other custom association identifiers deliberately
+    return an empty string.  They cannot be safely inferred from an arbitrary
+    installed engine folder and must instead use an explicit root, environment
+    override, or an exact ``engineRootsByAssociation`` mapping.
+    """
+
+    match = _NUMERIC_ENGINE_ASSOCIATION_RE.fullmatch(str(association or "").strip())
+    return f"UE_{match.group(1)}" if match else ""
+
+
+def engine_association_version(association: object) -> str:
+    """Return a numeric association version without imposing a UE release cap."""
+
+    match = _NUMERIC_ENGINE_ASSOCIATION_RE.fullmatch(str(association or "").strip())
+    return match.group(1) if match else ""
+
+
+def _engine_root_from_config_value(value: object, start: Path | None = None) -> Path:
+    """Resolve a portable configured engine root against this workspace."""
+
+    raw = str(value or "").strip()
+    native = raw.replace("\\", os.sep).replace("/", os.sep)
+    candidate = Path(native).expanduser()
+    if not candidate.is_absolute():
+        candidate = canonical_workspace_root(start) / candidate
+    return candidate.resolve()
+
+
+def _configured_engine_roots_by_association(start: Path | None = None) -> dict[str, str]:
+    """Return exact custom-association mappings with workspace precedence."""
+
+    roots: dict[str, str] = {}
+    # Shared configuration is a machine-level fallback.  The workspace (and
+    # its local overlay) must win so multiple projects can use different
+    # source-build associations on one host.
+    for source in (load_shared_config(), load_workspace_config(start)):
+        entries = source.get("engineRootsByAssociation") if isinstance(source, dict) else None
+        if not isinstance(entries, dict):
+            continue
+        for association, root in entries.items():
+            key = str(association or "").strip()
+            value = str(root or "").strip()
+            if key and value:
+                roots[key] = value
+    return roots
+
+
+def _engine_root_resolution(
+    *,
+    engine_root: Path,
+    source: str,
+    association: str,
+) -> dict[str, str | bool]:
+    return {
+        "ok": True,
+        "engineRoot": str(engine_root.resolve()),
+        "source": source,
+        "requestedEngineAssociation": association,
+        "errorCode": "",
+        "error": "",
+    }
+
+
+def _unresolved_engine_association(
+    association: str,
+    detail: str,
+) -> dict[str, str | bool]:
+    return {
+        "ok": False,
+        "engineRoot": "",
+        "source": "",
+        "requestedEngineAssociation": association,
+        "errorCode": "ENGINE_ASSOCIATION_UNRESOLVED",
+        "error": (
+            f"ENGINE_ASSOCIATION_UNRESOLVED: EngineAssociation {association!r} {detail}. "
+            "Set engineRoot, UNREAL_ENGINE_ROOT, or an exact engineRootsByAssociation entry."
+        ),
+    }
+
+
+def resolve_engine_root_for_association(
+    association: object,
+    start: Path | None = None,
+    *,
+    explicit_engine_root: str | Path | None = None,
+    host_platform: str | None = None,
+    environ: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> dict[str, str | bool]:
+    """Resolve an engine root without silently substituting another project engine.
+
+    Any non-empty association is a binding: explicit roots and the environment
+    may intentionally override it, exact config mappings may bind custom
+    source-build IDs, and numeric associations may discover only their exact
+    ``UE_<version>`` folder.  ``defaultEngineRoot`` and newest-installed
+    fallback are reserved for projects with no EngineAssociation.
+    """
+
+    association_text = str(association or "").strip()
+    host = host_platform or sys.platform
+    env = os.environ if environ is None else environ
+    injected_discovery = host_platform is not None or environ is not None or home is not None
+
+    def discovered_roots() -> list[Path]:
+        if not injected_discovery:
+            return discover_engine_roots()
+        return discover_engine_roots(
+            host_platform=host,
+            environ=env,
+            home=home,
+        )
+
+    def resolve_override(value: object, source: str) -> dict[str, str | bool] | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        root = _engine_root_from_config_value(raw, start)
+        if _is_engine_root(root):
+            return _engine_root_resolution(
+                engine_root=root,
+                source=source,
+                association=association_text,
+            )
+        if association_text:
+            return _unresolved_engine_association(
+                association_text,
+                f"could not use {source} ({root})",
+            )
+        return None
+
+    explicit = resolve_override(explicit_engine_root, "argument")
+    if explicit is not None:
+        return explicit
+    environment = resolve_override(env.get("UNREAL_ENGINE_ROOT", ""), "environment")
+    if environment is not None:
+        return environment
+
+    if association_text:
+        mapped_root = _configured_engine_roots_by_association(start).get(association_text)
+        if mapped_root:
+            mapped = resolve_override(mapped_root, "config.engineRootsByAssociation")
+            if mapped is not None:
+                return mapped
+
+        requested_folder = engine_association_folder(association_text)
+        if requested_folder:
+            requested_identity = filesystem_path_identity(
+                requested_folder,
+                host,
+                strip_project_uri=False,
+            )
+            for candidate in discovered_roots():
+                if filesystem_path_identity(
+                    candidate.name,
+                    host,
+                    strip_project_uri=False,
+                ) == requested_identity:
+                    return _engine_root_resolution(
+                        engine_root=candidate,
+                        source="EngineAssociation",
+                        association=association_text,
+                    )
+            return _unresolved_engine_association(
+                association_text,
+                f"does not have an installed {requested_folder} engine",
+            )
+        return _unresolved_engine_association(
+            association_text,
+            "is a custom/source-build identifier without an exact mapping",
+        )
+
     config = load_workspace_config(start)
-    namespace = str(config.get("indexNamespace") or "").strip()
+    shared = load_shared_config()
+    for source, value in (
+        ("config.defaultEngineRoot", config.get("defaultEngineRoot")),
+        ("shared.defaultEngineRoot", shared.get("defaultEngineRoot")),
+    ):
+        resolved = resolve_override(value, source)
+        if resolved is not None:
+            return resolved
+    for candidate in discovered_roots():
+        return _engine_root_resolution(
+            engine_root=candidate,
+            source="latest-installed",
+            association="",
+        )
+    return {
+        "ok": False,
+        "engineRoot": "",
+        "source": "",
+        "requestedEngineAssociation": "",
+        "errorCode": "ENGINE_ROOT_UNRESOLVED",
+        "error": "Could not resolve an Unreal Engine installation.",
+    }
+
+
+def resolve_index_namespace(start: Path | None = None) -> str:
+    settings = _index_settings(start)
+    namespace = settings.get("indexNamespace", "")
     if namespace:
         return namespace
-    index_path = str(config.get("indexPath") or "").strip().replace("\\", "/")
+    index_path = settings.get("indexPath", "").replace("\\", "/")
     if index_path:
         parts = [part for part in Path(index_path).parts if part]
         for idx, part in enumerate(parts):
@@ -355,41 +663,27 @@ def resolve_index_namespace(start: Path | None = None) -> str:
 
 def resolve_index_dir(start: Path | None = None) -> Path:
     root = canonical_workspace_root(start)
+    index_path = _index_settings(start).get("indexPath", "")
+    if index_path:
+        return _resolve_configured_index_path(root, index_path).parent
     namespace = resolve_index_namespace(start)
     return (root / "data" / namespace).resolve()
 
 
 def resolve_index_path(start: Path | None = None) -> Path:
-    config = load_workspace_config(start)
     root = canonical_workspace_root(start)
-    index_path = str(config.get("indexPath") or "").strip()
+    index_path = _index_settings(start).get("indexPath", "")
     if index_path:
-        # workspace.json is portable and may have been written by a different
-        # frontend or host OS. Treat both slash styles as separators instead
-        # of creating a literal backslash filename on macOS/Linux.
-        native_index_path = index_path.replace("\\", os.sep).replace("/", os.sep)
-        candidate = Path(native_index_path).expanduser()
-        if candidate.is_absolute():
-            return candidate.resolve()
-        return (root / candidate).resolve()
-    return (resolve_index_dir(start) / "rag.sqlite").resolve()
+        return _resolve_configured_index_path(root, index_path)
+    return (root / "data" / resolve_index_namespace(start) / "rag.sqlite").resolve()
 
 
 def resolve_engine_root(start: Path | None = None) -> Path:
-    env_root = os.environ.get("UNREAL_ENGINE_ROOT", "").strip()
-    if env_root:
-        return Path(env_root).expanduser().resolve()
-    config = load_workspace_config(start)
-    shared = load_shared_config()
-    for source in (
-        str(config.get("defaultEngineRoot") or "").strip(),
-        str(shared.get("defaultEngineRoot") or "").strip(),
-    ):
-        if source:
-            return Path(source).expanduser().resolve()
-    for candidate in _discover_engine_roots():
-        return candidate.resolve()
-    return Path("")
+    """Resolve the default engine only for an association-free operation."""
+
+    resolution = resolve_engine_root_for_association("", start)
+    root = str(resolution.get("engineRoot") or "")
+    return Path(root) if root else Path("")
 
 
 def resolve_ubt_path(start: Path | None = None) -> Path:

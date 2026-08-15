@@ -181,13 +181,42 @@ function Index-NamespaceFromVersion {
     return "unreal$digits"
 }
 
+function Get-SharedUnrealConfigPath {
+    if ($env:SHARED_UNREAL_CONFIG) {
+        return [string]$env:SHARED_UNREAL_CONFIG
+    }
+    return Join-Path (Join-Path (Join-Path $HOME ".lmstudio") "config") "unreal-workspace.json"
+}
+
+function Get-IndexSettingsForWorkspace {
+    param([string]$RagRoot)
+
+    $configs = @(
+        (Read-JsonObject (Join-Path $RagRoot "config\workspace.json")),
+        (Read-JsonObject (Join-Path $RagRoot "config\workspace.local.json"))
+    )
+    $selected = [ordered]@{}
+    foreach ($workspaceConfig in $configs) {
+        if ($workspaceConfig) {
+            foreach ($name in @("engineVersion", "indexNamespace", "indexPath")) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$workspaceConfig.$name)) {
+                    $selected[$name] = [string]$workspaceConfig.$name
+                }
+            }
+        }
+    }
+    if ($selected.Count -gt 0) {
+        return [PSCustomObject]$selected
+    }
+    return Read-JsonObject (Get-SharedUnrealConfigPath)
+}
+
 function Get-RagDataPaths {
     param(
         [string]$RagRoot,
         [string]$NamespaceOverride = ""
     )
-    $configPath = Join-Path $RagRoot "config\workspace.json"
-    $cfg = Read-JsonObject $configPath
+    $cfg = Get-IndexSettingsForWorkspace -RagRoot $RagRoot
     $ns = if ($NamespaceOverride) {
         $NamespaceOverride
     }
@@ -202,27 +231,39 @@ function Get-RagDataPaths {
             "unreal58"
         }
     }
-    $dir = Join-Path $RagRoot ("data\" + $ns)
+    $configuredIndexPath = if ($NamespaceOverride) { "" } elseif ($cfg -and $cfg.indexPath) {
+        Expand-ConfigPathString ([string]$cfg.indexPath)
+    }
+    else { "" }
+    if ($configuredIndexPath) {
+        $relative = $configuredIndexPath.Replace('\', [System.IO.Path]::DirectorySeparatorChar).Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+        $indexPath = if ([System.IO.Path]::IsPathRooted($relative)) {
+            [System.IO.Path]::GetFullPath($relative)
+        }
+        else {
+            [System.IO.Path]::GetFullPath((Join-Path $RagRoot $relative))
+        }
+        $dir = Split-Path -Parent $indexPath
+        if (-not $cfg.indexNamespace) {
+            $ns = Split-Path -Leaf $dir
+        }
+    }
+    else {
+        $dir = Join-Path $RagRoot ("data" + [System.IO.Path]::DirectorySeparatorChar + $ns)
+        $indexPath = Join-Path $dir "rag.sqlite"
+    }
     return [PSCustomObject]@{
         Namespace       = $ns
         DataDir         = $dir
-        IndexPath       = Join-Path $dir "rag.sqlite"
+        IndexPath       = $indexPath
+        EngineVersion   = if ($cfg -and $cfg.engineVersion) { [string]$cfg.engineVersion } else { "" }
         ModuleGraphPath = Join-Path $dir "raw_module_graph.jsonl"
     }
 }
 
 function Resolve-RagIndexPath {
     param([string]$RagRoot)
-    $configPath = Join-Path $RagRoot "config\workspace.json"
-    $cfg = Read-JsonObject $configPath
-    if ($cfg -and $cfg.indexPath) {
-        $rel = ([string]$cfg.indexPath) -replace "/", "\"
-        return Join-Path $RagRoot $rel
-    }
-    if ($cfg -and $cfg.indexNamespace) {
-        return Join-Path $RagRoot ("data\$($cfg.indexNamespace)\rag.sqlite")
-    }
-    return Join-Path $RagRoot "data\unreal58\rag.sqlite"
+    return (Get-RagDataPaths -RagRoot $RagRoot).IndexPath
 }
 
 function Assert-SafePackagePath {
@@ -515,7 +556,6 @@ function Build-ClineMcpConfig {
     )
 
     $ragServer = Join-Path $RagRoot "scripts\unreal_rag_mcp.py"
-    $ragIndex = Resolve-RagIndexPath -RagRoot $RagRoot
     $agentServer = Join-Path $AgentRoot "src\server.js"
     $allowWrite = if ($EnableAgentMode) { "1" } else { "0" }
     $allowCommands = if ($EnableAgentMode) { "1" } else { "0" }
@@ -556,7 +596,9 @@ function Build-ClineMcpConfig {
         mcpServers = [ordered]@{
             "unreal-rag" = [ordered]@{
                 command = $PythonExe
-                args    = @($ragServer, "--index", $ragIndex)
+                # Keep the index unpinned so the server resolves the active
+                # workspace/shared-config selection each time it starts.
+                args    = @($ragServer)
                 timeout = 420000
                 env     = [ordered]@{
                     SHARED_UNREAL_CONFIG   = $SharedConfigPath
@@ -839,7 +881,7 @@ function Get-WorkspaceEngineRootPath {
         }
     }
 
-    $sharedPath = Join-Path (Join-Path (Join-Path $HOME ".lmstudio") "config") "unreal-workspace.json"
+    $sharedPath = Get-SharedUnrealConfigPath
     $shared = Read-JsonObject $sharedPath
     if ($shared -and $shared.defaultEngineRoot) {
         $engineRoot = Expand-ConfigPathString ([string]$shared.defaultEngineRoot)

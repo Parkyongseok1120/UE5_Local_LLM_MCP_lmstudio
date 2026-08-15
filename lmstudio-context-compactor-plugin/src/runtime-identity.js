@@ -7,6 +7,17 @@ const { spawnSync } = require("child_process");
 
 const PROTOCOL_VERSION = 2;
 
+function packagedGitCommit(componentRoot) {
+  try {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(componentRoot, "control-runtime.json"), "utf8")
+    );
+    return String(manifest?.components?.compactor?.gitCommit || "").trim().slice(0, 80);
+  } catch {
+    return "";
+  }
+}
+
 function walkFiles(directory, suffixes) {
   if (!fs.existsSync(directory)) return [];
   const output = [];
@@ -56,6 +67,11 @@ function componentIdentity(componentRoot) {
     });
     if (result.status === 0) gitCommit = String(result.stdout || "").trim().slice(0, 80);
   }
+  // Installed plugins normally have no .git directory. The installer writes
+  // an immutable runtime manifest next to the shipped source, which is the
+  // package-time commit identity in that case. Source drift still fails on
+  // buildHash before this value is trusted.
+  if (!gitCommit) gitCommit = packagedGitCommit(base);
   return {
     component: "compactor",
     buildHash: digest.digest("hex"),
@@ -87,7 +103,7 @@ function verifyRuntimeComponent(options = {}) {
   if (!expected || typeof expected !== "object") {
     throw new Error("CONTROL_RUNTIME_VERSION_MISMATCH: compactor identity is missing");
   }
-  const mismatches = ["buildHash", "componentVersion", "protocolVersion"]
+  const mismatches = ["buildHash", "componentVersion", "protocolVersion", "gitCommit"]
     .filter((key) => String(expected[key] || "") !== String(running[key] || ""));
   if (mismatches.length) {
     throw new Error(`CONTROL_RUNTIME_VERSION_MISMATCH: compactor differs in ${mismatches.join(", ")}`);

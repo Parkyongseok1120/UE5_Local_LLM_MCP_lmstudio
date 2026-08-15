@@ -772,7 +772,7 @@ test("server-owned build tuple overwrites model target while preserving optional
   assert.equal(request.arguments.taskAuthorization.taskSessionId, "task-build-contract");
 });
 
-test("control v2 recovers an exact server-owned read when the chat catalog drops its schema", async () => {
+test("control v2 emits an exact server-owned read without model serialization", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-control-v2-read-recovery-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -786,21 +786,7 @@ test("control v2 recovers an exact server-owned read when the chat catalog drops
       async getContextLength() { return 100_000; },
       respond(_history, opts) {
         predictionCount += 1;
-        assert.equal(opts.rawTools.force, true);
-        assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name), ["read_file"]);
-        assert.deepEqual(opts.rawTools.tools[0].function.parameters.required, []);
-        opts.onToolCallRequestStart(1, { toolCallId: "read-recovered-v2" });
-        opts.onToolCallRequestNameReceived(1, "read_file");
-        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
-        opts.onToolCallRequestEnd(1, {
-          toolCallRequest: {
-            id: "read-recovered-v2",
-            type: "function",
-            name: "read_file",
-            arguments: {},
-          },
-        });
-        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+        throw new Error(`model must not serialize an exact server-owned read: ${opts?.rawTools?.tools?.length || 0}`);
       },
     };
     const ownership = { taskSessionId: "task-control-v2-read", ownerCapability: "owner-control-v2-read" };
@@ -836,7 +822,7 @@ test("control v2 recovers an exact server-owned read when the chat catalog drops
 
     await generate(controllerFor(model, {}, stateRoot, emitted, staleChatTools), history);
 
-    assert.equal(predictionCount, 1);
+    assert.equal(predictionCount, 0);
     const end = emitted.find((event) => event.kind === "end");
     assert.ok(end);
     assert.equal(end.request.name, "read_file");
@@ -850,6 +836,10 @@ test("control v2 recovers an exact server-owned read when the chat catalog drops
       event.type === "server_control_read_schema_recovered"
       && event.requiredTool === "read_file"
       && event.epoch === 1
+    )));
+    assert.ok(events.some((event) => (
+      event.type === "server_required_tool_direct_emitted"
+      && event.requiredTool === "read_file"
     )));
     assert.ok(events.some((event) => (
       event.type === "context_measurement"
@@ -4036,6 +4026,84 @@ test("semantic blocker rejects forbidden evidence calls but allows forward mutat
   }
 });
 
+test("newer evidence blocker cannot be bypassed by a stale v2 read route", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-v2-blocker-conflict-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let predictionCount = 0;
+    const model = {
+      identifier: "v2-blocker-conflict-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        predictionCount += 1;
+        throw new Error("a conflicting stale route must terminate before model dispatch");
+      },
+    };
+    const ownership = { taskSessionId: "task-v2-blocker", ownerCapability: "owner-v2-blocker" };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Fix the source-backed issue" }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "stale-route",
+        name: "unreal_agent_plan",
+        content: JSON.stringify({
+          taskAuthorization: ownership,
+          control: {
+            version: 2,
+            epoch: 3,
+            taskSessionId: ownership.taskSessionId,
+            routeHash: "route-v2-blocker",
+            phase: "evidence",
+            disposition: "require_tool",
+            requiredTool: { name: "read_file", args: { path: "Source/Replay.cpp" } },
+            allowedTools: ["read_file"],
+            retryPolicy: { sameSemanticInput: "once" },
+          },
+        }),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "repeated-read", type: "function", name: "read_file", arguments: { path: "Source/Replay.cpp" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "repeated-read",
+        name: "read_file",
+        content: JSON.stringify({
+          ok: false,
+          errorCode: "EVIDENCE_STAGNATION",
+          stopCurrentPhase: true,
+          phaseBoundary: "evidence",
+          doNotRetry: ["read_file"],
+        }),
+      }] },
+    ] });
+    const tools = ["read_file", "replace_in_file"].map((name) => ({
+      type: "function",
+      function: { name, parameters: { type: "object", properties: {} } },
+    }));
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
+
+    assert.equal(predictionCount, 0);
+    assert.equal(emitted.some((event) => event.kind === "end"), false);
+    assert.match(
+      emitted.find((event) => event.kind === "fragment").content,
+      /CONTROL_BLOCKER_CONFLICT/,
+    );
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.serverControl, null);
+    assert.equal(checkpoint.requiredNextTool, null);
+    assert.equal(checkpoint.semanticBlocker.errorCode, "CONTROL_BLOCKER_CONFLICT");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("missing read target forces one basename search instead of another read", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-missing-read-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -5974,6 +6042,105 @@ test("forced compaction keeps an SDK tool request and result as a complete pair"
     assert.ok(captured.some((message) => message.toolCalls.some((call) => call.id === "pair-1")));
     assert.ok(captured.some((message) => message.toolResults.some((result) => result.toolCallId === "pair-1")));
     assert.equal(captured.at(-1).text, "continue after the tool result");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("normal-budget active turns compact at the configured message cap", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-current-turn-cap-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let captured = null;
+    const model = {
+      identifier: "current-turn-cap-model",
+      async applyPromptTemplate(chat) { return JSON.stringify(core.snapshotMessages(chat.getMessagesArray())); },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(chat) {
+        captured = core.snapshotMessages(chat.getMessagesArray());
+        return { async result() { return { stats: { stopReason: "stop" } }; } };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "system", content: [{ type: "text", text: "rules" }] },
+      { role: "user", content: [{ type: "text", text: "Inspect the active source." }] },
+      ...Array.from({ length: 9 }, (_value, index) => ({
+        role: "assistant",
+        content: [{ type: "text", text: `intermediate-result-${index}` }],
+      })),
+    ] });
+
+    await generate(controllerFor(model, {
+      maxCurrentTurnMessages: 4,
+      softRemainingTokens: 14_000,
+      hardRemainingTokens: 8_000,
+      maxOutputReserve: 512,
+      normalToolResultReserve: 512,
+      targetRemainingTokensAfterCompaction: 24_000,
+    }, stateRoot, [], []), history);
+
+    assert.ok(captured);
+    const currentMessages = captured.filter((message) => (
+      message.role !== "system" && message.text !== "Inspect the active source."
+    ));
+    assert.ok(currentMessages.length <= 4);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map(JSON.parse);
+    const decision = events.filter((event) => event.type === "compaction_decision").at(-1);
+    assert.equal(decision.currentTurnCapForced, true);
+    assert.equal(decision.currentTurnCap, 4);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("major objective changes retain no prior verbatim turns", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-major-goal-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let captured = null;
+    const model = {
+      identifier: "major-goal-model",
+      async applyPromptTemplate(chat) { return JSON.stringify(core.snapshotMessages(chat.getMessagesArray())); },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(chat) {
+        captured = core.snapshotMessages(chat.getMessagesArray());
+        return { async result() { return { stats: { stopReason: "stop" } }; } };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Explain the current source layout." }] },
+      { role: "assistant", content: [{ type: "text", text: "OLD_VERBATIM_LAYOUT_ANSWER" }] },
+    ] });
+    const controller = controllerFor(model, {
+      recentCompleteTurns: 2,
+      maxOutputReserve: 512,
+      normalToolResultReserve: 512,
+    }, stateRoot, [], []);
+    // Persist the first objective before changing it: goal-change retention is
+    // defined relative to the durable prior checkpoint, not two initial turns.
+    await generate(controller, history);
+    history.append("user", "Implement the bounded portable fix.");
+    await generate(controller, history);
+
+    assert.ok(captured);
+    assert.equal(captured.some((message) => message.text === "OLD_VERBATIM_LAYOUT_ANSWER"), false);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map(JSON.parse);
+    const decision = events.filter((event) => event.type === "compaction_decision").at(-1);
+    assert.equal(decision.goalChangeCompact, true);
+    assert.equal(decision.zeroRetainedTurns, true);
+    assert.equal(decision.retainedTurns, 0);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });

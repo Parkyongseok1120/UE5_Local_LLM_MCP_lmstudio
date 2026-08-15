@@ -10,16 +10,27 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from runtime_verify import build_runtime_verify_plan, run_runtime_verify_plan  # noqa: E402
-from unreal_rag_mcp import McpServer  # noqa: E402
+from runtime_verify import (
+    build_runtime_verify_plan,
+    run_runtime_verify_plan,
+)
+from unreal_rag_mcp import McpServer
+from workspace_paths import resolve_engine_root_for_association
 
 
-def _engine(tmp_path: Path, version: str, platform: str) -> tuple[Path, Path]:
-    root = tmp_path / f"UE_{version}"
+def _engine(
+    tmp_path: Path,
+    version: str,
+    platform: str,
+    *,
+    name: str = "",
+) -> tuple[Path, Path]:
+    root = tmp_path / (name or f"UE_{version}")
     build = root / "Engine" / "Build"
     build.mkdir(parents=True)
+    major, minor = (int(part) for part in version.split(".", 1))
     build.joinpath("Build.version").write_text(
-        json.dumps({"MajorVersion": 5, "MinorVersion": int(version.split(".")[1])}),
+        json.dumps({"MajorVersion": major, "MinorVersion": minor}),
         encoding="utf-8",
     )
     if platform == "win32":
@@ -60,7 +71,7 @@ def _manifest() -> dict:
     }
 
 
-@pytest.mark.parametrize("version", ["5.4", "5.5", "5.6", "5.7", "5.8"])
+@pytest.mark.parametrize("version", ["4.27", "5.4", "5.8", "5.10", "6.0"])
 @pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
 def test_plan_binds_exact_engine_across_supported_versions_and_hosts(
     tmp_path: Path,
@@ -79,6 +90,136 @@ def test_plan_binds_exact_engine_across_supported_versions_and_hosts(
     assert plan["environment"]["engineVersion"] == version
     assert plan["environment"]["editorCmd"] == str(editor.resolve())
     assert plan["environment"]["exactEngineBinding"] is True
+
+
+def test_custom_engine_association_fails_closed_without_mapping_or_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.joinpath("config").mkdir(parents=True)
+    fallback, _editor = _engine(tmp_path, "5.10", "linux", name="UE_5.10")
+    workspace.joinpath("config", "workspace.json").write_text(
+        json.dumps({"defaultEngineRoot": str(fallback)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(tmp_path / "missing-shared.json"))
+
+    resolution = resolve_engine_root_for_association(
+        "{SOURCE-BUILD-GUID}",
+        workspace,
+        host_platform="linux",
+        environ={},
+        home=tmp_path / "home",
+    )
+
+    assert resolution["ok"] is False
+    assert resolution["errorCode"] == "ENGINE_ASSOCIATION_UNRESOLVED"
+    assert resolution["engineRoot"] == ""
+
+
+def test_custom_engine_association_uses_exact_workspace_mapping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.joinpath("config").mkdir(parents=True)
+    source_build, _editor = _engine(tmp_path, "5.10", "linux", name="SourceBuild")
+    association = "source-build-guid"
+    workspace.joinpath("config", "workspace.json").write_text(
+        json.dumps({"engineRootsByAssociation": {association: str(source_build)}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(tmp_path / "missing-shared.json"))
+
+    resolution = resolve_engine_root_for_association(
+        association,
+        workspace,
+        host_platform="linux",
+        environ={},
+        home=tmp_path / "home",
+    )
+
+    assert resolution["ok"] is True
+    assert resolution["engineRoot"] == str(source_build.resolve())
+    assert resolution["source"] == "config.engineRootsByAssociation"
+
+    explicit = resolve_engine_root_for_association(
+        association,
+        workspace,
+        explicit_engine_root=source_build,
+        host_platform="linux",
+        environ={},
+        home=tmp_path / "home",
+    )
+    assert explicit["ok"] is True
+    assert explicit["source"] == "argument"
+
+    environment = resolve_engine_root_for_association(
+        association,
+        workspace,
+        host_platform="linux",
+        environ={"UNREAL_ENGINE_ROOT": str(source_build)},
+        home=tmp_path / "home",
+    )
+    assert environment["ok"] is True
+    assert environment["source"] == "environment"
+
+
+def test_numeric_engine_association_discovers_ue4_without_version_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.joinpath("config").mkdir(parents=True)
+    workspace.joinpath("config", "workspace.json").write_text("{}", encoding="utf-8")
+    home = tmp_path / "home"
+    engine, _editor = _engine(home / "Epic Games", "4.27", "linux")
+    _engine(home / "Epic Games", "5.10", "linux")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(tmp_path / "missing-shared.json"))
+
+    resolution = resolve_engine_root_for_association(
+        "UE_4.27",
+        workspace,
+        host_platform="linux",
+        environ={},
+        home=home,
+    )
+
+    assert resolution["ok"] is True
+    assert resolution["engineRoot"] == str(engine.resolve())
+    assert resolution["source"] == "EngineAssociation"
+
+    association_free = resolve_engine_root_for_association(
+        "",
+        workspace,
+        explicit_engine_root=engine,
+        host_platform="linux",
+        environ={},
+        home=home,
+    )
+    assert association_free["ok"] is True
+    assert association_free["source"] == "argument"
+
+
+def test_runtime_verify_surfaces_unresolved_custom_association(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path, "custom-source-build")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(tmp_path / "missing-shared.json"))
+    monkeypatch.delenv("UNREAL_ENGINE_ROOT", raising=False)
+
+    plan = build_runtime_verify_plan(
+        _manifest(),
+        project_file=project,
+        host_platform="linux",
+    )
+
+    assert plan["ok"] is False
+    assert plan["errorCode"] == "ENGINE_ASSOCIATION_UNRESOLVED"
+    assert plan["environment"]["engineResolutionErrorCode"] == "ENGINE_ASSOCIATION_UNRESOLVED"
+    assert any("ENGINE_ASSOCIATION_UNRESOLVED" in issue for issue in plan["issues"])
 
 
 def test_plan_fails_closed_on_engine_mismatch_and_incomplete_network_contract(
@@ -221,3 +362,56 @@ def test_public_runtime_verify_plan_preserves_exact_execute_binding(
     assert payload["nextActionArgs"]["projectFile"] == str(project)
     assert payload["nextActionArgs"]["engineRoot"] == str(engine)
     assert payload["nextActionArgs"]["editorCmd"] == str(editor)
+
+
+def test_runtime_verify_execute_preserves_unresolved_engine_association_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(tmp_path / "missing-shared.json"))
+    monkeypatch.delenv("UNREAL_ENGINE_ROOT", raising=False)
+    project = _project(tmp_path, "custom-source-build")
+    server = McpServer(tmp_path / "missing.sqlite")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        701,
+        {
+            "name": "unreal_runtime_verify",
+            "arguments": {
+                "action": "execute",
+                "manifest": _manifest(),
+                "projectFile": str(project),
+            },
+        },
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "ENGINE_ASSOCIATION_UNRESOLVED"
+
+
+def test_project_status_does_not_probe_capabilities_with_another_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path, "custom-source-build")
+    shared = tmp_path / "unreal-workspace.json"
+    shared.write_text(json.dumps({"activeProject": str(project)}), encoding="utf-8")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(shared))
+    monkeypatch.delenv("UNREAL_ENGINE_ROOT", raising=False)
+    server = McpServer(tmp_path / "missing.sqlite")
+    sent: list[dict] = []
+    server.send = sent.append
+
+    server.handle_tool_call(
+        702,
+        {"name": "unreal_project_status", "arguments": {}},
+    )
+
+    payload = sent[-1]["result"]["structuredContent"]
+    assert payload["engineResolution"]["errorCode"] == "ENGINE_ASSOCIATION_UNRESOLVED"
+    assert payload["capabilities"]["engineRoot"] == ""
+    assert "ENGINE_ASSOCIATION_UNRESOLVED" in payload["blockingReasons"]

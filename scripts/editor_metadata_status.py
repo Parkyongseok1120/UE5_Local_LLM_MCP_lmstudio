@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from workspace_paths import editor_export_dir, load_shared_config
+from workspace_paths import editor_export_dir, find_workspace_root, load_shared_config, resolve_index_dir
 
 METADATA_FILES = {
     "blueprint": "raw_blueprint_metadata.jsonl",
@@ -171,8 +171,8 @@ def editor_metadata_status(
     project_root: str | Path | None = None,
     stale_after_hours: float = 24.0,
 ) -> dict[str, Any]:
-    workspace = Path(__file__).resolve().parent.parent
-    idx = Path(index_dir) if index_dir else workspace / "data" / "unreal58"
+    workspace = find_workspace_root()
+    idx = Path(index_dir) if index_dir else resolve_index_dir()
     if not idx.is_absolute():
         idx = workspace / idx
 
@@ -271,7 +271,7 @@ def editor_metadata_status(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Report Editor metadata freshness.")
-    parser.add_argument("--index-dir", default="data/unreal58")
+    parser.add_argument("--index-dir", default=None)
     parser.add_argument("--project-root", default="")
     parser.add_argument("--stale-after-hours", type=float, default=24.0)
     args = parser.parse_args()

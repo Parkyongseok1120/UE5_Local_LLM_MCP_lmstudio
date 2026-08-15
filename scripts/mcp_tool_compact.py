@@ -12,6 +12,54 @@ DEFAULT_MAX_TOOL_CHARS = 80_000
 CODE_SKETCH_STRUCTURED_MAX_CHARS = 11_000
 AGENT_PLAN_STRUCTURED_MAX_CHARS = 14_000
 
+_READ_ONLY_PLAN_TASK_KINDS = frozenset(
+    {
+        "answer_only",
+        "project_control",
+        "inspect_only",
+        "cpp_analysis",
+        "code_sketch",
+        "runtime_debug",
+    }
+)
+_TASK_CONTROL_SURFACE_KEYS = frozenset(
+    {
+        "control",
+        "controlEpoch",
+        "phase",
+        "disposition",
+        "routeHash",
+        "allowedTools",
+        "requiredTool",
+        "blocker",
+        "blockerFingerprint",
+        "taskSessionId",
+        "taskRouteTerminal",
+        "taskRouteOwnership",
+        "serverControl",
+        "protocolControl",
+        "toolRoute",
+        "roleSession",
+        "promptContract",
+        "taskAuthorization",
+        "taskAuthorizationRequiredForWrites",
+        "writeToolAuthorizationArgs",
+        "authorizationRetryPolicy",
+        "nextAction",
+        "nextActionIsTool",
+        "nextActionArgs",
+        "requiredNextTool",
+        "requiredNextToolArgs",
+        "requiredNextAction",
+        "executionContract",
+        "agentInstruction",
+        "contextCompactorRouting",
+        "architectureHandoff",
+        "selectedHypothesisId",
+        "selectedCandidateId",
+    }
+)
+
 
 def max_tool_result_chars() -> int:
     raw = os.environ.get("MCP_TOOL_RESULT_MAX_CHARS", "").strip()
@@ -292,12 +340,191 @@ def compact_code_sketch_payload(
     return minimal
 
 
+def _compact_read_only_project_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    # Paths and project identity are routing inputs, so keep them whole. Large
+    # discovery/cache diagnostics are intentionally omitted from a read-only
+    # plan response and remain available from their dedicated tools.
+    return {
+        key: value[key]
+        for key in (
+            "ok",
+            "projectName",
+            "projectDir",
+            "uprojectPath",
+            "activeProject",
+            "sourceBrowsePath",
+            "contentDir",
+            "engineAssociation",
+            "error",
+            "errorCode",
+        )
+        if key in value and value[key] not in (None, "", [], {})
+    }
+
+
+def _compact_read_only_evidence_plan(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result = {
+        key: value[key]
+        for key in ("task_kind", "taskKind", "rag_modes", "ragModes", "gates", "writes_allowed", "writesAllowed", "confidence")
+        if key in value
+    }
+    queries = [str(item) for item in (value.get("queries") or []) if str(item).strip()]
+    if queries:
+        result["queries"] = [queries[0][:600]]
+        result["queryCount"] = len(queries)
+    for key, limit in (("files_to_read", 6), ("filesToRead", 6), ("symbols_to_scan", 8), ("symbolsToScan", 8)):
+        values = value.get(key)
+        if isinstance(values, list):
+            result[key] = [str(item)[:360] for item in values[:limit]]
+    return result
+
+
+def _compact_read_only_source_evidence(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result = {
+        key: value[key]
+        for key in (
+            "required",
+            "sourceReadSucceeded",
+            "claimPolicy",
+            "onMissing",
+            "proofLevel",
+        )
+        if key in value
+    }
+    files = value.get("filesRead")
+    if isinstance(files, list):
+        result["filesRead"] = _shrink_value(files[:8], max_str=360, max_list=8)
+    return result
+
+
+def _compact_read_only_orchestration(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return _shrink_value(
+        {
+            key: value[key]
+            for key in (
+                "strategy",
+                "riskTier",
+                "profile",
+                "requiredBeforeWrite",
+                "taskSessionRequired",
+                "runtimeVerificationRequired",
+            )
+            if key in value
+        },
+        max_str=360,
+        max_list=8,
+    )
+
+
+def _is_task_control_surface_key(key: str) -> bool:
+    normalized = str(key or "")
+    lower = normalized.casefold()
+    return (
+        normalized in _TASK_CONTROL_SURFACE_KEYS
+        or "authorization" in lower
+        or "control" in lower
+        or "route" in lower
+    )
+
+
+def _compact_read_only_agent_plan_payload(
+    payload: dict[str, Any],
+    *,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Project a read-only plan without dropping task control or auth tokens."""
+
+    compact: dict[str, Any] = {
+        key: payload[key]
+        for key in ("ok", "status", "errorCode", "error", "retryable", "taskKind", "editStrategy")
+        if key in payload
+    }
+    request = str(payload.get("request") or "")
+    if request:
+        compact["request"] = request[:800] + (
+            "... [request truncated in response]" if len(request) > 800 else ""
+        )
+    compact["projectContext"] = _compact_read_only_project_context(payload.get("projectContext"))
+    compact["evidencePlan"] = _compact_read_only_evidence_plan(payload.get("evidencePlan"))
+    compact["writeGate"] = _shrink_value(payload.get("writeGate") or {}, max_str=360, max_list=8)
+    compact["suggestedToolCalls"] = _shrink_value(
+        list(payload.get("suggestedToolCalls") or [])[:6],
+        max_str=360,
+        max_list=8,
+    )
+    for key, limit in (("checkpoints", 6), ("stopConditions", 6), ("retryPolicy", 4), ("notes", 6)):
+        value = payload.get(key)
+        if isinstance(value, list):
+            compact[key] = [str(item)[:500] for item in value[:limit]]
+    source_evidence = _compact_read_only_source_evidence(payload.get("sourceEvidence"))
+    if source_evidence:
+        compact["sourceEvidence"] = source_evidence
+    orchestration = _compact_read_only_orchestration(payload.get("orchestration"))
+    if orchestration:
+        compact["orchestration"] = orchestration
+
+    # Preserve every current and future control/auth surface byte-for-byte.
+    # These values bind the next task-tool call; shrinking them can turn a safe
+    # response into an authorization retry loop.
+    for key, value in payload.items():
+        if _is_task_control_surface_key(key):
+            compact[key] = value
+
+    if len(json.dumps(compact, ensure_ascii=False)) <= max_bytes:
+        return compact
+
+    protected = {
+        key: compact[key]
+        for key in (
+            "taskKind",
+            "editStrategy",
+            "writeGate",
+            "projectContext",
+            "evidencePlan",
+            "suggestedToolCalls",
+            "sourceEvidence",
+            "orchestration",
+        )
+        if key in compact
+    }
+    for key, value in compact.items():
+        if _is_task_control_surface_key(key):
+            protected[key] = value
+    protected["_structuredTruncated"] = True
+    if len(json.dumps(protected, ensure_ascii=False)) <= max_bytes:
+        return protected
+
+    # Safety-critical tokens and server-owned route metadata win over the
+    # nominal byte budget. This matches the existing write-plan behavior.
+    minimal = {
+        key: protected[key]
+        for key in ("taskKind", "editStrategy", "writeGate", "projectContext", "evidencePlan")
+        if key in protected
+    }
+    for key, value in protected.items():
+        if _is_task_control_surface_key(key):
+            minimal[key] = value
+    minimal["_structuredTruncated"] = True
+    return minimal
+
+
 def compact_agent_plan_payload(
     payload: dict[str, Any],
     *,
     max_bytes: int = AGENT_PLAN_STRUCTURED_MAX_CHARS,
 ) -> dict[str, Any]:
     """Bound repeated plan context while preserving all write/recovery controls."""
+
+    if str(payload.get("taskKind") or "").casefold() in _READ_ONLY_PLAN_TASK_KINDS:
+        return _compact_read_only_agent_plan_payload(payload, max_bytes=max_bytes)
 
     compact = dict(payload)
     request = str(compact.get("request") or "")

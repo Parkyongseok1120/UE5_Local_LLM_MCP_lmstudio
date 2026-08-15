@@ -116,7 +116,7 @@ function verifyRuntimeComponent(component, options = {}) {
   if (!expected || typeof expected !== "object") {
     throw new Error(`CONTROL_RUNTIME_VERSION_MISMATCH: ${component} identity is missing`);
   }
-  const mismatches = ["buildHash", "componentVersion", "protocolVersion"]
+  const mismatches = ["buildHash", "componentVersion", "protocolVersion", "gitCommit"]
     .filter((key) => String(expected[key] || "") !== String(running[key] || ""));
   if (mismatches.length) {
     throw new Error(`CONTROL_RUNTIME_VERSION_MISMATCH: ${component} differs in ${mismatches.join(", ")}`);

@@ -23,7 +23,7 @@ from workspace_paths import (
     load_shared_config,
     normalize_editor_export_dir,
     resolve_active_project_path,
-    resolve_engine_root,
+    resolve_engine_root_for_association,
     save_shared_config,
 )
 
@@ -111,6 +111,47 @@ def resolve_editor_executable(engine_root: Path, host_platform: str | None = Non
         if candidate.is_file():
             return candidate
     raise FileNotFoundError(f"Unreal Editor executable not found under: {binary_dir}")
+
+
+def project_engine_association(uproject: Path) -> tuple[str, str]:
+    """Read the exact engine binding from a project descriptor.
+
+    A malformed descriptor is not association-free: treating it as such would
+    allow the default/latest engine resolver to run a different project
+    version.  Callers can report the returned error without starting Editor.
+    """
+
+    try:
+        descriptor = json.loads(uproject.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return "", f"Could not read project descriptor {uproject}: {exc}"
+    if not isinstance(descriptor, dict):
+        return "", f"Project descriptor is not a JSON object: {uproject}"
+    association = descriptor.get("EngineAssociation")
+    if association is None:
+        return "", ""
+    if not isinstance(association, str):
+        return "", f"Project EngineAssociation must be a string: {uproject}"
+    return association.strip(), ""
+
+
+def resolve_project_engine_root(
+    uproject: Path,
+    workspace: Path,
+) -> dict[str, Any]:
+    """Resolve the engine for *uproject* without changing its association."""
+
+    association, descriptor_error = project_engine_association(uproject)
+    if descriptor_error:
+        return {
+            "ok": False,
+            "engineRoot": "",
+            "source": "",
+            "requestedEngineAssociation": "",
+            "errorCode": "PROJECT_DESCRIPTOR_INVALID",
+            "error": descriptor_error,
+        }
+    return dict(resolve_engine_root_for_association(association, workspace))
 
 
 def project_editor_running(
@@ -287,6 +328,17 @@ def run_editor_export(
     active = Path(str(uproject)) if uproject else resolve_active_project_path()
     if not active or not active.is_file():
         return {"ok": False, "error": "No active .uproject found. Run pick-project or set activeProject."}
+    active = active.resolve()
+
+    association, descriptor_error = project_engine_association(active)
+    if descriptor_error:
+        return {
+            "ok": False,
+            "errorCode": "PROJECT_DESCRIPTOR_INVALID",
+            "error": descriptor_error,
+            "project": str(active),
+            "engineAssociation": "",
+        }
 
     resolved_export = resolve_export_dir(export_dir)
     resolved_content = content_path or editor_export_content_path()
@@ -294,7 +346,6 @@ def run_editor_export(
     resolved_scope = scope or editor_export_scope()
     resolved_timeout = timeout_sec or editor_export_timeout_sec()
     tools_dir = workspace / "tools" / "ue_export"
-    engine_root = resolve_engine_root()
 
     job = build_export_job(
         export_dir=resolved_export,
@@ -310,26 +361,58 @@ def run_editor_export(
     if mode == "auto":
         chosen_mode = "request" if editor_open else "headless"
 
+    engine_root: Path | None = None
+    engine_resolution: dict[str, Any] = {
+        "ok": True,
+        "engineRoot": "",
+        "source": "",
+        "requestedEngineAssociation": association,
+        "errorCode": "",
+        "error": "",
+    }
+
+    def run_resolved_headless_export() -> dict[str, Any]:
+        nonlocal engine_root, engine_resolution
+        if engine_root is None:
+            engine_resolution = resolve_project_engine_root(active, workspace)
+            if not engine_resolution.get("ok"):
+                return {
+                    "ok": False,
+                    "errorCode": str(
+                        engine_resolution.get("errorCode") or "ENGINE_ASSOCIATION_UNRESOLVED"
+                    ),
+                    "error": str(
+                        engine_resolution.get("error")
+                        or "Could not resolve the project's Unreal Engine."
+                    ),
+                }
+            engine_root_text = str(engine_resolution.get("engineRoot") or "").strip()
+            if not engine_root_text:
+                return {
+                    "ok": False,
+                    "errorCode": "ENGINE_ROOT_UNRESOLVED",
+                    "error": "Could not resolve the project's Unreal Engine.",
+                }
+            engine_root = Path(engine_root_text)
+        return run_headless_export(
+            uproject=active,
+            engine_root=engine_root,
+            job=job,
+            timeout_sec=resolved_timeout,
+        )
+
     result: dict[str, Any]
     if chosen_mode == "request":
         submit_export_request(job)
         result = wait_for_export_markers(resolved_export, timeout_sec=min(120, resolved_timeout), poll_sec=2.0)
         if not result.get("ok"):
             result["fallback"] = "headless"
-            headless = run_headless_export(
-                uproject=active,
-                engine_root=engine_root,
-                job=job,
-                timeout_sec=resolved_timeout,
-            )
+            headless = run_resolved_headless_export()
+            if result.get("fallback") and "fallback" not in headless:
+                headless["fallback"] = result["fallback"]
             result = headless
     else:
-        result = run_headless_export(
-            uproject=active,
-            engine_root=engine_root,
-            job=job,
-            timeout_sec=resolved_timeout,
-        )
+        result = run_resolved_headless_export()
 
     result.update(
         {
@@ -338,7 +421,9 @@ def run_editor_export(
             "mapsPath": resolved_maps,
             "scope": resolved_scope,
             "project": str(active),
-            "engineRoot": str(engine_root),
+            "engineRoot": str(engine_root or ""),
+            "engineAssociation": association,
+            "engineResolutionSource": str(engine_resolution.get("source") or ""),
             "chosenMode": chosen_mode,
             "editorWasRunning": editor_open,
         }

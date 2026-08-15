@@ -10,7 +10,10 @@ const {
   resolveProjectSelection,
   resolveSearchRoots,
   findEngineInstalls,
+  resolveEngineRoot,
+  resolveBuildPlan,
   defaultPlatform,
+  resolveAgentWorkspaceRoot,
   pathIdentity,
   splitSearchRoots,
   uniquePaths,
@@ -36,6 +39,21 @@ function createProject(root, name, engineAssociation) {
     "utf8"
   );
   return projectPath;
+}
+
+function createEngine(root, name, hostPlatform = process.platform) {
+  const engineRoot = path.join(root, name);
+  const batchRoot = path.join(engineRoot, "Engine", "Build", "BatchFiles");
+  const buildTool = hostPlatform === "win32"
+    ? path.join(batchRoot, "Build.bat")
+    : path.join(batchRoot, hostPlatform === "darwin" ? "Mac" : "Linux", "Build.sh");
+  fs.mkdirSync(path.dirname(buildTool), { recursive: true });
+  fs.writeFileSync(
+    buildTool,
+    hostPlatform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/usr/bin/env sh\nexit 0\n",
+    "utf8",
+  );
+  return engineRoot;
 }
 
 function sameFilesystemEntry(leftPath, rightPath) {
@@ -306,4 +324,161 @@ test("engine discovery sorts semantic versions so UE 5.10 is newer than UE 5.9",
   }
   const installs = await findEngineInstalls({ hostPlatform: "linux", roots: [parent], env: {} });
   assert.deepStrictEqual(installs.map((item) => item.folderName), ["UE_5.9", "UE_5.10"]);
+});
+
+test("custom EngineAssociation fails closed instead of selecting default or newest engine", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-custom-association-"));
+  const fallback = createEngine(parent, "UE_5.9", "linux");
+  const sourceBuild = createEngine(parent, "SourceBuild", "linux");
+  const association = "{01234567-89AB-CDEF-0123-456789ABCDEF}";
+  try {
+    const result = await resolveEngineRoot(
+      association,
+      { defaultEngineRoot: fallback },
+      "",
+      { hostPlatform: "linux", roots: [parent], env: {} },
+    );
+    assert.strictEqual(result.errorCode, "ENGINE_ASSOCIATION_UNRESOLVED");
+    assert.strictEqual(result.engineRoot, "");
+    assert.match(result.error, /engineRootsByAssociation/);
+    assert.notStrictEqual(result.engineRoot, sourceBuild);
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("custom EngineAssociation accepts an exact configured mapping or intentional override", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-custom-map-"));
+  const mapped = createEngine(parent, "SourceBuild", "linux");
+  const override = createEngine(parent, "OverrideBuild", "linux");
+  const association = "custom-source-build-id";
+  try {
+    const mappedResult = await resolveEngineRoot(
+      association,
+      { engineRootsByAssociation: { [association]: mapped } },
+      "",
+      { hostPlatform: "linux", roots: [parent], env: {} },
+    );
+    assert.strictEqual(mappedResult.engineRoot, path.resolve(mapped));
+    assert.strictEqual(mappedResult.source, "config.engineRootsByAssociation");
+
+    const explicitResult = await resolveEngineRoot(
+      association,
+      {},
+      override,
+      { hostPlatform: "linux", roots: [parent], env: {} },
+    );
+    assert.strictEqual(explicitResult.engineRoot, path.resolve(override));
+    assert.strictEqual(explicitResult.source, "argument");
+
+    const environmentResult = await resolveEngineRoot(
+      association,
+      {},
+      "",
+      { hostPlatform: "linux", roots: [parent], env: { UNREAL_ENGINE_ROOT: override } },
+    );
+    assert.strictEqual(environmentResult.engineRoot, path.resolve(override));
+    assert.strictEqual(environmentResult.source, "environment");
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("numeric EngineAssociation discovers only its exact UE folder across engine generations", async () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-numeric-association-"));
+  const ue427 = createEngine(parent, "UE_4.27", "linux");
+  createEngine(parent, "UE_5.10", "linux");
+  try {
+    const exact = await resolveEngineRoot(
+      "UE_4.27",
+      {},
+      "",
+      { hostPlatform: "linux", roots: [parent], env: {} },
+    );
+    assert.strictEqual(exact.engineRoot, path.resolve(ue427));
+    assert.strictEqual(exact.source, "EngineAssociation");
+
+    const missing = await resolveEngineRoot(
+      "5.6",
+      { defaultEngineRoot: ue427 },
+      "",
+      { hostPlatform: "linux", roots: [parent], env: {} },
+    );
+    assert.strictEqual(missing.errorCode, "ENGINE_ASSOCIATION_UNRESOLVED");
+    assert.strictEqual(missing.engineRoot, "");
+
+    const associationFree = await resolveEngineRoot(
+      "",
+      { defaultEngineRoot: ue427 },
+      "",
+      { hostPlatform: "linux", roots: [parent], env: {} },
+    );
+    assert.strictEqual(associationFree.engineRoot, path.resolve(ue427));
+    assert.strictEqual(associationFree.source, "config.defaultEngineRoot");
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("resolveBuildPlan exposes an unresolved custom association to the caller", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-build-plan-association-"));
+  const workspaceRoot = path.join(root, "workspace");
+  const projectRoot = path.join(root, "projects");
+  const configPath = path.join(root, "agent-mcp.json");
+  const sharedConfig = path.join(root, "unreal-workspace.json");
+  const project = createProject(projectRoot, "SourceGame", "source-build-guid");
+  const fallback = createEngine(root, "FallbackEngine");
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({ projectSearchRoots: [projectRoot], defaultEngineRoot: fallback }),
+    "utf8",
+  );
+  fs.writeFileSync(sharedConfig, "{}", "utf8");
+  const previousSharedConfig = process.env.SHARED_UNREAL_CONFIG;
+  process.env.SHARED_UNREAL_CONFIG = sharedConfig;
+  try {
+    const result = await resolveBuildPlan(workspaceRoot, configPath, { project });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.errorCode, "ENGINE_ASSOCIATION_UNRESOLVED");
+    assert.match(result.error, /source-build-guid/);
+  } finally {
+    if (previousSharedConfig === undefined) delete process.env.SHARED_UNREAL_CONFIG;
+    else process.env.SHARED_UNREAL_CONFIG = previousSharedConfig;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace controller resolution prefers explicit and packaged roots before legacy home", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-workspace-root-"));
+  const repositoryRoot = path.join(root, "portable-checkout");
+  const explicitRoot = path.join(root, "explicit-workspace");
+  const home = path.join(root, "home");
+  try {
+    fs.mkdirSync(path.join(repositoryRoot, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(repositoryRoot, "scripts", "project_controller.py"), "# controller\n");
+
+    assert.strictEqual(
+      resolveAgentWorkspaceRoot({
+        env: { UNREAL_WORKSPACE_ROOT: explicitRoot },
+        repositoryRoot,
+        homeDir: home,
+      }),
+      path.resolve(explicitRoot),
+    );
+    assert.strictEqual(
+      resolveAgentWorkspaceRoot({ env: {}, repositoryRoot, homeDir: home }),
+      path.resolve(repositoryRoot),
+    );
+    assert.strictEqual(
+      resolveAgentWorkspaceRoot({
+        env: {},
+        repositoryRoot: path.join(root, "mcp-only"),
+        homeDir: home,
+      }),
+      path.join(path.resolve(home), ".lmstudio", "Unreal58-RAG"),
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -12,6 +12,7 @@ from typing import Any
 
 
 from parse_build_cs import parse_build_deps as parse_build_deps_file
+from workspace_paths import resolve_index_dir
 SKIP_DIRS = {".git", ".vs", "Binaries", "DerivedDataCache", "Intermediate", "Saved"}
 
 
@@ -223,8 +224,11 @@ def collect(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect Unreal project profile summaries as JSONL.")
     parser.add_argument("--root", action="append", default=None)
-    parser.add_argument("--out", default="data/unreal58/raw_project_profiles.jsonl")
-    return parser.parse_args()
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
+    args = parser.parse_args()
+    if not args.out:
+        args.out = str(resolve_index_dir() / "raw_project_profiles.jsonl")
+    return args
 
 
 if __name__ == "__main__":

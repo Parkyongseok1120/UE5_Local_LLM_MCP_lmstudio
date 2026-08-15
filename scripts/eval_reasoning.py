@@ -15,6 +15,7 @@ from genre_scope_validate import validate_genre_scope  # noqa: E402
 from refactor_plan import validate_refactor_plan  # noqa: E402
 from runtime_config_checklist import check_runtime_config  # noqa: E402
 from rag_search import SearchOptions, search  # noqa: E402
+from workspace_paths import resolve_index_path  # noqa: E402
 
 
 def load_cases(workspace: Path) -> dict:
@@ -125,7 +126,7 @@ def compute_score(results: list[dict], weights: dict[str, float]) -> float:
 
 def main() -> int:
     workspace = SCRIPTS.parent
-    index_path = workspace / "data" / "unreal58" / "rag.sqlite"
+    index_path = resolve_index_path(workspace)
     config = load_cases(workspace)
     cases = config.get("cases") or []
     weights = config.get("weights") or {}

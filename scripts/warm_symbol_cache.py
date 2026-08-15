@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from rag_semantic import symbol_lookup
-from workspace_paths import active_project_names, find_workspace_root
+from workspace_paths import active_project_names, find_workspace_root, resolve_index_path
 
 DEFAULT_QUERIES = (
     "UActorComponent",
@@ -45,7 +45,7 @@ def load_eval_queries(workspace: Path) -> list[str]:
 
 def main() -> int:
     workspace = find_workspace_root()
-    index = workspace / "data" / "unreal58" / "rag.sqlite"
+    index = resolve_index_path(workspace)
     if not index.exists():
         print(f"[FAIL] index missing: {index}")
         return 1

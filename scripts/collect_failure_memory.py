@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from failure_memory_rerank import load_failure_records
+from workspace_paths import find_workspace_root, resolve_index_dir
 
 
 def collect(memory_dir: Path, out_path: Path) -> int:
@@ -22,12 +23,13 @@ def collect(memory_dir: Path, out_path: Path) -> int:
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parent.parent
+    root = find_workspace_root()
     parser = argparse.ArgumentParser(description="Collect failure memory into RAG JSONL.")
     parser.add_argument("--memory-dir", default=str(root / "data" / "failure_memory"))
-    parser.add_argument("--out", default=str(root / "data" / "unreal58" / "raw_failure_memory.jsonl"))
+    parser.add_argument("--out", default="", help="Output JSONL (default: configured RAG data directory).")
     args = parser.parse_args()
-    collect(Path(args.memory_dir), Path(args.out))
+    out_path = Path(args.out) if args.out else resolve_index_dir(root) / "raw_failure_memory.jsonl"
+    collect(Path(args.memory_dir), out_path)
     return 0
 
 

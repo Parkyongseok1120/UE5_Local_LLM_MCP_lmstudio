@@ -93,6 +93,12 @@ export const configSchematics = createConfigSchematics()
   .field("normalToolResultReserve", "numeric", { displayName: "Normal tool reserve", subtitle: "Tokens reserved for ordinary tool results." }, 3000)
   .field("buildToolResultReserve", "numeric", { displayName: "Build tool reserve", subtitle: "Tokens reserved for build and compiler output." }, 8000)
   .field("recentCompleteTurns", "numeric", { displayName: "Recent turns", subtitle: "Complete recent turns retained verbatim after compaction. Goal changes force 0 retained turns." }, 1)
+  .field(
+    "maxCurrentTurnMessages",
+    "numeric",
+    { displayName: "Current-turn message cap", subtitle: "Soft-compact the active tool/reasoning turn once it exceeds this many non-system messages (0 disables the cap). Complete tool-call/result pairs are retained." },
+    12,
+  )
   .field("minimumTurnsBetweenCompactions", "numeric", { displayName: "Minimum turns between compactions", subtitle: "Soft compaction waits for this many new messages; hard compaction never waits." }, 0)
   .field("targetRemainingTokensAfterCompaction", "numeric", { displayName: "Post-compaction target", subtitle: "Reduce the retained tail until this many tokens remain when possible." }, 24000)
   .build();

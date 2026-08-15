@@ -167,7 +167,11 @@ def _detect_engine_root(engine_association: str = "") -> Path | None:
             candidates.append(location)
         try:
             if location.is_dir():
-                candidates.extend(path for path in location.glob("UE_5.*") if _engine_root_is_valid(path))
+                candidates.extend(
+                    path
+                    for path in location.glob("UE_*")
+                    if _engine_root_is_valid(path)
+                )
         except OSError:
             continue
     unique: dict[str, Path] = {}
@@ -178,14 +182,101 @@ def _detect_engine_root(engine_association: str = "") -> Path | None:
             continue
         unique[str(resolved).casefold()] = resolved
     ordered = sorted(unique.values(), key=_engine_sort_key, reverse=True)
-    requested = engine_association.strip()
-    if requested and requested[0:1].isdigit():
-        requested = f"UE_{requested}"
-    if requested:
+    requested = _engine_association_folder(engine_association)
+    if engine_association.strip():
+        # Registered/source-build identifiers are opaque. Selecting a newest
+        # installed launcher engine for one would silently build/index the
+        # wrong project, so only a numeric association may be auto-discovered.
+        if not requested:
+            return None
         exact = next((path for path in ordered if path.name.casefold() == requested.casefold()), None)
         if exact:
             return exact
+        return None
     return ordered[0] if ordered else None
+
+
+def _engine_association_folder(value: str) -> str:
+    """Return an exact launcher folder name for a numeric association only."""
+
+    match = re.fullmatch(r"(?:UE_)?(\d+(?:\.\d+)+)", str(value or "").strip(), re.IGNORECASE)
+    return f"UE_{match.group(1)}" if match else ""
+
+
+def _engine_root_matches_numeric_association(root: Path, association: str) -> bool:
+    """Check a project binding without guessing from a custom source-build ID."""
+
+    requested = _engine_association_folder(association)
+    if not requested:
+        return True
+    requested_version = requested.removeprefix("UE_")
+    return (
+        _engine_version_from_root(root) == requested_version
+        or root.name.casefold() == requested.casefold()
+    )
+
+
+def _configured_engine_root_for_association(
+    shared: dict[str, Any],
+    association: str,
+) -> Path | None:
+    mappings = shared.get("engineRootsByAssociation")
+    if not association or not isinstance(mappings, dict):
+        return None
+    candidate = Path(str(mappings.get(association) or "")).expanduser()
+    return candidate.resolve() if _engine_root_is_valid(candidate) else None
+
+
+def _engine_minor_version(value: str) -> str:
+    """Return a numeric Unreal major.minor version, or an empty string."""
+
+    match = re.search(r"(?<!\d)(\d+)\.(\d+)(?:\.\d+)?", str(value or ""))
+    if not match:
+        return ""
+    return f"{int(match.group(1))}.{int(match.group(2))}"
+
+
+def _engine_version_from_root(engine_root: Path | None) -> str:
+    """Read the selected engine's major.minor without changing selection policy."""
+
+    if not engine_root:
+        return ""
+    build_version = engine_root / "Engine" / "Build" / "Build.version"
+    try:
+        payload = _load_json(build_version, {})
+    except (OSError, ValueError, json.JSONDecodeError):
+        payload = {}
+    if isinstance(payload, dict):
+        major = payload.get("MajorVersion")
+        minor = payload.get("MinorVersion")
+        if isinstance(major, int) and isinstance(minor, int):
+            return f"{major}.{minor}"
+    return _engine_minor_version(engine_root.name)
+
+
+def _shared_index_selection_is_managed(shared: dict[str, Any]) -> bool:
+    """Keep nonstandard user-selected index paths intact across reinstalls."""
+
+    namespace = str(shared.get("indexNamespace") or "").strip()
+    index_path = str(shared.get("indexPath") or "").strip().replace("\\", "/")
+    if not namespace and not index_path:
+        return True
+    if namespace and re.fullmatch(r"unreal\d+", namespace):
+        return not index_path or index_path == f"data/{namespace}/rag.sqlite"
+    return bool(re.fullmatch(r"data/unreal\d+/rag\.sqlite", index_path))
+
+
+def _sync_installer_index_settings(shared: dict[str, Any], engine_root: Path | None) -> None:
+    """Write a standard index selection for the engine already selected by install()."""
+
+    version = _engine_version_from_root(engine_root)
+    if not version or not _shared_index_selection_is_managed(shared):
+        return
+    namespace = f"unreal{''.join(char for char in version if char.isdigit())}"
+    shared["engineVersion"] = version
+    shared["indexNamespace"] = namespace
+    shared["indexPath"] = f"data/{namespace}/rag.sqlite"
+    shared["embeddingsPath"] = f"data/{namespace}/embeddings"
 
 
 def _default_editor_export_path(project: Path) -> Path:
@@ -1049,17 +1140,17 @@ def _unreal_entries(
     shared_config: Path,
     agent_config: Path,
     context_compactor_advisory: bool = False,
+    runtime_git_commit: str = "",
 ) -> dict[str, dict[str, Any]]:
     allow = "1" if args.enable_agent_mode else "0"
     state_root = args.lmstudio_home / "state" / "unreal-agent"
     runtime_manifest = args.lmstudio_home / "config" / "control-runtime.json"
     rag_entry = {
         "command": str(python_exe),
-        "args": [
-            str(ROOT / "scripts" / "unreal_rag_mcp.py"),
-            "--index",
-            str(ROOT / "data" / "unreal58" / "rag.sqlite"),
-        ],
+        # Do not pin an engine namespace here. unreal_rag_mcp resolves the
+        # workspace/shared index configuration unless a user explicitly starts
+        # it with --index.
+        "args": [str(ROOT / "scripts" / "unreal_rag_mcp.py")],
         "timeout": 420000,
         "env": {
             "SHARED_UNREAL_CONFIG": str(shared_config),
@@ -1100,6 +1191,12 @@ def _unreal_entries(
             "CONTROL_RUNTIME_REQUIRED": "1",
         },
     }
+    # Installed MCP components may not retain the repository's .git directory.
+    # Carry the manifest commit into both processes so runtime-identity compares
+    # the same immutable release identity instead of silently losing that check.
+    if str(runtime_git_commit).strip():
+        rag_entry["env"]["CONTROL_RUNTIME_GIT_COMMIT"] = str(runtime_git_commit).strip()
+        agent_entry["env"]["CONTROL_RUNTIME_GIT_COMMIT"] = str(runtime_git_commit).strip()
     if context_compactor_advisory:
         # Compactor is required for LM Studio installs. Advisory telemetry stays on;
         # strict write-blocking remains opt-in via MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1.
@@ -1654,16 +1751,60 @@ def install(
                     association = ""
             detected_engine = args.engine_root
             selection = getattr(args, "_engine_selection", "")
-            if (
-                selection != "launcher"
-                and detected_engine is None
-                and _engine_root_is_valid(existing_engine)
-            ):
-                detected_engine = existing_engine.resolve()
-            if detected_engine is None:
-                detected_engine = _detect_engine_root(association)
+            if association:
+                # A project's EngineAssociation is an exact binding. Resolve a
+                # custom/source-build value only through an explicit root or
+                # exact persisted map; never let a prior default/latest engine
+                # retarget a different project during installation.
+                if detected_engine is not None:
+                    detected_engine = detected_engine.resolve()
+                    if not _engine_root_is_valid(detected_engine):
+                        raise ValueError(
+                            f"--engine-root does not contain a usable Unreal Engine layout: {detected_engine}"
+                        )
+                    if not _engine_root_matches_numeric_association(detected_engine, association):
+                        raise ValueError(
+                            "--engine-root does not match the active project's "
+                            f"EngineAssociation {association!r}"
+                        )
+                elif selection != "launcher":
+                    detected_engine = _configured_engine_root_for_association(shared, association)
+                    if detected_engine is None and _engine_association_folder(association):
+                        if _engine_root_is_valid(existing_engine) and _engine_root_matches_numeric_association(
+                            existing_engine, association
+                        ):
+                            detected_engine = existing_engine.resolve()
+                if detected_engine is None:
+                    detected_engine = _detect_engine_root(association)
+                if detected_engine is None:
+                    raise ValueError(
+                        "ENGINE_ASSOCIATION_UNRESOLVED: active project uses "
+                        f"EngineAssociation {association!r}. Select its engine with --engine-root "
+                        "or configure engineRootsByAssociation for this source/custom build."
+                    )
+                if not _engine_root_matches_numeric_association(detected_engine, association):
+                    raise ValueError(
+                        "Resolved engine does not match the active project's "
+                        f"EngineAssociation {association!r}: {detected_engine}"
+                    )
+                if not _engine_association_folder(association):
+                    mappings = shared.get("engineRootsByAssociation")
+                    shared["engineRootsByAssociation"] = {
+                        **(mappings if isinstance(mappings, dict) else {}),
+                        association: str(detected_engine),
+                    }
+            else:
+                if (
+                    selection != "launcher"
+                    and detected_engine is None
+                    and _engine_root_is_valid(existing_engine)
+                ):
+                    detected_engine = existing_engine.resolve()
+                if detected_engine is None:
+                    detected_engine = _detect_engine_root("")
             args.engine_root = detected_engine
             shared["defaultEngineRoot"] = str(detected_engine) if detected_engine else ""
+            _sync_installer_index_settings(shared, detected_engine)
             shared["defaultPlatform"] = _default_platform()
             shared.setdefault("defaultConfiguration", "Development")
             shared["indexingTier"] = args.index_tier
@@ -1682,6 +1823,15 @@ def install(
             runtime_manifest = build_runtime_manifest(ROOT)
             tx.write_file(runtime_manifest_path, _json_bytes(runtime_manifest))
             report["controlRuntimeManifest"] = str(runtime_manifest_path)
+            runtime_components = runtime_manifest.get("components")
+            runtime_agent = (
+                runtime_components.get("agent")
+                if isinstance(runtime_components, dict)
+                else {}
+            )
+            runtime_git_commit = str(
+                runtime_agent.get("gitCommit") if isinstance(runtime_agent, dict) else ""
+            ).strip()
             assert mcp_config is not None
             for name, entry in _unreal_entries(
                 args,
@@ -1690,6 +1840,7 @@ def install(
                 shared_path,
                 agent_path,
                 context_compactor_advisory=("context_compactor" in components),
+                runtime_git_commit=runtime_git_commit,
             ).items():
                 _merge_mcp_entry(mcp_config, name, entry)
 
