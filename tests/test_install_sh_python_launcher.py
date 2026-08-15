@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -49,11 +50,17 @@ exit 0
 
 def _run_launcher(fake_bin: Path, *, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    # Prefer the fake bin for python* discovery, but keep system dirs so `sh`
-    # and core utilities remain available.
-    env["PATH"] = os.pathsep.join(
-        [str(fake_bin), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-    )
+    # Keep Python discovery hermetic even when a hosted runner adds newer
+    # system interpreters. The launcher is invoked with an absolute /bin/sh;
+    # expose only the two external path helpers it and the fake interpreter
+    # need, while shell builtins remain available normally.
+    for tool in ("dirname", "basename"):
+        target = shutil.which(tool)
+        assert target, f"required POSIX test helper is missing: {tool}"
+        link = fake_bin / tool
+        if not link.exists():
+            link.symlink_to(target)
+    env["PATH"] = str(fake_bin)
     env.pop("PYTHON", None)
     if env_extra:
         env.update(env_extra)
