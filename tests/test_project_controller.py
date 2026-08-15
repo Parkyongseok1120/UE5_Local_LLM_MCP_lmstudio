@@ -22,6 +22,24 @@ def test_switch_rejects_missing_uproject(tmp_path: Path) -> None:
     assert payload["switchResult"] == "failed"
 
 
+def test_validate_uproject_expands_portable_home_alias(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = tmp_path / "Portable Home Project" / "Portable.uproject"
+    project.parent.mkdir()
+    project.write_text(json.dumps({"FileVersion": 3}), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    import project_controller as pc
+
+    resolved, error = pc._validate_uproject("~/Portable Home Project/Portable.uproject")
+
+    assert error is None
+    assert resolved == project.resolve()
+
+
 def test_switch_valid_project_keeps_config_on_cache_error(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "Demo"
     project_dir.mkdir()
@@ -92,3 +110,38 @@ def test_switch_valid_project_writes_cache_generation(tmp_path: Path, monkeypatc
     after = read_cache_generation(tmp_path)
     assert payload["ok"] is True
     assert after > before
+
+
+def test_switch_same_exact_project_is_side_effect_free(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "Same Project"
+    project_dir.mkdir()
+    uproject = project_dir / "Same_Project.uproject"
+    uproject.write_text(json.dumps({"FileVersion": 3}), encoding="utf-8")
+
+    import project_controller as pc
+
+    monkeypatch.setattr(
+        pc,
+        "load_shared_config",
+        lambda: {"activeProject": str(uproject)},
+    )
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("same-project no-op must not persist or invalidate")
+
+    monkeypatch.setattr(pc, "save_shared_config", _unexpected)
+    monkeypatch.setattr(
+        "project_switch_invalidate.on_project_switch_invalidate",
+        _unexpected,
+    )
+    monkeypatch.setattr(
+        "on_active_project_changed.active_project_check_status",
+        _unexpected,
+    )
+
+    payload = switch_active_project(tmp_path, project_path=str(uproject))
+    assert payload["ok"] is True
+    assert payload["status"] == "completed"
+    assert payload["switchResult"] == "already_active"
+    assert payload["changed"] is False
+    assert payload["activeProject"] == str(uproject.resolve())

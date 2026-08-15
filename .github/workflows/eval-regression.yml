@@ -3,7 +3,7 @@ name: eval-regression
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main, master, Develop]
 
 jobs:
   tier-a-regression:
@@ -30,8 +30,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: Install dev dependencies
         run: python -m pip install -r requirements-dev.txt
+      - name: Install agent MCP dependencies
+        run: npm.cmd ci --no-fund --no-audit
+        working-directory: lmstudio-unreal-agent-mcp
       - name: Run pytest suite
         shell: pwsh
         run: |

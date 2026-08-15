@@ -148,7 +148,10 @@ def test_project_index_skips_when_profile_symbols_and_index_fresh(tmp_path: Path
         [{"metadata": {"project": "Demo", "project_root": str(tmp_path)}}],
     )
     symbols_path = index_dir / "raw_project_symbols.jsonl"
-    _write_jsonl(symbols_path, [{"metadata": {"project": "Demo", "symbol": "UFoo"}}])
+    _write_jsonl(
+        symbols_path,
+        [{"metadata": {"project": "Demo", "project_root": str(tmp_path), "symbol": "UFoo"}}],
+    )
 
     monkeypatch.setattr(
         "on_active_project_changed._project_has_uassets",
@@ -178,13 +181,46 @@ def test_project_index_needs_sync_when_asset_registry_missing_for_content_projec
     )
     _write_jsonl(
         index_dir / "raw_project_symbols.jsonl",
-        [{"metadata": {"project": "Demo", "symbol": "UFoo"}}],
+        [{"metadata": {"project": "Demo", "project_root": str(tmp_path), "symbol": "UFoo"}}],
     )
     monkeypatch.setattr("on_active_project_changed._project_has_uassets", lambda *_args, **_kwargs: True)
 
     needed, reason = project_index_needs_sync(project, index_dir)
     assert needed is True
     assert reason == "missing_project_asset_registry"
+
+
+def test_same_name_worktree_rows_do_not_satisfy_active_project_readiness(
+    tmp_path: Path,
+) -> None:
+    first_root = tmp_path / "clone-a" / "Game"
+    second_root = tmp_path / "clone-b" / "Game"
+    first_root.mkdir(parents=True)
+    second_root.mkdir(parents=True)
+    active = first_root / "Game.uproject"
+    active.write_text('{"FileVersion": 3}', encoding="utf-8")
+    index_dir = tmp_path / "data"
+    for filename in (
+        "raw_project_profiles.jsonl",
+        "raw_project_architecture.jsonl",
+        "raw_project_symbols.jsonl",
+    ):
+        _write_jsonl(
+            index_dir / filename,
+            [
+                {
+                    "metadata": {
+                        "project": "Game",
+                        "project_root": str(second_root),
+                        "symbol": "UFromOtherClone",
+                    }
+                }
+            ],
+        )
+
+    needed, reason = project_index_needs_sync(active, index_dir)
+    assert needed is True
+    assert reason == "missing_project_profile"
 
 
 def test_plugin_needs_setup_when_missing(tmp_path: Path) -> None:

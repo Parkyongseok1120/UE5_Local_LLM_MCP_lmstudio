@@ -26,6 +26,7 @@ from editor_export_runner import (
     wait_for_export_markers,
 )
 from workspace_paths import default_editor_export_dir, normalize_editor_export_dir
+from workspace_paths import resolve_active_project_path
 
 
 def test_build_export_job_writes_job_file(tmp_path):
@@ -177,6 +178,134 @@ def test_resolve_editor_executable_supports_mac_and_linux_layouts(tmp_path):
     assert resolve_editor_executable(mac_bundle, "darwin") == bundled_executable
 
 
+def test_explicit_project_uses_its_default_export_dir_without_mutating_active_config(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    active_project = tmp_path / "ActiveA" / "ActiveA.uproject"
+    explicit_project = tmp_path / "ExplicitB" / "ExplicitB.uproject"
+    active_project.parent.mkdir()
+    explicit_project.parent.mkdir()
+    active_project.write_text("{}", encoding="utf-8")
+    explicit_project.write_text(
+        json.dumps({"FileVersion": 3, "EngineAssociation": "5.0"}),
+        encoding="utf-8",
+    )
+
+    active_export = active_project.parent / "Saved" / "LmStudioMetadataExports"
+    config_path = tmp_path / "unreal-workspace.json"
+    config_text = json.dumps(
+        {
+            "activeProject": str(active_project),
+            "editorExportDir": str(active_export),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(config_path))
+
+    engine_root = tmp_path / "UE_5.0"
+    captured = {}
+    monkeypatch.setattr(runner, "find_workspace_root", lambda: workspace)
+    monkeypatch.setattr(runner, "project_editor_running", lambda _project: False)
+    monkeypatch.setattr(
+        runner,
+        "resolve_project_engine_root",
+        lambda _project, _workspace: {
+            "ok": True,
+            "engineRoot": str(engine_root),
+            "source": "test",
+            "requestedEngineAssociation": "5.0",
+            "errorCode": "",
+            "error": "",
+        },
+    )
+
+    def headless(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "mode": "headless"}
+
+    monkeypatch.setattr(runner, "run_headless_export", headless)
+
+    result = run_editor_export(
+        mode="headless",
+        uproject=explicit_project,
+        content_path="/Game",
+        maps_path="/Game/Maps",
+        scope="all",
+        timeout_sec=120,
+    )
+
+    expected_export = explicit_project.parent / "Saved" / "LmStudioMetadataExports"
+    assert result["ok"] is True
+    assert Path(result["exportDir"]) == expected_export
+    assert Path(captured["job"]["exportDir"]) == expected_export
+    assert expected_export.is_dir()
+    assert not active_export.exists()
+    assert config_path.read_text(encoding="utf-8") == config_text
+
+
+def test_relative_project_paths_are_workspace_relative_not_process_cwd(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace with spaces"
+    project = workspace / "Projects" / "다른 프로젝트" / "Portable.uproject"
+    unrelated_cwd = tmp_path / "unrelated cwd"
+    project.parent.mkdir(parents=True)
+    unrelated_cwd.mkdir()
+    project.write_text("{}", encoding="utf-8")
+    config_path = tmp_path / "unreal-workspace.json"
+    config_path.write_text(
+        json.dumps({"activeProject": str(project.relative_to(workspace))}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(config_path))
+    monkeypatch.chdir(unrelated_cwd)
+
+    assert resolve_active_project_path(workspace) == project.resolve()
+
+    captured = {}
+    monkeypatch.setattr(runner, "find_workspace_root", lambda: workspace)
+    monkeypatch.setattr(runner, "project_editor_running", lambda _project: False)
+    monkeypatch.setattr(
+        runner,
+        "resolve_project_engine_root",
+        lambda _project, _workspace: {
+            "ok": True,
+            "engineRoot": str(tmp_path / "Source Engine"),
+            "source": "test",
+            "requestedEngineAssociation": "",
+            "errorCode": "",
+            "error": "",
+        },
+    )
+
+    def headless(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "mode": "headless"}
+
+    monkeypatch.setattr(runner, "run_headless_export", headless)
+    result = run_editor_export(
+        mode="headless",
+        uproject=project.relative_to(workspace),
+        content_path="/Game",
+        maps_path="/Game",
+        scope="all",
+        timeout_sec=120,
+    )
+
+    assert result["ok"] is True
+    assert Path(result["project"]) == project.resolve()
+    assert captured["uproject"] == project.resolve()
+    assert Path(result["exportDir"]) == (
+        project.parent / "Saved" / "LmStudioMetadataExports"
+    )
+
+
 def test_headless_export_binds_to_explicit_project_engine_association(
     tmp_path,
     monkeypatch,
@@ -212,7 +341,7 @@ def test_headless_export_binds_to_explicit_project_engine_association(
 
     monkeypatch.setattr(runner, "find_workspace_root", lambda: workspace)
     monkeypatch.setattr(runner, "resolve_engine_root_for_association", resolve_association)
-    monkeypatch.setattr(runner, "resolve_export_dir", lambda _value: export_dir)
+    monkeypatch.setattr(runner, "resolve_export_dir", lambda _value, **_kwargs: export_dir)
     monkeypatch.setattr(runner, "editor_export_content_path", lambda: "/Game")
     monkeypatch.setattr(runner, "editor_export_maps_path", lambda: "/Game")
     monkeypatch.setattr(runner, "editor_export_scope", lambda: "all")
@@ -259,7 +388,7 @@ def test_headless_export_fails_closed_for_unresolved_custom_association(
             "error": "custom source build is not mapped",
         },
     )
-    monkeypatch.setattr(runner, "resolve_export_dir", lambda _value: export_dir)
+    monkeypatch.setattr(runner, "resolve_export_dir", lambda _value, **_kwargs: export_dir)
     monkeypatch.setattr(runner, "editor_export_content_path", lambda: "/Game")
     monkeypatch.setattr(runner, "editor_export_maps_path", lambda: "/Game")
     monkeypatch.setattr(runner, "editor_export_scope", lambda: "all")

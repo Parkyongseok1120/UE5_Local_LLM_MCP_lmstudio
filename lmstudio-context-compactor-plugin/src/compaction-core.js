@@ -3,6 +3,22 @@
 const crypto = require("node:crypto");
 
 const COMPACTION_SCHEMA_VERSION = 2;
+const REQUEST_INTENT_VERSION = 1;
+const REQUEST_INTENT_MUTABILITIES = new Set([
+  "none",
+  "control_state",
+  "source_files",
+  "external_process",
+]);
+const REQUEST_INTENT_SPEECH_ACTS = new Set(["query", "command", "proposal"]);
+const REQUEST_INTENT_AMBIGUITY_STATES = new Set(["resolved", "unresolved"]);
+const REQUEST_INTENT_SERVER_TOOL_NAMES = new Set([
+  "unreal_agent_plan",
+  "unreal_task_start",
+  "unreal_task_status",
+  "unreal_task_recover_active",
+  "unreal_task_checkpoint",
+]);
 const MAX_EDIT_EVIDENCE_FILES = 2;
 const MAX_EDIT_EVIDENCE_CHARS = 16000;
 const MAX_REPEAT_EVIDENCE_FILES = 1;
@@ -31,6 +47,84 @@ function stableStringify(value) {
 
 function sha256(value) {
   return crypto.createHash("sha256").update(String(value || ""), "utf8").digest("hex");
+}
+
+function objectiveHashOf(value) {
+  return sha256(String(value || "").trim());
+}
+
+function boundedRequestIntentValue(value, depth = 0) {
+  if (value == null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") return value.slice(0, 500);
+  if (depth >= 4) return null;
+  if (Array.isArray(value)) {
+    return value.slice(0, 12).map((item) => boundedRequestIntentValue(item, depth + 1));
+  }
+  if (typeof value !== "object") return String(value).slice(0, 500);
+  return Object.fromEntries(
+    Object.entries(value)
+      .slice(0, 16)
+      .map(([key, child]) => [String(key).slice(0, 120), boundedRequestIntentValue(child, depth + 1)]),
+  );
+}
+
+function compactRequestIntent(value, objective = "", expectedObjectiveHash = "") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version) !== REQUEST_INTENT_VERSION) return null;
+  const objectiveHash = String(value.objectiveHash || "").trim().toLowerCase();
+  const expectedHash = String(expectedObjectiveHash || objectiveHashOf(objective)).trim().toLowerCase();
+  const domain = String(value.domain || "").trim();
+  const operation = String(value.operation || "").trim();
+  const mutability = String(value.mutability || "").trim();
+  const speechAct = String(value.speechAct || "").trim();
+  const ambiguity = value.ambiguity;
+  if (
+    !/^[a-f0-9]{64}$/.test(objectiveHash)
+    || !/^[a-f0-9]{64}$/.test(expectedHash)
+    || objectiveHash !== expectedHash
+    || !domain
+    || !operation
+    || !REQUEST_INTENT_MUTABILITIES.has(mutability)
+    || !REQUEST_INTENT_SPEECH_ACTS.has(speechAct)
+    || typeof value.negated !== "boolean"
+    || !value.targets
+    || typeof value.targets !== "object"
+    || Array.isArray(value.targets)
+    || !ambiguity
+    || typeof ambiguity !== "object"
+    || Array.isArray(ambiguity)
+    || !REQUEST_INTENT_AMBIGUITY_STATES.has(String(ambiguity.status || "").trim())
+    || typeof ambiguity.material !== "boolean"
+  ) return null;
+  return {
+    version: REQUEST_INTENT_VERSION,
+    objectiveHash,
+    domain: domain.slice(0, 80),
+    operation: operation.slice(0, 80),
+    mutability,
+    speechAct,
+    negated: value.negated,
+    targets: boundedRequestIntentValue(value.targets),
+    ambiguity: {
+      status: String(ambiguity.status).trim(),
+      material: ambiguity.material,
+    },
+  };
+}
+
+function matchingRequestIntent(text, context = {}) {
+  const candidate = context && typeof context === "object"
+    ? (context.requestIntent || (Number(context.version) === REQUEST_INTENT_VERSION ? context : null))
+    : null;
+  const authoritativeObjectiveHash = context?.authoritativeObjectiveProjection === true
+    ? String(context.objectiveHash || "").trim().toLowerCase()
+    : "";
+  return compactRequestIntent(
+    candidate,
+    String(text || "").trim(),
+    authoritativeObjectiveHash,
+  );
 }
 
 function isWindowsHostPlatform(hostPlatform = process.platform) {
@@ -445,6 +539,7 @@ function resetTaskScopedControl(state, reason = "new_user_objective") {
   state.evidenceFacts = [];
   state.editEvidence = [];
   state.repeatEvidence = [];
+  state.requestIntent = null;
   state.exactSignatureContracts = [];
   state.coverageEvidence = [];
   state.touchedPaths = [];
@@ -458,9 +553,12 @@ function payloadTargetsInvalidatedTask(value, state) {
   const invalidated = state.invalidatedTaskSessionIds;
   if (!(invalidated instanceof Set) || invalidated.size === 0) return false;
   const candidates = [
+    String(value.taskSessionId || "").trim(),
+    String(value.state?.taskSessionId || "").trim(),
     compactServerControl(value.control)?.taskSessionId,
     compactTaskRouteOwnership(value.taskAuthorization)?.taskSessionId,
     compactTaskRouteOwnership(value.routeAuthorization)?.taskSessionId,
+    compactTaskRouteOwnership(value.state?.taskAuthorization)?.taskSessionId,
   ];
   return candidates.some((candidate) => candidate && invalidated.has(candidate));
 }
@@ -619,11 +717,79 @@ function boundedArchitecturePatchPreview(value) {
   return Object.keys(selected).length ? selected : null;
 }
 
-function collectControlFields(value, state) {
+function isTrustedRequestIntentToolName(toolName) {
+  const rawToolName = String(toolName || "").trim().toLowerCase().replace(/\\/g, "/");
+  const parsedToolName = parseProviderQualifiedToolName(rawToolName);
+  const trustedName = parsedToolName.functionName;
+  if (parsedToolName.qualified) {
+    const trustedProvider = (
+      /^mcp[/:]unreal-rag[/:]/u.test(rawToolName)
+      || rawToolName.startsWith("mcp__unreal-rag__")
+      || rawToolName.startsWith("mcp_unreal_rag_")
+    );
+    if (!trustedProvider) return false;
+  } else if (rawToolName !== trustedName) {
+    return false;
+  }
+  return REQUEST_INTENT_SERVER_TOOL_NAMES.has(trustedName);
+}
+
+function isTrustedRequestIntentResult(callName, resultName, payload, matchedCallObserved) {
+  if (matchedCallObserved !== true || !payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  if (!isTrustedRequestIntentToolName(callName)) return false;
+  const parsedCallName = parseProviderQualifiedToolName(callName);
+  const normalizedResultName = String(resultName || "").trim();
+  if (normalizedResultName) {
+    if (
+      !isTrustedRequestIntentToolName(normalizedResultName)
+      || !toolNamesMatch(callName, normalizedResultName)
+    ) {
+      return false;
+    }
+  }
+  const trustedName = parsedCallName.functionName;
+  if (trustedName === "unreal_agent_plan") {
+    return (
+      typeof payload.taskKind === "string"
+      || payload.taskSessionStarted === false
+      || (payload.projectControl && typeof payload.projectControl === "object")
+      || payload.taskAuthorizationRequiredForWrites === true
+    );
+  }
+  return Boolean(
+    String(payload.taskSessionId || "").trim()
+    && (
+      (payload.state && typeof payload.state === "object")
+      || (payload.control && typeof payload.control === "object")
+      || (payload.continuity && typeof payload.continuity === "object")
+      || (payload.taskAuthorization && typeof payload.taskAuthorization === "object")
+    )
+  );
+}
+
+function collectControlFields(value, state, context = {}) {
   if (!value || typeof value !== "object") return;
   if (payloadTargetsInvalidatedTask(value, state)) {
     state.lastDiagnostics.push("ignoredControlForInvalidatedTaskSession");
     return;
+  }
+  if (Object.hasOwn(value, "requestIntent")) {
+    if (context.requestIntentTrusted === true) {
+      const requestIntent = compactRequestIntent(
+        value.requestIntent,
+        state.objective,
+        state.objectiveHash,
+      );
+      if (requestIntent) {
+        state.requestIntent = requestIntent;
+      } else if (value.requestIntent != null) {
+        state.lastDiagnostics.push("ignoredInvalidOrMismatchedRequestIntent");
+      }
+    } else if (value.requestIntent != null) {
+      state.lastDiagnostics.push("ignoredUntrustedRequestIntentSource");
+    }
   }
   const declaredServerControl = value.control
     && typeof value.control === "object"
@@ -724,7 +890,9 @@ function collectControlFields(value, state) {
     ? value.requiredNextToolArgs
     : null);
   for (const [key, child] of Object.entries(value)) {
-    if (key === "control") {
+    if (key === "requestIntent") {
+      continue;
+    } else if (key === "control") {
       continue;
     } else if (!protocolControl && !authoritativeServerControl && key === "requiredNextTool") {
       directRequiredNextToolSeen = true;
@@ -789,7 +957,7 @@ function collectControlFields(value, state) {
     } else if (["automationCoverage", "engineHeaderLookup", "coverageStatus", "coverage"].includes(key)) {
       state.coverageEvidence.push({ [key]: child });
     }
-    collectControlFields(child, state);
+    collectControlFields(child, state, context);
   }
   if (projectServerControl(state)) return;
   // Parent control fields describe the action that must happen now. Reapply
@@ -1046,7 +1214,15 @@ function compactRepeatEvidence(call, payload) {
   };
 }
 
-function classifyMutationIntent(text) {
+function classifyMutationIntent(text, context = {}) {
+  const requestIntent = matchingRequestIntent(text, context);
+  if (requestIntent) {
+    const isMutation = requestIntent.mutability !== "none";
+    return {
+      isMutation,
+      kind: isMutation ? "mutation" : "non_mutation",
+    };
+  }
   const source = String(text || "");
   const withoutExplicitNegation = source
     .replace(/\b(?:do\s+not|don't|dont)\s+(?:fix|edit|patch|change|modify|write|delete|rename|build|implement|create|add)\b/gi, " ")
@@ -1062,8 +1238,12 @@ function classifyMutationIntent(text) {
   };
 }
 
-function classifyUserIntent(text) {
+function classifyUserIntent(text, context = {}) {
   const source = String(text || "");
+  const requestIntent = matchingRequestIntent(source, context);
+  if (requestIntent) {
+    return requestIntent.mutability === "none" ? "READ_ONLY" : "MUTATION";
+  }
   const lower = source.toLowerCase();
   const explicitNoWrite = (
     /수정은\s*하(?:지\s*)?마/.test(source)
@@ -1082,7 +1262,7 @@ function classifyUserIntent(text) {
   // still explicitly asking for an implementation. Mutation intent wins;
   // otherwise ordinary show/describe/status questions are read-only even
   // when the user does not spell out "do not edit".
-  if (classifyMutationIntent(source).isMutation) return "MUTATION";
+  if (classifyMutationIntent(source, context).isMutation) return "MUTATION";
   if (explicitNoWrite) return "READ_ONLY";
   const readOnlyIntent = Boolean(
     /\b(?:what|which|where|show|list|describe|explain|summari[sz]e|inspect|analy[sz]e|review|report|look\s+up)\b/i.test(source)
@@ -1094,8 +1274,8 @@ function classifyUserIntent(text) {
   return readOnlyIntent ? "READ_ONLY" : "AMBIGUOUS";
 }
 
-function isReadOnlyUserGoal(text) {
-  return classifyUserIntent(text) === "READ_ONLY";
+function isReadOnlyUserGoal(text, context = {}) {
+  return classifyUserIntent(text, context) === "READ_ONLY";
 }
 
 function classifyUserTurnIntent(text, context = {}) {
@@ -1106,7 +1286,7 @@ function classifyUserTurnIntent(text, context = {}) {
     context.hasActiveTask === true
     && activeObjective
     && value !== activeObjective
-    && isReadOnlyUserGoal(value)
+    && isReadOnlyUserGoal(value, context)
   ) {
     return "SIDE_QUERY";
   }
@@ -1130,6 +1310,29 @@ function isMetaUserMessage(text) {
   if (/^\s*<title>[\s\S]*<\/title>\s*$/i.test(source)) return true;
   if (/\b2-5 word title\b/i.test(source) && /<\/title>/i.test(source)) return true;
   return false;
+}
+
+function requestIntentFromCheckpointSummary(text) {
+  const source = String(text || "");
+  const marker = "Conversation checkpoint (control state is authoritative; do not reinterpret it).";
+  const markerIndex = source.lastIndexOf(marker);
+  if (markerIndex < 0) return null;
+  const checkpointSection = source.slice(markerIndex + marker.length);
+  // Only the generator-owned final envelope is authoritative. Dynamic summary
+  // fields (constraints, paths, diagnostics, and tool evidence) precede this
+  // line and may contain arbitrary newlines. Scanning an earlier
+  // `requestIntent=` line lets an untrusted tool smuggle a forged intent into a
+  // later cold rebuild even though its live result was correctly rejected.
+  const line = checkpointSection.split(/\r?\n/u)
+    .filter((item) => item.startsWith("checkpointRequestIntent="))
+    .at(-1);
+  if (!line) return null;
+  try {
+    const value = JSON.parse(line.slice("checkpointRequestIntent=".length));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function findLatestRealUserIndex(snapshots) {
@@ -1160,9 +1363,20 @@ function extractControlState(messages, prior = {}, options = {}) {
     && (!priorHasActiveTaskRoute || priorHasRouteOwnership)
     && Number(prior.schemaVersion || 0) === COMPACTION_SCHEMA_VERSION;
   const source = canResume ? snapshots.slice(priorCount) : snapshots;
+  const resumedObjective = canResume ? String(prior.objective || "") : "";
+  const persistedObjectiveHash = String(prior.objectiveHash || "").trim().toLowerCase();
+  const resumedObjectiveHash = canResume
+    ? (/^[a-f0-9]{64}$/.test(persistedObjectiveHash)
+      ? persistedObjectiveHash
+      : objectiveHashOf(resumedObjective))
+    : "";
   const state = {
     schemaVersion: COMPACTION_SCHEMA_VERSION,
-    objective: canResume ? (prior.objective || "") : "",
+    objective: resumedObjective,
+    objectiveHash: resumedObjectiveHash,
+    requestIntent: canResume
+      ? compactRequestIntent(prior.requestIntent, resumedObjective, resumedObjectiveHash)
+      : null,
     constraints: canResume && Array.isArray(prior.constraints) ? [...prior.constraints] : [],
     activeProject: canResume ? (prior.activeProject || null) : null,
     activeProjectName: canResume ? (prior.activeProjectName || "") : "",
@@ -1218,8 +1432,13 @@ function extractControlState(messages, prior = {}, options = {}) {
   };
   const toolCallsById = new Map();
   const anonymousToolCalls = [];
+  const trustedCheckpointRequestIntents = [];
 
   for (const snapshot of source) {
+    if (snapshot.role === "system") {
+      const checkpointRequestIntent = requestIntentFromCheckpointSummary(snapshot.text);
+      if (checkpointRequestIntent) trustedCheckpointRequestIntents.push(checkpointRequestIntent);
+    }
     if (snapshot.role === "user" && snapshot.text.trim()) {
       if (isMetaUserMessage(snapshot.text)) {
         continue;
@@ -1227,9 +1446,11 @@ function extractControlState(messages, prior = {}, options = {}) {
       // Latest real user message always wins — pinning the first turn causes goal drift.
       // Synthetic LM Studio title prompts must not replace the active goal.
       const userText = snapshot.text.trim();
+      const userObjectiveHash = objectiveHashOf(userText);
       const turnIntent = classifyUserTurnIntent(userText, {
         hasActiveTask: Boolean(state.taskRouteOwnership && state.toolRoute?.routeHash),
         activeObjective: state.objective,
+        requestIntent: state.requestIntent,
       });
       const continuation = Boolean(state.objective) && turnIntent === "CONTINUE_ACTIVE_TASK";
       if (turnIntent === "SIDE_QUERY") {
@@ -1243,7 +1464,11 @@ function extractControlState(messages, prior = {}, options = {}) {
       }
       const objectiveChanged = Boolean(
         state.objective
-        && userText !== state.objective
+        && (
+          /^[a-f0-9]{64}$/.test(String(state.objectiveHash || ""))
+            ? userObjectiveHash !== state.objectiveHash
+            : userText !== state.objective
+        )
         && !continuation,
       );
       if (objectiveChanged) {
@@ -1251,9 +1476,7 @@ function extractControlState(messages, prior = {}, options = {}) {
       }
       if (
         state.semanticBlocker?.active
-        && state.objective
-        && userText !== state.objective
-        && !continuation
+        && objectiveChanged
       ) {
         state.semanticBlocker = null;
       }
@@ -1266,6 +1489,7 @@ function extractControlState(messages, prior = {}, options = {}) {
       }
       state.sideQuery = null;
       state.objective = userText.slice(0, 1200);
+      state.objectiveHash = userObjectiveHash;
       state.constraints = state.constraints.filter((item) =>
         typeof item === "string" && !item.startsWith("active_goal:") && !item.startsWith("read_only_"));
       state.constraints.push(`active_goal:${userText.slice(0, 400)}`);
@@ -1285,9 +1509,10 @@ function extractControlState(messages, prior = {}, options = {}) {
       else anonymousToolCalls.push(call);
     }
     for (const result of snapshot.toolResults) {
-      const matchedCall = result.toolCallId
-        ? (toolCallsById.get(result.toolCallId) || { name: result.name, arguments: {} })
-        : (anonymousToolCalls.shift() || { name: result.name, arguments: {} });
+      const observedCall = result.toolCallId
+        ? (toolCallsById.get(result.toolCallId) || null)
+        : (anonymousToolCalls.shift() || null);
+      const matchedCall = observedCall || { name: result.name, arguments: {} };
       const matchedCallName = matchedCall.name || result.name;
       const normalizedCallName = String(matchedCallName || "").toLowerCase();
       if (
@@ -1317,7 +1542,18 @@ function extractControlState(messages, prior = {}, options = {}) {
       }
       const resultPayloads = parseJsonObjects(result.content);
       for (const payload of resultPayloads) {
-        collectControlFields(payload, state);
+        const resultNameMatchesCall = Boolean(
+          observedCall
+          && (!result.name || toolNamesMatch(observedCall.name, result.name)),
+        );
+        collectControlFields(payload, state, {
+          requestIntentTrusted: isTrustedRequestIntentResult(
+            matchedCallName,
+            result.name,
+            payload,
+            resultNameMatchesCall,
+          ),
+        });
         collectSemanticBlockerFields(payload, state, matchedCallName);
       }
       if (toolResultSucceeded(result)) {
@@ -1426,6 +1662,36 @@ function extractControlState(messages, prior = {}, options = {}) {
         state.requiredNextToolRef = null;
         state.requiredNextToolArgs = null;
       }
+    }
+  }
+
+  if (!state.requestIntent) {
+    for (let index = trustedCheckpointRequestIntents.length - 1; index >= 0; index -= 1) {
+      const requestIntent = compactRequestIntent(
+        trustedCheckpointRequestIntents[index],
+        state.objective,
+        state.objectiveHash,
+      );
+      if (requestIntent) {
+        state.requestIntent = requestIntent;
+        break;
+      }
+    }
+  }
+  state.requestIntent = compactRequestIntent(
+    state.requestIntent,
+    state.objective,
+    state.objectiveHash,
+  );
+  if (state.requestIntent) {
+    state.constraints = state.constraints.filter((item) => (
+      typeof item === "string" && !item.startsWith("read_only_")
+    ));
+    if (state.requestIntent.mutability === "none") {
+      state.constraints.push(
+        "read_only_findings_only: do not edit files; do not invent refactor/implementation plans; "
+        + "do not re-emit a prior project-structure overview unless the latest user asked for it",
+      );
     }
   }
 
@@ -1637,6 +1903,8 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     checkpointGeneration: generation,
     createdAt: new Date().toISOString(),
     objective: control.objective,
+    objectiveHash: control.objectiveHash,
+    requestIntent: control.requestIntent,
     constraints: control.constraints,
     activeProject: control.activeProject,
     activeProjectName: control.activeProjectName,
@@ -1931,6 +2199,8 @@ function summarizeOldMessages(messages, checkpoint) {
     `checkpointGeneration=${checkpoint.checkpointGeneration}`,
     `objective=${checkpoint.objective || "(not captured)"}`,
   ];
+  if (checkpoint.objectiveHash) lines.push(`objectiveHash=${checkpoint.objectiveHash}`);
+  if (checkpoint.requestIntent) lines.push(`requestIntent=${JSON.stringify(checkpoint.requestIntent)}`);
   if (checkpoint.modifiedFiles?.length) lines.push(`modifiedFiles=${checkpoint.modifiedFiles.join(", ")}`);
   if (checkpoint.constraints?.length) lines.push(`constraints=${checkpoint.constraints.join(" | ")}`);
   if (checkpoint.activeProject) lines.push(`activeProject=${checkpoint.activeProject}`);
@@ -2067,6 +2337,10 @@ function summarizeOldMessages(messages, checkpoint) {
     + "Do not invent missing classes, modules, or GameFramework paths from memory or prior assistant prose. "
     + "Trust verified evidenceFacts and semanticAnchors for unchanged files; use tools for unread, changed, or exact-range evidence.",
   );
+  // Keep this as the final generated line. requestIntentFromCheckpointSummary
+  // deliberately ignores similarly named text embedded in every earlier,
+  // potentially tool-derived summary field.
+  lines.push(`checkpointRequestIntent=${JSON.stringify(checkpoint.requestIntent || null)}`);
   return lines.join("\n");
 }
 
@@ -2146,6 +2420,21 @@ function compactSnapshots(messages, checkpoint, options = {}) {
 function validateCheckpoint(checkpoint) {
   if (!checkpoint || checkpoint.schemaVersion !== COMPACTION_SCHEMA_VERSION) return false;
   if (!Number.isFinite(Number(checkpoint.checkpointGeneration))) return false;
+  if (
+    checkpoint.objectiveHash !== undefined
+    && checkpoint.objectiveHash !== ""
+    && !/^[a-f0-9]{64}$/.test(String(checkpoint.objectiveHash || ""))
+  ) return false;
+  if (checkpoint.requestIntent !== undefined && checkpoint.requestIntent !== null) {
+    const requestIntent = compactRequestIntent(
+      checkpoint.requestIntent,
+      checkpoint.objective,
+      checkpoint.objectiveHash,
+    );
+    if (!requestIntent || stableStringify(requestIntent) !== stableStringify(checkpoint.requestIntent)) {
+      return false;
+    }
+  }
   if (
     checkpoint.requiredNextTool
     && (
@@ -2257,9 +2546,13 @@ function validateCheckpoint(checkpoint) {
 
 module.exports = {
   COMPACTION_SCHEMA_VERSION,
+  REQUEST_INTENT_VERSION,
   DEFAULT_COMPACTION_CONFIG,
   stableStringify,
   sha256,
+  objectiveHashOf,
+  compactRequestIntent,
+  matchingRequestIntent,
   isWindowsHostPlatform,
   asciiWindowsFold,
   normalizeProjectEvidencePath,
@@ -2284,6 +2577,7 @@ module.exports = {
   classifyUserIntent,
   classifyUserTurnIntent,
   isMetaUserMessage,
+  requestIntentFromCheckpointSummary,
   findLatestRealUserIndex,
   extractControlState,
   buildCheckpoint,

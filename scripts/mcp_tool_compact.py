@@ -57,6 +57,14 @@ _TASK_CONTROL_SURFACE_KEYS = frozenset(
         "architectureHandoff",
         "selectedHypothesisId",
         "selectedCandidateId",
+        "objective",
+        "objectiveHash",
+        "requestIntent",
+        "resolvedTargets",
+        "semanticAmbiguity",
+        "pendingRequest",
+        "pendingRequestHash",
+        "resumeAfter",
     }
 )
 
@@ -526,6 +534,11 @@ def compact_agent_plan_payload(
     if str(payload.get("taskKind") or "").casefold() in _READ_ONLY_PLAN_TASK_KINDS:
         return _compact_read_only_agent_plan_payload(payload, max_bytes=max_bytes)
 
+    control_surfaces = {
+        key: value
+        for key, value in payload.items()
+        if _is_task_control_surface_key(key)
+    }
     compact = dict(payload)
     request = str(compact.get("request") or "")
     if len(request) > 1_200:
@@ -613,27 +626,21 @@ def compact_agent_plan_payload(
             "_structuredTruncated": True,
         }
     )
+    # The write-plan fallbacks must preserve the same server-issued intent,
+    # routing, and authorization fields as read-only plans.  Shrinking any of
+    # these can detach a mutation from its original objective or resume token.
+    protected.update(control_surfaces)
     if len(json.dumps(protected, ensure_ascii=False)) <= max_bytes:
         return protected
-    authorization_surfaces = {
-        key: protected[key]
-        for key in (
-            "taskAuthorization",
-            "taskAuthorizationRequiredForWrites",
-            "writeToolAuthorizationArgs",
-            "authorizationRetryPolicy",
-        )
-        if key in protected
-    }
     for max_str, max_list in ((400, 8), (240, 6), (120, 4)):
         candidate = _shrink_value(protected, max_str=max_str, max_list=max_list)
         if not isinstance(candidate, dict):
             continue
-        candidate.update(authorization_surfaces)
+        candidate.update(control_surfaces)
         candidate["_structuredTruncated"] = True
         if len(json.dumps(candidate, ensure_ascii=False)) <= max_bytes:
             return candidate
-    return {
+    minimal = {
         key: protected[key]
         for key in (
             "taskKind",
@@ -657,6 +664,9 @@ def compact_agent_plan_payload(
         )
         if key in protected
     }
+    minimal.update(control_surfaces)
+    minimal["_structuredTruncated"] = True
+    return minimal
 
 
 def _shrink_value(value: Any, *, max_str: int, max_list: int) -> Any:
@@ -675,10 +685,40 @@ def _shrink_value(value: Any, *, max_str: int, max_list: int) -> Any:
     return value
 
 
+def _task_control_surface_projection(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): item
+        for key, item in value.items()
+        if _is_task_control_surface_key(str(key))
+    }
+
+
+def _continuity_control_surface_projection(value: Any) -> dict[str, Any]:
+    projection = _task_control_surface_projection(value)
+    if not isinstance(value, dict):
+        return projection
+    checkpoint = _task_control_surface_projection(value.get("checkpoint"))
+    if checkpoint:
+        projection["checkpoint"] = checkpoint
+    return projection
+
+
 def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> dict[str, Any]:
     """Return valid compact JSON, preserving safety-critical recovery surfaces."""
     if not isinstance(payload, dict):
         return {"value": payload}
+
+    control_surfaces = _task_control_surface_projection(payload)
+    nested_control_surfaces = {
+        key: projection
+        for key in ("state", "taskState", "checkpoint")
+        if (projection := _task_control_surface_projection(payload.get(key)))
+    }
+    continuity_projection = _continuity_control_surface_projection(payload.get("continuity"))
+    if continuity_projection:
+        nested_control_surfaces["continuity"] = continuity_projection
 
     specialized = payload
     if "verdictSummary" in payload and "knownBadCount" in payload:
@@ -686,7 +726,31 @@ def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> di
         # as non-negotiable.  A second generic pass could silently discard those
         # recovery instructions when a caller supplies an unrealistically tiny
         # byte budget.
-        return compact_code_sketch_payload(payload, max_bytes=max_bytes)
+        protected_projection = {
+            **control_surfaces,
+            **nested_control_surfaces,
+        }
+        # Reserve the exact serialized cost of the byte-for-byte control
+        # projection before choosing the sketch detail tier.  Adding it only
+        # after compact_code_sketch_payload had accepted a verbose tier could
+        # exceed max_bytes even when the protected projection plus the minimal
+        # known-bad replacements fit within the ceiling.
+        sketch_payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in protected_projection
+        }
+        projection_cost = (
+            len(json.dumps(protected_projection, ensure_ascii=False))
+            if protected_projection
+            else 0
+        )
+        compacted_sketch = compact_code_sketch_payload(
+            sketch_payload,
+            max_bytes=max(0, max_bytes - projection_cost),
+        )
+        compacted_sketch.update(protected_projection)
+        return compacted_sketch
     elif "taskAuthorizationRequiredForWrites" in payload and "toolRoute" in payload:
         # Authorization and routing fields must remain byte-for-byte usable by
         # the next tool call, so never feed them through generic string/list
@@ -735,6 +799,8 @@ def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> di
         ):
             if protected_key in payload:
                 specialized[protected_key] = payload[protected_key]
+        specialized.update(control_surfaces)
+        specialized.update(nested_control_surfaces)
 
     serialized = json.dumps(specialized, ensure_ascii=False)
     if len(serialized) <= max_bytes:
@@ -744,11 +810,13 @@ def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> di
         candidate = _shrink_value(specialized, max_str=max_str, max_list=max_list)
         if isinstance(candidate, dict):
             candidate = dict(candidate)
+            candidate.update(control_surfaces)
+            candidate.update(nested_control_surfaces)
             candidate["_structuredTruncated"] = True
         if len(json.dumps(candidate, ensure_ascii=False)) <= max_bytes:
             return candidate if isinstance(candidate, dict) else {"value": candidate, "_structuredTruncated": True}
 
-    return {
+    fallback = {
         "ok": payload.get("ok"),
         "errorCode": payload.get("errorCode"),
         "error": _shrink_value(payload.get("error"), max_str=800, max_list=3),
@@ -780,6 +848,9 @@ def compact_structured_payload(payload: dict[str, Any], *, max_bytes: int) -> di
         "_structuredTruncated": True,
         "summaryKeys": list(payload.keys())[:20],
     }
+    fallback.update(control_surfaces)
+    fallback.update(nested_control_surfaces)
+    return fallback
 
 
 def _short_status(status: dict[str, Any] | None) -> dict[str, Any] | None:

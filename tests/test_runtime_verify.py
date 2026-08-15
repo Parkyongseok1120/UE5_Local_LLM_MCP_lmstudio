@@ -202,6 +202,31 @@ def test_numeric_engine_association_discovers_ue4_without_version_cap(
     assert association_free["source"] == "argument"
 
 
+def test_numeric_association_ignores_stale_install_time_environment_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.joinpath("config").mkdir(parents=True)
+    workspace.joinpath("config", "workspace.json").write_text("{}", encoding="utf-8")
+    home = tmp_path / "home"
+    expected, _editor = _engine(home / "Epic Games", "5.6", "linux")
+    stale, _editor = _engine(home / "Epic Games", "5.8", "linux")
+    monkeypatch.setenv("SHARED_UNREAL_CONFIG", str(tmp_path / "missing-shared.json"))
+
+    resolution = resolve_engine_root_for_association(
+        "5.6",
+        workspace,
+        host_platform="linux",
+        environ={"UNREAL_ENGINE_ROOT": str(stale)},
+        home=home,
+    )
+
+    assert resolution["ok"] is True
+    assert resolution["engineRoot"] == str(expected.resolve())
+    assert resolution["source"] == "EngineAssociation"
+
+
 def test_runtime_verify_surfaces_unresolved_custom_association(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -45,7 +45,9 @@ def split_identifier(value: str) -> list[str]:
     parts: list[str] = []
     for token in IDENTIFIER_RE.findall(value):
         parts.append(token)
-        parts.extend(CAMEL_SPLIT_RE.findall(token))
+        split_parts = CAMEL_SPLIT_RE.split(token)
+        if len(split_parts) > 1:
+            parts.extend(split_parts)
     return [part for part in parts if len(part) > 1]
 
 

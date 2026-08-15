@@ -160,6 +160,9 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "scripts/architecture_portfolio.py",
         "scripts/asset_migration_contract.py",
         "scripts/task_continuity.py",
+        "scripts/project_name_resolver.py",
+        "scripts/semantic_ambiguity.py",
+        "scripts/target_resolver.py",
         "scripts/task_autonomy_supervisor.py",
         "scripts/feature_intent_contract.py",
         "scripts/runtime_oracle.py",
@@ -178,6 +181,8 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "scripts/manage_runtime_manifest.py",
         "installer/runtime-manifest.json",
         "lmstudio-unreal-agent-mcp/src/server.js",
+        "lmstudio-unreal-agent-mcp/src/command-policy.js",
+        "lmstudio-unreal-agent-mcp/src/resolve-project-name-cli.js",
         "lmstudio-unreal-agent-mcp/src/filesystem-path-identity.js",
         "lmstudio-unreal-agent-mcp/src/recovery-log-contract.js",
         "lmstudio-unreal-agent-mcp/src/route-watcher.js",
@@ -207,7 +212,10 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     assert packaged_installer_manifest["productVersion"] == "1.3.0 RC3"
     assert packaged_installer_manifest["version"] == "2.1.5"
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
-    assert (output / "install.sh").read_bytes() == (ROOT / "install.sh").read_bytes()
+    source_launcher = (ROOT / "install.sh").read_bytes()
+    expected_launcher = source_launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    assert (output / "install.sh").read_bytes() == expected_launcher
+    assert b"\r" not in (output / "install.sh").read_bytes()
     windows_launcher = (output / "INSTALL.bat").read_text(encoding="utf-8")
     posix_launcher = (output / "install.sh").read_text(encoding="utf-8")
     assert "pause >nul" in windows_launcher
@@ -215,6 +223,16 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     assert "Python 3.10+" in posix_launcher
     assert "python3.10" in posix_launcher
     assert "sudo apt-get install -y python3 ca-certificates" in posix_launcher
+    if os.name != "nt":
+        launcher_help = subprocess.run(
+            [str(output / "install.sh"), "--help"],
+            cwd=output,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert launcher_help.returncode == 0, launcher_help.stderr or launcher_help.stdout
     portable_help = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
     assert "Ubuntu 22.04/24.04 with glibc" in portable_help
     assert "pinned by SHA-256" in portable_help

@@ -13,6 +13,8 @@ from agent_orchestrator import (  # noqa: E402
     build_suggested_tool_calls,
     classify_task,
     is_continuation_request,
+    normalize_project_name,
+    parse_project_control_intent,
     project_control_project_path_hint,
     verify_edit_allowed,
 )
@@ -123,6 +125,160 @@ def test_project_control_keeps_only_explicit_cross_platform_uproject_path():
         f"Set active project to '{unix_path}'"
     ) == unix_path
     assert project_control_project_path_hint("Select Example by name") == ""
+
+
+def test_project_control_intent_parser_distinguishes_query_negation_and_mixed_work():
+    project_name = "Project" + "_MJS"
+    cases = (
+        ("지금 프로젝트 어디야", "status", "query", "none", "", True, False),
+        ("현재 작업 프로젝트 뭐야", "status", "query", "none", "", True, False),
+        (f"그럼 프로젝트 {project_name}로 지정", "select", "command", "name", project_name, True, False),
+        (f"{project_name}를 프로젝트로 지정해", "select", "command", "name", project_name, True, False),
+        (f"{project_name}로 프로젝트 바꿔", "select", "command", "name", project_name, True, False),
+        (f"{project_name}로 지정돼 있어?", "status", "query", "name", project_name, True, False),
+        (f"{project_name}로 지정하지 마", "noop", "command", "name", project_name, True, True),
+    )
+    for request, operation, speech_act, target_kind, target, pure, negated in cases:
+        parsed = parse_project_control_intent(request)
+        assert parsed.matched is True, request
+        assert parsed.operation == operation, request
+        assert parsed.speech_act == speech_act, request
+        assert parsed.target_kind == target_kind, request
+        assert parsed.target == target, request
+        assert parsed.pure_control is pure, request
+        assert parsed.negated is negated, request
+
+    english_cases = (
+        ("What is the active project path?", "status", "query", "none", "", False),
+        ("Set Project_MJS as the active project", "select", "command", "name", project_name, False),
+        ("Is Project_MJS the current project?", "status", "query", "name", project_name, False),
+        ("Do not set Project_MJS as the active project", "noop", "command", "name", project_name, True),
+        ("Don't switch the active project to Project_MJS", "noop", "command", "name", project_name, True),
+    )
+    for request, operation, speech_act, target_kind, target, negated in english_cases:
+        parsed = parse_project_control_intent(request)
+        assert parsed.matched is True, request
+        assert parsed.operation == operation, request
+        assert parsed.speech_act == speech_act, request
+        assert parsed.target_kind == target_kind, request
+        assert parsed.target == target, request
+        assert parsed.pure_control is True, request
+        assert parsed.negated is negated, request
+
+    mixed = parse_project_control_intent(
+        f"프로젝트 {project_name}로 바꾸고 Player AnimInstance 분석해"
+    )
+    assert mixed.matched is True
+    assert mixed.operation == "select"
+    assert mixed.pure_control is False
+    assert mixed.remaining_request == "Player AnimInstance 분석해"
+    english_mixed = parse_project_control_intent(
+        f"Switch the active project to {project_name}, then analyze Player AnimInstance"
+    )
+    assert english_mixed.operation == "select"
+    assert english_mixed.target == project_name
+    assert english_mixed.pure_control is False
+    assert english_mixed.remaining_request == "analyze Player AnimInstance"
+    assert classify_task(
+        f"{project_name} 프로젝트의 VFX 시스템 분석해", "auto"
+    ) != "project_control"
+
+
+def test_project_control_parser_rejects_descriptions_hypotheticals_and_embedded_control():
+    non_commands = (
+        "프로젝트 Project_MJS로 지정된 VFX 시스템 분석해",
+        "프로젝트 Project_MJS로 바꾸는 방법 알려줘",
+        "프로젝트 Project_MJS로 바꾸면 뭐가 달라져?",
+        "Should I switch the active project to Project_MJS?",
+        "Explain how to switch active project to Project_MJS",
+        "use project settings to fix input",
+        "VFX 시스템 분석하고 프로젝트 Project_MJS로 바꿔",
+        "코드 분석해. 현재 프로젝트 어디야?",
+    )
+    for request in non_commands:
+        parsed = parse_project_control_intent(request)
+        assert parsed.matched is False, request
+        assert classify_task(request, "auto") != "project_control", request
+
+
+def test_project_control_parser_preserves_negated_mixed_work_and_korean_word_boundary():
+    english = parse_project_control_intent(
+        "Do not switch the active project to Project_MJS, then analyze VFX"
+    )
+    assert english.operation == "noop"
+    assert english.negated is True
+    assert english.target == "Project_MJS"
+    assert english.pure_control is False
+    assert english.remaining_request == "analyze VFX"
+
+    korean = parse_project_control_intent(
+        "Project_MJS로 지정하지 말고 VFX 시스템 분석해"
+    )
+    assert korean.operation == "noop"
+    assert korean.negated is True
+    assert korean.target == "Project_MJS"
+    assert korean.pure_control is False
+    assert korean.remaining_request == "VFX 시스템 분석해"
+
+    switch_and_fix = parse_project_control_intent(
+        "프로젝트 Project_MJS로 바꾸고 고쳐줘"
+    )
+    assert switch_and_fix.operation == "select"
+    assert switch_and_fix.remaining_request == "고쳐줘"
+
+
+def test_project_control_parser_treats_quoted_paths_as_atomic_targets():
+    windows_path = "C:/Foo and Bar, Inc/Game.uproject"
+    english = parse_project_control_intent(
+        f'Switch active project to "{windows_path}" and analyze VFX'
+    )
+    assert english.operation == "select"
+    assert english.target_kind == "path"
+    assert english.target == windows_path
+    assert english.remaining_request == "analyze VFX"
+
+    korean_path = r"C:\Foo, Bar\Game.uproject"
+    korean = parse_project_control_intent(
+        f'프로젝트 "{korean_path}"로 바꾸고 고쳐줘'
+    )
+    assert korean.operation == "select"
+    assert korean.target_kind == "path"
+    assert korean.target == korean_path
+    assert korean.remaining_request == "고쳐줘"
+
+
+def test_normalize_project_name_is_unicode_and_separator_stable():
+    assert normalize_project_name("  My_Project-Name.uproject ") == "myprojectname"
+    assert normalize_project_name("Ｍｙ　Ｐｒｏｊｅｃｔ") == "myproject"
+
+
+def test_plan_issues_minimal_request_intent_and_material_semantic_gate():
+    read_plan = build_agent_plan("Player Animinstance C++ 클래스 분석해", "auto")
+    assert read_plan.request_intent["version"] == 1
+    assert read_plan.request_intent["domain"] == "source"
+    assert read_plan.request_intent["operation"] == "analyze"
+    assert read_plan.request_intent["mutability"] == "none"
+    calls = build_suggested_tool_calls(
+        "Player Animinstance C++ 클래스 분석해",
+        "cpp_analysis",
+        "auto",
+        {
+            "ok": True,
+            "projectName": "Portable",
+            "projectDir": str(SCRIPTS.parent),
+            "workspaceRoot": str(SCRIPTS.parent),
+            "sourceBrowsePath": "project://Source",
+            "browseAvailable": True,
+        },
+    )
+    assert calls[0]["tool"] == "unreal_symbol_lookup"
+
+    write_plan = build_agent_plan("엑셀레이터 기능을 구현해", "auto")
+    assert write_plan.semantic_ambiguity["material"] is True
+    assert write_plan.semantic_ambiguity["selectedInterpretation"] is None
+    assert write_plan.write_gate["writesAllowed"] is False
+    assert write_plan.write_gate["requiresUserClarification"] is True
+    assert write_plan.request_intent["ambiguity"]["status"] == "unresolved"
 
 
 def test_classify_inspect_review():

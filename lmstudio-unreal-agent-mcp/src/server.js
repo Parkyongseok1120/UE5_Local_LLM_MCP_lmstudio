@@ -40,6 +40,7 @@ const { verifyRuntimeComponent } = require("./runtime-identity.js");
 const { deriveValidationScope } = require("./validation-scope.js");
 const { absolutePathIsWithin } = require("./filesystem-path-identity.js");
 const { getMcpIdentityStatus } = require("./mcp-connection.js");
+const { allowedCommandBase, parseAllowedCommand } = require("./command-policy.js");
 
 const {
   Server
@@ -1838,63 +1839,6 @@ function isTextLikely(buffer) {
   return zeros === 0;
 }
 
-function allowedCommandBase(commandLine) {
-  const trimmed = String(commandLine || "").trim();
-  if (!trimmed) return false;
-  if (/[&|<>]/.test(trimmed)) return false;
-
-  const lower = trimmed.toLowerCase();
-
-  const denyPatterns = [
-    /\bdel\b/i,
-    /\berase\b/i,
-    /\brmdir\b/i,
-    /\brd\b/i,
-    /\bformat\b/i,
-    /\breg\s+delete\b/i,
-    /\bshutdown\b/i,
-    /\btaskkill\b/i,
-    /\bsetx\b/i,
-    /\bmklink\b/i,
-    /\btakeown\b/i,
-    /\bicacls\b/i,
-    /\bpowershell\b.*\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b/i,
-    /\bcurl\b.*\|\s*(powershell|cmd|sh|bash)/i
-  ];
-
-  if (denyPatterns.some((re) => re.test(lower))) return false;
-
-  const allowPatterns = [
-    /^dir(\s|$)/i,
-    /^type(\s|$)/i,
-    /^where(\s|$)/i,
-    /^git\s+(status|diff|log|show|rev-parse|branch)(\s|$)/i,
-    /^findstr(\s|$)/i,
-    /^cl(\s|$)/i,
-    /^msbuild(\s|$)/i,
-    /^dotnet\s+build(\s|$)/i,
-    /^node\s+--version$/i,
-    /^npm\s+--version$/i,
-    /^python\s+--version$/i,
-    /^py\s+--version$/i
-  ];
-
-  return allowPatterns.some((re) => re.test(trimmed));
-}
-
-function parseAllowedCommand(commandLine) {
-  const trimmed = String(commandLine || "").trim();
-  if (!allowedCommandBase(trimmed)) return null;
-  if (process.platform === "win32" && /^(dir|type|where|findstr)(\s|$)/i.test(trimmed)) {
-    return { file: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", trimmed], shell: false };
-  }
-  const parts = trimmed.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
-  if (!parts.length) return null;
-  const file = parts[0].replace(/^"|"$/g, "");
-  const args = parts.slice(1).map((part) => part.replace(/^"|"$/g, ""));
-  return { file, args, shell: false };
-}
-
 function execCommand(commandLine, cwd = WORKSPACE_ROOT, timeoutMs = COMMAND_TIMEOUT_MS) {
   const parsed = parseAllowedCommand(commandLine);
   if (!parsed) {
@@ -2819,10 +2763,10 @@ function allAgentTools() {
       },
       {
         name: "set_active_project",
-        description: "Choose the active Unreal project by .uproject path or hint. Pass clear=true to unset.",
+        description: "Choose the active Unreal project by .uproject path or one exact project name. Pass clear=true to unset; partial names are suggestions only.",
         inputSchema: makeJsonSchema({
           projectPath: { type: "string", description: "Absolute or workspace-relative .uproject path." },
-          hint: { type: "string", description: "Project name fragment, e.g. JRPG or CiciToon." },
+          hint: { type: "string", description: "Exact project name or exact .uproject stem; partial/fuzzy names are never auto-selected." },
           clear: { type: "boolean", description: "If true, clear activeProject and return to free selection." }
         })
       },

@@ -1141,6 +1141,7 @@ def _unreal_entries(
     agent_config: Path,
     context_compactor_advisory: bool = False,
     runtime_git_commit: str = "",
+    engine_association: str = "",
 ) -> dict[str, dict[str, Any]]:
     allow = "1" if args.enable_agent_mode else "0"
     state_root = args.lmstudio_home / "state" / "unreal-agent"
@@ -1207,6 +1208,12 @@ def _unreal_entries(
     if args.engine_root:
         rag_entry["env"]["UNREAL_ENGINE_ROOT"] = str(args.engine_root)
         agent_entry["env"]["UNREAL_ENGINE_ROOT"] = str(args.engine_root)
+        # Distinguish this installer-managed default from a user's intentional
+        # shell override. An empty value means it was installed without an
+        # active project binding and must not retarget a later bound project.
+        pin_association = str(engine_association or "").strip()
+        rag_entry["env"]["UNREAL_ENGINE_ROOT_ASSOCIATION"] = pin_association
+        agent_entry["env"]["UNREAL_ENGINE_ROOT_ASSOCIATION"] = pin_association
     return {"unreal-rag": rag_entry, "unreal-agent": agent_entry}
 
 
@@ -1841,6 +1848,7 @@ def install(
                 agent_path,
                 context_compactor_advisory=("context_compactor" in components),
                 runtime_git_commit=runtime_git_commit,
+                engine_association=association,
             ).items():
                 _merge_mcp_entry(mcp_config, name, entry)
 

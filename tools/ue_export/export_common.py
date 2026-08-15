@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from typing import AbstractSet, Any, Callable
 
 MAX_ITEMS = 120
 MAX_DEPS = 40
 
 
 def asset_class_name(asset) -> str:
-    if hasattr(asset, "asset_class_path"):
-        return str(asset.asset_class_path.asset_name)
-    return str(getattr(asset, "asset_class", "") or "")
+    try:
+        class_path = getattr(asset, "asset_class_path", None)
+        path_name = getattr(class_path, "asset_name", None) if class_path is not None else None
+        if path_name:
+            return str(path_name)
+    except Exception:
+        pass
+    try:
+        return str(getattr(asset, "asset_class", "") or "")
+    except Exception:
+        return ""
 
 
 def safe_name(value) -> str:
@@ -71,7 +79,7 @@ def export_by_class_map(
     content_path: str,
     out_path: str,
     *,
-    export_classes: set[str] | frozenset[str],
+    export_classes: AbstractSet[str],
     collectors: dict[str, Callable[[Any, Any, str], dict[str, Any]]],
     log_label: str,
 ) -> int:

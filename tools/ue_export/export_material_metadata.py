@@ -8,6 +8,8 @@
 
 import json
 
+from export_common import asset_class_name
+
 
 MAX_EXPRESSIONS = 320
 MAX_GRAPH_EDGES = 800
@@ -141,12 +143,6 @@ MATERIAL_FUNCTION_CLASSES = frozenset(
         "MaterialFunctionMaterialLayerBlend",
     }
 )
-
-
-def _asset_class_name(asset) -> str:
-    if hasattr(asset, "asset_class_path"):
-        return str(asset.asset_class_path.asset_name)
-    return str(getattr(asset, "asset_class", "") or "")
 
 
 def _safe_name(value) -> str:
@@ -738,7 +734,7 @@ def export_material_metadata(content_path: str, out_path: str) -> None:
     assets = registry.get_assets_by_path(content_path, recursive=True)
     rows = []
     for asset in assets:
-        cls = _asset_class_name(asset)
+        cls = asset_class_name(asset)
         if cls not in MATERIAL_EXPORT_CLASSES:
             continue
         path = str(asset.package_name)

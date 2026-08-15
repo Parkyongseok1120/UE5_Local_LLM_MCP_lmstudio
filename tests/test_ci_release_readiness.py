@@ -30,9 +30,14 @@ def test_github_workflows_keep_windows_safe_commands() -> None:
     assert "python -m pip install ruff" in ci
     assert "npm.cmd ci --no-fund --no-audit" in ci
     assert "Node syntax check (all src JS)" in ci
+    assert "tests/test_claim_validation_engine_portability.py" in ci
     assert "W503" not in ci
     assert "timeout-minutes: 10" in eval_regression
     assert "python -m pip install -r requirements-dev.txt" in eval_regression
+    unit_tests_job = eval_regression.split("  unit-tests:", 1)[1]
+    assert "actions/setup-node@v4" in unit_tests_job
+    assert 'node-version: "20"' in unit_tests_job
+    assert "npm.cmd ci --no-fund --no-audit" in unit_tests_job
     assert "--step-timeout 60" in eval_regression
 
 

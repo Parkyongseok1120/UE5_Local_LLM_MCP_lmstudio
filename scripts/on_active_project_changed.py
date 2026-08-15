@@ -54,15 +54,26 @@ def _row_metadata(row: dict[str, Any]) -> dict[str, Any]:
 
 def _project_rows(rows: list[dict[str, Any]], project_name: str, project_root: Path | None = None) -> list[dict[str, Any]]:
     matched: list[dict[str, Any]] = []
-    root_text = str(project_root.resolve()) if project_root else ""
+    expected_root = project_root.resolve() if project_root else None
     for row in rows:
         meta = _row_metadata(row)
         project = str(meta.get("project") or "")
         project_path = str(meta.get("project_root") or meta.get("project_path") or "")
-        if project == project_name:
-            matched.append(meta)
+        if expected_root is None:
+            if project == project_name:
+                matched.append(meta)
             continue
-        if root_text and root_text in project_path:
+        if not project_path:
+            # A legacy stem-only row cannot distinguish same-name worktrees.
+            # Force one sync so new root-bound metadata replaces it.
+            continue
+        try:
+            candidate = Path(project_path).expanduser().resolve()
+            candidate.relative_to(expected_root)
+            within_root = True
+        except (OSError, ValueError):
+            within_root = False
+        if within_root and (not project or project == project_name):
             matched.append(meta)
     return matched
 
@@ -92,7 +103,11 @@ def _project_has_uassets(project_root: Path) -> bool:
 
 def _project_editor_metadata_needs_sync(project: Path, index_dir: Path, project_name: str) -> tuple[bool, str]:
     project_root = project.parent.resolve()
-    registry_rows = _project_rows(_load_jsonl_rows(index_dir / "raw_asset_registry.jsonl"), project_name)
+    registry_rows = _project_rows(
+        _load_jsonl_rows(index_dir / "raw_asset_registry.jsonl"),
+        project_name,
+        project_root,
+    )
     has_uassets = _project_has_uassets(project_root)
 
     if has_uassets and not registry_rows:
@@ -120,7 +135,7 @@ def project_index_needs_sync(project: Path, index_dir: Path) -> tuple[bool, str]
         return True, "missing_project_architecture"
 
     symbols_path = index_dir / "raw_project_symbols.jsonl"
-    if not _project_rows(_load_jsonl_rows(symbols_path), project_name):
+    if not _project_rows(_load_jsonl_rows(symbols_path), project_name, project_root):
         return True, "missing_project_symbols"
 
     source_root = project_root / "Source"
@@ -173,7 +188,7 @@ def project_index_sync_capabilities(project: Path, index_dir: Path) -> dict[str,
 
     has_profile = bool(_project_rows(_load_jsonl_rows(profiles), project_name, project_root))
     has_architecture = bool(_project_rows(_load_jsonl_rows(architecture), project_name, project_root))
-    has_symbols = bool(_project_rows(_load_jsonl_rows(symbols_path), project_name))
+    has_symbols = bool(_project_rows(_load_jsonl_rows(symbols_path), project_name, project_root))
 
     source_newer_than_symbols = False
     source_newer_than_architecture = False

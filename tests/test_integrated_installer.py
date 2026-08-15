@@ -1107,6 +1107,8 @@ def test_explicit_engine_root_is_persisted_and_forwarded_to_mcp(tmp_path: Path) 
     assert shared["defaultEngineRoot"] == str(engine)
     assert mcp["mcpServers"]["unreal-rag"]["env"]["UNREAL_ENGINE_ROOT"] == str(engine)
     assert mcp["mcpServers"]["unreal-agent"]["env"]["UNREAL_ENGINE_ROOT"] == str(engine)
+    assert mcp["mcpServers"]["unreal-rag"]["env"]["UNREAL_ENGINE_ROOT_ASSOCIATION"] == ""
+    assert mcp["mcpServers"]["unreal-agent"]["env"]["UNREAL_ENGINE_ROOT_ASSOCIATION"] == ""
 
 
 def test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded(
@@ -1141,6 +1143,14 @@ def test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded(
     )
     commit = manifest["components"]["agent"]["gitCommit"]
     assert shared["engineRootsByAssociation"][association] == str(engine)
+    assert (
+        mcp["mcpServers"]["unreal-rag"]["env"]["UNREAL_ENGINE_ROOT_ASSOCIATION"]
+        == association
+    )
+    assert (
+        mcp["mcpServers"]["unreal-agent"]["env"]["UNREAL_ENGINE_ROOT_ASSOCIATION"]
+        == association
+    )
     assert mcp["mcpServers"]["unreal-rag"]["env"]["CONTROL_RUNTIME_GIT_COMMIT"] == commit
     assert mcp["mcpServers"]["unreal-agent"]["env"]["CONTROL_RUNTIME_GIT_COMMIT"] == commit
 

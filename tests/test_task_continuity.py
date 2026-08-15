@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from task_api import (  # noqa: E402
     task_checkpoint,
     task_record_gate,
+    task_replan,
     task_root,
     task_start,
     task_status,
@@ -188,6 +190,103 @@ def test_checkpoint_rejects_paths_outside_project(tmp_path: Path) -> None:
 
     assert result["ok"] is False
     assert result["errorCode"] == "CHECKPOINT_PATH_OUTSIDE_PROJECT"
+
+
+def test_server_request_intent_is_bound_into_task_state_and_checkpoint(tmp_path: Path) -> None:
+    objective = "프로젝트를 바꾸고 Player AnimInstance 분석해"
+    objective_hash = hashlib.sha256(objective.encode("utf-8")).hexdigest()
+    request_intent = {
+        "version": 1,
+        "objectiveHash": objective_hash,
+        "domain": "source",
+        "operation": "analyze",
+        "mutability": "none",
+        "speechAct": "command",
+        "negated": False,
+        "targets": {"symbols": ["UCPlayerCharacterAnimInstance"]},
+        "ambiguity": {"status": "resolved", "material": False},
+    }
+    started = task_start(
+        tmp_path,
+        request="Player AnimInstance 분석해",
+        plan_payload={
+            "objective": objective,
+            "requestIntent": request_intent,
+            "writeGate": {"writesAllowed": False},
+        },
+    )
+    assert started["state"]["objective"] == objective
+    assert started["state"]["objectiveHash"] == objective_hash
+    assert started["state"]["requestIntent"] == request_intent
+
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=_authorization(started),
+        action="record",
+        phase="inspect",
+        include_git_changes=False,
+    )
+    checkpoint = recorded["continuity"]["checkpoint"]
+    assert checkpoint["objectiveHash"] == objective_hash
+    assert checkpoint["requestIntent"] == request_intent
+
+
+def test_task_start_rejects_mismatched_request_intent_objective_hash(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    result = task_start(
+        tmp_path,
+        request="Analyze Demo",
+        plan_payload={
+            "objective": "Analyze Demo",
+            "requestIntent": {
+                "objectiveHash": "0" * 64,
+                "version": 1,
+            },
+            "writeGate": {"writesAllowed": False},
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["errorCode"] == "REQUEST_INTENT_OBJECTIVE_HASH_MISMATCH"
+    assert not (tmp_path / "state" / "tasks").exists()
+
+
+def test_task_replan_rejects_mismatched_intent_without_mutating_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Inspect Demo",
+        mode="read_only",
+        plan_payload={"writeGate": {"writesAllowed": False}},
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    before = state_path.read_bytes()
+
+    result = task_replan(
+        tmp_path,
+        task_session_id=started["taskSessionId"],
+        request="Analyze Demo again",
+        mode="read_only",
+        project_file="",
+        plan_payload={
+            "objective": "Analyze Demo again",
+            "requestIntent": {
+                "objectiveHash": "f" * 64,
+                "version": 1,
+            },
+            "writeGate": {"writesAllowed": False},
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["errorCode"] == "REQUEST_INTENT_OBJECTIVE_HASH_MISMATCH"
+    assert state_path.read_bytes() == before
 
 
 def test_expired_lease_requires_recovery_not_heartbeat(

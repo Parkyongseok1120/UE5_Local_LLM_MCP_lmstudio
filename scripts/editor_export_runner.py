@@ -18,6 +18,7 @@ from workspace_paths import (
     canonical_absolute_path_identity,
     default_editor_export_dir,
     editor_export_dir,
+    filesystem_path_identity,
     find_workspace_root,
     is_windows_host_platform,
     load_shared_config,
@@ -66,13 +67,58 @@ def editor_export_timeout_sec(start: Path | None = None) -> int:
     return max(120, min(value, 7200))
 
 
-def resolve_export_dir(explicit: str | Path | None = None) -> Path:
-    if explicit and str(explicit).strip():
+def _normalize_project_export_dir(
+    configured: str | Path | None,
+    project_file: Path,
+) -> Path:
+    """Normalize an export path against one explicit project, not global state."""
+
+    project_root = project_file.resolve().parent
+    default = (project_root / "Saved" / "LmStudioMetadataExports").resolve()
+    raw = str(configured or "").strip()
+    if not raw:
+        return default
+
+    path = Path(os.path.expandvars(raw)).expanduser()
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+
+    if canonical_absolute_path_identity(resolved) == canonical_absolute_path_identity(project_root):
+        return default
+
+    normalized = filesystem_path_identity(
+        resolved.as_posix(),
+        strip_project_uri=False,
+    )
+    expected_suffix = filesystem_path_identity(
+        "Saved/LmStudioMetadataExports",
+        strip_project_uri=False,
+    )
+    if normalized.endswith(f"/{expected_suffix}"):
+        try:
+            resolved.relative_to(project_root)
+        except ValueError:
+            return default
+    return resolved if str(resolved) else default
+
+
+def resolve_export_dir(
+    explicit: str | Path | None = None,
+    *,
+    project_file: str | Path | None = None,
+) -> Path:
+    project_scoped = project_file is not None and bool(str(project_file).strip())
+    if project_scoped:
+        path = _normalize_project_export_dir(explicit, Path(project_file))
+    elif explicit and str(explicit).strip():
         path = normalize_editor_export_dir(explicit)
     else:
         path = editor_export_dir() or default_editor_export_dir()
     path.mkdir(parents=True, exist_ok=True)
-    _maybe_persist_export_dir(path)
+    if not project_scoped:
+        _maybe_persist_export_dir(path)
     return path
 
 
@@ -325,7 +371,13 @@ def run_editor_export(
     timeout_sec: int | None = None,
 ) -> dict[str, Any]:
     workspace = find_workspace_root()
-    active = Path(str(uproject)) if uproject else resolve_active_project_path()
+    explicit_project = bool(uproject is not None and str(uproject).strip())
+    if explicit_project:
+        active = Path(str(uproject)).expanduser()
+        if not active.is_absolute():
+            active = workspace / active
+    else:
+        active = resolve_active_project_path(workspace)
     if not active or not active.is_file():
         return {"ok": False, "error": "No active .uproject found. Run pick-project or set activeProject."}
     active = active.resolve()
@@ -340,7 +392,10 @@ def run_editor_export(
             "engineAssociation": "",
         }
 
-    resolved_export = resolve_export_dir(export_dir)
+    resolved_export = resolve_export_dir(
+        export_dir,
+        project_file=active if explicit_project else None,
+    )
     resolved_content = content_path or editor_export_content_path()
     resolved_maps = maps_path or editor_export_maps_path()
     resolved_scope = scope or editor_export_scope()

@@ -160,12 +160,42 @@ function decodeBuildOutput(chunks, options = {}) {
   }
 }
 
+function buildWindowsBatchSpawnSpec(executable, args) {
+  const values = [executable, ...args].map((value) => String(value));
+  for (const value of values) {
+    // Build.bat forwards %* through several CALL boundaries and enables delayed
+    // expansion. These characters cannot be represented faithfully through that
+    // contract, so fail closed instead of allowing expansion or command injection.
+    if (/[\0\r\n"%!^]/.test(value)) {
+      throw new Error("Build.bat path or argument contains an unsafe cmd.exe expansion character");
+    }
+  }
+
+  const variableNames = values.map((_, index) => `MCP_UNREAL_BUILD_ARG_${index}`);
+  const env = Object.fromEntries(variableNames.map((name, index) => [name, values[index]]));
+  const quotedReferences = variableNames.map((name) => `"%${name}%"`).join(" ");
+
+  // /S strips the outer quote pair. Every actual value is supplied via a private
+  // environment variable and remains quoted, preserving whitespace, Unicode, and
+  // quoted cmd metacharacters without concatenating untrusted text into the command.
+  const commandLine = `"${quotedReferences}"`;
+  return {
+    command: "cmd.exe",
+    args: ["/d", "/s", "/e:on", "/v:off", "/c", commandLine],
+    env,
+    windowsVerbatimArguments: true,
+  };
+}
+
 function buildSpawnSpec({ executable, kind, args }) {
   if (kind === "build_bat") {
-    return { command: "cmd.exe", args: ["/d", "/s", "/c", executable, ...args] };
+    return buildWindowsBatchSpawnSpec(executable, args);
   }
   if (kind === "build_sh") {
-    return { command: "/bin/sh", args: [executable, ...args] };
+    // Unreal's Linux Build.sh is a Bash script (and UE shell helpers use
+    // `source`/`[[ ... ]]`).  Invoking it through Ubuntu's /bin/sh (dash)
+    // bypasses the shebang and fails before UnrealBuildTool starts.
+    return { command: "/bin/bash", args: [executable, ...args] };
   }
   if (kind === "ubt_dotnet") {
     return { command: "dotnet", args: [executable, ...args] };
@@ -186,7 +216,8 @@ function spawnBuildProcess({ executable, kind, args, workspaceRoot, hostPlatform
     shell: false,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
-    env: buildProcessEnv(),
+    env: buildProcessEnv({ ...process.env, ...(spec.env || {}) }),
+    windowsVerbatimArguments: spec.windowsVerbatimArguments === true,
     detached: hostPlatform !== "win32",
   });
 }
@@ -373,5 +404,6 @@ module.exports = {
   sanitizeBrokenCompilerLocalization,
   localeOutputEncoding,
   buildArgs,
+  buildWindowsBatchSpawnSpec,
   defaultBuildPlatform,
 };

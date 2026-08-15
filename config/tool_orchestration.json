@@ -38,6 +38,7 @@
     "project_source_analysis": {
       "sequence": [
         "unreal_get_active_project",
+        "unreal_symbol_lookup",
         "search_files",
         "read_file",
         "unreal_rag_search",

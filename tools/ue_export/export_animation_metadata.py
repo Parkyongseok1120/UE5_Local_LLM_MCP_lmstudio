@@ -1,7 +1,16 @@
 # Run inside Unreal Editor (Python) or as Editor Utility.
 # Exports animation, skeletal, sequencer, rig, and pose metadata to JSONL.
 
-from export_common import MAX_ITEMS, collect_dependencies, safe_name, safe_prop, value_to_text, coerce_list, write_jsonl_rows
+from export_common import (
+    MAX_ITEMS,
+    asset_class_name,
+    coerce_list,
+    collect_dependencies,
+    safe_name,
+    safe_prop,
+    value_to_text,
+    write_jsonl_rows,
+)
 
 ANIMATION_EXPORT_CLASSES = frozenset(
     {
@@ -347,7 +356,7 @@ def export_animation_metadata(content_path: str, out_path: str) -> None:
     assets = registry.get_assets_by_path(content_path, recursive=True)
     rows = []
     for asset in assets:
-        cls = str(asset.asset_class_path.asset_name) if hasattr(asset, "asset_class_path") else ""
+        cls = asset_class_name(asset)
         if cls not in ANIMATION_EXPORT_CLASSES:
             continue
         path = str(asset.package_name)

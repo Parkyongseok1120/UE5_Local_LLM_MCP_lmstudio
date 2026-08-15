@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 DEFAULT_LMSTUDIO_ROOT = Path.home() / ".lmstudio"
@@ -394,9 +395,266 @@ def _is_engine_root(path: Path) -> bool:
     return engine.is_dir() and ((engine / "Source").is_dir() or (engine / "Build").is_dir())
 
 
+_MAX_ENGINE_REGISTRATION_BYTES = 2 * 1024 * 1024
+_WINDOWS_ENGINE_BUILDS_KEY = r"SOFTWARE\Epic Games\Unreal Engine\Builds"
+
+
+def _application_settings_dirs(
+    host_platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> list[Path]:
+    """Return only Unreal's documented per-host application settings roots."""
+
+    host = host_platform or sys.platform
+    env = os.environ if environ is None else environ
+    user_home = Path.home() if home is None else home
+    candidates: list[Path] = []
+    if host == "win32":
+        program_data = str(
+            env.get("PROGRAMDATA")
+            or env.get("ProgramData")
+            or env.get("ALLUSERSPROFILE")
+            or ""
+        ).strip()
+        if program_data:
+            candidates.append(Path(program_data) / "Epic")
+    elif host == "darwin":
+        candidates.append(user_home / "Library" / "Application Support" / "Epic")
+    else:
+        # FUnixPlatformProcess::ApplicationSettingsDir deliberately uses this
+        # fixed home-relative path rather than XDG_CONFIG_HOME.
+        candidates.append(user_home / ".config" / "Epic")
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        key = canonical_absolute_path_identity(resolved, host)
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(resolved)
+    return unique
+
+
+def _default_launcher_manifest_paths(
+    host_platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> list[Path]:
+    if (host_platform or sys.platform) != "win32":
+        return []
+    return [
+        root / "UnrealEngineLauncher" / "LauncherInstalled.dat"
+        for root in _application_settings_dirs(host_platform, environ, home)
+    ]
+
+
+def _default_install_ini_paths(
+    host_platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+) -> list[Path]:
+    if (host_platform or sys.platform) not in {"darwin", "linux"}:
+        return []
+    return [
+        root / "UnrealEngine" / "Install.ini"
+        for root in _application_settings_dirs(host_platform, environ, home)
+    ]
+
+
+def _read_bounded_registration_text(path: Path) -> str:
+    try:
+        size = path.stat().st_size
+        if size < 0 or size > _MAX_ENGINE_REGISTRATION_BYTES:
+            return ""
+        return path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        return ""
+
+
+def _valid_engine_association_token(value: object) -> str:
+    token = str(value or "").strip()
+    if not token or len(token) > 256 or token in {".", "..", "(Default)"}:
+        return ""
+    if any(ord(char) < 32 for char in token):
+        return ""
+    if any(char in token for char in ("/", "\\", "=", "[", "]")):
+        return ""
+    return token
+
+
+def _registered_engine_root(value: object) -> Path | None:
+    raw = str(value or "").strip()
+    if (
+        not raw
+        or len(raw) > 32767
+        or any(char in raw for char in ("\0", "\r", "\n"))
+    ):
+        return None
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+        raw = raw[1:-1].strip()
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        return None
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return None
+    return resolved if _is_engine_root(resolved) else None
+
+
+def _launcher_registration_rows(paths: Iterable[Path]) -> list[tuple[str, object, str]]:
+    rows: list[tuple[str, object, str]] = []
+    for manifest in paths:
+        text = _read_bounded_registration_text(Path(manifest))
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        installations = payload.get("InstallationList") if isinstance(payload, dict) else None
+        for item in installations if isinstance(installations, list) else []:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                (
+                    str(item.get("AppName") or ""),
+                    item.get("InstallLocation"),
+                    "launcher-manifest",
+                )
+            )
+    return rows
+
+
+def _install_ini_registration_rows(paths: Iterable[Path]) -> list[tuple[str, object, str]]:
+    rows: list[tuple[str, object, str]] = []
+    for config_path in paths:
+        text = _read_bounded_registration_text(Path(config_path))
+        if not text:
+            continue
+        section = ""
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith((";", "#")):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip()
+                continue
+            if section != "Installations" or "=" not in line:
+                continue
+            association, root = line.split("=", 1)
+            rows.append((association, root, "install-ini"))
+    return rows
+
+
+def _windows_registry_registration_rows(
+    injected: Mapping[str, object] | None,
+    *,
+    read_system_registry: bool,
+) -> list[tuple[str, object, str]]:
+    if injected is not None:
+        return [(key, value, "windows-registry") for key, value in injected.items()]
+    if not read_system_registry or sys.platform != "win32":
+        return []
+    try:
+        import winreg
+
+        rows: list[tuple[str, object, str]] = []
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            _WINDOWS_ENGINE_BUILDS_KEY,
+            0,
+            winreg.KEY_READ,
+        ) as key:
+            for index in range(512):
+                try:
+                    association, root, value_type = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                if value_type in {winreg.REG_SZ, winreg.REG_EXPAND_SZ}:
+                    rows.append((association, root, "windows-registry"))
+        return rows
+    except (ImportError, OSError):
+        return []
+
+
+def registered_engine_installations(
+    host_platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: Path | None = None,
+    *,
+    launcher_manifest_paths: Iterable[Path] | None = None,
+    registry_installations: Mapping[str, object] | None = None,
+    install_ini_paths: Iterable[Path] | None = None,
+    read_system_registry: bool | None = None,
+) -> list[dict[str, str]]:
+    """Enumerate bounded, validated OS registrations without modifying them."""
+
+    host = host_platform or sys.platform
+    if read_system_registry is None:
+        read_system_registry = (
+            host_platform is None
+            and environ is None
+            and home is None
+            and registry_installations is None
+        )
+    rows: list[tuple[str, object, str]] = []
+    if host == "win32":
+        manifests = (
+            _default_launcher_manifest_paths(host, environ, home)
+            if launcher_manifest_paths is None
+            else list(launcher_manifest_paths)
+        )
+        rows.extend(_launcher_registration_rows(manifests))
+        rows.extend(
+            _windows_registry_registration_rows(
+                registry_installations,
+                read_system_registry=bool(read_system_registry),
+            )
+        )
+    elif host in {"darwin", "linux"}:
+        config_paths = (
+            _default_install_ini_paths(host, environ, home)
+            if install_ini_paths is None
+            else list(install_ini_paths)
+        )
+        rows.extend(_install_ini_registration_rows(config_paths))
+
+    installations: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_association, raw_root, source in rows:
+        association = _valid_engine_association_token(raw_association)
+        root = _registered_engine_root(raw_root)
+        if not association or root is None:
+            continue
+        key = (association, canonical_absolute_path_identity(root, host))
+        if key in seen:
+            continue
+        seen.add(key)
+        installations.append(
+            {
+                "association": association,
+                "engineRoot": str(root),
+                "source": source,
+            }
+        )
+    installations.sort(
+        key=lambda item: (
+            item["association"],
+            canonical_absolute_path_identity(item["engineRoot"], host),
+        )
+    )
+    return installations
+
+
 def _engine_sort_key(path: Path) -> tuple[tuple[int, ...], str]:
-    match = re.search(r"UE[_ -]?(\d+(?:\.\d+)*)", path.name, flags=re.IGNORECASE)
-    version = tuple(int(part) for part in match.group(1).split(".")) if match else ()
+    version_text = engine_root_numeric_version(path)
+    version = tuple(int(part) for part in version_text.split(".")) if version_text else ()
     return version, path.name.casefold()
 
 
@@ -404,9 +662,28 @@ def _discover_engine_roots(
     host_platform: str | None = None,
     environ: dict[str, str] | None = None,
     home: Path | None = None,
+    *,
+    launcher_manifest_paths: Iterable[Path] | None = None,
+    registry_installations: Mapping[str, object] | None = None,
+    install_ini_paths: Iterable[Path] | None = None,
+    read_system_registry: bool | None = None,
 ) -> list[Path]:
     candidates: list[Path] = []
     seen: set[str] = set()
+    for registration in registered_engine_installations(
+        host_platform,
+        environ,
+        home,
+        launcher_manifest_paths=launcher_manifest_paths,
+        registry_installations=registry_installations,
+        install_ini_paths=install_ini_paths,
+        read_system_registry=read_system_registry,
+    ):
+        root = Path(registration["engineRoot"])
+        key = canonical_absolute_path_identity(root, host_platform)
+        if key and key not in seen:
+            seen.add(key)
+            candidates.append(root)
     for location in _engine_location_candidates(host_platform, environ, home):
         if not location.is_dir():
             continue
@@ -432,15 +709,36 @@ def discover_engine_roots(
     host_platform: str | None = None,
     environ: dict[str, str] | None = None,
     home: Path | None = None,
+    *,
+    launcher_manifest_paths: Iterable[Path] | None = None,
+    registry_installations: Mapping[str, object] | None = None,
+    install_ini_paths: Iterable[Path] | None = None,
+    read_system_registry: bool | None = None,
 ) -> list[Path]:
     """Return validated Unreal roots in newest-first order for the current host."""
 
     # Keep the no-argument seam used by callers/tests that replace the local
     # discovery implementation, while still allowing deterministic injected
     # host/environment discovery for portability checks.
-    if host_platform is None and environ is None and home is None:
+    if (
+        host_platform is None
+        and environ is None
+        and home is None
+        and launcher_manifest_paths is None
+        and registry_installations is None
+        and install_ini_paths is None
+        and read_system_registry is None
+    ):
         return _discover_engine_roots()
-    return _discover_engine_roots(host_platform, environ, home)
+    return _discover_engine_roots(
+        host_platform,
+        environ,
+        home,
+        launcher_manifest_paths=launcher_manifest_paths,
+        registry_installations=registry_installations,
+        install_ini_paths=install_ini_paths,
+        read_system_registry=read_system_registry,
+    )
 
 
 _NUMERIC_ENGINE_ASSOCIATION_RE = re.compile(
@@ -466,6 +764,50 @@ def engine_association_version(association: object) -> str:
 
     match = _NUMERIC_ENGINE_ASSOCIATION_RE.fullmatch(str(association or "").strip())
     return match.group(1) if match else ""
+
+
+def engine_associations_match(left: object, right: object) -> bool:
+    """Compare numeric aliases while keeping custom/source identifiers exact."""
+
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    left_version = engine_association_version(left_text)
+    right_version = engine_association_version(right_text)
+    if left_version or right_version:
+        return bool(left_version and right_version and left_version == right_version)
+    return bool(left_text and left_text == right_text)
+
+
+def engine_root_numeric_version(engine_root: Path) -> str:
+    """Read an engine's major.minor without trusting an install-time path hint."""
+
+    build_version = engine_root / "Engine" / "Build" / "Build.version"
+    if build_version.is_file():
+        try:
+            payload = json.loads(build_version.read_text(encoding="utf-8-sig"))
+            major = int(payload.get("MajorVersion"))
+            minor = int(payload.get("MinorVersion"))
+            return f"{major}.{minor}"
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+    match = re.search(
+        r"UE[_ -]?(\d+(?:\.\d+)*)",
+        engine_root.name,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1) if match else ""
+
+
+def engine_root_matches_numeric_association(
+    engine_root: Path,
+    association: object,
+) -> bool:
+    requested = engine_association_version(association)
+    actual = engine_root_numeric_version(engine_root)
+    # A numeric project association is a binding, not a best-effort hint.  An
+    # engine whose version cannot be established must not inherit that binding
+    # merely because UNREAL_ENGINE_ROOT happens to point at it.
+    return not requested or bool(actual and actual == requested)
 
 
 def _engine_root_from_config_value(value: object, start: Path | None = None) -> Path:
@@ -539,6 +881,10 @@ def resolve_engine_root_for_association(
     host_platform: str | None = None,
     environ: dict[str, str] | None = None,
     home: Path | None = None,
+    launcher_manifest_paths: Iterable[Path] | None = None,
+    registry_installations: Mapping[str, object] | None = None,
+    install_ini_paths: Iterable[Path] | None = None,
+    read_system_registry: bool | None = None,
 ) -> dict[str, str | bool]:
     """Resolve an engine root without silently substituting another project engine.
 
@@ -552,15 +898,42 @@ def resolve_engine_root_for_association(
     association_text = str(association or "").strip()
     host = host_platform or sys.platform
     env = os.environ if environ is None else environ
-    injected_discovery = host_platform is not None or environ is not None or home is not None
+    injected_discovery = (
+        host_platform is not None
+        or environ is not None
+        or home is not None
+        or launcher_manifest_paths is not None
+        or registry_installations is not None
+        or install_ini_paths is not None
+    )
+    should_read_system_registry = (
+        not injected_discovery
+        if read_system_registry is None
+        else bool(read_system_registry)
+    )
 
     def discovered_roots() -> list[Path]:
-        if not injected_discovery:
+        if not injected_discovery and read_system_registry is None:
             return discover_engine_roots()
         return discover_engine_roots(
             host_platform=host,
             environ=env,
             home=home,
+            launcher_manifest_paths=launcher_manifest_paths,
+            registry_installations=registry_installations,
+            install_ini_paths=install_ini_paths,
+            read_system_registry=should_read_system_registry,
+        )
+
+    def registered_installations() -> list[dict[str, str]]:
+        return registered_engine_installations(
+            host_platform=host,
+            environ=env,
+            home=home,
+            launcher_manifest_paths=launcher_manifest_paths,
+            registry_installations=registry_installations,
+            install_ini_paths=install_ini_paths,
+            read_system_registry=should_read_system_registry,
         )
 
     def resolve_override(value: object, source: str) -> dict[str, str | bool] | None:
@@ -585,17 +958,90 @@ def resolve_engine_root_for_association(
     if explicit is not None:
         return explicit
     environment = resolve_override(env.get("UNREAL_ENGINE_ROOT", ""), "environment")
-    if environment is not None:
-        return environment
+    environment_association_is_managed = "UNREAL_ENGINE_ROOT_ASSOCIATION" in env
+    environment_association = str(
+        env.get("UNREAL_ENGINE_ROOT_ASSOCIATION") or ""
+    ).strip()
+    stale_managed_environment = bool(
+        association_text
+        and environment_association_is_managed
+        and not engine_associations_match(environment_association, association_text)
+    )
+
+    def same_resolved_root(
+        left: dict[str, str | bool] | None,
+        right: dict[str, str | bool] | None,
+    ) -> bool:
+        if not left or not right or not left.get("ok") or not right.get("ok"):
+            return False
+        return canonical_absolute_path_identity(left.get("engineRoot"), host) == (
+            canonical_absolute_path_identity(right.get("engineRoot"), host)
+        )
 
     if association_text:
         mapped_root = _configured_engine_roots_by_association(start).get(association_text)
         if mapped_root:
             mapped = resolve_override(mapped_root, "config.engineRootsByAssociation")
             if mapped is not None:
+                # Preserve legacy source attribution when both hints already
+                # identify the same root; a conflicting exact mapping wins.
+                if (
+                    not stale_managed_environment
+                    and environment is not None
+                    and same_resolved_root(environment, mapped)
+                ):
+                    return environment
                 return mapped
 
         requested_folder = engine_association_folder(association_text)
+        registered_matches: dict[str, dict[str, str]] = {}
+        for registration in registered_installations():
+            if not engine_associations_match(
+                registration.get("association"),
+                association_text,
+            ):
+                continue
+            registered_root = Path(registration["engineRoot"])
+            if requested_folder and not engine_root_matches_numeric_association(
+                registered_root,
+                association_text,
+            ):
+                continue
+            key = canonical_absolute_path_identity(registered_root, host)
+            registered_matches.setdefault(key, registration)
+        if len(registered_matches) > 1:
+            return _unresolved_engine_association(
+                association_text,
+                "has multiple conflicting registered engine roots",
+            )
+        if registered_matches:
+            registration = next(iter(registered_matches.values()))
+            registered = _engine_root_resolution(
+                engine_root=Path(registration["engineRoot"]),
+                source=f"registered.{registration['source']}",
+                association=association_text,
+            )
+            if (
+                not stale_managed_environment
+                and environment is not None
+                and same_resolved_root(environment, registered)
+            ):
+                return environment
+            return registered
+
+        if environment is not None and not stale_managed_environment:
+            if not environment.get("ok"):
+                return environment
+            environment_root = Path(str(environment.get("engineRoot") or ""))
+            if engine_root_matches_numeric_association(
+                environment_root,
+                association_text,
+            ):
+                return environment
+            # Installers may persist UNREAL_ENGINE_ROOT for the project that
+            # was active during setup.  A later numeric EngineAssociation is
+            # stronger evidence; ignore the stale pin and continue discovery.
+
         if requested_folder:
             requested_identity = filesystem_path_identity(
                 requested_folder,
@@ -621,6 +1067,9 @@ def resolve_engine_root_for_association(
             association_text,
             "is a custom/source-build identifier without an exact mapping",
         )
+
+    if environment is not None:
+        return environment
 
     config = load_workspace_config(start)
     shared = load_shared_config()
@@ -719,7 +1168,7 @@ def resolve_active_project_path(start: Path | None = None) -> Path | None:
         return None
     path = Path(active).expanduser()
     if not path.is_absolute():
-        path = Path(active)
+        path = find_workspace_root(start) / path
     if path.exists():
         return path.resolve()
     return None

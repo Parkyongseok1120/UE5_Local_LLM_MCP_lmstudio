@@ -12,7 +12,7 @@ from workspace_paths import find_workspace_root, load_shared_config, save_shared
 
 
 def _validate_uproject(project_path: str) -> tuple[Path | None, str | None]:
-    resolved = Path(project_path).resolve()
+    resolved = Path(project_path).expanduser().resolve()
     if not resolved.is_file():
         return None, f"projectPath not found: {resolved}"
     if resolved.suffix.lower() != ".uproject":
@@ -78,6 +78,24 @@ def switch_active_project(
     if error or resolved is None:
         return {"ok": False, "switchResult": "failed", "error": error}
 
+    if previous:
+        try:
+            previous_resolved = Path(previous).expanduser().resolve()
+        except OSError:
+            previous_resolved = Path(previous).expanduser().absolute()
+        if previous_resolved == resolved:
+            return {
+                "ok": True,
+                "status": "completed",
+                "switchResult": "already_active",
+                "changed": False,
+                "activeProject": str(resolved),
+                "message": f"Active project is already {resolved.name}",
+                "cacheInvalidation": None,
+                "cacheRefreshRequired": False,
+                "prepareRequested": False,
+            }
+
     readiness: dict[str, Any]
     try:
         from on_active_project_changed import active_project_check_status
@@ -135,6 +153,7 @@ def switch_active_project(
     return {
         "ok": True,
         "switchResult": switch_result,
+        "changed": True,
         "activeProject": str(resolved),
         "message": f"Active project set to {resolved.name}",
         "cacheInvalidation": invalidate_payload,

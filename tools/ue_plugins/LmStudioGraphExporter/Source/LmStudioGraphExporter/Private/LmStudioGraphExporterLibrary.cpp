@@ -9,6 +9,7 @@
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Runtime/Launch/Resources/Version.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "UObject/Class.h"
@@ -31,6 +32,15 @@ static FString LmStudioObjectName(const UObject* Object)
 static FString LmStudioClassName(const UObject* Object)
 {
     return Object ? Object->GetClass()->GetName() : FString();
+}
+
+static FString LmStudioAssetClassName(const FAssetData& Asset)
+{
+#if ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1)
+    return Asset.AssetClassPath.GetAssetName().ToString();
+#else
+    return Asset.AssetClass.ToString();
+#endif
 }
 
 static FString LmStudioPinDirection(const EEdGraphPinDirection Direction)
@@ -179,7 +189,7 @@ static TSharedRef<FJsonObject> LmStudioBlueprintToJson(const FAssetData& Asset, 
 {
     TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
     Row->SetStringField(TEXT("asset_path"), Asset.PackageName.ToString());
-    Row->SetStringField(TEXT("asset_type"), Asset.AssetClassPath.GetAssetName().ToString());
+    Row->SetStringField(TEXT("asset_type"), LmStudioAssetClassName(Asset));
     Row->SetStringField(TEXT("generated_class"), Blueprint && Blueprint->GeneratedClass ? Blueprint->GeneratedClass->GetName() : Asset.AssetName.ToString());
 
     if (!Blueprint)
@@ -321,7 +331,7 @@ FString ULmStudioGraphExporterLibrary::ExportBlueprintMetadata(const FString& Co
     int32 RowCount = 0;
     for (const FAssetData& Asset : Assets)
     {
-        const FString ClassName = Asset.AssetClassPath.GetAssetName().ToString();
+        const FString ClassName = LmStudioAssetClassName(Asset);
         if (!ClassName.Contains(TEXT("Blueprint")) && !ClassName.Contains(TEXT("Widget")))
         {
             continue;

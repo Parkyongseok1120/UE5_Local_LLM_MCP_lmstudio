@@ -238,6 +238,20 @@ def test_read_only_plan_compaction_drops_verbose_planning_but_keeps_task_control
     }
     payload = {
         "request": "inspect " + "source " * 20_000,
+        "objective": "프로젝트 Example로 바꾸고 Player AnimInstance 분석해",
+        "requestIntent": {
+            "version": 1,
+            "objectiveHash": "a" * 64,
+            "domain": "source",
+            "operation": "analyze",
+            "mutability": "none",
+            "speechAct": "command",
+            "negated": False,
+            "targets": {"symbols": ["UCPlayerCharacterAnimInstance"]},
+            "ambiguity": {"status": "resolved", "material": False},
+        },
+        "resolvedTargets": [{"symbol": "UCPlayerCharacterAnimInstance", "exact": False}],
+        "semanticAmbiguity": {"selectedInterpretation": None, "material": False},
         "taskKind": "cpp_analysis",
         "editStrategy": "no_edit",
         "evidencePlan": {
@@ -290,6 +304,10 @@ def test_read_only_plan_compaction_drops_verbose_planning_but_keeps_task_control
     assert compact["toolRoute"] == payload["toolRoute"]
     assert compact["control"] == payload["control"]
     assert compact["requiredNextToolArgs"] == {"taskAuthorization": authorization}
+    assert compact["objective"] == payload["objective"]
+    assert compact["requestIntent"] == payload["requestIntent"]
+    assert compact["resolvedTargets"] == payload["resolvedTargets"]
+    assert compact["semanticAmbiguity"] == payload["semanticAmbiguity"]
     assert compact["projectContext"]["uprojectPath"] == "/projects/Example/Example.uproject"
     assert "hugeDiscoveryCache" not in compact["projectContext"]
     assert "domainProfile" not in compact
@@ -297,6 +315,307 @@ def test_read_only_plan_compaction_drops_verbose_planning_but_keeps_task_control
     assert "featureIntent" not in compact
     assert "toolDiscoveryCandidates" not in compact
     assert len(json.dumps(compact, ensure_ascii=False)) <= 8_000
+
+
+def test_write_plan_compaction_preserves_request_intent_and_resume_contract() -> None:
+    request_intent = {
+        "version": 1,
+        "objectiveHash": "b" * 64,
+        "domain": "source",
+        "operation": "modify",
+        "mutability": "source_files",
+        "speechAct": "command",
+        "negated": False,
+        "targets": {"symbols": ["UCPlayerCharacterAnimInstance"]},
+        "ambiguity": {"status": "resolved", "material": False},
+    }
+    payload = {
+        "request": "modify " + "source " * 20_000,
+        "objective": "프로젝트 Example로 바꾸고 Player AnimInstance를 수정해",
+        "objectiveHash": "b" * 64,
+        "requestIntent": request_intent,
+        "resolvedTargets": [{"symbol": "UCPlayerCharacterAnimInstance", "exact": True}],
+        "semanticAmbiguity": {"selectedInterpretation": None, "material": False},
+        "pendingRequest": "Player AnimInstance를 수정해",
+        "pendingRequestHash": "c" * 64,
+        "resumeAfter": "unreal_set_active_project",
+        "taskKind": "edit",
+        "writeGate": {"writesAllowed": True},
+        "toolRoute": {"activeTools": ["read_file", "apply_patch"]},
+        "taskAuthorization": {"taskSessionId": "session", "authToken": "token"},
+        "checkpoints": ["checkpoint " * 1_000 for _ in range(30)],
+        "notes": ["note " * 1_000 for _ in range(30)],
+        "toolDiscoveryCandidates": [{"verbose": "x" * 50_000}],
+    }
+
+    compact = compact_agent_plan_payload(payload, max_bytes=8_000)
+
+    for key in (
+        "objective",
+        "objectiveHash",
+        "requestIntent",
+        "resolvedTargets",
+        "semanticAmbiguity",
+        "pendingRequest",
+        "pendingRequestHash",
+        "resumeAfter",
+        "toolRoute",
+        "taskAuthorization",
+    ):
+        assert compact[key] == payload[key]
+    assert compact["_structuredTruncated"] is True
+    assert len(json.dumps(compact, ensure_ascii=False)) <= 8_000
+
+
+def test_generic_compaction_preserves_top_level_project_resume_contract() -> None:
+    request_intent = {
+        "version": 1,
+        "objectiveHash": "d" * 64,
+        "domain": "project_control",
+        "operation": "select",
+        "mutability": "control_state",
+        "speechAct": "command",
+        "negated": False,
+        "targets": {"projectName": "Example"},
+        "ambiguity": {"status": "resolved", "material": False},
+    }
+    payload = {
+        "ok": True,
+        "objective": "프로젝트 Example로 바꾸고 분석해",
+        "objectiveHash": "d" * 64,
+        "requestIntent": request_intent,
+        "resolvedTargets": [{"projectPath": "/projects/Example/Example.uproject"}],
+        "semanticAmbiguity": {"selectedInterpretation": None, "material": False},
+        "pendingRequest": "분석해",
+        "pendingRequestHash": "e" * 64,
+        "resumeAfter": "unreal_set_active_project",
+        "rows": [{"text": "x" * 5_000} for _ in range(100)],
+    }
+
+    compact = compact_structured_payload(payload, max_bytes=8_000)
+
+    for key in (
+        "objective",
+        "objectiveHash",
+        "requestIntent",
+        "resolvedTargets",
+        "semanticAmbiguity",
+        "pendingRequest",
+        "pendingRequestHash",
+        "resumeAfter",
+    ):
+        assert compact[key] == payload[key]
+    assert compact["_structuredTruncated"] is True
+    assert len(json.dumps(compact, ensure_ascii=False)) <= 8_000
+
+
+def test_generic_task_status_compaction_preserves_nested_current_intent() -> None:
+    request_intent = {
+        "version": 1,
+        "objectiveHash": "f" * 64,
+        "domain": "source",
+        "operation": "modify",
+        "mutability": "source_files",
+        "speechAct": "command",
+        "negated": False,
+        "targets": {"symbols": ["UDemoComponent"]},
+        "ambiguity": {"status": "resolved", "material": False},
+    }
+    payload = {
+        "ok": True,
+        "status": "running",
+        "state": {
+            "taskSessionId": "task-session",
+            "objective": "UDemoComponent를 수정해",
+            "objectiveHash": "f" * 64,
+            "requestIntent": request_intent,
+            "history": [{"text": "x" * 5_000} for _ in range(100)],
+        },
+        "events": [{"payload": "y" * 5_000} for _ in range(100)],
+    }
+
+    compact = compact_structured_payload(payload, max_bytes=8_000)
+
+    assert compact["state"] == {
+        "taskSessionId": "task-session",
+        "objective": "UDemoComponent를 수정해",
+        "objectiveHash": "f" * 64,
+        "requestIntent": request_intent,
+    }
+    assert compact["_structuredTruncated"] is True
+    assert len(json.dumps(compact, ensure_ascii=False)) <= 8_000
+
+
+def test_generic_task_checkpoint_compaction_preserves_continuity_intent() -> None:
+    request_intent = {
+        "version": 1,
+        "objectiveHash": "1" * 64,
+        "domain": "source",
+        "operation": "analyze",
+        "mutability": "none",
+        "speechAct": "command",
+        "negated": False,
+        "targets": {"symbols": ["UDemoComponent"]},
+        "ambiguity": {"status": "resolved", "material": False},
+    }
+    payload = {
+        "ok": True,
+        "taskSessionId": "task-checkpoint-session",
+        "continuity": {
+            "checkpoint": {
+                "taskSessionId": "task-checkpoint-session",
+                "objective": "UDemoComponent를 분석해",
+                "objectiveHash": "1" * 64,
+                "requestIntent": request_intent,
+                "notes": ["x" * 5_000 for _ in range(100)],
+            },
+            "history": [{"text": "y" * 5_000} for _ in range(100)],
+        },
+        "events": [{"payload": "z" * 5_000} for _ in range(100)],
+    }
+
+    compact = compact_structured_payload(payload, max_bytes=8_000)
+
+    assert compact["continuity"] == {
+        "checkpoint": {
+            "taskSessionId": "task-checkpoint-session",
+            "objective": "UDemoComponent를 분석해",
+            "objectiveHash": "1" * 64,
+            "requestIntent": request_intent,
+        }
+    }
+    assert compact["taskSessionId"] == "task-checkpoint-session"
+    assert compact["_structuredTruncated"] is True
+    assert len(json.dumps(compact, ensure_ascii=False)) <= 8_000
+
+
+def test_specialized_metadata_compaction_keeps_nested_task_intent() -> None:
+    request_intent = {
+        "version": 1,
+        "objectiveHash": "2" * 64,
+        "domain": "asset",
+        "operation": "analyze",
+        "mutability": "none",
+        "speechAct": "command",
+        "negated": False,
+        "targets": {},
+        "ambiguity": {"status": "resolved", "material": False},
+    }
+    payload = {
+        "ok": True,
+        "exportDir": {"path": "/project/Saved/LmStudioMetadataExports"},
+        "needsEditorExport": False,
+        "state": {
+            "taskSessionId": "metadata-task-session",
+            "objective": "메타데이터 상태를 분석해",
+            "objectiveHash": "2" * 64,
+            "requestIntent": request_intent,
+            "noise": "x" * 20_000,
+        },
+        "noise": "y" * 20_000,
+    }
+
+    compact = compact_structured_payload(payload, max_bytes=8_000)
+
+    assert compact["state"] == {
+        "taskSessionId": "metadata-task-session",
+        "objective": "메타데이터 상태를 분석해",
+        "objectiveHash": "2" * 64,
+        "requestIntent": request_intent,
+    }
+    assert "noise" not in compact
+    assert len(json.dumps(compact, ensure_ascii=False)) <= 8_000
+
+
+def test_code_sketch_direct_compaction_keeps_top_level_control_surfaces() -> None:
+    request_intent = {
+        "version": 1,
+        "objectiveHash": "3" * 64,
+        "domain": "source",
+        "operation": "modify",
+        "mutability": "source_files",
+        "speechAct": "command",
+        "negated": False,
+        "targets": {"symbols": ["UDemoComponent"]},
+        "ambiguity": {"status": "resolved", "material": False},
+    }
+    payload = {
+        "ok": False,
+        "verdictSummary": "0 verified, 1 known_bad",
+        "knownBadCount": 1,
+        "unverifiedCount": 0,
+        "objective": "UDemoComponent를 수정해",
+        "objectiveHash": "3" * 64,
+        "requestIntent": request_intent,
+        "taskAuthorization": {
+            "taskSessionId": "sketch-task-session",
+            "authToken": "sketch-auth-token",
+        },
+        "results": [
+            {
+                "symbol": "BadCall",
+                "verdict": "known_bad",
+                "replacement": "UseGoodCall",
+                "note": "x" * 20_000,
+            }
+        ],
+    }
+
+    compact = compact_structured_payload(payload, max_bytes=2_000)
+
+    assert compact["objective"] == payload["objective"]
+    assert compact["objectiveHash"] == payload["objectiveHash"]
+    assert compact["requestIntent"] == request_intent
+    assert compact["taskAuthorization"] == payload["taskAuthorization"]
+    assert compact["results"][0]["replacement"] == "UseGoodCall"
+    assert len(json.dumps(compact, ensure_ascii=False)) <= 2_000
+
+
+def test_code_sketch_reserves_control_projection_before_selecting_detail_tier() -> None:
+    request_intent = {
+        "version": 1,
+        "objectiveHash": "4" * 64,
+        "domain": "source",
+        "operation": "modify",
+        "mutability": "source_files",
+        "speechAct": "command",
+        "negated": False,
+        "targets": {"symbols": ["UDemoComponent"]},
+        "ambiguity": {"status": "resolved", "material": False},
+    }
+    payload = {
+        "ok": False,
+        "verdictSummary": "0 verified, 1 known_bad",
+        "knownBadCount": 1,
+        "objective": "UDemoComponent를 수정해",
+        "objectiveHash": "4" * 64,
+        "requestIntent": request_intent,
+        "taskAuthorization": {
+            "taskSessionId": "s" * 100,
+            "authToken": "t" * 200,
+        },
+        "results": [
+            {
+                "symbol": "BadCall",
+                "verdict": "known_bad",
+                "replacement": "UseGoodCall",
+                "note": "x" * 1_000,
+            }
+        ],
+    }
+
+    compact = compact_structured_payload(payload, max_bytes=2_000)
+
+    assert compact["requestIntent"] == request_intent
+    assert compact["taskAuthorization"] == payload["taskAuthorization"]
+    assert compact["results"] == [
+        {
+            "symbol": "BadCall",
+            "verdict": "known_bad",
+            "replacement": "UseGoodCall",
+        }
+    ]
+    assert len(json.dumps(compact, ensure_ascii=False)) <= 2_000
 
 
 def test_generic_plan_compaction_never_shrinks_authorization_for_tiny_budget() -> None:

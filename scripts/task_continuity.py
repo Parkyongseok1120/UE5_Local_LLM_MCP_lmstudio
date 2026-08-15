@@ -101,6 +101,8 @@ def initialize_continuity(
             "targetHash": "",
             "checkpointStateHash": "",
             "checkpointHash": "",
+            "objectiveHash": "",
+            "requestIntent": {},
         },
         "checkpointHistory": [],
         "checkpointHistoryOverflowCount": 0,
@@ -200,6 +202,8 @@ def record_checkpoint(
     validation: dict[str, Any] | None = None,
     mutation_generation: int = 0,
     note: str = "",
+    objective_hash: str = "",
+    request_intent: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     updated = dict(continuity or {})
@@ -283,6 +287,8 @@ def record_checkpoint(
         "validation": dict(validation or {}),
         "mutationGeneration": max(0, int(mutation_generation or 0)),
         "note": str(note or "")[:1000],
+        "objectiveHash": str(objective_hash or "").strip(),
+        "requestIntent": dict(request_intent or {}),
         "recordedAt": iso_utc(current),
     }
     checkpoint["targetHash"] = canonical_hash(normalized_snapshots)

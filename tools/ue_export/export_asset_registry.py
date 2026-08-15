@@ -3,6 +3,8 @@
 
 import json
 
+from export_common import asset_class_name
+
 
 def export_asset_registry(content_path: str, out_path: str) -> None:
     import unreal
@@ -12,7 +14,7 @@ def export_asset_registry(content_path: str, out_path: str) -> None:
     rows = []
     for asset in assets:
         path = str(asset.package_name)
-        cls = str(asset.asset_class_path.asset_name) if hasattr(asset, "asset_class_path") else ""
+        cls = asset_class_name(asset)
         tags = {}
         try:
             tag_list = registry.get_asset_by_object_path(asset.object_path).get_tag_value("GeneratedClass")

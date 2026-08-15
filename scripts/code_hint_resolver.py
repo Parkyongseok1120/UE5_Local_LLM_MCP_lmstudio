@@ -117,6 +117,12 @@ def resolve_code_domain_hint(
             "ok": False,
             "error": f"Could not infer C++ domain folder from hint: {hint!r}",
             "projectName": ctx["projectName"],
+            "suggestedToolCalls": [
+                {
+                    "tool": "unreal_symbol_lookup",
+                    "args": {"query": str(hint or ""), "top_k": 8},
+                }
+            ],
         }
 
     project_dir = Path(str(ctx["projectDir"]))
@@ -149,6 +155,7 @@ def resolve_code_domain_hint(
 
     suggested: list[dict[str, Any]] = [
         {"tool": "unreal_get_active_project", "args": {}},
+        {"tool": "unreal_symbol_lookup", "args": {"query": hint, "top_k": 8}},
     ]
     if ctx.get("browseAvailable") and ctx.get("sourceBrowsePath"):
         for rel_path in payload["domainRelPaths"][:3] or [ctx["sourceBrowsePath"]]:

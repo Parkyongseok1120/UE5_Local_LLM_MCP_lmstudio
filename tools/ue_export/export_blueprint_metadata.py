@@ -8,6 +8,9 @@
 
 import json
 import os
+from typing import Optional
+
+from export_common import asset_class_name
 
 
 MAX_GRAPHS = 24
@@ -128,7 +131,7 @@ def _node_title(node) -> str:
         return _safe_text(_safe_prop(node, "node_title", ""))
 
 
-def _linked_pin_target(linked_pin) -> dict | None:
+def _linked_pin_target(linked_pin) -> Optional[dict]:
     if linked_pin is None:
         return None
     node = None
@@ -304,7 +307,7 @@ def export_blueprint_metadata(content_path: str, out_path: str) -> None:
     assets = asset_registry.get_assets_by_path(content_path, recursive=True)
     rows = []
     for asset in assets:
-        cls = str(asset.asset_class_path.asset_name) if hasattr(asset, "asset_class_path") else ""
+        cls = asset_class_name(asset)
         if "Blueprint" not in cls and "Widget" not in cls:
             continue
         path = str(asset.package_name)

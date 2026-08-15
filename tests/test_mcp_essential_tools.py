@@ -281,6 +281,12 @@ def test_rag_evidence_tools_advertise_compact_route_ownership(monkeypatch, tmp_p
     ]
     assert set(gate_auth["properties"]) == {"taskSessionId", "ownerCapability"}
 
+    symbol_properties = tools["unreal_symbol_lookup"]["inputSchema"]["properties"]
+    assert symbol_properties["access"]["enum"] == ["read", "write"]
+    assert symbol_properties["access"]["default"] == "read"
+    assert symbol_properties["expectedBaseType"]["type"] == "string"
+    assert symbol_properties["directoryDomain"]["type"] == "string"
+
     assert mod._has_complete_task_authorization(
         {"taskSessionId": "t", "ownerCapability": "cap"}
     ) is False

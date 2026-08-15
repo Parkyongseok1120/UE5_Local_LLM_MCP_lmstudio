@@ -36,6 +36,10 @@ const IGNORE_DIRS = new Set([
 ]);
 
 const DEFAULT_EPIC_ROOT = path.join("C:", "Program Files", "Epic Games");
+const DEFAULT_PROJECT_SEARCH_DEPTH = 4;
+const MAX_EXACT_PROJECT_SEARCH_DEPTH = 8;
+const MAX_ENGINE_REGISTRATION_BYTES = 2 * 1024 * 1024;
+const WINDOWS_ENGINE_BUILDS_KEY = "HKCU\\SOFTWARE\\Epic Games\\Unreal Engine\\Builds";
 
 function sharedConfigPath() {
   if (process.env.SHARED_UNREAL_CONFIG) {
@@ -133,8 +137,11 @@ async function invokeProjectController(argv) {
 }
 
 async function setActiveProject(workspaceRoot, configPath, options = {}) {
+  const controllerInvoker = typeof options.invokeProjectController === "function"
+    ? options.invokeProjectController
+    : invokeProjectController;
   if (options.clear === true || options.projectPath === null) {
-    const controller = await invokeProjectController(["--clear"]);
+    const controller = await controllerInvoker(["--clear"]);
     if (controller.ok) {
       saveConfig(configPath, { ...loadConfig(configPath), activeProject: null });
     }
@@ -147,7 +154,9 @@ async function setActiveProject(workspaceRoot, configPath, options = {}) {
 
   const projectPath = String(options.projectPath || "").trim();
   if (projectPath) {
-    const resolved = path.resolve(projectPath);
+    const resolved = path.isAbsolute(projectPath)
+      ? path.resolve(projectPath)
+      : path.resolve(workspaceRoot, projectPath);
     if (!(await exists(resolved))) {
       return { ok: false, error: `Project not found: ${resolved}` };
     }
@@ -161,7 +170,7 @@ async function setActiveProject(workspaceRoot, configPath, options = {}) {
     if (options.force === true) {
       argv.push("--force-prepare");
     }
-    const controller = await invokeProjectController(argv);
+    const controller = await controllerInvoker(argv);
     if (!controller.ok) {
       return controller;
     }
@@ -182,12 +191,17 @@ async function setActiveProject(workspaceRoot, configPath, options = {}) {
     return { ok: false, error: "Provide projectPath, hint, or clear=true." };
   }
 
-  const selection = await resolveProjectSelection(workspaceRoot, configPath, { hint });
+  const selection = await resolveExactProjectNameSelection(workspaceRoot, configPath, {
+    ...options,
+    name: hint,
+  });
   if (!selection.selected) {
     return {
       ok: false,
+      errorCode: selection.errorCode || "PROJECT_NAME_NOT_FOUND",
       error: selection.error || `No project matched hint: ${hint}`,
-      suggestions: selection.suggestions || null
+      selectionReason: selection.selectionReason,
+      suggestions: selection.suggestions || []
     };
   }
 
@@ -195,7 +209,7 @@ async function setActiveProject(workspaceRoot, configPath, options = {}) {
   if (options.prepare === true) {
     argv.push("--prepare");
   }
-  const controller = await invokeProjectController(argv);
+  const controller = await controllerInvoker(argv);
   if (!controller.ok) {
     return controller;
   }
@@ -219,7 +233,7 @@ async function listUnrealProjects(workspaceRoot, configPath, options = {}) {
   return {
     activeProject,
     searchRoots: discovery.roots,
-    projects: discovery.projects.map((project) => ({
+    projects: (discovery.rawProjects || discovery.projects).map((project) => ({
       projectFile: project.projectFile,
       projectPath: project.projectPath,
       projectName: project.projectName,
@@ -269,7 +283,14 @@ function resolveSearchRoots(workspaceRoot, configPath, options = {}) {
   const homeDirectory = options.homeDirectory || os.homedir();
   const config = loadMergedConfig(configPath);
   const fromEnv = splitSearchRoots(env.PROJECT_SEARCH_ROOTS, hostPlatform);
-  const fromConfig = Array.isArray(config.projectSearchRoots) ? config.projectSearchRoots : [];
+  const fromConfig = Array.isArray(config.projectSearchRoots)
+    ? config.projectSearchRoots.map((root) => {
+      if (!root || typeof root !== "string") return "";
+      return path.isAbsolute(root)
+        ? path.resolve(root)
+        : path.resolve(workspaceRoot, root);
+    })
+    : [];
   const explicitRoots = [...fromEnv, ...fromConfig];
   const fallbackRoots = explicitRoots.length === 0
     ? [
@@ -280,7 +301,9 @@ function resolveSearchRoots(workspaceRoot, configPath, options = {}) {
     : [];
   const roots = uniquePaths([
     workspaceRoot,
-    env.ACTIVE_PROJECT ? path.dirname(path.resolve(env.ACTIVE_PROJECT)) : "",
+    options.includeActiveProjectRoot === false || !env.ACTIVE_PROJECT
+      ? ""
+      : path.dirname(path.resolve(env.ACTIVE_PROJECT)),
     ...explicitRoots,
     ...fallbackRoots
   ], hostPlatform);
@@ -313,6 +336,21 @@ function engineFolderFromAssociation(value) {
   const text = String(value).trim();
   const match = text.match(/^(?:UE_)?(\d+(?:\.\d+)+)$/i);
   return match ? `UE_${match[1]}` : null;
+}
+
+function engineAssociationVersion(value) {
+  return String(value || "").trim().match(/^(?:UE_)?(\d+(?:\.\d+)+)$/i)?.[1] || "";
+}
+
+function engineAssociationsMatch(left, right) {
+  const leftText = String(left || "").trim();
+  const rightText = String(right || "").trim();
+  const leftVersion = engineAssociationVersion(leftText);
+  const rightVersion = engineAssociationVersion(rightText);
+  if (leftVersion || rightVersion) {
+    return Boolean(leftVersion && rightVersion && leftVersion === rightVersion);
+  }
+  return Boolean(leftText && leftText === rightText);
 }
 
 function configuredEngineRootForAssociation(engineAssociation, config) {
@@ -417,33 +455,296 @@ function defaultEngineLocations(
   ], hostPlatform);
 }
 
+function applicationSettingsDirs(
+  hostPlatform = process.platform,
+  env = process.env,
+  homeDirectory = os.homedir(),
+) {
+  const candidates = [];
+  if (hostPlatform === "win32") {
+    const programData = String(
+      env.PROGRAMDATA || env.ProgramData || env.ALLUSERSPROFILE || "",
+    ).trim();
+    if (programData) candidates.push(path.join(programData, "Epic"));
+  } else if (hostPlatform === "darwin") {
+    if (homeDirectory) {
+      candidates.push(path.join(homeDirectory, "Library", "Application Support", "Epic"));
+    }
+  } else {
+    // FUnixPlatformProcess::ApplicationSettingsDir intentionally ignores
+    // XDG_CONFIG_HOME and uses this fixed home-relative directory.
+    if (homeDirectory) candidates.push(path.join(homeDirectory, ".config", "Epic"));
+  }
+  return uniquePaths(candidates, hostPlatform);
+}
+
+function defaultLauncherManifestPaths(hostPlatform, env, homeDirectory) {
+  if (hostPlatform !== "win32") return [];
+  return applicationSettingsDirs(hostPlatform, env, homeDirectory).map((root) => (
+    path.join(root, "UnrealEngineLauncher", "LauncherInstalled.dat")
+  ));
+}
+
+function defaultInstallIniPaths(hostPlatform, env, homeDirectory) {
+  if (hostPlatform !== "darwin" && hostPlatform !== "linux") return [];
+  return applicationSettingsDirs(hostPlatform, env, homeDirectory).map((root) => (
+    path.join(root, "UnrealEngine", "Install.ini")
+  ));
+}
+
+async function readBoundedRegistrationText(filePath) {
+  try {
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile() || stat.size < 0 || stat.size > MAX_ENGINE_REGISTRATION_BYTES) return "";
+    return (await fsp.readFile(filePath, "utf8")).replace(/^\uFEFF/u, "");
+  } catch {
+    return "";
+  }
+}
+
+function validEngineAssociationToken(value) {
+  const token = String(value || "").trim();
+  if (!token || token.length > 256 || token === "." || token === ".." || token === "(Default)") {
+    return "";
+  }
+  if (/[\u0000-\u001f/\\=\[\]]/u.test(token)) return "";
+  return token;
+}
+
+function normalizedRegisteredEngineRoot(value) {
+  let raw = String(value || "").trim();
+  if (!raw || raw.length > 32767 || /[\u0000\r\n]/u.test(raw)) return "";
+  if (raw.length >= 2 && raw[0] === raw[raw.length - 1] && (raw[0] === '"' || raw[0] === "'")) {
+    raw = raw.slice(1, -1).trim();
+  }
+  if (!path.isAbsolute(raw)) return "";
+  return path.resolve(raw);
+}
+
+function parseLauncherRegistrationRows(text) {
+  let payload;
+  try {
+    payload = JSON.parse(String(text || ""));
+  } catch {
+    return [];
+  }
+  const installations = Array.isArray(payload?.InstallationList) ? payload.InstallationList : [];
+  return installations
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => ({
+      association: item.AppName,
+      engineRoot: item.InstallLocation,
+      source: "launcher-manifest",
+    }));
+}
+
+function parseInstallIniRegistrationRows(text) {
+  const rows = [];
+  let section = "";
+  for (const rawLine of String(text || "").split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+    if (line.startsWith("[") && line.endsWith("]")) {
+      section = line.slice(1, -1).trim();
+      continue;
+    }
+    if (section !== "Installations") continue;
+    const separator = line.indexOf("=");
+    if (separator < 0) continue;
+    rows.push({
+      association: line.slice(0, separator),
+      engineRoot: line.slice(separator + 1),
+      source: "install-ini",
+    });
+  }
+  return rows;
+}
+
+function mappingRegistrationRows(mapping, source) {
+  const entries = mapping instanceof Map
+    ? Array.from(mapping.entries())
+    : mapping && typeof mapping === "object" && !Array.isArray(mapping)
+      ? Object.entries(mapping)
+      : [];
+  return entries.map(([association, engineRoot]) => ({ association, engineRoot, source }));
+}
+
+function parseWindowsRegistryRegistrationRows(text) {
+  const rows = [];
+  for (const line of String(text || "").split(/\r?\n/u)) {
+    const match = line.match(/^\s*(.*?)\s+REG_(?:SZ|EXPAND_SZ)\s+(.+?)\s*$/iu);
+    if (!match) continue;
+    rows.push({
+      association: match[1],
+      engineRoot: match[2],
+      source: "windows-registry",
+    });
+  }
+  return rows;
+}
+
+async function windowsRegistryRegistrationRows(options) {
+  if (Object.prototype.hasOwnProperty.call(options, "registryInstallations")) {
+    return mappingRegistrationRows(options.registryInstallations, "windows-registry");
+  }
+  if (typeof options.registryReader === "function") {
+    try {
+      return mappingRegistrationRows(await options.registryReader(), "windows-registry");
+    } catch {
+      return [];
+    }
+  }
+  if (options.readSystemRegistry !== true || process.platform !== "win32") return [];
+  try {
+    const { stdout } = await execFile("reg.exe", ["query", WINDOWS_ENGINE_BUILDS_KEY], {
+      windowsHide: true,
+      maxBuffer: MAX_ENGINE_REGISTRATION_BYTES,
+    });
+    return parseWindowsRegistryRegistrationRows(stdout);
+  } catch {
+    return [];
+  }
+}
+
+async function registeredEngineInstallations(options = {}) {
+  const hostPlatform = options.hostPlatform || process.platform;
+  const env = options.env || process.env;
+  const homeDirectory = options.homeDirectory || os.homedir();
+  const rows = [];
+
+  if (hostPlatform === "win32") {
+    const manifestPaths = Object.prototype.hasOwnProperty.call(options, "launcherManifestPaths")
+      ? options.launcherManifestPaths || []
+      : defaultLauncherManifestPaths(hostPlatform, env, homeDirectory);
+    for (const manifestPath of manifestPaths) {
+      rows.push(...parseLauncherRegistrationRows(await readBoundedRegistrationText(manifestPath)));
+    }
+    rows.push(...await windowsRegistryRegistrationRows(options));
+  } else if (hostPlatform === "darwin" || hostPlatform === "linux") {
+    const configPaths = Object.prototype.hasOwnProperty.call(options, "installIniPaths")
+      ? options.installIniPaths || []
+      : defaultInstallIniPaths(hostPlatform, env, homeDirectory);
+    for (const configPath of configPaths) {
+      rows.push(...parseInstallIniRegistrationRows(await readBoundedRegistrationText(configPath)));
+    }
+  }
+
+  const installations = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const association = validEngineAssociationToken(row.association);
+    const engineRoot = normalizedRegisteredEngineRoot(row.engineRoot);
+    if (!association || !engineRoot) continue;
+    const buildTool = await resolveEngineBuildTool(engineRoot, hostPlatform);
+    if (!buildTool) continue;
+    const key = `${association}\u0000${pathIdentity(engineRoot, hostPlatform)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    installations.push({
+      association,
+      engineRoot,
+      buildTool: buildTool.path,
+      buildToolKind: buildTool.kind,
+      buildBat: buildTool.path,
+      source: row.source,
+    });
+  }
+  installations.sort((left, right) => (
+    String(left.association).localeCompare(String(right.association))
+    || pathIdentity(left.engineRoot, hostPlatform).localeCompare(
+      pathIdentity(right.engineRoot, hostPlatform),
+    )
+  ));
+  return installations;
+}
+
+function engineRootNumericVersion(engineRoot) {
+  const versionPath = path.join(engineRoot, "Engine", "Build", "Build.version");
+  try {
+    const payload = JSON.parse(fs.readFileSync(versionPath, "utf8"));
+    const major = Number(payload.MajorVersion);
+    const minor = Number(payload.MinorVersion);
+    if (Number.isInteger(major) && Number.isInteger(minor)) return `${major}.${minor}`;
+  } catch {
+    // Fall back to a conventional UE_<major>.<minor> directory name.
+  }
+  const match = path.basename(String(engineRoot || "")).match(/UE[_ -]?(\d+(?:\.\d+)*)/i);
+  return match ? match[1] : "";
+}
+
+function engineRootMatchesNumericAssociation(engineRoot, association) {
+  const requested = String(association || "").match(/^(?:UE_)?(\d+(?:\.\d+)+)$/i)?.[1] || "";
+  const actual = engineRootNumericVersion(engineRoot);
+  // Numeric associations are bindings.  If neither Build.version nor the
+  // conventional engine folder name establishes a version, fail closed.
+  return !requested || Boolean(actual && requested === actual);
+}
+
 async function findEngineInstalls(options = {}) {
   const hostPlatform = options.hostPlatform || process.platform;
   const env = options.env || process.env;
   const explicitEngineRoot = options.explicitEngineRoot ?? env.UNREAL_ENGINE_ROOT ?? "";
   const locations = options.roots || defaultEngineLocations(hostPlatform, env, options.homeDirectory);
   const installs = [];
-  const seen = new Set();
+  const byIdentity = new Map();
 
-  const addInstall = async (candidateRoot, source) => {
+  const addInstall = async (candidateRoot, source, registration = null) => {
     if (!candidateRoot) return;
     const root = path.resolve(candidateRoot);
     const key = pathIdentity(root, hostPlatform);
-    if (seen.has(key)) return;
+    const existing = byIdentity.get(key);
+    if (existing) {
+      if (registration && !existing.registrations.some((item) => (
+        item.association === registration.association && item.source === registration.source
+      ))) {
+        existing.registrations.push({
+          association: registration.association,
+          source: registration.source,
+        });
+      }
+      return;
+    }
     const buildTool = await resolveEngineBuildTool(root, hostPlatform);
     if (!buildTool) return;
-    seen.add(key);
-    installs.push({
+    const install = {
       engineRoot: root,
       folderName: path.basename(root),
+      numericVersion: engineRootNumericVersion(root),
       buildTool: buildTool.path,
       buildToolKind: buildTool.kind,
       buildBat: buildTool.path,
       source,
-    });
+      registrations: registration
+        ? [{ association: registration.association, source: registration.source }]
+        : [],
+    };
+    byIdentity.set(key, install);
+    installs.push(install);
   };
 
   await addInstall(explicitEngineRoot, "environment");
+  const injectedRegistrationContext = (
+    Object.prototype.hasOwnProperty.call(options, "hostPlatform")
+    || Object.prototype.hasOwnProperty.call(options, "env")
+    || Object.prototype.hasOwnProperty.call(options, "homeDirectory")
+    || Object.prototype.hasOwnProperty.call(options, "roots")
+    || Object.prototype.hasOwnProperty.call(options, "launcherManifestPaths")
+    || Object.prototype.hasOwnProperty.call(options, "registryInstallations")
+    || Object.prototype.hasOwnProperty.call(options, "installIniPaths")
+    || typeof options.registryReader === "function"
+  );
+  const readSystemRegistry = options.readSystemRegistry === undefined
+    ? !injectedRegistrationContext
+    : options.readSystemRegistry === true;
+  const registrations = await registeredEngineInstallations({
+    ...options,
+    hostPlatform,
+    env,
+    readSystemRegistry,
+  });
+  for (const registration of registrations) {
+    await addInstall(registration.engineRoot, registration.source, registration);
+  }
   for (const location of locations) {
     if (!(await exists(location))) continue;
     await addInstall(location, "common-location");
@@ -459,7 +760,10 @@ async function findEngineInstalls(options = {}) {
     }
   }
 
-  installs.sort((a, b) => compareEngineFolders(a.folderName, b.folderName));
+  installs.sort((a, b) => compareEngineFolders(
+    a.numericVersion ? `UE_${a.numericVersion}` : a.folderName,
+    b.numericVersion ? `UE_${b.numericVersion}` : b.folderName,
+  ));
   return installs;
 }
 
@@ -469,6 +773,25 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
   const association = String(engineAssociation || "").trim();
   const requestedFolder = engineFolderFromAssociation(association);
   const configBase = options.workspaceRoot || process.cwd();
+  const injectedRegistrationContext = (
+    Object.prototype.hasOwnProperty.call(options, "hostPlatform")
+    || Object.prototype.hasOwnProperty.call(options, "env")
+    || Object.prototype.hasOwnProperty.call(options, "homeDirectory")
+    || Object.prototype.hasOwnProperty.call(options, "roots")
+    || Object.prototype.hasOwnProperty.call(options, "launcherManifestPaths")
+    || Object.prototype.hasOwnProperty.call(options, "registryInstallations")
+    || Object.prototype.hasOwnProperty.call(options, "installIniPaths")
+    || typeof options.registryReader === "function"
+  );
+  const readSystemRegistry = options.readSystemRegistry === undefined
+    ? !injectedRegistrationContext
+    : options.readSystemRegistry === true;
+  const discoveryOptions = {
+    ...options,
+    hostPlatform,
+    env,
+    readSystemRegistry,
+  };
 
   const resolveCandidate = async (value, source, { relativeToConfig = false } = {}) => {
     const raw = String(value || "").trim();
@@ -499,10 +822,26 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
 
   const environmentEngineRoot = String(env.UNREAL_ENGINE_ROOT || "").trim();
   const environment = await resolveCandidate(environmentEngineRoot, "environment");
-  if (environment) return environment;
-  if (environmentEngineRoot && association) {
-    return engineAssociationUnresolved(association, "could not use UNREAL_ENGINE_ROOT");
-  }
+  const environmentAssociationIsManaged = Object.prototype.hasOwnProperty.call(
+    env,
+    "UNREAL_ENGINE_ROOT_ASSOCIATION",
+  );
+  const environmentAssociation = String(env.UNREAL_ENGINE_ROOT_ASSOCIATION || "").trim();
+  const staleManagedEnvironment = Boolean(
+    association
+    && environmentAssociationIsManaged
+    && !engineAssociationsMatch(environmentAssociation, association)
+  );
+  const staleNumericEnvironment = Boolean(
+    environment
+    && requestedFolder
+    && !engineRootMatchesNumericAssociation(environment.engineRoot, association)
+  );
+  const sameResolvedRoot = (left, right) => Boolean(
+    left?.engineRoot
+    && right?.engineRoot
+    && pathIdentity(left.engineRoot, hostPlatform) === pathIdentity(right.engineRoot, hostPlatform)
+  );
 
   if (association) {
     const mappedEngineRoot = configuredEngineRootForAssociation(association, config);
@@ -512,11 +851,58 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
         "config.engineRootsByAssociation",
         { relativeToConfig: true },
       );
-      if (mapped) return mapped;
+      if (mapped) {
+        return !staleManagedEnvironment && sameResolvedRoot(environment, mapped)
+          ? environment
+          : mapped;
+      }
       return engineAssociationUnresolved(
         association,
         "has an engineRootsByAssociation entry that is not a usable engine root",
       );
+    }
+
+    const installs = await findEngineInstalls(discoveryOptions);
+    const registeredMatches = [];
+    const registeredRoots = new Set();
+    for (const install of installs) {
+      const registration = (install.registrations || []).find((item) => (
+        engineAssociationsMatch(item.association, association)
+      ));
+      if (!registration) continue;
+      if (requestedFolder && !engineRootMatchesNumericAssociation(install.engineRoot, association)) {
+        continue;
+      }
+      const key = pathIdentity(install.engineRoot, hostPlatform);
+      if (registeredRoots.has(key)) continue;
+      registeredRoots.add(key);
+      registeredMatches.push({ install, registration });
+    }
+    if (registeredMatches.length > 1) {
+      return engineAssociationUnresolved(
+        association,
+        "has multiple conflicting registered engine roots",
+      );
+    }
+    if (registeredMatches.length === 1) {
+      const { install, registration } = registeredMatches[0];
+      const registered = {
+        engineRoot: install.engineRoot,
+        buildTool: install.buildTool,
+        buildToolKind: install.buildToolKind,
+        buildBat: install.buildBat,
+        source: `registered.${registration.source}`,
+        requestedEngineAssociation: association,
+        warning: null,
+      };
+      return !staleManagedEnvironment && sameResolvedRoot(environment, registered)
+        ? environment
+        : registered;
+    }
+
+    if (environment && !staleManagedEnvironment && !staleNumericEnvironment) return environment;
+    if (environmentEngineRoot && !staleManagedEnvironment && !staleNumericEnvironment) {
+      return engineAssociationUnresolved(association, "could not use UNREAL_ENGINE_ROOT");
     }
 
     // A numeric association is allowed to discover only its exact install;
@@ -528,7 +914,6 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
       );
     }
 
-    const installs = await findEngineInstalls({ ...options, hostPlatform, env });
     const requestedKey = filesystemPathIdentity(requestedFolder, hostPlatform, {
       stripProjectUri: false,
     });
@@ -554,6 +939,8 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
     );
   }
 
+  if (environment) return environment;
+
   const configured = await resolveCandidate(
     config?.defaultEngineRoot,
     "config.defaultEngineRoot",
@@ -561,7 +948,7 @@ async function resolveEngineRoot(engineAssociation, config, explicitEngineRoot, 
   );
   if (configured) return configured;
 
-  const installs = await findEngineInstalls({ ...options, hostPlatform, env });
+  const installs = await findEngineInstalls(discoveryOptions);
   const fallback = installs[installs.length - 1];
   if (fallback) {
     return {
@@ -629,11 +1016,19 @@ function shouldIgnoreDirName(name) {
 
 function isFixtureProjectPath(projectPath) {
   const normalized = String(projectPath || "").replace(/\\/g, "/").toLowerCase();
+  const segments = normalized.split("/").filter(Boolean);
   return (
     normalized.includes("/local_holdout_fixtures/")
     || normalized.includes("/data/local_holdout_fixtures/")
     || normalized.includes("/text_snapshot/")
     || /\/data\/[^/]+\/holdout/i.test(normalized)
+    || segments.some((segment) => (
+      segment === "test"
+      || segment === "tests"
+      || segment === "fixture"
+      || segment === "fixtures"
+      || /(?:^|[_-])fixtures?$/.test(segment)
+    ))
   );
 }
 
@@ -779,16 +1174,143 @@ async function discoverProjects(workspaceRoot, configPath, options = {}) {
     return timeB.localeCompare(timeA);
   });
 
-  return { config, roots, projects: deduped };
+  const rawProjects = [...projects].sort((a, b) => {
+    const timeA = a.modifiedAt || "";
+    const timeB = b.modifiedAt || "";
+    if (timeB !== timeA) return timeB.localeCompare(timeA);
+    return String(a.projectPath || "").localeCompare(String(b.projectPath || ""));
+  });
+
+  return { config, roots, projects: deduped, rawProjects };
+}
+
+function boundedUnicodeCasefold(value) {
+  // JavaScript has locale-independent lowercasing but no Unicode casefold API.
+  // NFKC (applied by the caller) handles compatibility characters; these are
+  // the remaining common folds that change project-name identity compared with
+  // Python's str.casefold(). Keep this deterministic and locale-independent.
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[\u00df\u1e9e]/gu, "ss")
+    .replace(/\u03c2/gu, "\u03c3")
+    .replace(/\u0345/gu, "\u03b9");
+}
+
+function normalizeProjectName(value) {
+  const normalized = String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\.uproject$/iu, "");
+  return boundedUnicodeCasefold(normalized).replace(/[\s_-]+/gu, "");
+}
+
+function boundedExactProjectSearchDepth(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_PROJECT_SEARCH_DEPTH;
+  return Math.min(Math.trunc(parsed), MAX_EXACT_PROJECT_SEARCH_DEPTH);
+}
+
+function projectNameSuggestion(project) {
+  return {
+    projectName: project.projectName,
+    projectFile: project.projectFile,
+    projectPath: project.projectPath,
+    preferredTarget: project.preferredTarget,
+  };
+}
+
+async function resolveExactProjectNameSelection(workspaceRoot, configPath, options = {}) {
+  const requestedName = String(options.name ?? options.hint ?? "").trim();
+  const normalizedName = normalizeProjectName(requestedName);
+  const hostPlatform = options.hostPlatform || process.platform;
+  const env = options.env || process.env;
+  const maxDepth = boundedExactProjectSearchDepth(
+    options.maxDepth ?? env.PROJECT_SEARCH_MAX_DEPTH
+  );
+  const discovery = await discoverProjects(workspaceRoot, configPath, {
+    ...options,
+    env,
+    maxDepth,
+    includeActiveProjectRoot: false,
+  });
+  const rawCandidates = (discovery.rawProjects || discovery.projects).filter((project) => (
+    !isFixtureProjectPath(project.projectPath)
+    && discovery.roots.some((root) => (
+      absolutePathIsWithin(project.projectPath, root, hostPlatform)
+    ))
+  ));
+  const namedCandidates = rawCandidates.map((project) => ({
+    project,
+    normalizedName: normalizeProjectName(project.projectName),
+  }));
+  const exactMatches = normalizedName
+    ? namedCandidates
+      .filter((candidate) => candidate.normalizedName === normalizedName)
+      .map((candidate) => candidate.project)
+    : [];
+  const base = {
+    config: discovery.config,
+    roots: discovery.roots,
+    projects: discovery.projects,
+    rawProjects: rawCandidates,
+    normalizedName,
+    maxDepth,
+  };
+
+  if (exactMatches.length === 1) {
+    return {
+      ...base,
+      selected: exactMatches[0],
+      selectionReason: "exact-project-name",
+    };
+  }
+
+  if (exactMatches.length > 1) {
+    return {
+      ...base,
+      selected: null,
+      selectionReason: "exact-project-name-ambiguous",
+      errorCode: "PROJECT_NAME_AMBIGUOUS",
+      error: `Multiple projects exactly match name "${requestedName}" under configured search roots.`,
+      suggestions: exactMatches.slice(0, 10).map(projectNameSuggestion),
+    };
+  }
+
+  const partialSuggestions = normalizedName
+    ? namedCandidates
+      .filter((candidate) => (
+        candidate.normalizedName
+        && (
+          candidate.normalizedName.includes(normalizedName)
+          || normalizedName.includes(candidate.normalizedName)
+        )
+      ))
+      .map((candidate) => candidate.project)
+    : [];
+  return {
+    ...base,
+    selected: null,
+    selectionReason: "exact-project-name-not-found",
+    errorCode: "PROJECT_NAME_NOT_FOUND",
+    error: `No project exactly matched name "${requestedName}" under configured search roots.`,
+    suggestions: partialSuggestions.slice(0, 10).map(projectNameSuggestion),
+  };
 }
 
 async function resolveProjectSelection(workspaceRoot, configPath, options = {}) {
   const explicitProject = String(options.project || "").trim();
   const hint = String(options.hint || "").trim();
+  const hostPlatform = options.hostPlatform || process.platform;
   const { config, roots } = resolveSearchRoots(workspaceRoot, configPath, options);
 
+  const workspaceRelativePath = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    return path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(workspaceRoot, raw);
+  };
+
   async function projectFromPath(projectPath, score = 1000) {
-    const activePath = path.resolve(projectPath);
+    const activePath = workspaceRelativePath(projectPath);
     const info = await readUProject(activePath);
     const targets = await findTargetNames(info.projectDir, info.projectName);
     const st = await statSafe(info.projectPath);
@@ -804,28 +1326,55 @@ async function resolveProjectSelection(workspaceRoot, configPath, options = {}) 
     const resolved = path.isAbsolute(explicitProject)
       ? path.resolve(explicitProject)
       : path.resolve(workspaceRoot, explicitProject);
-    if (await exists(resolved)) {
-      try {
-        const selected = await projectFromPath(resolved, 3000);
-        return {
-          config,
-          roots,
-          projects: [selected],
-          selected,
-          selectionReason: "explicit.project",
-        };
-      } catch {
-        // Fall through to discovery.
-      }
+    if (!(await exists(resolved))) {
+      return {
+        config,
+        roots,
+        projects: [],
+        selected: null,
+        selectionReason: "explicit-project-not-found",
+        errorCode: "PROJECT_PATH_NOT_FOUND",
+        error: `Explicit project does not exist: ${resolved}`,
+      };
+    }
+    try {
+      const selected = await projectFromPath(resolved, 3000);
+      return {
+        config,
+        roots,
+        projects: [selected],
+        selected,
+        selectionReason: "explicit.project",
+      };
+    } catch (error) {
+      return {
+        config,
+        roots,
+        projects: [],
+        selected: null,
+        selectionReason: "explicit-project-invalid",
+        errorCode: "PROJECT_DESCRIPTOR_INVALID",
+        error: `Could not read explicit project descriptor ${resolved}: ${error.message || error}`,
+      };
     }
   }
 
   const discovery = await discoverProjects(workspaceRoot, configPath, options);
-  const projects = discovery.projects;
+  // Selection must retain every physical candidate.  The display-oriented
+  // list is deduplicated by project name and would otherwise turn two clones
+  // into one arbitrary (mtime-dependent) build target.
+  const projects = discovery.rawProjects || discovery.projects;
+  const configuredActivePath = workspaceRelativePath(config.activeProject);
+  const configuredActiveMatch = configuredActivePath
+    ? projects.find((project) => (
+      pathIdentity(project.projectPath, hostPlatform)
+      === pathIdentity(configuredActivePath, hostPlatform)
+    ))
+    : null;
 
   if (projects.length === 0) {
     if (config.activeProject) {
-      const activePath = path.resolve(config.activeProject);
+      const activePath = configuredActivePath;
       if (await exists(activePath)) {
         try {
           const selected = await projectFromPath(activePath, 1000);
@@ -851,6 +1400,44 @@ async function resolveProjectSelection(workspaceRoot, configPath, options = {}) 
     };
   }
 
+  if (hint) {
+    const hintName = hint.replace(/\.uproject$/iu, "");
+    const hintIdentity = filesystemPathIdentity(hintName, hostPlatform, {
+      stripProjectUri: false,
+    });
+    const exactNameMatches = hintIdentity
+      ? projects.filter((project) => filesystemPathIdentity(
+        project.projectName,
+        hostPlatform,
+        { stripProjectUri: false },
+      ) === hintIdentity)
+      : [];
+    if (exactNameMatches.length > 1) {
+      if (configuredActiveMatch && exactNameMatches.some((project) => (
+        pathIdentity(project.projectPath, hostPlatform)
+        === pathIdentity(configuredActiveMatch.projectPath, hostPlatform)
+      ))) {
+        return {
+          config,
+          roots,
+          projects,
+          selected: configuredActiveMatch,
+          selectionReason: "config.activeProject",
+        };
+      }
+      return {
+        config,
+        roots,
+        projects,
+        selected: null,
+        selectionReason: "hint-ambiguous",
+        errorCode: "PROJECT_NAME_AMBIGUOUS",
+        error: `Multiple projects exactly match hint "${hint}". Pass an explicit .uproject path or set config.activeProject.`,
+        suggestions: exactNameMatches.slice(0, 10).map(projectNameSuggestion),
+      };
+    }
+  }
+
   const scored = projects.map((project) => ({
     ...project,
     score: scoreProjectMatch(project, hint, workspaceRoot, options)
@@ -862,19 +1449,94 @@ async function resolveProjectSelection(workspaceRoot, configPath, options = {}) 
   });
 
   const best = scored[0];
-  if (hint && best.score > 0) {
+  if (hint) {
+    const hintIdentity = filesystemPathIdentity(hint, hostPlatform, {
+      stripProjectUri: false,
+    });
+    const hintMatches = scored.filter((project) => {
+      const projectName = filesystemPathIdentity(project.projectName, hostPlatform, {
+        stripProjectUri: false,
+      });
+      const projectFile = filesystemPathIdentity(project.projectFile, hostPlatform, {
+        stripProjectUri: false,
+      });
+      const projectDir = pathIdentity(project.projectDir, hostPlatform);
+      return Boolean(
+        hintIdentity
+        && (
+          projectName === hintIdentity
+          || projectFile === hintIdentity
+          || projectFile === `${hintIdentity}.uproject`
+          || projectName.includes(hintIdentity)
+          || projectDir.includes(hintIdentity)
+        )
+      );
+    });
+    const hintMatch = hintMatches[0];
+    if (hintMatch) {
+      const selectedName = filesystemPathIdentity(hintMatch.projectName, hostPlatform, {
+        stripProjectUri: false,
+      });
+      const sameNameClones = hintMatches.filter((project) => (
+        filesystemPathIdentity(project.projectName, hostPlatform, {
+          stripProjectUri: false,
+        }) === selectedName
+      ));
+      if (sameNameClones.length > 1) {
+        if (configuredActiveMatch && sameNameClones.some((project) => (
+          pathIdentity(project.projectPath, hostPlatform)
+          === pathIdentity(configuredActiveMatch.projectPath, hostPlatform)
+        ))) {
+          return {
+            config,
+            roots,
+            projects: scored,
+            selected: configuredActiveMatch,
+            selectionReason: "config.activeProject",
+          };
+        }
+        return {
+          config,
+          roots,
+          projects: scored,
+          selected: null,
+          selectionReason: "hint-ambiguous",
+          errorCode: "PROJECT_NAME_AMBIGUOUS",
+          error: `Multiple same-name projects match hint "${hint}". Pass an explicit .uproject path or set config.activeProject.`,
+          suggestions: sameNameClones.slice(0, 10).map(projectNameSuggestion),
+        };
+      }
+      return {
+        config,
+        roots,
+        projects: scored,
+        selected: hintMatch,
+        selectionReason: "hint",
+      };
+    }
     return {
       config,
       roots,
       projects: scored,
-      selected: best,
-      selectionReason: "hint",
+      selected: null,
+      selectionReason: "hint-not-matched",
+      error: `No project matched hint "${hint}".`,
+      suggestions: scored.slice(0, 10).map((project) => ({
+        projectFile: project.projectFile,
+        projectPath: project.projectPath,
+        preferredTarget: project.preferredTarget,
+      })),
     };
   }
 
   if (config.activeProject) {
-    const activePath = path.resolve(config.activeProject);
-    const activeMatch = scored.find((project) => path.resolve(project.projectPath) === activePath);
+    const activePath = configuredActivePath;
+    const activeMatch = configuredActiveMatch
+      ? scored.find((project) => (
+        pathIdentity(project.projectPath, hostPlatform)
+        === pathIdentity(configuredActiveMatch.projectPath, hostPlatform)
+      ))
+      : null;
     if (activeMatch) {
       return {
         config,
@@ -900,20 +1562,27 @@ async function resolveProjectSelection(workspaceRoot, configPath, options = {}) 
     }
   }
 
-  if (hint && best.score === 0) {
-    return {
-      config,
-      roots,
-      projects: scored,
-      selected: null,
-      selectionReason: "hint-not-matched",
-      error: `No project matched hint "${hint}".`,
-      suggestions: scored.slice(0, 10).map((p) => ({
-        projectFile: p.projectFile,
-        projectPath: p.projectPath,
-        preferredTarget: p.preferredTarget
-      }))
-    };
+  if (!hint && !configuredActiveMatch && scored.length > 1) {
+    const bestName = filesystemPathIdentity(best.projectName, hostPlatform, {
+      stripProjectUri: false,
+    });
+    const sameNameClones = scored.filter((project) => (
+      filesystemPathIdentity(project.projectName, hostPlatform, {
+        stripProjectUri: false,
+      }) === bestName
+    ));
+    if (sameNameClones.length > 1) {
+      return {
+        config,
+        roots,
+        projects: scored,
+        selected: null,
+        selectionReason: "same-name-ambiguous",
+        errorCode: "PROJECT_NAME_AMBIGUOUS",
+        error: "Multiple same-name Unreal projects found. Pass an explicit .uproject path or set config.activeProject.",
+        suggestions: sameNameClones.slice(0, 10).map(projectNameSuggestion),
+      };
+    }
   }
 
   if (!hint && scored.length > 1 && scored[0].score === scored[1].score && scored[0].score <= 10) {
@@ -957,16 +1626,7 @@ async function resolveBuildPlan(workspaceRoot, configPath, args = {}) {
   }
 
   const project = selection.selected;
-  let projectPath = project.projectPath;
-
-  if (args.project) {
-    const rawProject = String(args.project);
-    if (rawProject.toLowerCase().endsWith(".uproject")) {
-      projectPath = path.isAbsolute(rawProject)
-        ? path.resolve(rawProject)
-        : path.resolve(project.projectDir, rawProject);
-    }
-  }
+  const projectPath = project.projectPath;
 
   const engine = await resolveEngineRoot(
     project.engineAssociation,
@@ -1110,14 +1770,18 @@ module.exports = {
   splitSearchRoots,
   uniquePaths,
   resolveSearchRoots,
+  normalizeProjectName,
   defaultEngineLocations,
   engineBuildToolCandidates,
   resolveEngineBuildTool,
+  engineRootNumericVersion,
+  engineRootMatchesNumericAssociation,
   engineFolderFromAssociation,
   configuredEngineRootForAssociation,
   resolveEngineRoot,
   findEngineInstalls,
   discoverProjects,
+  resolveExactProjectNameSelection,
   resolveProjectSelection,
   resolveBuildPlan,
   defaultPlatform,

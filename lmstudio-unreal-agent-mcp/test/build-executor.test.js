@@ -17,6 +17,7 @@ const {
   decodeBuildOutput,
   localeOutputEncoding,
   buildArgs,
+  buildWindowsBatchSpawnSpec,
   defaultBuildPlatform,
 } = require("../src/build-executor");
 
@@ -92,7 +93,7 @@ test("project EngineAssociation selects the expected version instead of globally
     },
     timeoutMs: 5000,
   });
-  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
   assert.strictEqual(result.expectedEngineVersion, "5.7");
   assert.strictEqual(result.resolvedEngineVersion, "5.7");
 });
@@ -126,7 +127,7 @@ test("custom GUID EngineAssociation does not impose a false numeric version poli
     },
     timeoutMs: 5000,
   });
-  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.ok, true, JSON.stringify(result));
   assert.strictEqual(result.expectedEngineVersion, "");
   assert.strictEqual(result.resolvedEngineVersion, "5.6");
 });
@@ -157,12 +158,25 @@ test("resolveBuildExecutable selects host Build.sh on macOS and Linux", async ()
   }
 });
 
-test("Unix UBT DLL is launched through dotnet and Build.sh through /bin/sh", () => {
+test("Unix UBT DLL is launched through dotnet and Build.sh through Bash", () => {
   const args = ["GameEditor", "Mac", "Development"];
   assert.deepStrictEqual(
     buildSpawnSpec({ executable: "/Engine/Build.sh", kind: "build_sh", args }),
-    { command: "/bin/sh", args: ["/Engine/Build.sh", ...args] }
+    { command: "/bin/bash", args: ["/Engine/Build.sh", ...args] }
   );
+  const portable = buildSpawnSpec({
+    executable: "/opt/Epic Engines/UE 5.8/Engine/Build/BatchFiles/Linux/Build.sh",
+    kind: "build_sh",
+    args: ["게임Editor", "Linux", "Development", "-Project=/srv/프로젝트 공간/Game.uproject"],
+  });
+  assert.strictEqual(portable.command, "/bin/bash");
+  assert.deepStrictEqual(portable.args, [
+    "/opt/Epic Engines/UE 5.8/Engine/Build/BatchFiles/Linux/Build.sh",
+    "게임Editor",
+    "Linux",
+    "Development",
+    "-Project=/srv/프로젝트 공간/Game.uproject",
+  ]);
   assert.deepStrictEqual(
     buildSpawnSpec({ executable: "/Engine/UnrealBuildTool.dll", kind: "ubt_dotnet", args }),
     { command: "dotnet", args: ["/Engine/UnrealBuildTool.dll", ...args] }
@@ -189,6 +203,84 @@ test("spawnBuildProcess uses cmd.exe for build bat", { skip: process.platform !=
   assert.ok(Array.isArray(child.spawnargs));
   assert.strictEqual(child.spawnargs[0], "cmd.exe");
   child.kill();
+});
+
+test("Build.bat spawn spec keeps untrusted values out of the cmd command string", () => {
+  const spec = buildWindowsBatchSpawnSpec(
+    "C:\\Program Files\\Epic Games\\UE_5.8\\Engine\\Build\\BatchFiles\\Build.bat",
+    ["GameEditor", "Win64", "Development", "-Project=C:\\프로젝트 폴더 & 샘플\\Game.uproject"]
+  );
+  assert.strictEqual(spec.command, "cmd.exe");
+  assert.deepStrictEqual(spec.args.slice(0, 5), ["/d", "/s", "/e:on", "/v:off", "/c"]);
+  assert.ok(!spec.args[5].includes("프로젝트"));
+  assert.ok(!spec.args[5].includes("&"));
+  assert.strictEqual(spec.env.MCP_UNREAL_BUILD_ARG_0.endsWith("Build.bat"), true);
+  assert.strictEqual(spec.env.MCP_UNREAL_BUILD_ARG_4.includes("프로젝트 폴더 & 샘플"), true);
+});
+
+test("Build.bat fallback rejects values that Epic's CALL and delayed expansion cannot preserve", () => {
+  for (const unsafe of ["C:\\Game%PATH%\\Game.uproject", "C:\\Game!TEMP!\\Game.uproject", "C:\\Game^Name\\Game.uproject", "bad\"target"] ) {
+    assert.throws(
+      () => buildWindowsBatchSpawnSpec("C:\\Engine\\Build.bat", [unsafe]),
+      /unsafe cmd\.exe expansion character/i
+    );
+  }
+});
+
+test("Build.bat fallback preserves spaced Unicode paths and quoted metacharacters", { skip: process.platform !== "win32" }, async () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "UE 공백 & 엔진-"));
+  const script = path.join(fixtureRoot, "빌드 도구 & Batch", "Build.bat");
+  const capture = path.join(fixtureRoot, "captured args.txt");
+  const projectPath = path.join(fixtureRoot, "프로젝트 & 샘플 (5.8)", "Game Test.uproject");
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  fs.writeFileSync(
+    script,
+    [
+      "@echo off",
+      "setlocal EnableDelayedExpansion",
+      "call :Capture %*",
+      "exit /b !ERRORLEVEL!",
+      ":Capture",
+      "\"%MCP_BUILD_TEST_NODE%\" -e \"require('fs').writeFileSync(process.env.MCP_BUILD_TEST_CAPTURE, JSON.stringify(process.argv.slice(1)), 'utf8')\" %*",
+      "exit /b 0",
+      "",
+    ].join("\r\n"),
+    "utf8"
+  );
+  const previousCapture = process.env.MCP_BUILD_TEST_CAPTURE;
+  const previousNode = process.env.MCP_BUILD_TEST_NODE;
+  process.env.MCP_BUILD_TEST_CAPTURE = capture;
+  process.env.MCP_BUILD_TEST_NODE = process.execPath;
+  try {
+    const args = buildArgs({
+      kind: "build_bat",
+      target: "GameEditor",
+      platform: "Win64",
+      configuration: "Development",
+      projectPath,
+    });
+    const child = spawnBuildProcess({
+      executable: script,
+      kind: "build_bat",
+      args,
+      workspaceRoot: fixtureRoot,
+    });
+    let diagnostic = `${JSON.stringify(child.spawnargs)}\n`;
+    child.stdout.on("data", (chunk) => { diagnostic += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { diagnostic += chunk.toString(); });
+    const exitCode = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    assert.strictEqual(exitCode, 0, diagnostic);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(capture, "utf8")), args);
+  } finally {
+    if (previousCapture === undefined) delete process.env.MCP_BUILD_TEST_CAPTURE;
+    else process.env.MCP_BUILD_TEST_CAPTURE = previousCapture;
+    if (previousNode === undefined) delete process.env.MCP_BUILD_TEST_NODE;
+    else process.env.MCP_BUILD_TEST_NODE = previousNode;
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test("build process environment requests stable English diagnostics without overriding policy", () => {
@@ -292,6 +384,6 @@ test("runUnrealBuildFromPlan reports timedOut", async () => {
     expectedEngineVersion: "5.8",
     timeoutMs: 500,
   });
-  assert.strictEqual(result.timedOut, true);
+  assert.strictEqual(result.timedOut, true, JSON.stringify(result));
   assert.strictEqual(result.errorCode, "BUILD_TIMEOUT");
 });

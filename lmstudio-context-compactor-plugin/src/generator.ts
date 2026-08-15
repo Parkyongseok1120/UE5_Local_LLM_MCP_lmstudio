@@ -707,8 +707,41 @@ function requiresArchitectureValidation(goal: string, toolDefinitions: any[]): b
   return /authoritative\s+multiplayer|architecture|architectural|structure\s+design|design\s+validation|(?:new|independent|standalone|separate)\s+(?:[\w-]+\s+){0,3}(?:system|subsystem|component|service)|(?:system|subsystem|component|service)\s+(?:design|architecture)|구조\s*설계|설계\s*검증|아키텍처|(?:새(?:로운)?|신규|독립(?:적인)?|별도)\s*(?:\S+\s*){0,3}(?:시스템|서브시스템|컴포넌트|서비스)|(?:시스템|서브시스템|컴포넌트|서비스)(?:으로|을|를|의|\s)*(?:설계|구현|추가|신설)/i.test(textValue);
 }
 
-function requiresTaskRoutePlanning(goal: string): boolean {
-  return core.classifyUserIntent(String(goal || "")) === "MUTATION";
+type RequestIntentContext = {
+  requestIntent?: any;
+  objectiveHash?: string;
+  authoritativeObjectiveProjection?: boolean;
+};
+
+function matchingRequestIntentContext(goal: string, checkpoint: any): RequestIntentContext {
+  const normalizedGoal = String(goal || "").trim();
+  const checkpointObjective = String(checkpoint?.objective || "").trim();
+  const checkpointObjectiveHash = String(checkpoint?.objectiveHash || "").trim().toLowerCase();
+  const authoritativeObjectiveProjection = Boolean(
+    normalizedGoal
+    && normalizedGoal === checkpointObjective
+    && /^[a-f0-9]{64}$/.test(checkpointObjectiveHash)
+  );
+  const requestIntent = core.matchingRequestIntent(String(goal || ""), {
+    requestIntent: checkpoint?.requestIntent,
+    objectiveHash: authoritativeObjectiveProjection ? checkpointObjectiveHash : "",
+    authoritativeObjectiveProjection,
+  });
+  return requestIntent
+    ? {
+      requestIntent,
+      ...(authoritativeObjectiveProjection
+        ? {
+          objectiveHash: checkpointObjectiveHash,
+          authoritativeObjectiveProjection: true,
+        }
+        : {}),
+    }
+    : {};
+}
+
+function requiresTaskRoutePlanning(goal: string, context: RequestIntentContext = {}): boolean {
+  return core.classifyMutationIntent(String(goal || ""), context).isMutation === true;
 }
 
 function requiresFeatureCompletionAudit(goal: string): boolean {
@@ -2314,7 +2347,22 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const serverControlV2Active = Boolean(serverControlV2);
   const trailingMetaUser = trailingMetaUserMessage(messages);
   const architectureGoal = latestUserGoalText(messages);
-  const detachedSideQueryActive = Boolean(nextCheckpoint?.sideQuery?.active);
+  const latestTurnRequestIntentContext = matchingRequestIntentContext(
+    architectureGoal,
+    nextCheckpoint,
+  );
+  const latestTurnIntent = core.classifyUserTurnIntent(architectureGoal, {
+    hasActiveTask: Boolean(nextCheckpoint?.taskRouteOwnership && nextCheckpoint?.toolRoute?.routeHash),
+    activeObjective: String(nextCheckpoint?.objective || ""),
+    ...latestTurnRequestIntentContext,
+  });
+  const detachedSideQueryActive = Boolean(
+    nextCheckpoint?.sideQuery?.active
+    && (
+      !latestTurnRequestIntentContext.requestIntent
+      || latestTurnIntent === "SIDE_QUERY"
+    )
+  );
   if (detachedSideQueryActive) {
     injectDetachedSideQueryRule(
       history,
@@ -2330,6 +2378,21 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       ? nextCheckpoint?.sideQuery?.request
       : (nextCheckpoint?.objective || architectureGoal),
   ).trim();
+  // A checkpoint intent is authoritative only for the exact trimmed UTF-8
+  // objective hash it was issued for. First turns, detached side queries, and
+  // changed goals intentionally receive an empty context and keep the legacy
+  // classifier fallback.
+  // The checkpoint objective is a bounded model-facing projection. Prefer the
+  // full latest raw objective for classification when it carries the matching
+  // server hash, so long UTF-8 requests do not fall back merely because the
+  // checkpoint text was truncated.
+  const latestRawRequestIntentContext = latestTurnRequestIntentContext;
+  const authoritativeClassificationGoal = latestRawRequestIntentContext.requestIntent
+    ? architectureGoal
+    : authoritativeGoal;
+  const authoritativeRequestIntentContext = latestRawRequestIntentContext.requestIntent
+    ? latestRawRequestIntentContext
+    : matchingRequestIntentContext(authoritativeClassificationGoal, nextCheckpoint);
   const workflowStopActive = Boolean(
     !detachedSideQueryActive
     && (
@@ -2956,7 +3019,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && activeProjectBootstrapTool
     && plannerTool
     && !trailingMetaUser
-    && requiresTaskRoutePlanning(authoritativeGoal)
+    && requiresTaskRoutePlanning(authoritativeClassificationGoal, authoritativeRequestIntentContext)
     && architectureStatus.discoveryCallsSinceLastAttempt === 0
     && !architectureStatus.attempted
   );
@@ -2972,7 +3035,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && !routeOwnershipAvailable
     && plannerTool
     && !trailingMetaUser
-    && requiresTaskRoutePlanning(authoritativeGoal)
+    && requiresTaskRoutePlanning(authoritativeClassificationGoal, authoritativeRequestIntentContext)
     && (
       architectureStatus.validated
       || (
@@ -3337,7 +3400,16 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     return message.getRole() === "user" && text && !core.isMetaUserMessage(text);
   }).length;
   const hasPriorAssistant = messages.some((message) => message.getRole() === "assistant");
-  const latestIsReadOnly = core.isReadOnlyUserGoal(latestObjective);
+  const latestClassificationGoal = latestRawRequestIntentContext.requestIntent
+    ? architectureGoal
+    : latestObjective;
+  const latestRequestIntentContext = latestRawRequestIntentContext.requestIntent
+    ? latestRawRequestIntentContext
+    : matchingRequestIntentContext(latestClassificationGoal, nextCheckpoint);
+  const latestIsReadOnly = core.isReadOnlyUserGoal(
+    latestClassificationGoal,
+    latestRequestIntentContext,
+  );
   const budgetPressed = decision.action === "soft_compact" || decision.action === "hard_compact";
   // Major mode flips may soft-compact even when the budget is healthy, but ordinary
   // objective-string churn must not. A real major objective change starts with
@@ -3361,6 +3433,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   debugAgentLog("H9", "generator.ts:generate", "goal-change and meta gate", {
     priorObjectiveLen: priorObjective.length,
     latestObjectiveLen: latestObjective.length,
+    authoritativeClassificationGoalLen: authoritativeClassificationGoal.length,
+    authoritativeRequestIntentMutability:
+      authoritativeRequestIntentContext.requestIntent?.mutability || "",
+    checkpointRequestIntentMutability: nextCheckpoint?.requestIntent?.mutability || "",
+    checkpointObjectiveHash: String(nextCheckpoint?.objectiveHash || ""),
     goalChanged,
     latestIsReadOnly,
     answeringMeta: Boolean(trailingMetaUser),

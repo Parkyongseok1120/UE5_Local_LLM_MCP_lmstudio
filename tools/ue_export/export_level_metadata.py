@@ -3,6 +3,8 @@
 
 import json
 
+from export_common import asset_class_name
+
 
 def export_level_metadata(maps_path: str, out_path: str) -> None:
     import unreal
@@ -11,7 +13,7 @@ def export_level_metadata(maps_path: str, out_path: str) -> None:
     assets = registry.get_assets_by_path(maps_path, recursive=True)
     rows = []
     for asset in assets:
-        cls = str(asset.asset_class_path.asset_name) if hasattr(asset, "asset_class_path") else ""
+        cls = asset_class_name(asset)
         if "World" not in cls and "Map" not in cls:
             continue
         path = str(asset.package_name)

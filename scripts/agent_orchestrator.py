@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import hashlib
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -21,6 +23,25 @@ TaskKind = Literal[
     "refactor",
     "runtime_debug",
 ]
+
+
+@dataclass(frozen=True)
+class ProjectControlIntent:
+    """A bounded parse of active-project control language.
+
+    ``matched`` says that a control speech act was present.  ``pure_control``
+    is intentionally separate so a switch-and-work request cannot be consumed
+    by the control plane and silently lose the user's remaining objective.
+    """
+
+    matched: bool = False
+    operation: Literal["status", "select", "clear", "noop"] = "noop"
+    speech_act: Literal["query", "command"] = "command"
+    negated: bool = False
+    target_kind: Literal["path", "name", "none"] = "none"
+    target: str = ""
+    pure_control: bool = False
+    remaining_request: str = ""
 EditStrategy = Literal[
     "no_edit",
     "new_file",
@@ -163,6 +184,7 @@ ASSET_METADATA_TOOL_POLICY = tool_sequence_for_task("asset_metadata_inspect")
 PROJECT_SOURCE_ANALYSIS_POLICY_KEY = "project_source_analysis"
 CPP_REVIEW_TOOL_POLICY = tool_sequence_for_task(PROJECT_SOURCE_ANALYSIS_POLICY_KEY) or [
     "unreal_get_active_project",
+    "unreal_symbol_lookup",
     "search_files",
     "read_file",
     "unreal_rag_search",
@@ -247,6 +269,301 @@ _PROJECT_CONTROL_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Project-control targets are deliberately bounded.  Quoting is required for
+# names containing whitespace, while absolute .uproject paths may keep spaces.
+# This prevents ordinary phrases such as "use project settings to fix input"
+# from being consumed as a project name and blocking the real source task.
+_PROJECT_CONTROL_TARGET_ATOM = (
+    r'(?:"[^"\r\n]+"|\'[^\'\r\n]+\'|'
+    r'(?:(?:[A-Za-z]:[\\/])|/|~[\\/])[^\r\n,;]*?\.uproject|'
+    r'[^\s\r\n,;.!?"\']+?)'
+)
+_PROJECT_CONTROL_ABSOLUTE_UPROJECT_RE = re.compile(
+    r"(?:(?:[A-Za-z]:[\\/])|/|~[\\/])[^\r\n]*\.uproject",
+    re.IGNORECASE,
+)
+_PROJECT_CONTROL_KOREAN_COMMAND_VERB = (
+    r"(?:지정|설정|선택|전환|변경|바꿔|바꾸|교체)"
+    r"(?:\s*(?:해주세요|해줘|해|주세요|줘))?"
+)
+_PROJECT_CONTROL_KOREAN_COMMAND_BOUNDARY = (
+    r"(?=\s*(?:(?:고|하고)(?=\s|[,;:])|그리고|그다음|그\s*후|[,;:]|[.!?]|$))"
+)
+_PROJECT_CONTROL_ENGLISH_COMMAND_PREFIX = (
+    r"(?:then\s+)?(?:please\s+|(?:(?:can|could|would|will)\s+you\s+))?"
+)
+_PROJECT_CONTROL_ENGLISH_COMMAND_BOUNDARY = (
+    r"(?=\s*(?:(?:[,;:]\s*)?(?:and|then)\b|[,;:]|[.!?]|$))"
+)
+
+_PROJECT_CONTROL_STATUS_RE = re.compile(
+    r"(?:"
+    r"(?:지금|현재)?\s*(?:활성|작업)?\s*프로젝트(?:\s*(?:가|는|의|를|을))?\s*"
+    r"(?:뭐(?:야|지)?|무엇(?:이야|인가)?|어디(?:야|지)?|상태|경로|이름|확인|조회|알려|보여)"
+    r"|현재\s*작업\s*프로젝트\s*(?:뭐(?:야|지)?|무엇(?:이야|인가)?|어디(?:야|지)?)"
+    r"|(?:what(?:'s|\s+is)|which|show|tell\s+me|check|get)\s+"
+    r"(?:the\s+)?(?:active|current)\s+project(?:\s+(?:status|path|name))?"
+    r"|(?:active|current)\s+project\s+(?:status|path|name)"
+    r")",
+    re.IGNORECASE,
+)
+_PROJECT_CONTROL_CLEAR_RE = re.compile(
+    r"(?:"
+    r"(?:현재|활성)?\s*프로젝트\s*(?:를|을)?\s*(?:해제|초기화|지워)"
+    r"|(?:clear|unset|remove)\s+(?:the\s+)?(?:active|current)\s+project"
+    r")",
+    re.IGNORECASE,
+)
+_PROJECT_CONTROL_NEGATED_RES = (
+    re.compile(
+        rf"(?:그럼\s*)?(?P<target>{_PROJECT_CONTROL_TARGET_ATOM})\s*로\s*"
+        r"(?:프로젝트(?:를|을)?\s*)?"
+        r"(?:(?:지정|설정|선택|전환|변경|교체)\s*하?지|바꾸\s*지)\s*(?:마|말)"
+        + _PROJECT_CONTROL_KOREAN_COMMAND_BOUNDARY,
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:do\s+not|don't|dont|never)\s+"
+        r"(?:(?:set|select|switch|change)\s+(?:(?:the\s+)?(?:active|current)\s+)?project|"
+        r"use\s+(?:the\s+)?(?:active|current)\s+project)\s+(?:to\s+)?"
+        rf"(?P<target>{_PROJECT_CONTROL_TARGET_ATOM})"
+        + _PROJECT_CONTROL_ENGLISH_COMMAND_BOUNDARY,
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:do\s+not|don't|dont|never)\s+(?:set|select|choose|activate|use)\s+"
+        rf"(?P<target>{_PROJECT_CONTROL_TARGET_ATOM})\s+(?:as\s+)?(?:the\s+)?"
+        r"(?:(?:active|current)\s+)?project\b"
+        + _PROJECT_CONTROL_ENGLISH_COMMAND_BOUNDARY,
+        re.IGNORECASE,
+    ),
+)
+_PROJECT_CONTROL_TARGET_QUERY_RE = re.compile(
+    r"(?P<target>[\"']?[^\r\n,;?]+?[\"']?)\s*로\s*"
+    r"(?:프로젝트(?:가|는)?\s*)?(?:지정|설정|선택)(?:돼|되어)\s*"
+    r"(?:있어|있는지|있나요|있습니까)?\s*\??",
+    re.IGNORECASE,
+)
+_PROJECT_CONTROL_ENGLISH_TARGET_QUERY_RE = re.compile(
+    r"(?:is|was)\s+(?P<target>[\"']?[^\r\n,;?]+?[\"']?)\s+"
+    r"(?:the\s+)?(?:active|current)\s+project\s*\??",
+    re.IGNORECASE,
+)
+_PROJECT_CONTROL_SELECT_RES = (
+    # 프로젝트 <name/path>로 바꾸고 <remaining request>
+    re.compile(
+        r"(?:그럼\s*)?(?:현재\s*|활성\s*)?프로젝트\s+"
+        rf"(?P<target>{_PROJECT_CONTROL_TARGET_ATOM})\s*(?:로|을|를)?\s*"
+        + _PROJECT_CONTROL_KOREAN_COMMAND_VERB
+        + _PROJECT_CONTROL_KOREAN_COMMAND_BOUNDARY,
+        re.IGNORECASE,
+    ),
+    # <name/path>를 프로젝트로 지정해
+    re.compile(
+        rf"(?:그럼\s*)?(?P<target>{_PROJECT_CONTROL_TARGET_ATOM})\s*(?:을|를)\s*"
+        r"프로젝트(?:로)?\s*(?:지정|설정|선택|전환|변경|바꿔|바꾸|교체)"
+        r"(?:\s*(?:해주세요|해줘|해|주세요|줘))?"
+        + _PROJECT_CONTROL_KOREAN_COMMAND_BOUNDARY,
+        re.IGNORECASE,
+    ),
+    # <name/path>로 프로젝트 바꿔
+    re.compile(
+        rf"(?:그럼\s*)?(?P<target>{_PROJECT_CONTROL_TARGET_ATOM})\s*로\s*"
+        r"(?:현재\s*|활성\s*)?프로젝트\s*"
+        + _PROJECT_CONTROL_KOREAN_COMMAND_VERB
+        + _PROJECT_CONTROL_KOREAN_COMMAND_BOUNDARY,
+        re.IGNORECASE,
+    ),
+    re.compile(
+        _PROJECT_CONTROL_ENGLISH_COMMAND_PREFIX
+        + r"(?:(?:set|select|switch|change|choose|activate)\s+"
+        r"(?:(?:the|an?)\s+)?(?:(?:active|current)\s+)?project|"
+        r"use\s+(?:the\s+)?(?:active|current)\s+project)\s+"
+        rf"(?:to\s+)?(?!and\b|then\b)(?P<target>{_PROJECT_CONTROL_TARGET_ATOM})"
+        + _PROJECT_CONTROL_ENGLISH_COMMAND_BOUNDARY,
+        re.IGNORECASE,
+    ),
+    re.compile(
+        _PROJECT_CONTROL_ENGLISH_COMMAND_PREFIX
+        + r"(?:set|select|choose|activate|use)\s+"
+        rf"(?P<target>{_PROJECT_CONTROL_TARGET_ATOM})\s+(?:as\s+)?(?:the\s+)?"
+        r"(?:(?:active|current)\s+)?project\b"
+        + _PROJECT_CONTROL_ENGLISH_COMMAND_BOUNDARY,
+        re.IGNORECASE,
+    ),
+)
+_PROJECT_CONTROL_TARGETLESS_SELECT_RE = re.compile(
+    r"(?:현재\s*|활성\s*)?프로젝트\s*(?:를|을)?\s*"
+    + _PROJECT_CONTROL_KOREAN_COMMAND_VERB
+    + _PROJECT_CONTROL_KOREAN_COMMAND_BOUNDARY,
+    re.IGNORECASE,
+)
+_PROJECT_CONTROL_LEADING_CONNECTIVE_RE = re.compile(
+    r"^(?:\s|[,;:.!?])+|^(?:(?:고|하고)(?=\s|[,;:])|그리고|그다음|그\s*후|and\b|then\b)\s*",
+    re.IGNORECASE,
+)
+_PROJECT_CONTROL_POLITE_TAIL_RE = re.compile(
+    r"^(?:(?:을|를)\s*)?(?:"
+    r"알려(?:줘|주세요)?|보여(?:줘|주세요)?|말해(?:줘|주세요)?|"
+    r"확인(?:해줘|해주세요|해)?|조회(?:해줘|해주세요|해)?|"
+    r"해줘|해주세요|줘|주세요"
+    r")?[.!?\s]*$",
+    re.IGNORECASE,
+)
+
+
+def normalize_project_name(value: str) -> str:
+    """Return a comparison-only project identity without altering real paths."""
+
+    normalized = unicodedata.normalize("NFKC", str(value or "").strip())
+    normalized = re.sub(r"\.uproject$", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"[\s_-]+", "", normalized)
+    return normalized.casefold()
+
+
+_ECMASCRIPT_TRIM_CHARS = (
+    "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+
+
+def normalize_objective_for_hash(value: str) -> str:
+    """Match ECMAScript String.trim for the cross-runtime intent protocol."""
+
+    return str(value or "").strip(_ECMASCRIPT_TRIM_CHARS)
+
+
+def objective_hash(value: str) -> str:
+    return hashlib.sha256(normalize_objective_for_hash(value).encode("utf-8")).hexdigest()
+
+
+def _clean_project_control_target(value: str) -> str:
+    target = str(value or "").strip().strip("\"'").strip()
+    target = re.sub(r"^(?:그럼|then)\s+", "", target, flags=re.IGNORECASE)
+    return target.rstrip(".,;:)]}")
+
+
+def _remaining_after_control_match(request: str, end: int) -> str:
+    remaining = str(request or "")[end:]
+    previous = None
+    while previous != remaining:
+        previous = remaining
+        remaining = _PROJECT_CONTROL_LEADING_CONNECTIVE_RE.sub("", remaining, count=1)
+    remaining = remaining.strip()
+    if _PROJECT_CONTROL_POLITE_TAIL_RE.fullmatch(remaining):
+        return ""
+    return remaining
+
+
+def _project_target_kind(target: str) -> Literal["path", "name", "none"]:
+    if not target:
+        return "none"
+    path_match = _PROJECT_CONTROL_PATH_RE.fullmatch(target.strip())
+    if path_match:
+        return "path"
+    if _PROJECT_CONTROL_ABSOLUTE_UPROJECT_RE.fullmatch(target.strip()):
+        return "path"
+    candidate = Path(target).expanduser()
+    if candidate.suffix.casefold() == ".uproject" and candidate.is_absolute():
+        return "path"
+    return "name"
+
+
+def parse_project_control_intent(request: str) -> ProjectControlIntent:
+    """Parse project status/selection without consuming an attached work goal."""
+
+    source = str(request or "").strip()
+    if not source:
+        return ProjectControlIntent()
+
+    status_match = _PROJECT_CONTROL_STATUS_RE.match(source)
+    if status_match:
+        remaining = _remaining_after_control_match(source, status_match.end())
+        return ProjectControlIntent(
+            matched=True,
+            operation="status",
+            speech_act="query",
+            target_kind="none",
+            pure_control=not remaining,
+            remaining_request=remaining,
+        )
+
+    target_query = _PROJECT_CONTROL_TARGET_QUERY_RE.match(source)
+    if not target_query:
+        target_query = _PROJECT_CONTROL_ENGLISH_TARGET_QUERY_RE.match(source)
+    if target_query:
+        target = _clean_project_control_target(target_query.group("target"))
+        remaining = _remaining_after_control_match(source, target_query.end())
+        return ProjectControlIntent(
+            matched=True,
+            operation="status",
+            speech_act="query",
+            target_kind=_project_target_kind(target),
+            target=target,
+            pure_control=not remaining,
+            remaining_request=remaining,
+        )
+
+    clear_match = _PROJECT_CONTROL_CLEAR_RE.match(source)
+    if clear_match:
+        remaining = _remaining_after_control_match(source, clear_match.end())
+        return ProjectControlIntent(
+            matched=True,
+            operation="clear",
+            speech_act="command",
+            target_kind="none",
+            pure_control=not remaining,
+            remaining_request=remaining,
+        )
+
+    for pattern in _PROJECT_CONTROL_NEGATED_RES:
+        match = pattern.match(source)
+        if not match:
+            continue
+        target = _clean_project_control_target(match.group("target"))
+        remaining = _remaining_after_control_match(source, match.end())
+        return ProjectControlIntent(
+            matched=True,
+            operation="noop",
+            speech_act="command",
+            negated=True,
+            target_kind=_project_target_kind(target),
+            target=target,
+            pure_control=not remaining,
+            remaining_request=remaining,
+        )
+
+    for pattern in _PROJECT_CONTROL_SELECT_RES:
+        match = pattern.match(source)
+        if not match:
+            continue
+        target = _clean_project_control_target(match.group("target"))
+        remaining = _remaining_after_control_match(source, match.end())
+        return ProjectControlIntent(
+            matched=True,
+            operation="select",
+            speech_act="command",
+            target_kind=_project_target_kind(target),
+            target=target,
+            pure_control=not remaining,
+            remaining_request=remaining,
+        )
+
+    targetless = _PROJECT_CONTROL_TARGETLESS_SELECT_RE.match(source)
+    if targetless:
+        remaining = _remaining_after_control_match(source, targetless.end())
+        return ProjectControlIntent(
+            matched=True,
+            operation="select",
+            speech_act="command",
+            target_kind="none",
+            pure_control=not remaining,
+            remaining_request=remaining,
+        )
+
+    return ProjectControlIntent()
+
 
 @dataclass
 class EvidencePlan:
@@ -294,10 +611,16 @@ class AgentPlan:
     tool_discovery_candidates: list[dict[str, Any]] = field(default_factory=list)
     plan_graph_delta: dict[str, Any] = field(default_factory=dict)
     orchestration: dict[str, Any] = field(default_factory=dict)
+    request_intent: dict[str, Any] = field(default_factory=dict)
+    project_control: dict[str, Any] = field(default_factory=dict)
+    resolved_targets: list[dict[str, Any]] = field(default_factory=list)
+    semantic_ambiguity: dict[str, Any] = field(default_factory=dict)
+    original_objective: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "request": self.request,
+            "objective": self.original_objective or self.request,
             "taskKind": self.task_kind,
             "evidencePlan": self.evidence.to_dict(),
             "editStrategy": self.edit_strategy,
@@ -310,6 +633,7 @@ class AgentPlan:
             "retryPolicy": self.retry_policy,
             "notes": self.notes,
             "domainKind": self.domain_kind,
+            "requestIntent": self.request_intent,
         }
         if self.domain_profile:
             payload["domainProfile"] = self.domain_profile
@@ -343,6 +667,12 @@ class AgentPlan:
             payload["planGraphDelta"] = self.plan_graph_delta
         if self.orchestration:
             payload["orchestration"] = self.orchestration
+        if self.project_control:
+            payload["projectControl"] = self.project_control
+        if self.resolved_targets:
+            payload["resolvedTargets"] = self.resolved_targets
+        if self.semantic_ambiguity:
+            payload["semanticAmbiguity"] = self.semantic_ambiguity
         return payload
 
 
@@ -606,53 +936,40 @@ def _has_sketch_intent(text: str) -> bool:
 
 
 def is_project_control_request(request: str, mode: str = "auto") -> bool:
-    """Recognize only explicit project selection/status requests.
-
-    The classifier intentionally refuses mixed requests such as "switch project
-    and analyze its source".  Those need the regular planner because the
-    analysis or implementation portion still needs a bounded task route.
-    """
+    """Return true only for a *pure* project-control speech act."""
 
     if str(mode or "").strip().casefold() == "project_control":
         return True
-    text = str(request or "").strip().casefold()
-    if not text or not any(pattern.search(text) for pattern in PROJECT_CONTROL_PATTERNS):
-        return False
-    # A user-supplied filesystem path can contain words such as ``Source`` or
-    # ``test``. It is data for the project controller, not an extra analysis
-    # instruction, so do not let it alter intent classification.
-    intent_text = _PROJECT_CONTROL_PATH_RE.sub(" <project-path> ", text)
-    if _has_write_intent(intent_text) or _is_compile_fix_request(intent_text) or _has_refactor_intent(intent_text):
-        return False
-    return not any(marker in intent_text for marker in PROJECT_CONTROL_WORK_MARKERS)
+    intent = parse_project_control_intent(request)
+    return intent.matched and intent.pure_control
 
 
 def project_control_requests_selection(request: str) -> bool:
     """Return whether an explicit project-control request changes selection."""
 
-    text = str(request or "").strip()
-    return bool(text and any(pattern.search(text) for pattern in PROJECT_CONTROL_SELECTION_PATTERNS))
+    intent = parse_project_control_intent(request)
+    return intent.matched and intent.operation == "select" and not intent.negated
 
 
 def project_control_requests_clear(request: str) -> bool:
     """Return whether project control explicitly requests clearing the selection."""
 
-    text = str(request or "").strip()
-    return bool(text and any(pattern.search(text) for pattern in PROJECT_CONTROL_CLEAR_PATTERNS))
+    intent = parse_project_control_intent(request)
+    return intent.matched and intent.operation == "clear" and not intent.negated
 
 
 def project_control_project_path_hint(request: str) -> str:
-    """Extract only an explicit absolute/tilde ``.uproject`` path from user text.
+    """Return the exact path target from the structured parse, if present."""
 
-    A project name alone is intentionally not resolved here: choosing a matching
-    project by name would reintroduce a machine-specific, potentially wrong
-    project selection.  The downstream project controller validates the path.
-    """
+    intent = parse_project_control_intent(request)
+    return intent.target if intent.target_kind == "path" else ""
 
-    match = _PROJECT_CONTROL_PATH_RE.search(str(request or ""))
-    if not match:
-        return ""
-    return str(match.group("quoted") or match.group("bare") or "").strip().rstrip(".,;:)]}")
+
+def project_control_project_name_hint(request: str) -> str:
+    """Return the exact name target from the structured parse, if present."""
+
+    intent = parse_project_control_intent(request)
+    return intent.target if intent.target_kind == "name" else ""
 
 
 def classify_task(request: str, mode: str = "auto") -> TaskKind:
@@ -710,6 +1027,87 @@ def classify_task(request: str, mode: str = "auto") -> TaskKind:
     return "inspect_only"
 
 
+def build_request_intent(
+    request: str,
+    task_kind: TaskKind | None = None,
+    *,
+    objective: str | None = None,
+    domain_kind: str = "",
+    ambiguity_material: bool = False,
+) -> dict[str, Any]:
+    """Issue the minimal server intent contract consumed by the compactor."""
+
+    raw_request = str(request or "")
+    source = raw_request.strip()
+    authoritative_objective = normalize_objective_for_hash(
+        objective if objective is not None else raw_request
+    )
+    resolved_kind = task_kind or classify_task(source, "auto")
+    project_intent = parse_project_control_intent(source)
+
+    if project_intent.matched:
+        domain = "project_control"
+        operation = (
+            "status"
+            if project_intent.operation in {"status", "noop"}
+            else "select"
+        )
+        mutability = (
+            "control_state"
+            if project_intent.operation in {"select", "clear"}
+            and not project_intent.negated
+            else "none"
+        )
+        speech_act = project_intent.speech_act
+        targets: dict[str, Any] = {
+            "project": {
+                "kind": project_intent.target_kind,
+                "value": project_intent.target,
+            }
+        }
+        if project_intent.operation == "clear":
+            targets["project"]["clear"] = True
+    else:
+        lower = source.casefold()
+        if resolved_kind == "compile_fix":
+            domain, operation, mutability = "build", "repair", "source_files"
+        elif resolved_kind == "runtime_debug":
+            domain, operation, mutability = "runtime", "analyze", "none"
+        elif resolved_kind in {"edit", "refactor"}:
+            domain, operation, mutability = "source", "modify", "source_files"
+        elif resolved_kind in {"cpp_analysis", "code_sketch"}:
+            domain, operation, mutability = "source", "analyze", "none"
+        elif any(marker in lower for marker in ASSET_ANALYSIS_MARKERS):
+            domain, operation, mutability = "asset", "analyze", "none"
+        elif domain_kind and domain_kind != "generic":
+            domain, operation, mutability = "source", "analyze", "none"
+        else:
+            domain, operation, mutability = "generic", "analyze", "none"
+        speech_act = (
+            "query"
+            if "?" in source
+            or re.search(r"(?:뭐|무엇|어디|알려|설명해|what|which|how\s+does)\b", lower)
+            else "command"
+        )
+        symbols = _symbol_candidates_from_text(source)
+        targets = {"symbols": symbols[:8]} if symbols else {}
+
+    return {
+        "version": 1,
+        "objectiveHash": objective_hash(authoritative_objective),
+        "domain": domain,
+        "operation": operation,
+        "mutability": mutability,
+        "speechAct": speech_act,
+        "negated": bool(project_intent.negated or _has_negated_write_intent(source.casefold())),
+        "targets": targets,
+        "ambiguity": {
+            "status": "unresolved" if ambiguity_material else "resolved",
+            "material": bool(ambiguity_material),
+        },
+    }
+
+
 def is_continuation_request(request: str) -> bool:
     """Return true only for a context-dependent, goal-free continuation command."""
 
@@ -718,8 +1116,8 @@ def is_continuation_request(request: str) -> bool:
 
 def resolve_plan_request(request: str, latest_user_message: str | None = None) -> dict[str, Any]:
     """Keep the user's latest verbatim goal authoritative over model restatements."""
-    plan_request = str(request or "").strip()
-    latest = str(latest_user_message or "").strip()
+    plan_request = normalize_objective_for_hash(request or "")
+    latest = normalize_objective_for_hash(latest_user_message or "")
     result: dict[str, Any] = {
         "request": plan_request,
         "usedLatestUserMessage": False,
@@ -1412,7 +1810,9 @@ def build_suggested_tool_calls(
         # build_agent_plan already resolved projectContext. Repeating the
         # control-plane lookup here is redundant and can collide with another
         # chat's task ownership without adding any source evidence.
-        calls: list[dict[str, Any]] = []
+        calls: list[dict[str, Any]] = [
+            {"tool": "unreal_symbol_lookup", "args": {"query": text, "top_k": 8}},
+        ]
         if search_tokens:
             for token in search_tokens:
                 calls.append({"tool": "search_files", "args": {"query": token, "path": browse_path}})
@@ -1465,6 +1865,7 @@ def _build_project_control_plan(
 ) -> AgentPlan:
     """Build a deliberately taskless plan for explicit project control only."""
 
+    parsed = parse_project_control_intent(request)
     evidence = build_evidence_plan(request, "project_control")
     suggested = build_suggested_tool_calls(
         request,
@@ -1473,13 +1874,17 @@ def _build_project_control_plan(
         project_context,
     )
     selection_requested = project_control_requests_selection(request)
-    has_exact_target = bool(project_control_requests_clear(request) or project_control_project_path_hint(request))
+    has_exact_target = bool(
+        project_control_requests_clear(request)
+        or project_control_project_path_hint(request)
+        or project_control_project_name_hint(request)
+    )
     notes = [
         "Project control is handled directly; no task session, source scan, RAG query, or write authority is created.",
     ]
     if selection_requested and not has_exact_target:
         notes.append(
-            "Project selection needs one exact absolute .uproject path; do not guess from a project name."
+            "Project selection needs one exact project name or .uproject path; fuzzy selection is forbidden."
         )
     return AgentPlan(
         request=request,
@@ -1509,6 +1914,21 @@ def _build_project_control_plan(
             "requiredBeforeWrite": [],
             "taskSessionRequired": False,
         },
+        request_intent=build_request_intent(
+            request,
+            "project_control",
+            objective=request,
+        ),
+        project_control={
+            "operation": parsed.operation,
+            "speechAct": parsed.speech_act,
+            "negated": parsed.negated,
+            "targetKind": parsed.target_kind,
+            "target": parsed.target,
+            "pureControl": parsed.pure_control,
+            "remainingRequest": parsed.remaining_request,
+        },
+        original_objective=request,
     )
 
 
@@ -1518,6 +1938,7 @@ def build_agent_plan(
     *,
     file_count_hint: int = 0,
     latest_user_message: str | None = None,
+    original_objective: str | None = None,
 ) -> AgentPlan:
     from load_sampling_preset import profile_agent_policy, resolve_profile_name
     from project_context import resolve_active_project_context
@@ -1526,6 +1947,7 @@ def build_agent_plan(
 
     resolved = resolve_plan_request(request, latest_user_message)
     request = str(resolved.get("request") or request)
+    authoritative_objective = normalize_objective_for_hash(original_objective or request)
     policy = profile_agent_policy()
     project_context = resolve_active_project_context()
     task_kind = classify_task(request, mode)
@@ -1732,6 +2154,12 @@ def build_agent_plan(
     ambiguity_gate: dict[str, Any] = {}
     feature_intent: dict[str, Any] = {}
     feature_completion_audit: dict[str, Any] = {}
+    from semantic_ambiguity import resolve_lexical_semantic_ambiguity
+
+    semantic_ambiguity = resolve_lexical_semantic_ambiguity(
+        request,
+        write_intent=task_kind in {"edit", "compile_fix", "refactor"},
+    )
     architecture_required = domain_profile.architecture_required or domain_kind == "architecture"
     if architecture_required:
         ambiguity_gate = architecture_ambiguity_gate(request)
@@ -1752,6 +2180,19 @@ def build_agent_plan(
     )
 
     gate_extras: dict[str, Any] = {}
+    if semantic_ambiguity.get("material"):
+        strategy = "no_edit"
+        evidence.writes_allowed = False
+        gate_extras.update(
+            {
+                "requiresUserClarification": True,
+                "semanticAmbiguityStatus": "unresolved",
+            }
+        )
+        notes.append(
+            "Lexical semantic ambiguity is material: compare the server-issued "
+            "interpretations and obtain one explicit target before writes."
+        )
     if ambiguity_gate:
         strategy, evidence_writes, gate_extras = apply_ambiguity_write_policy(
             ambiguity_gate=ambiguity_gate,
@@ -1855,7 +2296,7 @@ def build_agent_plan(
         profile_name=resolve_profile_name(),
         completion_contract=completion_contract,
     )
-    if feature_intent.get("requiresResolution"):
+    if feature_intent.get("requiresResolution") or semantic_ambiguity.get("material"):
         required = list(orchestration.get("requiredBeforeWrite") or [])
         if "unreal_feature_intent_resolve" not in required:
             required.insert(0, "unreal_feature_intent_resolve")
@@ -2020,6 +2461,19 @@ def build_agent_plan(
         tool_discovery_candidates=tool_discovery_candidates,
         plan_graph_delta=plan_graph_delta,
         orchestration=orchestration,
+        request_intent=build_request_intent(
+            request,
+            task_kind,
+            objective=authoritative_objective,
+            domain_kind=domain_kind,
+            ambiguity_material=bool(
+                (ambiguity_gate or {}).get("requiresResolution")
+                or feature_intent.get("requiresResolution")
+                or semantic_ambiguity.get("material")
+            ),
+        ),
+        semantic_ambiguity=semantic_ambiguity,
+        original_objective=authoritative_objective,
     )
     consistency_issues = validate_plan_consistency(plan)
     if consistency_issues:

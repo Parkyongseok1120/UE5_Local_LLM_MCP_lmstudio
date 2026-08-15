@@ -31,12 +31,22 @@ jobs:
       - name: Install pytest
         run: python -m pip install pytest
 
+      - name: Python syntax gate (portable sources)
+        run: python -m compileall -q install.py installer scripts skills tools
+
+      - name: Root Node contract tests
+        run: >
+          node --test
+          scripts/chat_history_trim.test.js
+          scripts/stage_campaign_verify.test.js
+
       - name: Cross-platform installer and package tests
         run: >
           python -m pytest
           tests/test_integrated_installer.py
           tests/test_bootstrap_runtimes.py
           tests/test_integrated_package.py
+          tests/test_install_sh_python_launcher.py
           tests/test_evidence_first_mcp.py
           tests/test_evidence_first_benchmark.py
           -q --tb=short
@@ -45,27 +55,19 @@ jobs:
         run: npm ci --no-fund --no-audit
         working-directory: lmstudio-unreal-agent-mcp
 
-      - name: Cross-platform path, build, and Automation contracts
-        run: >
-          node --test
-          test/unreal-detect-portability.test.js
-          test/build-executor.test.js
-          test/build-tool-envelope.test.js
-          test/automation-executor.test.js
-          test/automation-regression-boundaries.test.js
-          test/edit-bundle-rollback.test.js
-          test/edit-bundle-transaction.test.js
-          test/mutation-generation.test.js
-          test/transaction-journal.test.js
-          test/journal-writeahead-crash.test.js
-          test/read-path-resolver.test.js
-          test/recovery-log-contract.test.js
-          test/task-control-transition.test.js
-          test/task-auth.test.js
-          test/tool-read-history.test.js
-          test/validation-scope.test.js
-          test/write-locks.test.js
-          test/workflow-loop-guard.test.js
+      - name: Agent MCP syntax gate (all source JavaScript)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem -Path src -Filter *.js -Recurse | ForEach-Object {
+            Write-Host "Checking $($_.FullName)"
+            node --check $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "node --check failed: $($_.FullName)" }
+          }
+        working-directory: lmstudio-unreal-agent-mcp
+
+      - name: Agent MCP full test suite
+        run: npm test
         working-directory: lmstudio-unreal-agent-mcp
 
       - name: Version-local engine evidence and multi-slice routing
@@ -81,6 +83,16 @@ jobs:
           tests/test_unreal_static_validate.py
           tests/test_validate_project_sources.py
           tests/test_write_lock_stale.py
+          tests/test_claim_validation_engine_portability.py
+          tests/test_engine_registration_portability.py
+          tests/test_project_name_resolver.py
+          tests/test_project_switch_contract_integration.py
+          tests/test_request_intent_cross_runtime.py
+          tests/test_runtime_verify.py
+          tests/test_semantic_ambiguity.py
+          tests/test_target_resolver.py
+          tests/test_transcript_replay_contract.py
+          tests/test_ue_export_compatibility.py
           tests/test_phase_tool_router.py::test_successful_build_advances_multi_slice_plan_before_completion
           tests/test_phase_tool_router.py::test_successful_build_binds_automation_gate_without_completing_task
           -q --tb=short
@@ -89,8 +101,8 @@ jobs:
         run: npm ci --no-fund --no-audit
         working-directory: lmstudio-context-compactor-plugin
 
-      - name: Cross-platform context continuity contracts
-        run: node --test test/compaction-core.test.js
+      - name: Context compactor full build and test suite
+        run: npm test
         working-directory: lmstudio-context-compactor-plugin
 
       - name: SAFE dry-run performs no target writes

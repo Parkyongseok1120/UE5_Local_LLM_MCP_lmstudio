@@ -111,6 +111,9 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 
 REQUIRED_RUNTIME_FILES = (
     "docs/Release_Notes_1_3_0_RC3.md",
+    "scripts/project_name_resolver.py",
+    "scripts/semantic_ambiguity.py",
+    "scripts/target_resolver.py",
     "scripts/control_runtime_identity.py",
     "scripts/phase_tool_router.py",
     "scripts/approve_feature_intent.py",
@@ -119,6 +122,8 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/unreal_source_extensions.py",
     "scripts/installer_support/Install-PathHelpers.ps1",
     "lmstudio-unreal-agent-mcp/src/filesystem-path-identity.js",
+    "lmstudio-unreal-agent-mcp/src/command-policy.js",
+    "lmstudio-unreal-agent-mcp/src/resolve-project-name-cli.js",
     "lmstudio-unreal-agent-mcp/src/recovery-log-contract.js",
     "lmstudio-unreal-agent-mcp/src/route-watcher.js",
     "lmstudio-unreal-agent-mcp/src/mutation-semantic-guard.js",
@@ -342,7 +347,11 @@ def _sha256(path: Path) -> str:
 def _write_launchers(staging: Path) -> None:
     shutil.copy2(ROOT / "INSTALL.bat", staging / "INSTALL.bat")
     target = staging / "install.sh"
-    shutil.copy2(ROOT / "install.sh", target)
+    # A Windows checkout may materialize the tracked shell launcher with CRLF.
+    # Normalize the portable artifact so its shebang remains executable after
+    # the ZIP is moved to Linux or macOS, regardless of the packaging host.
+    launcher = (ROOT / "install.sh").read_bytes()
+    target.write_bytes(launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
     target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     (staging / "PORTABLE-INSTALL.md").write_text(
         "# Integrated portable installer\n\n"

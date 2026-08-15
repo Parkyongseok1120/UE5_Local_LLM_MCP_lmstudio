@@ -23,6 +23,7 @@ from workspace_paths import (
     filesystem_path_identity,
     find_workspace_root,
     load_shared_config,
+    resolve_engine_root_for_association,
     resolve_index_path,
     shared_config_path,
 )
@@ -3258,6 +3259,241 @@ def _handle_unreal_feature_intent_resolve(
     server.structured_tool_result(message_id, payload)
 
 
+_CLAIM_VALIDATION_UPROJECT_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _claim_validation_project_descriptor(project_root: str) -> dict[str, Any]:
+    """Resolve one immediate project descriptor without searching outside its root."""
+
+    raw_root = str(project_root or "").strip()
+    if not raw_root:
+        return {
+            "ok": True,
+            "projectFile": "",
+            "engineAssociation": "",
+        }
+    try:
+        candidate = Path(raw_root).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        return {
+            "ok": False,
+            "projectFile": raw_root,
+            "engineAssociation": "",
+            "errorCode": "PROJECT_DESCRIPTOR_INVALID",
+            "error": f"Could not resolve projectRoot: {type(exc).__name__}: {exc}",
+        }
+
+    descriptor: Path | None = None
+    if candidate.suffix.lower() == ".uproject":
+        if not candidate.is_file():
+            return {
+                "ok": False,
+                "projectFile": str(candidate),
+                "engineAssociation": "",
+                "errorCode": "PROJECT_DESCRIPTOR_INVALID",
+                "error": f"Project descriptor does not exist: {candidate}",
+            }
+        descriptor = candidate
+    elif candidate.is_dir():
+        try:
+            descriptors = sorted(
+                (
+                    child.resolve()
+                    for child in candidate.iterdir()
+                    if child.is_file() and child.suffix.lower() == ".uproject"
+                ),
+                key=lambda item: item.name.casefold(),
+            )
+        except OSError as exc:
+            return {
+                "ok": False,
+                "projectFile": "",
+                "engineAssociation": "",
+                "errorCode": "PROJECT_DESCRIPTOR_INVALID",
+                "error": f"Could not enumerate project descriptors under {candidate}: {exc}",
+            }
+        if len(descriptors) == 1:
+            descriptor = descriptors[0]
+        elif len(descriptors) > 1:
+            active_text = str(load_shared_config().get("activeProject") or "").strip()
+            active: Path | None = None
+            if active_text:
+                try:
+                    active_candidate = Path(active_text).expanduser().resolve()
+                    if active_candidate in descriptors:
+                        active = active_candidate
+                except (OSError, RuntimeError):
+                    active = None
+            if active is None:
+                return {
+                    "ok": False,
+                    "projectFile": "",
+                    "engineAssociation": "",
+                    "errorCode": "PROJECT_DESCRIPTOR_AMBIGUOUS",
+                    "error": (
+                        f"Multiple .uproject files exist directly under {candidate}; "
+                        "pass the exact projectRoot .uproject path."
+                    ),
+                }
+            descriptor = active
+
+    if descriptor is None:
+        return {
+            "ok": True,
+            "projectFile": "",
+            "engineAssociation": "",
+        }
+
+    try:
+        size = descriptor.stat().st_size
+        if size > _CLAIM_VALIDATION_UPROJECT_MAX_BYTES:
+            raise ValueError(
+                f"descriptor exceeds {_CLAIM_VALIDATION_UPROJECT_MAX_BYTES} bytes"
+            )
+        raw = descriptor.read_bytes()
+        if len(raw) > _CLAIM_VALIDATION_UPROJECT_MAX_BYTES:
+            raise ValueError(
+                f"descriptor exceeds {_CLAIM_VALIDATION_UPROJECT_MAX_BYTES} bytes"
+            )
+        parsed = json.loads(raw.decode("utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return {
+            "ok": False,
+            "projectFile": str(descriptor),
+            "engineAssociation": "",
+            "errorCode": "PROJECT_DESCRIPTOR_INVALID",
+            "error": f"Could not read project descriptor {descriptor}: {exc}",
+        }
+    if not isinstance(parsed, dict):
+        return {
+            "ok": False,
+            "projectFile": str(descriptor),
+            "engineAssociation": "",
+            "errorCode": "PROJECT_DESCRIPTOR_INVALID",
+            "error": f"Project descriptor must contain a JSON object: {descriptor}",
+        }
+    association = parsed.get("EngineAssociation")
+    if association is not None and not isinstance(association, str):
+        return {
+            "ok": False,
+            "projectFile": str(descriptor),
+            "engineAssociation": "",
+            "errorCode": "PROJECT_DESCRIPTOR_INVALID",
+            "error": f"Project EngineAssociation must be a string: {descriptor}",
+        }
+    return {
+        "ok": True,
+        "projectFile": str(descriptor),
+        "engineAssociation": str(association or "").strip(),
+    }
+
+
+def _resolve_claim_validation_engine(
+    project_root: str,
+    explicit_engine_root: object,
+    workspace: Path,
+) -> dict[str, Any]:
+    """Bind claim validation to the selected project's engine association.
+
+    A valid explicit ``engineRoot`` is an intentional per-call override.  An
+    invalid explicit value never falls through to a default engine.  Projects
+    with an association fail closed when that exact binding cannot be resolved;
+    association-free source fixtures retain header-optional validation.
+    """
+
+    descriptor = _claim_validation_project_descriptor(project_root)
+    if not descriptor.get("ok"):
+        return descriptor
+    association = str(descriptor.get("engineAssociation") or "").strip()
+    explicit = str(explicit_engine_root or "").strip()
+    legacy_source = ""
+    requested_root = explicit
+    if not association and not requested_root:
+        shared_default = str(
+            load_shared_config().get("defaultEngineRoot") or ""
+        ).strip()
+        for source, value in (
+            ("environment", os.environ.get("UNREAL_ENGINE_ROOT", "")),
+            ("shared.defaultEngineRoot", shared_default),
+        ):
+            candidate = str(value or "").strip()
+            if candidate:
+                legacy_source = source
+                requested_root = candidate
+                break
+    if not association and not requested_root:
+        return {
+            "ok": True,
+            "resolverOk": False,
+            "engineRoot": "",
+            "source": "",
+            "requestedEngineAssociation": "",
+            "engineAssociation": "",
+            "projectFile": str(descriptor.get("projectFile") or ""),
+        }
+    resolution = dict(
+        resolve_engine_root_for_association(
+            association,
+            workspace,
+            explicit_engine_root=requested_root or None,
+        )
+    )
+    resolution["projectFile"] = str(descriptor.get("projectFile") or "")
+    resolution["engineAssociation"] = association
+    if explicit and not (
+        resolution.get("ok") is True
+        and str(resolution.get("source") or "") == "argument"
+    ):
+        return {
+            **resolution,
+            "ok": False,
+            "engineRoot": "",
+            "errorCode": "EXPLICIT_ENGINE_ROOT_INVALID",
+            "error": (
+                "The explicit engineRoot is not a valid Unreal Engine root; "
+                "it was not replaced with a configured or environment fallback."
+            ),
+        }
+    if legacy_source:
+        if not (
+            resolution.get("ok") is True
+            and str(resolution.get("source") or "") == "argument"
+        ):
+            resolution = {
+                "ok": False,
+                "engineRoot": "",
+                "source": legacy_source,
+                "requestedEngineAssociation": "",
+                "errorCode": "ENGINE_ROOT_UNRESOLVED",
+                "error": f"Could not use {legacy_source} as an Unreal Engine root.",
+                "projectFile": str(descriptor.get("projectFile") or ""),
+                "engineAssociation": "",
+            }
+        else:
+            resolution["source"] = legacy_source
+    if association and resolution.get("ok") is not True:
+        return resolution
+    if resolution.get("ok") is not True:
+        # Header evidence is optional for synthetic/association-free source
+        # fixtures.  Preserve the resolver diagnostic without selecting a
+        # potentially unrelated engine.
+        optional_resolution = {
+            **resolution,
+            "ok": True,
+            "resolverOk": False,
+            "engineRoot": "",
+        }
+        optional_resolution["resolverErrorCode"] = str(
+            optional_resolution.pop("errorCode", "") or ""
+        )
+        optional_resolution["resolverError"] = str(
+            optional_resolution.pop("error", "") or ""
+        )
+        return optional_resolution
+    resolution["resolverOk"] = True
+    return resolution
+
+
 def _handle_unreal_code_sketch_claim_validate(
     server: McpServer, message_id: Any, arguments: dict[str, Any]
 ) -> None:
@@ -3296,10 +3532,17 @@ def _handle_unreal_code_sketch_claim_validate(
             )
             raw_target_files = selected_slice.get("files")
     project_root = str(arguments.get("projectRoot") or "").strip()
+    project_file_hint = (
+        project_root
+        if Path(project_root).suffix.lower() == ".uproject"
+        else ""
+    )
     if not project_root and task_state:
         task_project = str(task_state.get("projectFile") or "").strip()
         if task_project:
             task_path = Path(task_project).expanduser().resolve()
+            if task_path.suffix.lower() == ".uproject":
+                project_file_hint = str(task_path)
             project_root = str(
                 task_path.parent
                 if task_path.suffix.lower() == ".uproject"
@@ -3309,6 +3552,8 @@ def _handle_unreal_code_sketch_claim_validate(
         active = str(load_shared_config().get("activeProject") or "").strip()
         if active:
             active_path = Path(active).resolve()
+            if active_path.suffix.lower() == ".uproject":
+                project_file_hint = str(active_path)
             project_root = str(active_path.parent if active_path.suffix.lower() == ".uproject" else active_path)
     target_files: list[str] = []
     validation_plan: list[str] = []
@@ -3503,6 +3748,86 @@ def _handle_unreal_code_sketch_claim_validate(
                 preflight=preflight,
             ):
                 return
+    engine_resolution: dict[str, Any] = {
+        "ok": True,
+        "resolverOk": False,
+        "engineRoot": "",
+        "source": "skipped_oversized" if oversized else "",
+        "requestedEngineAssociation": "",
+        "engineAssociation": "",
+        "projectFile": "",
+    }
+    engine_root = ""
+    if not oversized:
+        server.progress_phase(message_id, "Resolving project engine association")
+        engine_resolution = _resolve_claim_validation_engine(
+            project_file_hint or project_root,
+            arguments.get("engineRoot"),
+            Path(server.workspace).expanduser().resolve(),
+        )
+        if engine_resolution.get("ok") is not True:
+            error_code = str(
+                engine_resolution.get("errorCode")
+                or "ENGINE_ASSOCIATION_UNRESOLVED"
+            )
+            error = str(
+                engine_resolution.get("error")
+                or "The selected project's Unreal Engine association could not be resolved."
+            )
+            payload = {
+                "ok": False,
+                "status": "blocked",
+                "errorCode": error_code,
+                "error": error,
+                "retryable": True,
+                "gatePassed": False,
+                "writeGateClosed": True,
+                "doNotRetryUnchanged": True,
+                "reuseCurrentTaskAuthorization": True,
+                "nextAction": "unreal_project_status",
+                "nextActionIsTool": True,
+                "nextActionArgs": {},
+                "engineResolution": engine_resolution,
+                "agentInstruction": (
+                    "Keep the current project and task. Resolve its exact EngineAssociation "
+                    "with engineRootsByAssociation, an OS registration, or a valid explicit "
+                    "engineRoot, then retry this gate once with changed engine evidence."
+                ),
+                "generationContract": {
+                    "ok": False,
+                    "mode": "engine_binding_unresolved",
+                    "projectRoot": project_root,
+                    "targets": [{"path": path} for path in target_files],
+                    "issues": [error],
+                    "writeGate": {
+                        "writesAllowed": False,
+                        "reason": "project EngineAssociation is unresolved",
+                    },
+                    "proofBoundary": (
+                        "Project and engine-header validation were skipped because selecting "
+                        "an unrelated Unreal Engine would invalidate the API evidence."
+                    ),
+                },
+            }
+            gate_completion = _record_prewrite_gate(
+                server,
+                gate_name="unreal_code_sketch_claim_validate",
+                arguments=arguments,
+                evidence=payload,
+                gate_passed=False,
+                failure_input_context={
+                    "projectFile": str(engine_resolution.get("projectFile") or ""),
+                    "requestedEngineAssociation": str(
+                        engine_resolution.get("requestedEngineAssociation")
+                        or engine_resolution.get("engineAssociation")
+                        or ""
+                    ),
+                },
+            )
+            _reconcile_gate_completion(payload, gate_completion)
+            server.structured_tool_result(message_id, payload)
+            return
+        engine_root = str(engine_resolution.get("engineRoot") or "").strip()
     graph: dict[str, Any] | None = None
     graph_status: dict[str, Any] = {
         "status": "not_requested" if not project_root else "not_started",
@@ -3552,13 +3877,6 @@ def _handle_unreal_code_sketch_claim_validate(
     generation_contract: dict[str, Any] | None = None
     declaration_context = ""
     declaration_context_files: list[str] = []
-    shared_config = load_shared_config()
-    engine_root = str(
-        arguments.get("engineRoot")
-        or os.environ.get("UNREAL_ENGINE_ROOT")
-        or shared_config.get("defaultEngineRoot")
-        or ""
-    ).strip()
     if not oversized:
         effective_change_kind = str(arguments.get("changeKind") or "").strip()
         if not effective_change_kind:
@@ -3601,6 +3919,7 @@ def _handle_unreal_code_sketch_claim_validate(
         declaration_context=declaration_context,
         engine_root=engine_root or None,
     )
+    payload["engineResolution"] = engine_resolution
     payload["graphStatus"] = graph_status
     payload["declarationContext"] = {
         "fileCount": len(declaration_context_files),
@@ -3759,6 +4078,7 @@ def _handle_unreal_code_sketch_claim_validate(
     gate_completed = _reconcile_gate_completion(payload, gate_completion)
     gate_passed = bool(gate_passed and gate_completed)
     compact_payload = compact_code_sketch_payload(payload)
+    compact_payload["engineResolution"] = engine_resolution
     graph_summary = compact_payload.get("graphStatus") or {}
     gate_summary = compact_payload.get("gateCompletion") or {}
     summary_lines = [str(compact_payload.get("verdictSummary") or "Sketch validation completed.")]
@@ -5030,31 +5350,92 @@ def _handle_unreal_symbol_lookup(server: McpServer, message_id: Any, arguments: 
     server.handle_symbol_lookup(message_id, arguments)
 
 
-def _project_control_response(request: str) -> dict[str, Any]:
+def _project_control_response(
+    request: str,
+    workspace: Path | None = None,
+) -> dict[str, Any]:
     """Return a no-task handoff for an explicit project selection/status request."""
 
     from agent_orchestrator import (
+        build_request_intent,
+        normalize_project_name,
+        parse_project_control_intent,
         project_control_project_path_hint,
+        project_control_project_name_hint,
         project_control_requests_clear,
         project_control_requests_selection,
     )
 
+    parsed = parse_project_control_intent(request)
     config = load_shared_config()
     project_context = resolve_active_project_context()
+    active_project = str(config.get("activeProject") or "").strip()
     payload: dict[str, Any] = {
         "ok": True,
         "status": "completed",
         "taskKind": "project_control",
+        "operation": parsed.operation,
         "taskSessionStarted": False,
-        "activeProject": config.get("activeProject"),
+        "activeProject": active_project or None,
         "activeProjectNames": active_project_names(),
         "sharedConfigPath": str(shared_config_path()),
         "projectContext": project_context,
+        "requestIntent": build_request_intent(
+            request,
+            "project_control",
+            objective=request,
+        ),
+        "projectControl": {
+            "operation": parsed.operation,
+            "speechAct": parsed.speech_act,
+            "negated": parsed.negated,
+            "targetKind": parsed.target_kind,
+            "target": parsed.target,
+            "pureControl": parsed.pure_control,
+            "remainingRequest": parsed.remaining_request,
+        },
         "writeGate": {
             "writesAllowed": False,
             "reason": "Project selection/status is a control operation, not source editing.",
         },
     }
+    if parsed.negated or parsed.operation == "noop":
+        payload.update(
+            {
+                "switchResult": "not_requested",
+                "changed": False,
+                "nextAction": "project_control_noop",
+                "nextActionIsTool": False,
+                "agentInstruction": (
+                    "The project mutation was explicitly negated. Do not call "
+                    "unreal_set_active_project or unreal_agent_plan."
+                ),
+            }
+        )
+        return payload
+
+    if parsed.operation == "status":
+        target_name = project_control_project_name_hint(request)
+        if target_name:
+            active_keys = {
+                normalize_project_name(Path(active_project).stem)
+                if active_project
+                else "",
+                normalize_project_name(project_context.get("projectName") or ""),
+            }
+            payload["targetMatch"] = normalize_project_name(target_name) in active_keys
+        payload.update(
+            {
+                "nextAction": "project_status_reported",
+                "nextActionIsTool": False,
+                "agentInstruction": (
+                    "Report the active-project status above. Do not call unreal_agent_plan "
+                    "or start a task session for a status-only request."
+                ),
+            }
+        )
+        return payload
+
     if project_control_requests_clear(request):
         payload.update(
             {
@@ -5089,6 +5470,100 @@ def _project_control_response(request: str) -> dict[str, Any]:
         )
         return payload
 
+    project_name = project_control_project_name_hint(request)
+    if project_name:
+        target_key = normalize_project_name(project_name)
+        active_keys = {
+            normalize_project_name(Path(active_project).stem)
+            if active_project
+            else "",
+            normalize_project_name(project_context.get("projectName") or ""),
+        }
+        if active_project and target_key and target_key in active_keys:
+            payload.update(
+                {
+                    "switchResult": "already_active",
+                    "changed": False,
+                    "activeProject": str(Path(active_project).expanduser().resolve()),
+                    "nextAction": "already_active",
+                    "nextActionIsTool": False,
+                    "agentInstruction": (
+                        "The exact requested project is already active. Do not call "
+                        "unreal_set_active_project or start a project-control task."
+                    ),
+                }
+            )
+            return payload
+
+        from project_name_resolver import resolve_project_name
+
+        resolution = resolve_project_name(
+            workspace or Path(__file__).resolve().parent.parent,
+            project_name,
+        )
+        if not resolution.get("ok"):
+            candidates = list(
+                resolution.get("suggestions")
+                or resolution.get("candidates")
+                or []
+            )
+            payload.update(
+                {
+                    "ok": False,
+                    "status": "await_user",
+                    "errorCode": str(
+                        resolution.get("errorCode")
+                        or "PROJECT_NAME_NOT_FOUND"
+                    ),
+                    "error": str(
+                        resolution.get("error")
+                        or "No unique exact project-name match was found."
+                    ),
+                    "candidates": candidates,
+                    "suggestions": candidates,
+                    "nextAction": "clarify_project_name",
+                    "nextActionIsTool": False,
+                    "agentInstruction": (
+                        "Do not fuzzy-select a project and do not start the remaining task. "
+                        "Ask the user to choose one exact candidate path or configured name."
+                    ),
+                }
+            )
+            return payload
+        selected = (
+            resolution.get("selected")
+            if isinstance(resolution.get("selected"), dict)
+            else {}
+        )
+        resolved_path = str(selected.get("projectPath") or "").strip()
+        if not resolved_path:
+            payload.update(
+                {
+                    "ok": False,
+                    "status": "await_user",
+                    "errorCode": "PROJECT_NAME_RESOLUTION_FAILED",
+                    "error": "The exact resolver returned no project path.",
+                    "nextActionIsTool": False,
+                }
+            )
+            return payload
+        set_args = {"projectPath": resolved_path}
+        payload.update(
+            {
+                "resolvedProject": selected,
+                "nextAction": "unreal_set_active_project",
+                "nextActionIsTool": True,
+                "requiredNextTool": "unreal_set_active_project",
+                "nextActionArgs": set_args,
+                "requiredNextToolArgs": dict(set_args),
+                "agentInstruction": (
+                    "Call unreal_set_active_project once with the server-resolved exact "
+                    "projectPath. Do not replace it with a fuzzy suggestion."
+                ),
+            }
+        )
+        return payload
+
     if project_control_requests_selection(request):
         payload.update(
             {
@@ -5104,16 +5579,7 @@ def _project_control_response(request: str) -> dict[str, Any]:
         )
         return payload
 
-    payload.update(
-        {
-            "nextAction": "project_status_reported",
-            "nextActionIsTool": False,
-            "agentInstruction": (
-                "Report the active-project status above. Do not call unreal_agent_plan "
-                "or start a task session for a status-only request."
-            ),
-        }
-    )
+    payload.update({"nextAction": "project_status_reported", "nextActionIsTool": False})
     return payload
 
 
@@ -5569,6 +6035,8 @@ class McpServer:
         # must not silently replace a validated multi-slice plan with an
         # incomplete two-file guess.
         self._pending_architecture_handoff: dict[str, Any] = {}
+        self._pending_project_switch_handoffs: dict[str, dict[str, Any]] = {}
+        self._pending_project_switch_lock = threading.Lock()
         try:
             from reconcile_jobs import reconcile_stale_jobs
 
@@ -5708,6 +6176,96 @@ class McpServer:
             return {}
         self._pending_architecture_handoff = {}
         return handoff
+
+    def clear_pending_project_switch_handoffs(self) -> None:
+        with self._pending_project_switch_lock:
+            self._pending_project_switch_handoffs.clear()
+
+    def set_pending_project_switch_handoff(
+        self,
+        *,
+        project_path: str,
+        pending_request: str,
+        original_objective: str,
+        max_age_seconds: float = 180.0,
+    ) -> str:
+        from agent_orchestrator import objective_hash
+
+        now = time.time()
+        token = uuid.uuid4().hex
+        handoff = {
+            "projectPathIdentity": canonical_absolute_path_identity(
+                Path(project_path).expanduser().resolve()
+            ),
+            "pendingRequest": str(pending_request or ""),
+            "pendingRequestHash": hashlib.sha256(
+                str(pending_request or "").encode("utf-8")
+            ).hexdigest(),
+            "originalObjective": str(original_objective or ""),
+            "objectiveHash": objective_hash(str(original_objective or "")),
+            "status": "pending_switch",
+            "recordedAt": now,
+            "expiresAt": now + max(30.0, float(max_age_seconds)),
+        }
+        with self._pending_project_switch_lock:
+            self._pending_project_switch_handoffs = {token: handoff}
+        return token
+
+    def pending_project_switch_handoff(
+        self,
+        token: str,
+        *,
+        project_path: str = "",
+        objective_hash: str = "",
+        required_status: str = "",
+        consume: bool = False,
+    ) -> dict[str, Any]:
+        normalized_token = str(token or "").strip()
+        if not normalized_token:
+            return {}
+        now = time.time()
+        with self._pending_project_switch_lock:
+            handoff = dict(
+                self._pending_project_switch_handoffs.get(normalized_token) or {}
+            )
+            if not handoff:
+                return {}
+            if now > float(handoff.get("expiresAt") or 0.0):
+                self._pending_project_switch_handoffs.pop(normalized_token, None)
+                return {}
+            if required_status and handoff.get("status") != required_status:
+                return {}
+            if project_path:
+                identity = canonical_absolute_path_identity(
+                    Path(project_path).expanduser().resolve()
+                )
+                if handoff.get("projectPathIdentity") != identity:
+                    return {}
+            if objective_hash and str(handoff.get("objectiveHash") or "") != str(
+                objective_hash
+            ):
+                return {}
+            if consume:
+                self._pending_project_switch_handoffs.pop(normalized_token, None)
+        return handoff
+
+    def mark_project_switch_handoff_ready(
+        self,
+        token: str,
+        *,
+        switch_result: str = "switched",
+        changed: bool = True,
+    ) -> dict[str, Any]:
+        normalized_token = str(token or "").strip()
+        with self._pending_project_switch_lock:
+            handoff = self._pending_project_switch_handoffs.get(normalized_token)
+            if not isinstance(handoff, dict):
+                return {}
+            handoff["status"] = "ready_for_plan"
+            handoff["switchResult"] = str(switch_result or "switched")
+            handoff["changed"] = bool(changed)
+            handoff["switchedAt"] = time.time()
+            return dict(handoff)
 
     def architecture_graph(
         self,
@@ -6411,6 +6969,14 @@ class McpServer:
                         },
                         "source": {"type": "array", "items": {"type": "string"}},
                         "project": {"type": "array", "items": {"type": "string"}},
+                        "access": {
+                            "type": "string",
+                            "enum": ["read", "write"],
+                            "default": "read",
+                            "description": "Write resolution additionally requires an existing in-project source file.",
+                        },
+                        "expectedBaseType": {"type": "string"},
+                        "directoryDomain": {"type": "string"},
                         "layer": {"type": "array", "items": {"type": "string"}},
                         "doc_type": {"type": "array", "items": {"type": "string"}},
                         "genre": {"type": "array", "items": {"type": "string"}},
@@ -6466,6 +7032,23 @@ class McpServer:
                             "description": "Optional filter: class, struct, interface, enum, function, module.",
                         },
                         "project": {"type": "array", "items": {"type": "string"}},
+                        "access": {
+                            "type": "string",
+                            "enum": ["read", "write"],
+                            "default": "read",
+                            "description": (
+                                "Use write to require an active-project file binding before "
+                                "targetResolution may select a mutation target."
+                            ),
+                        },
+                        "expectedBaseType": {
+                            "type": "string",
+                            "description": "Optional verified base-type hint for deterministic target ranking.",
+                        },
+                        "directoryDomain": {
+                            "type": "string",
+                            "description": "Optional source-directory domain hint for deterministic target ranking.",
+                        },
                         "detailLevel": {
                             "type": "string",
                             "enum": ["compact", "medium", "large", "full"],
@@ -6521,6 +7104,13 @@ class McpServer:
                         },
                         "prepare": {"type": "boolean", "default": False},
                         "force": {"type": "boolean", "default": False},
+                        "resumeToken": {
+                            "type": "string",
+                            "description": (
+                                "Opaque server-issued token for a switch-and-work handoff. "
+                                "Do not invent or reuse it."
+                            ),
+                        },
                     },
                 ),
             },
@@ -7640,6 +8230,21 @@ class McpServer:
                                 "validated architecture handoff to this planner call."
                             ),
                         },
+                        "projectSwitchResumeToken": {
+                            "type": "string",
+                            "description": (
+                                "Opaque one-shot token returned after a successful server-owned "
+                                "project switch. Do not invent or reuse it."
+                            ),
+                        },
+                        "originalObjective": {
+                            "type": "string",
+                            "description": "Server-owned original mixed objective; accepted only with a valid resume token.",
+                        },
+                        "objectiveHash": {
+                            "type": "string",
+                            "description": "SHA-256 of the server-owned original objective.",
+                        },
                     },
                     ["request"],
                 ),
@@ -8199,6 +8804,35 @@ class McpServer:
     def handle_set_active_project(self, message_id: Any, arguments: dict[str, Any]) -> None:
         from project_controller import switch_active_project
 
+        resume_token = str(arguments.get("resumeToken") or "").strip()
+        pending_handoff: dict[str, Any] = {}
+        if resume_token:
+            project_path_for_token = str(arguments.get("projectPath") or "").strip()
+            pending_handoff = self.pending_project_switch_handoff(
+                resume_token,
+                project_path=project_path_for_token,
+                required_status="pending_switch",
+            )
+            if not pending_handoff or arguments.get("clear") is True:
+                self.structured_tool_result(
+                    message_id,
+                    {
+                        "ok": False,
+                        "errorCode": "PROJECT_SWITCH_HANDOFF_INVALID",
+                        "error": "The project-switch resume token is stale, mismatched, or invalid.",
+                        "retryable": False,
+                        "stopCurrentWorkflow": True,
+                        "agentInstruction": (
+                            "Do not switch or start the pending task. Ask the user to send "
+                            "the original project-switch request again."
+                        ),
+                    },
+                )
+                return
+        else:
+            # A manual control call supersedes any older switch-and-work handoff.
+            self.clear_pending_project_switch_handoffs()
+
         if arguments.get("clear") is True:
             payload = switch_active_project(self.workspace, clear=True)
         else:
@@ -8221,8 +8855,59 @@ class McpServer:
                 payload["fastPath"] = arguments.get("prepare") is not True
 
         if not payload.get("ok"):
+            if resume_token:
+                self.clear_pending_project_switch_handoffs()
+                self.structured_tool_result(
+                    message_id,
+                    {
+                        **dict(payload),
+                        "ok": False,
+                        "errorCode": str(
+                            payload.get("errorCode") or "PROJECT_SWITCH_FAILED"
+                        ),
+                        "error": str(
+                            payload.get("error") or "Project switch failed."
+                        ),
+                        "retryable": False,
+                        "stopCurrentWorkflow": True,
+                        "agentInstruction": (
+                            "Do not start or reconstruct the pending task. Resolve the project "
+                            "switch failure before asking the user to resend the request."
+                        ),
+                    },
+                )
+                return
             self.tool_result(message_id, payload.get("error") or "Project switch failed.", is_error=True)
             return
+
+        if resume_token:
+            switched_identity = canonical_absolute_path_identity(
+                str(payload.get("activeProject") or "")
+            )
+            if (
+                not switched_identity
+                or switched_identity
+                != str(pending_handoff.get("projectPathIdentity") or "")
+            ):
+                self.clear_pending_project_switch_handoffs()
+                self.structured_tool_result(
+                    message_id,
+                    {
+                        "ok": False,
+                        "errorCode": "PROJECT_SWITCH_ACTIVE_PROJECT_MISMATCH",
+                        "error": (
+                            "The project controller result does not match the "
+                            "server-selected project target."
+                        ),
+                        "retryable": False,
+                        "stopCurrentWorkflow": True,
+                        "agentInstruction": (
+                            "Do not resume or reconstruct the pending task. Verify the active "
+                            "project and ask the user to send the original request again."
+                        ),
+                    },
+                )
+                return
 
         if payload.get("ok"):
             from project_switch_invalidate import read_cache_generation
@@ -8236,6 +8921,53 @@ class McpServer:
             else:
                 self._applied_cache_generation = observed
                 self._cache_refresh_required = False
+
+        if resume_token:
+            ready = self.mark_project_switch_handoff_ready(
+                resume_token,
+                switch_result=str(payload.get("switchResult") or "switched"),
+                changed=payload.get("changed", True) is True,
+            )
+            if not ready:
+                self.structured_tool_result(
+                    message_id,
+                    {
+                        "ok": False,
+                        "errorCode": "PROJECT_SWITCH_HANDOFF_EXPIRED",
+                        "error": "The project switched, but the pending work handoff expired.",
+                        "retryable": False,
+                        "stopCurrentWorkflow": True,
+                    },
+                )
+                return
+            plan_args = {
+                "request": str(ready.get("pendingRequest") or ""),
+                "latestUserMessage": str(ready.get("pendingRequest") or ""),
+                "projectSwitchResumeToken": resume_token,
+                "originalObjective": str(ready.get("originalObjective") or ""),
+                "objectiveHash": str(ready.get("objectiveHash") or ""),
+            }
+            payload.update(
+                {
+                    "projectControl": {
+                        "operation": "select",
+                        "switchResult": payload.get("switchResult"),
+                        "changed": payload.get("changed", True),
+                        "resumeAfter": "unreal_set_active_project",
+                    },
+                    "pendingRequest": ready.get("pendingRequest"),
+                    "pendingRequestHash": ready.get("pendingRequestHash"),
+                    "requiredNextTool": "unreal_agent_plan",
+                    "requiredNextToolArgs": plan_args,
+                    "nextAction": "unreal_agent_plan",
+                    "nextActionIsTool": True,
+                    "nextActionArgs": dict(plan_args),
+                    "agentInstruction": (
+                        "Call unreal_agent_plan once with the exact server-owned arguments. "
+                        "Do not restate or broaden the pending request."
+                    ),
+                }
+            )
 
         self.tool_result(
             message_id,
@@ -9065,18 +9797,133 @@ class McpServer:
                 from agent_orchestrator import (
                     build_agent_plan,
                     is_continuation_request,
-                    is_project_control_request,
+                    normalize_objective_for_hash,
+                    parse_project_control_intent,
                     resolve_plan_request,
                 )
 
-                request = str(arguments.get("request") or "").strip()
-                latest_user_message = str(
+                request = normalize_objective_for_hash(
+                    arguments.get("request") or ""
+                )
+                latest_user_message = normalize_objective_for_hash(
                     arguments.get("latestUserMessage")
                     or arguments.get("latest_user_message")
                     or arguments.get("userMessage")
                     or ""
-                ).strip() or None
+                ) or None
                 mode = str(arguments.get("mode") or "auto")
+                original_objective: str | None = None
+                project_control_context: dict[str, Any] = {}
+                switch_project_path_identity = ""
+                switch_resume_token = str(
+                    arguments.get("projectSwitchResumeToken") or ""
+                ).strip()
+                if switch_resume_token:
+                    switch_handoff = self.pending_project_switch_handoff(
+                        switch_resume_token,
+                        required_status="ready_for_plan",
+                    )
+                    if not switch_handoff:
+                        self.structured_tool_result(
+                            message_id,
+                            {
+                                "ok": False,
+                                "errorCode": "PROJECT_SWITCH_RESUME_INVALID",
+                                "error": "The project-switch task resume token is stale or invalid.",
+                                "retryable": False,
+                                "stopCurrentWorkflow": True,
+                                "agentInstruction": (
+                                    "Do not reconstruct the pending request. Ask the user to send "
+                                    "the original switch-and-work request again."
+                                ),
+                            },
+                        )
+                        return
+                    supplied_hash = str(arguments.get("objectiveHash") or "").strip()
+                    if not supplied_hash or supplied_hash != str(
+                        switch_handoff.get("objectiveHash") or ""
+                    ):
+                        self.structured_tool_result(
+                            message_id,
+                            {
+                                "ok": False,
+                                "errorCode": "PROJECT_SWITCH_OBJECTIVE_MISMATCH",
+                                "error": (
+                                    "The resumed objective hash is missing or does not match "
+                                    "the server handoff."
+                                ),
+                                "retryable": False,
+                            },
+                        )
+                        return
+                    switch_project_path_identity = str(
+                        switch_handoff.get("projectPathIdentity") or ""
+                    )
+                    active_at_resume = str(
+                        load_shared_config().get("activeProject") or ""
+                    ).strip()
+                    if (
+                        not active_at_resume
+                        or canonical_absolute_path_identity(active_at_resume)
+                        != switch_project_path_identity
+                    ):
+                        self.clear_pending_project_switch_handoffs()
+                        self.structured_tool_result(
+                            message_id,
+                            {
+                                "ok": False,
+                                "errorCode": "PROJECT_SWITCH_ACTIVE_PROJECT_MISMATCH",
+                                "error": (
+                                    "The active project changed before the pending task could resume."
+                                ),
+                                "retryable": False,
+                                "stopCurrentWorkflow": True,
+                                "agentInstruction": (
+                                    "Do not read source or start the pending task in the current "
+                                    "project. Ask the user to send the original request again."
+                                ),
+                            },
+                        )
+                        return
+                    # Validate and consume under one lock. A bad/missing hash
+                    # never burns the token, while a valid resume remains one-shot.
+                    switch_handoff = self.pending_project_switch_handoff(
+                        switch_resume_token,
+                        objective_hash=supplied_hash,
+                        required_status="ready_for_plan",
+                        consume=True,
+                    )
+                    if not switch_handoff:
+                        self.structured_tool_result(
+                            message_id,
+                            {
+                                "ok": False,
+                                "errorCode": "PROJECT_SWITCH_RESUME_INVALID",
+                                "error": (
+                                    "The project-switch task resume token was already consumed "
+                                    "or became invalid."
+                                ),
+                                "retryable": False,
+                                "stopCurrentWorkflow": True,
+                            },
+                        )
+                        return
+                    request = str(switch_handoff.get("pendingRequest") or "").strip()
+                    latest_user_message = request
+                    original_objective = normalize_objective_for_hash(
+                        switch_handoff.get("originalObjective") or ""
+                    )
+                    project_control_context = {
+                        "operation": "select",
+                        "switchResult": str(
+                            switch_handoff.get("switchResult") or "switched"
+                        ),
+                        "changed": switch_handoff.get("changed", True) is True,
+                        "resumeAfter": "unreal_set_active_project",
+                    }
+                else:
+                    # Any fresh planner objective invalidates an older one-shot handoff.
+                    self.clear_pending_project_switch_handoffs()
                 if not request:
                     self.tool_result(message_id, "Missing request", is_error=True)
                     return
@@ -9118,10 +9965,77 @@ class McpServer:
                 effective_request = str(
                     resolve_plan_request(request, latest_user_message).get("request") or request
                 )
-                if is_project_control_request(effective_request, mode):
+                project_intent = parse_project_control_intent(effective_request)
+                if project_intent.matched:
+                    control_payload = _project_control_response(
+                        effective_request,
+                        self.workspace,
+                    )
+                    if project_intent.pure_control or not project_intent.remaining_request:
+                        self.structured_tool_result(message_id, control_payload)
+                        return
+                    if project_intent.operation in {"status", "noop"} or project_intent.negated:
+                        original_objective = effective_request
+                        request = project_intent.remaining_request
+                        latest_user_message = request
+                        effective_request = request
+                        project_control_context = {
+                            **dict(control_payload.get("projectControl") or {}),
+                            "switchResult": str(
+                                control_payload.get("switchResult") or "not_requested"
+                            ),
+                            "changed": False,
+                        }
+                    elif project_intent.operation != "select":
+                        self.structured_tool_result(message_id, control_payload)
+                        return
+                    elif control_payload.get("switchResult") == "already_active":
+                        original_objective = effective_request
+                        request = project_intent.remaining_request
+                        latest_user_message = request
+                        effective_request = request
+                        project_control_context = {
+                            **dict(control_payload.get("projectControl") or {}),
+                            "switchResult": "already_active",
+                            "changed": False,
+                        }
+                    elif control_payload.get("requiredNextTool") == "unreal_set_active_project":
+                        set_args = dict(control_payload.get("requiredNextToolArgs") or {})
+                        project_path = str(set_args.get("projectPath") or "").strip()
+                        if not project_path:
+                            self.structured_tool_result(message_id, control_payload)
+                            return
+                        resume_token = self.set_pending_project_switch_handoff(
+                            project_path=project_path,
+                            pending_request=project_intent.remaining_request,
+                            original_objective=effective_request,
+                        )
+                        set_args["resumeToken"] = resume_token
+                        control_payload.update(
+                            {
+                                "projectControl": {
+                                    **dict(control_payload.get("projectControl") or {}),
+                                    "resumeAfter": "unreal_set_active_project",
+                                },
+                                "pendingRequest": project_intent.remaining_request,
+                                "pendingRequestHash": hashlib.sha256(
+                                    project_intent.remaining_request.encode("utf-8")
+                                ).hexdigest(),
+                                "resumeAfter": "unreal_set_active_project",
+                                "requiredNextToolArgs": set_args,
+                                "nextActionArgs": dict(set_args),
+                            }
+                        )
+                        self.structured_tool_result(message_id, control_payload)
+                        return
+                    else:
+                        # Ambiguous/not-found/switch failure: never start remaining work.
+                        self.structured_tool_result(message_id, control_payload)
+                        return
+                elif mode == "project_control":
                     self.structured_tool_result(
                         message_id,
-                        _project_control_response(effective_request),
+                        _project_control_response(effective_request, self.workspace),
                     )
                     return
                 self.progress_phase(message_id, "Classifying task and building guarded plan")
@@ -9129,7 +10043,10 @@ class McpServer:
                     request,
                     mode,
                     latest_user_message=latest_user_message,
+                    original_objective=original_objective,
                 ).to_dict()
+                if project_control_context:
+                    payload["projectControl"] = project_control_context
                 writes_allowed = (
                     (payload.get("writeGate") or {}).get("writesAllowed") is True
                 )
@@ -9257,6 +10174,28 @@ class McpServer:
 
                 config = load_shared_config()
                 active_project = str(config.get("activeProject") or "").strip()
+                if (
+                    switch_project_path_identity
+                    and canonical_absolute_path_identity(active_project)
+                    != switch_project_path_identity
+                ):
+                    self.structured_tool_result(
+                        message_id,
+                        {
+                            "ok": False,
+                            "errorCode": "PROJECT_SWITCH_ACTIVE_PROJECT_MISMATCH",
+                            "error": (
+                                "The active project changed while the resumed plan was being built."
+                            ),
+                            "retryable": False,
+                            "stopCurrentWorkflow": True,
+                            "agentInstruction": (
+                                "Do not start a task or read source in the current project. "
+                                "Ask the user to send the original request again."
+                            ),
+                        },
+                    )
+                    return
                 task_mode = "agent_edit" if (payload.get("writeGate") or {}).get("writesAllowed") is True else "plan_only"
                 active_task_session_id = str(
                     self._active_route_context.get("taskSessionId") or ""
@@ -10057,6 +10996,37 @@ class McpServer:
             ]
             suppressed = len(rows) - len(fresh_rows)
             rows = fresh_rows
+        from target_resolver import resolve_symbol_target
+
+        active_path = str(load_shared_config().get("activeProject") or "").strip()
+        active_project_path = (
+            Path(active_path).expanduser().resolve() if active_path else None
+        )
+        active_root = (
+            active_project_path.parent
+            if active_project_path
+            and active_project_path.suffix.casefold() == ".uproject"
+            else active_project_path
+        )
+        target_resolution = resolve_symbol_target(
+            query,
+            rows,
+            access=(
+                "write"
+                if str(arguments.get("access") or "read").casefold() == "write"
+                else "read"
+            ),
+            project_root=active_root,
+            expected_base_type=str(arguments.get("expectedBaseType") or ""),
+            directory_domain=str(arguments.get("directoryDomain") or ""),
+        )
+        from semantic_ambiguity import resolve_lexical_semantic_ambiguity
+
+        semantic_ambiguity = resolve_lexical_semantic_ambiguity(
+            query,
+            evidence_rows=rows,
+            write_intent=str(arguments.get("access") or "read").casefold() == "write",
+        )
         context = assemble_context(
             rows,
             query,
@@ -10071,6 +11041,7 @@ class McpServer:
         next_detail = next_code_detail(detail) if truncated else None
         structured = {
             "matches": rows,
+            "targetResolution": target_resolution,
             "detailLevel": detail,
             "nextDetailLevel": next_detail,
             "signatureContract": contract,
@@ -10078,6 +11049,8 @@ class McpServer:
             "directSourcePreferred": stale_status.get("directSourcePreferred", False),
             "staleProjectRowsSuppressed": suppressed,
         }
+        if semantic_ambiguity:
+            structured["semanticAmbiguity"] = semantic_ambiguity
         authorization = (
             arguments.get("taskAuthorization")
             if isinstance(arguments.get("taskAuthorization"), dict)

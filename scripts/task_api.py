@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from atomic_io import atomic_write_text
+from agent_orchestrator import normalize_objective_for_hash, objective_hash
 from state_root import ensure_state_root_layout, resolve_agent_state_root, task_state_dir
 from task_continuity import (
     MAX_CHECKPOINT_FILES,
@@ -4212,6 +4213,43 @@ def _initial_slice_target_snapshots(
     return normalized_selection_snapshots(snapshots)
 
 
+def _bind_plan_request_intent(
+    plan_payload: dict[str, Any],
+    request: str,
+) -> tuple[dict[str, Any], str, str, dict[str, Any] | None]:
+    request_intent = (
+        dict(plan_payload.get("requestIntent") or {})
+        if isinstance(plan_payload.get("requestIntent"), dict)
+        else {}
+    )
+    original_objective = normalize_objective_for_hash(
+        plan_payload.get("objective") or request
+    )
+    authoritative_hash = objective_hash(original_objective)
+    supplied_hash = str(request_intent.get("objectiveHash") or "").strip().lower()
+    if supplied_hash and (
+        re.fullmatch(r"[a-f0-9]{64}", supplied_hash) is None
+        or supplied_hash != authoritative_hash
+    ):
+        return (
+            request_intent,
+            original_objective,
+            authoritative_hash,
+            {
+                "ok": False,
+                "errorCode": "REQUEST_INTENT_OBJECTIVE_HASH_MISMATCH",
+                "error": (
+                    "requestIntent.objectiveHash does not match the exact "
+                    "trimmed plan objective."
+                ),
+                "retryable": False,
+            },
+        )
+    if request_intent:
+        request_intent["objectiveHash"] = authoritative_hash
+    return request_intent, original_objective, authoritative_hash, None
+
+
 def task_start(
     workspace: Path,
     *,
@@ -4236,6 +4274,12 @@ def task_start(
 
         planner_mode = "planning" if mode in {"read_only", "plan_only"} else "auto"
         plan_payload = build_agent_plan(request, planner_mode).to_dict()
+
+    request_intent, original_objective, intent_objective_hash, intent_error = (
+        _bind_plan_request_intent(plan_payload, request)
+    )
+    if intent_error:
+        return intent_error
 
     write_gate = dict(plan_payload.get("writeGate") or {})
     if mode in {"read_only", "plan_only"}:
@@ -4339,6 +4383,9 @@ def task_start(
         },
         "status": "running",
         "request": request,
+        "objective": original_objective,
+        "objectiveHash": intent_objective_hash,
+        "requestIntent": request_intent,
         "mode": mode,
         "projectFile": project_file,
         "planId": resolved_plan_id,
@@ -5997,6 +6044,11 @@ def task_replan(
     """Atomically replace an active task plan without creating a second owner."""
 
     project_identity = _canonical_project_identity(project_file, workspace=workspace)
+    request_intent, original_objective, intent_objective_hash, intent_error = (
+        _bind_plan_request_intent(plan_payload, request)
+    )
+    if intent_error:
+        return intent_error
     outcome: dict[str, Any] = {}
     new_auth_token = ""
     authorization_identity: dict[str, str] = {}
@@ -6257,6 +6309,9 @@ def task_replan(
         state.update(
             {
                 "request": request,
+                "objective": original_objective,
+                "objectiveHash": intent_objective_hash,
+                "requestIntent": request_intent,
                 "mode": mode,
                 "projectFile": current_project or project_identity,
                 "planRevision": next_revision,
@@ -7232,6 +7287,12 @@ def task_checkpoint(
                     validation=validation,
                     mutation_generation=int(state.get("mutationGeneration") or 0),
                     note=note,
+                    objective_hash=str(state.get("objectiveHash") or ""),
+                    request_intent=(
+                        dict(state.get("requestIntent") or {})
+                        if isinstance(state.get("requestIntent"), dict)
+                        else {}
+                    ),
                 )
                 candidate_checkpoint = dict(
                     candidate_continuity.get("checkpoint") or {}
@@ -7516,6 +7577,12 @@ def task_checkpoint(
                         validation={},
                         mutation_generation=int(state.get("mutationGeneration") or 0),
                         note=note or "Accepted current files during checkpoint rebase.",
+                        objective_hash=str(state.get("objectiveHash") or ""),
+                        request_intent=(
+                            dict(state.get("requestIntent") or {})
+                            if isinstance(state.get("requestIntent"), dict)
+                            else {}
+                        ),
                     )
                 except ValueError as exc:
                     mutation_result = {

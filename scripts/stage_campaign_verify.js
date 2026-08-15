@@ -244,5 +244,5 @@ module.exports = {
   stripCppComments,
   scanForbidden,
   signatureMatches,
-  STAGES_PATH: DEFAULT_STAGES_PATH,
+  stagesPath,
 };
