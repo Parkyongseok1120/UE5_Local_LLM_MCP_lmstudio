@@ -8463,6 +8463,36 @@ class McpServer:
                 ),
             },
             {
+                "name": "unreal_task_commit_synthesis",
+                "title": "Commit displayed read-only synthesis",
+                "description": (
+                    "Internal idempotent completion handshake for the context compactor. "
+                    "Call only after a task-bound, tool-free synthesis was generated completely "
+                    "and emitted to the LM Studio UI. The objective, control epoch, and output "
+                    "digest must match the durable read-only task."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "taskAuthorization": _checkpoint_authorization_schema(),
+                        "objectiveHash": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$",
+                        },
+                        "controlEpoch": {"type": "integer", "minimum": 0},
+                        "outputDigest": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$",
+                        },
+                    },
+                    [
+                        "taskAuthorization",
+                        "objectiveHash",
+                        "controlEpoch",
+                        "outputDigest",
+                    ],
+                ),
+            },
+            {
                 "name": "unreal_task_define_slices",
                 "title": "Define executable task slices",
                 "description": (
@@ -9511,6 +9541,62 @@ class McpServer:
                 if payload.get("ok"):
                     self.notify_tools_list_changed()
                 self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_commit_synthesis":
+                from task_api import (
+                    task_authorization_for_state,
+                    task_commit_synthesis,
+                    task_root,
+                )
+
+                compact = (
+                    dict(arguments.get("taskAuthorization") or {})
+                    if isinstance(arguments.get("taskAuthorization"), dict)
+                    else {}
+                )
+                task_session_id = str(compact.get("taskSessionId") or "").strip()
+                owner_capability = str(compact.get("ownerCapability") or "").strip()
+                if not task_session_id or not owner_capability:
+                    self.structured_tool_result(
+                        message_id,
+                        {
+                            "ok": False,
+                            "errorCode": "TASK_ROUTE_OWNERSHIP_REQUIRED",
+                            "error": (
+                                "Synthesis commit requires compact taskSessionId + "
+                                "ownerCapability authorization."
+                            ),
+                        },
+                    )
+                    return
+                state_path = task_root(self.workspace, task_session_id) / "state.json"
+                try:
+                    synthesis_state = json.loads(state_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError, TypeError):
+                    synthesis_state = {}
+                if (
+                    not isinstance(synthesis_state, dict)
+                    or str(synthesis_state.get("ownerCapability") or "")
+                    != owner_capability
+                ):
+                    self.structured_tool_result(
+                        message_id,
+                        {
+                            "ok": False,
+                            "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
+                            "error": "Synthesis ownerCapability does not own the active task.",
+                        },
+                    )
+                    return
+                payload = task_commit_synthesis(
+                    self.workspace,
+                    task_authorization=task_authorization_for_state(synthesis_state),
+                    objective_hash_value=str(arguments.get("objectiveHash") or ""),
+                    control_epoch=int(arguments.get("controlEpoch") or 0),
+                    output_digest=str(arguments.get("outputDigest") or ""),
+                )
+                if payload.get("ok"):
+                    self.notify_tools_list_changed()
+                self.structured_tool_result(message_id, payload)
             elif name == "unreal_task_define_slices":
                 from task_api import task_define_slices
 
@@ -9797,6 +9883,7 @@ class McpServer:
                 from agent_orchestrator import (
                     build_agent_plan,
                     is_continuation_request,
+                    is_plan_only_request,
                     normalize_objective_for_hash,
                     parse_project_control_intent,
                     resolve_plan_request,
@@ -10196,7 +10283,23 @@ class McpServer:
                         },
                     )
                     return
-                task_mode = "agent_edit" if (payload.get("writeGate") or {}).get("writesAllowed") is True else "plan_only"
+                explicit_plan_only = (
+                    mode == "plan_only" or is_plan_only_request(request, mode)
+                )
+                if (payload.get("writeGate") or {}).get("writesAllowed") is True:
+                    task_mode = "agent_edit"
+                elif explicit_plan_only:
+                    task_mode = "plan_only"
+                elif str(payload.get("taskKind") or "").strip().casefold() in {
+                    "inspect_only",
+                    "cpp_analysis",
+                }:
+                    # Project-bound source analysis owns a durable evidence and
+                    # synthesis lifecycle.  A plan-only session is completed
+                    # immediately and cannot survive compaction/output retry.
+                    task_mode = "read_only"
+                else:
+                    task_mode = "plan_only"
                 active_task_session_id = str(
                     self._active_route_context.get("taskSessionId") or ""
                 ).strip()
@@ -10455,6 +10558,28 @@ class McpServer:
                     "and 8000 combined oldText/newText characters. Never send a full existing "
                     "file in apply_edit_bundle.files; split larger work into bounded patches."
                 )
+                if task_mode == "plan_only":
+                    # The task owner has already completed and released this
+                    # session. Never recreate a callable capability while
+                    # merging the plan into the public response.
+                    payload.pop("taskAuthorization", None)
+                    payload.pop("writeToolAuthorizationArgs", None)
+                    payload.pop("requiredNextTool", None)
+                    payload.pop("requiredNextToolArgs", None)
+                    payload["taskAuthorizationRequiredForWrites"] = False
+                    payload["toolRoute"] = {}
+                    payload["toolPolicy"] = []
+                    payload["roleSession"] = None
+                    payload["promptContract"] = {}
+                    payload["nextAction"] = "plan_complete"
+                    payload["nextActionIsTool"] = False
+                    payload["nextActionArgs"] = {}
+                    payload["taskRouteTerminal"] = True
+                    payload["planOnlyCompleted"] = True
+                    payload["agentInstruction"] = (
+                        "Return the completed plan to the user. This plan-only session is "
+                        "terminal and carries no write or continuation authorization."
+                    )
                 compact_plan = compact_agent_plan_payload(payload)
                 plan_summary = {
                     "taskKind": compact_plan.get("taskKind"),

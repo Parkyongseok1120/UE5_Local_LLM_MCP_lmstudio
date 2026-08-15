@@ -9,15 +9,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import task_api as task_api_module  # noqa: E402
 from task_api import (  # noqa: E402
     authorize_task_tool,
     finalize_task_result,
     task_cancel,
+    task_checkpoint,
+    task_commit_synthesis,
     task_complete_after_successful_build,
     task_define_slices,
     task_continue_active,
     task_list_active,
     task_record_build_recovery,
+    task_record_recovery_obligation,
     task_record_gate,
     task_record_gate_failure,
     task_root,
@@ -52,6 +56,243 @@ def test_task_start_and_status_phase_fields(tmp_path: Path) -> None:
     status = task_status(tmp_path, task_id)
     assert status["phase"] == "planning"
     assert (task_root(tmp_path, task_id) / "logs" / "task.log").is_file()
+
+
+def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_file = tmp_path / "Sample.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Inspect the project source and explain the control flow",
+        mode="read_only",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "cpp_analysis",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "inspect", "files": ["Source/Sample/Foo.cpp"]}
+            ],
+        },
+    )
+    assert started["status"] == "running"
+    ready = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        recovery={
+            "source": "evidence",
+            "status": "evidence_complete",
+            "scopeDisposition": "in_slice",
+            "errorCode": "EVIDENCE_COMPLETE",
+            "requiredTool": {},
+            "targetFiles": ["Source/Sample/Foo.cpp"],
+        },
+    )
+    assert ready["ok"] is True
+    assert ready["control"]["phase"] == "synthesis"
+    assert ready["control"]["requiredTool"] is None
+    assert ready["control"]["allowedTools"] == []
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    digest = "d" * 64
+    committed = task_commit_synthesis(
+        tmp_path,
+        task_authorization=ready["taskAuthorization"],
+        objective_hash_value=state["objectiveHash"],
+        control_epoch=ready["control"]["epoch"],
+        output_digest=digest,
+    )
+    assert committed["ok"] is True
+    assert committed["active"] is False
+    committed_state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert committed_state["status"] == "completed"
+    assert committed_state["synthesisLifecycle"]["outputDigest"] == digest
+
+    replay = task_commit_synthesis(
+        tmp_path,
+        task_authorization=ready["taskAuthorization"],
+        objective_hash_value=state["objectiveHash"],
+        control_epoch=ready["control"]["epoch"],
+        output_digest=digest,
+    )
+    assert replay["ok"] is True
+    assert replay["idempotentReplay"] is True
+
+
+def test_checkpoint_rebase_resolves_bound_transaction_before_releasing_control(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_file = tmp_path / "Sample.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Repair an interrupted source mutation",
+        mode="agent_edit",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "cpp_edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [{"sliceId": "repair", "files": []}],
+        },
+    )
+    recovery = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        recovery={
+            "source": "transaction_journal",
+            "status": "checkpoint_rebase_required",
+            "scopeDisposition": "in_slice",
+            "errorCode": "TRANSACTION_RECOVERY_REQUIRED",
+            "transactionId": "tx-rebase-1",
+            "journalPaths": ["Source/Sample/Foo.cpp"],
+            "requiredTool": {
+                "name": "unreal_task_checkpoint",
+                "args": {
+                    "action": "rebase",
+                    "acceptCurrentFiles": True,
+                    "includeGitChanges": False,
+                },
+            },
+        },
+    )
+    calls: list[dict] = []
+
+    def resolve_stub(workspace, **kwargs):
+        calls.append({"workspace": workspace, **kwargs})
+        return {"ok": True, "transactionId": "tx-rebase-1", "archived": True}
+
+    monkeypatch.setattr(
+        task_api_module,
+        "_resolve_recovery_required_journal",
+        resolve_stub,
+    )
+    rebased = task_checkpoint(
+        tmp_path,
+        task_authorization=recovery["taskAuthorization"],
+        action="rebase",
+        accept_current_files=True,
+        include_git_changes=False,
+    )
+
+    assert rebased["ok"] is True, rebased
+    assert calls[0]["recovery"]["transactionId"] == "tx-rebase-1"
+    state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert "recoveryObligation" not in state
+    assert state["lastRecoveryJournalResolution"]["transactionId"] == "tx-rebase-1"
+
+
+def test_environment_recovery_counts_unique_committed_attempt_ids_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Repair a build infrastructure failure",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "repair", "files": ["Source/Sample/Foo.cpp"]}
+            ],
+        },
+    )
+    recovery = {
+        "source": "build",
+        "status": "environment_recovery",
+        "scopeDisposition": "infrastructure",
+        "errorCode": "BUILD_TOOL_FAILED",
+        "requiredTool": {"name": "build_unreal_project", "args": {}},
+        "attemptId": "attempt-one",
+        "attemptOutcome": "failed",
+    }
+    first = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        recovery=recovery,
+    )
+    assert first["recoveryObligation"]["attemptCount"] == 1
+    assert first["control"]["disposition"] == "require_tool"
+
+    replay = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=first["taskAuthorization"],
+        recovery=recovery,
+    )
+    assert replay["recoveryObligation"]["attemptCount"] == 1
+
+    second = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=replay["taskAuthorization"],
+        recovery={**recovery, "attemptId": "attempt-two"},
+    )
+    assert second["recoveryObligation"]["attemptCount"] == 2
+    assert second["control"]["disposition"] == "await_user"
+
+
+def test_bounded_strategy_budget_is_scoped_to_the_concrete_failure_fingerprint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Repair independent validation failures in one source slice",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "cpp_edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "repair", "files": ["Source/Sample/Foo.cpp"]}
+            ],
+        },
+    )
+    base = {
+        "source": "static",
+        "status": "repair_planning_required",
+        "scopeDisposition": "in_slice",
+        "errorCode": "WORKFLOW_LOOP_BLOCKED",
+        "requiredTool": {
+            "name": "unreal_code_sketch_claim_validate",
+            "args": {"targetFiles": ["Source/Sample/Foo.cpp"]},
+        },
+        "targetFiles": ["Source/Sample/Foo.cpp"],
+    }
+    first_fingerprint = "a" * 64
+    second_fingerprint = "b" * 64
+
+    first = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        recovery={**base, "failureFingerprint": first_fingerprint},
+    )
+    assert first["control"]["disposition"] == "require_tool"
+    assert first["recoveryObligation"]["failureFingerprint"] == first_fingerprint
+
+    independent = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=first["taskAuthorization"],
+        recovery={**base, "failureFingerprint": second_fingerprint},
+    )
+    assert independent["control"]["disposition"] == "require_tool"
+    assert independent["recoveryObligation"]["strategyRevision"] == "2"
+
+    repeated = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=independent["taskAuthorization"],
+        recovery={**base, "failureFingerprint": second_fingerprint},
+    )
+    assert repeated["control"]["disposition"] == "await_user"
 
 
 def test_active_task_listing_continues_owned_gate_and_never_auto_cancels(

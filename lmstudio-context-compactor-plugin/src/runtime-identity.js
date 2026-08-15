@@ -4,8 +4,15 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { controlProtocolIdentity } = require("./control-protocol-spec");
 
 const PROTOCOL_VERSION = 2;
+const PROTOCOL_IDENTITY_FIELDS = Object.freeze([
+  "transitionPolicyHash",
+  "errorCatalogHash",
+  "authorizationSchemaHash",
+  "controlSchemaHash",
+]);
 
 function packagedGitCommit(componentRoot) {
   try {
@@ -35,7 +42,7 @@ function walkFiles(directory, suffixes) {
   return output;
 }
 
-function componentIdentity(componentRoot) {
+function componentIdentity(componentRoot, options = {}) {
   const base = path.resolve(componentRoot);
   const files = [
     path.join(base, "package.json"),
@@ -72,12 +79,21 @@ function componentIdentity(componentRoot) {
   // package-time commit identity in that case. Source drift still fails on
   // buildHash before this value is trusted.
   if (!gitCommit) gitCommit = packagedGitCommit(base);
+  const protocol = controlProtocolIdentity({
+    ...options,
+    repositoryRoot: path.resolve(base, ".."),
+    componentRoot: base,
+  });
+  if (protocol.protocolVersion !== PROTOCOL_VERSION) {
+    throw new Error("CONTROL_RUNTIME_VERSION_MISMATCH: protocol spec version differs from runtime");
+  }
   return {
     component: "compactor",
     buildHash: digest.digest("hex"),
     gitCommit,
     componentVersion,
     protocolVersion: PROTOCOL_VERSION,
+    ...Object.fromEntries(PROTOCOL_IDENTITY_FIELDS.map((field) => [field, protocol[field]])),
   };
 }
 
@@ -90,7 +106,7 @@ function verifyRuntimeComponent(options = {}) {
   );
   const required = options.required === true
     || /^(?:1|true|yes|on)$/i.test(String(process.env.CONTROL_RUNTIME_REQUIRED || ""));
-  const running = componentIdentity(componentRoot);
+  const running = componentIdentity(componentRoot, { manifestPath });
   if (!fs.existsSync(manifestPath)) {
     if (required) throw new Error("CONTROL_RUNTIME_VERSION_MISMATCH: manifest is required");
     return { ok: true, verified: false, reason: "manifest_not_configured", running };
@@ -103,7 +119,13 @@ function verifyRuntimeComponent(options = {}) {
   if (!expected || typeof expected !== "object") {
     throw new Error("CONTROL_RUNTIME_VERSION_MISMATCH: compactor identity is missing");
   }
-  const mismatches = ["buildHash", "componentVersion", "protocolVersion", "gitCommit"]
+  const mismatches = [
+    "buildHash",
+    "componentVersion",
+    "protocolVersion",
+    "gitCommit",
+    ...PROTOCOL_IDENTITY_FIELDS,
+  ]
     .filter((key) => String(expected[key] || "") !== String(running[key] || ""));
   if (mismatches.length) {
     throw new Error(`CONTROL_RUNTIME_VERSION_MISMATCH: compactor differs in ${mismatches.join(", ")}`);
@@ -111,4 +133,9 @@ function verifyRuntimeComponent(options = {}) {
   return { ok: true, verified: true, manifestPath, expected, running };
 }
 
-module.exports = { PROTOCOL_VERSION, componentIdentity, verifyRuntimeComponent };
+module.exports = {
+  PROTOCOL_VERSION,
+  PROTOCOL_IDENTITY_FIELDS,
+  componentIdentity,
+  verifyRuntimeComponent,
+};

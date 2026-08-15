@@ -1106,7 +1106,7 @@ test("server rollback wiring checkpoints the reconciled generation before termin
   const staticLoopEnd = source.indexOf("let finish;", staticLoopStart);
   const staticLoopBody = source.slice(staticLoopStart, staticLoopEnd);
   assert.ok(staticLoopBody.includes("recordRecoveryObligationViaPython"));
-  assert.ok(staticLoopBody.includes("rollbackGeneration"));
+  assert.ok(staticLoopBody.includes("recoveryGeneration"));
 });
 
 async function rollbackCrashFixture(stage) {

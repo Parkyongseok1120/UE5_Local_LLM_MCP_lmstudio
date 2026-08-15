@@ -852,6 +852,150 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
         client.close()
 
 
+def test_failed_replace_requires_exact_bounded_recovery(
+    tmp_path: Path,
+) -> None:
+    require_agent_mcp_deps()
+    workspace_dir = tmp_path / "control-workspace"
+    workspace_dir.mkdir()
+    project_dir = tmp_path / "PortableGame"
+    source_file = project_dir / "Source" / "PortableGame" / "Public" / "Thing.h"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text(
+        "#pragma once\n\nstruct FPortableThing\n{\n    int32 StableValue = 1;\n};\n",
+        encoding="utf-8",
+    )
+    uproject = project_dir / "PortableGame.uproject"
+    uproject.write_text(json.dumps({"FileVersion": 3}), encoding="utf-8")
+    shared_config = tmp_path / "unreal-workspace.json"
+    shared_config.write_text(
+        json.dumps({"activeProject": str(uproject)}),
+        encoding="utf-8",
+    )
+    agent_config = tmp_path / "agent-mcp.json"
+    agent_config.write_text(
+        json.dumps({"projectSearchRoots": [str(tmp_path)]}),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "MCP_ESSENTIAL_TOOLS": "1",
+            "WORKSPACE_ROOT": str(workspace_dir),
+            "SHARED_UNREAL_CONFIG": str(shared_config),
+            "AGENT_STATE_ROOT": str(tmp_path / "state" / "unreal-agent"),
+            "AGENT_MCP_CONFIG": str(agent_config),
+            "ALLOW_WRITE": "1",
+            "VALIDATE_ON_WRITE": "0",
+        }
+    )
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"")
+    rag = _StdioJsonRpc([_python_exe(), str(RAG_SCRIPT), "--index", str(index)], env=env)
+    client = _StdioJsonRpc(
+        [_node_exe(), str(AGENT_SERVER)],
+        env=env,
+        cwd=ROOT / "lmstudio-unreal-agent-mcp",
+    )
+    relative_path = "Source/PortableGame/Public/Thing.h"
+    original = source_file.read_text(encoding="utf-8")
+    request = (
+        f"Implement exact replacement in existing {relative_path}: replace "
+        "StableValue with UpdatedValue; compile-only change"
+    )
+    try:
+        rag.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
+            },
+            1,
+        )
+        planned = rag.request(
+            "tools/call",
+            {"name": "unreal_agent_plan", "arguments": {"request": request}},
+            2,
+        )
+        planned_payload = _tool_payload(planned)
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "pytest", "version": "1.0"},
+            },
+            1,
+        )
+        client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        initial_read = client.request(
+            "tools/call",
+            {
+                "name": "read_file",
+                "arguments": {
+                    "taskAuthorization": planned_payload["taskAuthorization"],
+                    "path": relative_path,
+                },
+            },
+            2,
+        )
+        initial_read_payload = _tool_payload(initial_read)
+        assert initial_read_payload["control"]["requiredTool"]["name"] == (
+            "unreal_code_sketch_claim_validate"
+        )
+        initial_gate = rag.request(
+            "tools/call",
+            {
+                "name": "unreal_code_sketch_claim_validate",
+                "arguments": {
+                    "sketch": original.replace("StableValue", "UpdatedValue"),
+                    "request": request,
+                    "projectRoot": str(project_dir),
+                    "targetFiles": [relative_path],
+                    "changeKind": "single_file",
+                    "taskAuthorization": initial_read_payload["taskAuthorization"],
+                },
+            },
+            3,
+        )
+        initial_gate_payload = _tool_payload(initial_gate)
+        replace_auth = initial_gate_payload["gateCompletion"]["taskAuthorization"]
+        failed_replace = client.request(
+            "tools/call",
+            {
+                "name": "replace_in_file",
+                "arguments": {
+                    "taskAuthorization": replace_auth,
+                    "path": relative_path,
+                    "oldText": "ValueThatDoesNotExist",
+                    "newText": "Replacement",
+                    "expectedOccurrences": 1,
+                },
+            },
+            5,
+        )
+        assert failed_replace["result"].get("isError") is True
+        replace_payload = _tool_payload(failed_replace)
+        assert replace_payload["errorCode"] == "OLD_TEXT_NOT_FOUND"
+        assert replace_payload["requiredNextTool"] == "read_file_range"
+        read_args = replace_payload["requiredNextToolArgs"]
+        assert read_args["path"] == f"project://{relative_path}"
+        assert 1 <= read_args["startLine"] <= read_args["endLine"]
+        assert read_args["endLine"] - read_args["startLine"] + 1 <= 80
+        assert replace_payload.get("doNotRetry") in (None, [])
+        assert replace_payload["forbiddenCalls"] == [
+            {
+                "tool": "replace_in_file",
+                "fingerprint": replace_payload["failedCallFingerprint"],
+            }
+        ]
+        assert source_file.read_text(encoding="utf-8") == original
+    finally:
+        client.close()
+        rag.close()
+
+
 def test_task_bound_evidence_stagnation_commits_v2_synthesis_control(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

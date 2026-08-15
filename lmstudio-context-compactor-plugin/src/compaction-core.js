@@ -23,6 +23,14 @@ const MAX_EDIT_EVIDENCE_FILES = 2;
 const MAX_EDIT_EVIDENCE_CHARS = 16000;
 const MAX_REPEAT_EVIDENCE_FILES = 1;
 const MAX_REPEAT_EVIDENCE_CHARS = 12000;
+const MAX_DURABLE_OBJECTIVE_CHARS = 65536;
+const CHECKPOINT_LIFECYCLE_VERSION = 1;
+const CHECKPOINT_LIFECYCLE_STATUSES = new Set(["pending", "completed", "committed"]);
+const CHECKPOINT_LIFECYCLE_STATUS_RANK = Object.freeze({
+  pending: 0,
+  completed: 1,
+  committed: 2,
+});
 const DEFAULT_COMPACTION_CONFIG = Object.freeze({
   enabled: true,
   observeOnly: false,
@@ -51,6 +59,106 @@ function sha256(value) {
 
 function objectiveHashOf(value) {
   return sha256(String(value || "").trim());
+}
+
+function toolCallFingerprint(name, args = {}) {
+  const normalizedArgs = args && typeof args === "object" && !Array.isArray(args)
+    ? args
+    : {};
+  const normalizedName = parseProviderQualifiedToolName(name).functionName
+    || String(name || "").trim().toLowerCase();
+  return sha256(stableStringify({
+    name: normalizedName,
+    args: normalizedArgs,
+  }));
+}
+
+function compactLifecycleState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version) !== CHECKPOINT_LIFECYCLE_VERSION) return null;
+  const status = String(value.status || "").trim().toLowerCase();
+  if (!CHECKPOINT_LIFECYCLE_STATUSES.has(status)) return null;
+  const taskSessionId = String(value.taskSessionId || "").trim().slice(0, 160);
+  const objectiveHash = String(value.objectiveHash || "").trim().toLowerCase();
+  if (objectiveHash && !/^[a-f0-9]{64}$/.test(objectiveHash)) return null;
+  if (!taskSessionId && !objectiveHash) return null;
+  let controlEpoch = null;
+  if (value.controlEpoch !== undefined && value.controlEpoch !== null && value.controlEpoch !== "") {
+    controlEpoch = Number(value.controlEpoch);
+    if (!Number.isInteger(controlEpoch) || controlEpoch < 0) return null;
+  }
+  const outputDigest = String(value.outputDigest || "").trim().toLowerCase();
+  if (outputDigest && !/^[a-f0-9]{64}$/.test(outputDigest)) return null;
+  const updatedAt = String(value.updatedAt || "").trim().slice(0, 64);
+  if (updatedAt && !Number.isFinite(Date.parse(updatedAt))) return null;
+  return {
+    version: CHECKPOINT_LIFECYCLE_VERSION,
+    status,
+    taskSessionId,
+    objectiveHash,
+    controlEpoch,
+    outputDigest,
+    stopReason: String(value.stopReason || "").trim().slice(0, 80),
+    updatedAt,
+  };
+}
+
+function lifecycleIdentityMatches(left, right) {
+  if (!left || !right) return false;
+  if (left.taskSessionId && right.taskSessionId && left.taskSessionId !== right.taskSessionId) {
+    return false;
+  }
+  if (left.objectiveHash && right.objectiveHash && left.objectiveHash !== right.objectiveHash) {
+    return false;
+  }
+  if (
+    left.controlEpoch !== null
+    && right.controlEpoch !== null
+    && left.controlEpoch !== right.controlEpoch
+  ) return false;
+  return Boolean(
+    (left.taskSessionId && right.taskSessionId)
+    || (left.objectiveHash && right.objectiveHash)
+  );
+}
+
+function mergeLifecycleState(previousValue, nextValue) {
+  const previous = compactLifecycleState(previousValue);
+  const next = compactLifecycleState(nextValue);
+  if (!previous) return next;
+  if (!next) return previous;
+  if (
+    previous.taskSessionId
+    && next.taskSessionId
+    && previous.taskSessionId === next.taskSessionId
+    && previous.controlEpoch !== null
+    && next.controlEpoch !== null
+    && next.controlEpoch < previous.controlEpoch
+  ) return previous;
+  if (
+    lifecycleIdentityMatches(previous, next)
+    && CHECKPOINT_LIFECYCLE_STATUS_RANK[next.status]
+      < CHECKPOINT_LIFECYCLE_STATUS_RANK[previous.status]
+  ) return previous;
+  return next;
+}
+
+function hasUncommittedPrediction(value, context = {}) {
+  const lifecycle = compactLifecycleState(value);
+  if (!lifecycle || lifecycle.status === "committed") return false;
+  const expectedTaskSessionId = String(context.taskSessionId || "").trim();
+  const expectedObjectiveHash = String(context.objectiveHash || "").trim().toLowerCase();
+  if (
+    lifecycle.taskSessionId
+    && expectedTaskSessionId
+    && lifecycle.taskSessionId !== expectedTaskSessionId
+  ) return false;
+  if (
+    lifecycle.objectiveHash
+    && expectedObjectiveHash
+    && lifecycle.objectiveHash !== expectedObjectiveHash
+  ) return false;
+  return true;
 }
 
 function boundedRequestIntentValue(value, depth = 0) {
@@ -397,6 +505,7 @@ function compactServerControl(value) {
     version: 2,
     epoch,
     taskSessionId,
+    controlFingerprint: String(value.controlFingerprint || value.fingerprint || "").trim().slice(0, 160),
     routeHash: String(value.routeHash || "").slice(0, 160),
     phase: String(value.phase || "unknown").slice(0, 160),
     disposition,
@@ -418,8 +527,20 @@ function acceptServerControl(state, incoming) {
       return false;
     }
     if (incoming.epoch === current.epoch && stableStringify(incoming) !== stableStringify(current)) {
-      state.lastDiagnostics.push(`controlEpochConflict=${incoming.epoch}`);
-      return false;
+      const currentWithoutFingerprint = { ...current, controlFingerprint: "" };
+      const incomingWithoutFingerprint = { ...incoming, controlFingerprint: "" };
+      const fingerprintOnlyChange = stableStringify(incomingWithoutFingerprint)
+        === stableStringify(currentWithoutFingerprint);
+      if (!fingerprintOnlyChange || (
+        current.controlFingerprint
+        && incoming.controlFingerprint
+        && current.controlFingerprint !== incoming.controlFingerprint
+      )) {
+        state.lastDiagnostics.push(`controlEpochConflict=${incoming.epoch}`);
+        return false;
+      }
+      incoming.controlFingerprint = incoming.controlFingerprint || current.controlFingerprint;
+      state.lastDiagnostics.push(`controlFingerprintEnriched=${incoming.epoch}`);
     }
   }
   state.serverControl = incoming;
@@ -545,6 +666,8 @@ function resetTaskScopedControl(state, reason = "new_user_objective") {
   state.touchedPaths = [];
   state.failedToolResults = [];
   state.mutationGeneration = 0;
+  state.predictionState = null;
+  state.synthesisState = null;
   state.lastDiagnostics.push(`taskScopedControlReset=${reason}`);
 }
 
@@ -572,9 +695,52 @@ function normalizeToolNames(value, sourceTool = "") {
     .filter((item) => /^[a-z][a-z0-9_-]{1,160}$/i.test(item)))];
 }
 
-function collectSemanticBlockerFields(value, state, sourceTool = "") {
+function normalizeCallFingerprints(...values) {
+  const flattened = values.flatMap((value) => (
+    Array.isArray(value) ? value : (typeof value === "string" ? [value] : [])
+  ));
+  return [...new Set(flattened
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter((item) => /^[a-f0-9]{64}$/.test(item)))].slice(-32);
+}
+
+function compactSemanticBlocker(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const controlEpochValue = value.controlEpoch;
+  let controlEpoch = null;
+  if (controlEpochValue !== undefined && controlEpochValue !== null && controlEpochValue !== "") {
+    controlEpoch = Number(controlEpochValue);
+    if (!Number.isInteger(controlEpoch) || controlEpoch < 0) return null;
+  }
+  const forbiddenTools = normalizeToolNames(value.forbiddenTools).slice(-32);
+  return {
+    active: value.active === true,
+    scope: String(value.scope || "workflow").slice(0, 80),
+    errorCode: String(value.errorCode || "").slice(0, 120),
+    sourceErrorCode: String(value.sourceErrorCode || "").slice(0, 120),
+    blockerFingerprint: String(value.blockerFingerprint || "").slice(0, 160),
+    taskSessionId: String(value.taskSessionId || "").trim().slice(0, 160),
+    controlEpoch,
+    controlFingerprint: String(value.controlFingerprint || "").trim().slice(0, 160),
+    stopCurrentWorkflow: value.stopCurrentWorkflow === true,
+    stopCurrentPhase: value.stopCurrentPhase === true,
+    phaseBoundary: String(value.phaseBoundary || "").slice(0, 80),
+    forbiddenTools,
+    forbiddenCallFingerprints: normalizeCallFingerprints(value.forbiddenCallFingerprints),
+    clearOnTool: String(value.clearOnTool || "").slice(0, 160),
+    clearOnToolArgs: value.clearOnToolArgs && typeof value.clearOnToolArgs === "object"
+      && !Array.isArray(value.clearOnToolArgs)
+      ? value.clearOnToolArgs
+      : null,
+    agentInstruction: String(value.agentInstruction || "").slice(0, 800),
+  };
+}
+
+function collectSemanticBlockerFields(value, state, sourceTool = "", sourceCall = null) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  const control = compactProtocolControl(value.control);
+  const protocolControl = compactProtocolControl(value.control);
+  const payloadServerControl = compactServerControl(value.control);
+  const activeServerControl = payloadServerControl || compactServerControl(state.serverControl);
   const retryTargets = normalizeToolNames(value.doNotRetry, sourceTool);
   const explicitForbiddenTools = normalizeToolNames(value.doNotRetryTools, sourceTool);
   const errorCode = String(value.errorCode || "");
@@ -606,21 +772,69 @@ function collectSemanticBlockerFields(value, state, sourceTool = "") {
     ? "evidence_phase"
     : (handoffBoundary ? "until_required_tool_success" : "workflow");
 
-  const prior = state.semanticBlocker && typeof state.semanticBlocker === "object"
-    ? state.semanticBlocker
-    : {};
+  const prior = compactSemanticBlocker(state.semanticBlocker) || {};
   const preserveEvidencePhase = (
     prior.active === true
     && prior.scope === "evidence_phase"
     && evidencePhaseBoundary
   );
-  state.semanticBlocker = {
+  const sourceCallFingerprint = sourceCall
+    && typeof sourceCall === "object"
+    && (retryTargets.some((name) => toolNamesMatch(name, sourceTool))
+      || explicitForbiddenTools.some((name) => toolNamesMatch(name, sourceTool))
+      || stopCurrentWorkflow
+      || evidencePhaseBoundary)
+    ? toolCallFingerprint(sourceTool, sourceCall.arguments)
+    : "";
+  const forbiddenCallFingerprints = normalizeCallFingerprints(
+    preserveEvidencePhase ? prior.forbiddenCallFingerprints : [],
+    value.forbiddenCallFingerprints,
+    value.doNotRetryCallFingerprints,
+    value.forbiddenCallFingerprint,
+    value.failedCallFingerprint,
+    value.blocker?.callFingerprint,
+    sourceCallFingerprint,
+  );
+  const declaredTaskSessionId = String(
+    value.taskSessionId
+    || value.state?.taskSessionId
+    || value.taskAuthorization?.taskSessionId
+    || activeServerControl?.taskSessionId
+    || state.taskRouteOwnership?.taskSessionId
+    || prior.taskSessionId
+    || "",
+  ).trim().slice(0, 160);
+  const hasDeclaredControlEpoch = value.controlEpoch !== undefined
+    && value.controlEpoch !== null
+    && value.controlEpoch !== "";
+  const hasStateControlEpoch = value.state?.controlEpoch !== undefined
+    && value.state?.controlEpoch !== null
+    && value.state?.controlEpoch !== "";
+  const declaredControlEpoch = hasDeclaredControlEpoch
+    && Number.isInteger(Number(value.controlEpoch)) && Number(value.controlEpoch) >= 0
+    ? Number(value.controlEpoch)
+    : (hasStateControlEpoch
+      && Number.isInteger(Number(value.state.controlEpoch)) && Number(value.state.controlEpoch) >= 0
+      ? Number(value.state.controlEpoch)
+      : (activeServerControl?.epoch ?? prior.controlEpoch ?? null));
+  const declaredControlFingerprint = String(
+    value.controlFingerprint
+    || value.state?.controlFingerprint
+    || payloadServerControl?.controlFingerprint
+    || activeServerControl?.controlFingerprint
+    || prior.controlFingerprint
+    || "",
+  ).trim().slice(0, 160);
+  state.semanticBlocker = compactSemanticBlocker({
     active: true,
     scope: preserveEvidencePhase ? prior.scope : scope,
     errorCode: String(preserveEvidencePhase ? prior.errorCode : (errorCode || prior.errorCode || "")).slice(0, 120),
     blockerFingerprint: String(
-      control?.blockerFingerprint || value.blockerFingerprint || prior.blockerFingerprint || "",
+      protocolControl?.blockerFingerprint || value.blockerFingerprint || prior.blockerFingerprint || "",
     ).slice(0, 160),
+    taskSessionId: declaredTaskSessionId,
+    controlEpoch: declaredControlEpoch,
+    controlFingerprint: declaredControlFingerprint,
     stopCurrentWorkflow: preserveEvidencePhase
       ? prior.stopCurrentWorkflow === true
       : stopCurrentWorkflow,
@@ -632,6 +846,7 @@ function collectSemanticBlockerFields(value, state, sourceTool = "") {
       ...(preserveEvidencePhase && Array.isArray(prior.forbiddenTools) ? prior.forbiddenTools : []),
       ...forbiddenTools,
     ])].slice(-32),
+    forbiddenCallFingerprints,
     clearOnTool: String(preserveEvidencePhase ? prior.clearOnTool : (requiredNextTool || "")).slice(0, 160),
     clearOnToolArgs: preserveEvidencePhase
       ? (prior.clearOnToolArgs || null)
@@ -643,19 +858,26 @@ function collectSemanticBlockerFields(value, state, sourceTool = "") {
         ? prior.agentInstruction
         : (value.agentInstruction || value.userMessage || prior.agentInstruction || ""),
     ).slice(0, 800),
-  };
+  });
 }
 
-function isContinuationUserMessage(text) {
+function isContinuationUserMessage(text, context = {}) {
   const source = String(text || "").trim();
   const directContinuation = /^(?:continue|resume|retry|keep\s+going|go\s+on|계속(?:해|해서|\s*진행(?:해|하세요)?|\s*작업(?:해|하세요)?)?|이어(?:서)?(?:\s*진행(?:해|하세요)?)?|재개(?:해|하세요)?|중단한\s*곳부터\s*(?:계속|진행)(?:해|하세요)?|다시\s*시도(?:해|하세요)?)[\s.!?]*$/i;
   const contextualContinuation = /^(?:(?:아까|이전|전에|기존|중단한)\s*(?:하던\s*)?(?:작업|일|것|내용)|그\s*(?:작업|일|것|내용))(?:을|를)?\s*(?:계속(?:해|하세요)?|재개(?:해|하세요)?|이어(?:서)?\s*진행(?:해|하세요)?)[\s.!?]*$/i;
   const englishContextualContinuation = /^(?:continue|resume)\s+(?:the\s+)?(?:previous|prior|active|same)\s+(?:task|work)[\s.!?]*$/i;
   const englishShortContinuation = /^(?:continue|resume)\s+(?:this|that|the)\s+(?:validation|analysis|plan|replan|work|task)[\s.!?]*$/i;
+  const identityAvailable = context.hasActiveTask === true || context.hasUncommittedPrediction === true;
+  const koreanEllipticalContinuation = /^(?:다시\s*(?:해\s*볼래|해\s*봐|해\s*줘|할래|하자)|한\s*번\s*더|아까\s*(?:거|것|그거)|그거\s*다시)[\s.!?]*$/i;
+  const englishEllipticalContinuation = /^(?:try\s+again|one\s+more\s+time|do\s+(?:that|it)\s+again|(?:that|it|same)\s+again)[\s.!?]*$/i;
   return directContinuation.test(source)
     || contextualContinuation.test(source)
     || englishContextualContinuation.test(source)
-    || englishShortContinuation.test(source);
+    || englishShortContinuation.test(source)
+    || (identityAvailable && (
+      koreanEllipticalContinuation.test(source)
+      || englishEllipticalContinuation.test(source)
+    ));
 }
 
 function mutationToolName(name) {
@@ -1280,7 +1502,7 @@ function isReadOnlyUserGoal(text, context = {}) {
 
 function classifyUserTurnIntent(text, context = {}) {
   const value = String(text || "").trim();
-  if (isContinuationUserMessage(value)) return "CONTINUE_ACTIVE_TASK";
+  if (isContinuationUserMessage(value, context)) return "CONTINUE_ACTIVE_TASK";
   const activeObjective = String(context.activeObjective || "").trim();
   if (
     context.hasActiveTask === true
@@ -1351,6 +1573,7 @@ function extractControlState(messages, prior = {}, options = {}) {
   const priorCount = Number(prior.sourceMessageCount || 0);
   const priorHasActiveTaskRoute = Boolean(prior.toolRoute?.routeHash);
   const priorHasRouteOwnership = Boolean(compactTaskRouteOwnership(prior.taskRouteOwnership));
+  const priorHasAuthoritativeServerControl = Boolean(compactServerControl(prior.serverControl));
   const canResume = priorCount > 0
     && priorCount <= snapshots.length
     && prior.sourceHistoryHash === sha256(stableStringify(snapshots.slice(0, priorCount)))
@@ -1360,7 +1583,7 @@ function extractControlState(messages, prior = {}, options = {}) {
     // Revision 22 migration: old checkpoints discarded ownerCapability. When
     // an active task route is present, rescan the bounded conversation once so
     // compact route ownership can be recovered from an earlier tool result.
-    && (!priorHasActiveTaskRoute || priorHasRouteOwnership)
+    && (!priorHasActiveTaskRoute || priorHasRouteOwnership || priorHasAuthoritativeServerControl)
     && Number(prior.schemaVersion || 0) === COMPACTION_SCHEMA_VERSION;
   const source = canResume ? snapshots.slice(priorCount) : snapshots;
   const resumedObjective = canResume ? String(prior.objective || "") : "";
@@ -1370,9 +1593,16 @@ function extractControlState(messages, prior = {}, options = {}) {
       ? persistedObjectiveHash
       : objectiveHashOf(resumedObjective))
     : "";
+  const priorObjectiveFull = canResume ? String(prior.objectiveFull || "") : "";
+  const resumedObjectiveFull = Boolean(
+    priorObjectiveFull
+    && priorObjectiveFull.length <= MAX_DURABLE_OBJECTIVE_CHARS
+    && objectiveHashOf(priorObjectiveFull) === resumedObjectiveHash
+  ) ? priorObjectiveFull : "";
   const state = {
     schemaVersion: COMPACTION_SCHEMA_VERSION,
     objective: resumedObjective,
+    objectiveFull: resumedObjectiveFull,
     objectiveHash: resumedObjectiveHash,
     requestIntent: canResume
       ? compactRequestIntent(prior.requestIntent, resumedObjective, resumedObjectiveHash)
@@ -1413,12 +1643,12 @@ function extractControlState(messages, prior = {}, options = {}) {
     absentEvidence: canResume && compactEvidenceLedger(prior.absentEvidence, true)
       ? compactEvidenceLedger(prior.absentEvidence, true)
       : null,
-    semanticBlocker: canResume && prior.semanticBlocker
-      ? { ...prior.semanticBlocker }
-      : null,
+    semanticBlocker: canResume ? compactSemanticBlocker(prior.semanticBlocker) : null,
     sideQuery: canResume && prior.sideQuery?.active === true
       ? { ...prior.sideQuery }
       : null,
+    predictionState: canResume ? compactLifecycleState(prior.predictionState) : null,
+    synthesisState: canResume ? compactLifecycleState(prior.synthesisState) : null,
     failedToolResults: canResume && Array.isArray(prior.failedToolResults) ? [...prior.failedToolResults] : [],
     facts: canResume && Array.isArray(prior.facts) ? [...prior.facts] : [],
     evidenceFacts: canResume && Array.isArray(prior.evidenceFacts) ? [...prior.evidenceFacts] : [],
@@ -1447,8 +1677,26 @@ function extractControlState(messages, prior = {}, options = {}) {
       // Synthetic LM Studio title prompts must not replace the active goal.
       const userText = snapshot.text.trim();
       const userObjectiveHash = objectiveHashOf(userText);
+      const turnServerControl = compactServerControl(state.serverControl);
+      const activeTaskSessionId = String(
+        turnServerControl?.taskSessionId
+        || state.taskRouteOwnership?.taskSessionId
+        || "",
+      ).trim();
+      const uncommittedPrediction = hasUncommittedPrediction(state.predictionState, {
+        taskSessionId: activeTaskSessionId,
+        objectiveHash: state.objectiveHash,
+      }) || hasUncommittedPrediction(state.synthesisState, {
+        taskSessionId: activeTaskSessionId,
+        objectiveHash: state.objectiveHash,
+      });
       const turnIntent = classifyUserTurnIntent(userText, {
-        hasActiveTask: Boolean(state.taskRouteOwnership && state.toolRoute?.routeHash),
+        hasActiveTask: Boolean(
+          (turnServerControl
+            && !["complete", "workflow_stop"].includes(turnServerControl.disposition))
+          || (state.taskRouteOwnership && state.toolRoute?.routeHash),
+        ),
+        hasUncommittedPrediction: uncommittedPrediction,
         activeObjective: state.objective,
         requestIntent: state.requestIntent,
       });
@@ -1489,6 +1737,9 @@ function extractControlState(messages, prior = {}, options = {}) {
       }
       state.sideQuery = null;
       state.objective = userText.slice(0, 1200);
+      state.objectiveFull = userText.length <= MAX_DURABLE_OBJECTIVE_CHARS
+        ? userText
+        : "";
       state.objectiveHash = userObjectiveHash;
       state.constraints = state.constraints.filter((item) =>
         typeof item === "string" && !item.startsWith("active_goal:") && !item.startsWith("read_only_"));
@@ -1554,7 +1805,7 @@ function extractControlState(messages, prior = {}, options = {}) {
             resultNameMatchesCall,
           ),
         });
-        collectSemanticBlockerFields(payload, state, matchedCallName);
+        collectSemanticBlockerFields(payload, state, matchedCallName, matchedCall);
       }
       if (toolResultSucceeded(result)) {
         const evidence = compactToolEvidence(matchedCall, resultPayloads.slice(-1)[0] || {}, result.content);
@@ -1829,63 +2080,84 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
   const snapshots = snapshotMessages(messages || []);
   const generation = Number(prior.checkpointGeneration || 0) + 1;
   const activeServerControl = compactServerControl(control.serverControl);
-  const semanticForbiddenTools = Array.isArray(control.semanticBlocker?.forbiddenTools)
-    ? control.semanticBlocker.forbiddenTools
-    : [];
-  const controlBlockerConflict = Boolean(
-    activeServerControl
-    && control.semanticBlocker?.active
-    && (
-      (
-        control.semanticBlocker.stopCurrentWorkflow === true
-        && !String(control.semanticBlocker.clearOnTool || "").trim()
-      )
-      || activeServerControl.allowedTools.some((name) => (
-        semanticForbiddenTools.some((forbidden) => toolNamesMatch(forbidden, name))
-      ))
-      || (
-        activeServerControl.requiredTool
-        && semanticForbiddenTools.some((forbidden) => (
-          toolNamesMatch(forbidden, activeServerControl.requiredTool.name)
+  control.semanticBlocker = compactSemanticBlocker(control.semanticBlocker);
+  if (activeServerControl && control.semanticBlocker?.active) {
+    const blocker = control.semanticBlocker;
+    const taskMismatch = Boolean(
+      blocker.taskSessionId
+      && blocker.taskSessionId !== activeServerControl.taskSessionId
+    );
+    const blockerIsStale = Boolean(
+      blocker.controlEpoch !== null
+      && blocker.controlEpoch < activeServerControl.epoch
+    );
+    const sameEpochFingerprintMismatch = Boolean(
+      blocker.controlEpoch !== null
+      && blocker.controlEpoch === activeServerControl.epoch
+      && blocker.controlFingerprint
+      && activeServerControl.controlFingerprint
+      && blocker.controlFingerprint !== activeServerControl.controlFingerprint
+    );
+    if (taskMismatch || blockerIsStale || sameEpochFingerprintMismatch) {
+      control.semanticBlocker = null;
+      control.lastDiagnostics.push(
+        taskMismatch
+          ? "semanticBlockerDiscarded=task_session_mismatch"
+          : (blockerIsStale
+            ? `semanticBlockerDiscarded=stale_epoch_${blocker.controlEpoch}<${activeServerControl.epoch}`
+            : "semanticBlockerDiscarded=control_fingerprint_mismatch"),
+      );
+    } else {
+      const semanticForbiddenTools = blocker.forbiddenTools;
+      const controlBlockerConflict = Boolean(
+        (
+          blocker.stopCurrentWorkflow === true
+          && !String(blocker.clearOnTool || "").trim()
+        )
+        || activeServerControl.allowedTools.some((name) => (
+          semanticForbiddenTools.some((forbidden) => toolNamesMatch(forbidden, name))
         ))
-      )
-    )
-  );
-  if (controlBlockerConflict) {
-    // Do not guess whether a stale v2 route or an evidence/recovery blocker is
-    // newer.  Their intersection can otherwise expose a tool that the same
-    // checkpoint expressly prohibits.  A new user objective or a fresh server
-    // control envelope is required to resume the task.
-    rememberInvalidatedTaskSession(control, activeServerControl.taskSessionId);
-    control.serverControl = null;
-    control.protocolControl = null;
-    control.architectureControl = null;
-    control.taskRouteTerminal = true;
-    control.toolRoute = null;
-    control.taskRouteOwnership = null;
-    control.requiredNextTool = null;
-    control.requiredNextToolRef = null;
-    control.requiredNextToolArgs = null;
-    control.semanticBlocker = {
-      active: true,
-      scope: "workflow",
-      errorCode: "CONTROL_BLOCKER_CONFLICT",
-      blockerFingerprint: String(
-        control.semanticBlocker?.blockerFingerprint || activeServerControl.blocker?.fingerprint || "",
-      ).slice(0, 160),
-      stopCurrentWorkflow: true,
-      stopCurrentPhase: true,
-      phaseBoundary: "control",
-      forbiddenTools: [...new Set(semanticForbiddenTools)].slice(-32),
-      clearOnTool: "",
-      clearOnToolArgs: null,
-      agentInstruction: "Conflicting stale task controls were discarded. Do not call a tool for this task; wait for a new user objective.",
-    };
-    control.lastDiagnostics.push("controlBlockerConflict=fail_closed");
+        || (
+          activeServerControl.requiredTool
+          && semanticForbiddenTools.some((forbidden) => (
+            toolNamesMatch(forbidden, activeServerControl.requiredTool.name)
+          ))
+        )
+      );
+      if (controlBlockerConflict) {
+        // The v2 route remains authoritative for this task/epoch. A semantic
+        // failure may suppress only the exact call that failed; a tool-family
+        // deny would recreate the route/deny contradiction and strand the task.
+        control.semanticBlocker = compactSemanticBlocker({
+          ...blocker,
+          scope: "exact_calls",
+          errorCode: "CONTROL_BLOCKER_CONFLICT",
+          sourceErrorCode: blocker.sourceErrorCode || blocker.errorCode,
+          blockerFingerprint: blocker.blockerFingerprint
+            || activeServerControl.blocker?.fingerprint
+            || "",
+          taskSessionId: activeServerControl.taskSessionId,
+          controlEpoch: activeServerControl.epoch,
+          controlFingerprint: activeServerControl.controlFingerprint,
+          stopCurrentWorkflow: false,
+          stopCurrentPhase: true,
+          phaseBoundary: "control",
+          forbiddenTools: [],
+          forbiddenCallFingerprints: blocker.forbiddenCallFingerprints,
+          clearOnTool: "",
+          clearOnToolArgs: null,
+          agentInstruction: blocker.forbiddenCallFingerprints.length > 0
+            ? "The task route remains active. Do not replay the exact failed call fingerprint; use the authoritative v2 arguments or wait for a newer control epoch."
+            : "The task route remains active. The legacy tool-wide blocker lacked an exact call fingerprint and was superseded by the authoritative v2 route.",
+        });
+        control.lastDiagnostics.push("controlBlockerConflict=reconciled_exact_call");
+      }
+    }
   }
   if (
     control.semanticBlocker?.active
     && control.requiredNextTool
+    && control.semanticBlocker.scope !== "exact_calls"
     && (
       (
         control.semanticBlocker.stopCurrentWorkflow === true
@@ -1898,11 +2170,50 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     control.requiredNextToolRef = null;
     control.requiredNextToolArgs = null;
   }
+  const checkpointTaskSessionId = String(
+    activeServerControl?.taskSessionId
+    || control.taskRouteOwnership?.taskSessionId
+    || "",
+  ).trim();
+  const lifecycleMatchesCurrentIdentity = (value) => Boolean(
+    value
+    && (!value.objectiveHash || value.objectiveHash === control.objectiveHash)
+    && (!value.taskSessionId || !checkpointTaskSessionId || value.taskSessionId === checkpointTaskSessionId)
+  );
+  let predictionState = mergeLifecycleState(
+    control.predictionState,
+    options.predictionState,
+  );
+  if (!lifecycleMatchesCurrentIdentity(predictionState)) predictionState = null;
+  let synthesisState = mergeLifecycleState(
+    control.synthesisState,
+    options.synthesisState,
+  );
+  if (!lifecycleMatchesCurrentIdentity(synthesisState)) synthesisState = null;
+  if (
+    activeServerControl
+    && activeServerControl.phase.toLowerCase() === "synthesis"
+    && !activeServerControl.requiredTool
+    && activeServerControl.allowedTools.length === 0
+    && !["await_user", "workflow_stop", "complete"].includes(activeServerControl.disposition)
+  ) {
+    synthesisState = mergeLifecycleState(synthesisState, {
+      version: CHECKPOINT_LIFECYCLE_VERSION,
+      status: "pending",
+      taskSessionId: activeServerControl.taskSessionId,
+      objectiveHash: control.objectiveHash,
+      controlEpoch: activeServerControl.epoch,
+      updatedAt: new Date().toISOString(),
+    });
+  }
   return {
     schemaVersion: COMPACTION_SCHEMA_VERSION,
     checkpointGeneration: generation,
     createdAt: new Date().toISOString(),
     objective: control.objective,
+    // Keep an exact, bounded copy for server-bound identity checks. The
+    // shortened objective remains the model-facing representation.
+    objectiveFull: control.objectiveFull,
     objectiveHash: control.objectiveHash,
     requestIntent: control.requestIntent,
     constraints: control.constraints,
@@ -1926,6 +2237,8 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     absentEvidence: control.absentEvidence,
     workingSet: buildWorkingSet(control),
     semanticBlocker: control.semanticBlocker,
+    predictionState,
+    synthesisState,
     sideQuery: control.sideQuery,
     failedToolResults: control.failedToolResults,
     requiredNextTool: control.requiredNextTool ? {
@@ -2262,6 +2575,8 @@ function summarizeOldMessages(messages, checkpoint) {
     lines.push(`semanticBlocker=${JSON.stringify(checkpoint.semanticBlocker)}`);
     lines.push(
       "semanticBlockerInstruction=This server-owned blocker survives compaction. Do not call any forbiddenTools. "
+      + "If scope=exact_calls, the authoritative route remains active and only a request whose canonical "
+      + "fingerprint appears in forbiddenCallFingerprints is denied; do not broaden it to the whole tool. "
       + "If scope=evidence_phase, only discovery is closed: continue from retained evidence with an allowed "
       + "write/validation/final action. If scope=until_required_tool_success, call clearOnTool once. "
       + "Never retry a forbidden tool merely because older tool results were compacted.",
@@ -2329,6 +2644,12 @@ function summarizeOldMessages(messages, checkpoint) {
       "workingSetExactCode="
       + JSON.stringify(checkpoint.workingSet),
     );
+  }
+  if (checkpoint.predictionState) {
+    lines.push(`predictionState=${JSON.stringify(checkpoint.predictionState)}`);
+  }
+  if (checkpoint.synthesisState) {
+    lines.push(`synthesisState=${JSON.stringify(checkpoint.synthesisState)}`);
   }
   lines.push(`compactedMessageCount=${(messages || []).length}`);
   lines.push(
@@ -2425,6 +2746,13 @@ function validateCheckpoint(checkpoint) {
     && checkpoint.objectiveHash !== ""
     && !/^[a-f0-9]{64}$/.test(String(checkpoint.objectiveHash || ""))
   ) return false;
+  if (checkpoint.objectiveFull !== undefined && checkpoint.objectiveFull !== "") {
+    if (
+      typeof checkpoint.objectiveFull !== "string"
+      || checkpoint.objectiveFull.length > MAX_DURABLE_OBJECTIVE_CHARS
+      || objectiveHashOf(checkpoint.objectiveFull) !== String(checkpoint.objectiveHash || "")
+    ) return false;
+  }
   if (checkpoint.requestIntent !== undefined && checkpoint.requestIntent !== null) {
     const requestIntent = compactRequestIntent(
       checkpoint.requestIntent,
@@ -2472,10 +2800,35 @@ function validateCheckpoint(checkpoint) {
     if (!Number.isInteger(attempts) || attempts < 0 || attempts > 1) return false;
     if (!["requested", "synchronized", "failed"].includes(checkpoint.catalogRefresh.status)) return false;
   }
+  for (const lifecycleField of ["predictionState", "synthesisState"]) {
+    if (
+      checkpoint[lifecycleField] !== undefined
+      && checkpoint[lifecycleField] !== null
+    ) {
+      const value = checkpoint[lifecycleField];
+      if (!compactLifecycleState(value)) return false;
+      if (String(value.taskSessionId || "").length > 160) return false;
+      if (String(value.stopReason || "").length > 80) return false;
+      if (String(value.updatedAt || "").length > 64) return false;
+    }
+  }
   if (checkpoint.semanticBlocker !== undefined && checkpoint.semanticBlocker !== null) {
     if (typeof checkpoint.semanticBlocker !== "object" || Array.isArray(checkpoint.semanticBlocker)) return false;
-    if (!Array.isArray(checkpoint.semanticBlocker.forbiddenTools)) return false;
-    if (checkpoint.semanticBlocker.forbiddenTools.some((name) => typeof name !== "string" || !name.trim())) return false;
+    if (!Array.isArray(checkpoint.semanticBlocker.forbiddenTools)
+      || checkpoint.semanticBlocker.forbiddenTools.length > 32) return false;
+    if (checkpoint.semanticBlocker.forbiddenTools.some((name) => (
+      typeof name !== "string" || !/^[a-z][a-z0-9_-]{1,160}$/i.test(name)
+    ))) return false;
+    if (checkpoint.semanticBlocker.forbiddenCallFingerprints !== undefined) {
+      if (!Array.isArray(checkpoint.semanticBlocker.forbiddenCallFingerprints)
+        || checkpoint.semanticBlocker.forbiddenCallFingerprints.length > 32) return false;
+      if (checkpoint.semanticBlocker.forbiddenCallFingerprints.some((value) => (
+        typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)
+      ))) return false;
+    }
+    if (String(checkpoint.semanticBlocker.taskSessionId || "").length > 160) return false;
+    if (String(checkpoint.semanticBlocker.controlFingerprint || "").length > 160) return false;
+    if (!compactSemanticBlocker(checkpoint.semanticBlocker)) return false;
   }
   if (checkpoint.sideQuery !== undefined && checkpoint.sideQuery !== null) {
     if (typeof checkpoint.sideQuery !== "object" || Array.isArray(checkpoint.sideQuery)) return false;
@@ -2546,11 +2899,16 @@ function validateCheckpoint(checkpoint) {
 
 module.exports = {
   COMPACTION_SCHEMA_VERSION,
+  CHECKPOINT_LIFECYCLE_VERSION,
   REQUEST_INTENT_VERSION,
   DEFAULT_COMPACTION_CONFIG,
   stableStringify,
   sha256,
   objectiveHashOf,
+  toolCallFingerprint,
+  compactLifecycleState,
+  mergeLifecycleState,
+  hasUncommittedPrediction,
   compactRequestIntent,
   matchingRequestIntent,
   isWindowsHostPlatform,
@@ -2567,6 +2925,7 @@ module.exports = {
   isNonToolNextAction,
   compactTaskRouteOwnership,
   compactServerControl,
+  compactSemanticBlocker,
   collectSemanticBlockerFields,
   isContinuationUserMessage,
   mutationToolName,

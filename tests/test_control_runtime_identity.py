@@ -30,6 +30,13 @@ def test_runtime_manifest_covers_every_control_component() -> None:
         assert identity["componentVersion"]
         assert identity["protocolVersion"] == 2
         assert "gitCommit" in identity
+        for field in (
+            "transitionPolicyHash",
+            "errorCatalogHash",
+            "authorizationSchemaHash",
+            "controlSchemaHash",
+        ):
+            assert len(identity[field]) == 64
 
 
 @pytest.mark.parametrize("component", ["agent", "rag", "compactor"])
@@ -127,3 +134,25 @@ def test_python_and_node_build_hashes_are_platform_neutral(
     assert node_identity["buildHash"] == python_identity["buildHash"]
     assert node_identity["componentVersion"] == python_identity["componentVersion"]
     assert node_identity["protocolVersion"] == python_identity["protocolVersion"]
+    for field in (
+        "transitionPolicyHash",
+        "errorCatalogHash",
+        "authorizationSchemaHash",
+        "controlSchemaHash",
+    ):
+        assert node_identity[field] == python_identity[field]
+
+
+def test_protocol_schema_hash_mismatch_fails_closed(tmp_path: Path) -> None:
+    manifest = build_runtime_manifest(ROOT)
+    manifest["components"]["rag"]["controlSchemaHash"] = "0" * 64
+    manifest_path = tmp_path / "control-runtime.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ControlRuntimeMismatch, match="controlSchemaHash"):
+        verify_runtime_component(
+            "rag",
+            manifest_path=manifest_path,
+            repository_root=ROOT,
+            required=True,
+        )

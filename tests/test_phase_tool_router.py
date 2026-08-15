@@ -23,6 +23,7 @@ from feature_intent_contract import target_snapshot_hash  # noqa: E402
 from task_phase import task_phase_from_state  # noqa: E402
 from task_api import (  # noqa: E402
     _refresh_server_owned_state,
+    _reset_tool_route_usage,
     active_task_route_context,
     authorize_active_task_tool,
     authorize_task_tool,
@@ -43,6 +44,36 @@ from task_api import (  # noqa: E402
     task_authorization_for_state,
     task_validate_build_recovery_sketch,
 )
+
+
+def test_route_usage_reset_preserves_inflight_reservation_capability() -> None:
+    reservation = {
+        "reservationId": "reservation-1",
+        "tool": "replace_in_file",
+        "routeHash": "old-route",
+        "createdAt": "2026-08-16T00:00:00+00:00",
+        "expiresAt": "2099-08-16T00:10:00+00:00",
+    }
+    reset = _reset_tool_route_usage(
+        {
+            "routeHash": "old-route",
+            "count": 1,
+            "calls": ["replace_in_file"],
+            "reserved": 1,
+            "reservations": [reservation, reservation],
+        },
+        route_hash="new-route",
+        phase="validation",
+        role_session="validator",
+        reset_reason="route_transition",
+    )
+
+    assert reset["routeHash"] == "new-route"
+    assert reset["count"] == 0
+    assert reset["calls"] == []
+    assert reset["reserved"] == 1
+    assert reset["reservations"] == [reservation]
+    assert reset["reservations"][0]["routeHash"] == "old-route"
 
 
 def test_initial_active_project_discovery_is_safe_before_route_ownership() -> None:
@@ -848,6 +879,80 @@ def test_successful_build_binds_all_automation_filters_into_control_args(
     }
 
 
+def test_large_automation_filter_set_advances_durable_batches_before_completion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Verify a slice with a large exact Automation suite",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "runtime", "files": ["Source/Runtime/Feature.cpp"]}
+            ],
+        },
+    )
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 4)
+    filters = [f"Runtime.Feature.Case{index:03d}" for index in range(257)]
+    pending = task_require_automation_after_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        mutation_generation=4,
+        build_log_path=".agent/logs/latest-build.log",
+        test_filters=filters,
+        declared_tests=filters,
+    )
+    assert pending["ok"] is True
+    assert pending["filterBatchCount"] == 2
+    assert pending["testFilters"] == filters[:256]
+    assert pending["control"]["requiredTool"]["args"] == {
+        "testFilters": filters[:256]
+    }
+
+    advanced = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=pending["taskAuthorization"],
+        proof_kind="automation",
+        mutation_generation=4,
+        automation_filters=filters[:256],
+        automation_succeeded_count=256,
+        automation_failed_count=0,
+        automation_queue_empty=True,
+    )
+    assert advanced["ok"] is True
+    assert advanced["active"] is True
+    assert advanced["automationBatchAdvanced"] is True
+    assert advanced["testFilters"] == filters[256:]
+    assert advanced["control"]["requiredTool"]["args"] == {
+        "testFilters": filters[256:]
+    }
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    assert json.loads(state_path.read_text(encoding="utf-8"))["status"] == "running"
+
+    completed = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=advanced["taskAuthorization"],
+        proof_kind="automation",
+        mutation_generation=4,
+        automation_filters=filters[256:],
+        automation_succeeded_count=1,
+        automation_failed_count=0,
+        automation_queue_empty=True,
+    )
+    assert completed["ok"] is True
+    assert completed["active"] is False
+    completed_state = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert completed_state["status"] == "completed"
+    assert completed_state["buildProofHistory"][-1][
+        "automationFilterCount"
+    ] == 257
+
+
 def test_post_build_automation_transition_rejects_stale_generation_and_static_binding(
     tmp_path: Path,
     monkeypatch,
@@ -1620,6 +1725,84 @@ def test_build_recovery_does_not_expand_beyond_active_slice(
         task_authorization=started["taskAuthorization"],
         target_files=["Source/Demo/DemoGameMode.cpp"],
     ) == {"ok": True, "active": False}
+
+
+def test_causal_project_build_failure_creates_temporary_repair_slice(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_file = tmp_path / "Sample.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    source = tmp_path / "Source" / "Sample"
+    source.mkdir(parents=True)
+    active_file = source / "Feature.cpp"
+    repair_file = source / "Dependency.cpp"
+    active_file.write_text("void Feature() {}\n", encoding="utf-8")
+    repair_file.write_text("void Dependency() {}\n", encoding="utf-8")
+    started = task_start(
+        tmp_path,
+        request="Implement the bounded feature",
+        mode="agent_edit",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "feature", "files": ["Source/Sample/Feature.cpp"]}
+            ],
+        },
+    )
+    bound = _bind_passed_static_checkpoint(
+        tmp_path,
+        started["taskSessionId"],
+        mutation_generation=1,
+    )
+    recorded = task_record_build_recovery(
+        tmp_path,
+        task_authorization=task_authorization_for_state(bound),
+        recovery={
+            "category": "source_compile_error",
+            "targetFile": "Source/Sample/Dependency.cpp",
+            "requiredNextTool": "read_file_range",
+            "requiredNextToolArgs": {
+                "path": "Source/Sample/Dependency.cpp",
+                "startLine": 1,
+                "endLine": 21,
+            },
+            "firstError": "Dependency.cpp(1): error C2065",
+            "errorCode": "BUILD_FAILED",
+            "mutationGeneration": 1,
+        },
+    )
+
+    assert recorded["ok"] is True
+    assert recorded["active"] is True
+    assert recorded["scopeDisposition"] == "repair_slice"
+    assert recorded["activeSliceId"].startswith("repair-")
+    assert recorded["control"]["requiredTool"] == {
+        "name": "read_file_range",
+        "args": {
+            "path": "Source/Sample/Dependency.cpp",
+            "startLine": 1,
+            "endLine": 21,
+        },
+    }
+    state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["planRevision"] == "2"
+    assert state["repairScope"]["supersededSliceId"] == "feature"
+    assert state["selectedTargetSnapshots"] == [
+        {
+            "path": "Source/Sample/Dependency.cpp",
+            "exists": True,
+            "fileHash": hashlib.sha1(repair_file.read_bytes()).hexdigest(),
+        }
+    ]
 
 
 def test_linker_recovery_blocks_invented_state_and_accepts_existing_project_state(

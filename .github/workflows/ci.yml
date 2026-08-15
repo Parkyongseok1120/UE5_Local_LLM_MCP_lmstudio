@@ -34,6 +34,9 @@ jobs:
       - name: Python syntax gate (portable sources)
         run: python -m compileall -q install.py installer scripts skills tools
 
+      - name: Control protocol and error-catalog totality gate
+        run: python scripts/validate_control_protocol.py
+
       - name: Root Node contract tests
         run: >
           node --test

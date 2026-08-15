@@ -110,11 +110,14 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 )
 
 REQUIRED_RUNTIME_FILES = (
+    "config/control_protocol_spec.json",
     "docs/Release_Notes_1_3_0_RC3.md",
     "scripts/project_name_resolver.py",
     "scripts/semantic_ambiguity.py",
     "scripts/target_resolver.py",
     "scripts/control_runtime_identity.py",
+    "scripts/control_protocol_spec.py",
+    "scripts/validate_control_protocol.py",
     "scripts/phase_tool_router.py",
     "scripts/approve_feature_intent.py",
     "scripts/mutation_semantic_guard.py",
@@ -128,8 +131,11 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/route-watcher.js",
     "lmstudio-unreal-agent-mcp/src/mutation-semantic-guard.js",
     "lmstudio-unreal-agent-mcp/src/runtime-identity.js",
+    "lmstudio-unreal-agent-mcp/src/control-protocol-spec.js",
+    "lmstudio-unreal-agent-mcp/src/durable-guard-store.js",
     "lmstudio-unreal-agent-mcp/src/task-control-transition.js",
     "lmstudio-context-compactor-plugin/src/runtime-identity.js",
+    "lmstudio-context-compactor-plugin/src/control-protocol-spec.js",
 )
 
 # The portable RAG entry points dot-source this cross-platform path/index

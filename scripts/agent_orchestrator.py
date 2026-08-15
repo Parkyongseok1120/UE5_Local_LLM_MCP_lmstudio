@@ -850,6 +850,12 @@ def _is_plan_only_request(text: str) -> bool:
     return not any(re.search(pattern, text) for pattern in PLAN_AND_EXECUTE_PATTERNS)
 
 
+def is_plan_only_request(request: str, mode: str = "auto") -> bool:
+    """Expose the classifier's single plan-only predicate to lifecycle owners."""
+
+    return _is_plan_only_request(f"{mode} {request}".lower())
+
+
 def _is_compile_fix_request(text: str) -> bool:
     if any(m in text for m in COMPILE_MARKERS):
         return True

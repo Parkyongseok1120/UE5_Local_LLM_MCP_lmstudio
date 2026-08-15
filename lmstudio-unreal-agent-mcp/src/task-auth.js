@@ -806,6 +806,10 @@ const ROUTE_RESERVATION_TTL_BY_TOOL_MS = Object.freeze({
   read_symbol: 120_000,
   list_directory: 300_000,
   search_files: 600_000,
+  write_file: 600_000,
+  replace_in_file: 600_000,
+  delete_file: 300_000,
+  apply_edit_bundle: 1_800_000,
 });
 const ROUTE_RESERVATION_TTL_DEFAULT_MS = 180_000;
 
@@ -1352,14 +1356,77 @@ function mutateRouteBudget(
         error: "Task state disappeared before route call recording.",
       };
     }
-    const routeCheck = validateToolRoute(current, fields, args, toolName);
+    const reservationMode = ["commit", "rollback", "heartbeat"].includes(String(mode || ""));
+    let routeCheck;
+    let reservedRouteHashForOperation = "";
+    if (reservationMode) {
+      const usageBeforeRouteCheck = current.toolRouteUsage && typeof current.toolRouteUsage === "object"
+        ? current.toolRouteUsage
+        : {};
+      const matchingReservation = (Array.isArray(usageBeforeRouteCheck.reservations)
+        ? usageBeforeRouteCheck.reservations
+        : []).find((entry) => String(entry?.reservationId || "") === String(reservationId || ""));
+      if (!matchingReservation) {
+        return {
+          ok: false,
+          errorCode: "TASK_RESERVATION_NOT_FOUND",
+          error: `Unknown reservation id: ${String(reservationId || "")}`,
+        };
+      }
+      if (String(matchingReservation.tool || "") !== String(toolName || "")) {
+        return {
+          ok: false,
+          errorCode: "TASK_RESERVATION_TOOL_MISMATCH",
+          error: "Route reservation belongs to a different tool.",
+        };
+      }
+      const suppliedRouteHash = String(fields?.routeHash || "");
+      const reservedRouteHash = String(matchingReservation.routeHash || "");
+      reservedRouteHashForOperation = reservedRouteHash;
+      if (suppliedRouteHash && reservedRouteHash && suppliedRouteHash !== reservedRouteHash) {
+        return {
+          ok: false,
+          errorCode: "TASK_RESERVATION_ROUTE_MISMATCH",
+          error: "Route reservation does not match the call's original authorization.",
+        };
+      }
+      if (["commit", "heartbeat"].includes(String(mode || ""))) {
+        const staleFields = [];
+        if (String(current.status || "") !== "running") staleFields.push("status");
+        if (
+          String(matchingReservation.planRevision || "")
+          !== String(current.planRevision || "")
+        ) staleFields.push("planRevision");
+        if (
+          String(matchingReservation.activeSliceId || "")
+          !== String(current.activeSliceId || "")
+        ) staleFields.push("activeSliceId");
+        if (staleFields.length) {
+          return {
+            ok: false,
+            errorCode: "TASK_RESERVATION_SCOPE_STALE",
+            error: `Route reservation scope changed before ${String(mode)}: ${staleFields.join(", ")}.`,
+            staleFields,
+          };
+        }
+      }
+      routeCheck = {
+        ok: true,
+        route: current.toolRoute && typeof current.toolRoute === "object"
+          ? current.toolRoute
+          : {},
+        reservationCapability: true,
+      };
+    } else {
+      routeCheck = validateToolRoute(current, fields, args, toolName);
+    }
     if (!routeCheck.ok) return routeCheck;
     if (routeCheck.legacy) return { ok: true };
     const route = routeCheck.route;
     let usage = current.toolRouteUsage && typeof current.toolRouteUsage === "object"
       ? { ...current.toolRouteUsage }
       : {};
-    if (String(usage.routeHash || "") !== String(route.routeHash || "")) {
+    if (!reservationMode && String(usage.routeHash || "") !== String(route.routeHash || "")) {
       usage = {
         routeHash: String(route.routeHash || ""),
         phase: String(route.phase || ""),
@@ -1430,11 +1497,31 @@ function mutateRouteBudget(
         };
       }
       const calls = Array.isArray(usage.calls) ? usage.calls.map(String) : [];
-      calls.push(toolName);
       usage.reservations = next;
       usage.reserved = next.length;
-      usage.count = count + 1;
-      usage.calls = calls.slice(-limit);
+      const routeTransitioned = Boolean(
+        reservedRouteHashForOperation
+        && String(route.routeHash || "")
+        && reservedRouteHashForOperation !== String(route.routeHash || "")
+      );
+      if (routeTransitioned) {
+        const priorRouteCommits = Array.isArray(usage.priorRouteCommits)
+          ? usage.priorRouteCommits.slice(-7)
+          : [];
+        priorRouteCommits.push({
+          reservationId: targetId,
+          tool: String(toolName),
+          routeHash: reservedRouteHashForOperation,
+          committedAt: new Date().toISOString(),
+        });
+        usage.priorRouteCommits = priorRouteCommits;
+        usage.count = count;
+        usage.calls = calls.slice(-limit);
+      } else {
+        calls.push(toolName);
+        usage.count = count + 1;
+        usage.calls = calls.slice(-limit);
+      }
       current.toolRouteUsage = usage;
       recordDirectSourceEvidence(current, toolName, callMetadata);
       recordAbsentSourceEvidence(current, toolName, callMetadata);
@@ -1558,6 +1645,10 @@ function mutateRouteBudget(
         reservationId: id,
         tool: String(toolName),
         routeHash: String(route.routeHash || ""),
+        taskStatus: String(current.status || ""),
+        planRevision: String(current.planRevision || ""),
+        activeSliceId: String(current.activeSliceId || ""),
+        controlEpoch: Math.max(0, Number(current.controlEpoch || 0)),
         ownerPid: process.pid,
         createdAt,
         lastHeartbeatAt: createdAt,
@@ -2629,6 +2720,34 @@ function checkpointRollbackViaPython(workspaceRoot, binding = {}) {
   );
 }
 
+function environmentRecoveryAttempt(recovery, authorization = {}, state = null) {
+  const durableRecovery = { ...(recovery || {}) };
+  if (String(durableRecovery.status || "") !== "environment_recovery") {
+    return durableRecovery;
+  }
+  const required = durableRecovery.requiredTool && typeof durableRecovery.requiredTool === "object"
+    ? durableRecovery.requiredTool
+    : {};
+  const attemptIdentity = {
+    taskSessionId: String(state?.taskSessionId || authorization.taskSessionId || ""),
+    controlEpoch: Math.max(0, Number(state?.controlEpoch || authorization.controlEpoch || 0)),
+    routeHash: String(state?.toolRoute?.routeHash || authorization.routeHash || ""),
+    errorCode: String(durableRecovery.errorCode || ""),
+    requiredTool: {
+      name: String(required.name || ""),
+      args: required.args && typeof required.args === "object" ? required.args : {},
+    },
+  };
+  return {
+    ...durableRecovery,
+    attemptId: crypto
+      .createHash("sha256")
+      .update(stableStringify(attemptIdentity))
+      .digest("hex"),
+    attemptOutcome: "failed",
+  };
+}
+
 function recordRecoveryObligationViaPython(workspaceRoot, args, recovery) {
   const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
     ? args.taskAuthorization
@@ -2636,6 +2755,8 @@ function recordRecoveryObligationViaPython(workspaceRoot, args, recovery) {
   if (!nested.taskSessionId || !recovery || typeof recovery !== "object") {
     return { ok: true, active: false };
   }
+  const current = readTaskState(workspaceRoot, String(nested.taskSessionId || ""));
+  const durableRecovery = environmentRecoveryAttempt(recovery, nested, current);
   return invokePythonTaskApi(
     workspaceRoot,
     (
@@ -2644,7 +2765,7 @@ function recordRecoveryObligationViaPython(workspaceRoot, args, recovery) {
       + "recovery=dict((_stdin or {}).get('recovery') or {}))"
     ),
     [],
-    { stdinPayload: { taskAuthorization: nested, recovery } }
+    { stdinPayload: { taskAuthorization: nested, recovery: durableRecovery } }
   );
 }
 
@@ -3648,6 +3769,7 @@ module.exports = {
   recordBuildRecoveryViaPython,
   markBuildRecoveryEvidenceViaPython,
   recordRecoveryObligationViaPython,
+  environmentRecoveryAttempt,
   bindBuildContractViaPython,
   markRecoveryEvidenceViaPython,
   listToolsRouteContext,

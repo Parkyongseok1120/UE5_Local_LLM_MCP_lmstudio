@@ -272,10 +272,20 @@ def test_slim_write_success_payload_surfaces_skipped_validator_failure() -> None
 
 
 def test_write_discipline_options_for_existing_paths() -> None:
-    payload = run_node("ux.writeDisciplineOptions(true)")
+    payload = run_node("ux.writeDisciplineOptions(true, {path:'project://Source/Demo/A.cpp', startLine:7, endLine:55})")
     assert payload["writeToolPolicy"] == "create_only"
-    assert payload["requiredNextTool"] == "replace_in_file"
-    assert payload["doNotRetry"] == "write_file"
+    assert payload["requiredNextTool"] == "read_file_range"
+    assert payload["requiredNextToolArgs"] == {
+        "path": "project://Source/Demo/A.cpp",
+        "startLine": 7,
+        "endLine": 55,
+        "detailLevel": "compact",
+    }
+    assert payload["doNotRetry"] == []
+    assert payload["doNotRetryToolFamily"] is False
+    assert payload["suggestedToolCalls"] == [
+        {"tool": "read_file_range", "args": payload["requiredNextToolArgs"]}
+    ]
 
 
 def test_compact_validation_payload_groups_and_caps_findings() -> None:

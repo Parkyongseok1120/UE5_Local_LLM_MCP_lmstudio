@@ -467,6 +467,55 @@ async function validateAfterWrite(absPath, getActiveProject) {
   return result;
 }
 
+async function validateAfterDelete(absPath, getActiveProject) {
+  if (!VALIDATE_ON_WRITE || !isSourceLike(absPath)) {
+    return null;
+  }
+  const projectRoot = await resolveProjectRootForFile(absPath, getActiveProject);
+  if (!projectRoot) {
+    return {
+      ok: false,
+      skipped: false,
+      projectRoot: null,
+      findingCount: 1,
+      findings: [{
+        severity: "error",
+        code: "VALIDATION_PROJECT_ROOT",
+        path: absPath,
+        line: 0,
+        message: "could not resolve project root for post-delete validation",
+      }],
+    };
+  }
+  const deletedTarget = path.relative(projectRoot, absPath).split(path.sep).join("/");
+  // A deleted path cannot be the validator's write target: limiting blockers to
+  // a file that no longer exists would falsely pass. Run the project audit so
+  // missing counterparts and references in surviving files remain observable.
+  const result = await runStaticValidation(projectRoot, {
+    timeoutMs: VALIDATE_ON_WRITE_TIMEOUT_MS,
+  });
+  const infrastructureError = isValidationInfrastructureFailure(result);
+  if (result && (result.timedOut || infrastructureError)) {
+    const skipReason = result.timedOut
+      ? "post-delete validation skipped (time budget)"
+      : "post-delete validation unavailable (validator infrastructure failure)";
+    markUnvalidated(projectRoot, deletedTarget, skipReason);
+    return {
+      ok: true,
+      skipped: true,
+      timedOut: Boolean(result.timedOut),
+      infrastructureError,
+      projectRoot,
+      deletedTarget,
+      findingCount: 0,
+      findings: [],
+      advisoryFindings: result.findings || [],
+      note: skipReason + "; run static_validate_project before build",
+    };
+  }
+  return result ? { ...result, deletedTarget } : result;
+}
+
 function formatValidationResult(result) {
   if (!result) {
     return "";
@@ -550,6 +599,7 @@ module.exports = {
   resolveValidationRoot,
   resolvePythonExe,
   validateAfterWrite,
+  validateAfterDelete,
   formatValidationResult,
   runStaticValidation,
   isValidationInfrastructureFailure,

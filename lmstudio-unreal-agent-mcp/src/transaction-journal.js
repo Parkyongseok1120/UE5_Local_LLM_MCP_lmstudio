@@ -544,6 +544,95 @@ async function archiveJournal(transactionId, stateRoot = resolveAgentStateRoot()
   return true;
 }
 
+function recoveryItemForJournal(journal, details = {}) {
+  const source = details && typeof details === "object" ? details : {};
+  const entryPaths = (journal.entries || [])
+    .map((entry) => String(entry?.relativePath || "").replace(/\\/g, "/"))
+    .filter(Boolean);
+  const detailPaths = Array.isArray(source.paths)
+    ? source.paths.map((item) => String(item || "").replace(/\\/g, "/")).filter(Boolean)
+    : [];
+  return {
+    ...source,
+    transactionId: String(journal.transactionId || source.transactionId || ""),
+    operation: String(journal.operation || source.operation || "mutation"),
+    taskSessionId: String(journal.taskSessionId || source.taskSessionId || ""),
+    projectPath: String(journal.projectPath || source.projectPath || ""),
+    projectRoot: String(journal.projectRoot || source.projectRoot || ""),
+    paths: [...new Set([...detailPaths, ...entryPaths])].slice(0, 8),
+  };
+}
+
+function appendRecoveryRequired(recovery, journal, details = {}) {
+  const item = recoveryItemForJournal(journal, details);
+  const duplicate = recovery.recoveryRequired.some((existing) => (
+    String(existing?.transactionId || "") === item.transactionId
+    && String(existing?.reason || "") === String(item.reason || "")
+  ));
+  if (!duplicate) recovery.recoveryRequired.push(item);
+  return item;
+}
+
+async function resolveRecoveryRequiredJournal(
+  { transactionId = "", taskSessionId = "", resolution = {} } = {},
+  stateRoot = resolveAgentStateRoot()
+) {
+  const id = String(transactionId || "").trim();
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+    return { ok: false, errorCode: "TRANSACTION_ID_INVALID", error: "Invalid transaction id." };
+  }
+  const journal = loadJournal(id, stateRoot);
+  if (!journal) {
+    const archived = path.join(journalDir(stateRoot), "archive", `${id}.json`);
+    if (fs.existsSync(archived)) {
+      return { ok: true, transactionId: id, alreadyResolved: true, archived: true };
+    }
+    return { ok: false, errorCode: "TRANSACTION_JOURNAL_NOT_FOUND", error: "Transaction journal not found." };
+  }
+  const expectedTask = String(journal.taskSessionId || "").trim();
+  const observedTask = String(taskSessionId || "").trim();
+  if (expectedTask && (!observedTask || observedTask !== expectedTask)) {
+    return {
+      ok: false,
+      errorCode: "TRANSACTION_TASK_MISMATCH",
+      error: "Transaction journal belongs to a different task session.",
+    };
+  }
+  const resolutionStrategy = String(resolution?.strategy || "").trim();
+  const checkpointHash = String(resolution?.checkpointHash || "").trim();
+  if (resolutionStrategy !== "task_checkpoint_rebase" || !checkpointHash) {
+    return {
+      ok: false,
+      errorCode: "TRANSACTION_REBASE_PROOF_REQUIRED",
+      error: "An exact task_checkpoint_rebase strategy and checkpointHash are required.",
+    };
+  }
+  const resolvable = new Set([
+    "recovery_required",
+    "rollback_incomplete",
+    "rollback_state_pending",
+    "rollback_disk_pending",
+  ]);
+  if (!resolvable.has(String(journal.status || ""))) {
+    return {
+      ok: false,
+      errorCode: "TRANSACTION_NOT_RECOVERY_REQUIRED",
+      error: `Transaction status is not recovery-required: ${String(journal.status || "")}`,
+    };
+  }
+  journal.status = "recovered";
+  journal.recoveryResolved = {
+    ...(resolution && typeof resolution === "object" ? resolution : {}),
+    strategy: resolutionStrategy,
+    checkpointHash,
+    resolvedAt: new Date().toISOString(),
+  };
+  journal.updatedAt = new Date().toISOString();
+  saveJournal(journal, stateRoot);
+  const archived = await archiveJournal(id, stateRoot);
+  return { ok: true, transactionId: id, archived, alreadyResolved: false };
+}
+
 function normalizedJournalRelativePath(value) {
   const normalized = String(value || "").replace(/\\/g, "/").replace(/^\.\//, "");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
@@ -902,11 +991,7 @@ async function completeSupersededJournal(journal, supersession, recovery, stateR
 }
 
 async function markAtomicRecoveryRequired(journal, recovery, details, stateRoot) {
-  const item = {
-    transactionId: journal.transactionId,
-    ...(details || {}),
-  };
-  recovery.recoveryRequired.push(item);
+  const item = appendRecoveryRequired(recovery, journal, details);
   journal.status = "recovery_required";
   journal.recoveryFailure = item;
   journal.updatedAt = new Date().toISOString();
@@ -914,11 +999,7 @@ async function markAtomicRecoveryRequired(journal, recovery, details, stateRoot)
 }
 
 function markAtomicRollbackPending(journal, recovery, details, stateRoot) {
-  const item = {
-    transactionId: journal.transactionId,
-    ...(details || {}),
-  };
-  recovery.recoveryRequired.push(item);
+  const item = appendRecoveryRequired(recovery, journal, details);
   journal.status = "rollback_state_pending";
   journal.recoveryFailure = item;
   journal.updatedAt = new Date().toISOString();
@@ -1170,6 +1251,8 @@ async function recoverIncompleteJournals(
     skippedTerminal: [],
     committed: [],
     superseded: [],
+    promoted: [],
+    promotionFailures: [],
     scanned: 0,
   };
   const loaded = [];
@@ -1197,13 +1280,26 @@ async function recoverIncompleteJournals(
   });
   const recoveryJournals = loaded.map((item) => item.journal);
   for (const { name, journal } of loaded) {
+    // recovery_required is deliberately non-terminal from the control plane's
+    // perspective.  Keep publishing the same durable item on every startup
+    // until an exact task checkpoint rebase resolves and archives it.
+    if (String(journal.status || "") === "recovery_required") {
+      appendRecoveryRequired(
+        recovery,
+        journal,
+        journal.recoveryFailure && typeof journal.recoveryFailure === "object"
+          ? journal.recoveryFailure
+          : { reason: "transaction_recovery_required" }
+      );
+      continue;
+    }
     if (
       journal.requiresAtomicCheckpoint === true
       && TERMINAL_JOURNAL_STATUSES.has(String(journal.status || ""))
       && (
         journal.checkpointCommitted === true
         || journal.rollbackStateReconciled === true
-        || ["recovery_required", "superseded"].includes(String(journal.status || ""))
+        || String(journal.status || "") === "superseded"
       )
     ) {
       if (["completed", "rolled_back", "recovered", "superseded"].includes(String(journal.status || ""))) {
@@ -1257,19 +1353,52 @@ async function recoverIncompleteJournals(
         } catch (err) {
           const item = { path: entry.relativePath, error: String(err.message || err) };
           localRequired.push(item);
-          recovery.recoveryRequired.push(item);
         }
       } else {
         const item = { path: entry.relativePath, reason: "external_change_detected" };
         localRequired.push(item);
-        recovery.recoveryRequired.push(item);
       }
     }
     journal.status = localRequired.length ? "recovery_required" : "recovered";
+    if (localRequired.length) {
+      journal.recoveryFailure = appendRecoveryRequired(recovery, journal, {
+        reason: localRequired.some((item) => item.reason === "external_change_detected")
+          ? "external_change_detected"
+          : "filesystem_recovery_failed",
+        failures: localRequired.slice(0, 8),
+        paths: localRequired.map((item) => item.path).filter(Boolean),
+      });
+    }
     journal.updatedAt = new Date().toISOString();
     saveJournal(journal, stateRoot);
     if (!localRequired.length) {
       await archiveJournal(journal.transactionId, stateRoot);
+    }
+  }
+  if (typeof options.promoteRecoveryRequired === "function") {
+    for (const item of recovery.recoveryRequired) {
+      try {
+        const promoted = await options.promoteRecoveryRequired(item);
+        if (promoted?.ok === true) {
+          recovery.promoted.push({
+            transactionId: String(item.transactionId || ""),
+            active: promoted.active !== false,
+            idempotent: promoted.idempotent === true,
+          });
+        } else {
+          recovery.promotionFailures.push({
+            transactionId: String(item.transactionId || ""),
+            errorCode: String(promoted?.errorCode || "TRANSACTION_RECOVERY_PROMOTION_FAILED"),
+            error: String(promoted?.error || "Recovery promotion did not succeed."),
+          });
+        }
+      } catch (error) {
+        recovery.promotionFailures.push({
+          transactionId: String(item.transactionId || ""),
+          errorCode: "TRANSACTION_RECOVERY_PROMOTION_FAILED",
+          error: String(error.message || error),
+        });
+      }
     }
   }
   return recovery;
@@ -1285,6 +1414,7 @@ module.exports = {
   intendedPostHashes,
   entryMatchesOwnedPostImage,
   archiveJournal,
+  resolveRecoveryRequiredJournal,
   recoverIncompleteJournals,
   pathIdentity,
   requiresBuildValidation,

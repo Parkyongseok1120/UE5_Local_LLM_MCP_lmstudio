@@ -133,6 +133,12 @@ test("later failed patch on one file rolls all earlier patches back", async () =
 
   assert.strictEqual(result.ok, false);
   assert.strictEqual(result.rolledBack, true);
+  assert.deepStrictEqual(result.mutationFailure, {
+    errorCode: "OLD_TEXT_NOT_FOUND",
+    relativePath: "One.cpp",
+    oldText: "missing",
+    expectedOccurrences: 1,
+  });
   assert.strictEqual(fs.readFileSync(target, "utf8"), "alpha\nbeta\n");
 });
 

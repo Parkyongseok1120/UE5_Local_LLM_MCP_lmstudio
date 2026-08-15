@@ -168,6 +168,25 @@ async function captureBaseline(targets, journal, stateRoot) {
   return baseline;
 }
 
+function patchMutationError(result, relativePath, item) {
+  const failure = new Error(result?.error || `Patch failed for ${relativePath}`);
+  const resultCode = String(result?.errorCode || "");
+  const message = String(result?.error || "");
+  failure.mutationFailure = {
+    errorCode: resultCode || (
+      /oldText not found|found 0\b/iu.test(message)
+        ? "OLD_TEXT_NOT_FOUND"
+        : /occurrence mismatch/iu.test(message)
+          ? "OCCURRENCE_MISMATCH"
+          : "PATCH_CAS_FAILED"
+    ),
+    relativePath: relativePath,
+    oldText: String(item?.oldText || ""),
+    expectedOccurrences: Number(item?.expectedOccurrences ?? 1),
+  };
+  return failure;
+}
+
 async function commitFromTargets(
   bundle,
   targets,
@@ -211,7 +230,7 @@ async function commitFromTargets(
       expectedOccurrences: Number(item.expectedOccurrences ?? 1),
     });
     if (!planned.ok) {
-      throw new Error(planned.error || `Patch failed for ${rel}`);
+      throw patchMutationError(planned, rel, item);
     }
     const postHash = sha256Text(planned.updated);
     const previousEntry = (journal.entries || []).find((entry) => entry.relativePath === rel);
@@ -259,7 +278,7 @@ async function commitFromTargets(
       readHash,
     });
     if (!result.ok) {
-      throw new Error(result.error || `Patch failed for ${rel}`);
+      throw patchMutationError(result, rel, item);
     }
     if (sha256Text(result.updated) !== postHash) {
       throw new Error(`Patch plan changed during commit for ${rel}`);
@@ -459,6 +478,16 @@ async function applyBundleTransaction(bundle, resolvePathFn, options = {}) {
   validateBundleLimits(bundle, maxFilesPerEdit);
   const stateRoot = ensureStateRootLayout(resolveAgentStateRoot());
   const journal = createJournal({ operation: "apply_edit_bundle" }, stateRoot);
+  // Bind recovery ownership before acquiring locks or touching disk.  A crash,
+  // lock conflict, or canonicalization failure must still be attributable to
+  // the durable task/project that issued this bundle.
+  Object.assign(journal, options.transactionMetadata || {});
+  journal.taskSessionId = String(options.taskSessionId || journal.taskSessionId || "").trim();
+  journal.projectRoot = pathIdentity(options.projectRoot || journal.projectRoot || process.cwd());
+  journal.checkpointRequired = options.checkpointRequired !== undefined
+    ? Boolean(options.checkpointRequired)
+    : Boolean(journal.taskSessionId);
+  saveJournal(journal, stateRoot);
   const acquired = [];
   let wroteAny = false;
 
@@ -580,6 +609,9 @@ async function applyBundleTransaction(bundle, resolvePathFn, options = {}) {
     return {
       ok: false,
       error: String(error.message || error),
+      ...(error.mutationFailure && typeof error.mutationFailure === "object"
+        ? { mutationFailure: { ...error.mutationFailure } }
+        : {}),
       transactionId: journal.transactionId,
       rollback,
       rolledBack: rollback.rolledBack,

@@ -188,19 +188,40 @@ function errorPayload(message, options = {}) {
   return payload;
 }
 
-function writeDisciplineOptions(existingPath = true) {
+function writeDisciplineOptions(existingPath = true, options = {}) {
   if (!existingPath) return {};
+  const pathValue = String(
+    typeof options === "string" ? options : options.path || "<path>"
+  );
+  const requestedStart = Number(options.startLine || 1);
+  const startLine = Math.max(1, Number.isFinite(requestedStart) ? requestedStart : 1);
+  const requestedEnd = Number(options.endLine || startLine + 119);
+  const endLine = Math.max(
+    startLine,
+    Math.min(startLine + 119, Number.isFinite(requestedEnd) ? requestedEnd : startLine + 119)
+  );
+  const readArgs = {
+    path: pathValue,
+    startLine,
+    endLine,
+    detailLevel: "compact",
+  };
   return {
     errorCode: "FILE_ALREADY_EXISTS",
     writeToolPolicy: "create_only",
-    requiredNextTool: "replace_in_file",
-    doNotRetry: "write_file",
+    requiredNextTool: "read_file_range",
+    requiredNextToolArgs: readArgs,
+    // The caller adds an exact failed-call fingerprint.  Never publish a
+    // tool-family deny here: write_file remains valid for other new paths.
+    doNotRetry: [],
+    doNotRetryToolFamily: false,
     doNotCall: ["unreal_agent_plan"],
     authorizationRefreshRequired: false,
-    nextSteps: ["Read the existing file, then patch it with replace_in_file. Do not retry write_file on this path."],
+    nextSteps: [
+      "Read the concrete bounded range first. Then construct a new exact replace_in_file call from the returned text; do not retry write_file on this path.",
+    ],
     suggestedToolCalls: [
-      { tool: "read_file", args: { path: "<path>", detailLevel: "compact" } },
-      { tool: "replace_in_file", args: { path: "<path>", oldText: "<exact text from read_file>", newText: "<replacement>", expectedOccurrences: 1 } }
+      { tool: "read_file_range", args: readArgs },
     ]
   };
 }

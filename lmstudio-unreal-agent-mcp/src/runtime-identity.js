@@ -4,8 +4,15 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { controlProtocolIdentity } = require("./control-protocol-spec");
 
 const PROTOCOL_VERSION = 2;
+const PROTOCOL_IDENTITY_FIELDS = Object.freeze([
+  "transitionPolicyHash",
+  "errorCatalogHash",
+  "authorizationSchemaHash",
+  "controlSchemaHash",
+]);
 
 function walkFiles(directory, suffixes) {
   if (!fs.existsSync(directory)) return [];
@@ -71,7 +78,7 @@ function gitCommit(root) {
   return result.status === 0 ? String(result.stdout || "").trim().slice(0, 80) : "";
 }
 
-function componentIdentity(component, repositoryRoot) {
+function componentIdentity(component, repositoryRoot, options = {}) {
   const root = path.resolve(repositoryRoot);
   const { base, files } = componentLayout(root, component);
   if (!files.length) throw new Error(`no runtime files found for ${component} under ${root}`);
@@ -83,12 +90,21 @@ function componentIdentity(component, repositoryRoot) {
     digest.update("\0");
   }
   const packageFile = path.join(base, "package.json");
+  const protocol = controlProtocolIdentity({
+    ...options,
+    repositoryRoot: root,
+    componentRoot: base,
+  });
+  if (protocol.protocolVersion !== PROTOCOL_VERSION) {
+    throw new Error("CONTROL_RUNTIME_VERSION_MISMATCH: protocol spec version differs from runtime");
+  }
   return {
     component,
     buildHash: digest.digest("hex"),
     gitCommit: gitCommit(root),
     componentVersion: packageVersion(packageFile),
     protocolVersion: PROTOCOL_VERSION,
+    ...Object.fromEntries(PROTOCOL_IDENTITY_FIELDS.map((field) => [field, protocol[field]])),
   };
 }
 
@@ -102,7 +118,7 @@ function verifyRuntimeComponent(component, options = {}) {
   ).trim();
   const required = options.required === true
     || /^(?:1|true|yes|on)$/i.test(String(process.env.CONTROL_RUNTIME_REQUIRED || ""));
-  const running = componentIdentity(component, repositoryRoot);
+  const running = componentIdentity(component, repositoryRoot, { manifestPath });
   if (!manifestPath || !fs.existsSync(manifestPath)) {
     if (required) throw new Error("CONTROL_RUNTIME_VERSION_MISMATCH: manifest is required");
     return { ok: true, verified: false, reason: "manifest_not_configured", running };
@@ -116,7 +132,13 @@ function verifyRuntimeComponent(component, options = {}) {
   if (!expected || typeof expected !== "object") {
     throw new Error(`CONTROL_RUNTIME_VERSION_MISMATCH: ${component} identity is missing`);
   }
-  const mismatches = ["buildHash", "componentVersion", "protocolVersion", "gitCommit"]
+  const mismatches = [
+    "buildHash",
+    "componentVersion",
+    "protocolVersion",
+    "gitCommit",
+    ...PROTOCOL_IDENTITY_FIELDS,
+  ]
     .filter((key) => String(expected[key] || "") !== String(running[key] || ""));
   if (mismatches.length) {
     throw new Error(`CONTROL_RUNTIME_VERSION_MISMATCH: ${component} differs in ${mismatches.join(", ")}`);
@@ -124,4 +146,9 @@ function verifyRuntimeComponent(component, options = {}) {
   return { ok: true, verified: true, manifestPath: path.resolve(manifestPath), expected, running };
 }
 
-module.exports = { PROTOCOL_VERSION, componentIdentity, verifyRuntimeComponent };
+module.exports = {
+  PROTOCOL_VERSION,
+  PROTOCOL_IDENTITY_FIELDS,
+  componentIdentity,
+  verifyRuntimeComponent,
+};

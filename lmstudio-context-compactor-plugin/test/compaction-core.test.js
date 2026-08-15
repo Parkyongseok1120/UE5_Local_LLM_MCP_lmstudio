@@ -507,10 +507,11 @@ test("new user objective invalidates an old task route and ignores its delayed r
   assert.equal(core.validateCheckpoint(rebuilt), true);
 });
 
-test("conflicting v2 route and semantic evidence blocker fail closed", () => {
+test("same-epoch v2 and semantic conflict preserves task route and blocks only the failed call", () => {
   const staleRoute = {
     version: 2,
     epoch: 2,
+    fingerprint: "control-replay-2",
     taskSessionId: "task-stale-route",
     routeHash: "route-stale",
     phase: "evidence",
@@ -536,14 +537,143 @@ test("conflicting v2 route and semantic evidence blocker fail closed", () => {
     }] },
   ]);
 
-  assert.equal(checkpoint.serverControl, null);
-  assert.equal(checkpoint.toolRoute, null);
+  assert.equal(checkpoint.serverControl.taskSessionId, "task-stale-route");
+  assert.equal(checkpoint.serverControl.controlFingerprint, "control-replay-2");
+  assert.equal(checkpoint.toolRoute.routeHash, "route-stale");
   assert.equal(checkpoint.taskRouteOwnership, null);
-  assert.equal(checkpoint.requiredNextTool, null);
+  assert.equal(checkpoint.requiredNextTool.name, "read_file");
+  assert.deepEqual(checkpoint.requiredNextTool.args, { path: "Source/Replay.cpp" });
   assert.equal(checkpoint.semanticBlocker.errorCode, "CONTROL_BLOCKER_CONFLICT");
-  assert.equal(checkpoint.semanticBlocker.stopCurrentWorkflow, true);
-  assert.ok(checkpoint.invalidatedTaskSessionIds.includes("task-stale-route"));
+  assert.equal(checkpoint.semanticBlocker.sourceErrorCode, "EVIDENCE_STAGNATION");
+  assert.equal(checkpoint.semanticBlocker.stopCurrentWorkflow, false);
+  assert.deepEqual(checkpoint.semanticBlocker.forbiddenTools, []);
+  assert.deepEqual(checkpoint.semanticBlocker.forbiddenCallFingerprints, [
+    core.toolCallFingerprint("read_file", {}),
+  ]);
+  assert.ok(!checkpoint.invalidatedTaskSessionIds.includes("task-stale-route"));
   assert.equal(core.validateCheckpoint(checkpoint), true);
+});
+
+test("same-epoch control may enrich a legacy checkpoint with its fingerprint only", () => {
+  const control = {
+    version: 2,
+    epoch: 8,
+    taskSessionId: "task-control-fingerprint",
+    routeHash: "route-control-fingerprint",
+    phase: "inspect",
+    disposition: "require_tool",
+    requiredTool: { name: "read_file", args: { path: "Source/Control.cpp" } },
+    allowedTools: ["read_file"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
+  const base = [
+    { role: "user", content: "control fingerprint를 보존해" },
+    { role: "tool", content: JSON.stringify({ control }) },
+  ];
+  const prior = core.buildCheckpoint(base);
+  assert.equal(prior.serverControl.controlFingerprint, "");
+
+  const enriched = core.buildCheckpoint([
+    ...base,
+    { role: "tool", content: JSON.stringify({
+      control: { ...control, fingerprint: "control-fingerprint-8" },
+    }) },
+  ], prior);
+  assert.equal(enriched.serverControl.controlFingerprint, "control-fingerprint-8");
+  assert.ok(enriched.diagnostics.includes("controlFingerprintEnriched=8"));
+  assert.equal(core.validateCheckpoint(enriched), true);
+});
+
+test("newer v2 control discards stale or mismatched semantic blockers", () => {
+  const controlAt = (epoch, fingerprint) => ({
+    version: 2,
+    epoch,
+    fingerprint,
+    taskSessionId: "task-versioned-blocker",
+    routeHash: `route-versioned-${epoch}`,
+    phase: "evidence",
+    disposition: "require_tool",
+    requiredTool: { name: "read_file", args: { path: `Source/V${epoch}.cpp` } },
+    allowedTools: ["read_file"],
+    retryPolicy: { sameSemanticInput: "once" },
+  });
+  const base = [
+    { role: "user", content: "버전이 있는 복구 경로를 검증해" },
+    { role: "tool", content: JSON.stringify({ control: controlAt(2, "control-v2") }) },
+    { role: "assistant", toolCalls: [{ id: "failed-read", name: "read_file", arguments: { path: "Source/V2.cpp" } }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "failed-read",
+      name: "read_file",
+      content: JSON.stringify({
+        ok: false,
+        taskSessionId: "task-versioned-blocker",
+        controlEpoch: 2,
+        controlFingerprint: "control-v2",
+        errorCode: "EVIDENCE_STAGNATION",
+        stopCurrentPhase: true,
+        phaseBoundary: "evidence",
+        doNotRetry: ["read_file"],
+      }),
+    }] },
+  ];
+  const conflicted = core.buildCheckpoint(base);
+  assert.equal(conflicted.semanticBlocker.errorCode, "CONTROL_BLOCKER_CONFLICT");
+  assert.equal(conflicted.serverControl.epoch, 2);
+
+  const advanced = core.buildCheckpoint([
+    ...base,
+    { role: "tool", content: JSON.stringify({ control: controlAt(3, "control-v3") }) },
+  ], conflicted);
+  assert.equal(advanced.serverControl.epoch, 3);
+  assert.equal(advanced.semanticBlocker, null);
+  assert.ok(advanced.diagnostics.some((item) => item.startsWith("semanticBlockerDiscarded=stale_epoch_")));
+  assert.ok(!advanced.invalidatedTaskSessionIds.includes("task-versioned-blocker"));
+
+  const mismatchedTask = core.buildCheckpoint([
+    { role: "user", content: "다른 세션의 지연 결과를 무시해" },
+    { role: "tool", content: JSON.stringify({ control: controlAt(5, "control-v5") }) },
+    { role: "assistant", toolCalls: [{ id: "other-read", name: "read_file", arguments: {} }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "other-read",
+      name: "read_file",
+      content: JSON.stringify({
+        ok: false,
+        taskSessionId: "task-from-another-session",
+        controlEpoch: 5,
+        controlFingerprint: "control-v5",
+        errorCode: "EVIDENCE_STAGNATION",
+        stopCurrentPhase: true,
+        phaseBoundary: "evidence",
+        doNotRetry: ["read_file"],
+      }),
+    }] },
+  ]);
+  assert.equal(mismatchedTask.serverControl.epoch, 5);
+  assert.equal(mismatchedTask.semanticBlocker, null);
+  assert.ok(mismatchedTask.diagnostics.includes("semanticBlockerDiscarded=task_session_mismatch"));
+
+  const mismatchedFingerprint = core.buildCheckpoint([
+    { role: "user", content: "같은 epoch의 오래된 fingerprint를 무시해" },
+    { role: "tool", content: JSON.stringify({ control: controlAt(6, "control-v6") }) },
+    { role: "assistant", toolCalls: [{ id: "old-fingerprint", name: "read_file", arguments: {} }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "old-fingerprint",
+      name: "read_file",
+      content: JSON.stringify({
+        ok: false,
+        taskSessionId: "task-versioned-blocker",
+        controlEpoch: 6,
+        controlFingerprint: "different-control-v6",
+        errorCode: "EVIDENCE_STAGNATION",
+        stopCurrentPhase: true,
+        phaseBoundary: "evidence",
+        doNotRetry: ["read_file"],
+      }),
+    }] },
+  ]);
+  assert.equal(mismatchedFingerprint.serverControl.epoch, 6);
+  assert.equal(mismatchedFingerprint.semanticBlocker, null);
+  assert.ok(mismatchedFingerprint.diagnostics.includes("semanticBlockerDiscarded=control_fingerprint_mismatch"));
 });
 
 test("workflow stop without a deny-list remains fail-closed", () => {
@@ -1022,6 +1152,10 @@ test("tool name matching accepts LM Studio provider-qualified MCP paths", () => 
     core.parseProviderQualifiedToolName("mcp/unreal-agent/read_file"),
     { qualified: true, functionName: "read_file" },
   );
+  assert.equal(
+    core.toolCallFingerprint("read_file", { path: "Source/Portable.cpp" }),
+    core.toolCallFingerprint("mcp/unreal-agent/read_file", { path: "Source/Portable.cpp" }),
+  );
 });
 
 test("mutation intent classification is shared across Korean read and write goals", () => {
@@ -1389,6 +1523,22 @@ test("a long objective prefix is still a new goal and clears the old route", () 
   assert.ok(checkpoint.invalidatedTaskSessionIds.includes(taskSessionId));
 });
 
+test("a long objective keeps an exact durable tool-binding copy and full hash", () => {
+  const objective = `Audit the current project source exhaustively. ${"portable evidence boundary ".repeat(120)}`.trim();
+  assert.ok(objective.length > 1200);
+  const messages = [{ role: "user", content: objective }];
+
+  const checkpoint = core.buildCheckpoint(messages);
+
+  assert.equal(checkpoint.objective, objective.slice(0, 1200));
+  assert.equal(checkpoint.objectiveFull, objective);
+  assert.equal(checkpoint.objectiveHash, core.objectiveHashOf(objective));
+  assert.equal(core.validateCheckpoint(checkpoint), true);
+  const resumed = core.buildCheckpoint(messages, checkpoint);
+  assert.equal(resumed.objectiveFull, objective);
+  assert.equal(resumed.objectiveHash, core.objectiveHashOf(objective));
+});
+
 test("zero-tail compaction preserves bounded UTF-8 requestIntent through checkpoint round-trip", () => {
   const objective = "  이동 애니메이션 보정 🚀 상태를 분석해  ";
   const normalizedObjective = objective.trim();
@@ -1568,6 +1718,150 @@ test("continuation user message preserves the active objective and constraints",
   assert.equal(core.isContinuationUserMessage("continue the active task"), true);
   assert.equal(core.isContinuationUserMessage("다시해: 네트워크는 제외해"), false);
   assert.equal(core.isContinuationUserMessage("아까 작업은 취소하고 구조만 알려줘"), false);
+});
+
+test("elliptical retry prompts require durable task or prediction identity", () => {
+  const control = {
+    version: 2,
+    epoch: 11,
+    fingerprint: "control-elliptical-11",
+    taskSessionId: "task-elliptical",
+    routeHash: "route-elliptical",
+    phase: "inspect",
+    disposition: "require_tool",
+    requiredTool: { name: "read_file", args: { path: "Source/Portable.cpp" } },
+    allowedTools: ["read_file"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
+  const base = [
+    { role: "user", content: "휴대 가능한 입력 처리를 검증하고 고쳐" },
+    { role: "tool", content: JSON.stringify({
+      control,
+      taskAuthorization: { taskSessionId: "task-elliptical", ownerCapability: "owner-elliptical" },
+    }) },
+  ];
+  const prior = core.buildCheckpoint(base);
+  for (const prompt of ["다시 해볼래?", "한 번 더", "아까 거", "try again", "one more time"]) {
+    const continued = core.buildCheckpoint([...base, { role: "user", content: prompt }], prior);
+    assert.equal(continued.objective, prior.objective, prompt);
+    assert.equal(continued.objectiveHash, prior.objectiveHash, prompt);
+    assert.equal(continued.serverControl.taskSessionId, "task-elliptical", prompt);
+    assert.deepEqual(continued.taskRouteOwnership, prior.taskRouteOwnership, prompt);
+  }
+
+  assert.equal(core.isContinuationUserMessage("다시 해볼래?"), false);
+  assert.equal(core.isContinuationUserMessage("다시 해볼래?", { hasActiveTask: true }), true);
+  assert.equal(core.classifyUserTurnIntent("아까 거", { hasUncommittedPrediction: true }), "CONTINUE_ACTIVE_TASK");
+
+  const newObjective = "다시 해볼래? 새 네트워크 동기화 기능을 구현해";
+  const replaced = core.buildCheckpoint([...base, { role: "user", content: newObjective }], prior);
+  assert.equal(replaced.objective, newObjective);
+  assert.equal(replaced.serverControl, null);
+  assert.ok(replaced.invalidatedTaskSessionIds.includes("task-elliptical"));
+});
+
+test("uncommitted prediction identity preserves an objective without an active route", () => {
+  const base = [{ role: "user", content: "프로젝트의 종료 경로를 끝까지 분석해" }];
+  const prior = core.buildCheckpoint(base);
+  prior.predictionState = {
+    version: 1,
+    status: "completed",
+    objectiveHash: prior.objectiveHash,
+    outputDigest: core.sha256("partial local-model answer"),
+    stopReason: "eosFound",
+    updatedAt: new Date().toISOString(),
+  };
+  assert.equal(core.validateCheckpoint(prior), true);
+
+  const continued = core.buildCheckpoint([...base, { role: "user", content: "아까 거" }], prior);
+  assert.equal(continued.objective, prior.objective);
+  assert.equal(continued.objectiveHash, prior.objectiveHash);
+  assert.equal(core.hasUncommittedPrediction(continued.predictionState, {
+    objectiveHash: continued.objectiveHash,
+  }), true);
+
+  const changed = core.buildCheckpoint([
+    ...base,
+    { role: "user", content: "새 로딩 화면을 구현해" },
+  ], prior, { predictionState: prior.predictionState });
+  assert.equal(changed.objective, "새 로딩 화면을 구현해");
+  assert.equal(changed.predictionState, null);
+});
+
+test("prediction and synthesis lifecycle is bounded, monotonic, and epoch-aware", () => {
+  const synthesisControl = {
+    version: 2,
+    epoch: 7,
+    fingerprint: "control-synthesis-7",
+    taskSessionId: "task-synthesis",
+    routeHash: "route-synthesis",
+    phase: "synthesis",
+    disposition: "continue",
+    requiredTool: null,
+    allowedTools: [],
+    retryPolicy: { sameSemanticInput: "forbidden" },
+  };
+  const messages = [
+    { role: "user", content: "읽기 전용 분석 결과를 근거와 함께 정리해" },
+    { role: "tool", content: JSON.stringify({ control: synthesisControl }) },
+  ];
+  const pending = core.buildCheckpoint(messages);
+  assert.equal(pending.synthesisState.status, "pending");
+  assert.equal(pending.synthesisState.taskSessionId, "task-synthesis");
+  assert.equal(pending.synthesisState.controlEpoch, 7);
+  assert.equal(pending.synthesisState.objectiveHash, pending.objectiveHash);
+
+  const digest = core.sha256("durable synthesis output");
+  const committed = core.buildCheckpoint(messages, pending, {
+    predictionState: {
+      version: 1,
+      status: "committed",
+      taskSessionId: "task-synthesis",
+      objectiveHash: pending.objectiveHash,
+      controlEpoch: 7,
+      outputDigest: digest,
+      stopReason: "eosFound",
+      updatedAt: new Date().toISOString(),
+    },
+    synthesisState: {
+      ...pending.synthesisState,
+      status: "committed",
+      outputDigest: digest,
+      stopReason: "eosFound",
+      updatedAt: new Date().toISOString(),
+    },
+  });
+  assert.equal(committed.predictionState.status, "committed");
+  assert.equal(committed.synthesisState.status, "committed");
+  assert.equal(committed.synthesisState.outputDigest, digest);
+  assert.equal(core.validateCheckpoint(committed), true);
+
+  const noDowngrade = core.buildCheckpoint(messages, committed, {
+    synthesisState: { ...committed.synthesisState, status: "pending", outputDigest: "" },
+  });
+  assert.equal(noDowngrade.synthesisState.status, "committed");
+  assert.equal(noDowngrade.synthesisState.outputDigest, digest);
+
+  const newer = core.mergeLifecycleState(committed.synthesisState, {
+    ...committed.synthesisState,
+    status: "pending",
+    controlEpoch: 8,
+    outputDigest: "",
+  });
+  assert.equal(newer.status, "pending");
+  assert.equal(newer.controlEpoch, 8);
+  assert.equal(core.validateCheckpoint({
+    ...committed,
+    predictionState: { ...committed.predictionState, outputDigest: "not-a-digest" },
+  }), false);
+  assert.equal(core.validateCheckpoint({
+    ...committed,
+    synthesisState: { ...committed.synthesisState, controlEpoch: -1 },
+  }), false);
+  assert.equal(core.validateCheckpoint({
+    ...committed,
+    predictionState: { ...committed.predictionState, taskSessionId: "x".repeat(161) },
+  }), false);
 });
 
 test("contextual continuation preserves a fail-closed semantic blocker", () => {

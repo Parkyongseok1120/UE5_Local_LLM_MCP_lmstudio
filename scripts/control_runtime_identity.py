@@ -10,10 +10,17 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from control_protocol_spec import (
+    HASH_SECTIONS,
+    control_protocol_identity,
+    load_control_protocol_spec,
+)
+
 
 PROTOCOL_VERSION = 2
 RAG_COMPONENT_VERSION = "0.3.0"
 COMPONENTS = ("agent", "rag", "compactor")
+PROTOCOL_IDENTITY_FIELDS = tuple(HASH_SECTIONS)
 
 
 class ControlRuntimeMismatch(RuntimeError):
@@ -49,6 +56,7 @@ def _component_files(root: Path, component: str) -> list[Path]:
             "feature_intent_contract.py",
             "feature_intent_fast_path.py",
             "control_runtime_identity.py",
+            "control_protocol_spec.py",
         )
         files = [base / name for name in names]
     else:
@@ -120,12 +128,18 @@ def component_identity(
             "unknown",
         ),
     }
+    protocol = control_protocol_identity(repository_root=root)
+    if int(protocol["protocolVersion"]) != PROTOCOL_VERSION:
+        raise ControlRuntimeMismatch(
+            "CONTROL_RUNTIME_VERSION_MISMATCH: protocol spec version differs from runtime"
+        )
     return {
         "component": component,
         "buildHash": _build_hash(root, component),
         "gitCommit": _git_commit(root),
         "componentVersion": versions[component],
         "protocolVersion": PROTOCOL_VERSION,
+        **{field: protocol[field] for field in PROTOCOL_IDENTITY_FIELDS},
     }
 
 
@@ -134,8 +148,9 @@ def build_runtime_manifest(
 ) -> dict[str, Any]:
     root = _repository_root(repository_root)
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "protocolVersion": PROTOCOL_VERSION,
+        "protocolSpec": load_control_protocol_spec(repository_root=root),
         "components": {
             component: component_identity(component, repository_root=root)
             for component in COMPONENTS
@@ -176,7 +191,13 @@ def verify_runtime_component(
         )
     mismatches = [
         key
-        for key in ("buildHash", "componentVersion", "protocolVersion", "gitCommit")
+        for key in (
+            "buildHash",
+            "componentVersion",
+            "protocolVersion",
+            "gitCommit",
+            *PROTOCOL_IDENTITY_FIELDS,
+        )
         if str(expected.get(key) or "") != str(running.get(key) or "")
     ]
     if mismatches:

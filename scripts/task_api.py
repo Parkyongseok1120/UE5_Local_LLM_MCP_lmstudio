@@ -9,6 +9,7 @@ import hashlib
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import uuid
 from contextlib import contextmanager
@@ -47,6 +48,7 @@ from phase_tool_router import (
     normalized_selection_snapshots,
     request_files,
     selection_binding,
+    validation_finding_recovery,
     validate_runtime_selection,
 )
 from mcp_connection import (
@@ -100,6 +102,8 @@ SCOPE_SUPPORTING_GATES = frozenset(
     }
 )
 GATE_POLICY_VERSION = 2
+MAX_AUTOMATION_FILTERS_PER_BATCH = 256
+MAX_AUTOMATION_FILTERS_TOTAL = 4096
 SLICE_DISCOVERY_TOOLS = frozenset(
     {
         "unreal_agent_session",
@@ -125,6 +129,73 @@ class TaskStateRootUnavailableError(RuntimeError):
 
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _resolve_recovery_required_journal(
+    workspace: Path,
+    *,
+    task_session_id: str,
+    recovery: dict[str, Any],
+    checkpoint_hash: str,
+) -> dict[str, Any]:
+    transaction_id = str(recovery.get("transactionId") or "").strip()
+    if not transaction_id:
+        return {"ok": True, "skipped": True}
+    node = str(os.environ.get("NODE_BINARY") or "").strip() or shutil.which("node")
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "lmstudio-unreal-agent-mcp"
+        / "src"
+        / "resolve-recovery-journal-cli.js"
+    )
+    if not node or not script.is_file():
+        return {
+            "ok": False,
+            "errorCode": "RECOVERY_JOURNAL_RESOLVER_UNAVAILABLE",
+            "error": "The Node transaction-journal resolver is unavailable.",
+        }
+    payload = {
+        "transactionId": transaction_id,
+        "taskSessionId": task_session_id,
+        "resolution": {
+            "strategy": "task_checkpoint_rebase",
+            "checkpointHash": str(checkpoint_hash or ""),
+        },
+    }
+    try:
+        completed = subprocess.run(
+            [node, str(script), str(Path(workspace).resolve())],
+            input=json.dumps(payload, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "ok": False,
+            "errorCode": "RECOVERY_JOURNAL_RESOLUTION_FAILED",
+            "error": str(exc),
+        }
+    try:
+        response = json.loads(str(completed.stdout or "").strip() or "{}")
+    except json.JSONDecodeError:
+        response = {}
+    if completed.returncode != 0 or response.get("ok") is not True:
+        return {
+            "ok": False,
+            "errorCode": str(
+                response.get("errorCode") or "RECOVERY_JOURNAL_RESOLUTION_FAILED"
+            ),
+            "error": str(
+                response.get("error")
+                or completed.stderr
+                or "Transaction-journal resolution failed."
+            ).strip(),
+        }
+    return response
 
 
 def _canonical_hash(value: Any) -> str:
@@ -507,6 +578,72 @@ def _control_epoch(value: Any) -> int:
         return 0
 
 
+def _preserved_route_reservations(usage: Any) -> list[dict[str, Any]]:
+    """Keep in-flight route capabilities across server-owned route refreshes.
+
+    Node owns reservation expiry and commits/rollbacks by reservationId. A
+    mutation may change the route while its reservation is still outstanding,
+    so resetting usage must not erase that capability first.
+    """
+    if not isinstance(usage, dict) or not isinstance(usage.get("reservations"), list):
+        return []
+    preserved: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    now = datetime.now(tz=timezone.utc)
+    for raw_entry in usage.get("reservations") or []:
+        if not isinstance(raw_entry, dict):
+            continue
+        reservation_id = str(raw_entry.get("reservationId") or "").strip()
+        tool = str(raw_entry.get("tool") or "").strip()
+        if not reservation_id or not tool or reservation_id in seen:
+            continue
+        expires_text = str(raw_entry.get("expiresAt") or "").strip()
+        if expires_text:
+            try:
+                expires_at = datetime.fromisoformat(expires_text.replace("Z", "+00:00"))
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if expires_at <= now:
+                    continue
+            except ValueError:
+                # Node remains the expiry authority. Preserve malformed legacy
+                # entries so its fail-closed purge can reconcile them.
+                pass
+        entry = copy.deepcopy(raw_entry)
+        entry["reservationId"] = reservation_id
+        entry["tool"] = tool
+        preserved.append(entry)
+        seen.add(reservation_id)
+        if len(preserved) >= 64:
+            break
+    return preserved
+
+
+def _reset_tool_route_usage(
+    prior_usage: Any,
+    *,
+    route_hash: str = "",
+    phase: str = "",
+    role_session: str = "",
+    reset_reason: str = "",
+    **extra: Any,
+) -> dict[str, Any]:
+    reservations = _preserved_route_reservations(prior_usage)
+    result: dict[str, Any] = {
+        "routeHash": str(route_hash or ""),
+        "phase": str(phase or ""),
+        "roleSession": str(role_session or ""),
+        "count": 0,
+        "calls": [],
+        "reserved": len(reservations),
+        "reservations": reservations,
+    }
+    if reset_reason:
+        result["resetReason"] = reset_reason
+    result.update(extra)
+    return result
+
+
 def _refresh_server_owned_state(
     state: dict[str, Any],
 ) -> dict[str, Any]:
@@ -608,13 +745,12 @@ def _refresh_server_owned_state(
         else {}
     )
     if str(usage.get("routeHash") or "") != str(route.get("routeHash") or ""):
-        state["toolRouteUsage"] = {
-            "routeHash": route["routeHash"],
-            "phase": route["phase"],
-            "roleSession": route["roleSession"],
-            "count": 0,
-            "calls": [],
-        }
+        state["toolRouteUsage"] = _reset_tool_route_usage(
+            usage,
+            route_hash=str(route.get("routeHash") or ""),
+            phase=str(route.get("phase") or ""),
+            role_session=str(route.get("roleSession") or ""),
+        )
     elif previous_route and previous_route.get("routeHash") != route.get("routeHash"):
         state["toolRouteUsage"]["count"] = 0
         state["toolRouteUsage"]["calls"] = []
@@ -2199,6 +2335,8 @@ def _recovery_obligation_fingerprint(recovery: dict[str, Any]) -> str:
         "status": str(recovery.get("status") or ""),
         "scopeDisposition": str(recovery.get("scopeDisposition") or ""),
         "errorCode": str(recovery.get("errorCode") or ""),
+        "failureFingerprint": str(recovery.get("failureFingerprint") or ""),
+        "transactionId": str(recovery.get("transactionId") or ""),
         "mutationGeneration": int(recovery.get("mutationGeneration") or 0),
         "requiredTool": {
             "name": str(required.get("name") or ""),
@@ -2254,11 +2392,30 @@ def _set_recovery_obligation(
         "message": str(recovery.get("message") or "")[:1000],
         "recordedAt": str(recovery.get("recordedAt") or _utc_now()),
     }
+    transaction_id = str(recovery.get("transactionId") or "").strip()[:128]
+    if transaction_id:
+        normalized["transactionId"] = transaction_id
+    project_root = str(recovery.get("projectRoot") or "").strip()[:1024]
+    if project_root:
+        normalized["projectRoot"] = project_root
+    journal_paths = list(
+        dict.fromkeys(
+            str(item or "").replace("\\", "/")[:1024]
+            for item in (recovery.get("journalPaths") or [])
+            if str(item or "").strip()
+        )
+    )[:8]
+    if journal_paths:
+        normalized["journalPaths"] = journal_paths
+    failure_fingerprint = str(recovery.get("failureFingerprint") or "").strip().lower()
+    if re.fullmatch(r"[a-f0-9]{16,64}", failure_fingerprint):
+        normalized["failureFingerprint"] = failure_fingerprint
     for key in (
         "evidenceSatisfiedAt",
         "evidenceSatisfiedBy",
         "repairPlannedAt",
         "repairedAt",
+        "strategyRevision",
     ):
         if recovery.get(key):
             normalized[key] = str(recovery.get(key))
@@ -2268,14 +2425,59 @@ def _set_recovery_obligation(
         if isinstance(state.get("recoveryObligation"), dict)
         else {}
     )
-    if increment_attempt:
-        normalized["attemptCount"] = (
-            int(previous.get("attemptCount") or 0) + 1
-            if str(previous.get("fingerprint") or "") == normalized["fingerprint"]
-            else 1
+    same_obligation = (
+        str(previous.get("fingerprint") or "") == normalized["fingerprint"]
+    )
+    prior_attempts = (
+        list(previous.get("attempts") or [])
+        if same_obligation and isinstance(previous.get("attempts"), list)
+        else []
+    )
+    attempts: list[dict[str, str]] = []
+    seen_attempt_ids: set[str] = set()
+    for item in prior_attempts:
+        if not isinstance(item, dict):
+            continue
+        attempt_id = str(item.get("attemptId") or "").strip()[:128]
+        if not attempt_id or attempt_id in seen_attempt_ids:
+            continue
+        seen_attempt_ids.add(attempt_id)
+        attempts.append(
+            {
+                "attemptId": attempt_id,
+                "outcome": str(item.get("outcome") or "failed").strip()[:32],
+                "committedAt": str(item.get("committedAt") or "")[:64],
+            }
         )
-    else:
-        normalized["attemptCount"] = max(0, int(recovery.get("attemptCount") or 0))
+    attempt_id = str(recovery.get("attemptId") or "").strip()[:128]
+    attempt_outcome = str(
+        recovery.get("attemptOutcome") or recovery.get("outcome") or "failed"
+    ).strip().casefold()[:32]
+    # Recording a recovery hint is not proof that an actual tool attempt ran.
+    # Count only a committed, uniquely identified environment failure.  A
+    # replay of the same tool result carries the same attemptId and is therefore
+    # idempotent across MCP reconnects and response retries.
+    if increment_attempt and attempt_id and attempt_id not in seen_attempt_ids:
+        attempts.append(
+            {
+                "attemptId": attempt_id,
+                "outcome": attempt_outcome or "failed",
+                "committedAt": str(recovery.get("attemptCommittedAt") or _utc_now())[:64],
+            }
+        )
+    attempts = attempts[-8:]
+    if attempts:
+        normalized["attempts"] = attempts
+    normalized["attemptCount"] = sum(
+        1
+        for item in attempts
+        if str(item.get("outcome") or "").casefold()
+        in {"failed", "failure", "timed_out", "timeout", "unavailable"}
+    )
+    if not increment_attempt and not attempts:
+        normalized["attemptCount"] = max(
+            0, int(recovery.get("attemptCount") or 0)
+        )
     state["recoveryObligation"] = normalized
     return normalized
 
@@ -2455,11 +2657,73 @@ def task_record_recovery_obligation(
                 "error": "Recovery requires a running task",
             }
             return None
+        requested_recovery = dict(recovery or {})
+        if (
+            str(requested_recovery.get("status") or "").casefold()
+            == "repair_planning_required"
+            and str(requested_recovery.get("errorCode") or "")
+            == "WORKFLOW_LOOP_BLOCKED"
+        ):
+            ledger = (
+                dict(state.get("strategyReplanLedger") or {})
+                if isinstance(state.get("strategyReplanLedger"), dict)
+                else {}
+            )
+            scope_key = _canonical_hash(
+                {
+                    "taskSessionId": task_session_id,
+                    "planRevision": str(state.get("planRevision") or ""),
+                    "activeSliceId": str(state.get("activeSliceId") or ""),
+                    "source": str(requested_recovery.get("source") or ""),
+                    # A strategy budget belongs to one concrete failure, not
+                    # every future compiler/static error in the same slice.
+                    "failureFingerprint": str(
+                        requested_recovery.get("failureFingerprint") or ""
+                    ),
+                }
+            )
+            prior_count = (
+                int(ledger.get("count") or 0)
+                if str(ledger.get("scopeKey") or "") == scope_key
+                else 0
+            )
+            if prior_count >= 1:
+                requested_recovery.update(
+                    {
+                        "status": "await_user",
+                        "requiredTool": {},
+                        "message": (
+                            "The bounded alternate repair strategy also reproduced "
+                            "the same validation loop. The task remains resumable but "
+                            "requires user direction."
+                        ),
+                    }
+                )
+                ledger.update(
+                    {
+                        "scopeKey": scope_key,
+                        "count": prior_count,
+                        "status": "exhausted",
+                        "exhaustedAt": _utc_now(),
+                    }
+                )
+            else:
+                ledger.update(
+                    {
+                        "scopeKey": scope_key,
+                        "count": 1,
+                        "status": "replan_required",
+                        "strategyRevision": int(ledger.get("strategyRevision") or 0) + 1,
+                        "recordedAt": _utc_now(),
+                    }
+                )
+                requested_recovery["strategyRevision"] = ledger["strategyRevision"]
+            state["strategyReplanLedger"] = ledger
         normalized = _set_recovery_obligation(
             state,
-            dict(recovery or {}),
+            requested_recovery,
             increment_attempt=(
-                str((recovery or {}).get("status") or "")
+                str(requested_recovery.get("status") or "")
                 == "environment_recovery"
             ),
         )
@@ -2473,6 +2737,14 @@ def task_record_recovery_obligation(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
+    if outcome.get("ok") is True and result.get("ok") is True:
+        try:
+            current = _read_state(workspace, task_session_id)
+        except TaskStateReadError:
+            current = None
+        if current:
+            outcome["taskAuthorization"] = task_authorization_for_state(current)
+            outcome["toolRoute"] = compact_tool_route(current.get("toolRoute"))
     return _task_outcome_with_control(outcome, result) if outcome else result
 
 
@@ -2796,6 +3068,185 @@ def task_record_build_recovery(
             )
         return None
 
+    def causal_repair_target(
+        state: dict[str, Any],
+        slice_files: list[str],
+    ) -> str:
+        """Return a contained target eligible for automatic scope expansion.
+
+        Only the first project-source diagnostic produced from the current,
+        statically validated mutation can expand ownership.  This prevents an
+        unrelated pre-existing project error from silently broadening a task.
+        """
+
+        if not target_file or not slice_files:
+            return ""
+        current_generation = int(state.get("mutationGeneration") or 0)
+        observed_generation = int(payload.get("mutationGeneration") or 0)
+        if current_generation <= 0 or observed_generation != current_generation:
+            return ""
+        continuity = (
+            state.get("continuity")
+            if isinstance(state.get("continuity"), dict)
+            else {}
+        )
+        checkpoint = (
+            continuity.get("checkpoint")
+            if isinstance(continuity.get("checkpoint"), dict)
+            else {}
+        )
+        validation = (
+            checkpoint.get("validation")
+            if isinstance(checkpoint.get("validation"), dict)
+            else {}
+        )
+        if (
+            int(checkpoint.get("mutationGeneration") or 0) != current_generation
+            or str(validation.get("status") or "").strip().casefold() != "passed"
+        ):
+            return ""
+        if category not in {
+            "source_compile_error",
+            "missing_member",
+            "unknown_symbol",
+            "api_signature",
+            "include_or_module",
+            "uht_or_reflection",
+            "linker_missing_definition",
+        }:
+            return ""
+        project_root = _continuity_project_root(workspace, state)
+        relative, issue = _resolve_checkpoint_relative_path(
+            project_root,
+            target_file,
+        )
+        if issue or not relative:
+            return ""
+        first = relative.split("/", 1)[0].casefold()
+        if first not in {"source", "plugins", "config"}:
+            return ""
+        return relative
+
+    def create_temporary_repair_slice(
+        state: dict[str, Any],
+        *,
+        relative_target: str,
+        prior_slice_files: list[str],
+    ) -> str:
+        prior_slice_id = str(state.get("activeSliceId") or "").strip()
+        prior_revision = str(state.get("planRevision") or "1")
+        try:
+            next_revision = str(int(prior_revision) + 1)
+        except ValueError:
+            next_revision = f"{prior_revision}.1"
+        repair_id = "repair-" + hashlib.sha256(
+            (
+                f"{state.get('taskSessionId')}\n{next_revision}\n"
+                f"{relative_target}\n{payload.get('errorCode') or category}"
+            ).encode("utf-8")
+        ).hexdigest()[:12]
+        scope = (
+            dict(state.get("planScope") or {})
+            if isinstance(state.get("planScope"), dict)
+            else {}
+        )
+        slices = [
+            dict(item)
+            for item in (scope.get("slices") or [])
+            if isinstance(item, dict)
+            and str(item.get("sliceId") or "").strip() != repair_id
+        ]
+        slices.append({"sliceId": repair_id, "files": [relative_target]})
+        scope["slices"] = slices
+        declared_files = {
+            str(file_path or "").replace("\\", "/").strip("/")
+            for item in slices
+            for file_path in (item.get("files") or [])
+            if str(file_path or "").strip()
+        }
+        scope["declaredFileCount"] = len(declared_files) + len(
+            scope.get("impactContractFiles") or []
+        )
+        scope["overflow"] = False
+        state["planScope"] = scope
+        state["planRevision"] = next_revision
+        state["activeSliceId"] = repair_id
+        state["authToken"] = uuid.uuid4().hex
+        required_gates = [
+            str(item).strip()
+            for item in (state.get("requiredBeforeWrite") or [])
+            if str(item).strip()
+        ]
+        if "unreal_code_sketch_claim_validate" not in required_gates:
+            required_gates.append("unreal_code_sketch_claim_validate")
+        state["requiredBeforeWrite"] = required_gates
+        state["requiredGateSetHash"] = required_gate_set_hash(
+            task_session_id=str(state.get("taskSessionId") or ""),
+            plan_id=str(state.get("planId") or ""),
+            plan_revision=next_revision,
+            active_slice_id=repair_id,
+            project_file=str(state.get("projectFile") or ""),
+            required_gates=required_gates,
+        )
+        state["completedGates"] = {}
+        state["failedGateAttempts"] = {}
+        state["pendingGates"] = list(required_gates)
+        write_gate = (
+            dict(state.get("writeGate") or {})
+            if isinstance(state.get("writeGate"), dict)
+            else {}
+        )
+        write_gate["requiredBeforeWrite"] = list(required_gates)
+        write_gate["completedBeforeWrite"] = []
+        write_gate["pendingBeforeWrite"] = list(required_gates)
+        state["writeGate"] = write_gate
+        progress = (
+            dict(state.get("sliceProgress") or {})
+            if isinstance(state.get("sliceProgress"), dict)
+            else {}
+        )
+        completed = [
+            str(item).strip()
+            for item in (progress.get("completedSlices") or [])
+            if str(item).strip()
+        ]
+        pending = [
+            str(item.get("sliceId") or "").strip()
+            for item in slices
+            if str(item.get("sliceId") or "").strip()
+            and str(item.get("sliceId") or "").strip() not in completed
+            and str(item.get("sliceId") or "").strip() != repair_id
+        ]
+        state["sliceProgress"] = {
+            "activeSliceId": repair_id,
+            "completedSlices": completed,
+            "pendingSlices": pending,
+        }
+        state["repairScope"] = {
+            "status": "active",
+            "temporarySliceId": repair_id,
+            "supersededSliceId": prior_slice_id,
+            "causalSliceFiles": list(prior_slice_files)[:MAX_FILES_PER_SLICE],
+            "targetFile": relative_target,
+            "originPlanRevision": prior_revision,
+            "planRevision": next_revision,
+            "mutationGeneration": int(state.get("mutationGeneration") or 0),
+            "createdAt": _utc_now(),
+        }
+        state["continuity"] = initialize_continuity(
+            task_session_id=str(state.get("taskSessionId") or ""),
+            plan_id=str(state.get("planId") or ""),
+            plan_revision=next_revision,
+            active_slice_id=repair_id,
+        )
+        _reset_slice_selection_authority(state, active_slice_id=repair_id)
+        state["selectedTargetSnapshots"] = _initial_slice_target_snapshots(
+            str(state.get("projectFile") or ""),
+            scope,
+            repair_id,
+        )
+        return repair_id
+
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
         nonlocal outcome
         mismatches = _task_authorization_mismatches(state, authorization)
@@ -2820,6 +3271,59 @@ def task_record_build_recovery(
         slice_files = active_slice_files(state)
         belongs_to_slice = recovery_belongs_to_active_slice(slice_files)
         if belongs_to_slice is False:
+            repair_target = causal_repair_target(state, slice_files)
+            if repair_target:
+                repair_slice_id = create_temporary_repair_slice(
+                    state,
+                    relative_target=repair_target,
+                    prior_slice_files=slice_files,
+                )
+                state.pop("buildBlocker", None)
+                state["buildRecovery"] = {
+                    "status": "evidence_required",
+                    "category": category,
+                    "targetFile": repair_target,
+                    "ownerSymbol": owner_symbol,
+                    "missingSymbol": missing_symbol,
+                    "semanticEvidenceRequired": bool(payload.get("semanticEvidenceRequired")),
+                    "mutationPermittedWithoutSemanticEvidence": bool(
+                        payload.get("mutationPermittedWithoutSemanticEvidence", True)
+                    ),
+                    "semanticEvidenceSources": list(payload.get("semanticEvidenceSources") or []),
+                    "requiredNextTool": required_tool,
+                    "requiredNextToolArgs": required_args,
+                    "firstError": str(payload.get("firstError") or ""),
+                    "mutationGeneration": int(payload.get("mutationGeneration") or 0),
+                    "evidenceSatisfied": False,
+                    "temporaryRepairSlice": True,
+                    "recordedAt": _utc_now(),
+                }
+                normalized = _set_recovery_obligation(
+                    state,
+                    {
+                        "source": "build",
+                        "status": "evidence_required",
+                        "scopeDisposition": "repair_slice",
+                        "errorCode": str(payload.get("errorCode") or "BUILD_FAILED"),
+                        "mutationGeneration": int(payload.get("mutationGeneration") or 0),
+                        "requiredTool": {"name": required_tool, "args": required_args},
+                        "targetFiles": [repair_target],
+                        "message": str(payload.get("firstError") or ""),
+                    },
+                )
+                state["updatedAt"] = _utc_now()
+                outcome = {
+                    "ok": True,
+                    "active": True,
+                    "scopeDisposition": "repair_slice",
+                    "taskSessionId": task_session_id,
+                    "activeSliceId": repair_slice_id,
+                    "activeSliceFiles": [repair_target],
+                    "repairScope": dict(state["repairScope"]),
+                    "buildRecovery": dict(state["buildRecovery"]),
+                    "recoveryObligation": dict(normalized),
+                }
+                return state
             state.pop("buildRecovery", None)
             state["buildBlocker"] = {
                 "status": "out_of_slice",
@@ -3237,6 +3741,64 @@ def task_complete_after_successful_build(
                     "observedFilters": observed_filters,
                 }
                 return None
+            remaining_batches = [
+                [str(item).strip() for item in batch if str(item).strip()]
+                for batch in (verification.get("remainingFilterBatches") or [])
+                if isinstance(batch, list)
+            ]
+            if remaining_batches:
+                completed_batches = [
+                    dict(item)
+                    for item in (verification.get("completedAutomationBatches") or [])
+                    if isinstance(item, dict)
+                ]
+                completed_batches.append(
+                    {
+                        "batchIndex": int(verification.get("filterBatchIndex") or 0),
+                        "filtersHash": _canonical_hash(expected_filters),
+                        "filterCount": len(expected_filters),
+                        "succeededCount": int(automation_succeeded_count or 0),
+                        "failedCount": int(automation_failed_count or 0),
+                        "queueEmpty": automation_queue_empty is True,
+                        "completedAt": _utc_now(),
+                    }
+                )
+                next_filters = remaining_batches.pop(0)
+                next_index = int(verification.get("filterBatchIndex") or 0) + 1
+                verification.update(
+                    {
+                        "testFilter": next_filters[0] if len(next_filters) == 1 else "",
+                        "testFilters": next_filters,
+                        "remainingFilterBatches": remaining_batches,
+                        "completedAutomationBatches": completed_batches,
+                        "filterBatchIndex": next_index,
+                        "updatedAt": _utc_now(),
+                    }
+                )
+                state["buildVerification"] = verification
+                state["updatedAt"] = _utc_now()
+                outcome = {
+                    "ok": True,
+                    "active": True,
+                    "status": "pending_automation",
+                    "automationBatchAdvanced": True,
+                    "taskSessionId": task_session_id,
+                    "activeSliceId": str(state.get("activeSliceId") or ""),
+                    "testFilter": next_filters[0] if len(next_filters) == 1 else "",
+                    "testFilters": next_filters,
+                    "filterBatchIndex": next_index,
+                    "filterBatchCount": int(verification.get("filterBatchCount") or 1),
+                    "completedAutomationBatchCount": len(completed_batches),
+                }
+                _append_log(
+                    workspace,
+                    task_session_id,
+                    (
+                        "Automation batch completed; next batch pending "
+                        f"({next_index + 1}/{verification.get('filterBatchCount') or 1})"
+                    ),
+                )
+                return state
         elif normalized_proof_kind == "automation":
             outcome = {
                 "ok": False,
@@ -3256,6 +3818,19 @@ def task_complete_after_successful_build(
         ]
         active_slice_id = str(state.get("activeSliceId") or "task").strip() or "task"
         progress = state.get("sliceProgress") if isinstance(state.get("sliceProgress"), dict) else {}
+        repair_scope = (
+            dict(state.get("repairScope") or {})
+            if isinstance(state.get("repairScope"), dict)
+            else {}
+        )
+        superseded_slice_id = ""
+        if (
+            str(repair_scope.get("status") or "") == "active"
+            and str(repair_scope.get("temporarySliceId") or "") == active_slice_id
+        ):
+            superseded_slice_id = str(
+                repair_scope.get("supersededSliceId") or ""
+            ).strip()
         completed_slices = list(
             dict.fromkeys(
                 [
@@ -3264,6 +3839,11 @@ def task_complete_after_successful_build(
                     if str(item).strip()
                 ]
                 + ([active_slice_id] if active_slice_id in slice_ids else [])
+                + (
+                    [superseded_slice_id]
+                    if superseded_slice_id in slice_ids
+                    else []
+                )
             )
         )
         pending_slices = [item for item in slice_ids if item not in completed_slices]
@@ -3284,6 +3864,30 @@ def task_complete_after_successful_build(
             "resolvedEngineVersion": str(resolved_engine_version or ""),
             "recordedAt": completed_at,
         }
+        if pending_automation:
+            prior_batch_proofs = [
+                dict(item)
+                for item in (verification.get("completedAutomationBatches") or [])
+                if isinstance(item, dict)
+            ]
+            prior_batch_proofs.append(
+                {
+                    "batchIndex": int(verification.get("filterBatchIndex") or 0),
+                    "filtersHash": _canonical_hash(expected_filters),
+                    "filterCount": len(expected_filters),
+                    "succeededCount": int(automation_succeeded_count or 0),
+                    "failedCount": int(automation_failed_count or 0),
+                    "queueEmpty": automation_queue_empty is True,
+                    "completedAt": completed_at,
+                }
+            )
+            evidence["automationBatchProofs"] = prior_batch_proofs[-32:]
+            evidence["automationFilterCount"] = int(
+                verification.get("allFilterCount") or len(expected_filters)
+            )
+            evidence["automationFiltersHash"] = str(
+                verification.get("allFiltersHash") or _canonical_hash(expected_filters)
+            )
         history = list(state.get("buildProofHistory") or [])
         history.append(evidence)
         state["buildProofHistory"] = history[-256:]
@@ -3305,6 +3909,16 @@ def task_complete_after_successful_build(
         state.pop("buildBlocker", None)
         state.pop("automationRecovery", None)
         state.pop("recoveryObligation", None)
+        if superseded_slice_id:
+            repair_scope.update(
+                {
+                    "status": "verified",
+                    "verifiedAt": completed_at,
+                    "proofKind": normalized_proof_kind,
+                    "proofMutationGeneration": int(mutation_generation or 0),
+                }
+            )
+            state["repairScope"] = repair_scope
 
         if pending_slices:
             next_slice_id = pending_slices[0]
@@ -3355,14 +3969,10 @@ def task_complete_after_successful_build(
                 active_slice_id=next_slice_id,
             )
             state["continuity"] = continuity
-            state["toolRouteUsage"] = {
-                "routeHash": "",
-                "phase": "",
-                "roleSession": "",
-                "count": 0,
-                "calls": [],
-                "resetReason": "successful_slice_build",
-            }
+            state["toolRouteUsage"] = _reset_tool_route_usage(
+                state.get("toolRouteUsage"),
+                reset_reason="successful_slice_build",
+            )
             state["completionEvidence"] = evidence
             state["updatedAt"] = completed_at
             _append_log(
@@ -3506,15 +4116,24 @@ def task_require_automation_after_build(
                 "error": "Automation coverage requires at least one server-derived filter.",
             }
             return None
-        if len(normalized_filters) > 256:
+        if len(normalized_filters) > MAX_AUTOMATION_FILTERS_TOTAL:
             outcome = {
                 "ok": False,
                 "errorCode": "AUTOMATION_FILTER_SET_TOO_LARGE",
-                "error": "Automation coverage exceeds the bounded 256-filter contract.",
+                "error": (
+                    "Automation coverage exceeds the bounded total-filter "
+                    "contract. Narrow the task slice before execution."
+                ),
                 "filterCount": len(normalized_filters),
-                "maxFilters": 256,
+                "maxFilters": MAX_AUTOMATION_FILTERS_TOTAL,
             }
             return None
+        filter_batches = [
+            normalized_filters[index : index + MAX_AUTOMATION_FILTERS_PER_BATCH]
+            for index in range(0, len(normalized_filters), MAX_AUTOMATION_FILTERS_PER_BATCH)
+        ]
+        active_filters = filter_batches[0]
+        remaining_batches = filter_batches[1:]
         state.pop("recoveryObligation", None)
         state.pop("automationRecovery", None)
         state["buildVerification"] = {
@@ -3531,9 +4150,17 @@ def task_require_automation_after_build(
                 workspace=workspace,
             ),
             "resolvedEngineVersion": str(resolved_engine_version or ""),
-            "testFilter": normalized_filters[0] if len(normalized_filters) == 1 else "",
-            "testFilters": normalized_filters,
-            "declaredTests": [str(item) for item in (declared_tests or [])][:256],
+            "testFilter": active_filters[0] if len(active_filters) == 1 else "",
+            "testFilters": active_filters,
+            "remainingFilterBatches": remaining_batches,
+            "completedAutomationBatches": [],
+            "filterBatchIndex": 0,
+            "filterBatchCount": len(filter_batches),
+            "allFilterCount": len(normalized_filters),
+            "allFiltersHash": _canonical_hash(normalized_filters),
+            "declaredTests": [
+                str(item) for item in (declared_tests or [])
+            ][:MAX_AUTOMATION_FILTERS_TOTAL],
             "recordedAt": recorded_at,
         }
         build_history = list(state.get("buildProofHistory") or [])
@@ -3572,14 +4199,20 @@ def task_require_automation_after_build(
             "status": "pending_automation",
             "taskSessionId": task_session_id,
             "activeSliceId": str(state.get("activeSliceId") or ""),
-            "testFilter": normalized_filters[0] if len(normalized_filters) == 1 else "",
-            "testFilters": normalized_filters,
+            "testFilter": active_filters[0] if len(active_filters) == 1 else "",
+            "testFilters": active_filters,
+            "filterBatchIndex": 0,
+            "filterBatchCount": len(filter_batches),
+            "allFilterCount": len(normalized_filters),
             "declaredTestCount": len(declared_tests or []),
         }
         _append_log(
             workspace,
             task_session_id,
-            f"Build passed; Automation gate pending for filters {', '.join(normalized_filters)}",
+            (
+                "Build passed; Automation gate pending for batch "
+                f"1/{len(filter_batches)} ({len(active_filters)} filters)"
+            ),
         )
         return state
 
@@ -6093,6 +6726,27 @@ def task_replan(
                 "errorCode": "TASK_JOB_IN_PROGRESS",
             }
             return None
+        inflight_reservations = _preserved_route_reservations(
+            state.get("toolRouteUsage")
+        )
+        if inflight_reservations:
+            outcome = {
+                "ok": False,
+                "error": "Cannot replan while a routed tool call is still in flight.",
+                "errorCode": "TASK_MUTATION_IN_FLIGHT",
+                "retryable": True,
+                "stopCurrentWorkflow": False,
+                "taskSessionId": str(state.get("taskSessionId") or ""),
+                "taskAuthorization": task_authorization_for_state(state),
+                "inflightTools": [
+                    str(item.get("tool") or "") for item in inflight_reservations
+                ],
+                "agentInstruction": (
+                    "Wait for the in-flight tool result to commit or roll back, then "
+                    "continue the same task. Do not create another task session."
+                ),
+            }
+            return None
         validation_state = dict(state)
         validation_supervisor = (
             dict(state.get("autonomySupervisor") or {})
@@ -6455,14 +7109,10 @@ def task_replan(
             state["autonomySupervisor"] = advanced
         else:
             state["autonomySupervisor"] = prior_supervisor
-        state["toolRouteUsage"] = {
-            "routeHash": "",
-            "phase": "",
-            "roleSession": "",
-            "count": 0,
-            "calls": [],
-            "resetReason": "atomic_replan",
-        }
+        state["toolRouteUsage"] = _reset_tool_route_usage(
+            state.get("toolRouteUsage"),
+            reset_reason="atomic_replan",
+        )
         state["directSourceEvidence"] = {
             "version": 1,
             "planRevision": next_revision,
@@ -7072,6 +7722,7 @@ def task_checkpoint(
     advanced_gate_snapshots: list[str] = []
     checkpoint_recorded = False
     checkpoint_substantive = False
+    journal_recovery_to_resolve: dict[str, Any] = {}
 
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
         nonlocal mutation_result
@@ -7080,6 +7731,7 @@ def task_checkpoint(
         nonlocal advanced_gate_snapshots
         nonlocal checkpoint_recorded
         nonlocal checkpoint_substantive
+        nonlocal journal_recovery_to_resolve
         rollback_binding_failure = (
             _rollback_checkpoint_binding_failure(
                 workspace,
@@ -7352,38 +8004,24 @@ def task_checkpoint(
                     if isinstance(validation_fact.get("firstFinding"), dict)
                     else {}
                 )
-                target_path = str(first_finding.get("path") or "").replace("\\", "/").strip("/")
-                line = max(0, int(first_finding.get("line") or 0))
-                required_args: dict[str, Any] = {"path": target_path} if target_path else {}
-                required_tool = "read_file"
-                if target_path and line > 0:
-                    required_tool = "read_file_range"
-                    required_args.update(
-                        {
-                            "startLine": max(1, line - 20),
-                            "endLine": line + 20,
-                        }
-                    )
+                (
+                    recovery_status,
+                    scope_disposition,
+                    required_tool,
+                    recovery_targets,
+                ) = validation_finding_recovery(first_finding)
                 _set_recovery_obligation(
                     state,
                     {
                         "source": "static",
-                        "status": (
-                            "evidence_required" if target_path else "external_blocker"
-                        ),
-                        "scopeDisposition": (
-                            "in_slice" if target_path else "infrastructure"
-                        ),
+                        "status": recovery_status,
+                        "scopeDisposition": scope_disposition,
                         "errorCode": str(
                             first_finding.get("code") or "STATIC_VALIDATION_FAILED"
                         ),
                         "mutationGeneration": int(state.get("mutationGeneration") or 0),
-                        "requiredTool": (
-                            {"name": required_tool, "args": required_args}
-                            if target_path
-                            else {}
-                        ),
-                        "targetFiles": [target_path] if target_path else [],
+                        "requiredTool": required_tool,
+                        "targetFiles": recovery_targets,
                         "message": str(first_finding.get("message") or ""),
                     },
                 )
@@ -7446,15 +8084,14 @@ def task_checkpoint(
                     "checkpointSubstantive": checkpoint_substantive,
                 }
             else:
-                state["toolRouteUsage"] = {
-                    "routeHash": str(prior_usage.get("routeHash") or ""),
-                    "phase": str(prior_usage.get("phase") or ""),
-                    "roleSession": str(prior_usage.get("roleSession") or ""),
-                    "count": 0,
-                    "calls": [],
-                    "resetReason": "checkpoint_record",
-                    "checkpointHash": checkpoint_hash,
-                }
+                state["toolRouteUsage"] = _reset_tool_route_usage(
+                    prior_usage,
+                    route_hash=str(prior_usage.get("routeHash") or ""),
+                    phase=str(prior_usage.get("phase") or ""),
+                    role_session=str(prior_usage.get("roleSession") or ""),
+                    reset_reason="checkpoint_record",
+                    checkpointHash=checkpoint_hash,
+                )
         else:
             conflicts, discovery_warnings, discovery_issues = _checkpoint_conflicts(
                 workspace,
@@ -7606,9 +8243,14 @@ def task_checkpoint(
                     "buildBlocker",
                     "buildVerification",
                     "automationRecovery",
-                    "recoveryObligation",
                 ):
                     state.pop(stale_key, None)
+                if str(checkpoint_recovery.get("transactionId") or "").strip():
+                    # Keep the executable rebase obligation until the owning
+                    # transaction journal has also been durably resolved.
+                    journal_recovery_to_resolve = copy.deepcopy(checkpoint_recovery)
+                else:
+                    state.pop("recoveryObligation", None)
                 if "unreal_feature_intent_resolve" in required:
                     state["selectedIntentId"] = ""
                     state["intentContractHash"] = ""
@@ -7636,13 +8278,6 @@ def task_checkpoint(
                     state,
                     reason="checkpoint_rebase",
                 )
-                checkpoint_recovery = (
-                    state.get("recoveryObligation")
-                    if isinstance(state.get("recoveryObligation"), dict)
-                    else {}
-                )
-                if str(checkpoint_recovery.get("source") or "") == "checkpoint":
-                    state.pop("recoveryObligation", None)
             else:
                 state["continuity"] = mark_recovery(continuity, conflicts=[])
                 checkpoint_recovery = (
@@ -7677,6 +8312,74 @@ def task_checkpoint(
         return state
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
+    if (
+        result.get("ok") is True
+        and mutation_result.get("ok") is True
+        and normalized_action == "rebase"
+        and journal_recovery_to_resolve
+    ):
+        checkpoint_hash = str(
+            ((
+                (mutation_result.get("continuity") or {}).get("checkpoint")
+                if isinstance(mutation_result.get("continuity"), dict)
+                else {}
+            ) or {}).get("checkpointHash")
+            or ""
+        )
+        journal_resolution = _resolve_recovery_required_journal(
+            workspace,
+            task_session_id=task_session_id,
+            recovery=journal_recovery_to_resolve,
+            checkpoint_hash=checkpoint_hash,
+        )
+        mutation_result["recoveryJournalResolution"] = journal_resolution
+        if journal_resolution.get("ok") is True:
+            expected_transaction_id = str(
+                journal_recovery_to_resolve.get("transactionId") or ""
+            )
+
+            def clear_resolved_journal_recovery(
+                state: dict[str, Any],
+            ) -> dict[str, Any]:
+                current_recovery = (
+                    state.get("recoveryObligation")
+                    if isinstance(state.get("recoveryObligation"), dict)
+                    else {}
+                )
+                if (
+                    str(current_recovery.get("transactionId") or "")
+                    == expected_transaction_id
+                ):
+                    state.pop("recoveryObligation", None)
+                    state["lastRecoveryJournalResolution"] = {
+                        "transactionId": expected_transaction_id,
+                        "checkpointHash": checkpoint_hash,
+                        "resolvedAt": _utc_now(),
+                    }
+                return state
+
+            cleared = _mutate_task_state(
+                workspace,
+                task_session_id,
+                clear_resolved_journal_recovery,
+            )
+            if cleared.get("ok") is True:
+                result = cleared
+        else:
+            mutation_result.update(
+                {
+                    "ok": False,
+                    "errorCode": str(
+                        journal_resolution.get("errorCode")
+                        or "RECOVERY_JOURNAL_RESOLUTION_FAILED"
+                    ),
+                    "error": str(
+                        journal_resolution.get("error")
+                        or "Transaction-journal resolution remains pending."
+                    ),
+                    "retryable": True,
+                }
+            )
     if mutation_result:
         if result.get("ok"):
             mutation_result["writeReadiness"] = result.get("writeReadiness") or {}
@@ -7747,6 +8450,185 @@ def task_checkpoint(
                 mutation_result["requiredNextToolArgs"] = dict(next_action_args)
         return _task_outcome_with_control(mutation_result, result)
     return result
+
+
+def task_commit_synthesis(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    objective_hash_value: str,
+    control_epoch: int,
+    output_digest: str,
+) -> dict[str, Any]:
+    """Atomically commit a displayed read-only synthesis and release its task.
+
+    The context compactor is the only surface that observes both a complete
+    prediction and successful UI emission.  It submits this digest-bound fact
+    as a server-owned tool call.  Replaying the same call is harmless; a
+    different digest or stale control epoch cannot complete the task.
+    """
+
+    authorization = (
+        dict(task_authorization)
+        if isinstance(task_authorization, dict)
+        else {}
+    )
+    task_session_id = str(
+        authorization.get("taskSessionId")
+        or authorization.get("task_session_id")
+        or ""
+    ).strip()
+    objective_identity = str(objective_hash_value or "").strip().casefold()
+    digest = str(output_digest or "").strip().casefold()
+    observed_epoch = max(0, int(control_epoch or 0))
+    if not task_session_id:
+        return {
+            "ok": False,
+            "errorCode": "TASK_SESSION_REQUIRED",
+            "error": "taskAuthorization.taskSessionId is required",
+        }
+    if re.fullmatch(r"[a-f0-9]{64}", objective_identity) is None:
+        return {
+            "ok": False,
+            "errorCode": "SYNTHESIS_OBJECTIVE_HASH_INVALID",
+            "error": "objectiveHash must be a SHA-256 identity",
+        }
+    if re.fullmatch(r"[a-f0-9]{64}", digest) is None:
+        return {
+            "ok": False,
+            "errorCode": "SYNTHESIS_OUTPUT_DIGEST_INVALID",
+            "error": "outputDigest must be a SHA-256 digest",
+        }
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        prior = (
+            dict(state.get("synthesisLifecycle") or {})
+            if isinstance(state.get("synthesisLifecycle"), dict)
+            else {}
+        )
+        if str(state.get("status") or "") == "completed" and prior:
+            if (
+                str(prior.get("objectiveHash") or "").casefold() == objective_identity
+                and str(prior.get("outputDigest") or "").casefold() == digest
+                and int(prior.get("controlEpoch") or 0) == observed_epoch
+            ):
+                outcome = {
+                    "ok": True,
+                    "active": False,
+                    "idempotentReplay": True,
+                    "taskSessionId": task_session_id,
+                    "synthesisLifecycle": prior,
+                }
+                return state
+            outcome = {
+                "ok": False,
+                "errorCode": "SYNTHESIS_COMMIT_CONFLICT",
+                "error": "The task was completed by a different synthesis identity.",
+            }
+            return None
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                },
+                state,
+                mismatched_fields=mismatches,
+            )
+            return None
+        if str(state.get("status") or "") != "running":
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_NOT_SYNTHESIZABLE",
+                "error": "Only a running read-only task can commit synthesis.",
+            }
+            return None
+        if str(state.get("mode") or "").casefold() != "read_only":
+            outcome = {
+                "ok": False,
+                "errorCode": "SYNTHESIS_WRITE_TASK_BLOCKED",
+                "error": "Synthesis commit cannot complete a write-enabled task.",
+            }
+            return None
+        if str(state.get("objectiveHash") or "").casefold() != objective_identity:
+            outcome = {
+                "ok": False,
+                "errorCode": "SYNTHESIS_OBJECTIVE_MISMATCH",
+                "error": "The synthesis objective does not match the durable task.",
+            }
+            return None
+        recovery = (
+            state.get("recoveryObligation")
+            if isinstance(state.get("recoveryObligation"), dict)
+            else {}
+        )
+        control = (
+            state.get("controlState")
+            if isinstance(state.get("controlState"), dict)
+            else {}
+        )
+        synthesis_ready = bool(
+            str(recovery.get("status") or "").casefold() == "evidence_complete"
+            and str(control.get("phase") or "").casefold() == "synthesis"
+            and control.get("requiredTool") is None
+            and not list(control.get("allowedTools") or [])
+        )
+        if not synthesis_ready:
+            outcome = {
+                "ok": False,
+                "errorCode": "SYNTHESIS_NOT_READY",
+                "error": "The authoritative task control is not awaiting tool-free synthesis.",
+            }
+            return None
+        if int(control.get("epoch") or 0) != observed_epoch:
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "SYNTHESIS_CONTROL_STALE",
+                    "error": "The synthesis control epoch is stale.",
+                },
+                state,
+            )
+            return None
+        committed_at = _utc_now()
+        lifecycle = {
+            "version": 1,
+            "status": "committed",
+            "taskSessionId": task_session_id,
+            "objectiveHash": objective_identity,
+            "controlEpoch": observed_epoch,
+            "outputDigest": digest,
+            "committedAt": committed_at,
+        }
+        state["synthesisLifecycle"] = lifecycle
+        state["status"] = "completed"
+        state["completionNote"] = "read_only_synthesis_committed"
+        continuity = dict(state.get("continuity") or {})
+        lease = dict(continuity.get("lease") or {})
+        if lease:
+            lease["status"] = "released"
+            continuity["lease"] = lease
+            state["continuity"] = continuity
+        state["updatedAt"] = committed_at
+        _append_log(
+            workspace,
+            task_session_id,
+            f"Read-only synthesis committed: {digest[:16]}",
+        )
+        outcome = {
+            "ok": True,
+            "active": False,
+            "taskSessionId": task_session_id,
+            "synthesisLifecycle": lifecycle,
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return _task_outcome_with_control(outcome, result) if outcome else result
 
 
 def task_checkpoint_rollback_internal(
@@ -9146,13 +10028,12 @@ def authorize_task_tool(
                 else {}
             )
             if str(usage.get("routeHash") or "") != str(route.get("routeHash") or ""):
-                usage = {
-                    "routeHash": route["routeHash"],
-                    "phase": route["phase"],
-                    "roleSession": route["roleSession"],
-                    "count": 0,
-                    "calls": [],
-                }
+                usage = _reset_tool_route_usage(
+                    usage,
+                    route_hash=str(route.get("routeHash") or ""),
+                    phase=str(route.get("phase") or ""),
+                    role_session=str(route.get("roleSession") or ""),
+                )
             count = int(usage.get("count") or 0)
             limit = int(route.get("maxToolCallsPerPhase") or 2)
             if count >= limit:

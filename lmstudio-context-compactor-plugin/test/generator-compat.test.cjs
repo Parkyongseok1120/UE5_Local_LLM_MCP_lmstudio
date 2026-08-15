@@ -4331,7 +4331,7 @@ test("conversation session is injected into direct evidence tools", async () => 
   }
 });
 
-test("semantic blocker rejects forbidden evidence calls but allows forward mutation", async () => {
+test("semantic blocker rejects only the exact failed call and allows corrected evidence", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-semantic-blocker-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -4345,12 +4345,16 @@ test("semantic blocker rejects forbidden evidence calls but allows forward mutat
       async getContextLength() { return 100_000; },
       respond(_history, opts) {
         advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
-        for (const [callId, name] of [[1, "search_files"], [2, "replace_in_file"]]) {
+        for (const [callId, name, callArgs] of [
+          [1, "search_files", { query: "RestartMatch" }],
+          [2, "search_files", { query: "DifferentMatch" }],
+          [3, "replace_in_file", {}],
+        ]) {
           opts.onToolCallRequestStart(callId, { toolCallId: `call-${callId}` });
           opts.onToolCallRequestNameReceived(callId, name);
-          opts.onToolCallRequestArgumentFragmentGenerated(callId, "{}");
+          opts.onToolCallRequestArgumentFragmentGenerated(callId, JSON.stringify(callArgs));
           opts.onToolCallRequestEnd(callId, {
-            toolCallRequest: { id: `call-${callId}`, type: "function", name, arguments: {} },
+            toolCallRequest: { id: `call-${callId}`, type: "function", name, arguments: callArgs },
           });
         }
         return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
@@ -4392,12 +4396,21 @@ test("semantic blocker rejects forbidden evidence calls but allows forward mutat
 
     await generate(controller, history);
 
-    assert.deepEqual(advertisedTools, ["replace_in_file"]);
-    assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "search_files"), false);
-    assert.equal(emitted.some((event) => event.kind === "failure" && /semantic blocker forbids search_files/.test(event.error)), true);
+    assert.deepEqual(advertisedTools, ["search_files", "read_file", "replace_in_file"]);
+    assert.equal(emitted.some((event) => (
+      event.kind === "end"
+      && event.request.name === "search_files"
+      && event.request.arguments.query === "RestartMatch"
+    )), false);
+    assert.equal(emitted.some((event) => (
+      event.kind === "end"
+      && event.request.name === "search_files"
+      && event.request.arguments.query === "DifferentMatch"
+    )), true);
+    assert.equal(emitted.some((event) => event.kind === "failure" && /exact search_files call fingerprint/.test(event.error)), true);
     assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "replace_in_file"), true);
-    assert.deepEqual(activeCheckpoint(stateRoot).semanticBlocker.forbiddenTools.sort(), [
-      "read_file", "read_file_range", "read_symbol", "search_files",
+    assert.deepEqual(activeCheckpoint(stateRoot).semanticBlocker.forbiddenCallFingerprints, [
+      core.toolCallFingerprint("search_files", { query: "RestartMatch" }),
     ]);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -4405,7 +4418,7 @@ test("semantic blocker rejects forbidden evidence calls but allows forward mutat
   }
 });
 
-test("newer evidence blocker cannot be bypassed by a stale v2 read route", async () => {
+test("v2 route survives an exact-call blocker while only corrected arguments advance", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-v2-blocker-conflict-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -4417,9 +4430,25 @@ test("newer evidence blocker cannot be bypassed by a stale v2 read route", async
       async applyPromptTemplate() { return "formatted"; },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
-      respond() {
+      respond(_history, opts) {
         predictionCount += 1;
-        throw new Error("a conflicting stale route must terminate before model dispatch");
+        for (const [callId, pathValue] of [
+          [1, "Source/Replay.cpp"],
+          [2, "Source/Different.cpp"],
+        ]) {
+          opts.onToolCallRequestStart(callId, { toolCallId: `v2-read-${callId}` });
+          opts.onToolCallRequestNameReceived(callId, "read_file");
+          opts.onToolCallRequestArgumentFragmentGenerated(callId, JSON.stringify({ path: pathValue }));
+          opts.onToolCallRequestEnd(callId, {
+            toolCallRequest: {
+              id: `v2-read-${callId}`,
+              type: "function",
+              name: "read_file",
+              arguments: { path: pathValue },
+            },
+          });
+        }
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
       },
     };
     const ownership = { taskSessionId: "task-v2-blocker", ownerCapability: "owner-v2-blocker" };
@@ -4437,8 +4466,7 @@ test("newer evidence blocker cannot be bypassed by a stale v2 read route", async
             taskSessionId: ownership.taskSessionId,
             routeHash: "route-v2-blocker",
             phase: "evidence",
-            disposition: "require_tool",
-            requiredTool: { name: "read_file", args: { path: "Source/Replay.cpp" } },
+            disposition: "continue",
             allowedTools: ["read_file"],
             retryPolicy: { sameSemanticInput: "once" },
           },
@@ -4467,16 +4495,25 @@ test("newer evidence blocker cannot be bypassed by a stale v2 read route", async
 
     await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
 
-    assert.equal(predictionCount, 0);
-    assert.equal(emitted.some((event) => event.kind === "end"), false);
-    assert.match(
-      emitted.find((event) => event.kind === "fragment").content,
-      /CONTROL_BLOCKER_CONFLICT/,
-    );
+    assert.equal(predictionCount, 1);
+    assert.equal(emitted.some((event) => (
+      event.kind === "end"
+      && event.request.arguments.path === "Source/Replay.cpp"
+    )), false);
+    assert.equal(emitted.some((event) => (
+      event.kind === "end"
+      && event.request.arguments.path === "Source/Different.cpp"
+    )), true);
+    assert.equal(emitted.some((event) => (
+      event.kind === "failure" && /exact read_file call fingerprint/.test(event.error)
+    )), true);
     const checkpoint = activeCheckpoint(stateRoot);
-    assert.equal(checkpoint.serverControl, null);
+    assert.equal(checkpoint.serverControl.epoch, 3);
+    assert.equal(checkpoint.taskRouteOwnership.taskSessionId, ownership.taskSessionId);
     assert.equal(checkpoint.requiredNextTool, null);
-    assert.equal(checkpoint.semanticBlocker.errorCode, "CONTROL_BLOCKER_CONFLICT");
+    assert.deepEqual(checkpoint.semanticBlocker.forbiddenCallFingerprints, [
+      core.toolCallFingerprint("read_file", { path: "Source/Replay.cpp" }),
+    ]);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -5937,10 +5974,11 @@ test("pending tool checkpoint is durable before buffered tool output is committe
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   const checkpointStore = require("../dist/checkpoint-store.js");
   const originalSave = checkpointStore.saveCheckpoint;
-  let saveCount = 0;
   checkpointStore.saveCheckpoint = async (...args) => {
-    saveCount += 1;
-    if (saveCount === 2) throw new Error("injected pending checkpoint failure");
+    const candidate = args[1];
+    if ((candidate?.pendingToolCalls || []).some((call) => call?.dispatchState === "prepared")) {
+      throw new Error("injected pending checkpoint failure");
+    }
     return originalSave(...args);
   };
   try {
@@ -6524,4 +6562,535 @@ test("major objective changes retain no prior verbatim turns", async () => {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
+});
+
+test("model readiness waits for one model and keeps a model-independent conversation checkpoint", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-model-ready-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let readinessChecks = 0;
+    let maxTokens = 0;
+    const model = {
+      identifier: "late-ready-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        maxTokens = opts.maxTokens;
+        opts.onPredictionFragment({ content: "ready", reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const controller = controllerFor(
+      model,
+      {
+        modelReadinessTimeoutSeconds: 0.5,
+        modelReadinessPollIntervalSeconds: 0.01,
+        maxOutputReserve: 256,
+      },
+      stateRoot,
+      emitted,
+      [],
+      "C:\\Users\\dev\\.lmstudio\\working-directories\\model-ready-conversation",
+    );
+    controller.client.llm.listLoaded = async () => {
+      readinessChecks += 1;
+      return readinessChecks >= 3 ? [model] : [];
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Inspect the current project state." }] },
+    ] });
+
+    await generate(controller, history);
+
+    assert.equal(readinessChecks, 3);
+    assert.equal(maxTokens, 8192, "tool-free synthesis must receive the dynamic minimum reserve");
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.predictionState.status, "committed");
+    assert.equal(checkpoint.synthesisState.status, "committed");
+    assert.equal(checkpoint.objective, "Inspect the current project state.");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("model readiness timeout preserves a pending prediction and objective", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-model-timeout-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const model = {
+      identifier: "never-ready-model",
+      async applyPromptTemplate() { throw new Error("model must not be invoked"); },
+      async getContextLength() { throw new Error("model must not be invoked"); },
+    };
+    const controller = controllerFor(
+      model,
+      {
+        modelReadinessTimeoutSeconds: 0.03,
+        modelReadinessPollIntervalSeconds: 0.01,
+      },
+      stateRoot,
+      [],
+      [],
+    );
+    controller.client.llm.listLoaded = async () => [];
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Audit this project across all source modules." }] },
+    ] });
+
+    await assert.rejects(generate(controller, history), /No loaded LLM became ready/);
+
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.objective, "Audit this project across all source modules.");
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.predictionState.objectiveHash, core.objectiveHashOf(checkpoint.objective));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("switching the selected model does not fork one LM Studio conversation task", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-model-switch-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const modelFor = (identifier, content) => ({
+      identifier,
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onPredictionFragment({ content, reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    });
+    const workingDirectory = "C:\\Users\\dev\\.lmstudio\\working-directories\\model-switch-conversation";
+    const firstModel = modelFor("model-a", "first");
+    const secondModel = modelFor("model-b", "second");
+    const first = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Inspect the current project source." }] },
+    ] });
+    await generate(controllerFor(firstModel, {}, stateRoot, [], [], workingDirectory), first);
+
+    const continued = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Inspect the current project source." }] },
+      { role: "assistant", content: [{ type: "text", text: "first" }] },
+      { role: "user", content: [{ type: "text", text: "continue" }] },
+    ] });
+    await generate(controllerFor(secondModel, {}, stateRoot, [], [], workingDirectory), continued);
+
+    const sessionDirs = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== "_base");
+    assert.equal(sessionDirs.length, 1);
+    assert.equal(activeCheckpoint(stateRoot).objective, "Inspect the current project source.");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("duplicate tool callbacks are exactly-once and use the tool-call output reserve", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-callback-fsm-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let maxTokens = 0;
+    const request = {
+      id: "dedupe-read-1",
+      type: "function",
+      name: "read_file",
+      arguments: { path: "Source/Example.cpp" },
+    };
+    const model = {
+      identifier: "callback-dedupe-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        maxTokens = opts.maxTokens;
+        opts.onToolCallRequestStart(7, { toolCallId: request.id });
+        opts.onToolCallRequestStart(7, { toolCallId: request.id });
+        opts.onToolCallRequestNameReceived(7, request.name);
+        opts.onToolCallRequestNameReceived(7, request.name);
+        opts.onToolCallRequestArgumentFragmentGenerated(7, JSON.stringify(request.arguments));
+        opts.onToolCallRequestEnd(7, { toolCallRequest: request });
+        opts.onToolCallRequestEnd(7, { toolCallRequest: request });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const tools = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      },
+    }];
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Read Source/Example.cpp." }] },
+    ] });
+
+    await generate(
+      controllerFor(model, { maxOutputReserve: 128 }, stateRoot, emitted, tools),
+      history,
+    );
+
+    assert.equal(maxTokens, 6144);
+    assert.equal(emitted.filter((event) => event.kind === "start").length, 1);
+    assert.equal(emitted.filter((event) => event.kind === "name").length, 1);
+    assert.equal(emitted.filter((event) => event.kind === "end").length, 1);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.pendingToolCalls.length, 1);
+    assert.equal(checkpoint.pendingToolCalls[0].dispatchState, "emitted");
+    assert.equal(checkpoint.pendingToolCalls[0].id, request.id);
+    assert.equal(checkpoint.predictionState.status, "committed");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("conflicting duplicate callback names fail before frontend dispatch", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-callback-conflict-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const model = {
+      identifier: "callback-conflict-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onToolCallRequestStart(1, { toolCallId: "conflict-1" });
+        opts.onToolCallRequestNameReceived(1, "read_file");
+        opts.onToolCallRequestNameReceived(1, "search_files");
+        return { async result() { return {}; } };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Inspect Source." }] },
+    ] });
+
+    await assert.rejects(
+      generate(controllerFor(model, {}, stateRoot, emitted, [],), history),
+      /Conflicting duplicate tool-call name/,
+    );
+    assert.deepEqual(emitted, []);
+    assert.equal(activeCheckpoint(stateRoot).predictionState.status, "pending");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("prepared mutation dispatch is re-emitted with the same id after restart", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-dispatch-restart-"));
+  const sessionId = "ab".repeat(16);
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = sessionId;
+  try {
+    const store = require("../src/checkpoint-store.js");
+    const { generate } = require("../dist/generator.js");
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Continue the current source repair." }] },
+    ] });
+    const checkpoint = core.buildCheckpoint(history.getMessagesArray(), {}, { maxCheckpointFacts: 32 });
+    checkpoint.pendingToolCalls = [{
+      id: "prepared-write-1",
+      type: "function",
+      name: "write_file",
+      arguments: { path: "Source/Example.cpp", content: "// repaired" },
+      dispatchState: "prepared",
+      preparedAt: new Date().toISOString(),
+      observedToolResultCount: 0,
+    }];
+    await store.saveCheckpoint(sessionId, checkpoint);
+
+    const emitted = [];
+    let modelReadinessChecks = 0;
+    const controller = controllerFor({}, {}, stateRoot, emitted, []);
+    controller.client.llm.listLoaded = async () => {
+      modelReadinessChecks += 1;
+      return [];
+    };
+
+    await assert.rejects(generate(controller, history), /still lack a result/);
+
+    assert.equal(modelReadinessChecks, 0, "pending dispatch recovery must not wait for a model");
+    assert.equal(emitted.filter((event) => event.kind === "start").length, 1);
+    assert.equal(emitted.find((event) => event.kind === "start").info.toolCallId, "prepared-write-1");
+    assert.equal(emitted.find((event) => event.kind === "end").request.id, "prepared-write-1");
+    assert.equal(activeCheckpoint(stateRoot).pendingToolCalls[0].dispatchState, "emitted");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("tool-free synthesis emits a durable server-owned commit handshake", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-commit-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let maxTokens = 0;
+    const ownership = {
+      taskSessionId: "task-synthesis-1",
+      ownerCapability: "owner-synthesis-1",
+    };
+    const payload = {
+      ok: true,
+      taskAuthorization: ownership,
+      control: {
+        version: 2,
+        epoch: 21,
+        taskSessionId: ownership.taskSessionId,
+        routeHash: "route-synthesis-1",
+        phase: "synthesis",
+        disposition: "continue",
+        allowedTools: [],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
+    };
+    const model = {
+      identifier: "synthesis-commit-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        maxTokens = opts.maxTokens;
+        assert.equal(opts.rawTools, undefined);
+        opts.onPredictionFragment({ content: "Evidence-backed final synthesis.", reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const commitTool = {
+      type: "function",
+      function: {
+        name: "unreal_task_commit_synthesis",
+        parameters: {
+          type: "object",
+          properties: {
+            taskAuthorization: { type: "object" },
+            objectiveHash: { type: "string" },
+            controlEpoch: { type: "integer" },
+            outputDigest: { type: "string" },
+          },
+        },
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Audit the current project and report every verified issue." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "synthesis-route",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, [commitTool]), history);
+
+    assert.equal(maxTokens, 8192);
+    const fragmentIndex = emitted.findIndex((event) => event.kind === "fragment");
+    const endIndex = emitted.findIndex((event) => event.kind === "end");
+    assert.ok(fragmentIndex >= 0 && endIndex > fragmentIndex);
+    const commit = emitted[endIndex].request;
+    assert.equal(commit.name, "unreal_task_commit_synthesis");
+    assert.deepEqual(commit.arguments.taskAuthorization, ownership);
+    assert.equal(commit.arguments.controlEpoch, 21);
+    assert.match(commit.arguments.objectiveHash, /^[a-f0-9]{64}$/);
+    assert.match(commit.arguments.outputDigest, /^[a-f0-9]{64}$/);
+    const persisted = activeCheckpoint(stateRoot);
+    assert.equal(persisted.synthesisState.status, "committed");
+    assert.equal(persisted.synthesisState.outputDigest, commit.arguments.outputDigest);
+    assert.equal(persisted.pendingToolCalls[0].id, commit.id);
+    assert.equal(persisted.pendingToolCalls[0].dispatchState, "emitted");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("synthesis stays uncommitted when the server commit tool is absent", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-missing-tool-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const payload = {
+      ok: true,
+      taskAuthorization: {
+        taskSessionId: "task-synthesis-missing",
+        ownerCapability: "owner-synthesis-missing",
+      },
+      control: {
+        version: 2,
+        epoch: 7,
+        taskSessionId: "task-synthesis-missing",
+        routeHash: "route-synthesis-missing",
+        phase: "synthesis",
+        disposition: "continue",
+        allowedTools: [],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
+    };
+    const model = {
+      identifier: "synthesis-missing-tool-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onPredictionFragment({ content: "Final evidence synthesis.", reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Audit this project and report verified findings." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "synthesis-missing-route",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await assert.rejects(
+      generate(controllerFor(model, {}, stateRoot, emitted, []), history),
+      /unreal_task_commit_synthesis is missing/,
+    );
+    assert.equal(emitted.some((event) => event.kind === "fragment"), false);
+    assert.notEqual(activeCheckpoint(stateRoot).synthesisState.status, "committed");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("an emitted synthesis commit is replayed with the same id after result loss", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-replay-"));
+  const sessionId = "cd".repeat(16);
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = sessionId;
+  try {
+    const store = require("../src/checkpoint-store.js");
+    const { generate } = require("../dist/generator.js");
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Audit current project source." }] },
+    ] });
+    const checkpoint = core.buildCheckpoint(history.getMessagesArray(), {}, { maxCheckpointFacts: 32 });
+    checkpoint.pendingToolCalls = [{
+      id: "synthesis-commit-replay-1",
+      type: "function",
+      name: "unreal_task_commit_synthesis",
+      arguments: {
+        objectiveHash: checkpoint.objectiveHash,
+        controlEpoch: 4,
+        outputDigest: "a".repeat(64),
+      },
+      dispatchState: "emitted",
+      preparedSynthesisOutput: "Recovered synthesis output.",
+      observedToolResultCount: 0,
+    }];
+    await store.saveCheckpoint(sessionId, checkpoint);
+    const emitted = [];
+    let readinessChecks = 0;
+    const controller = controllerFor({}, {}, stateRoot, emitted, []);
+    controller.client.llm.listLoaded = async () => {
+      readinessChecks += 1;
+      return [];
+    };
+
+    await assert.rejects(generate(controller, history), /still lack a result/);
+
+    assert.equal(readinessChecks, 0);
+    assert.equal(emitted.find((event) => event.kind === "end").request.id, "synthesis-commit-replay-1");
+    assert.equal(emitted.find((event) => event.kind === "fragment").content, "Recovered synthesis output.");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("long objectives are injected intact into the durable planner handoff", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-long-planner-goal-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const objective = `Audit every current project source path. ${"cross-check portable boundary evidence ".repeat(90)}`.trim();
+    assert.ok(objective.length > 1200);
+    const model = {
+      identifier: "long-planner-goal-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onToolCallRequestStart(1, { toolCallId: "long-plan-1" });
+        opts.onToolCallRequestNameReceived(1, "unreal_agent_plan");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"request":"shortened"}');
+        opts.onToolCallRequestEnd(1, { toolCallRequest: {
+          id: "long-plan-1",
+          type: "function",
+          name: "unreal_agent_plan",
+          arguments: { request: "shortened" },
+        } });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const planner = {
+      type: "function",
+      function: {
+        name: "unreal_agent_plan",
+        parameters: {
+          type: "object",
+          properties: {
+            request: { type: "string" },
+            latestUserMessage: { type: "string" },
+          },
+        },
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: objective }] },
+    ] });
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, [planner]), history);
+
+    const request = emitted.find((event) => event.kind === "end").request;
+    assert.equal(request.arguments.request, objective);
+    assert.equal(request.arguments.latestUserMessage, objective);
+    assert.equal(activeCheckpoint(stateRoot).objectiveHash, core.objectiveHashOf(objective));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("durable inspection planning distinguishes project audits from generic Unreal questions", () => {
+  const { requiresDurableInspectionPlanning } = require("../dist/generator.js");
+  assert.equal(
+    requiresDurableInspectionPlanning("Audit every implementation path in this project and cross-check the source files."),
+    true,
+  );
+  assert.equal(
+    requiresDurableInspectionPlanning("현재 프로젝트의 모든 소스 모듈을 대조해서 근본 원인을 분석해줘"),
+    true,
+  );
+  assert.equal(
+    requiresDurableInspectionPlanning("How does Unreal Engine replication work?"),
+    false,
+  );
+  assert.equal(
+    requiresDurableInspectionPlanning("Explain what TArray is."),
+    false,
+  );
 });

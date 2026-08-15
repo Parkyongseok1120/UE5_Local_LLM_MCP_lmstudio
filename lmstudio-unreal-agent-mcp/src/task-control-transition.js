@@ -164,6 +164,81 @@ function preGateSourceReadPath(state, pendingGates, hostPlatform = process.platf
   return "";
 }
 
+function validationFindingRecovery(firstFinding) {
+  const finding = firstFinding && typeof firstFinding === "object" ? firstFinding : {};
+  const targetPath = normalizePath(finding.path);
+  const line = nonNegativeInt(finding.line);
+  if (targetPath) {
+    if (line > 0) {
+      return {
+        status: "evidence_required",
+        scopeDisposition: "in_slice",
+        requiredTool: {
+          name: "read_file_range",
+          args: {
+            path: targetPath,
+            startLine: Math.max(1, line - 20),
+            endLine: line + 20,
+          },
+        },
+        targetFiles: [targetPath],
+      };
+    }
+    return {
+      status: "evidence_required",
+      scopeDisposition: "in_slice",
+      requiredTool: { name: "read_file", args: { path: targetPath } },
+      targetFiles: [targetPath],
+    };
+  }
+  const symbol = String(
+    finding.symbol || finding.ownerSymbol || finding.missingSymbol || ""
+  ).trim();
+  if (symbol) {
+    return {
+      status: "evidence_required",
+      scopeDisposition: "in_slice",
+      requiredTool: {
+        name: "unreal_symbol_lookup",
+        args: { query: symbol, access: "read" },
+      },
+      targetFiles: [],
+    };
+  }
+  const rawLog = String(
+    finding.buildLogPath || finding.logPath || finding.logFile || ""
+  ).trim();
+  const diagnosticSource = String(finding.diagnosticSource || "").toLowerCase();
+  if (rawLog || ["build", "automation", "ubt", "uat", "log"].includes(diagnosticSource)) {
+    const logArgs = {
+      mode: "first_error",
+      maxFiles: 1,
+      maxLines: 200,
+      summaryOnly: true,
+    };
+    if (rawLog) logArgs.fileName = path.posix.basename(rawLog.replace(/\\/g, "/"));
+    return {
+      status: "evidence_required",
+      scopeDisposition: "infrastructure",
+      requiredTool: { name: "read_unreal_logs", args: logArgs },
+      targetFiles: [],
+    };
+  }
+  return {
+    status: "checkpoint_rebase_required",
+    scopeDisposition: "in_slice",
+    requiredTool: {
+      name: "unreal_task_checkpoint",
+      args: {
+        action: "rebase",
+        acceptCurrentFiles: true,
+        includeGitChanges: false,
+      },
+    },
+    targetFiles: [],
+  };
+}
+
 function deriveNextObligation(state) {
   const route = state.toolRoute && typeof state.toolRoute === "object" ? state.toolRoute : {};
   const status = String(state.status || "running").trim().toLowerCase();
@@ -367,9 +442,12 @@ function deriveNextObligation(state) {
         if (validationRecoverySatisfied) {
           requiredName = mutationToolForState(state, route);
         } else {
-          requiredName = "read_file";
-          const findingPath = String(validation.firstFinding?.path || "").trim();
-          requiredArgs = findingPath ? { path: findingPath } : {};
+          const fallback = validationFindingRecovery(validation.firstFinding);
+          requiredName = String(fallback.requiredTool?.name || "");
+          requiredArgs = fallback.requiredTool?.args
+            && typeof fallback.requiredTool.args === "object"
+            ? { ...fallback.requiredTool.args }
+            : {};
         }
       } else if (currentMutationCheckpoint) {
         requiredName = "static_validate_project";
@@ -461,6 +539,7 @@ module.exports = {
   mutationToolForState,
   preGateSourceReadPath,
   transitionPathIdentity,
+  validationFindingRecovery,
   authoritativeProjectFile,
   authoritativeProjectRoot,
 };

@@ -55,6 +55,18 @@ export const configSchematics = createConfigSchematics()
     { displayName: "Underlying model key", subtitle: "Optional when exactly one LLM is loaded; otherwise enter its exact LM Studio model key." },
     "",
   )
+  .field(
+    "modelReadinessTimeoutSeconds",
+    "numeric",
+    { displayName: "Model readiness timeout", subtitle: "Wait this many seconds for exactly one unloaded/starting LM Studio model to become ready while preserving the task checkpoint." },
+    120,
+  )
+  .field(
+    "modelReadinessPollIntervalSeconds",
+    "numeric",
+    { displayName: "Model readiness poll interval", subtitle: "Seconds between bounded loaded-model readiness checks." },
+    2,
+  )
   .field("softRemainingTokens", "numeric", { displayName: "Soft threshold", subtitle: "Compact before the next model call below this remaining-token count." }, 14000)
   .field("hardRemainingTokens", "numeric", { displayName: "Hard threshold", subtitle: "Force deterministic checkpoint compaction below this remaining-token count." }, 8000)
   .field("maxOutputReserve", "numeric", { displayName: "Output reserve", subtitle: "Tokens reserved for the next model response." }, 4096)
@@ -62,6 +74,18 @@ export const configSchematics = createConfigSchematics()
     "architectureMaxOutputReserve",
     "numeric",
     { displayName: "Architecture output reserve", subtitle: "Minimum output budget for structured architecture/design validation calls." },
+    6144,
+  )
+  .field(
+    "synthesisMaxOutputReserve",
+    "numeric",
+    { displayName: "Synthesis output reserve", subtitle: "Output budget for tool-free evidence synthesis/final responses (minimum 8192 tokens)." },
+    8192,
+  )
+  .field(
+    "toolCallMaxOutputReserve",
+    "numeric",
+    { displayName: "Tool-call output reserve", subtitle: "Output budget while tool schemas are available (minimum 6144 tokens)." },
     6144,
   )
   .field(
@@ -87,6 +111,12 @@ export const configSchematics = createConfigSchematics()
     "numeric",
     { displayName: "Pre-route discovery limit", subtitle: "Force one unreal_agent_plan handoff after this many successful discovery calls on a write request without a server-owned task route." },
     6,
+  )
+  .field(
+    "durableInspectionDiscoveryLimit",
+    "numeric",
+    { displayName: "Durable inspection discovery limit", subtitle: "Force an inspect-only task route after this many project-source discovery calls for complex read-only audits." },
+    2,
   )
   .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra reserve for token-estimation and prompt-template variance." }, 1024)
   .field("temperature", "numeric", { displayName: "Temperature", subtitle: "Sampling temperature used by the underlying model proxy (0 to 1)." }, 0.1)

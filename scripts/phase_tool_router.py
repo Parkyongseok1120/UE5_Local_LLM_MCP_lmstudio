@@ -41,6 +41,7 @@ CONTROL_PLANE_TOOLS = frozenset(
         "unreal_task_quarantine_corrupt",
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
+        "unreal_task_commit_synthesis",
         "unreal_task_define_slices",
         "unreal_task_approve",
         "unreal_task_cancel",
@@ -56,6 +57,7 @@ ALWAYS_DISCOVERABLE_CONTROL_TOOLS = frozenset(
         "unreal_task_quarantine_corrupt",
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
+        "unreal_task_commit_synthesis",
         "unreal_task_define_slices",
         "unreal_task_resume",
         "unreal_task_cancel",
@@ -502,6 +504,93 @@ def _pre_gate_source_read_path(
     return ""
 
 
+def validation_finding_recovery(
+    first_finding: dict[str, Any],
+) -> tuple[str, str, dict[str, Any], list[str]]:
+    """Return one executable, portable recovery for a static finding."""
+
+    finding = first_finding if isinstance(first_finding, dict) else {}
+    target_path = str(finding.get("path") or "").replace("\\", "/").strip("/")
+    line = max(0, int(finding.get("line") or 0))
+    if target_path:
+        if line > 0:
+            return (
+                "evidence_required",
+                "in_slice",
+                {
+                    "name": "read_file_range",
+                    "args": {
+                        "path": target_path,
+                        "startLine": max(1, line - 20),
+                        "endLine": line + 20,
+                    },
+                },
+                [target_path],
+            )
+        return (
+            "evidence_required",
+            "in_slice",
+            {"name": "read_file", "args": {"path": target_path}},
+            [target_path],
+        )
+
+    symbol = str(
+        finding.get("symbol")
+        or finding.get("ownerSymbol")
+        or finding.get("missingSymbol")
+        or ""
+    ).strip()
+    if symbol:
+        return (
+            "evidence_required",
+            "in_slice",
+            {
+                "name": "unreal_symbol_lookup",
+                "args": {"query": symbol, "access": "read"},
+            },
+            [],
+        )
+
+    raw_log = str(
+        finding.get("buildLogPath")
+        or finding.get("logPath")
+        or finding.get("logFile")
+        or ""
+    ).strip()
+    diagnostic_source = str(finding.get("diagnosticSource") or "").casefold()
+    if raw_log or diagnostic_source in {"build", "automation", "ubt", "uat", "log"}:
+        log_args: dict[str, Any] = {
+            "mode": "first_error",
+            "maxFiles": 1,
+            "maxLines": 200,
+            "summaryOnly": True,
+        }
+        if raw_log:
+            # read_unreal_logs accepts a basename only; never leak a machine
+            # absolute path into the cross-platform control contract.
+            log_args["fileName"] = os.path.basename(raw_log.replace("\\", "/"))
+        return (
+            "evidence_required",
+            "infrastructure",
+            {"name": "read_unreal_logs", "args": log_args},
+            [],
+        )
+
+    return (
+        "checkpoint_rebase_required",
+        "in_slice",
+        {
+            "name": "unreal_task_checkpoint",
+            "args": {
+                "action": "rebase",
+                "acceptCurrentFiles": True,
+                "includeGitChanges": False,
+            },
+        },
+        [],
+    )
+
+
 def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
     """Derive the one authoritative next action for the complete task pipeline.
 
@@ -778,14 +867,23 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 if validation_recovery_satisfied:
                     required_name = _mutation_tool_for_state(state, route)
                 else:
-                    required_name = "read_file"
                     first_finding = (
                         checkpoint_validation.get("firstFinding")
                         if isinstance(checkpoint_validation.get("firstFinding"), dict)
                         else {}
                     )
-                    finding_path = str(first_finding.get("path") or "").strip()
-                    required_args = {"path": finding_path} if finding_path else {}
+                    (
+                        _fallback_status,
+                        _fallback_scope,
+                        fallback_tool,
+                        _fallback_targets,
+                    ) = validation_finding_recovery(first_finding)
+                    required_name = str(fallback_tool.get("name") or "")
+                    required_args = (
+                        dict(fallback_tool.get("args") or {})
+                        if isinstance(fallback_tool.get("args"), dict)
+                        else {}
+                    )
             elif current_mutation_checkpoint:
                 required_name = "static_validate_project"
             elif checkpoint_action and checkpoint_action in active_tools:

@@ -79,6 +79,7 @@ const {
 } = require("./read-path-resolver.js");
 const {
   validateAfterWrite,
+  validateAfterDelete,
   runStaticValidation,
   resolveValidateOnWrite,
   VALIDATE_ON_WRITE_TIMEOUT_MS,
@@ -100,13 +101,13 @@ const {
   listToolsRouteContext,
   SAFE_ROUTE_RECOVERY_TOOLS,
   validateMutationAuth,
-  consumeRouteCall,
   reserveRouteCall,
   commitRouteReservation,
   rollbackRouteReservation,
   heartbeatRouteReservation,
   readTaskState,
   taskAuthorizationForState,
+  authoritativeTaskProjectFile,
   canonicalProjectIdentity,
   validateResolvedTaskProject,
   requiredFields,
@@ -209,6 +210,11 @@ const {
   sha256Buffer,
   sha256Text,
 } = require("./safe-write");
+const {
+  boundedRecoveryRead,
+  exactMutationCallGuard,
+  bundleFailureRecovery,
+} = require("./mutation-recovery.js");
 const {
   beginToolCall,
   checkToolRepeatBlocked,
@@ -328,14 +334,14 @@ const LIST_DIRECTORY_BUDGET = createListDirectoryBudget({
 const ALLOW_WRITE = process.env.ALLOW_WRITE === "1" || process.env.ALLOW_WRITE === "true";
 const ALLOW_COMMANDS = process.env.ALLOW_COMMANDS === "1" || process.env.ALLOW_COMMANDS === "true";
 const ALLOW_UNREAL_BUILD = process.env.ALLOW_UNREAL_BUILD === "1" || process.env.ALLOW_UNREAL_BUILD === "true";
-const ALLOW_EXISTING_SOURCE_WRITE = ["1", "true", "yes", "on"].includes(
+const EXISTING_SOURCE_WRITE_OVERRIDE_REQUESTED = ["1", "true", "yes", "on"].includes(
   String(process.env.ALLOW_EXISTING_SOURCE_WRITE || "").trim().toLowerCase()
 );
-if (ALLOW_EXISTING_SOURCE_WRITE) {
+if (EXISTING_SOURCE_WRITE_OVERRIDE_REQUESTED) {
   // stderr only: stdout carries the MCP stdio protocol.
   console.error(
-    "[unreal-agent] WARNING: ALLOW_EXISTING_SOURCE_WRITE=1 — write_file may OVERWRITE existing files. "
-    + "This is a manual override; unset it in mcp.json after the one-off operation."
+    "[unreal-agent] ALLOW_EXISTING_SOURCE_WRITE is deprecated and ignored. "
+    + "Existing files require a bounded read_file_range followed by replace_in_file."
   );
 }
 const MAX_READ_BYTES = Math.min(
@@ -386,6 +392,9 @@ const LOG_FIRST_ERROR_SCAN_MAX_BYTES = Math.min(
   numberEnv("LOG_FIRST_ERROR_SCAN_MAX_BYTES", 32 * 1024 * 1024, LOG_READ_MAX_BYTES),
   256 * 1024 * 1024
 );
+// Python task state persists these as 256-item execution batches. Keep the
+// total contract aligned while exposing only the active batch to the tool.
+const MAX_AUTOMATION_FILTERS_TOTAL = 4096;
 const ALLOW_SOURCE_DELETE = ["1", "true", "yes", "on"].includes(
   String(process.env.ALLOW_SOURCE_DELETE || "").trim().toLowerCase()
 );
@@ -665,6 +674,136 @@ function pendingMutationQuery(projectRoot, args, mutationGeneration = null) {
     taskSessionId: mutationTaskSessionId(args),
     mutationGeneration,
   };
+}
+
+function recordMutationEvidenceRecovery(args, options = {}) {
+  const taskSessionId = mutationTaskSessionId(args);
+  if (!taskSessionId) return { ok: true, active: false };
+  const taskState = readTaskState(WORKSPACE_ROOT, taskSessionId);
+  if (!taskState || String(taskState.status || "") !== "running") {
+    return { ok: false, active: true, errorCode: "TASK_STATE_MISSING", error: "Active mutation task state is unavailable." };
+  }
+  const requiredArgs = options.requiredArgs && typeof options.requiredArgs === "object"
+    ? options.requiredArgs
+    : {};
+  const targetFiles = Array.isArray(options.targetFiles)
+    ? options.targetFiles.map((item) => String(item || "").replace(/\\/g, "/")).filter(Boolean).slice(0, 4)
+    : [];
+  return recordRecoveryObligationViaPython(
+    WORKSPACE_ROOT,
+    { taskAuthorization: taskAuthorizationForState(taskState) },
+    {
+      source: "mutation",
+      status: "evidence_required",
+      scopeDisposition: "in_slice",
+      errorCode: String(options.errorCode || "MUTATION_EVIDENCE_REFRESH_REQUIRED"),
+      mutationGeneration: Math.max(0, Number(taskState.mutationGeneration || 0)),
+      requiredTool: { name: "read_file_range", args: requiredArgs },
+      targetFiles,
+      message: String(options.message || "Read the bounded current source range before constructing a new exact mutation call."),
+      ...(options.failedCallFingerprint
+        ? { failedCallFingerprint: String(options.failedCallFingerprint) }
+        : {}),
+    }
+  );
+}
+
+function recordMutationFailureRecovery(args, options = {}) {
+  const taskSessionId = mutationTaskSessionId(args);
+  if (!taskSessionId) return { ok: true, active: false };
+  const taskState = readTaskState(WORKSPACE_ROOT, taskSessionId);
+  if (!taskState || String(taskState.status || "") !== "running") {
+    return { ok: false, active: true, errorCode: "TASK_STATE_MISSING", error: "Active mutation task state is unavailable." };
+  }
+  const targetFiles = Array.isArray(options.targetFiles)
+    ? options.targetFiles.map((item) => String(item || "").replace(/\\/g, "/")).filter(Boolean).slice(0, 4)
+    : [];
+  const reconciliationRequired = options.rollbackIncomplete === true || options.externalChange === true;
+  const requiredTool = reconciliationRequired
+    ? {
+      name: "unreal_task_checkpoint",
+      args: { action: "rebase", acceptCurrentFiles: true, includeGitChanges: false },
+    }
+    : {
+      name: "unreal_code_sketch_claim_validate",
+      args: targetFiles.length ? { targetFiles } : {},
+    };
+  return recordRecoveryObligationViaPython(
+    WORKSPACE_ROOT,
+    { taskAuthorization: taskAuthorizationForState(taskState) },
+    {
+      source: "mutation",
+      status: reconciliationRequired ? "checkpoint_rebase_required" : "repair_planning_required",
+      scopeDisposition: "in_slice",
+      errorCode: String(options.errorCode || "MUTATION_VALIDATION_FAILED"),
+      mutationGeneration: Math.max(0, Number(taskState.mutationGeneration || 0)),
+      requiredTool,
+      targetFiles,
+      transactionId: String(options.transactionId || ""),
+      journalPaths: targetFiles,
+      message: String(options.message || (
+        reconciliationRequired
+          ? "The mutation rollback could not prove the pre-image. Rebase the exact task checkpoint against current files."
+          : "The mutation was rolled back after validation. Validate a corrected bounded repair claim before writing again."
+      )),
+    }
+  );
+}
+
+function promoteJournalRecoveryRequired(item, stateRoot = resolveAgentStateRoot()) {
+  const taskSessionId = String(item?.taskSessionId || "").trim();
+  if (!taskSessionId) {
+    return { ok: true, active: false, idempotent: true, reason: "journal_not_task_bound" };
+  }
+  const taskState = readTaskState(WORKSPACE_ROOT, taskSessionId, stateRoot);
+  if (!taskState || String(taskState.status || "") !== "running") {
+    return {
+      ok: false,
+      active: true,
+      errorCode: "TRANSACTION_RECOVERY_TASK_UNAVAILABLE",
+      error: "The transaction journal is task-bound, but its running task state is unavailable.",
+    };
+  }
+  const transactionId = String(item?.transactionId || "");
+  const current = taskState.recoveryObligation && typeof taskState.recoveryObligation === "object"
+    ? taskState.recoveryObligation
+    : {};
+  if (
+    String(current.transactionId || "") === transactionId
+    || (
+      String(current.source || "") === "transaction_journal"
+      && String(current.message || "").includes(transactionId)
+    )
+  ) {
+    return { ok: true, active: true, idempotent: true, transactionId };
+  }
+  const targetFiles = Array.isArray(item?.paths)
+    ? item.paths.map((value) => String(value || "").replace(/\\/g, "/")).filter(Boolean).slice(0, 4)
+    : [];
+  return recordRecoveryObligationViaPython(
+    WORKSPACE_ROOT,
+    { taskAuthorization: taskAuthorizationForState(taskState) },
+    {
+      source: "transaction_journal",
+      status: "checkpoint_rebase_required",
+      scopeDisposition: "in_slice",
+      errorCode: "TRANSACTION_RECONCILIATION_REQUIRED",
+      mutationGeneration: Math.max(0, Number(taskState.mutationGeneration || 0)),
+      requiredTool: {
+        name: "unreal_task_checkpoint",
+        args: {
+          action: "rebase",
+          acceptCurrentFiles: true,
+          includeGitChanges: false,
+        },
+      },
+      targetFiles,
+      transactionId,
+      projectRoot: String(item?.projectRoot || ""),
+      journalPaths: targetFiles,
+      message: `Transaction ${transactionId} requires an exact checkpoint rebase before mutation work can continue.`,
+    }
+  );
 }
 
 function mutationCompensationOptions(journal, location) {
@@ -1003,6 +1142,47 @@ function validationScopeForTask(args, mutationGeneration) {
     fullAudit: args?.fullAudit === true,
     taskBound: Boolean(taskSessionId),
   });
+}
+
+function automationScopeForTask(args, mutationGeneration) {
+  const validationScope = validationScopeForTask(args, mutationGeneration);
+  if (validationScope.kind === "task_scope_unavailable") return validationScope;
+  const taskSessionId = requiredFields(args || {}).taskSessionId;
+  const taskState = taskSessionId
+    ? readTaskState(WORKSPACE_ROOT, taskSessionId)
+    : null;
+  const repairScope = taskState?.repairScope && typeof taskState.repairScope === "object"
+    ? taskState.repairScope
+    : {};
+  const temporarySliceId = String(repairScope.temporarySliceId || "").trim();
+  const activeRepairScope = (
+    String(repairScope.status || "") === "active"
+    && temporarySliceId
+    && temporarySliceId === String(taskState?.activeSliceId || "").trim()
+  );
+  if (!activeRepairScope) return validationScope;
+  const normalizeTarget = (value) => String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .trim();
+  const causalTargets = Array.isArray(repairScope.causalSliceFiles)
+    ? repairScope.causalSliceFiles
+    : [];
+  const targets = [...new Set([
+    ...(Array.isArray(validationScope.targets) ? validationScope.targets : []),
+    ...causalTargets,
+    repairScope.targetFile,
+  ].map(normalizeTarget).filter(Boolean))];
+  return {
+    ...validationScope,
+    targets,
+    repairCoverage: {
+      temporarySliceId,
+      supersededSliceId: String(repairScope.supersededSliceId || ""),
+      causalTargetCount: causalTargets.length,
+    },
+  };
 }
 
 function recordValidationContinuityCheckpoint(args, validation, passed, mutationGeneration = 0) {
@@ -1426,41 +1606,6 @@ function routeAuthorizationFailureOptions(result = {}, toolName = "") {
   };
 }
 
-function commitMutationRouteBudget(args, toolName) {
-  // Plan-auth off (MCP_REQUIRE_PLAN_AUTH=0): do not consume route budget even if
-  // the model still passes a fabricated/stale taskSessionId. Otherwise every
-  // project write fails with TASK_STATE_MISSING / "Task state disappeared…".
-  // Default (plan-auth on) keeps the existing route ledger contract.
-  if (!REQUIRE_TASK_AUTH_FOR_WRITES) {
-    agentDebugLog("H8", "server.js:commitMutationRouteBudget", "skip route budget (plan-auth disabled)", {
-      toolName: String(toolName || ""),
-      hadTaskSessionId: Boolean(requiredFields(args || {}).taskSessionId),
-    });
-    return null;
-  }
-  const fields = requiredFields(args || {});
-  if (!fields.taskSessionId) {
-    return null;
-  }
-  const consumed = consumeRouteCall(
-    WORKSPACE_ROOT,
-    fields.taskSessionId,
-    fields,
-    args || {},
-    toolName
-  );
-  if (!consumed.ok) {
-    return fail(
-      consumed.error || "Task phase tool budget exhausted.",
-      {
-        taskSessionId: fields.taskSessionId,
-        ...routeAuthorizationFailureOptions(consumed, toolName),
-      }
-    );
-  }
-  return null;
-}
-
 function validationToolResult(summary, validation, options = {}) {
   const base = options.ok === false
     ? {
@@ -1487,7 +1632,8 @@ function validationToolResult(summary, validation, options = {}) {
     "commandSucceeded", "proofSatisfied", "recoveryRequired", "errorCode",
     "retryable", "doNotRetry", "stopCurrentWorkflow", "suggestedToolCalls",
     "validationOverrideAvailable", "buildAllowedForValidatedGeneration", "requiredNextTool",
-    "requiredNextToolArgs", "validationScope",
+    "requiredNextToolArgs", "validationScope", "transactionId",
+    "failedCallFingerprint", "forbiddenCallFingerprints", "forbiddenCalls",
     "continuityCheckpoint", "taskAuthorization", "toolRoute", "controlEpoch", "control",
   ];
   for (const key of passthrough) {
@@ -1530,6 +1676,19 @@ function bindAuthoritativeLifecycleControl(payload, lifecycleResult) {
     delete payload.requiredNextToolArgs;
   }
   return payload;
+}
+
+function bindCommittedMutationControl(payload, committedBudget, checkpoint = {}) {
+  const state = committedBudget?.state && typeof committedBudget.state === "object"
+    ? committedBudget.state
+    : null;
+  if (!state) return payload;
+  return bindAuthoritativeLifecycleControl(payload, {
+    taskAuthorization: checkpoint?.taskAuthorization || taskAuthorizationForState(state),
+    toolRoute: state.toolRoute && typeof state.toolRoute === "object" ? state.toolRoute : {},
+    controlEpoch: Math.max(0, Number(state.controlEpoch || 0)),
+    control: state.controlState && typeof state.controlState === "object" ? state.controlState : {},
+  });
 }
 
 function taskProofLifecycle(state) {
@@ -1751,6 +1910,150 @@ function isPatchOnlyExistingFile(p) {
 
 function validationFailed(validation) {
   return Boolean(validation && validation.ok === false);
+}
+
+function durableGuardScopeForArgs(args = {}, overrides = {}) {
+  const stateRoot = ensureStateRootLayout(resolveAgentStateRoot());
+  const taskSessionId = String(
+    overrides.taskSessionId || requiredFields(args || {}).taskSessionId || ""
+  ).trim();
+  if (!taskSessionId) return { stateRoot };
+  let taskState = null;
+  try {
+    taskState = readTaskState(WORKSPACE_ROOT, taskSessionId, stateRoot);
+  } catch {
+    taskState = null;
+  }
+  let projectRoot = String(overrides.projectRoot || "").trim();
+  if (!projectRoot && taskState) {
+    const projectFile = authoritativeTaskProjectFile(taskState, WORKSPACE_ROOT);
+    if (projectFile) projectRoot = path.dirname(projectFile);
+  }
+  const requestedGeneration = Number(overrides.mutationGeneration);
+  const stateGeneration = Number(taskState?.mutationGeneration);
+  const mutationGeneration = Number.isFinite(requestedGeneration)
+    ? Math.max(0, Math.floor(requestedGeneration))
+    : (Number.isFinite(stateGeneration) ? Math.max(0, Math.floor(stateGeneration)) : null);
+  if (!projectRoot || mutationGeneration === null) {
+    return { taskSessionId, stateRoot };
+  }
+  return {
+    taskSessionId,
+    projectRoot,
+    mutationGeneration,
+    stateRoot,
+  };
+}
+
+function exactCheckpointRebaseTool() {
+  return {
+    name: "unreal_task_checkpoint",
+    args: {
+      action: "rebase",
+      acceptCurrentFiles: true,
+      includeGitChanges: false,
+    },
+  };
+}
+
+function taskStateForToolArgs(args = {}) {
+  const taskSessionId = requiredFields(args || {}).taskSessionId;
+  if (!taskSessionId) return null;
+  try {
+    return readTaskState(WORKSPACE_ROOT, taskSessionId);
+  } catch {
+    return null;
+  }
+}
+
+function authoritativeBuildRecoveryArgs(taskState, invocationArgs = {}) {
+  const contract = taskState?.buildContract && typeof taskState.buildContract === "object"
+    ? taskState.buildContract
+    : {};
+  const source = Object.keys(contract).length ? contract : invocationArgs;
+  const result = {
+    project: String(source.project || source.projectFile || taskState?.projectFile || "").trim(),
+    engineRoot: String(source.engineRoot || "").trim(),
+    target: String(source.target || "").trim(),
+    platform: String(source.platform || "").trim(),
+    configuration: String(source.configuration || "").trim(),
+    allowAbsoluteProject: true,
+    allowEngineFallback: false,
+  };
+  return Object.values(result).every((value) => value !== "") ? result : null;
+}
+
+function authoritativeAutomationRecoveryArgs(taskState, invocationArgs = {}) {
+  const verification = taskState?.buildVerification
+    && typeof taskState.buildVerification === "object"
+    ? taskState.buildVerification
+    : {};
+  const filters = Array.isArray(verification.testFilters) && verification.testFilters.length
+    ? verification.testFilters.map(String).map((value) => value.trim()).filter(Boolean)
+    : (Array.isArray(invocationArgs.testFilters)
+      ? invocationArgs.testFilters.map(String).map((value) => value.trim()).filter(Boolean)
+      : [String(invocationArgs.testFilter || "").trim()].filter(Boolean));
+  if (!filters.length) return null;
+  const project = String(
+    verification.projectFile || invocationArgs.project || taskState?.projectFile || ""
+  ).trim();
+  const engineRoot = String(verification.engineRoot || invocationArgs.engineRoot || "").trim();
+  return {
+    testFilters: filters.slice(0, MAX_AUTOMATION_FILTERS),
+    ...(project ? { project } : {}),
+    ...(engineRoot ? { engineRoot } : {}),
+  };
+}
+
+function recoveryGateAfterMissingDiagnostic(taskState, priorRecovery, invocationArgs = {}) {
+  const source = recoveryLogSource(priorRecovery, priorRecovery?.requiredTool?.args?.fileName);
+  if (source === "automation") {
+    const automationArgs = authoritativeAutomationRecoveryArgs(taskState, invocationArgs);
+    if (automationArgs) {
+      return {
+        status: "environment_recovery",
+        requiredTool: { name: "run_unreal_automation_tests", args: automationArgs },
+      };
+    }
+  } else {
+    const buildArgs = authoritativeBuildRecoveryArgs(taskState, invocationArgs);
+    if (buildArgs) {
+      return {
+        status: "environment_recovery",
+        requiredTool: { name: "build_unreal_project", args: buildArgs },
+      };
+    }
+  }
+  return {
+    status: "checkpoint_rebase_required",
+    requiredTool: exactCheckpointRebaseTool(),
+  };
+}
+
+function boundedAutomationRetryGate(args = {}, taskState = taskStateForToolArgs(args)) {
+  const automationArgs = authoritativeAutomationRecoveryArgs(taskState, args);
+  return automationArgs
+    ? {
+      status: "environment_recovery",
+      requiredTool: { name: "run_unreal_automation_tests", args: automationArgs },
+    }
+    : {
+      status: "checkpoint_rebase_required",
+      requiredTool: exactCheckpointRebaseTool(),
+    };
+}
+
+function boundedBuildRetryGate(args = {}, taskState = taskStateForToolArgs(args)) {
+  const buildArgs = authoritativeBuildRecoveryArgs(taskState, args);
+  return buildArgs
+    ? {
+      status: "environment_recovery",
+      requiredTool: { name: "build_unreal_project", args: buildArgs },
+    }
+    : {
+      status: "checkpoint_rebase_required",
+      requiredTool: exactCheckpointRebaseTool(),
+    };
 }
 
 function exposureProfileName() {
@@ -2276,6 +2579,23 @@ function evidenceStagnationFail(tool, guard, options = {}) {
 
 function prepareReadGuard(tool, args, context) {
   const normalizedArgs = normalizeReadToolArgs(tool, args);
+  const taskSessionId = String(context?.taskSessionId || requiredFields(args || {}).taskSessionId || "");
+  if (taskSessionId) {
+    const taskState = readTaskState(WORKSPACE_ROOT, taskSessionId);
+    const requiredName = String(taskState?.controlState?.requiredTool?.name || "");
+    const recoveryStatus = String(taskState?.recoveryObligation?.status || "");
+    if (requiredName === String(tool || "") && recoveryStatus) {
+      // A server-issued recovery read is a state transition, not optional
+      // evidence gathering. Let the exact authorized call reach the route
+      // reservation commit even when its line range was materialized earlier.
+      return {
+        normalizedArgs,
+        action: "allow",
+        repeat: false,
+        serverRequiredRecoveryRead: true,
+      };
+    }
+  }
   const decision = checkReadRepeat(tool, normalizedArgs, context);
   return { normalizedArgs, decision, ...decision };
 }
@@ -2309,6 +2629,10 @@ function applyBuildRecoveryEvidenceGuard(tool, context = {}, toolArgs = {}) {
       fileAbsPath: context.fileAbsPath || "",
       toolArgs,
       commitEvidence: false,
+    },
+    {
+      taskSessionId,
+      stateRoot: ensureStateRootLayout(resolveAgentStateRoot()),
     }
   );
   if (!recovery.blocked) return null;
@@ -2391,6 +2715,10 @@ function commitBuildRecoveryEvidence(tool, context = {}, toolArgs = {}) {
       tool,
       fileAbsPath: context.fileAbsPath || "",
       toolArgs,
+    },
+    {
+      taskSessionId: String(context.taskSessionId || ""),
+      stateRoot: ensureStateRootLayout(resolveAgentStateRoot()),
     }
   );
 }
@@ -2663,7 +2991,7 @@ async function buildWorkspaceInfo() {
     allowUnrealBuild: ALLOW_UNREAL_BUILD,
     validateOnWrite: VALIDATE_ON_WRITE,
     validateOnWriteTimeoutMs: VALIDATE_ON_WRITE_TIMEOUT_MS,
-    allowExistingSourceWrite: ALLOW_EXISTING_SOURCE_WRITE,
+    allowExistingSourceWrite: false,
     allowSourceDelete: ALLOW_SOURCE_DELETE,
     mcpEssentialTools: MCP_ESSENTIAL_TOOLS,
     mcpExtendedTools: MCP_EXTENDED_TOOLS,
@@ -3086,7 +3414,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const name = request.params.name;
   return toolCallContext.run({ toolName: name }, async () => {
     let args = request.params.arguments || {};
-    const priorSeq = beginToolCall();
+    let priorSeq = 0;
+    let durableGuardScope = { stateRoot: ensureStateRootLayout(resolveAgentStateRoot()) };
     const context = toolCallContext.getStore();
     if (context) {
       context.arguments = args;
@@ -3354,7 +3683,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
       hasExplicitTaskAuthorization = true;
     }
-    const earlyRepeatBlock = checkToolRepeatBlocked(name, args, priorSeq);
+    durableGuardScope = durableGuardScopeForArgs(args);
+    priorSeq = beginToolCall(durableGuardScope);
+    if (context) {
+      context.arguments = args;
+      context.durableGuardScope = durableGuardScope;
+    }
+    const earlyRepeatBlock = checkToolRepeatBlocked(name, args, priorSeq, durableGuardScope);
     if (earlyRepeatBlock.blocked) {
       return fail(toolRepeatBlockedMessage(name, earlyRepeatBlock), {
         errorCode: "TOOL_REPEAT_BLOCKED",
@@ -3370,7 +3705,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       args
     );
     if (argumentCheck.invalidShape) {
-      recordToolFailure(name, args, "INVALID_TOOL_ARGUMENTS");
+      recordToolFailure(name, args, "INVALID_TOOL_ARGUMENTS", durableGuardScope);
       return fail("Tool arguments must be a JSON object.", {
         errorCode: "INVALID_TOOL_ARGUMENTS",
         requiredArguments: argumentCheck.required,
@@ -3382,7 +3717,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     const missingNonAuthorizationArgs = argumentCheck.missing.filter((key) => key !== "taskAuthorization");
     if (missingNonAuthorizationArgs.length) {
-      recordToolFailure(name, args, "INVALID_TOOL_ARGUMENTS");
+      recordToolFailure(name, args, "INVALID_TOOL_ARGUMENTS", durableGuardScope);
       return fail("Missing required argument(s): " + missingNonAuthorizationArgs.join(", "), {
         errorCode: "INVALID_TOOL_ARGUMENTS",
         requiredArguments: argumentCheck.required,
@@ -3393,14 +3728,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
     }
 
-    // Validation-heavy read tools: reserve budget before I/O, commit on success,
-    // rollback on semantic/validation failure so concurrent calls still contend.
+    // Validation-heavy reads and every mutation reserve before I/O.  Mutation
+    // reservations commit only after disk state, semantic/static validation,
+    // mutation generation, and the durable continuity checkpoint all succeed.
     const DEFER_BUDGET_UNTIL_SUCCESS = new Set([
       "read_symbol",
       "read_file",
       "read_file_range",
       "search_files",
       "list_directory",
+      "write_file",
+      "replace_in_file",
+      "delete_file",
+      "apply_edit_bundle",
     ]);
     let pendingBudgetReservation = null;
     let committedDeferredBudget = null;
@@ -3442,9 +3782,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       );
     };
     if (
-      !ROUTE_MUTATION_TOOLS.has(name)
-      && !SAFE_ROUTE_RECOVERY_TOOLS.has(name)
+      !SAFE_ROUTE_RECOVERY_TOOLS.has(name)
       && !detachedReadOnlyObservation
+      && (!ROUTE_MUTATION_TOOLS.has(name) || REQUIRE_TASK_AUTH_FOR_WRITES)
       && (hasExplicitTaskAuthorization || routePreflight.taskSessionId)
     ) {
       if (DEFER_BUDGET_UNTIL_SUCCESS.has(name)) {
@@ -3745,7 +4085,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "read_unreal_logs") {
-      const activeProject = getActiveProject(CONFIG_PATH);
+      const logTaskSessionId = requiredFields(args).taskSessionId;
+      const logTaskState = logTaskSessionId
+        ? readTaskState(WORKSPACE_ROOT, logTaskSessionId)
+        : null;
+      const activeProject = authoritativeTaskProjectFile(logTaskState, WORKSPACE_ROOT)
+        || getActiveProject(CONFIG_PATH);
       if (!activeProject) {
         const switchGuidance = projectSwitchGuidance(agentRegisteredToolNames());
         return fail(
@@ -3802,6 +4147,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         maxLines,
         summaryOnly,
         ...(requestedLogFile ? { fileName: requestedLogFile } : {}),
+        ...(readMode === "range" ? {
+          cursorByte: rangeCursorByte,
+          maxBytes: chunkBytes,
+        } : {}),
+        ...(filterText ? { filter: String(args.filter || "") } : {}),
       };
       const recoveryFields = requiredFields(args);
       const recoveryTaskState = recoveryFields.taskSessionId
@@ -3814,27 +4164,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (logsDirs.length === 0) {
         if (recoveryLogObligation.matched) {
           const priorRecovery = recoveryLogObligation.recovery;
+          const gate = recoveryGateAfterMissingDiagnostic(
+            recoveryTaskState,
+            priorRecovery,
+            args
+          );
           const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
             source: recoveryLogSource(priorRecovery, requestedLogFile),
-            status: "external_blocker",
+            status: gate.status,
             scopeDisposition: "infrastructure",
             errorCode: "RECOVERY_LOG_UNAVAILABLE",
             mutationGeneration: Number(
               priorRecovery.mutationGeneration || recoveryTaskState?.mutationGeneration || 0
             ),
-            requiredTool: {},
+            requiredTool: gate.requiredTool,
             targetFiles: Array.isArray(priorRecovery.targetFiles) ? priorRecovery.targetFiles : [],
             message: `The required recovery log directory is unavailable under: ${projectDir}`,
           });
           const payload = {
             ok: false,
             errorCode: "RECOVERY_LOG_UNAVAILABLE",
-            retryable: false,
+            retryable: true,
             doNotRetry: ["read_unreal_logs"],
+            requiredNextTool: gate.requiredTool.name,
+            requiredNextToolArgs: gate.requiredTool.args,
             projectDir,
             logsDirs: candidateLogDirs,
             nextSteps: [
-              "Restore or regenerate the required build/Automation log before starting another repair.",
+              `Call ${gate.requiredTool.name} exactly once to regenerate or rebase the missing diagnostic evidence.`,
             ],
           };
           bindAuthoritativeLifecycleControl(payload, blocker);
@@ -3961,6 +4318,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           filtered = lines.slice(0, maxLines);
         } else if (readMode === "range") {
           filtered = filtered.slice(0, maxLines);
+          firstErrorFound = filtered.some((line) => (
+            filterText
+              ? String(line).toLowerCase().includes(filterText)
+              : isInterestingLogLine(line)
+          ));
         } else if (summaryOnly) {
           filtered = firstErrorCluster(filtered, 4, 30);
         } else {
@@ -4013,7 +4375,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? ["Use only the first actionable error or assertion for the next fix."]
           : ["Run the project or build once, then read logs again."]
       });
-      const recoveryLogEvidenceSatisfied = readMode !== "first_error"
+      const recoveryLogEvidenceSatisfied = !["first_error", "range"].includes(readMode)
         || chunks.some((chunk) => chunk.firstErrorFound === true);
       if (payload.ok === true && recoveryFields.taskSessionId && recoveryLogEvidenceSatisfied) {
         const recoveryEvidence = markRecoveryEvidenceViaPython(
@@ -4051,55 +4413,99 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       } else if (
         payload.ok === true
-        && readMode === "first_error"
+        && ["first_error", "range"].includes(readMode)
         && recoveryLogObligation.matched
       ) {
         const priorRecovery = recoveryLogObligation.recovery;
+        const continuation = chunks.find((chunk) => (
+          chunk.firstErrorFound !== true
+          && chunk.hasMore === true
+          && Number.isFinite(Number(chunk.nextCursorByte))
+        ));
+        const nextRangeArgs = continuation
+          ? {
+            mode: "range",
+            ...(requestedLogFile ? { fileName: requestedLogFile } : {}),
+            cursorByte: Number(continuation.nextCursorByte),
+            maxBytes: chunkBytes,
+            maxFiles: 1,
+            maxLines,
+            summaryOnly: false,
+            ...(filterText ? { filter: String(args.filter || "") } : {}),
+          }
+          : null;
+        const gate = nextRangeArgs
+          ? {
+            status: "evidence_required",
+            requiredTool: { name: "read_unreal_logs", args: nextRangeArgs },
+          }
+          : recoveryGateAfterMissingDiagnostic(recoveryTaskState, priorRecovery, args);
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: recoveryLogSource(priorRecovery, requestedLogFile),
-          status: "external_blocker",
-          scopeDisposition: "infrastructure",
-          errorCode: "RECOVERY_ERROR_EVIDENCE_NOT_FOUND",
+          status: gate.status,
+          scopeDisposition: nextRangeArgs ? "in_slice" : "infrastructure",
+          errorCode: nextRangeArgs
+            ? "RECOVERY_LOG_SCAN_CONTINUATION_REQUIRED"
+            : "RECOVERY_ERROR_EVIDENCE_NOT_FOUND",
           mutationGeneration: Number(
             priorRecovery.mutationGeneration || recoveryTaskState?.mutationGeneration || 0
           ),
-          requiredTool: {},
+          requiredTool: gate.requiredTool,
           targetFiles: Array.isArray(priorRecovery.targetFiles) ? priorRecovery.targetFiles : [],
-          message: "The bounded authoritative log scan completed without an actionable error record.",
+          message: nextRangeArgs
+            ? "The bounded log window had no actionable error; continue from the exact persisted byte cursor."
+            : "The complete authoritative log scan had no actionable error; rerun the owning gate once to regenerate evidence.",
         });
         payload.ok = false;
-        payload.errorCode = "RECOVERY_ERROR_EVIDENCE_NOT_FOUND";
-        payload.retryable = false;
+        payload.errorCode = nextRangeArgs
+          ? "RECOVERY_LOG_SCAN_CONTINUATION_REQUIRED"
+          : "RECOVERY_ERROR_EVIDENCE_NOT_FOUND";
+        payload.retryable = true;
         payload.doNotRetry = ["read_unreal_logs"];
+        payload.requiredNextTool = gate.requiredTool.name;
+        payload.requiredNextToolArgs = gate.requiredTool.args;
         payload.recoveryEvidence = {
           ok: false,
           active: blocker?.active === true,
-          errorCode: "RECOVERY_ERROR_EVIDENCE_NOT_FOUND",
+          errorCode: payload.errorCode,
         };
         payload.nextSteps = [
-          "The bounded log scan did not find an actionable error; do not repeat the same log read.",
-          "Verify the correct build/Automation log exists or report the missing diagnostic instead of planning a speculative edit.",
+          nextRangeArgs
+            ? "Continue from requiredNextToolArgs.cursorByte; do not restart the scan from byte zero."
+            : `Call ${gate.requiredTool.name} exactly once; do not plan a speculative source edit.`,
         ];
         bindAuthoritativeLifecycleControl(payload, blocker);
-        return fail("The required recovery log contains no actionable error evidence.", payload);
+        return fail(
+          nextRangeArgs
+            ? "No actionable error was found in this bounded log window; continue from the persisted cursor."
+            : "The complete recovery log contains no actionable error; the owning gate must regenerate evidence.",
+          payload
+        );
       } else if (payload.ok !== true && recoveryLogObligation.matched) {
         const priorRecovery = recoveryLogObligation.recovery;
+        const gate = recoveryGateAfterMissingDiagnostic(
+          recoveryTaskState,
+          priorRecovery,
+          args
+        );
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: recoveryLogSource(priorRecovery, requestedLogFile),
-          status: "external_blocker",
+          status: gate.status,
           scopeDisposition: "infrastructure",
           errorCode: "RECOVERY_LOG_UNAVAILABLE",
           mutationGeneration: Number(
             priorRecovery.mutationGeneration || recoveryTaskState?.mutationGeneration || 0
           ),
-          requiredTool: {},
+          requiredTool: gate.requiredTool,
           targetFiles: Array.isArray(priorRecovery.targetFiles) ? priorRecovery.targetFiles : [],
           message: `The required recovery log is unavailable: ${requestedLogFile || "<latest>"}`,
         });
         payload.ok = false;
         payload.errorCode = "RECOVERY_LOG_UNAVAILABLE";
-        payload.retryable = false;
+        payload.retryable = true;
         payload.doNotRetry = ["read_unreal_logs"];
+        payload.requiredNextTool = gate.requiredTool.name;
+        payload.requiredNextToolArgs = gate.requiredTool.args;
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail(
           `Required recovery log is unavailable: ${requestedLogFile || "latest project log"}`,
@@ -4452,19 +4858,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         activeProjectPath: activeProject,
         createDirs: Boolean(args.createDirs),
         fileExists: async (p) => exists(p),
-        allowExistingWrite: ALLOW_EXISTING_SOURCE_WRITE
+        allowExistingWrite: false
       });
       if (!guard.ok) {
         const rel = displayPath(writeResolution);
         const fileExists = await exists(target);
-        const discipline = writeDisciplineOptions(fileExists);
-        return fail(guard.message, {
-          ...discipline,
-          suggestedToolCalls: fileExists ? [
-            { tool: "read_file", args: { path: rel, detailLevel: "compact" } },
-            { tool: "replace_in_file", args: { path: rel, oldText: "<exact text from read_file>", newText: "<replacement>", expectedOccurrences: 1 } }
-          ] : discipline.suggestedToolCalls
+        const discipline = writeDisciplineOptions(fileExists, {
+          path: rel,
+          startLine: 1,
+          endLine: 120,
         });
+        const callGuard = fileExists ? exactMutationCallGuard("write_file", args) : {};
+        let lifecycle = null;
+        if (fileExists) {
+          rollbackDeferredBudget({
+            mutationFailure: { errorCode: "FILE_ALREADY_EXISTS", fingerprint: callGuard.failedCallFingerprint },
+          });
+          lifecycle = recordMutationEvidenceRecovery(args, {
+            errorCode: "FILE_ALREADY_EXISTS",
+            requiredArgs: discipline.requiredNextToolArgs,
+            targetFiles: [writeResolution.projectRelativePath || rel],
+            failedCallFingerprint: callGuard.failedCallFingerprint,
+            message: "write_file is create-only for this existing path. Read the bounded current range before constructing a new exact replacement call.",
+          });
+        }
+        const payload = {
+          ...discipline,
+          ...callGuard,
+          suggestedToolCalls: discipline.suggestedToolCalls,
+        };
+        bindAuthoritativeLifecycleControl(payload, lifecycle);
+        return fail(guard.message, payload);
       }
       const requestedContent = String(args.content || "");
       const requestedLineCount = requestedContent.split(/\r?\n/).length;
@@ -4494,14 +4918,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!(await exists(parent))) return fail(`parent directory not found: ${path.relative(WORKSPACE_ROOT, parent)}`);
         const rel = displayPath(writeResolution);
         const mutationPayload = String(args.content || "");
-        const repeat = checkMutationDuplicate("write_file", target, mutationPayload);
+        const mutationGuardScope = durableGuardScopeForArgs(args);
+        const repeat = checkMutationDuplicate(
+          "write_file",
+          target,
+          mutationPayload,
+          mutationGuardScope
+        );
         if (repeat.duplicate) {
-          return fail(duplicateMutationMessage("write_file", rel, repeat), {
-            errorCode: "MUTATION_REPEAT_BLOCKED",
-            retryable: false,
-            doNotRetry: ["write_file"],
-            stopCurrentWorkflow: true,
+          const callGuard = exactMutationCallGuard("write_file", args);
+          rollbackDeferredBudget({
+            mutationFailure: { errorCode: "MUTATION_REPEAT_BLOCKED", fingerprint: callGuard.failedCallFingerprint },
           });
+          const lifecycle = recordMutationFailureRecovery(args, {
+            errorCode: "MUTATION_REPEAT_BLOCKED",
+            targetFiles: [writeResolution.projectRelativePath || rel],
+            message: "The exact create call was already attempted. Validate a corrected bounded repair before constructing a new write call.",
+          });
+          const payload = {
+            errorCode: "MUTATION_REPEAT_BLOCKED",
+            retryable: true,
+            stopCurrentWorkflow: false,
+            ...callGuard,
+          };
+          bindAuthoritativeLifecycleControl(payload, lifecycle);
+          return fail(duplicateMutationMessage("write_file", rel, repeat), payload);
         }
         const contentToWrite = mutationPayload;
         if (isSemanticGuardSourcePath(target)) {
@@ -4510,8 +4951,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             return mutationSemanticGuardFailure(semanticGuard, rel);
           }
         }
-        const budgetFail = commitMutationRouteBudget(args, "write_file");
-        if (budgetFail) return budgetFail;
         const targetExists = await exists(target);
         const priorContent = targetExists
           ? await fsp.readFile(target, "utf8")
@@ -4527,28 +4966,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           checkpointRequired: REQUIRE_TASK_AUTH_FOR_WRITES && Boolean(journalLocation.taskSessionId),
         });
         try {
-          if (ALLOW_EXISTING_SOURCE_WRITE) {
-            atomicWriteText(target, contentToWrite);
-          } else {
-            await createExclusive(target, contentToWrite);
-          }
+          await createExclusive(target, contentToWrite);
         } catch (err) {
           if (err && err.code === "EEXIST") {
             await abandonMutationJournal(mutationJournal, "aborted");
-            const discipline = writeDisciplineOptions(true);
-            return fail(`write_file blocked because file already exists: ${rel}. Use replace_in_file. Do not retry write_file.`, {
-              ...discipline,
-              suggestedToolCalls: [
-                { tool: "read_file", args: { path: rel, detailLevel: "compact" } },
-                { tool: "replace_in_file", args: { path: rel, oldText: "<exact text from read_file>", newText: "<replacement>", expectedOccurrences: 1 } }
-              ]
+            const discipline = writeDisciplineOptions(true, {
+              path: rel,
+              startLine: 1,
+              endLine: 120,
             });
+            const callGuard = exactMutationCallGuard("write_file", args);
+            rollbackDeferredBudget({
+              mutationFailure: { errorCode: "FILE_ALREADY_EXISTS", fingerprint: callGuard.failedCallFingerprint },
+            });
+            const lifecycle = recordMutationEvidenceRecovery(args, {
+              errorCode: "FILE_ALREADY_EXISTS",
+              requiredArgs: discipline.requiredNextToolArgs,
+              targetFiles: [writeResolution.projectRelativePath || rel],
+              failedCallFingerprint: callGuard.failedCallFingerprint,
+              message: "write_file lost a create race on this existing path. Read the bounded current range before constructing a new exact replacement call.",
+            });
+            const payload = {
+              ...discipline,
+              ...callGuard,
+              suggestedToolCalls: discipline.suggestedToolCalls,
+            };
+            bindAuthoritativeLifecycleControl(payload, lifecycle);
+            return fail(`write_file blocked because file already exists: ${rel}. Read the bounded current range before constructing a replace_in_file call. Do not replay the failed call fingerprint.`, payload);
           }
           throw err;
         }
-        recordMutationAttempt("write_file", target, mutationPayload);
+        recordMutationAttempt("write_file", target, mutationPayload, mutationGuardScope);
         invalidateFileCache(target);
+        heartbeatDeferredBudget();
         const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
+        heartbeatDeferredBudget();
         if (validationFailed(validation)) {
           // Stale-safe rollback: only revert if the file still holds exactly what this
           // request wrote. A newer operation's content must never be clobbered.
@@ -4558,38 +5010,76 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const rollback = await rollbackJournal(mutationJournal);
             invalidateFileCache(target);
             if (rollback.rolledBack) await abandonMutationJournal(mutationJournal, "rolled_back");
+            rollbackDeferredBudget({
+              mutationFailure: {
+                errorCode: rollback.rolledBack ? "WRITE_STATIC_VALIDATION_FAILED" : "WRITE_ROLLBACK_INCOMPLETE",
+                transactionId: mutationJournal.transactionId,
+              },
+            });
+            const recovery = recordMutationFailureRecovery(args, {
+              errorCode: rollback.rolledBack
+                ? "WRITE_STATIC_VALIDATION_FAILED"
+                : "WRITE_ROLLBACK_INCOMPLETE",
+              targetFiles: [writeResolution.projectRelativePath || rel],
+              transactionId: mutationJournal.transactionId,
+              rollbackIncomplete: rollback.rolledBack !== true,
+            });
+            const failureOptions = {
+              ok: false,
+              path: rel,
+              operation: "create",
+              rolledBack: rollback.rolledBack,
+              rollbackIncomplete: rollback.rolledBack !== true,
+              transactionId: mutationJournal.transactionId,
+              isError: true,
+              errorCode: rollback.rolledBack
+                ? "WRITE_STATIC_VALIDATION_FAILED"
+                : "WRITE_ROLLBACK_INCOMPLETE",
+              error: rollback.rolledBack
+                ? "Static validation failed after create; the write was reverted."
+                : "Static validation failed and the pre-image could not be fully restored.",
+              nextSteps: rollback.rolledBack
+                ? ["Validate a corrected bounded repair claim before writing again."]
+                : ["Rebase the exact task checkpoint against current files before any new mutation."],
+            };
+            bindAuthoritativeLifecycleControl(failureOptions, recovery);
             return validationToolResult(
               `WRITE ROLLED BACK — ${rel} failed static validation.`,
               validation,
-              {
-                ok: false,
-                path: rel,
-                operation: "create",
-                rolledBack: rollback.rolledBack,
-                transactionId: mutationJournal.transactionId,
-                isError: true,
-                error: "Static validation failed after create; the write was reverted.",
-                nextSteps: ["Fix the first blocking finding, then submit a corrected write_file call."]
-              }
+              failureOptions
             );
           }
           invalidateFileCache(target);
           mutationJournal.status = "recovery_required";
           mutationJournal.updatedAt = new Date().toISOString();
           saveJournal(mutationJournal);
+          rollbackDeferredBudget({
+            mutationFailure: { errorCode: "WRITE_ROLLBACK_CONFLICT", transactionId: mutationJournal.transactionId },
+          });
+          const recovery = recordMutationFailureRecovery(args, {
+            errorCode: "WRITE_ROLLBACK_CONFLICT",
+            targetFiles: [writeResolution.projectRelativePath || rel],
+            transactionId: mutationJournal.transactionId,
+            rollbackIncomplete: true,
+            externalChange: true,
+          });
+          const failureOptions = {
+            ok: false,
+            path: rel,
+            operation: "create",
+            rolledBack: false,
+            rollbackIncomplete: true,
+            conflict: true,
+            isError: true,
+            errorCode: "WRITE_ROLLBACK_CONFLICT",
+            error: "Another operation changed the file after this write.",
+            nextSteps: ["Rebase the exact task checkpoint against current files before any new mutation."],
+          };
+          bindAuthoritativeLifecycleControl(failureOptions, recovery);
           return validationToolResult(
             `WRITE CONFLICT — ${rel} failed validation and rollback was skipped.`,
             validation,
-            {
-              ok: false,
-              path: rel,
-              operation: "create",
-              rolledBack: false,
-              conflict: true,
-              isError: true,
-              error: "Another operation changed the file after this write.",
-              nextSteps: ["Read the current file before any further edit and reconcile the conflict."]
-            }
+            failureOptions
           );
         }
         let summary = `OK — ${rel} created.`;
@@ -4644,7 +5134,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           );
         }
         committedJournal = await completeMutationJournalCheckpoint(committedJournal, checkpoint);
-        return validationToolResult(summary, validation, {
+        const budgetFail = commitDeferredBudgetOrFail({
+          mutationCommit: {
+            transactionId: committedJournal.transactionId,
+            operation: "write_file",
+            paths: [rel],
+          },
+        });
+        if (budgetFail) return budgetFail;
+        const successOptions = {
           path: rel,
           operation: "create",
           bytesWritten: Buffer.byteLength(contentToWrite, "utf8"),
@@ -4653,7 +5151,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           transactionId: committedJournal.transactionId,
           buildValidationPending: committedJournal.status === "awaiting_build",
           continuityCheckpoint: checkpoint,
-        });
+        };
+        bindCommittedMutationControl(successOptions, committedDeferredBudget, checkpoint);
+        return validationToolResult(summary, validation, successOptions);
       } finally {
         releasePathLock(target);
       }
@@ -4801,14 +5301,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       try {
         const mutationPayload = `${oldText}\u0000${newText}\u0000${args.expectedOccurrences ?? ""}`;
-        const repeat = checkMutationDuplicate("replace_in_file", target, mutationPayload);
+        const mutationGuardScope = durableGuardScopeForArgs(args);
+        const repeat = checkMutationDuplicate(
+          "replace_in_file",
+          target,
+          mutationPayload,
+          mutationGuardScope
+        );
         if (repeat.duplicate) {
-          return fail(duplicateMutationMessage("replace_in_file", displayPath(writeResolution), repeat), {
-            errorCode: "MUTATION_REPEAT_BLOCKED",
-            retryable: false,
-            doNotRetry: ["replace_in_file"],
-            stopCurrentWorkflow: true,
+          const display = displayPath(writeResolution);
+          let currentContent = "";
+          try { currentContent = await fsp.readFile(target, "utf8"); } catch { currentContent = ""; }
+          const nextActionArgs = boundedRecoveryRead(display, currentContent, oldText);
+          const callGuard = exactMutationCallGuard("replace_in_file", args);
+          rollbackDeferredBudget({
+            mutationFailure: { errorCode: "MUTATION_REPEAT_BLOCKED", fingerprint: callGuard.failedCallFingerprint },
           });
+          const lifecycle = recordMutationEvidenceRecovery(args, {
+            errorCode: "MUTATION_REPEAT_BLOCKED",
+            requiredArgs: nextActionArgs,
+            targetFiles: [writeResolution.projectRelativePath || display],
+            failedCallFingerprint: callGuard.failedCallFingerprint,
+            message: "The exact mutation call was already attempted. Read the bounded current range and construct a new call rather than replaying it.",
+          });
+          const payload = {
+            errorCode: "MUTATION_REPEAT_BLOCKED",
+            retryable: true,
+            stopCurrentWorkflow: false,
+            ...callGuard,
+            nextAction: "read_file_range",
+            nextActionIsTool: true,
+            nextActionArgs,
+            requiredNextTool: "read_file_range",
+            requiredNextToolArgs: nextActionArgs,
+          };
+          bindAuthoritativeLifecycleControl(payload, lifecycle);
+          return fail(duplicateMutationMessage("replace_in_file", display, repeat), payload);
         }
         const raw = await readCachedBufferFile(target, s);
         const hasCRLF = raw.includes(Buffer.from("\r\n"));
@@ -4831,44 +5359,70 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } else {
             hint = "\n\nHint: the first line of oldText was not found anywhere in the file. Use read_file or search_files to verify the exact content before retrying.";
           }
-          const hadFresh = hasFreshReadEvidence(target, s);
-          if (hadFresh) {
-            markMutationRecoveryHint(target, "OLD_TEXT_NOT_FOUND");
-          }
-          return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`, {
+          const display = displayPath(writeResolution);
+          const nextActionArgs = boundedRecoveryRead(display, contentNorm, oldTextNorm);
+          const callGuard = exactMutationCallGuard("replace_in_file", args);
+          rollbackDeferredBudget({
+            mutationFailure: { errorCode: "OLD_TEXT_NOT_FOUND", fingerprint: callGuard.failedCallFingerprint },
+          });
+          const lifecycle = recordMutationEvidenceRecovery(args, {
+            errorCode: "OLD_TEXT_NOT_FOUND",
+            requiredArgs: nextActionArgs,
+            targetFiles: [writeResolution.projectRelativePath || display],
+            failedCallFingerprint: callGuard.failedCallFingerprint,
+            message: "The exact replacement pre-image was not present. Read the nearest bounded current range, then construct a new call with new oldText.",
+          });
+          const payload = {
             errorCode: "OLD_TEXT_NOT_FOUND",
             retryable: true,
-            doNotRetry: hadFresh ? ["read_file", "read_file_range", "replace_in_file"] : ["replace_in_file"],
-            nextAction: hadFresh ? "replace_in_file" : "read_file_range",
+            stopCurrentWorkflow: false,
+            ...callGuard,
+            nextAction: "read_file_range",
             nextActionIsTool: true,
-            nextActionArgs: hadFresh
-              ? {
-                path: displayPath(writeResolution),
-                oldText: "<exact contiguous excerpt from prior read evidence>",
-                newText: "<replacement for that excerpt only>",
-                expectedOccurrences: 1,
-              }
-              : {
-                path: displayPath(writeResolution),
-                startLine: 1,
-                endLine: 120,
-                detailLevel: "compact",
-              },
-            agentInstruction: hadFresh
-              ? "Do NOT re-read. Reuse the exact file text already returned in this conversation, correct oldText to match it byte-for-byte (LF), then call replace_in_file once with a bounded patch."
-              : "Call read_file_range for the target lines, then retry replace_in_file with corrected oldText.",
-            nextSteps: hadFresh
-              ? [
-                "Copy exact oldText from prior read evidence (preserve tabs/spaces/LF).",
-                "Retry one bounded replace_in_file; do not re-read the same file.",
-              ]
-              : ["Call read_file_range for the target lines, then retry replace_in_file with corrected oldText."],
-          });
+            nextActionArgs,
+            requiredNextTool: "read_file_range",
+            requiredNextToolArgs: nextActionArgs,
+            agentInstruction: "Call read_file_range once with the exact bounded args. Then construct a new replace_in_file call from the returned current text; only the failed call fingerprint is forbidden.",
+            nextSteps: ["Read the bounded current range, then construct a new exact replacement call."],
+          };
+          bindAuthoritativeLifecycleControl(payload, lifecycle);
+          return fail(`oldText not found in ${args.path} (file uses ${hasCRLF ? "CRLF" : "LF"} line endings).${hint}`, payload);
         }
         const isSourcePath = [".h", ".hpp", ".cpp", ".c", ".cc", ".cs"].includes(path.extname(target).toLowerCase());
         const expectedOccurrences = args.expectedOccurrences !== undefined
           ? Number(args.expectedOccurrences)
           : (isSourcePath ? 1 : undefined);
+        const occurrenceRecoveryFailure = (errorCode, message, extra = {}) => {
+          const display = displayPath(writeResolution);
+          const nextActionArgs = boundedRecoveryRead(display, contentNorm, oldTextNorm);
+          const callGuard = exactMutationCallGuard("replace_in_file", args);
+          rollbackDeferredBudget({
+            mutationFailure: { errorCode, fingerprint: callGuard.failedCallFingerprint },
+          });
+          const lifecycle = recordMutationEvidenceRecovery(args, {
+            errorCode,
+            requiredArgs: nextActionArgs,
+            targetFiles: [writeResolution.projectRelativePath || display],
+            failedCallFingerprint: callGuard.failedCallFingerprint,
+            message: "The replacement occurrence contract did not match current disk state. Read the bounded current range before constructing a new call.",
+          });
+          const payload = {
+            errorCode,
+            retryable: true,
+            stopCurrentWorkflow: false,
+            ...callGuard,
+            nextAction: "read_file_range",
+            nextActionIsTool: true,
+            nextActionArgs,
+            requiredNextTool: "read_file_range",
+            requiredNextToolArgs: nextActionArgs,
+            observedOccurrences: occurrences,
+            agentInstruction: "Read the exact bounded current range, then construct a new replacement with a unique pre-image and a correct expectedOccurrences value. Only the failed call fingerprint is forbidden.",
+            ...extra,
+          };
+          bindAuthoritativeLifecycleControl(payload, lifecycle);
+          return fail(message, payload);
+        };
         if (isSourcePath && args.expectedOccurrences === undefined && occurrences > 1) {
           const snippets = contentNorm.split("\n")
             .map((line, index) => ({ line, index }))
@@ -4876,21 +5430,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             .slice(0, 3)
             .map(({ line, index }) => `L${index + 1}: ${line.slice(0, 120)}`)
             .join("\n");
-          return fail(
+          return occurrenceRecoveryFailure(
+            "AMBIGUOUS_REPLACE",
             `ambiguous replace in ${args.path}: found ${occurrences} matches; specify expectedOccurrences or narrow oldText.${snippets ? `\n\nMatches:\n${snippets}` : ""}`,
-            {
-              errorCode: "AMBIGUOUS_REPLACE",
-              retryable: false,
-              doNotRetry: ["replace_in_file"],
-            }
+            { matchingSnippets: snippets }
           );
         }
         if (expectedOccurrences !== undefined && occurrences !== expectedOccurrences) {
-          return fail(`occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`, {
-            errorCode: "OCCURRENCE_MISMATCH",
-            retryable: false,
-            doNotRetry: ["replace_in_file"],
-          });
+          return occurrenceRecoveryFailure(
+            "OCCURRENCE_MISMATCH",
+            `occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`,
+            { expectedOccurrences }
+          );
         }
 
         // Apply replacement on normalized content, then restore original line endings if needed
@@ -4906,8 +5457,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             return mutationSemanticGuardFailure(semanticGuard, displayPath(writeResolution));
           }
         }
-        const budgetFail = commitMutationRouteBudget(args, "replace_in_file");
-        if (budgetFail) return budgetFail;
         const evidenceEntry = readEvidence.get(path.resolve(target));
         const journalLocation = mutationJournalLocation(target, args);
         const mutationJournal = beginMutationJournal({
@@ -4929,17 +5478,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
         if (!casResult.ok) {
           await abandonMutationJournal(mutationJournal, "aborted");
-          return fail(casResult.error || "replace_in_file blocked by read-hash CAS.", {
-            errorCode: casResult.errorCode || "READ_HASH_CAS_MISMATCH",
-            retryable: false,
-            doNotRetry: ["replace_in_file"],
-            nextSteps: ["Re-read the file, then retry replace_in_file with exact oldText."],
+          let currentContent = contentNorm;
+          try {
+            currentContent = String(await fsp.readFile(target, "utf8")).replace(/\r\n/g, "\n");
+          } catch {
+            // Keep the last successfully read content for a concrete recovery range.
+          }
+          const display = displayPath(writeResolution);
+          const nextActionArgs = boundedRecoveryRead(display, currentContent, oldTextNorm);
+          const callGuard = exactMutationCallGuard("replace_in_file", args);
+          const errorCode = casResult.errorCode || "READ_HASH_CAS_MISMATCH";
+          rollbackDeferredBudget({
+            mutationFailure: { errorCode, fingerprint: callGuard.failedCallFingerprint },
           });
+          const lifecycle = recordMutationEvidenceRecovery(args, {
+            errorCode,
+            requiredArgs: nextActionArgs,
+            targetFiles: [writeResolution.projectRelativePath || display],
+            failedCallFingerprint: callGuard.failedCallFingerprint,
+            message: "The file changed after its read evidence. Read the bounded current range before constructing a new replacement call.",
+          });
+          const payload = {
+            errorCode: casResult.errorCode || "READ_HASH_CAS_MISMATCH",
+            retryable: true,
+            stopCurrentWorkflow: false,
+            ...callGuard,
+            nextAction: "read_file_range",
+            nextActionIsTool: true,
+            nextActionArgs,
+            requiredNextTool: "read_file_range",
+            requiredNextToolArgs: nextActionArgs,
+            nextSteps: ["Read the bounded current range, then construct a new call with current exact text."],
+            agentInstruction: "Call read_file_range with the exact bounded args. Do not replay the failed call fingerprint; construct a new exact replacement from current disk evidence.",
+          };
+          bindAuthoritativeLifecycleControl(payload, lifecycle);
+          return fail(casResult.error || "replace_in_file blocked by read-hash CAS.", payload);
         }
-        recordMutationAttempt("replace_in_file", target, mutationPayload);
+        recordMutationAttempt("replace_in_file", target, mutationPayload, mutationGuardScope);
         const updated = casResult.updated;
         invalidateFileCache(target);
+        heartbeatDeferredBudget();
         const validation = await validateAfterWrite(target, () => getActiveProject(CONFIG_PATH));
+        heartbeatDeferredBudget();
         const rel = displayPath(writeResolution);
         if (validationFailed(validation)) {
           // Stale-safe rollback: only restore if the file still holds exactly what this
@@ -4950,40 +5530,78 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const rollback = await rollbackJournal(mutationJournal);
             invalidateFileCache(target);
             if (rollback.rolledBack) await abandonMutationJournal(mutationJournal, "rolled_back");
+            rollbackDeferredBudget({
+              mutationFailure: {
+                errorCode: rollback.rolledBack ? "PATCH_STATIC_VALIDATION_FAILED" : "PATCH_ROLLBACK_INCOMPLETE",
+                transactionId: mutationJournal.transactionId,
+              },
+            });
+            const recovery = recordMutationFailureRecovery(args, {
+              errorCode: rollback.rolledBack
+                ? "PATCH_STATIC_VALIDATION_FAILED"
+                : "PATCH_ROLLBACK_INCOMPLETE",
+              targetFiles: [writeResolution.projectRelativePath || rel],
+              transactionId: mutationJournal.transactionId,
+              rollbackIncomplete: rollback.rolledBack !== true,
+            });
+            const failureOptions = {
+              ok: false,
+              path: rel,
+              operation: "replace",
+              replacements: occurrences,
+              rolledBack: rollback.rolledBack,
+              rollbackIncomplete: rollback.rolledBack !== true,
+              transactionId: mutationJournal.transactionId,
+              isError: true,
+              errorCode: rollback.rolledBack
+                ? "PATCH_STATIC_VALIDATION_FAILED"
+                : "PATCH_ROLLBACK_INCOMPLETE",
+              error: rollback.rolledBack
+                ? "Static validation failed after replace; the file was restored."
+                : "Static validation failed and the pre-image could not be fully restored.",
+              nextSteps: rollback.rolledBack
+                ? ["Validate a corrected bounded repair claim before writing again."]
+                : ["Rebase the exact task checkpoint against current files before any new mutation."],
+            };
+            bindAuthoritativeLifecycleControl(failureOptions, recovery);
             return validationToolResult(
               `PATCH ROLLED BACK — ${rel} failed static validation.`,
               validation,
-              {
-                ok: false,
-                path: rel,
-                operation: "replace",
-                replacements: occurrences,
-                rolledBack: rollback.rolledBack,
-                transactionId: mutationJournal.transactionId,
-                isError: true,
-                error: "Static validation failed after replace; the file was restored.",
-                nextSteps: ["Fix the first blocking finding, re-read the target, then submit a corrected patch."]
-              }
+              failureOptions
             );
           }
           invalidateFileCache(target);
           mutationJournal.status = "recovery_required";
           mutationJournal.updatedAt = new Date().toISOString();
           saveJournal(mutationJournal);
+          rollbackDeferredBudget({
+            mutationFailure: { errorCode: "PATCH_ROLLBACK_CONFLICT", transactionId: mutationJournal.transactionId },
+          });
+          const recovery = recordMutationFailureRecovery(args, {
+            errorCode: "PATCH_ROLLBACK_CONFLICT",
+            targetFiles: [writeResolution.projectRelativePath || rel],
+            transactionId: mutationJournal.transactionId,
+            rollbackIncomplete: true,
+            externalChange: true,
+          });
+          const failureOptions = {
+            ok: false,
+            path: rel,
+            operation: "replace",
+            replacements: occurrences,
+            rolledBack: false,
+            rollbackIncomplete: true,
+            conflict: true,
+            isError: true,
+            errorCode: "PATCH_ROLLBACK_CONFLICT",
+            error: "Another operation changed the file after this patch.",
+            nextSteps: ["Rebase the exact task checkpoint against current files before any new mutation."],
+          };
+          bindAuthoritativeLifecycleControl(failureOptions, recovery);
           return validationToolResult(
             `PATCH CONFLICT — ${rel} failed validation and rollback was skipped.`,
             validation,
-            {
-              ok: false,
-              path: rel,
-              operation: "replace",
-              replacements: occurrences,
-              rolledBack: false,
-              conflict: true,
-              isError: true,
-              error: "Another operation changed the file after this patch.",
-              nextSteps: ["Read the current file before any further edit and reconcile the conflict."]
-            }
+            failureOptions
           );
         }
         let summary = `OK — ${rel} patched (${occurrences} replacement(s)).`;
@@ -5038,7 +5656,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           );
         }
         committedJournal = await completeMutationJournalCheckpoint(committedJournal, checkpoint);
-        return validationToolResult(summary, validation, {
+        const budgetFail = commitDeferredBudgetOrFail({
+          mutationCommit: {
+            transactionId: committedJournal.transactionId,
+            operation: "replace_in_file",
+            paths: [rel],
+          },
+        });
+        if (budgetFail) return budgetFail;
+        const successOptions = {
           path: rel,
           operation: "replace",
           replacements: occurrences,
@@ -5047,7 +5673,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           transactionId: committedJournal.transactionId,
           buildValidationPending: committedJournal.status === "awaiting_build",
           continuityCheckpoint: checkpoint,
-        });
+        };
+        bindCommittedMutationControl(successOptions, committedDeferredBudget, checkpoint);
+        return validationToolResult(summary, validation, successOptions);
       } finally {
         releasePathLock(target);
       }
@@ -5118,8 +5746,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             return fail("expectedContent mismatch; delete aborted.");
           }
         }
-        const budgetFail = commitMutationRouteBudget(args, "delete_file");
-        if (budgetFail) return budgetFail;
         const journalLocation = mutationJournalLocation(target, args);
         const mutationJournal = beginMutationJournal({
           operation: "delete_file",
@@ -5137,6 +5763,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           throw error;
         }
         invalidateFileCache(target);
+        heartbeatDeferredBudget();
+        const validation = await validateAfterDelete(
+          target,
+          () => getActiveProject(CONFIG_PATH)
+        );
+        heartbeatDeferredBudget();
+        if (validationFailed(validation)) {
+          const rollback = await rollbackJournal(mutationJournal);
+          invalidateFileCache(target);
+          if (rollback.rolledBack) {
+            await abandonMutationJournal(mutationJournal, "rolled_back");
+          }
+          const errorCode = rollback.rolledBack
+            ? "DELETE_STATIC_VALIDATION_FAILED"
+            : "DELETE_ROLLBACK_INCOMPLETE";
+          rollbackDeferredBudget({
+            mutationFailure: {
+              errorCode,
+              transactionId: mutationJournal.transactionId,
+            },
+          });
+          const lifecycle = recordMutationFailureRecovery(args, {
+            errorCode,
+            targetFiles: [resolution.projectRelativePath || rel],
+            transactionId: mutationJournal.transactionId,
+            rollbackIncomplete: rollback.rolledBack !== true,
+            externalChange: rollback.externalChangeDetected?.length > 0,
+            message: rollback.rolledBack
+              ? "The deletion failed post-mutation static validation and was rolled back. Validate a corrected bounded repair claim."
+              : "The deletion failed validation and its pre-image could not be fully restored. Rebase the exact task checkpoint against current files.",
+          });
+          const failureOptions = {
+            ok: false,
+            path: rel,
+            operation: "delete",
+            rolledBack: rollback.rolledBack,
+            rollbackIncomplete: rollback.rollbackIncomplete,
+            restoredPaths: rollback.restoredPaths,
+            unrestoredPaths: rollback.unrestoredPaths,
+            externalChangeDetected: rollback.externalChangeDetected,
+            rollbackErrors: rollback.rollbackErrors,
+            transactionId: mutationJournal.transactionId,
+            isError: true,
+            errorCode,
+            error: rollback.rolledBack
+              ? "Static validation failed after deletion; the file was restored."
+              : "Static validation failed and the deleted file could not be fully restored.",
+            nextSteps: rollback.rolledBack
+              ? ["Validate a corrected bounded repair claim before deleting again."]
+              : ["Rebase the exact task checkpoint against current files before any new mutation."],
+          };
+          bindAuthoritativeLifecycleControl(failureOptions, lifecycle);
+          return validationToolResult(
+            rollback.rolledBack
+              ? `DELETE ROLLED BACK — ${rel} failed static validation.`
+              : `DELETE RECOVERY REQUIRED — ${rel} failed static validation.`,
+            validation,
+            failureOptions
+          );
+        }
         let committedJournal = commitMutationJournal(mutationJournal, null, {
           ...journalLocation,
           mutationGeneration: 0,
@@ -5209,7 +5895,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           );
         }
         committedJournal = await completeMutationJournalCheckpoint(committedJournal, checkpoint);
-        return text(JSON.stringify({
+        const budgetFail = commitDeferredBudgetOrFail({
+          mutationCommit: {
+            transactionId: committedJournal.transactionId,
+            operation: "delete_file",
+            paths: [rel],
+          },
+        });
+        if (budgetFail) return budgetFail;
+        const nextSteps = ["Continue the planned edit set, then run build_unreal_project for source deletions."];
+        if (validation?.skipped) {
+          nextSteps.unshift("Run static_validate_project before build.");
+        }
+        const successPayload = {
           ok: true,
           deleted: rel,
           fileName: path.basename(target),
@@ -5221,13 +5919,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           transactionId: committedJournal.transactionId,
           buildValidationPending: committedJournal.status === "awaiting_build",
           continuityCheckpoint: checkpoint,
+          validation: compactValidationPayload(validation),
+          nextSteps,
           ...(checkpoint.taskAuthorization ? { taskAuthorization: checkpoint.taskAuthorization } : {}),
           ...(checkpoint.toolRoute ? { toolRoute: checkpoint.toolRoute } : {}),
           ...(Number.isInteger(Number(checkpoint.controlEpoch))
             ? { controlEpoch: Math.max(0, Number(checkpoint.controlEpoch)) }
             : {}),
           ...(checkpoint.control ? { control: checkpoint.control } : {}),
-        }, null, 2));
+        };
+        bindCommittedMutationControl(successPayload, committedDeferredBudget, checkpoint);
+        return text(JSON.stringify(successPayload, null, 2));
       } finally {
         releasePathLock(target);
       }
@@ -5292,14 +5994,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return fail(resolution.error || `Invalid bundle path: ${relPath}`);
         }
         if (await exists(resolution.absolutePath)) {
-          return fail(`apply_edit_bundle.files cannot overwrite existing file: ${relPath}`, {
+          const discipline = writeDisciplineOptions(true, {
+            path: relPath,
+            startLine: 1,
+            endLine: 120,
+          });
+          const callGuard = exactMutationCallGuard("apply_edit_bundle", args);
+          rollbackDeferredBudget({
+            mutationFailure: {
+              errorCode: "BUNDLE_EXISTING_FILE_CONTENT_FORBIDDEN",
+              fingerprint: callGuard.failedCallFingerprint,
+            },
+          });
+          const lifecycle = recordMutationEvidenceRecovery(args, {
+            errorCode: "BUNDLE_EXISTING_FILE_CONTENT_FORBIDDEN",
+            requiredArgs: discipline.requiredNextToolArgs,
+            targetFiles: [relPath],
+            failedCallFingerprint: callGuard.failedCallFingerprint,
+            message: "A bundle files[] entry targeted an existing file. Read its bounded current range before constructing a new exact replacement call.",
+          });
+          const payload = {
             errorCode: "BUNDLE_EXISTING_FILE_CONTENT_FORBIDDEN",
             retryable: true,
             stopCurrentWorkflow: false,
-            nextAction: "replace_in_file",
+            ...callGuard,
+            nextAction: "read_file_range",
             nextActionIsTool: true,
-            agentInstruction: "Use a bounded exact patch for the existing file. Never resend its complete content in apply_edit_bundle.files; split larger work into read_file_range + replace_in_file calls.",
-          });
+            nextActionArgs: discipline.requiredNextToolArgs,
+            requiredNextTool: "read_file_range",
+            requiredNextToolArgs: discipline.requiredNextToolArgs,
+            suggestedToolCalls: discipline.suggestedToolCalls,
+            agentInstruction: "Read the bounded current range first, then construct a new exact replace_in_file call. Never resend complete existing-file content in apply_edit_bundle.files.",
+          };
+          bindAuthoritativeLifecycleControl(payload, lifecycle);
+          return fail(`apply_edit_bundle.files cannot overwrite existing file: ${relPath}`, payload);
         }
         if (
           content.length > MAX_NEW_FILE_ARGUMENT_CHARS
@@ -5339,9 +6067,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
       }
 
-      const budgetFail = commitMutationRouteBudget(args, "apply_edit_bundle");
-      if (budgetFail) return budgetFail;
-
       const tx = await applyBundleTransaction(bundle, resolveBundlePath, {
         maxFilesPerEdit: auth.maxFilesPerEdit || DEFAULT_MAX_FILES_PER_EDIT,
         deferFinalization: true,
@@ -5361,6 +6086,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           });
           const validationResults = [];
           for (const absPath of commit.writtenAbs) {
+            heartbeatDeferredBudget();
             if (isSemanticGuardSourcePath(absPath)) {
               const prospectiveContent = await fsp.readFile(absPath, "utf8");
               const semanticGuard = validateMutationSemanticText(prospectiveContent);
@@ -5374,6 +6100,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               }
             }
             validationResults.push(await validateAfterWrite(absPath, () => getActiveProject(CONFIG_PATH)));
+            heartbeatDeferredBudget();
           }
           const failed = validationResults.find((item) => validationFailed(item));
           if (failed) {
@@ -5383,28 +6110,96 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         },
       });
       if (!tx.ok) {
-        if (tx.rollback?.rolledBack || tx.rolledBack) {
+        let recoveryPlan = bundleFailureRecovery(tx, bundle);
+        const patchFailure = tx.mutationFailure && typeof tx.mutationFailure === "object"
+          ? tx.mutationFailure
+          : null;
+        const evidenceFailureCodes = new Set([
+          "OLD_TEXT_NOT_FOUND",
+          "OCCURRENCE_MISMATCH",
+          "READ_HASH_CAS_MISMATCH",
+          "PATCH_CAS_FAILED",
+        ]);
+        if (
+          patchFailure
+          && evidenceFailureCodes.has(String(patchFailure.errorCode || ""))
+          && recoveryPlan.rollbackIncomplete !== true
+        ) {
+          const relativePath = String(patchFailure.relativePath || "").replace(/\\/g, "/");
+          const resolved = await resolveBundlePath(relativePath);
+          let currentContent = "";
+          if (resolved.ok) {
+            try {
+              currentContent = await fsp.readFile(resolved.absolutePath, "utf8");
+            } catch {
+              currentContent = "";
+            }
+          }
+          const requiredArgs = boundedRecoveryRead(
+            relativePath,
+            currentContent,
+            String(patchFailure.oldText || "")
+          );
+          recoveryPlan = {
+            errorCode: String(patchFailure.errorCode || "PATCH_CAS_FAILED"),
+            status: "evidence_required",
+            scopeDisposition: "in_slice",
+            requiredTool: { name: "read_file_range", args: requiredArgs },
+            targetFiles: relativePath ? [relativePath] : [],
+            message: "The bundle patch pre-image or CAS evidence no longer matches. Read the nearest bounded current range, then construct a new exact bundle or replacement call.",
+            rolledBack: recoveryPlan.rolledBack,
+            rollbackIncomplete: false,
+          };
+        }
+        if (recoveryPlan.rolledBack) {
           await archiveJournal(tx.transactionId);
         }
+        const callGuard = exactMutationCallGuard("apply_edit_bundle", args);
+        rollbackDeferredBudget({
+          mutationFailure: {
+            errorCode: recoveryPlan.errorCode,
+            transactionId: String(tx.transactionId || ""),
+            fingerprint: callGuard.failedCallFingerprint,
+          },
+        });
+        const lifecycle = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
+          source: "mutation",
+          status: recoveryPlan.status,
+          scopeDisposition: recoveryPlan.scopeDisposition,
+          errorCode: recoveryPlan.errorCode,
+          mutationGeneration: Math.max(0, Number(auth.state?.mutationGeneration || 0)),
+          requiredTool: recoveryPlan.requiredTool,
+          targetFiles: recoveryPlan.targetFiles,
+          transactionId: String(tx.transactionId || ""),
+          projectRoot,
+          journalPaths: recoveryPlan.targetFiles,
+          failedCallFingerprint: callGuard.failedCallFingerprint,
+          message: recoveryPlan.message,
+        });
         await agentNotify(`apply_edit_bundle failed: ${tx.error}`, "error");
-        return fail(`apply_edit_bundle failed: ${tx.error}`, {
-          ...(tx.validation?.semanticGuard ? {
-            errorCode: "MUTATION_SEMANTIC_GUARD_FAILED",
-            semanticGuard: tx.validation.semanticGuard,
-            nextAction: "unreal_code_sketch_claim_validate",
-            nextActionIsTool: true,
-            retryable: true,
-            stopCurrentWorkflow: false,
-            agentInstruction: "Correct the first known-bad pattern, revalidate the exact target sketch, then retry the bounded bundle.",
-          } : {}),
-          rolledBack: tx.rollback?.rolledBack ?? tx.rolledBack ?? false,
-          rollbackIncomplete: tx.rollback?.rollbackIncomplete ?? tx.rollbackIncomplete ?? true,
+        const payload = {
+          errorCode: recoveryPlan.errorCode,
+          retryable: true,
+          stopCurrentWorkflow: false,
+          ...callGuard,
+          ...(tx.validation?.semanticGuard ? { semanticGuard: tx.validation.semanticGuard } : {}),
+          nextAction: recoveryPlan.requiredTool.name,
+          nextActionIsTool: true,
+          nextActionArgs: recoveryPlan.requiredTool.args,
+          requiredNextTool: recoveryPlan.requiredTool.name,
+          requiredNextToolArgs: recoveryPlan.requiredTool.args,
+          agentInstruction: recoveryPlan.message,
+          transactionId: tx.transactionId,
+          rolledBack: recoveryPlan.rolledBack,
+          rollbackIncomplete: recoveryPlan.rollbackIncomplete,
           restoredPaths: tx.rollback?.restoredPaths || tx.restoredPaths || [],
           unrestoredPaths: tx.rollback?.unrestoredPaths || tx.unrestoredPaths || [],
           externalChangeDetected: tx.rollback?.externalChangeDetected || tx.externalChangeDetected || [],
           rollbackErrors: tx.rollback?.rollbackErrors || [],
-          recoveryRequired: Boolean(tx.lockFailure),
-        });
+          recoveryRequired: true,
+        };
+        bindAuthoritativeLifecycleControl(payload, lifecycle);
+        return fail(`apply_edit_bundle failed: ${tx.error}`, payload);
       }
 
       const validationResults = Array.isArray(tx.validation?.validationResults)
@@ -5476,11 +6271,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
       }
       tx.journal = await completeMutationJournalCheckpoint(tx.journal, checkpoint);
+      const budgetFail = commitDeferredBudgetOrFail({
+        mutationCommit: {
+          transactionId: tx.journal.transactionId,
+          operation: "apply_edit_bundle",
+          paths: bundleMutations.map((item) => item.relPath),
+        },
+      });
+      if (budgetFail) return budgetFail;
       const bundleNextSteps = ["Run build_unreal_project after C++ edits."];
       if (primaryValidation?.skipped) {
         bundleNextSteps.unshift("Run static_validate_project before build.");
       }
-      return validationToolResult(`OK — applied ${tx.writtenAbs.length} file(s) from bundle.`, primaryValidation, {
+      const successOptions = {
         operation: "apply_edit_bundle",
         writtenCount: tx.writtenAbs.length,
         preChangeHashes: tx.preChangeHashes,
@@ -5492,7 +6295,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         phase: "editing",
         userMessage: `Applied ${tx.writtenAbs.length} file(s) from bundle`,
         cancellable: false,
-      });
+      };
+      bindCommittedMutationControl(successOptions, committedDeferredBudget, checkpoint);
+      return validationToolResult(
+        `OK — applied ${tx.writtenAbs.length} file(s) from bundle.`,
+        primaryValidation,
+        successOptions
+      );
     }
 
     if (name === "static_validate_project") {
@@ -5503,18 +6312,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         projectRoot = path.dirname(path.resolve(activeProject));
       }
       if (!projectRoot) {
+        const taskSessionId = String(requiredFields(args || {}).taskSessionId || "").trim();
+        const taskState = taskSessionId
+          ? readTaskState(WORKSPACE_ROOT, taskSessionId)
+          : null;
+        const taskProject = String(
+          taskState?.routeScope?.projectFile || taskState?.projectFile || ""
+        ).trim();
+        if (taskProject) {
+          const resolvedTaskProject = path.resolve(taskProject);
+          projectRoot = path.extname(resolvedTaskProject).toLowerCase() === ".uproject"
+            ? path.dirname(resolvedTaskProject)
+            : resolvedTaskProject;
+        }
+      }
+      if (!projectRoot) {
         const switchGuidance = projectSwitchGuidance(agentRegisteredToolNames());
+        const requiredTool = exactCheckpointRebaseTool();
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "static",
-          status: "external_blocker",
+          status: "checkpoint_rebase_required",
           scopeDisposition: "infrastructure",
           errorCode: "STATIC_PROJECT_UNAVAILABLE",
           mutationGeneration: 0,
-          requiredTool: {},
+          requiredTool,
           targetFiles: [],
           message: "Static validation requires an active Unreal project or an explicit projectRoot.",
         });
         const payload = {
+          errorCode: "STATIC_PROJECT_UNAVAILABLE",
+          retryable: true,
+          requiredNextTool: requiredTool.name,
+          requiredNextToolArgs: requiredTool.args,
           nextSteps: ["Select an active .uproject, then run static validation again."],
           ...switchGuidance
         };
@@ -5546,18 +6375,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (validationScope.kind === "task_scope_unavailable") {
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "static",
-          status: "external_blocker",
-          scopeDisposition: "out_of_slice",
+          status: "checkpoint_rebase_required",
+          scopeDisposition: "in_slice",
           errorCode: "STATIC_VALIDATION_SCOPE_UNAVAILABLE",
           mutationGeneration: validationStart.startGeneration,
-          requiredTool: {},
+          requiredTool: {
+            name: "unreal_task_checkpoint",
+            args: {
+              action: "rebase",
+              acceptCurrentFiles: true,
+              includeGitChanges: false,
+            },
+          },
           targetFiles: [],
-          message: "Static validation could not bind the current task slice.",
+          message: "Static validation could not bind the current task slice; rebase the same task checkpoint.",
         });
         const payload = {
           errorCode: "STATIC_VALIDATION_SCOPE_UNAVAILABLE",
           validationScope,
-          retryable: false,
+          retryable: true,
           nextSteps: [
             "Refresh the current task authorization or record the mutation checkpoint.",
             "Use fullAudit=true only when a project-wide audit is explicitly intended.",
@@ -5617,41 +6453,78 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ? `STATIC VALIDATION FAILED — ${blockingErrorCount} blocking error(s), ${severityCounts.warning || 0} warning(s)`
         : `STATIC VALIDATION PASSED — ${severityCounts.warning || 0} warning(s)`;
       if (validationFailed(validation)) {
-        const loopState = recordValidationFailure(projectRoot, validationStart.startGeneration, validation);
+        const loopState = recordValidationFailure(
+          projectRoot,
+          validationStart.startGeneration,
+          validation,
+          {
+            taskSessionId: requiredFields(args).taskSessionId,
+            stateRoot: ensureStateRootLayout(resolveAgentStateRoot()),
+          }
+        );
         if (loopState.blocked) {
-          const mutationRollback = await rollbackPendingMutationJournals(
-            pendingMutationQuery(projectRoot, args, loopState.mutationGeneration),
-            "static_validation_recovery_exhausted",
-            args
+          const targetFiles = Array.isArray(validationScope.targets)
+            ? validationScope.targets.map(String).filter(Boolean).slice(0, 4)
+            : [];
+          const requiredTool = targetFiles.length
+            ? {
+              name: "unreal_code_sketch_claim_validate",
+              args: { targetFiles },
+            }
+            : {
+              name: "unreal_task_checkpoint",
+              args: {
+                action: "rebase",
+                acceptCurrentFiles: true,
+                includeGitChanges: false,
+              },
+            };
+          const recovery = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
+            source: "static",
+            status: targetFiles.length
+              ? "repair_planning_required"
+              : "checkpoint_rebase_required",
+            scopeDisposition: "in_slice",
+            errorCode: "WORKFLOW_LOOP_BLOCKED",
+            failureFingerprint: loopState.fingerprint,
+            mutationGeneration: loopState.mutationGeneration,
+            requiredTool,
+            targetFiles,
+            message: "The repeated static failure requires one bounded alternate repair strategy.",
+          });
+          const automaticReplan = ["require_tool", "checkpoint"].includes(
+            String(recovery?.control?.disposition || "")
           );
-          const rollbackGeneration = Number(
+          const mutationRollback = automaticReplan
+            ? null
+            : await rollbackPendingMutationJournals(
+              pendingMutationQuery(projectRoot, args, loopState.mutationGeneration),
+              "static_validation_recovery_exhausted",
+              args
+            );
+          const recoveryGeneration = Number(
             mutationRollback?.reconciliation?.mutationGeneration
             ?? loopState.mutationGeneration
           );
-          const recovery = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
-            source: "static",
-            status: "external_blocker",
-            scopeDisposition: "in_slice",
-            errorCode: "WORKFLOW_LOOP_BLOCKED",
-            mutationGeneration: rollbackGeneration,
-            requiredTool: {},
-            targetFiles: validationScope.targets || [],
-            message: "The repeated static failure exhausted automatic repair and its pending mutation was rolled back.",
-          });
           const blockedPayload = {
             ok: false,
             operation: "static_validate",
             isError: true,
-            error: "Validation/build loop blocked until the source is changed.",
+            error: automaticReplan
+              ? "Validation repeated; one bounded alternate repair strategy is required."
+              : "Validation repeated after the alternate strategy; user direction is required.",
             errorCode: "WORKFLOW_LOOP_BLOCKED",
-            retryable: false,
-            doNotRetry: ["static_validate_project", "build_unreal_project"],
-            stopCurrentWorkflow: true,
+            retryable: automaticReplan,
+            stopCurrentWorkflow: !automaticReplan,
             validationOverrideAvailable: false,
-            mutationGeneration: rollbackGeneration,
+            mutationGeneration: recoveryGeneration,
             validationScope,
-            mutationRollback,
-            nextSteps: ["The failed mutation was rolled back. Review the blocker before starting a new bounded repair."],
+            ...(mutationRollback ? { mutationRollback } : {}),
+            nextSteps: [
+              automaticReplan
+                ? `Call ${requiredTool.name} exactly once, use a different repair candidate, then mutate before validating again.`
+                : "The failed mutation was rolled back. Review the exhausted strategy before resuming the same task.",
+            ],
           };
           bindAuthoritativeLifecycleControl(blockedPayload, recovery);
           return validationToolResult(
@@ -5783,7 +6656,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ],
         });
       }
-      recordValidationSuccess(projectRoot, validationStart.startGeneration);
+      recordValidationSuccess(
+        projectRoot,
+        validationStart.startGeneration,
+        durableGuardScopeForArgs(args, {
+          projectRoot,
+          mutationGeneration: validationStart.startGeneration,
+        })
+      );
       let finish;
       try {
         finish = await finishValidationAndClear(projectRoot, validationStart.startGeneration, {
@@ -6108,38 +6988,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "run_unreal_automation_tests") {
       if (!ALLOW_UNREAL_BUILD) {
+        const gate = boundedAutomationRetryGate(args);
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "automation",
-          status: "external_blocker",
+          status: gate.status,
           scopeDisposition: "infrastructure",
           errorCode: "AUTOMATION_DISABLED",
           mutationGeneration: 0,
-          requiredTool: {},
+          requiredTool: gate.requiredTool,
           targetFiles: [],
           message: "Automation execution is disabled by server configuration.",
         });
         const payload = {
           errorCode: "AUTOMATION_DISABLED",
-          retryable: false,
+          retryable: true,
+          requiredNextTool: gate.requiredTool.name,
+          requiredNextToolArgs: gate.requiredTool.args,
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail("run_unreal_automation_tests blocked. Set ALLOW_UNREAL_BUILD=1 to enable.", payload);
       }
       const planResult = await resolveBuildPlan(WORKSPACE_ROOT, CONFIG_PATH, args);
       if (!planResult.ok || !planResult.build) {
+        const gate = boundedAutomationRetryGate(args);
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "automation",
-          status: "external_blocker",
+          status: gate.status,
           scopeDisposition: "infrastructure",
           errorCode: "AUTOMATION_PLAN_RESOLUTION_FAILED",
           mutationGeneration: 0,
-          requiredTool: {},
+          requiredTool: gate.requiredTool,
           targetFiles: [],
           message: String(planResult.error || "Could not resolve Unreal Automation plan."),
         });
         const payload = {
           errorCode: "AUTOMATION_PLAN_RESOLUTION_FAILED",
-          retryable: false,
+          retryable: true,
+          requiredNextTool: gate.requiredTool.name,
+          requiredNextToolArgs: gate.requiredTool.args,
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail(planResult.error || "Could not resolve Unreal Automation plan.", payload);
@@ -6200,22 +7086,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       const mutation = await readMutationState(projectRoot);
       const mutationGeneration = Number(mutation.mutationGeneration || 0);
-      const automationScope = validationScopeForTask(args, mutationGeneration);
+      const automationScope = automationScopeForTask(args, mutationGeneration);
       if (automationScope.kind === "task_scope_unavailable") {
+        const requiredTool = exactCheckpointRebaseTool();
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "automation",
-          status: "external_blocker",
+          status: "checkpoint_rebase_required",
           scopeDisposition: "out_of_slice",
           errorCode: "AUTOMATION_SCOPE_UNAVAILABLE",
           mutationGeneration,
-          requiredTool: {},
+          requiredTool,
           targetFiles: [],
           message: "Automation could not bind declarations to the active task slice.",
         });
         const payload = {
           errorCode: "AUTOMATION_SCOPE_UNAVAILABLE",
           automationScope,
-          retryable: false,
+          retryable: true,
+          requiredNextTool: requiredTool.name,
+          requiredNextToolArgs: requiredTool.args,
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail("Automation could not bind the current task slice.", payload);
@@ -6223,18 +7112,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const scopeTargets = Array.isArray(automationScope.targets)
         ? automationScope.targets
         : [];
-      const discovery = discoverAutomationTests(projectRoot, { scopeTargets });
+      const discovery = discoverAutomationTests(projectRoot, {
+        scopeTargets,
+        maxFiles: 5000,
+      });
       const unmappedScopeTargets = Array.isArray(discovery.unmappedScopeTargets)
         ? discovery.unmappedScopeTargets.map(String).filter(Boolean)
         : [];
       if (discovery.scopeBound === true && unmappedScopeTargets.length) {
+        const requiredTool = scopeTargets.length
+          ? {
+            name: "unreal_code_sketch_claim_validate",
+            args: { targetFiles: scopeTargets.slice(0, 4) },
+          }
+          : exactCheckpointRebaseTool();
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "automation",
-          status: "external_blocker",
+          status: scopeTargets.length
+            ? "repair_planning_required"
+            : "checkpoint_rebase_required",
           scopeDisposition: "out_of_slice",
           errorCode: "AUTOMATION_SCOPE_UNMAPPED",
           mutationGeneration,
-          requiredTool: {},
+          requiredTool,
           targetFiles: scopeTargets,
           message: "One or more active-slice targets could not be mapped to an Automation coverage module.",
         });
@@ -6242,45 +7142,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           errorCode: "AUTOMATION_SCOPE_UNMAPPED",
           automationCoverage: discovery,
           unmappedScopeTargets,
-          retryable: false,
+          retryable: true,
+          requiredNextTool: requiredTool.name,
+          requiredNextToolArgs: requiredTool.args,
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail("Automation coverage could not map every active-slice target.", payload);
       }
       if (discovery.truncated) {
+        const gate = boundedAutomationRetryGate(args, taskState);
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "automation",
-          status: "external_blocker",
+          status: gate.status,
           scopeDisposition: "infrastructure",
           errorCode: "AUTOMATION_DISCOVERY_TRUNCATED",
           mutationGeneration,
-          requiredTool: {},
+          requiredTool: gate.requiredTool,
           targetFiles: scopeTargets,
           message: "Automation declaration discovery was truncated before coverage could be proven.",
         });
         const payload = {
           errorCode: "AUTOMATION_DISCOVERY_TRUNCATED",
           automationCoverage: discovery,
-          retryable: false,
+          retryable: true,
+          requiredNextTool: gate.requiredTool.name,
+          requiredNextToolArgs: gate.requiredTool.args,
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail("Automation declaration discovery was truncated.", payload);
       }
       if (!discovery.count) {
+        const requiredTool = scopeTargets.length
+          ? {
+            name: "unreal_code_sketch_claim_validate",
+            args: { targetFiles: scopeTargets.slice(0, 4) },
+          }
+          : exactCheckpointRebaseTool();
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "automation",
-          status: "external_blocker",
+          status: scopeTargets.length
+            ? "repair_planning_required"
+            : "checkpoint_rebase_required",
           scopeDisposition: "infrastructure",
           errorCode: "NO_AUTOMATION_TESTS_DECLARED",
           mutationGeneration,
-          requiredTool: {},
+          requiredTool,
           targetFiles: scopeTargets,
           message: "The pending Automation gate no longer has discoverable declarations.",
         });
         const payload = {
           errorCode: "NO_AUTOMATION_TESTS_DECLARED",
           automationCoverage: discovery,
-          retryable: false,
+          retryable: true,
+          requiredNextTool: requiredTool.name,
+          requiredNextToolArgs: requiredTool.args,
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail("No project Automation test declarations were found.", payload);
@@ -6295,32 +7210,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ? (requestedFilters.length ? requestedFilters : boundFilters)
         : (requestedFilters.length ? requestedFilters : discovery.suggestedFilters);
       if (!testFilters.length) {
+        const requiredTool = scopeTargets.length
+          ? {
+            name: "unreal_code_sketch_claim_validate",
+            args: { targetFiles: scopeTargets.slice(0, 4) },
+          }
+          : exactCheckpointRebaseTool();
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "automation",
-          status: "external_blocker",
+          status: scopeTargets.length
+            ? "repair_planning_required"
+            : "checkpoint_rebase_required",
           scopeDisposition: "infrastructure",
           errorCode: "AUTOMATION_FILTER_REQUIRED",
           mutationGeneration,
-          requiredTool: {},
+          requiredTool,
           targetFiles: scopeTargets,
           message: "Automation discovery did not produce a concrete bounded filter set.",
         });
         const payload = {
           errorCode: "AUTOMATION_FILTER_REQUIRED",
           declaredTests: discovery.names.slice(0, 100),
-          retryable: false,
+          retryable: true,
+          requiredNextTool: requiredTool.name,
+          requiredNextToolArgs: requiredTool.args,
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail("Automation tests require one or more concrete server-derived filters.", payload);
       }
       if (testFilters.length > MAX_AUTOMATION_FILTERS) {
+        const requiredTool = exactCheckpointRebaseTool();
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "automation",
-          status: "external_blocker",
+          status: "checkpoint_rebase_required",
           scopeDisposition: "infrastructure",
           errorCode: "AUTOMATION_FILTER_SET_TOO_LARGE",
           mutationGeneration,
-          requiredTool: {},
+          requiredTool,
           targetFiles: scopeTargets,
           message: `Automation requires ${testFilters.length} exact filters; the bounded maximum is ${MAX_AUTOMATION_FILTERS}.`,
         });
@@ -6328,7 +7254,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           errorCode: "AUTOMATION_FILTER_SET_TOO_LARGE",
           filterCount: testFilters.length,
           maxFilters: MAX_AUTOMATION_FILTERS,
-          retryable: false,
+          retryable: true,
+          requiredNextTool: requiredTool.name,
+          requiredNextToolArgs: requiredTool.args,
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail("Automation coverage exceeds the bounded exact-filter contract.", payload);
@@ -6487,13 +7415,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       );
       payload.taskLifecycle = completion?.ok === true && completion?.active === true
         ? {
-          status: "slice_advanced",
+          status: completion.automationBatchAdvanced === true
+            ? "automation_batch_advanced"
+            : "slice_advanced",
           routeOwnershipReleased: false,
           completedSliceId: String(completion.completedSliceId || ""),
           activeSliceId: String(completion.activeSliceId || ""),
           pendingSlices: Array.isArray(completion.pendingSlices)
             ? completion.pendingSlices.map(String)
             : [],
+          ...(completion.automationBatchAdvanced === true ? {
+            automationBatchAdvanced: true,
+            filterBatchIndex: Number(completion.filterBatchIndex || 0),
+            filterBatchCount: Number(completion.filterBatchCount || 1),
+            testFilters: Array.isArray(completion.testFilters)
+              ? completion.testFilters.map(String)
+              : [],
+          } : {}),
           taskAuthorization: completion.taskAuthorization || undefined,
           toolRoute: completion.toolRoute || undefined,
         }
@@ -6505,17 +7443,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             errorCode: String(completion?.errorCode || "TASK_AUTOMATION_COMPLETION_FAILED"),
           };
       bindAuthoritativeLifecycleControl(payload, completion);
-      if (completion?.ok === true) {
-        payload.finalizedMutationTransactions = await finalizePendingBuildJournals(
-          pendingMutationQuery(projectRoot, args, payload.mutationGeneration),
-          "completed"
-        );
-      } else {
+      if (completion?.ok !== true) {
         payload.ok = false;
         payload.errorCode = String(completion?.errorCode || "TASK_AUTOMATION_COMPLETION_FAILED");
         payload.error = String(completion?.error || "Automation proof could not be committed to the task lifecycle.");
         payload.retryable = false;
         return fail("Automation proof passed, but task lifecycle completion failed.", payload);
+      }
+      if (completion?.ok === true && completion?.automationBatchAdvanced !== true) {
+        payload.finalizedMutationTransactions = await finalizePendingBuildJournals(
+          pendingMutationQuery(projectRoot, args, payload.mutationGeneration),
+          "completed"
+        );
       }
       try { await server.sendToolListChanged(); } catch { /* advisory */ }
       return text(JSON.stringify(payload, null, 2));
@@ -6523,19 +7462,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "build_unreal_project") {
       if (!ALLOW_UNREAL_BUILD) {
+        const gate = boundedBuildRetryGate(args);
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "build",
-          status: "external_blocker",
+          status: gate.status,
           scopeDisposition: "infrastructure",
           errorCode: "BUILD_DISABLED",
           mutationGeneration: 0,
-          requiredTool: {},
+          requiredTool: gate.requiredTool,
           targetFiles: [],
           message: "Unreal build execution is disabled by server configuration.",
         });
         const payload = {
           errorCode: "BUILD_DISABLED",
-          retryable: false,
+          retryable: true,
+          requiredNextTool: gate.requiredTool.name,
+          requiredNextToolArgs: gate.requiredTool.args,
           nextSteps: ["Rerun the root integrated installer, choose AGENT authority for a trusted project, restart LM Studio, then retry."]
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
@@ -6544,25 +7486,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const planResult = await resolveBuildPlan(WORKSPACE_ROOT, CONFIG_PATH, args);
       if (!planResult.ok || !planResult.build) {
+        const gate = boundedBuildRetryGate(args);
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "build",
-          status: "external_blocker",
+          status: gate.status,
           scopeDisposition: "infrastructure",
           errorCode: "BUILD_PLAN_RESOLUTION_FAILED",
           mutationGeneration: 0,
-          requiredTool: {},
+          requiredTool: gate.requiredTool,
           targetFiles: [],
           message: String(planResult.error || "Could not resolve Unreal build plan."),
         });
         const payload = {
           errorCode: "BUILD_PLAN_RESOLUTION_FAILED",
-          retryable: false,
+          retryable: true,
           userMessage: "Build plan could not be resolved for the active project.",
-          agentInstruction: "Call unreal_set_active_project on unreal-rag, confirm the .uproject path, then retry build_unreal_project.",
-          requiredNextTool: { server: "unreal-rag", name: "unreal_set_active_project" },
+          agentInstruction: `Call ${gate.requiredTool.name} with requiredNextToolArgs exactly once; do not invent or hard-code a project path.`,
+          requiredNextTool: gate.requiredTool.name,
+          requiredNextToolArgs: gate.requiredTool.args,
           nextSteps: [
-            "Call unreal_set_active_project on unreal-rag with a valid .uproject path.",
-            "Confirm build target and configuration, then retry build_unreal_project.",
+            `Use the server-owned ${gate.requiredTool.name} recovery contract.`,
           ],
         };
         bindAuthoritativeLifecycleControl(payload, blocker);
@@ -6571,17 +7514,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const build = planResult.build;
       if (!build.buildTool || !(await exists(build.buildTool))) {
+        const gate = boundedBuildRetryGate(args);
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "build",
-          status: "external_blocker",
+          status: gate.status,
           scopeDisposition: "infrastructure",
           errorCode: "BUILD_TOOL_UNAVAILABLE",
           mutationGeneration: 0,
-          requiredTool: {},
+          requiredTool: gate.requiredTool,
           targetFiles: [],
           message: `Unreal build tool not found: ${build.buildTool || "not resolved"}`,
         });
-        const payload = { errorCode: "BUILD_TOOL_UNAVAILABLE", retryable: false };
+        const payload = {
+          errorCode: "BUILD_TOOL_UNAVAILABLE",
+          retryable: true,
+          requiredNextTool: gate.requiredTool.name,
+          requiredNextToolArgs: gate.requiredTool.args,
+        };
         bindAuthoritativeLifecycleControl(payload, blocker);
         return fail(`Unreal build tool not found: ${build.buildTool || "not resolved"}`, payload);
       }
@@ -6691,7 +7640,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           : null;
         const publicDetails = { ...details };
         delete publicDetails.lifecycleResult;
-        const gateLoop = recordBuildGateFailure(projectRoot, mutation.mutationGeneration, errorCode);
+        const gateLoop = recordBuildGateFailure(
+          projectRoot,
+          mutation.mutationGeneration,
+          errorCode,
+          durableGuardScopeForArgs(args, {
+            projectRoot,
+            mutationGeneration: mutation.mutationGeneration,
+          })
+        );
         if (gateLoop.blocked) {
           const mutationRollback = await rollbackPendingForWorkflowStop(args, "BUILD_GATE_LOOP_BLOCKED");
           const payload = {
@@ -6800,7 +7757,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         allowEngineFallback: args.allowEngineFallback === true,
       };
 
-      const buildAttempt = beginBuildAttempt(projectRoot, mutation.mutationGeneration);
+      const buildGuardScope = durableGuardScopeForArgs(args, {
+        projectRoot,
+        mutationGeneration: mutation.mutationGeneration,
+      });
+      const buildAttempt = beginBuildAttempt(
+        projectRoot,
+        mutation.mutationGeneration,
+        buildGuardScope
+      );
       if (!buildAttempt.ok) {
         const mutationRollback = await rollbackPendingMutationJournals(
           pendingMutationQuery(projectRoot, args, mutation.mutationGeneration),
@@ -6874,20 +7839,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args: [],
         };
       }
-      finishBuildAttempt(projectRoot, mutation.mutationGeneration, execResult);
+      finishBuildAttempt(
+        projectRoot,
+        mutation.mutationGeneration,
+        execResult,
+        buildGuardScope
+      );
       const endGen = await finishBuild(path.dirname(projectPath), buildGen.buildStartGeneration);
       if (execResult.errorCode === "ENGINE_VERSION_MISMATCH") {
         // Engine selection is an environmental precondition, not proof that the
-        // mutation is bad. Publish a durable external blocker without implying
-        // that the unchanged build may be retried automatically.
-        cancelBuildAttempt(projectRoot, mutation.mutationGeneration);
+        // mutation is bad. Preserve the exact build tuple so the task can resume
+        // after the configured engine becomes available.
+        cancelBuildAttempt(projectRoot, mutation.mutationGeneration, buildGuardScope);
         const blocker = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "build",
-          status: "external_blocker",
+          status: "environment_recovery",
           scopeDisposition: "infrastructure",
           errorCode: "ENGINE_VERSION_MISMATCH",
           mutationGeneration: endGen.mutationGeneration,
-          requiredTool: {},
+          requiredTool: { name: "build_unreal_project", args: authoritativeBuildArgs },
           targetFiles: validationScopeForTask(args, endGen.mutationGeneration).targets || [],
           message: String(execResult.error || "The selected Unreal Engine version does not match the project contract."),
         });
@@ -6898,7 +7868,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           requestedEngineAssociation: execResult.requestedEngineAssociation,
           resolvedUbtPath: execResult.resolvedUbtPath,
           engineMismatch: true,
-          retryable: false,
+          retryable: true,
+          requiredNextTool: "build_unreal_project",
+          requiredNextToolArgs: authoritativeBuildArgs,
           nextSteps: [
             taskProjectBinding.active
               ? `Install/select Unreal Engine ${execResult.expectedEngineVersion}, or update the trusted project/engine configuration and start a newly authorized task.`
@@ -6954,7 +7926,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           recordBuildRecoveryContract(
             projectRoot,
             endGen.mutationGeneration,
-            payload.recovery
+            payload.recovery,
+            durableGuardScopeForArgs(args, {
+              projectRoot,
+              mutationGeneration: endGen.mutationGeneration,
+            })
           );
         }
         if (hasTaskAuthorization && taskBindableRecovery) {
@@ -7046,33 +8022,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const recovery = recordRecoveryObligationViaPython(
             WORKSPACE_ROOT,
             args,
-            scopeTargets.length
-              ? {
-                source: "build",
-                status: "evidence_required",
-                scopeDisposition: "in_slice",
-                errorCode: String(payload.errorCode || "BUILD_FAILED"),
-                mutationGeneration: endGen.mutationGeneration,
-                requiredTool: { name: "read_unreal_logs", args: diagnosticArgs },
-                targetFiles: scopeTargets,
-                message: String(payload.error || payload.summary || "The build failed without bounded source coordinates."),
-              }
-              : {
-                source: "build",
-                status: "external_blocker",
-                scopeDisposition: "out_of_slice",
-                errorCode: "BUILD_DIAGNOSTIC_SCOPE_UNAVAILABLE",
-                mutationGeneration: endGen.mutationGeneration,
-                requiredTool: {},
-                targetFiles: [],
-                message: "The build failed without source coordinates and no bounded active-slice target was available.",
-              }
+            {
+              source: "build",
+              status: "evidence_required",
+              scopeDisposition: scopeTargets.length ? "in_slice" : "out_of_slice",
+              errorCode: scopeTargets.length
+                ? String(payload.errorCode || "BUILD_FAILED")
+                : "BUILD_DIAGNOSTIC_SCOPE_UNAVAILABLE",
+              mutationGeneration: endGen.mutationGeneration,
+              requiredTool: { name: "read_unreal_logs", args: diagnosticArgs },
+              targetFiles: scopeTargets,
+              message: String(
+                payload.error
+                || payload.summary
+                || "The build failed without source coordinates; inspect the exact bounded build log."
+              ),
+            }
           );
           bindAuthoritativeLifecycleControl(payload, recovery);
-          if (scopeTargets.length) {
-            payload.requiredNextTool = "read_unreal_logs";
-            payload.requiredNextToolArgs = diagnosticArgs;
-          }
+          payload.requiredNextTool = "read_unreal_logs";
+          payload.requiredNextToolArgs = diagnosticArgs;
         }
         payload.pendingMutationTransactions = await markPendingMutationJournals(
           pendingMutationQuery(projectRoot, args, endGen.mutationGeneration),
@@ -7088,7 +8057,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Missing executables, spawn failures, timeouts, and stale builds do
         // not prove the mutation is invalid. Permit correction/retry without
         // manufacturing a source edit or rolling valid code back.
-        cancelBuildAttempt(projectRoot, mutation.mutationGeneration);
+        cancelBuildAttempt(projectRoot, mutation.mutationGeneration, buildGuardScope);
         const recovery = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
           source: "build",
           status: "environment_recovery",
@@ -7109,7 +8078,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const budgetFail = commitDeferredBudgetOrFail();
       if (budgetFail) return budgetFail;
       if (disposition.buildOutcome === "succeeded") {
-        const automationScope = validationScopeForTask(args, endGen.mutationGeneration);
+        const automationScope = automationScopeForTask(args, endGen.mutationGeneration);
         const automationCoverage = automationScope.kind === "task_scope_unavailable"
           ? {
             count: 0,
@@ -7119,6 +8088,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
           : discoverAutomationTests(projectRoot, {
             scopeTargets: automationScope.targets || [],
+            maxFiles: 5000,
           });
         automationCoverage.validationScope = automationScope;
         payload.automationCoverage = automationCoverage;
@@ -7126,7 +8096,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const automationFilterCount = Array.isArray(automationCoverage.suggestedFilters)
           ? automationCoverage.suggestedFilters.length
           : 0;
-        const automationFilterLimitExceeded = automationFilterCount > MAX_AUTOMATION_FILTERS;
+        const automationFilterLimitExceeded = automationFilterCount > MAX_AUTOMATION_FILTERS_TOTAL;
         const automationUnmappedTargets = Array.isArray(automationCoverage.unmappedScopeTargets)
           ? automationCoverage.unmappedScopeTargets.map(String).filter(Boolean)
           : [];
@@ -7138,9 +8108,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ) {
           const scopeUnmapped = automationCoverage.scopeBound === true
             && automationUnmappedTargets.length > 0;
+          const repairTargets = Array.isArray(automationScope.targets)
+            ? automationScope.targets.map(String).filter(Boolean).slice(0, 4)
+            : [];
+          const requiredTool = (scopeUnmapped || automationFilterLimitExceeded) && repairTargets.length
+            ? {
+              name: "unreal_code_sketch_claim_validate",
+              args: { targetFiles: repairTargets },
+            }
+            : exactCheckpointRebaseTool();
           lifecycleResult = recordRecoveryObligationViaPython(WORKSPACE_ROOT, args, {
             source: "automation",
-            status: "external_blocker",
+            status: requiredTool.name === "unreal_code_sketch_claim_validate"
+              ? "repair_planning_required"
+              : "checkpoint_rebase_required",
             scopeDisposition: automationCoverage.scopeUnavailable || scopeUnmapped
               ? "out_of_slice"
               : "infrastructure",
@@ -7152,7 +8133,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 ? "AUTOMATION_FILTER_SET_TOO_LARGE"
                 : "AUTOMATION_DISCOVERY_TRUNCATED",
             mutationGeneration: endGen.mutationGeneration,
-            requiredTool: {},
+            requiredTool,
             targetFiles: automationScope.targets || [],
             message: "Build passed, but Automation coverage could not be proven for the active slice.",
           });
@@ -7167,8 +8148,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (scopeUnmapped) payload.unmappedScopeTargets = automationUnmappedTargets;
           if (automationFilterLimitExceeded) {
             payload.automationFilterCount = automationFilterCount;
-            payload.maxAutomationFilters = MAX_AUTOMATION_FILTERS;
+            payload.maxAutomationFilters = MAX_AUTOMATION_FILTERS_TOTAL;
           }
+          payload.requiredNextTool = requiredTool.name;
+          payload.requiredNextToolArgs = requiredTool.args;
           payload.taskLifecycle = {
             status: "automation_coverage_blocked",
             routeOwnershipReleased: false,
@@ -7311,7 +8294,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     console.error(err && err.stack ? err.stack : err);
     const validationLike = /must be a concrete|must contain at least|may contain at most|write blocked|path escapes|path must be|not found or not file|Duplicate deletion path/i.test(message);
     if (!validationLike) {
-      recordToolFailure(name, args, "INTERNAL_ERROR");
+      recordToolFailure(
+        name,
+        args,
+        "INTERNAL_ERROR",
+        toolCallContext.getStore()?.durableGuardScope || durableGuardScopeForArgs(args)
+      );
     }
     return fail(message, {
       errorCode: validationLike ? "VALIDATION_ERROR" : "INTERNAL_ERROR",
@@ -7331,14 +8319,19 @@ async function main() {
     componentRoot: path.resolve(__dirname, ".."),
   });
   try {
-    const recovery = await recoverIncompleteJournals(resolveAgentStateRoot(), {
+    const startupStateRoot = resolveAgentStateRoot();
+    const recovery = await recoverIncompleteJournals(startupStateRoot, {
       checkpointRollback: recoverRollbackContinuityCheckpoint,
+      promoteRecoveryRequired: (item) => promoteJournalRecoveryRequired(item, startupStateRoot),
     });
     if (recovery.recoveryRequired?.length) {
       console.error(`[unreal-agent] transaction recovery required: ${JSON.stringify(recovery.recoveryRequired)}`);
     }
     if (recovery.skippedCorrupt?.length) {
       console.error(`[unreal-agent] skipped corrupt journals: ${recovery.skippedCorrupt.length}`);
+    }
+    if (recovery.promotionFailures?.length) {
+      console.error(`[unreal-agent] transaction recovery promotion failed: ${JSON.stringify(recovery.promotionFailures)}`);
     }
   } catch (err) {
     console.error(`[unreal-agent] transaction recovery scan failed: ${err.message || err}`);

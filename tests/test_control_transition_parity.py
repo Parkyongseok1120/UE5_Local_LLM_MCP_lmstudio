@@ -18,6 +18,7 @@ from phase_tool_router import (  # noqa: E402
     _pre_gate_source_read_path,
     commit_control_transition,
     derive_next_obligation,
+    validation_finding_recovery,
 )
 from task_api import _control_args_match  # noqa: E402
 
@@ -326,6 +327,65 @@ def test_evidence_complete_is_a_no_tool_synthesis_transition() -> None:
     assert control["blocker"] == {
         "code": "RECOVERY_EVIDENCE_COMPLETE",
         "fingerprint": "fingerprint-evidence_complete-0",
+    }
+
+
+def test_static_finding_recovery_is_total_and_never_emits_empty_read_args() -> None:
+    cases = [
+        (
+            {"path": "Source/Demo/Foo.cpp", "line": 42},
+            "read_file_range",
+            {"path": "Source/Demo/Foo.cpp", "startLine": 22, "endLine": 62},
+        ),
+        (
+            {"path": "Source/Demo/Foo.cpp"},
+            "read_file",
+            {"path": "Source/Demo/Foo.cpp"},
+        ),
+        (
+            {"symbol": "UDemoSubsystem"},
+            "unreal_symbol_lookup",
+            {"query": "UDemoSubsystem", "access": "read"},
+        ),
+        (
+            {"diagnosticSource": "build", "buildLogPath": r"C:\\Logs\\latest-build.log"},
+            "read_unreal_logs",
+            {
+                "mode": "first_error",
+                "maxFiles": 1,
+                "maxLines": 200,
+                "summaryOnly": True,
+                "fileName": "latest-build.log",
+            },
+        ),
+        (
+            {},
+            "unreal_task_checkpoint",
+            {
+                "action": "rebase",
+                "acceptCurrentFiles": True,
+                "includeGitChanges": False,
+            },
+        ),
+    ]
+    for finding, expected_name, expected_args in cases:
+        _status, _scope, required, _targets = validation_finding_recovery(finding)
+        assert required == {"name": expected_name, "args": expected_args}
+
+    state = _base_state()
+    state["mutationGeneration"] = 1
+    state["continuity"]["checkpoint"] = {
+        "mutationGeneration": 1,
+        "validation": {"status": "failed", "firstFinding": {}},
+    }
+    control = derive_next_obligation(state)
+    assert control["requiredTool"] == {
+        "name": "unreal_task_checkpoint",
+        "args": {
+            "action": "rebase",
+            "acceptCurrentFiles": True,
+            "includeGitChanges": False,
+        },
     }
 
 
