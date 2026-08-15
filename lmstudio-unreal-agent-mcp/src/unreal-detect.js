@@ -1402,16 +1402,33 @@ async function resolveProjectSelection(workspaceRoot, configPath, options = {}) 
 
   if (hint) {
     const hintName = hint.replace(/\.uproject$/iu, "");
-    const hintIdentity = filesystemPathIdentity(hintName, hostPlatform, {
-      stripProjectUri: false,
-    });
-    const exactNameMatches = hintIdentity
-      ? projects.filter((project) => filesystemPathIdentity(
-        project.projectName,
-        hostPlatform,
-        { stripProjectUri: false },
-      ) === hintIdentity)
+    const literalNameMatches = projects.filter((project) => project.projectName === hintName);
+    if (literalNameMatches.length === 1) {
+      return {
+        config,
+        roots,
+        projects,
+        selected: literalNameMatches[0],
+        selectionReason: "hint",
+      };
+    }
+    const normalizedHintName = normalizeProjectName(hintName);
+    const exactNameMatches = literalNameMatches.length > 1
+      ? literalNameMatches
+      : normalizedHintName
+      ? projects.filter((project) => (
+        normalizeProjectName(project.projectName) === normalizedHintName
+      ))
       : [];
+    if (exactNameMatches.length === 1) {
+      return {
+        config,
+        roots,
+        projects,
+        selected: exactNameMatches[0],
+        selectionReason: "hint",
+      };
+    }
     if (exactNameMatches.length > 1) {
       if (configuredActiveMatch && exactNameMatches.some((project) => (
         pathIdentity(project.projectPath, hostPlatform)
@@ -1453,34 +1470,26 @@ async function resolveProjectSelection(workspaceRoot, configPath, options = {}) 
     const hintIdentity = filesystemPathIdentity(hint, hostPlatform, {
       stripProjectUri: false,
     });
+    const normalizedHintName = normalizeProjectName(hint.replace(/\.uproject$/iu, ""));
     const hintMatches = scored.filter((project) => {
-      const projectName = filesystemPathIdentity(project.projectName, hostPlatform, {
-        stripProjectUri: false,
-      });
-      const projectFile = filesystemPathIdentity(project.projectFile, hostPlatform, {
-        stripProjectUri: false,
-      });
+      const projectName = normalizeProjectName(project.projectName);
+      const projectFile = normalizeProjectName(project.projectFile);
       const projectDir = pathIdentity(project.projectDir, hostPlatform);
       return Boolean(
-        hintIdentity
+        normalizedHintName
         && (
-          projectName === hintIdentity
-          || projectFile === hintIdentity
-          || projectFile === `${hintIdentity}.uproject`
-          || projectName.includes(hintIdentity)
-          || projectDir.includes(hintIdentity)
+          projectName === normalizedHintName
+          || projectFile === normalizedHintName
+          || projectName.includes(normalizedHintName)
+          || (hintIdentity && projectDir.includes(hintIdentity))
         )
       );
     });
     const hintMatch = hintMatches[0];
     if (hintMatch) {
-      const selectedName = filesystemPathIdentity(hintMatch.projectName, hostPlatform, {
-        stripProjectUri: false,
-      });
+      const selectedName = normalizeProjectName(hintMatch.projectName);
       const sameNameClones = hintMatches.filter((project) => (
-        filesystemPathIdentity(project.projectName, hostPlatform, {
-          stripProjectUri: false,
-        }) === selectedName
+        normalizeProjectName(project.projectName) === selectedName
       ));
       if (sameNameClones.length > 1) {
         if (configuredActiveMatch && sameNameClones.some((project) => (

@@ -208,7 +208,7 @@ test("legacy build selection fails closed for same-name clones unless an exact p
     const ambiguous = await resolveProjectSelection(
       harness.workspaceRoot,
       harness.localConfig,
-      { hint: "shared_project.uproject", env: {} },
+      { hint: "shared_project.uproject", env: {}, hostPlatform: "linux" },
     );
     assert.equal(ambiguous.selected, null);
     assert.equal(ambiguous.errorCode, "PROJECT_NAME_AMBIGUOUS");
@@ -217,7 +217,7 @@ test("legacy build selection fails closed for same-name clones unless an exact p
     const partial = await resolveProjectSelection(
       harness.workspaceRoot,
       harness.localConfig,
-      { hint: "Shared", env: {} },
+      { hint: "shared", env: {}, hostPlatform: "linux" },
     );
     assert.equal(partial.selected, null);
     assert.equal(partial.errorCode, "PROJECT_NAME_AMBIGUOUS");
@@ -225,7 +225,7 @@ test("legacy build selection fails closed for same-name clones unless an exact p
     const implicit = await resolveProjectSelection(
       harness.workspaceRoot,
       harness.localConfig,
-      { env: {} },
+      { env: {}, hostPlatform: "linux" },
     );
     assert.equal(implicit.selected, null);
     assert.equal(implicit.errorCode, "PROJECT_NAME_AMBIGUOUS");
@@ -234,7 +234,7 @@ test("legacy build selection fails closed for same-name clones unless an exact p
     const active = await resolveProjectSelection(
       harness.workspaceRoot,
       harness.localConfig,
-      { hint: "Shared_Project", env: {} },
+      { hint: "shared_project", env: {}, hostPlatform: "linux" },
     );
     assert.equal(active.selected?.projectPath, path.resolve(second));
     assert.equal(active.selectionReason, "config.activeProject");
@@ -242,7 +242,7 @@ test("legacy build selection fails closed for same-name clones unless an exact p
     const explicit = await resolveProjectSelection(
       harness.workspaceRoot,
       harness.localConfig,
-      { project: path.relative(harness.workspaceRoot, first), env: {} },
+      { project: path.relative(harness.workspaceRoot, first), env: {}, hostPlatform: "linux" },
     );
     assert.equal(explicit.selected?.projectPath, path.resolve(first));
     assert.equal(explicit.selectionReason, "explicit.project");

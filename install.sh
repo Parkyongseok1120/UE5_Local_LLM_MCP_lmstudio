@@ -83,15 +83,27 @@ done
 HOME_DIR=${HOME:-}
 if [ -n "$HOME_DIR" ]; then
   for minor in 14 13 12 11 10; do
+    global_homebrew_root=""
+    global_usr_local_root=""
+    global_framework_root=""
+    # Hosted POSIX tests need to prove PATH/HOME discovery without inheriting
+    # a runner's preinstalled global Python. This private test seam does not
+    # change normal installer discovery.
+    if [ "${_INSTALL_SH_TEST_HERMETIC:-0}" != "1" ]; then
+      global_homebrew_root="/opt/homebrew/opt/python@3.${minor}"
+      global_usr_local_root="/usr/local/opt/python@3.${minor}"
+      global_framework_root="/Library/Frameworks/Python.framework/Versions/3.${minor}"
+    fi
     for root in \
       "$HOME_DIR/.local/share/uv/python" \
       "$HOME_DIR/.evidence-first/runtimes/python" \
       "$HOME_DIR/.cache/codex-runtimes/codex-primary-runtime/dependencies/python" \
       "$HOME_DIR/.lmstudio/extensions/backends/vendor/_amphibian" \
-      "/opt/homebrew/opt/python@3.${minor}" \
-      "/usr/local/opt/python@3.${minor}" \
-      "/Library/Frameworks/Python.framework/Versions/3.${minor}"
+      "$global_homebrew_root" \
+      "$global_usr_local_root" \
+      "$global_framework_root"
     do
+      [ -n "$root" ] || continue
       [ -d "$root" ] || continue
       for candidate in \
         "$root/bin/python3.${minor}" \

@@ -61,6 +61,7 @@ def _run_launcher(fake_bin: Path, *, env_extra: dict[str, str] | None = None) ->
         if not link.exists():
             link.symlink_to(target)
     env["PATH"] = str(fake_bin)
+    env["_INSTALL_SH_TEST_HERMETIC"] = "1"
     env.pop("PYTHON", None)
     if env_extra:
         env.update(env_extra)
