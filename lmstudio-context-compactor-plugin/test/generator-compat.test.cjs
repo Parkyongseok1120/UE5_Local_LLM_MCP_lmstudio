@@ -1157,7 +1157,7 @@ for (const recoveryCase of [
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-target-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
-    const { generate } = require("../dist/generator.js");
+    const { generate, normalizeProjectSourcePath } = require("../dist/generator.js");
     const emitted = [];
     const ownership = { taskSessionId: "task-feature-target", ownerCapability: "owner-feature-target" };
     let predictionCount = 0;
@@ -1389,7 +1389,10 @@ for (const recoveryCase of [
       event.type === "feature_intent_target_evidence_recovery_completed"
     ));
     assert.equal(recovery.serverBoundPath, recoveryCase.serverBoundPath);
-    assert.equal(recovery.requestedPath, "source/demo/playercontroller.h");
+    assert.equal(
+      recovery.requestedPath,
+      normalizeProjectSourcePath("Source/Demo/PlayerController.h"),
+    );
     const checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.requiredNextTool.name, "unreal_feature_intent_resolve");
     assert.deepEqual(
@@ -2578,7 +2581,7 @@ test("complete zero-result basename search lets a new Feature target reach the v
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-new-target-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
-    const { generate } = require("../dist/generator.js");
+    const { generate, normalizeProjectSourcePath } = require("../dist/generator.js");
     const emitted = [];
     const ownership = { taskSessionId: "task-feature-new-target", ownerCapability: "owner-feature-new-target" };
     const target = "Source/Demo/Tests/Stage1LocalPlay.spec.cpp";
@@ -2730,7 +2733,9 @@ test("complete zero-result basename search lets a new Feature target reach the v
       .trim().split(/\r?\n/).map((line) => JSON.parse(line));
     assert.ok(events.some((event) => (
       event.type === "feature_intent_new_target_absence_proven"
-        && event.targetFiles.includes("source/demo/tests/stage1localplay.spec.cpp")
+        && event.targetFiles.includes(
+          normalizeProjectSourcePath(target),
+        )
     )));
     assert.equal(
       events.some((event) => event.type === "feature_intent_target_evidence_recovery_started"),
