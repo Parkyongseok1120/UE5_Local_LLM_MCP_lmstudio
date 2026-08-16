@@ -26,29 +26,35 @@ function sectionHash(value) {
 function specCandidates(options = {}) {
   const componentRoot = options.componentRoot ? path.resolve(options.componentRoot) : path.resolve(__dirname, "..");
   const repositoryRoot = options.repositoryRoot ? path.resolve(options.repositoryRoot) : path.resolve(componentRoot, "..");
+  const moduleRoot = path.resolve(options.moduleRoot || path.join(__dirname, ".."));
   return [...new Set([
     String(options.specPath || "").trim(),
     String(process.env.CONTROL_PROTOCOL_SPEC || "").trim(),
     path.join(repositoryRoot, "config", "control_protocol_spec.json"),
     path.join(componentRoot, "..", "config", "control_protocol_spec.json"),
     path.join(componentRoot, "control-protocol-spec.json"),
-    path.resolve(__dirname, "../../config/control_protocol_spec.json"),
+    path.join(moduleRoot, "..", "config", "control_protocol_spec.json"),
   ].filter(Boolean).map((item) => path.resolve(item)))];
 }
 
 function embeddedSpec(options = {}) {
-  const manifestPath = String(
-    options.manifestPath
-    || process.env.CONTROL_RUNTIME_MANIFEST
-    || (options.componentRoot ? path.join(options.componentRoot, "control-runtime.json") : "")
-  ).trim();
-  if (!manifestPath || !fs.existsSync(manifestPath)) return null;
-  try {
-    const value = JSON.parse(fs.readFileSync(manifestPath, "utf8"))?.protocolSpec;
-    return value && typeof value === "object" ? value : null;
-  } catch {
-    return null;
+  const moduleRoot = path.resolve(options.moduleRoot || path.join(__dirname, ".."));
+  const candidates = [...new Set([
+    String(options.manifestPath || "").trim(),
+    String(process.env.CONTROL_RUNTIME_MANIFEST || "").trim(),
+    options.componentRoot ? path.join(options.componentRoot, "control-runtime.json") : "",
+    path.join(moduleRoot, "control-runtime.json"),
+  ].filter(Boolean).map((item) => path.resolve(item)))];
+  for (const manifestPath of candidates) {
+    if (!fs.existsSync(manifestPath)) continue;
+    try {
+      const value = JSON.parse(fs.readFileSync(manifestPath, "utf8"))?.protocolSpec;
+      if (value && typeof value === "object") return value;
+    } catch {
+      // A corrupt candidate cannot shadow the next explicit packaged source.
+    }
   }
+  return null;
 }
 
 function validateSpec(spec) {

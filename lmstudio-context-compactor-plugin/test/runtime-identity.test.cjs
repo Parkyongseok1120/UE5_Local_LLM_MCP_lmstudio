@@ -7,6 +7,32 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { componentIdentity, verifyRuntimeComponent } = require("../dist/runtime-identity.js");
+const { loadControlProtocolSpec } = require("../dist/control-protocol-spec.js");
+
+test("packaged protocol spec resolves from the executing module runtime manifest", () => {
+  const sourceRoot = path.resolve(__dirname, "..");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "compactor-module-protocol-"));
+  const componentRoot = path.join(root, "isolated-component");
+  const repositoryRoot = path.join(root, "isolated-repository");
+  const moduleRoot = path.join(root, "installed-plugin");
+  try {
+    fs.mkdirSync(componentRoot, { recursive: true });
+    fs.mkdirSync(repositoryRoot, { recursive: true });
+    fs.mkdirSync(moduleRoot, { recursive: true });
+    const protocolSpec = loadControlProtocolSpec({ componentRoot: sourceRoot });
+    fs.writeFileSync(
+      path.join(moduleRoot, "control-runtime.json"),
+      JSON.stringify({ protocolSpec }),
+    );
+
+    assert.deepEqual(
+      loadControlProtocolSpec({ componentRoot, repositoryRoot, moduleRoot }),
+      protocolSpec,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("compactor runtime identity verifies and detects source drift", () => {
   const sourceRoot = path.resolve(__dirname, "..");
