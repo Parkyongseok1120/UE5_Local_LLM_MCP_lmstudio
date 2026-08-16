@@ -4916,6 +4916,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     const configuredEffort = config.reasoningEffort as ReasoningEffort;
     const persistedEffort = String(nextCheckpoint?.reasoningFallback?.effort || "") as ReasoningEffort;
     let effort = effortOrder.includes(persistedEffort) ? persistedEffort : configuredEffort;
+    const sameEffortRetryLimit = 1;
+    let sameEffortRetries = (
+      nextCheckpoint?.reasoningFallback?.status === "retrying"
+      && nextCheckpoint?.reasoningFallback?.reason === "semantic_no_progress_at_effort_floor"
+    )
+      ? Math.max(0, Number(nextCheckpoint?.reasoningFallback?.sameEffortRetries || 0))
+      : 0;
     while (true) {
       try {
         const result = await runPredictionAttempt(
@@ -4937,7 +4944,36 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         if (String(error?.code || "") !== "PREDICTION_NO_PROGRESS_EXCEEDED") throw error;
         if (!thinkingEnabled) throw error;
         const index = effortOrder.indexOf(effort);
-        if (index < 0 || index >= effortOrder.length - 1) throw error;
+        if (index < 0) throw error;
+        if (index >= effortOrder.length - 1) {
+          if (sameEffortRetries >= sameEffortRetryLimit) throw error;
+          sameEffortRetries += 1;
+          nextCheckpoint.reasoningFallback = {
+            version: 1,
+            status: "retrying",
+            configuredEffort,
+            effort,
+            reason: "semantic_no_progress_at_effort_floor",
+            attempts: Math.max(0, Number(nextCheckpoint?.reasoningFallback?.attempts || 0)) + 1,
+            sameEffortRetries,
+            updatedAt: isoNow(),
+          };
+          await persistCheckpoint(
+            sessionId,
+            nextCheckpoint,
+            requireCheckpointPersistence,
+            "reasoning_effort_floor_retry",
+          );
+          await appendEventBestEffort(sessionId, {
+            type: "reasoning_effort_floor_retry",
+            at: isoNow(),
+            effort,
+            reason: "semantic_no_progress_at_effort_floor",
+            retry: sameEffortRetries,
+            retryLimit: sameEffortRetryLimit,
+          });
+          continue;
+        }
         const nextEffort = effortOrder[index + 1];
         nextCheckpoint.reasoningFallback = {
           version: 1,

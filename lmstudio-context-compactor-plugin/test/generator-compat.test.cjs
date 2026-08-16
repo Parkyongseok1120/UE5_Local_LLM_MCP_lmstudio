@@ -3856,6 +3856,121 @@ test("reasoning activity without semantic progress durably downgrades xhigh to l
   }
 });
 
+test("low reasoning effort retries once at the immutable effort floor after semantic no-progress", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-reasoning-retry-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const efforts = [];
+    let attempt = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "qwen-low-retry-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        const effort = opts.raw.fields.find(
+          (field) => field.key.endsWith("reasoningEffort"),
+        ).value;
+        efforts.push(effort);
+        attempt += 1;
+        if (attempt === 1) {
+          opts.onPredictionFragment({
+            content: "Reasoning without semantic progress...",
+            tokensCount: 5,
+            reasoningType: "reasoning",
+          });
+          return {
+            cancel() {},
+            async result() { return await new Promise(() => {}); },
+          };
+        }
+        opts.onPredictionFragment({
+          content: "Recovered at the selected effort.",
+          tokensCount: 4,
+          reasoningType: "none",
+        });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect the project without changing files.");
+
+    await generate(controllerFor(model, {
+      reasoningEffort: "low",
+      predictionNoProgressSeconds: 0.03,
+      streamReasoningProgress: false,
+    }, stateRoot, emitted, []), history);
+
+    assert.deepEqual(efforts, ["low", "low"]);
+    assert.equal(emitted.find((event) => event.kind === "fragment").content, "Recovered at the selected effort.");
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.reasoningFallback.status, "completed");
+    assert.equal(checkpoint.reasoningFallback.effort, "low");
+    assert.equal(checkpoint.reasoningFallback.attempts, 1);
+    assert.equal(checkpoint.reasoningFallback.sameEffortRetries, 1);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("low reasoning effort floor retry remains bounded when semantic progress never resumes", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-reasoning-bounded-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const efforts = [];
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "qwen-low-bounded-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        efforts.push(opts.raw.fields.find(
+          (field) => field.key.endsWith("reasoningEffort"),
+        ).value);
+        opts.onPredictionFragment({
+          content: "Still reasoning without semantic progress...",
+          tokensCount: 5,
+          reasoningType: "reasoning",
+        });
+        return {
+          cancel() {},
+          async result() { return await new Promise(() => {}); },
+        };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect the project without changing files.");
+
+    await assert.rejects(
+      generate(controllerFor(model, {
+        reasoningEffort: "low",
+        predictionNoProgressSeconds: 0.03,
+        streamReasoningProgress: false,
+      }, stateRoot, [], []), history),
+      (error) => error?.code === "PREDICTION_NO_PROGRESS_EXCEEDED",
+    );
+
+    assert.deepEqual(efforts, ["low", "low"]);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.reasoningFallback.status, "retrying");
+    assert.equal(checkpoint.reasoningFallback.sameEffortRetries, 1);
+    assert.equal(checkpoint.predictionState.status, "pending");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("silent local-model prediction emits a bounded UI heartbeat", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-heartbeat-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
