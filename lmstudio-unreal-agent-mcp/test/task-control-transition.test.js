@@ -621,6 +621,30 @@ test("checkpoint conflict publishes one exact rebase obligation", () => {
   assert.deepEqual(control.retryPolicy, { sameSemanticInput: "once" });
 });
 
+test("phase budget exhaustion publishes one exact record checkpoint obligation", () => {
+  const value = state();
+  value.recoveryObligation = {
+    source: "phase_tool_budget",
+    status: "phase_budget_checkpoint_required",
+    fingerprint: "route:planner:2:2:list_directory",
+    requiredTool: {
+      name: "unreal_task_checkpoint",
+      args: {
+        action: "record",
+        phase: "planner",
+        requiredNextAction: "list_directory",
+        includeGitChanges: false,
+      },
+    },
+  };
+
+  const control = deriveNextObligation(value);
+  assert.equal(control.disposition, "checkpoint");
+  assert.deepEqual(control.requiredTool, value.recoveryObligation.requiredTool);
+  assert.deepEqual(control.allowedTools, ["unreal_task_checkpoint"]);
+  assert.deepEqual(control.retryPolicy, { sameSemanticInput: "once" });
+});
+
 test("every successful late-stage tool replay is blocked and redirected", () => {
   const value = state();
   const fields = { routeHash: "route", routePhase: "executor" };

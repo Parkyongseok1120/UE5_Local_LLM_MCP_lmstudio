@@ -65,6 +65,7 @@ def test_transition_and_authorization_schema_cover_current_cross_runtime_contrac
         "repair_planning_required",
         "revalidate_required",
         "checkpoint_rebase_required",
+        "phase_budget_checkpoint_required",
         "repair_required",
     }.issubset(transition["recoveryStatuses"])
     assert set(authorization["secretFields"]) == {"authToken", "ownerCapability"}

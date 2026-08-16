@@ -1036,6 +1036,7 @@ def _phase_and_role(
         "revalidate_required",
         "environment_recovery",
         "checkpoint_rebase_required",
+        "phase_budget_checkpoint_required",
     }:
         return "verifier", "verifier"
 

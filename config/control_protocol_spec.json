@@ -61,6 +61,10 @@
         "disposition": "checkpoint",
         "retry": "once"
       },
+      "phase_budget_checkpoint_required": {
+        "disposition": "checkpoint",
+        "retry": "once"
+      },
       "repair_required": {
         "disposition": "require_tool",
         "retry": "once"

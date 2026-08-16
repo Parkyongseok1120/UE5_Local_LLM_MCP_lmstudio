@@ -239,6 +239,20 @@ def _state_corpus() -> list[dict]:
             },
         )
     )
+    states.append(
+        _recovery_obligation_state(
+            "phase_budget_checkpoint_required",
+            required_tool={
+                "name": "unreal_task_checkpoint",
+                "args": {
+                    "action": "record",
+                    "phase": "planner",
+                    "requiredNextAction": "list_directory",
+                    "includeGitChanges": False,
+                },
+            },
+        )
+    )
     states.extend(
         [
             _recovery_obligation_state("external_blocker"),

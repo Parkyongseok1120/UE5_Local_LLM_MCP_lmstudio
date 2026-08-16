@@ -339,7 +339,13 @@ function deriveNextObligation(state) {
           fingerprint: recoveryFingerprint,
         };
       }
-    } else if (["evidence_required", "repair_planning_required", "revalidate_required", "checkpoint_rebase_required"].includes(recoveryStatus)) {
+    } else if ([
+      "evidence_required",
+      "repair_planning_required",
+      "revalidate_required",
+      "checkpoint_rebase_required",
+      "phase_budget_checkpoint_required",
+    ].includes(recoveryStatus)) {
       if (recoveryToolName) {
         requiredName = recoveryToolName;
         requiredArgs = recoveryToolArgs;
