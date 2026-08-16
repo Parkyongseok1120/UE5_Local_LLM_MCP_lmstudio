@@ -2344,11 +2344,13 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
         const status = String(prior.reasoningFallback.status || "").slice(0, 32);
         const reason = String(prior.reasoningFallback.reason || "").slice(0, 80);
         const toolChoiceForced = prior.reasoningFallback.toolChoiceForced === true;
-        const thinkingSuppressed = prior.reasoningFallback.thinkingSuppressed === true || (
+        const legacyForcedFloorRetry = (
           status === "retrying"
           && reason === "semantic_no_progress_at_effort_floor"
           && toolChoiceForced
         );
+        const serverOwnedTransition = prior.reasoningFallback.serverOwnedTransition === true
+          || legacyForcedFloorRetry;
         return {
           version: 1,
           status,
@@ -2358,10 +2360,11 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
           attempts: Math.max(0, Number(prior.reasoningFallback.attempts || 0)),
           sameEffortRetries: Math.max(0, Number(prior.reasoningFallback.sameEffortRetries || 0)),
           toolChoiceForced,
-          thinkingSuppressed,
+          thinkingSuppressed: prior.reasoningFallback.thinkingSuppressed === true,
+          serverOwnedTransition,
           recoveryStrategy: String(
-            thinkingSuppressed
-              ? "suppress_thinking_and_force_advertised_tool_transition"
+            legacyForcedFloorRetry
+              ? "server_owned_implementation_evidence_transition"
               : prior.reasoningFallback.recoveryStrategy || "",
           ).slice(0, 96),
           updatedAt: String(prior.reasoningFallback.updatedAt || "").slice(0, 64),
@@ -2936,15 +2939,17 @@ function validateCheckpoint(checkpoint) {
     ) return false;
     if (fallback.toolChoiceForced !== undefined && typeof fallback.toolChoiceForced !== "boolean") return false;
     if (fallback.thinkingSuppressed !== undefined && typeof fallback.thinkingSuppressed !== "boolean") return false;
+    if (fallback.serverOwnedTransition !== undefined && typeof fallback.serverOwnedTransition !== "boolean") return false;
     if (fallback.recoveryStrategy !== undefined && typeof fallback.recoveryStrategy !== "string") return false;
     if (String(fallback.status || "") === "retrying") {
       if (String(fallback.reason || "") !== "semantic_no_progress_at_effort_floor") return false;
-      if (fallback.toolChoiceForced !== true) return false;
-      if (!Number.isInteger(Number(fallback.sameEffortRetries)) || Number(fallback.sameEffortRetries) < 1) return false;
+      if (fallback.serverOwnedTransition !== true && fallback.toolChoiceForced !== true) return false;
+      if (!Number.isInteger(Number(fallback.sameEffortRetries)) || Number(fallback.sameEffortRetries) < 0) return false;
       const strategy = String(fallback.recoveryStrategy || "");
       if (![
         "force_advertised_tool_transition",
         "suppress_thinking_and_force_advertised_tool_transition",
+        "server_owned_implementation_evidence_transition",
       ].includes(strategy)) return false;
     }
   }

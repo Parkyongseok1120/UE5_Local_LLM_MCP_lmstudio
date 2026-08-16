@@ -4919,31 +4919,114 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     const configuredEffort = config.reasoningEffort as ReasoningEffort;
     const persistedEffort = String(nextCheckpoint?.reasoningFallback?.effort || "") as ReasoningEffort;
     let effort = effortOrder.includes(persistedEffort) ? persistedEffort : configuredEffort;
-    const sameEffortRetryLimit = 1;
-    let sameEffortRetries = (
+    const floorRecoveryStrategy = "server_owned_implementation_evidence_transition";
+    const emitServerOwnedFloorRecovery = async (): Promise<string | null> => {
+      const readDefinition = predictionTools.find((tool: any) => toolNamesMatch(
+        "read_file",
+        String(tool?.function?.name || tool?.name || ""),
+      ));
+      if (!readDefinition) return null;
+
+      const workingSetEntries = Array.isArray(nextCheckpoint?.workingSet)
+        ? nextCheckpoint.workingSet
+        : [];
+      const directSourceEvidence = (Array.isArray(nextCheckpoint?.evidenceFacts)
+        ? nextCheckpoint.evidenceFacts
+        : []
+      ).filter((entry: any) => DIRECT_SOURCE_FILE_TOOLS.some((tool) => toolNamesMatch(
+        tool,
+        String(entry?.tool || ""),
+      )));
+      const observedPaths = [...workingSetEntries, ...directSourceEvidence]
+        .map((entry: any) => String(entry?.path || "").replace(/\\/g, "/"))
+        .filter(Boolean);
+      const observedPathKeys = new Set(observedPaths.map((path: string) => (
+        normalizeProjectSourcePath(path)
+      )));
+      let implementationPath = "";
+      for (const sourcePath of observedPaths) {
+        if (!/^project:\/\/Source\/[^/]+\/Public\/.+\.h$/i.test(sourcePath)) continue;
+        const candidate = sourcePath
+          .replace(/\/Public\//i, "/Private/")
+          .replace(/\.h$/i, ".cpp");
+        if (observedPathKeys.has(normalizeProjectSourcePath(candidate))) continue;
+        implementationPath = candidate;
+        break;
+      }
+      if (!implementationPath) return null;
+
+      const toolName = String(readDefinition?.function?.name || readDefinition?.name || "read_file");
+      const implementationPathDigest = core.sha256(implementationPath).slice(0, 16);
+      const rawRequest = {
+        id: `server-owned-low-floor-${String(sessionId).slice(0, 16)}-${implementationPathDigest}`,
+        type: "function",
+        name: toolName,
+        arguments: { path: implementationPath },
+      };
+      const request = enrichToolRequestControl(
+        rawRequest,
+        sessionId,
+        nextCheckpoint,
+        authoritativeGoal,
+        modelFacingToolDefinitions,
+      );
+      const callId = requests.length;
+      requests.push({ callId, request });
+      recordEvent({ kind: "start", callId, toolCallId: rawRequest.id });
+      recordEvent({ kind: "name", callId, name: request.name });
+      recordEvent({ kind: "args", callId, content: JSON.stringify(request.arguments || {}) });
+      recordEvent({ kind: "end", callId, request });
+      nextCheckpoint.reasoningFallback = {
+        version: 1,
+        status: "retrying",
+        configuredEffort,
+        effort,
+        reason: "semantic_no_progress_at_effort_floor",
+        attempts: Math.max(0, Number(nextCheckpoint?.reasoningFallback?.attempts || 0)) + 1,
+        sameEffortRetries: 0,
+        toolChoiceForced: false,
+        thinkingSuppressed: false,
+        serverOwnedTransition: true,
+        recoveryStrategy: floorRecoveryStrategy,
+        updatedAt: isoNow(),
+      };
+      await persistCheckpoint(
+        sessionId,
+        nextCheckpoint,
+        requireCheckpointPersistence,
+        "reasoning_effort_floor_direct_transition_selected",
+      );
+      await appendEventBestEffort(sessionId, {
+        type: "reasoning_effort_floor_direct_transition_selected",
+        at: isoNow(),
+        effort,
+        reason: "semantic_no_progress_at_effort_floor",
+        tool: toolName,
+        path: implementationPath,
+        taskSessionId: String(nextCheckpoint?.taskRouteOwnership?.taskSessionId || ""),
+        modelSerializationBypassed: true,
+        outputPrepared: false,
+        recoveryStrategy: floorRecoveryStrategy,
+      });
+      return "server_owned_low_floor_recovery";
+    };
+    const persistedFloorRecovery = Boolean(
       nextCheckpoint?.reasoningFallback?.status === "retrying"
       && nextCheckpoint?.reasoningFallback?.reason === "semantic_no_progress_at_effort_floor"
-    )
-      ? Math.max(0, Number(nextCheckpoint?.reasoningFallback?.sameEffortRetries || 0))
-      : 0;
-    let forceToolRecovery = Boolean(
-      nextCheckpoint?.reasoningFallback?.status === "retrying"
-      && nextCheckpoint?.reasoningFallback?.reason === "semantic_no_progress_at_effort_floor"
-      && nextCheckpoint?.reasoningFallback?.toolChoiceForced === true
     );
-    let suppressThinkingRecovery = Boolean(
-      nextCheckpoint?.reasoningFallback?.status === "retrying"
-      && nextCheckpoint?.reasoningFallback?.reason === "semantic_no_progress_at_effort_floor"
-      && nextCheckpoint?.reasoningFallback?.thinkingSuppressed === true
-    );
+    if (persistedFloorRecovery) {
+      const recovered = await emitServerOwnedFloorRecovery();
+      if (recovered) return recovered;
+      throw predictionSupervisorError("PREDICTION_NO_PROGRESS_EXCEEDED", 0);
+    }
     while (true) {
       try {
         const result = await runPredictionAttempt(
           predictionTools,
-          forceTool || forceToolRecovery,
+          forceTool,
           progressLabel,
           effort,
-          suppressThinkingRecovery ? false : thinkingEnabled,
+          thinkingEnabled,
         );
         if (nextCheckpoint.reasoningFallback) {
           nextCheckpoint.reasoningFallback = {
@@ -4960,23 +5043,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         const index = effortOrder.indexOf(effort);
         if (index < 0) throw error;
         if (index >= effortOrder.length - 1) {
-          // Replaying the same effort, chat, and unconstrained tool choice is
-          // deterministic in practice for local models and merely reproduces
-          // the same semantic stall.  A floor recovery is useful only when it
-          // introduces a distinct state transition: suppress the Qwen thinking
-          // stream and require one of the advertised tools on the retry.  Tool
-          // choice alone is insufficient because a forced Qwen prediction can
-          // still spend the entire no-progress budget in reasoning before it
-          // begins serializing the required call.  An already-forced server
-          // route may still use this stronger thinking-suppression edge; a
-          // prediction with no tools has no bounded recovery transition.
-          if (
-            sameEffortRetries >= sameEffortRetryLimit
-            || predictionTools.length === 0
-          ) throw error;
-          sameEffortRetries += 1;
-          forceToolRecovery = true;
-          suppressThinkingRecovery = true;
+          // A second prediction at the immutable Low floor is not a recovery:
+          // local backends may consume the entire budget before serializing a
+          // forced call, even with thinking disabled.  Commit one deterministic
+          // implementation-evidence read derived from an observed Unreal header
+          // instead.  If no such transition is provable, persist the bounded
+          // intent and fail closed without asking the model to guess a path.
+          const recovered = await emitServerOwnedFloorRecovery();
+          if (recovered) return recovered;
           nextCheckpoint.reasoningFallback = {
             version: 1,
             status: "retrying",
@@ -4984,30 +5058,28 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             effort,
             reason: "semantic_no_progress_at_effort_floor",
             attempts: Math.max(0, Number(nextCheckpoint?.reasoningFallback?.attempts || 0)) + 1,
-            sameEffortRetries,
-            toolChoiceForced: true,
-            thinkingSuppressed: true,
-            recoveryStrategy: "suppress_thinking_and_force_advertised_tool_transition",
+            sameEffortRetries: 0,
+            toolChoiceForced: false,
+            thinkingSuppressed: false,
+            serverOwnedTransition: true,
+            recoveryStrategy: floorRecoveryStrategy,
             updatedAt: isoNow(),
           };
           await persistCheckpoint(
             sessionId,
             nextCheckpoint,
             requireCheckpointPersistence,
-            "reasoning_effort_floor_retry",
+            "reasoning_effort_floor_transition_unavailable",
           );
           await appendEventBestEffort(sessionId, {
-            type: "reasoning_effort_floor_retry",
+            type: "reasoning_effort_floor_transition_unavailable",
             at: isoNow(),
             effort,
             reason: "semantic_no_progress_at_effort_floor",
-            retry: sameEffortRetries,
-            retryLimit: sameEffortRetryLimit,
-            toolChoiceForced: true,
-            thinkingSuppressed: true,
-            recoveryStrategy: "suppress_thinking_and_force_advertised_tool_transition",
+            modelRetryStarted: false,
+            recoveryStrategy: floorRecoveryStrategy,
           });
-          continue;
+          throw error;
         }
         const nextEffort = effortOrder[index + 1];
         nextCheckpoint.reasoningFallback = {
@@ -5941,12 +6013,38 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       }
       return pending;
     });
+    const lowFloorTransitionPrepared = Boolean(
+      stopReason === "server_owned_low_floor_recovery"
+      && nextCheckpoint?.reasoningFallback?.status === "retrying"
+      && nextCheckpoint?.reasoningFallback?.recoveryStrategy
+        === "server_owned_implementation_evidence_transition"
+    );
+    if (lowFloorTransitionPrepared) {
+      nextCheckpoint.reasoningFallback = {
+        ...nextCheckpoint.reasoningFallback,
+        status: "completed",
+        completedAt: isoNow(),
+      };
+    }
     await persistCheckpoint(
       sessionId,
       nextCheckpoint,
       requireCheckpointPersistence,
       "pending_tool_calls",
     );
+    if (lowFloorTransitionPrepared) {
+      const preparedRequest = acceptedRequests[0]?.request;
+      await appendEventBestEffort(sessionId, {
+        type: "reasoning_effort_floor_direct_transition_prepared",
+        at: isoNow(),
+        tool: requestedToolName(preparedRequest),
+        path: String(preparedRequest?.arguments?.path || ""),
+        toolCallId: String(preparedRequest?.id || ""),
+        modelSerializationBypassed: true,
+        outputPrepared: true,
+        recoveryStrategy: "server_owned_implementation_evidence_transition",
+      });
+    }
   }
 
   for (const event of events) {

@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const core = require("../src/compaction-core");
 
-test("legacy forced low-floor recovery migrates to suppressed-thinking recovery", () => {
+test("legacy forced low-floor recovery migrates to a server-owned transition", () => {
   const messages = [{ role: "user", content: "Inspect the current project." }];
   const prior = core.buildCheckpoint(messages);
   prior.reasoningFallback = {
@@ -21,10 +21,11 @@ test("legacy forced low-floor recovery migrates to suppressed-thinking recovery"
   const checkpoint = core.buildCheckpoint(messages, prior);
 
   assert.equal(checkpoint.reasoningFallback.status, "retrying");
-  assert.equal(checkpoint.reasoningFallback.thinkingSuppressed, true);
+  assert.equal(checkpoint.reasoningFallback.thinkingSuppressed, false);
+  assert.equal(checkpoint.reasoningFallback.serverOwnedTransition, true);
   assert.equal(
     checkpoint.reasoningFallback.recoveryStrategy,
-    "suppress_thinking_and_force_advertised_tool_transition",
+    "server_owned_implementation_evidence_transition",
   );
 });
 

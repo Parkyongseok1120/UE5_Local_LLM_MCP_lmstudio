@@ -37,6 +37,22 @@ function activeCheckpoint(stateRoot) {
   ));
 }
 
+function historyWithObservedUnrealHeader(userText = "Inspect the project without changing files.") {
+  const headerPath = "project://Source/Project_MJS/Public/Character/SharedComponent/StaminaComponent.h";
+  return Chat.from({ messages: [
+    { role: "user", content: [{ type: "text", text: userText }] },
+    { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+      id: "observed-header", type: "function", name: "read_file", arguments: { path: headerPath },
+    } }] },
+    { role: "tool", content: [{
+      type: "toolCallResult",
+      toolCallId: "observed-header",
+      name: "read_file",
+      content: '{"ok":true,"fileContent":"class UStaminaComponent {};"}',
+    }] },
+  ] });
+}
+
 function controllerFor(model, config, stateRoot, emitted, toolDefinitions, workingDirectory = stateRoot) {
   return {
     client: { llm: { async listLoaded() { return [model]; } } },
@@ -3856,7 +3872,7 @@ test("reasoning activity without semantic progress durably downgrades xhigh to l
   }
 });
 
-test("low reasoning effort retries once at the immutable effort floor after semantic no-progress", async () => {
+test("low reasoning effort commits a server-owned implementation read at the immutable floor", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-reasoning-retry-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -3865,7 +3881,6 @@ test("low reasoning effort retries once at the immutable effort floor after sema
     const efforts = [];
     const thinkingEnabled = [];
     const toolChoiceForced = [];
-    let attempt = 0;
     const model = {
       identifier: "qwen/qwen3.8-27b",
       async getModelInfo() {
@@ -3883,34 +3898,18 @@ test("low reasoning effort retries once at the immutable effort floor after sema
           (field) => field.key === "llm.prediction.reasoning.enableThinking",
         )?.value);
         toolChoiceForced.push(opts.rawTools?.force === true);
-        attempt += 1;
-        if (attempt === 1) {
-          opts.onPredictionFragment({
-            content: "Reasoning without semantic progress...",
-            tokensCount: 5,
-            reasoningType: "reasoning",
-          });
-          return {
-            cancel() {},
-            async result() { return await new Promise(() => {}); },
-          };
-        }
-        opts.onToolCallRequestStart(1, { toolCallId: "low-floor-recovery-read" });
-        opts.onToolCallRequestNameReceived(1, "read_file");
-        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"project://Source/Feature.cpp"}');
-        opts.onToolCallRequestEnd(1, {
-          toolCallRequest: {
-            id: "low-floor-recovery-read",
-            type: "function",
-            name: "read_file",
-            arguments: { path: "project://Source/Feature.cpp" },
-          },
+        opts.onPredictionFragment({
+          content: "Reasoning without semantic progress...",
+          tokensCount: 5,
+          reasoningType: "reasoning",
         });
-        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+        return {
+          cancel() {},
+          async result() { return await new Promise(() => {}); },
+        };
       },
     };
-    const history = Chat.empty();
-    history.append("user", "Inspect the project without changing files.");
+    const history = historyWithObservedUnrealHeader();
 
     const toolDefinitions = [{
       type: "function",
@@ -3930,20 +3929,26 @@ test("low reasoning effort retries once at the immutable effort floor after sema
       streamReasoningProgress: false,
     }, stateRoot, emitted, toolDefinitions), history);
 
-    assert.deepEqual(efforts, ["low", null]);
-    assert.deepEqual(thinkingEnabled, [true, false]);
-    assert.deepEqual(toolChoiceForced, [false, true]);
-    assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
+    assert.deepEqual(efforts, ["low"]);
+    assert.deepEqual(thinkingEnabled, [true]);
+    assert.deepEqual(toolChoiceForced, [false]);
+    const request = emitted.find((event) => event.kind === "end").request;
+    assert.equal(request.name, "read_file");
+    assert.equal(
+      request.arguments.path,
+      "project://Source/Project_MJS/Private/Character/SharedComponent/StaminaComponent.cpp",
+    );
     const checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.reasoningFallback.status, "completed");
     assert.equal(checkpoint.reasoningFallback.effort, "low");
     assert.equal(checkpoint.reasoningFallback.attempts, 1);
-    assert.equal(checkpoint.reasoningFallback.sameEffortRetries, 1);
-    assert.equal(checkpoint.reasoningFallback.toolChoiceForced, true);
-    assert.equal(checkpoint.reasoningFallback.thinkingSuppressed, true);
+    assert.equal(checkpoint.reasoningFallback.sameEffortRetries, 0);
+    assert.equal(checkpoint.reasoningFallback.toolChoiceForced, false);
+    assert.equal(checkpoint.reasoningFallback.thinkingSuppressed, false);
+    assert.equal(checkpoint.reasoningFallback.serverOwnedTransition, true);
     assert.equal(
       checkpoint.reasoningFallback.recoveryStrategy,
-      "suppress_thinking_and_force_advertised_tool_transition",
+      "server_owned_implementation_evidence_transition",
     );
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -3951,7 +3956,7 @@ test("low reasoning effort retries once at the immutable effort floor after sema
   }
 });
 
-test("low reasoning effort floor retry remains bounded when semantic progress never resumes", async () => {
+test("low reasoning effort floor fails without a provable implementation path and never retries the model", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-reasoning-bounded-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -4010,17 +4015,18 @@ test("low reasoning effort floor retry remains bounded when semantic progress ne
       (error) => error?.code === "PREDICTION_NO_PROGRESS_EXCEEDED",
     );
 
-    assert.deepEqual(efforts, ["low", null]);
-    assert.deepEqual(thinkingEnabled, [true, false]);
-    assert.deepEqual(toolChoiceForced, [false, true]);
+    assert.deepEqual(efforts, ["low"]);
+    assert.deepEqual(thinkingEnabled, [true]);
+    assert.deepEqual(toolChoiceForced, [false]);
     const checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.reasoningFallback.status, "retrying");
-    assert.equal(checkpoint.reasoningFallback.sameEffortRetries, 1);
-    assert.equal(checkpoint.reasoningFallback.toolChoiceForced, true);
-    assert.equal(checkpoint.reasoningFallback.thinkingSuppressed, true);
+    assert.equal(checkpoint.reasoningFallback.sameEffortRetries, 0);
+    assert.equal(checkpoint.reasoningFallback.toolChoiceForced, false);
+    assert.equal(checkpoint.reasoningFallback.thinkingSuppressed, false);
+    assert.equal(checkpoint.reasoningFallback.serverOwnedTransition, true);
     assert.equal(
       checkpoint.reasoningFallback.recoveryStrategy,
-      "suppress_thinking_and_force_advertised_tool_transition",
+      "server_owned_implementation_evidence_transition",
     );
     assert.equal(checkpoint.predictionState.status, "pending");
   } finally {
@@ -4029,7 +4035,69 @@ test("low reasoning effort floor retry remains bounded when semantic progress ne
   }
 });
 
-test("persisted low floor recovery resumes with thinking suppressed and forced tool choice", async () => {
+test("low floor recovery rejects header-shaped directory evidence", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-directory-spoof-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let modelCalls = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "qwen-low-directory-spoof-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        modelCalls += 1;
+        return { cancel() {}, async result() { return await new Promise(() => {}); } };
+      },
+    };
+    const fakeHeaderDirectory = "project://Source/Project_MJS/Public/Character/Fake.h";
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Inspect the project without changing files." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "fake-header-directory",
+        type: "function",
+        name: "list_directory",
+        arguments: { path: fakeHeaderDirectory },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "fake-header-directory",
+        name: "list_directory",
+        content: '{"ok":true,"entries":[]}',
+      }] },
+    ] });
+    const toolDefinitions = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    }];
+
+    await assert.rejects(
+      generate(controllerFor(model, {
+        reasoningEffort: "low",
+        predictionNoProgressSeconds: 0.03,
+      }, stateRoot, [], toolDefinitions), history),
+      (error) => error?.code === "PREDICTION_NO_PROGRESS_EXCEEDED",
+    );
+    assert.equal(modelCalls, 1);
+    assert.equal(activeCheckpoint(stateRoot).reasoningFallback.status, "retrying");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("persisted low floor recovery resumes with a server-owned transition and no model replay", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-reasoning-resume-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -4053,29 +4121,15 @@ test("persisted low floor recovery resumes with thinking suppressed and forced t
           )?.value,
           toolChoiceForced: opts.rawTools?.force === true,
         });
-        if (attempts.length < 3) {
-          opts.onPredictionFragment({
-            content: "Reasoning without a committed transition...",
-            tokensCount: 5,
-            reasoningType: "reasoning",
-          });
-          return {
-            cancel() {},
-            async result() { return await new Promise(() => {}); },
-          };
-        }
-        opts.onToolCallRequestStart(1, { toolCallId: "resumed-low-floor-read" });
-        opts.onToolCallRequestNameReceived(1, "read_file");
-        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"project://Source/Feature.cpp"}');
-        opts.onToolCallRequestEnd(1, {
-          toolCallRequest: {
-            id: "resumed-low-floor-read",
-            type: "function",
-            name: "read_file",
-            arguments: { path: "project://Source/Feature.cpp" },
-          },
+        opts.onPredictionFragment({
+          content: "Reasoning without a committed transition...",
+          tokensCount: 5,
+          reasoningType: "reasoning",
         });
-        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+        return {
+          cancel() {},
+          async result() { return await new Promise(() => {}); },
+        };
       },
     };
     const history = Chat.empty();
@@ -4105,14 +4159,17 @@ test("persisted low floor recovery resumes with thinking suppressed and forced t
     assert.equal(activeCheckpoint(stateRoot).reasoningFallback.status, "retrying");
 
     const resumedEmitted = [];
-    await generate(controllerFor(model, config, stateRoot, resumedEmitted, toolDefinitions), history);
+    await generate(
+      controllerFor(model, config, stateRoot, resumedEmitted, toolDefinitions),
+      historyWithObservedUnrealHeader(),
+    );
 
     assert.deepEqual(attempts, [
       { effort: "low", thinkingEnabled: true, toolChoiceForced: false },
-      { effort: null, thinkingEnabled: false, toolChoiceForced: true },
-      { effort: null, thinkingEnabled: false, toolChoiceForced: true },
     ]);
-    assert.equal(resumedEmitted.find((event) => event.kind === "end").request.name, "read_file");
+    const resumedRequest = resumedEmitted.find((event) => event.kind === "end").request;
+    assert.equal(resumedRequest.name, "read_file");
+    assert.match(resumedRequest.arguments.path, /\/Private\/.+\.cpp$/);
     assert.equal(activeCheckpoint(stateRoot).reasoningFallback.status, "completed");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -4120,7 +4177,164 @@ test("persisted low floor recovery resumes with thinking suppressed and forced t
   }
 });
 
-test("an already-forced low tool route recovers by suppressing thinking", async () => {
+test("low floor recovery survives a crash before its prepared call checkpoint", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-prepare-crash-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  const checkpointStore = require("../dist/checkpoint-store.js");
+  const originalSave = checkpointStore.saveCheckpoint;
+  let injectPrepareFailure = true;
+  checkpointStore.saveCheckpoint = async (...args) => {
+    const candidate = args[1];
+    if (
+      injectPrepareFailure
+      && (candidate?.pendingToolCalls || []).some((call) => call?.dispatchState === "prepared")
+    ) {
+      throw new Error("injected low floor prepare crash");
+    }
+    return originalSave(...args);
+  };
+  try {
+    const { generate } = require("../dist/generator.js");
+    let modelCalls = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "qwen-low-prepare-crash-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        modelCalls += 1;
+        return { cancel() {}, async result() { return await new Promise(() => {}); } };
+      },
+    };
+    const config = {
+      reasoningEffort: "low",
+      predictionNoProgressSeconds: 0.03,
+      requireCheckpointPersistence: true,
+    };
+    const tools = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    }];
+    const history = historyWithObservedUnrealHeader();
+
+    await assert.rejects(
+      generate(controllerFor(model, config, stateRoot, [], tools), history),
+      /pending_tool_calls.*injected low floor prepare crash/i,
+    );
+    assert.equal(activeCheckpoint(stateRoot).reasoningFallback.status, "retrying");
+
+    injectPrepareFailure = false;
+    const resumed = [];
+    await generate(controllerFor(model, config, stateRoot, resumed, tools), history);
+
+    assert.equal(modelCalls, 1);
+    assert.match(
+      resumed.find((event) => event.kind === "end").request.arguments.path,
+      /\/Private\/.+\.cpp$/,
+    );
+    assert.equal(activeCheckpoint(stateRoot).reasoningFallback.status, "completed");
+  } finally {
+    checkpointStore.saveCheckpoint = originalSave;
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("successive low floor recoveries use path-bound call ids", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-path-bound-id-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let modelCalls = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "qwen-low-path-bound-id-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        modelCalls += 1;
+        return { cancel() {}, async result() { return await new Promise(() => {}); } };
+      },
+    };
+    const config = { reasoningEffort: "low", predictionNoProgressSeconds: 0.03 };
+    const tools = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    }];
+    const userText = "Inspect the project without changing files.";
+    const headerPaths = [
+      "project://Source/Project_MJS/Public/Character/SharedComponent/StaminaComponent.h",
+      "project://Source/Project_MJS/Public/Character/SharedComponent/HealthComponent.h",
+    ];
+    const messages = [{ role: "user", content: [{ type: "text", text: userText }] }];
+    headerPaths.forEach((headerPath, index) => {
+      const id = `observed-header-${index}`;
+      messages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id, type: "function", name: "read_file", arguments: { path: headerPath },
+      } }] });
+      messages.push({ role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: id,
+        name: "read_file",
+        content: '{"ok":true,"fileContent":"class UObservedComponent {};"}',
+      }] });
+    });
+
+    const firstEmitted = [];
+    await generate(
+      controllerFor(model, config, stateRoot, firstEmitted, tools),
+      Chat.from({ messages }),
+    );
+    const firstRequest = firstEmitted.find((event) => event.kind === "end").request;
+    messages.push({ role: "assistant", content: [{
+      type: "toolCallRequest", toolCallRequest: firstRequest,
+    }] });
+    messages.push({ role: "tool", content: [{
+      type: "toolCallResult",
+      toolCallId: firstRequest.id,
+      name: "read_file",
+      content: '{"ok":true,"fileContent":"// implementation"}',
+    }] });
+
+    const secondEmitted = [];
+    await generate(
+      controllerFor(model, config, stateRoot, secondEmitted, tools),
+      Chat.from({ messages }),
+    );
+    const secondRequest = secondEmitted.find((event) => event.kind === "end").request;
+
+    assert.equal(modelCalls, 2);
+    assert.notEqual(firstRequest.arguments.path, secondRequest.arguments.path);
+    assert.notEqual(firstRequest.id, secondRequest.id);
+    assert.match(firstRequest.id, /^server-owned-low-floor-[a-f0-9]+-[a-f0-9]{16}$/);
+    assert.match(secondRequest.id, /^server-owned-low-floor-[a-f0-9]+-[a-f0-9]{16}$/);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("an already-forced low tool route recovers without a second model prediction", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-forced-recovery-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -4142,28 +4356,13 @@ test("an already-forced low tool route recovers by suppressing thinking", async 
           )?.value,
           toolChoiceForced: opts.rawTools?.force === true,
         });
-        if (attempts.length === 1) {
-          return {
-            cancel() {},
-            async result() { return await new Promise(() => {}); },
-          };
-        }
-        opts.onToolCallRequestStart(1, { toolCallId: "forced-low-recovery-read" });
-        opts.onToolCallRequestNameReceived(1, "read_file");
-        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"project://Source/Feature.cpp"}');
-        opts.onToolCallRequestEnd(1, {
-          toolCallRequest: {
-            id: "forced-low-recovery-read",
-            type: "function",
-            name: "read_file",
-            arguments: { path: "project://Source/Feature.cpp" },
-          },
-        });
-        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+        return {
+          cancel() {},
+          async result() { return await new Promise(() => {}); },
+        };
       },
     };
-    const history = Chat.empty();
-    history.append("user", "continue");
+    const history = historyWithObservedUnrealHeader("continue");
     history.append("assistant", JSON.stringify({ requiredNextTool: "read_file" }));
     const toolDefinitions = [{
       type: "function",
@@ -4185,7 +4384,6 @@ test("an already-forced low tool route recovers by suppressing thinking", async 
 
     assert.deepEqual(attempts, [
       { thinkingEnabled: true, toolChoiceForced: true },
-      { thinkingEnabled: false, toolChoiceForced: true },
     ]);
     assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
   } finally {
