@@ -191,6 +191,38 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "package-manifest.json",
     ):
         assert (output / relative).is_file(), relative
+    package_manifest = json.loads(
+        (output / "package-manifest.json").read_text(encoding="utf-8")
+    )
+    expected_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert package_manifest["sourceGitCommit"] == expected_commit
+    identity_env = os.environ.copy()
+    identity_env.pop("CONTROL_RUNTIME_GIT_COMMIT", None)
+    identity_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    packaged_identity = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys; sys.path.insert(0,'scripts'); "
+                "from control_runtime_identity import build_runtime_manifest; "
+                "print(json.dumps(build_runtime_manifest('.')))"
+            ),
+        ],
+        cwd=output,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=identity_env,
+    )
+    components = json.loads(packaged_identity.stdout)["components"]
+    assert {value["gitCommit"] for value in components.values()} == {expected_commit}
     public_launchers = {
         path.relative_to(output).as_posix()
         for path in output.rglob("*")

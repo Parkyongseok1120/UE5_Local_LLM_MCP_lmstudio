@@ -102,8 +102,19 @@ def _git_commit(root: Path) -> str:
             timeout=3,
         )
     except (OSError, subprocess.SubprocessError):
+        completed = None
+    if completed is not None and completed.returncode == 0:
+        return completed.stdout.strip()[:80]
+    # Relocatable production bundles intentionally exclude .git. The package
+    # builder seals the source commit into its deterministic inventory manifest
+    # so every installed component retains the release identity.
+    try:
+        packaged = json.loads(
+            (root / "package-manifest.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
         return ""
-    return completed.stdout.strip()[:80] if completed.returncode == 0 else ""
+    return str(packaged.get("sourceGitCommit") or "").strip()[:80]
 
 
 def _package_version(path: Path, fallback: str) -> str:

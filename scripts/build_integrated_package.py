@@ -392,7 +392,36 @@ def _write_launchers(staging: Path) -> None:
     )
 
 
-def _manifest(staging: Path, *, include_index: bool) -> dict[str, object]:
+def _source_git_commit(source: Path) -> str:
+    explicit = str(os.environ.get("CONTROL_RUNTIME_GIT_COMMIT") or "").strip()
+    if explicit:
+        return explicit[:80]
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        completed = None
+    if completed is not None and completed.returncode == 0:
+        return completed.stdout.strip()[:80]
+    try:
+        packaged = json.loads((source / "package-manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(packaged.get("sourceGitCommit") or "").strip()[:80]
+
+
+def _manifest(
+    staging: Path,
+    *,
+    include_index: bool,
+    source_git_commit: str,
+) -> dict[str, object]:
     inventory = []
     for path in sorted(staging.rglob("*"), key=lambda item: item.as_posix().lower()):
         if path.is_file() and path.name != "package-manifest.json":
@@ -406,6 +435,7 @@ def _manifest(staging: Path, *, include_index: bool) -> dict[str, object]:
     return {
         "schemaVersion": 1,
         "name": "evidence-first-integrated-coding",
+        "sourceGitCommit": str(source_git_commit or ""),
         "portable": True,
         "supportedHosts": ["windows", "linux", "macos-apple-silicon"],
         "hostNotes": {
@@ -514,7 +544,11 @@ def build(source: Path, output: Path, zip_path: Path | None, *, include_index: b
                 "required runtime files were not packaged: "
                 + ", ".join(missing_staged)
             )
-        manifest = _manifest(staging, include_index=include_index)
+        manifest = _manifest(
+            staging,
+            include_index=include_index,
+            source_git_commit=_source_git_commit(source),
+        )
         inventory_paths = _assert_clean_inventory(manifest)
         (staging / "package-manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
