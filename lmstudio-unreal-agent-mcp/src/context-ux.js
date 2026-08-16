@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { atomicWriteText } = require("./atomic-io");
@@ -651,24 +652,42 @@ function buildToolDisposition(payload = {}) {
   if (payload.ok) {
     return {
       buildOutcome: "succeeded",
+      failureClass: "",
       toolExecutionSucceeded: true,
       recoverable: false,
       mcpIsError: false,
     };
   }
   const likelyErrors = Array.isArray(payload.likelyErrors) ? payload.likelyErrors : [];
-  const compileFailed = (
+  const processExitedNonZero = (
     payload.phase !== "stale"
     && !payload.timedOut
     && !String(payload.errorCode || "").trim()
     && !String(payload.error || "").trim()
-    && likelyErrors.length > 0
+    && Number.isInteger(Number(payload.exitCode))
+    && Number(payload.exitCode) !== 0
   );
+  const failureClass = processExitedNonZero
+    ? (likelyErrors.length > 0 ? "compile_failed_parsed" : "compile_failed_unparsed")
+    : String(payload.phase || "") === "stale"
+      ? (payload.upToDate === true ? "up_to_date_without_compile" : "stale_during_build")
+      : String(payload.phase || "") === "unverified"
+        ? "command_succeeded_unverified"
+      : payload.timedOut
+        ? "timeout"
+        : /cancel/i.test(String(payload.errorCode || payload.error || ""))
+          ? "cancelled"
+          : /engine.*mismatch/i.test(String(payload.errorCode || payload.error || ""))
+            ? "engine_mismatch"
+            : String(payload.errorCode || "").trim()
+              ? "environment_failed"
+              : "launch_failed";
   return {
-    buildOutcome: compileFailed ? "compile_failed" : "tool_failed",
-    toolExecutionSucceeded: compileFailed,
-    recoverable: compileFailed,
-    mcpIsError: !compileFailed,
+    buildOutcome: processExitedNonZero ? "compile_failed" : "tool_failed",
+    failureClass,
+    toolExecutionSucceeded: processExitedNonZero,
+    recoverable: processExitedNonZero,
+    mcpIsError: !processExitedNonZero,
   };
 }
 
@@ -760,6 +779,16 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
   const proofLevel = proof.proofLevel;
   const hasCompileEvidence = Number(proof.compileLineCount || 0) > 0 || Number(proof.linkLineCount || 0) > 0;
   const platform = build.platform || defaultUnrealPlatform();
+  const rawOutput = `${result.stdout || ""}\n${result.stderr || ""}`;
+  const outputTail = rawOutput.split(/\r?\n/).filter(Boolean).slice(-20)
+    .map((line) => compactCompilerDiagnostic(line) || String(line).trim().slice(0, 1000))
+    .filter(Boolean).slice(-20);
+  const sha256 = (value) => crypto.createHash("sha256").update(String(value || ""), "utf8").digest("hex");
+  const commandFingerprint = sha256(command);
+  const diagnosticFingerprint = sha256(
+    compactErrorLines.length ? compactErrorLines.join("\n") : outputTail.join("\n")
+  );
+  const outputHash = sha256(rawOutput);
 
   let summary;
   if (!result.ok) {
@@ -785,6 +814,15 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
     observedLinkLines: proof.linkLineCount,
     highestObservedActionIndex: proof.highestObservedActionIndex,
     proofLevel,
+    proofSemantic: proofLevel === "Built"
+      ? "BuiltFresh"
+      : (proofLevel === "BuiltStale"
+        ? "UpToDateNoCompile"
+        : (proofLevel === "BuiltUnverified" ? "CommandSucceededUnverified" : "Failed")),
+    commandFingerprint,
+    diagnosticFingerprint,
+    outputHash,
+    outputTail: result.ok ? [] : outputTail,
     responseMode: verbose ? "verbose" : "compact",
     likelyErrors: responseErrorLines,
     fullLogPath: logPath,
@@ -924,6 +962,7 @@ function buildResponsePayload({ result, build, planResult, projectPath, command,
 
   const disposition = buildToolDisposition(payload);
   payload.buildOutcome = disposition.buildOutcome;
+  payload.failureClass = disposition.failureClass;
   payload.toolExecutionSucceeded = disposition.toolExecutionSucceeded;
   payload.recoverable = disposition.recoverable;
   return payload;

@@ -669,6 +669,18 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
         recovery_fingerprint = str(
             recovery_obligation.get("fingerprint") or ""
         )
+        repo_audit = (
+            state.get("repoAuditLedger")
+            if isinstance(state.get("repoAuditLedger"), dict)
+            else {}
+        )
+        repo_audit_required = repo_audit.get("required") is True
+        repo_audit_status = str(repo_audit.get("status") or "").casefold()
+        repo_audit_queue = _clean_strings(repo_audit.get("queuedTargets"))
+        repo_audit_cursor = min(
+            len(repo_audit_queue),
+            _non_negative_int(repo_audit.get("cursor")),
+        )
         pending_gate = pending_gates[0] if pending_gates else ""
         failed_gate_attempt = (
             failed_gate_attempt_for_current_scope(state, pending_gate)
@@ -696,6 +708,25 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 or "RECOVERY_EXTERNAL_BLOCKER"
             )
             blocker_fingerprint = recovery_fingerprint
+        elif repo_audit_required and repo_audit_status == "inventory_overflow":
+            disposition = "workflow_stop"
+            retry_value = "forbidden"
+            blocker_code = "REPO_AUDIT_INVENTORY_OVERFLOW"
+            blocker_fingerprint = str(repo_audit.get("inventoryHash") or "")
+        elif repo_audit_required and repo_audit_status != "complete":
+            if repo_audit_cursor < len(repo_audit_queue):
+                required_name = "read_file"
+                required_args = {"path": repo_audit_queue[repo_audit_cursor]}
+                retry_value = "once"
+            else:
+                disposition = "workflow_stop"
+                retry_value = "forbidden"
+                blocker_code = "REPO_AUDIT_FRONTIER_INCONSISTENT"
+                blocker_fingerprint = str(repo_audit.get("inventoryHash") or "")
+        elif repo_audit_required and repo_audit_status == "complete":
+            disposition = "continue"
+            retry_value = "forbidden"
+            no_tools_for_synthesis = True
         elif recovery_status == "evidence_complete":
             # Keep an analysis task open for a source-backed final answer, but
             # make the exhausted evidence route uncallable. This must mirror

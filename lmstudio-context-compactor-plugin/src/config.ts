@@ -40,7 +40,7 @@ export const configSchematics = createConfigSchematics()
   .field(
     "predictionNoProgressSeconds",
     "numeric",
-    { displayName: "Prediction no-progress limit", subtitle: "Cancel and discard a prediction after this many seconds without a non-empty token or tool-call callback (5-300 seconds). Heartbeats do not count as progress." },
+    { displayName: "Prediction no-progress limit", subtitle: "Cancel after this many seconds without final text or tool-call progress (5-300 seconds). Reasoning tokens and heartbeats are activity only." },
     45,
   )
   .field(

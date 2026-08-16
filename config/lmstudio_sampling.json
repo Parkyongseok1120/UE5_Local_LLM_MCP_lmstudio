@@ -68,14 +68,14 @@
       "mcpToolDiscipline": "one_tool_per_turn",
       "quantDefault": "Q4_K_M",
       "reasoningPolicy": {
-        "owner": "server",
+        "owner": "compactor_generator_resolved_prediction_policy",
         "transport": "generator_raw_kv_config",
         "capabilityStatus": "model_profile_bound",
         "supportedEfforts": ["low", "medium", "extra_high"],
         "defaultEffort": "low",
         "failClosedIfUnpinned": true,
         "fieldKey": "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort",
-        "notes": "The SDK has no public effort property; the generator binds LM Studio's Qwen3.8 model-profile KV field on every proxied prediction and records the selected effort in runtime telemetry."
+        "notes": "The generator resolves one immutable per-prediction policy from task phase and user-selected effort. It records transportConfigured separately from backendApplied=unknown/backendObserved=false because SDK 1.5.0 cannot observe backend application. Thinking-off phases omit the meaningless effort field."
       },
       "agentPolicy": {
         "ragBudgetScale": 1.1,

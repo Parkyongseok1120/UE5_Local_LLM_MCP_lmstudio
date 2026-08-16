@@ -203,6 +203,215 @@ def _canonical_hash(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+_REPO_AUDIT_MAX_FILES = 4096
+_REPO_AUDIT_EXTENSIONS = frozenset(
+    {".h", ".hpp", ".hh", ".inl", ".c", ".cc", ".cpp", ".cxx", ".cs", ".ini"}
+)
+_REPO_AUDIT_EXCLUDED_PARTS = frozenset(
+    {
+        ".git",
+        ".vs",
+        "binaries",
+        "deriveddatacache",
+        "intermediate",
+        "node_modules",
+        "saved",
+    }
+)
+
+
+def _repository_audit_requested(request: str, mode: str) -> bool:
+    if str(mode or "").strip().casefold() != "read_only":
+        return False
+    text = str(request or "")
+    return bool(
+        re.search(
+            r"(?:repository[- ]wide|entire\s+(?:repository|project|codebase)|"
+            r"all\s+(?:repository|project|source|code)|whole\s+(?:repository|project)|"
+            r"저장소\s*전체|프로젝트\s*전체|전체\s*(?:코드|소스)|모든\s*(?:코드|소스)|전부\s*분석)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _build_repository_audit_ledger(
+    workspace: Path,
+    *,
+    request: str,
+    mode: str,
+    project_file: str,
+) -> dict[str, Any]:
+    if not _repository_audit_requested(request, mode):
+        return {"version": 1, "required": False, "status": "not_required"}
+    raw_project = Path(str(project_file or "")).expanduser() if project_file else None
+    root = (
+        raw_project.resolve().parent
+        if raw_project and raw_project.suffix.casefold() == ".uproject" and raw_project.exists()
+        else workspace.expanduser().resolve()
+    )
+    inventory: list[dict[str, Any]] = []
+    for scope_name in ("Source", "Plugins", "Config"):
+        scope = root / scope_name
+        if not scope.is_dir():
+            continue
+        for candidate in scope.rglob("*"):
+            if not candidate.is_file():
+                continue
+            relative = candidate.relative_to(root)
+            if any(part.casefold() in _REPO_AUDIT_EXCLUDED_PARTS for part in relative.parts):
+                continue
+            if candidate.suffix.casefold() not in _REPO_AUDIT_EXTENSIONS:
+                continue
+            try:
+                data = candidate.read_bytes()
+            except OSError:
+                continue
+            path_value = relative.as_posix()
+            inventory.append(
+                {
+                    "path": path_value,
+                    "contentHash": hashlib.sha256(data).hexdigest(),
+                    "lineCount": max(1, len(data.splitlines())),
+                    "status": "queued",
+                    "analysisVersion": 0,
+                    "coveredRanges": [],
+                }
+            )
+    scope_priority = {"source": 0, "plugins": 1, "config": 2}
+    inventory.sort(
+        key=lambda item: (
+            scope_priority.get(str(item["path"]).split("/", 1)[0].casefold(), 3),
+            str(item["path"]).casefold(),
+        )
+    )
+    overflow = len(inventory) > _REPO_AUDIT_MAX_FILES
+    bounded = inventory[:_REPO_AUDIT_MAX_FILES]
+    entries = {str(item["path"]): item for item in bounded}
+    queued = [str(item["path"]) for item in bounded]
+    return {
+        "version": 1,
+        "required": True,
+        "analysisVersion": 1,
+        "status": "inventory_overflow" if overflow else ("active" if queued else "complete"),
+        "root": str(root),
+        "inventoryHash": _canonical_hash(
+            [{"path": item["path"], "contentHash": item["contentHash"]} for item in bounded]
+        ),
+        "queuedTargets": queued,
+        "entries": entries,
+        "cursor": 0,
+        "totalCount": len(inventory),
+        "boundedCount": len(bounded),
+        "analyzedCount": 0,
+        "remainingCount": len(bounded),
+        "findings": [],
+        "findingCount": 0,
+        "overflow": overflow,
+        "exclusions": [
+            {
+                "patterns": sorted(_REPO_AUDIT_EXCLUDED_PARTS),
+                "reason": "generated, cached, dependency, or VCS artifact",
+            },
+            {
+                "patterns": ["non-source extensions outside Source/Plugins/Config"],
+                "reason": "outside correctness-relevant Unreal source/config audit scope",
+            },
+        ],
+        "createdAt": _utc_now(),
+        "updatedAt": _utc_now(),
+    }
+
+
+def _refresh_repository_audit_ledger(
+    workspace: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    prior = (
+        state.get("repoAuditLedger")
+        if isinstance(state.get("repoAuditLedger"), dict)
+        else {}
+    )
+    if prior.get("required") is not True:
+        return state
+    fresh = _build_repository_audit_ledger(
+        workspace,
+        request=str(state.get("objective") or state.get("request") or ""),
+        mode=str(state.get("mode") or ""),
+        project_file=str(state.get("projectFile") or ""),
+    )
+    prior_entries = (
+        prior.get("entries") if isinstance(prior.get("entries"), dict) else {}
+    )
+    fresh_entries = (
+        fresh.get("entries") if isinstance(fresh.get("entries"), dict) else {}
+    )
+    analysis_version = max(1, int(prior.get("analysisVersion") or 1))
+    for path_value, entry in list(fresh_entries.items()):
+        previous = (
+            prior_entries.get(path_value)
+            if isinstance(prior_entries.get(path_value), dict)
+            else {}
+        )
+        if (
+            str(previous.get("contentHash") or "")
+            == str(entry.get("contentHash") or "")
+            and str(previous.get("status") or "") == "analyzed"
+            and int(previous.get("analysisVersion") or 0) == analysis_version
+        ):
+            fresh_entries[path_value] = {
+                **entry,
+                "status": "analyzed",
+                "analysisVersion": analysis_version,
+                "coveredRanges": list(previous.get("coveredRanges") or []),
+                "analyzedAt": str(previous.get("analyzedAt") or ""),
+            }
+    queued = [str(item) for item in (fresh.get("queuedTargets") or [])]
+    analyzed_count = sum(
+        1
+        for path_value in queued
+        if str(fresh_entries.get(path_value, {}).get("status") or "") == "analyzed"
+    )
+    cursor = 0
+    while (
+        cursor < len(queued)
+        and str(fresh_entries.get(queued[cursor], {}).get("status") or "")
+        == "analyzed"
+    ):
+        cursor += 1
+    remaining_count = max(0, len(queued) - analyzed_count)
+    removed = sorted(set(prior_entries) - set(fresh_entries))[:256]
+    exclusions = list(fresh.get("exclusions") or [])
+    if removed:
+        exclusions.append(
+            {
+                "paths": removed,
+                "reason": "removed from the current repository inventory",
+            }
+        )
+    fresh.update(
+        {
+            "analysisVersion": analysis_version,
+            "entries": fresh_entries,
+            "cursor": cursor,
+            "analyzedCount": analyzed_count,
+            "remainingCount": remaining_count,
+            "status": (
+                "inventory_overflow"
+                if fresh.get("overflow") is True
+                else ("complete" if remaining_count == 0 else "active")
+            ),
+            "findings": list(prior.get("findings") or [])[:1024],
+            "findingCount": int(prior.get("findingCount") or 0),
+            "exclusions": exclusions[:16],
+            "createdAt": str(prior.get("createdAt") or fresh.get("createdAt") or _utc_now()),
+            "updatedAt": _utc_now(),
+        }
+    )
+    state["repoAuditLedger"] = fresh
+    return state
+
+
 def task_authorization_for_state(state: dict[str, Any]) -> dict[str, str]:
     route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
     return {
@@ -1474,6 +1683,25 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
     public.pop("directSourceEvidence", None)
     public.pop("sourceEvidence", None)
     public.pop("absentEvidence", None)
+    audit = public.get("repoAuditLedger")
+    if isinstance(audit, dict):
+        queued = [str(item) for item in (audit.get("queuedTargets") or [])]
+        cursor = max(0, int(audit.get("cursor") or 0))
+        public["repoAuditLedger"] = {
+            "version": int(audit.get("version") or 1),
+            "required": audit.get("required") is True,
+            "analysisVersion": int(audit.get("analysisVersion") or 1),
+            "status": str(audit.get("status") or ""),
+            "inventoryHash": str(audit.get("inventoryHash") or ""),
+            "cursor": cursor,
+            "totalCount": int(audit.get("totalCount") or 0),
+            "analyzedCount": int(audit.get("analyzedCount") or 0),
+            "remainingCount": int(audit.get("remainingCount") or 0),
+            "findingCount": int(audit.get("findingCount") or 0),
+            "nextTargets": queued[cursor : cursor + 8],
+            "overflow": audit.get("overflow") is True,
+            "exclusions": list(audit.get("exclusions") or [])[:8],
+        }
     # expiryTransition contains a speculative future route, including a phase
     # that may intentionally hide the current executor/build tools. Exposing
     # that internal fallback through task_status made compact models reason
@@ -2410,6 +2638,24 @@ def _set_recovery_obligation(
     failure_fingerprint = str(recovery.get("failureFingerprint") or "").strip().lower()
     if re.fullmatch(r"[a-f0-9]{16,64}", failure_fingerprint):
         normalized["failureFingerprint"] = failure_fingerprint
+    for key in ("commandFingerprint", "diagnosticFingerprint", "outputHash"):
+        fingerprint = str(recovery.get(key) or "").strip().lower()
+        if re.fullmatch(r"[a-f0-9]{64}", fingerprint):
+            normalized[key] = fingerprint
+    if recovery.get("exitCode") is not None:
+        normalized["exitCode"] = int(recovery.get("exitCode") or 0)
+    output_tail = recovery.get("outputTail")
+    if isinstance(output_tail, list):
+        normalized["outputTail"] = [str(item or "")[:1000] for item in output_tail[-20:]]
+    for key, limit in (
+        ("fullLogPath", 2048),
+        ("target", 128),
+        ("platform", 64),
+        ("configuration", 64),
+    ):
+        value = str(recovery.get(key) or "").strip()
+        if value:
+            normalized[key] = value[:limit]
     for key in (
         "evidenceSatisfiedAt",
         "evidenceSatisfiedBy",
@@ -2638,18 +2884,6 @@ def task_record_recovery_obligation(
 
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
         nonlocal outcome
-        mismatches = _task_authorization_mismatches(state, authorization)
-        if mismatches:
-            outcome = _auth_refresh_failure(
-                {
-                    "ok": False,
-                    "errorCode": "TASK_AUTH_MISMATCH",
-                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
-                },
-                state,
-                mismatched_fields=mismatches,
-            )
-            return None
         if str(state.get("status") or "") != "running":
             outcome = {
                 "ok": False,
@@ -3019,6 +3253,21 @@ def task_record_build_recovery(
         if isinstance(payload.get("requiredNextToolArgs"), dict)
         else {}
     )
+    failure_evidence = {
+        key: payload.get(key)
+        for key in (
+            "commandFingerprint",
+            "diagnosticFingerprint",
+            "outputHash",
+            "outputTail",
+            "exitCode",
+            "fullLogPath",
+            "target",
+            "platform",
+            "configuration",
+        )
+        if payload.get(key) is not None
+    }
     if not task_session_id or (not target_file and not semantic_scoped):
         return {
             "ok": False,
@@ -3297,6 +3546,7 @@ def task_record_build_recovery(
                     "evidenceSatisfied": False,
                     "temporaryRepairSlice": True,
                     "recordedAt": _utc_now(),
+                    **failure_evidence,
                 }
                 normalized = _set_recovery_obligation(
                     state,
@@ -3309,6 +3559,7 @@ def task_record_build_recovery(
                         "requiredTool": {"name": required_tool, "args": required_args},
                         "targetFiles": [repair_target],
                         "message": str(payload.get("firstError") or ""),
+                        **failure_evidence,
                     },
                 )
                 state["updatedAt"] = _utc_now()
@@ -3336,6 +3587,7 @@ def task_record_build_recovery(
                 "activeSliceFiles": slice_files,
                 "mutationGeneration": int(payload.get("mutationGeneration") or 0),
                 "recordedAt": _utc_now(),
+                **failure_evidence,
             }
             blocker_targets = [target_file] if target_file else slice_files
             _set_recovery_obligation(
@@ -3349,6 +3601,7 @@ def task_record_build_recovery(
                     "requiredTool": {},
                     "targetFiles": blocker_targets,
                     "message": str(payload.get("firstError") or ""),
+                    **failure_evidence,
                 },
             )
             state["updatedAt"] = _utc_now()
@@ -3381,6 +3634,7 @@ def task_record_build_recovery(
             "mutationGeneration": int(payload.get("mutationGeneration") or 0),
             "evidenceSatisfied": False,
             "recordedAt": _utc_now(),
+            **failure_evidence,
         }
         recovery_targets = [target_file] if target_file else slice_files
         _set_recovery_obligation(
@@ -3394,6 +3648,7 @@ def task_record_build_recovery(
                 "requiredTool": {"name": required_tool, "args": required_args},
                 "targetFiles": recovery_targets,
                 "message": str(payload.get("firstError") or ""),
+                **failure_evidence,
             },
         )
         state["updatedAt"] = _utc_now()
@@ -3533,16 +3788,54 @@ def _post_static_oracle_binding_issue(
     return None
 
 
+def _build_tuple_proof_binding_issue(
+    state: dict[str, Any],
+    *,
+    target: str,
+    platform: str,
+    configuration: str,
+) -> dict[str, Any] | None:
+    contract = (
+        state.get("buildContract")
+        if isinstance(state.get("buildContract"), dict)
+        else {}
+    )
+    if not contract:
+        return None
+    observed = {
+        "target": str(target or "").strip(),
+        "platform": str(platform or "").strip(),
+        "configuration": str(configuration or "").strip(),
+    }
+    expected = {key: str(contract.get(key) or "").strip() for key in observed}
+    if any(not observed[key] or observed[key] != expected[key] for key in observed):
+        return {
+            "errorCode": "BUILD_PROOF_TUPLE_MISMATCH",
+            "error": (
+                "Build proof target/platform/configuration does not match the "
+                "server-bound task build contract."
+            ),
+            "expectedBuildTuple": expected,
+            "observedBuildTuple": observed,
+        }
+    return None
+
+
 def task_complete_after_successful_build(
     workspace: Path,
     *,
     task_authorization: dict[str, Any],
     proof_level: str = "",
+    build_proof_digest: str = "",
     mutation_generation: int | None = None,
     build_log_path: str = "",
     project_file: str = "",
     engine_root: str = "",
     resolved_engine_version: str = "",
+    target: str = "",
+    platform: str = "",
+    configuration: str = "",
+    bookkeeping_transaction_id: str = "",
     proof_kind: str = "build",
     automation_filters: list[str] | None = None,
     automation_succeeded_count: int = 0,
@@ -3570,6 +3863,36 @@ def task_complete_after_successful_build(
 
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
         nonlocal outcome
+        transaction_id = str(bookkeeping_transaction_id or "").strip()
+        prior_completion = (
+            state.get("completionEvidence")
+            if isinstance(state.get("completionEvidence"), dict)
+            else {}
+        )
+        if (
+            transaction_id
+            and str(prior_completion.get("bookkeepingTransactionId") or "")
+            == transaction_id
+            and str(authorization.get("taskSessionId") or "")
+            == str(state.get("taskSessionId") or "")
+        ):
+            active = str(state.get("status") or "") == "running"
+            progress = (
+                state.get("sliceProgress")
+                if isinstance(state.get("sliceProgress"), dict)
+                else {}
+            )
+            outcome = {
+                "ok": True,
+                "active": active,
+                "status": str(state.get("status") or ""),
+                "taskSessionId": task_session_id,
+                "idempotentReplay": True,
+                "completionEvidence": dict(prior_completion),
+                "activeSliceId": str(state.get("activeSliceId") or ""),
+                "pendingSlices": list(progress.get("pendingSlices") or []),
+            }
+            return state
         mismatches = _task_authorization_mismatches(state, authorization)
         if mismatches:
             outcome = _auth_refresh_failure(
@@ -3659,6 +3982,21 @@ def task_complete_after_successful_build(
                 **project_binding_issue,
             }
             return None
+        if not pending_automation:
+            tuple_binding_issue = _build_tuple_proof_binding_issue(
+                state,
+                target=target,
+                platform=platform,
+                configuration=configuration,
+            )
+            if tuple_binding_issue:
+                outcome = {
+                    "ok": False,
+                    "active": True,
+                    "status": "running",
+                    **tuple_binding_issue,
+                }
+                return None
         if not pending_automation and normalized_proof_kind != "build":
             outcome = {
                 "ok": False,
@@ -3668,7 +4006,53 @@ def task_complete_after_successful_build(
                 "error": "The current authoritative obligation requires build proof.",
             }
             return None
+        if (
+            not pending_automation
+            and str(proof_level or "").strip().casefold() != "built"
+        ):
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "running",
+                "errorCode": "BUILD_PROOF_LEVEL_NOT_AUTHORITATIVE",
+                "error": (
+                    "Task completion requires proofLevel=Built; stale, unverified, "
+                    "missing, or failed build evidence is non-terminal."
+                ),
+                "observedProofLevel": str(proof_level or ""),
+            }
+            return None
+        if (
+            not pending_automation
+            and not re.fullmatch(r"[a-f0-9]{64}", str(build_proof_digest or "").strip().casefold())
+        ):
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "running",
+                "errorCode": "BUILD_PROOF_DIGEST_REQUIRED",
+                "error": "Fresh build proof requires a content-addressed proof receipt.",
+            }
+            return None
         if pending_automation:
+            if (
+                str(verification.get("proofLevel") or "").strip().casefold() != "built"
+                or not re.fullmatch(
+                    r"[a-f0-9]{64}",
+                    str(verification.get("buildProofDigest") or "").strip().casefold(),
+                )
+            ):
+                outcome = {
+                    "ok": False,
+                    "active": True,
+                    "status": "pending_automation",
+                    "errorCode": "AUTOMATION_BUILD_PROOF_NOT_AUTHORITATIVE",
+                    "error": (
+                        "Automation cannot upgrade stale, unverified, or missing "
+                        "compiler proof into terminal completion."
+                    ),
+                }
+                return None
             expected_project = str(verification.get("projectFile") or "").strip()
             observed_project = _canonical_project_identity(
                 project_file,
@@ -3850,7 +4234,17 @@ def task_complete_after_successful_build(
         evidence = {
             "kind": normalized_proof_kind,
             "sliceId": active_slice_id,
-            "proofLevel": str(proof_level or "Built"),
+            "proofLevel": str(proof_level),
+            "buildProofLevel": str(
+                verification.get("proofLevel")
+                if pending_automation
+                else proof_level
+            ),
+            "buildProofDigest": str(
+                verification.get("buildProofDigest")
+                if pending_automation
+                else build_proof_digest
+            ),
             "mutationGeneration": int(mutation_generation or 0),
             "buildLogPath": str(build_log_path or ""),
             "projectFile": _canonical_project_identity(
@@ -3862,6 +4256,12 @@ def task_complete_after_successful_build(
                 workspace=workspace,
             ),
             "resolvedEngineVersion": str(resolved_engine_version or ""),
+            "target": str(target or verification.get("target") or ""),
+            "platform": str(platform or verification.get("platform") or ""),
+            "configuration": str(
+                configuration or verification.get("configuration") or ""
+            ),
+            "bookkeepingTransactionId": str(bookkeeping_transaction_id or ""),
             "recordedAt": completed_at,
         }
         if pending_automation:
@@ -3894,7 +4294,11 @@ def task_complete_after_successful_build(
         _mark_compiler_proof_verified(
             state,
             slice_id=active_slice_id,
-            proof_level=str(proof_level or "Built"),
+            proof_level=str(
+                verification.get("proofLevel")
+                if pending_automation
+                else proof_level
+            ),
             mutation_generation=int(mutation_generation or 0),
             build_log_path=str(build_log_path or ""),
             verified_at=completed_at,
@@ -4032,10 +4436,16 @@ def task_require_automation_after_build(
     *,
     task_authorization: dict[str, Any],
     mutation_generation: int,
+    proof_level: str = "",
+    build_proof_digest: str = "",
     build_log_path: str,
     project_file: str = "",
     engine_root: str = "",
     resolved_engine_version: str = "",
+    target: str = "",
+    platform: str = "",
+    configuration: str = "",
+    bookkeeping_transaction_id: str = "",
     test_filter: str = "",
     test_filters: list[str] | None = None,
     declared_tests: list[str] | None = None,
@@ -4051,6 +4461,13 @@ def task_require_automation_after_build(
     if not task_session_id:
         return {"ok": True, "active": False}
     outcome: dict[str, Any] = {}
+    requested_filters = list(
+        dict.fromkeys(
+            str(item or "").strip()
+            for item in ([*(test_filters or []), test_filter])
+            if str(item or "").strip()
+        )
+    )
 
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
         nonlocal outcome
@@ -4072,6 +4489,71 @@ def task_require_automation_after_build(
                 "errorCode": "TASK_NOT_WRITABLE",
                 "error": "Automation gate requires a running task",
             }
+            return None
+        existing_verification = (
+            state.get("buildVerification")
+            if isinstance(state.get("buildVerification"), dict)
+            else {}
+        )
+        if str(existing_verification.get("status") or "") == "pending_automation":
+            exact_replay = bool(
+                str(existing_verification.get("bookkeepingTransactionId") or "")
+                == str(bookkeeping_transaction_id or "")
+                and bool(str(bookkeeping_transaction_id or "").strip())
+                and
+                int(existing_verification.get("mutationGeneration") or 0)
+                == int(mutation_generation or 0)
+                and str(existing_verification.get("projectFile") or "")
+                == _canonical_project_identity(project_file, workspace=workspace)
+                and str(existing_verification.get("engineRoot") or "")
+                == _canonical_project_identity(engine_root, workspace=workspace)
+                and str(existing_verification.get("target") or "") == str(target or "")
+                and str(existing_verification.get("platform") or "") == str(platform or "")
+                and str(existing_verification.get("configuration") or "")
+                == str(configuration or "")
+                and str(existing_verification.get("proofLevel") or "")
+                == str(proof_level or "")
+                and str(existing_verification.get("buildProofDigest") or "")
+                == str(build_proof_digest or "")
+                and str(existing_verification.get("allFiltersHash") or "")
+                == _canonical_hash(requested_filters)
+            )
+            if not exact_replay:
+                outcome = {
+                    "ok": False,
+                    "active": True,
+                    "status": "pending_automation",
+                    "errorCode": "AUTOMATION_BUILD_BOOKKEEPING_REPLAY_MISMATCH",
+                    "error": (
+                        "Pending Automation bookkeeping may be replayed only "
+                        "with its exact build evidence."
+                    ),
+                }
+                return None
+            outcome = {
+                "ok": True,
+                "active": True,
+                "status": "pending_automation",
+                "idempotentReplay": True,
+                "taskSessionId": task_session_id,
+                "activeSliceId": str(state.get("activeSliceId") or ""),
+                "testFilter": str(existing_verification.get("testFilter") or ""),
+                "testFilters": list(existing_verification.get("testFilters") or []),
+                "filterBatchIndex": int(existing_verification.get("filterBatchIndex") or 0),
+                "filterBatchCount": int(existing_verification.get("filterBatchCount") or 1),
+            }
+            return state
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "TASK_AUTH_MISMATCH",
+                    "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+                },
+                state,
+                mismatched_fields=mismatches,
+            )
             return None
         binding_issue = _post_static_oracle_binding_issue(
             state,
@@ -4100,15 +4582,46 @@ def task_require_automation_after_build(
                 **project_binding_issue,
             }
             return None
+        tuple_binding_issue = _build_tuple_proof_binding_issue(
+            state,
+            target=target,
+            platform=platform,
+            configuration=configuration,
+        )
+        if tuple_binding_issue:
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "running",
+                **tuple_binding_issue,
+            }
+            return None
+        if str(proof_level or "").strip().casefold() != "built":
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "running",
+                "errorCode": "BUILD_PROOF_LEVEL_NOT_AUTHORITATIVE",
+                "error": (
+                    "Automation requires fresh compiler proof; stale, unverified, "
+                    "missing, or failed build evidence cannot open the gate."
+                ),
+                "observedProofLevel": str(proof_level or ""),
+            }
+            return None
+        normalized_digest = str(build_proof_digest or "").strip().casefold()
+        if not re.fullmatch(r"[a-f0-9]{64}", normalized_digest):
+            outcome = {
+                "ok": False,
+                "active": True,
+                "status": "running",
+                "errorCode": "BUILD_PROOF_DIGEST_REQUIRED",
+                "error": "Automation requires a content-addressed fresh-build proof receipt.",
+            }
+            return None
         recorded_at = _utc_now()
         active_slice_id = str(state.get("activeSliceId") or "")
-        normalized_filters = list(
-            dict.fromkeys(
-                str(item or "").strip()
-                for item in ([*(test_filters or []), test_filter])
-                if str(item or "").strip()
-            )
-        )
+        normalized_filters = requested_filters
         if not normalized_filters:
             outcome = {
                 "ok": False,
@@ -4140,6 +4653,8 @@ def task_require_automation_after_build(
             "status": "pending_automation",
             "activeSliceId": active_slice_id,
             "mutationGeneration": int(mutation_generation or 0),
+            "proofLevel": str(proof_level),
+            "buildProofDigest": normalized_digest,
             "buildLogPath": str(build_log_path or ""),
             "projectFile": _canonical_project_identity(
                 project_file,
@@ -4150,6 +4665,10 @@ def task_require_automation_after_build(
                 workspace=workspace,
             ),
             "resolvedEngineVersion": str(resolved_engine_version or ""),
+            "target": str(target or ""),
+            "platform": str(platform or ""),
+            "configuration": str(configuration or ""),
+            "bookkeepingTransactionId": str(bookkeeping_transaction_id or ""),
             "testFilter": active_filters[0] if len(active_filters) == 1 else "",
             "testFilters": active_filters,
             "remainingFilterBatches": remaining_batches,
@@ -4169,6 +4688,7 @@ def task_require_automation_after_build(
                 "kind": "build",
                 "sliceId": active_slice_id,
                 "proofLevel": "Built",
+                "buildProofDigest": normalized_digest,
                 "mutationGeneration": int(mutation_generation or 0),
                 "buildLogPath": str(build_log_path or ""),
                 "projectFile": _canonical_project_identity(
@@ -4180,6 +4700,10 @@ def task_require_automation_after_build(
                     workspace=workspace,
                 ),
                 "resolvedEngineVersion": str(resolved_engine_version or ""),
+                "target": str(target or ""),
+                "platform": str(platform or ""),
+                "configuration": str(configuration or ""),
+                "bookkeepingTransactionId": str(bookkeeping_transaction_id or ""),
                 "recordedAt": recorded_at,
             }
         )
@@ -5084,6 +5608,12 @@ def task_start(
             "planRevision": resolved_plan_revision,
             "files": {},
         },
+        "repoAuditLedger": _build_repository_audit_ledger(
+            workspace,
+            request=original_objective,
+            mode=mode,
+            project_file=project_file,
+        ),
         "createdAt": _utc_now(),
         "updatedAt": _utc_now(),
         "toolDiscoveryCandidates": [
@@ -7074,6 +7604,12 @@ def task_replan(
                     "frontier": {},
                     "frontierHash": "",
                 },
+                "repoAuditLedger": _build_repository_audit_ledger(
+                    workspace,
+                    request=original_objective,
+                    mode=mode,
+                    project_file=current_project or project_identity,
+                ),
                 "continuity": initialize_continuity(
                     task_session_id=task_session_id,
                     plan_id=plan_id,
@@ -8466,13 +9002,15 @@ def task_commit_synthesis(
     objective_hash_value: str,
     control_epoch: int,
     output_digest: str,
+    control_fingerprint: str = "",
+    mutation_generation: int = 0,
+    synthesis_transaction_id: str = "",
 ) -> dict[str, Any]:
-    """Atomically commit a displayed read-only synthesis and release its task.
+    """Atomically ACK a prepared read-only synthesis and release its task.
 
-    The context compactor is the only surface that observes both a complete
-    prediction and successful UI emission.  It submits this digest-bound fact
-    as a server-owned tool call.  Replaying the same call is harmless; a
-    different digest or stale control epoch cannot complete the task.
+    The context compactor submits this identity before UI delivery.  Only the
+    authoritative ACK returned by this function permits final delivery.
+    Replaying the same transaction is harmless; any stale binding is rejected.
     """
 
     authorization = (
@@ -8488,6 +9026,9 @@ def task_commit_synthesis(
     objective_identity = str(objective_hash_value or "").strip().casefold()
     digest = str(output_digest or "").strip().casefold()
     observed_epoch = max(0, int(control_epoch or 0))
+    observed_fingerprint = str(control_fingerprint or "").strip().casefold()
+    observed_generation = max(0, int(mutation_generation or 0))
+    transaction_id = str(synthesis_transaction_id or "").strip().casefold()
     if not task_session_id:
         return {
             "ok": False,
@@ -8506,6 +9047,28 @@ def task_commit_synthesis(
             "errorCode": "SYNTHESIS_OUTPUT_DIGEST_INVALID",
             "error": "outputDigest must be a SHA-256 digest",
         }
+    if re.fullmatch(r"[a-f0-9]{64}", observed_fingerprint) is None:
+        return {
+            "ok": False,
+            "errorCode": "SYNTHESIS_CONTROL_FINGERPRINT_INVALID",
+            "error": "controlFingerprint must be a SHA-256 identity",
+        }
+    expected_transaction_id = _canonical_hash(
+        {
+            "taskSessionId": task_session_id,
+            "objectiveHash": objective_identity,
+            "controlEpoch": observed_epoch,
+            "controlFingerprint": observed_fingerprint,
+            "mutationGeneration": observed_generation,
+            "outputDigest": digest,
+        }
+    )
+    if transaction_id != expected_transaction_id:
+        return {
+            "ok": False,
+            "errorCode": "SYNTHESIS_TRANSACTION_ID_MISMATCH",
+            "error": "synthesisTransactionId does not match the prepared synthesis binding",
+        }
     outcome: dict[str, Any] = {}
 
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -8520,6 +9083,12 @@ def task_commit_synthesis(
                 str(prior.get("objectiveHash") or "").casefold() == objective_identity
                 and str(prior.get("outputDigest") or "").casefold() == digest
                 and int(prior.get("controlEpoch") or 0) == observed_epoch
+                and str(prior.get("controlFingerprint") or "").casefold()
+                == observed_fingerprint
+                and int(prior.get("mutationGeneration") or 0)
+                == observed_generation
+                and str(prior.get("synthesisTransactionId") or "").casefold()
+                == transaction_id
             ):
                 outcome = {
                     "ok": True,
@@ -8603,6 +9172,29 @@ def task_commit_synthesis(
             if isinstance(state.get("lastToolOutcome"), dict)
             else {}
         )
+        state = _refresh_repository_audit_ledger(workspace, state)
+        state = _refresh_server_owned_state(state)
+        repo_audit = (
+            state.get("repoAuditLedger")
+            if isinstance(state.get("repoAuditLedger"), dict)
+            else {}
+        )
+        if repo_audit.get("required") is True and not (
+            str(repo_audit.get("status") or "").casefold() == "complete"
+            and int(repo_audit.get("remainingCount") or 0) == 0
+            and repo_audit.get("overflow") is not True
+        ):
+            outcome = {
+                "ok": False,
+                "errorCode": "SYNTHESIS_AUDIT_FRONTIER_INCOMPLETE",
+                "error": (
+                    "Repository-wide synthesis cannot commit until every bounded "
+                    "inventory target is analyzed or explicitly excluded."
+                ),
+                "inventoryHash": str(repo_audit.get("inventoryHash") or ""),
+                "remainingCount": int(repo_audit.get("remainingCount") or 0),
+            }
+            return None
         evidence_tools = {
             "unreal_rag_search",
             "unreal_symbol_lookup",
@@ -8671,15 +9263,38 @@ def task_commit_synthesis(
                 state,
             )
             return None
+        if str(control.get("fingerprint") or "").casefold() != observed_fingerprint:
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "SYNTHESIS_CONTROL_FINGERPRINT_STALE",
+                    "error": "The synthesis control fingerprint is stale.",
+                },
+                state,
+            )
+            return None
+        if int(state.get("mutationGeneration") or 0) != observed_generation:
+            outcome = _auth_refresh_failure(
+                {
+                    "ok": False,
+                    "errorCode": "SYNTHESIS_MUTATION_GENERATION_STALE",
+                    "error": "The synthesis mutation generation is stale.",
+                },
+                state,
+            )
+            return None
         committed_at = _utc_now()
         lifecycle = {
-            "version": 1,
+            "version": 2,
             "status": "committed",
             "entryMode": synthesis_entry_mode,
             "taskSessionId": task_session_id,
             "objectiveHash": objective_identity,
             "controlEpoch": observed_epoch,
+            "controlFingerprint": observed_fingerprint,
+            "mutationGeneration": observed_generation,
             "outputDigest": digest,
+            "synthesisTransactionId": transaction_id,
             "committedAt": committed_at,
         }
         state["synthesisLifecycle"] = lifecycle
@@ -10757,6 +11372,8 @@ def task_set_runtime_session(
 
 def task_status(workspace: Path, task_session_id: str) -> dict[str, Any]:
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        state = _refresh_repository_audit_ledger(workspace, state)
+        state = _refresh_server_owned_state(state)
         return _reflect_job_terminal_state(workspace, task_session_id, state)
 
     try:

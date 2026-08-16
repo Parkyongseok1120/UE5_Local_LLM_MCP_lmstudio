@@ -25,11 +25,23 @@ const MAX_REPEAT_EVIDENCE_FILES = 1;
 const MAX_REPEAT_EVIDENCE_CHARS = 12000;
 const MAX_DURABLE_OBJECTIVE_CHARS = 65536;
 const CHECKPOINT_LIFECYCLE_VERSION = 1;
-const CHECKPOINT_LIFECYCLE_STATUSES = new Set(["pending", "completed", "committed"]);
+const CHECKPOINT_LIFECYCLE_STATUSES = new Set([
+  "pending",
+  "prepared",
+  "completed",
+  "commit_sent",
+  "commit_acked",
+  "committed",
+  "delivered",
+]);
 const CHECKPOINT_LIFECYCLE_STATUS_RANK = Object.freeze({
   pending: 0,
-  completed: 1,
-  committed: 2,
+  prepared: 1,
+  completed: 2,
+  commit_sent: 2,
+  commit_acked: 3,
+  committed: 3,
+  delivered: 4,
 });
 const DEFAULT_COMPACTION_CONFIG = Object.freeze({
   enabled: true,
@@ -71,6 +83,51 @@ function toolCallFingerprint(name, args = {}) {
     name: normalizedName,
     args: normalizedArgs,
   }));
+}
+
+function compactModelFence(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version) !== 1) return null;
+  const identifier = String(value.identifier || "").trim().slice(0, 512);
+  const instanceReference = String(value.instanceReference || "").trim().slice(0, 512);
+  const contextLength = Number(value.contextLength);
+  const observationLevel = String(value.observationLevel || "").trim();
+  if (!identifier || !Number.isInteger(contextLength) || contextLength <= 0) return null;
+  if (!new Set(["instance", "identifier"]).has(observationLevel)) return null;
+  if ((observationLevel === "instance") !== Boolean(instanceReference)) return null;
+  if (value.loadConfigObservable !== false) return null;
+  return {
+    version: 1,
+    identifier,
+    instanceReference,
+    contextLength,
+    observationLevel,
+    loadConfigObservable: false,
+  };
+}
+
+function compactPredictionPolicy(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version) !== 2) return null;
+  const copy = JSON.parse(JSON.stringify(value));
+  if (stableStringify(copy).length > 16_384) return null;
+  const fingerprint = String(copy.fingerprint || "").trim().toLowerCase();
+  delete copy.fingerprint;
+  if (!/^[a-f0-9]{64}$/.test(fingerprint)) return null;
+  if (sha256(stableStringify(copy)) !== fingerprint) return null;
+  if (String(copy.policyVersion || "") !== "qwen-reasoning-runtime-v2") return null;
+  if (!String(copy.modelIdentifier || "").trim() || String(copy.modelIdentifier).length > 512) return null;
+  if (String(copy.modelInstanceReference || "").length > 512) return null;
+  if (copy.modelLoadConfigHash !== null || copy.modelLoadConfigObservable !== false) return null;
+  if (!copy.sampling || typeof copy.sampling !== "object" || Array.isArray(copy.sampling)) return null;
+  if (!copy.budgets || typeof copy.budgets !== "object" || Array.isArray(copy.budgets)) return null;
+  if (!copy.reasoningControl || typeof copy.reasoningControl !== "object"
+    || Array.isArray(copy.reasoningControl)) return null;
+  if (!new Set(["generator_raw_kv_config", "unsupported_model"])
+    .has(String(copy.reasoningControl.transport || ""))) return null;
+  const effort = copy.reasoningControl.effort;
+  if (effort !== null && !new Set(["low", "medium", "xhigh"]).has(String(effort))) return null;
+  return { ...copy, fingerprint };
 }
 
 function compactLifecycleState(value) {
@@ -145,7 +202,7 @@ function mergeLifecycleState(previousValue, nextValue) {
 
 function hasUncommittedPrediction(value, context = {}) {
   const lifecycle = compactLifecycleState(value);
-  if (!lifecycle || lifecycle.status === "committed") return false;
+  if (!lifecycle || ["committed", "delivered"].includes(lifecycle.status)) return false;
   const expectedTaskSessionId = String(context.taskSessionId || "").trim();
   const expectedObjectiveHash = String(context.objectiveHash || "").trim().toLowerCase();
   if (
@@ -1601,7 +1658,11 @@ function extractControlState(messages, prior = {}, options = {}) {
     && objectiveHashOf(priorObjectiveFull) === resumedObjectiveHash
   ) ? priorObjectiveFull : "";
   const state = {
+    resumedPriorCheckpoint: canResume,
     schemaVersion: COMPACTION_SCHEMA_VERSION,
+    // Storage revision is concurrency identity, not semantic task state. Keep
+    // it even when a major goal change intentionally discards prior control.
+    storeRevision: Math.max(0, Number(prior.storeRevision || 0)),
     objective: resumedObjective,
     objectiveFull: resumedObjectiveFull,
     objectiveHash: resumedObjectiveHash,
@@ -2078,6 +2139,7 @@ function buildWorkingSet(control) {
 
 function buildCheckpoint(messages, prior = {}, options = {}) {
   const control = extractControlState(messages, prior, options);
+  const canResume = control.resumedPriorCheckpoint === true;
   const snapshots = snapshotMessages(messages || []);
   const generation = Number(prior.checkpointGeneration || 0) + 1;
   const activeServerControl = compactServerControl(control.serverControl);
@@ -2209,6 +2271,7 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
   }
   return {
     schemaVersion: COMPACTION_SCHEMA_VERSION,
+    storeRevision: Math.max(0, Number(control.storeRevision || prior.storeRevision || 0)),
     checkpointGeneration: generation,
     createdAt: new Date().toISOString(),
     objective: control.objective,
@@ -2256,6 +2319,48 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     invalidatedTaskSessionIds: [...control.invalidatedTaskSessionIds].slice(-16),
     pendingToolCall: prior.pendingToolCall || null,
     pendingToolCalls: Array.isArray(prior.pendingToolCalls) ? [...prior.pendingToolCalls] : [],
+    synthesisDelivery: canResume && prior.synthesisDelivery && typeof prior.synthesisDelivery === "object"
+      && !Array.isArray(prior.synthesisDelivery)
+      ? {
+        output: String(prior.synthesisDelivery.output || "").slice(0, 131072),
+        outputDigest: String(prior.synthesisDelivery.outputDigest || "").slice(0, 64),
+        transactionId: String(prior.synthesisDelivery.transactionId || "").slice(0, 160),
+        acknowledgedAt: String(prior.synthesisDelivery.acknowledgedAt || "").slice(0, 64),
+      }
+      : null,
+    modelFence: canResume ? compactModelFence(prior.modelFence) : null,
+    predictionPolicy: canResume ? compactPredictionPolicy(prior.predictionPolicy) : null,
+    predictionActivity: canResume && prior.predictionActivity
+      && typeof prior.predictionActivity === "object" && !Array.isArray(prior.predictionActivity)
+      ? {
+        version: 1,
+        inferenceActivityAt: String(prior.predictionActivity.inferenceActivityAt || "").slice(0, 64),
+        semanticProgressAt: String(prior.predictionActivity.semanticProgressAt || "").slice(0, 64),
+      }
+      : null,
+    reasoningFallback: canResume && prior.reasoningFallback && typeof prior.reasoningFallback === "object"
+      && !Array.isArray(prior.reasoningFallback)
+      ? {
+        version: 1,
+        status: String(prior.reasoningFallback.status || "").slice(0, 32),
+        configuredEffort: String(prior.reasoningFallback.configuredEffort || "").slice(0, 16),
+        effort: String(prior.reasoningFallback.effort || "").slice(0, 16),
+        reason: String(prior.reasoningFallback.reason || "").slice(0, 80),
+        attempts: Math.max(0, Number(prior.reasoningFallback.attempts || 0)),
+        updatedAt: String(prior.reasoningFallback.updatedAt || "").slice(0, 64),
+        completedAt: String(prior.reasoningFallback.completedAt || "").slice(0, 64),
+      }
+      : null,
+    compactionChurn: canResume && prior.compactionChurn && typeof prior.compactionChurn === "object"
+      && !Array.isArray(prior.compactionChurn)
+      ? {
+        version: 1,
+        progressSignature: String(prior.compactionChurn.progressSignature || "").slice(0, 64),
+        consecutiveWithoutProgress: Math.max(0, Number(prior.compactionChurn.consecutiveWithoutProgress || 0)),
+        lastAction: String(prior.compactionChurn.lastAction || "").slice(0, 32),
+        updatedAt: String(prior.compactionChurn.updatedAt || "").slice(0, 64),
+      }
+      : null,
     completedToolCallIds: Array.isArray(prior.completedToolCallIds) ? [...prior.completedToolCallIds].slice(-256) : [],
     // RAG and Agent publish tool catalogs independently. Preserve the one-shot
     // catalog refresh across its tool-result turn so a stale client catalog
@@ -2742,6 +2847,10 @@ function compactSnapshots(messages, checkpoint, options = {}) {
 function validateCheckpoint(checkpoint) {
   if (!checkpoint || checkpoint.schemaVersion !== COMPACTION_SCHEMA_VERSION) return false;
   if (!Number.isFinite(Number(checkpoint.checkpointGeneration))) return false;
+  if (checkpoint.storeRevision !== undefined
+    && (!Number.isInteger(Number(checkpoint.storeRevision)) || Number(checkpoint.storeRevision) < 0)) {
+    return false;
+  }
   if (
     checkpoint.objectiveHash !== undefined
     && checkpoint.objectiveHash !== ""
@@ -2788,6 +2897,44 @@ function validateCheckpoint(checkpoint) {
       || typeof call.name !== "string"
       || !call.name.trim()
     ))) return false;
+  }
+  if (checkpoint.synthesisDelivery !== undefined && checkpoint.synthesisDelivery !== null) {
+    const delivery = checkpoint.synthesisDelivery;
+    if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) return false;
+    if (typeof delivery.output !== "string" || delivery.output.length > 131072) return false;
+    if (!/^[a-f0-9]{64}$/.test(String(delivery.outputDigest || ""))) return false;
+    if (!String(delivery.transactionId || "").trim()) return false;
+  }
+  if (checkpoint.reasoningFallback !== undefined && checkpoint.reasoningFallback !== null) {
+    const fallback = checkpoint.reasoningFallback;
+    if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) return false;
+    if (Number(fallback.version) !== 1) return false;
+    if (!["downgraded", "completed"].includes(String(fallback.status || ""))) return false;
+    if (!["low", "medium", "xhigh"].includes(String(fallback.effort || ""))) return false;
+    if (!Number.isInteger(Number(fallback.attempts)) || Number(fallback.attempts) < 0) return false;
+  }
+  if (checkpoint.modelFence !== undefined && checkpoint.modelFence !== null) {
+    const fence = compactModelFence(checkpoint.modelFence);
+    if (!fence || stableStringify(fence) !== stableStringify(checkpoint.modelFence)) return false;
+  }
+  if (checkpoint.predictionPolicy !== undefined && checkpoint.predictionPolicy !== null) {
+    const policy = compactPredictionPolicy(checkpoint.predictionPolicy);
+    if (!policy || stableStringify(policy) !== stableStringify(checkpoint.predictionPolicy)) return false;
+  }
+  if (checkpoint.predictionActivity !== undefined && checkpoint.predictionActivity !== null) {
+    const activity = checkpoint.predictionActivity;
+    if (!activity || typeof activity !== "object" || Array.isArray(activity)) return false;
+    if (Number(activity.version) !== 1) return false;
+    if (!Number.isFinite(Date.parse(String(activity.inferenceActivityAt || "")))) return false;
+    if (!Number.isFinite(Date.parse(String(activity.semanticProgressAt || "")))) return false;
+  }
+  if (checkpoint.compactionChurn !== undefined && checkpoint.compactionChurn !== null) {
+    const churn = checkpoint.compactionChurn;
+    if (!churn || typeof churn !== "object" || Array.isArray(churn)) return false;
+    if (Number(churn.version) !== 1) return false;
+    if (!/^[a-f0-9]{64}$/.test(String(churn.progressSignature || ""))) return false;
+    if (!Number.isInteger(Number(churn.consecutiveWithoutProgress))
+      || Number(churn.consecutiveWithoutProgress) < 0) return false;
   }
   if (checkpoint.sourceMessageCount !== undefined) {
     const count = Number(checkpoint.sourceMessageCount);
@@ -2907,6 +3054,8 @@ module.exports = {
   sha256,
   objectiveHashOf,
   toolCallFingerprint,
+  compactModelFence,
+  compactPredictionPolicy,
   compactLifecycleState,
   mergeLifecycleState,
   hasUncommittedPrediction,

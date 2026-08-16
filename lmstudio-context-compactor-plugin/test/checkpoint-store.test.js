@@ -11,12 +11,16 @@ const core = require("../src/compaction-core.js");
 test("checkpoint store keeps the newest 20 generations and active checkpoint", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-store-"));
   try {
+    let storeRevision = 0;
     for (let generation = 1; generation <= 25; generation += 1) {
-      await store.saveCheckpoint("session", {
+      const checkpoint = {
         schemaVersion: core.COMPACTION_SCHEMA_VERSION,
         checkpointGeneration: generation,
+        storeRevision,
         completedToolCallIds: [],
-      }, root);
+      };
+      await store.saveCheckpoint("session", checkpoint, root);
+      storeRevision = checkpoint.storeRevision;
     }
     const dir = store.sessionDir("session", root);
     const generations = fs.readdirSync(dir).filter((name) => /^checkpoint-\d+\.json$/.test(name));
@@ -107,6 +111,37 @@ test("newest durable generation recovers a stale active checkpoint", async () =>
 
     const checkpoint = await store.loadCheckpoint("session", root);
     assert.equal(checkpoint.checkpointGeneration, 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("same-generation durable revision recovers an interrupted active-pointer write", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-recover-revision-"));
+  try {
+    await store.saveCheckpoint("session", {
+      schemaVersion: core.COMPACTION_SCHEMA_VERSION,
+      checkpointGeneration: 3,
+      storeRevision: 0,
+      completedToolCallIds: [],
+      diagnostics: ["active-old"],
+    }, root);
+    const dir = store.sessionDir("session", root);
+    fs.writeFileSync(
+      path.join(dir, "checkpoint-000003.json"),
+      JSON.stringify({
+        schemaVersion: core.COMPACTION_SCHEMA_VERSION,
+        checkpointGeneration: 3,
+        storeRevision: 2,
+        completedToolCallIds: [],
+        diagnostics: ["durable-new"],
+      }),
+      "utf8",
+    );
+
+    const checkpoint = await store.loadCheckpoint("session", root);
+    assert.equal(checkpoint.storeRevision, 2);
+    assert.deepEqual(checkpoint.diagnostics, ["durable-new"]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

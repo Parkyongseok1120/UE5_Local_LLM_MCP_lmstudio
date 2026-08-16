@@ -227,6 +227,9 @@ test("Qwen3.8 reasoning effort is bound on every proxied prediction", async () =
       const capturedRaw = [];
       const model = {
         identifier: "qwen/qwen3.8-27b",
+        async getModelInfo() {
+          return { identifier: this.identifier, instanceReference: `qwen-instance-${expectedEffort}` };
+        },
         async applyPromptTemplate() { return "formatted"; },
         async countTokens(value) { return String(value || "").length; },
         async getContextLength() { return 100_000; },
@@ -255,26 +258,65 @@ test("Qwen3.8 reasoning effort is bound on every proxied prediction", async () =
         fields: [
           { key: "llm.prediction.reasoning.enableThinking", value: true },
           {
-            key: "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort",
-            value: expectedEffort,
-          },
-          {
             key: "ext.virtualModel.customField.qwen.qwen3.827b.enableThinking",
             value: true,
+          },
+          {
+            key: "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort",
+            value: expectedEffort,
           },
         ],
       });
       const checkpoint = activeCheckpoint(stateRoot);
-      assert.deepEqual(checkpoint.predictionPolicy.reasoningControl, {
-        transport: "generator_raw_kv_config",
-        sdkVersion: "1.5.0",
-        effort: expectedEffort,
-        perPredictionEffortObservable: true,
-      });
+      assert.equal(checkpoint.predictionPolicy.version, 2);
+      assert.equal(checkpoint.predictionPolicy.modelIdentifier, "qwen/qwen3.8-27b");
+      assert.equal(checkpoint.predictionPolicy.modelInstanceReference, `qwen-instance-${expectedEffort}`);
+      assert.equal(checkpoint.predictionPolicy.modelLoadConfigHash, null);
+      assert.equal(checkpoint.predictionPolicy.modelLoadConfigObservable, false);
+      assert.equal(checkpoint.predictionPolicy.samplingProfile, "qwen3_8_27b");
+      assert.equal(checkpoint.predictionPolicy.reasoningControl.transport, "generator_raw_kv_config");
+      assert.equal(checkpoint.predictionPolicy.reasoningControl.effort, expectedEffort);
+      assert.equal(checkpoint.predictionPolicy.reasoningControl.enableThinking, true);
+      assert.equal(checkpoint.predictionPolicy.reasoningControl.failClosedIfUnpinned, true);
+      assert.equal(checkpoint.predictionPolicy.reasoningControl.runtimePinned, true);
+      assert.equal(checkpoint.predictionPolicy.reasoningControl.transportConfigured, true);
+      assert.equal(checkpoint.predictionPolicy.reasoningControl.backendApplied, "unknown");
+      assert.equal(checkpoint.predictionPolicy.reasoningControl.backendObserved, false);
+      assert.equal(checkpoint.predictionPolicy.reasoningControl.perPredictionEffortObservable, false);
+      assert.match(checkpoint.predictionPolicy.fingerprint, /^[a-f0-9]{64}$/);
     } finally {
       delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
       fs.rmSync(stateRoot, { recursive: true, force: true });
     }
+  }
+});
+
+test("Qwen3.8 reasoning fails closed when the LM Studio instance cannot be pinned", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-qwen-unpinned-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let predictionCalls = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() { return { identifier: this.identifier }; },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() { predictionCalls += 1; throw new Error("must not predict unpinned"); },
+    };
+    const history = Chat.empty();
+    history.append("user", "Explain the current Unreal source.");
+
+    await assert.rejects(
+      generate(controllerFor(model, { reasoningEffort: "medium" }, stateRoot, [], []), history),
+      (error) => error?.code === "REASONING_MODEL_INSTANCE_UNPINNED",
+    );
+    assert.equal(predictionCalls, 0);
+    assert.equal(activeCheckpoint(stateRoot).predictionState.status, "pending");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
@@ -803,11 +845,21 @@ test("control v2 required tool is forced as one exact schema with server argumen
     const { generate } = require("../dist/generator.js");
     const emitted = [];
     const model = {
-      identifier: "control-v2-required-model",
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "qwen-required-tool-instance" };
+      },
       async applyPromptTemplate() { return "formatted"; },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
       respond(_history, opts) {
+        assert.deepEqual(opts.raw, { fields: [
+          { key: "llm.prediction.reasoning.enableThinking", value: false },
+          {
+            key: "ext.virtualModel.customField.qwen.qwen3.827b.enableThinking",
+            value: false,
+          },
+        ] });
         assert.equal(opts.rawTools.force, true);
         assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name), ["replace_in_file"]);
         opts.onToolCallRequestStart(1, { toolCallId: "write-v2" });
@@ -875,6 +927,10 @@ test("control v2 required tool is forced as one exact schema with server argumen
     assert.equal(end.request.arguments.path, "Source/Demo/Rule.cpp");
     assert.deepEqual(end.request.arguments.taskAuthorization, ownership);
     assert.equal(emitted.some((event) => event.kind === "failure"), false);
+    const policy = activeCheckpoint(stateRoot).predictionPolicy;
+    assert.equal(policy.phase, "execute");
+    assert.equal(policy.reasoningControl.enableThinking, false);
+    assert.equal(policy.reasoningControl.effort, null);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -3734,6 +3790,66 @@ test("atomic output streams reasoning progress but withholds final text until co
       emitted.filter((event) => event.kind === "fragment").map((event) => event.content),
       ["Inspecting project structure...", "Complete."],
     );
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("reasoning activity without semantic progress durably downgrades xhigh to low", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-reasoning-fallback-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const efforts = [];
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "qwen-reasoning-fallback-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        const effort = opts.raw.fields.find(
+          (field) => field.key.endsWith("reasoningEffort"),
+        ).value;
+        efforts.push(effort);
+        if (effort !== "low") {
+          opts.onPredictionFragment({
+            content: "Still thinking without changing workflow state...",
+            tokensCount: 5,
+            reasoningType: "reasoning",
+          });
+          return {
+            cancel() {},
+            async result() { return await new Promise(() => {}); },
+          };
+        }
+        opts.onPredictionFragment({
+          content: "Bounded final result.",
+          tokensCount: 3,
+          reasoningType: "none",
+        });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect the project without changing files.");
+
+    await generate(controllerFor(model, {
+      reasoningEffort: "extra high",
+      predictionNoProgressSeconds: 0.03,
+      streamReasoningProgress: false,
+    }, stateRoot, emitted, []), history);
+
+    assert.deepEqual(efforts, ["xhigh", "medium", "low"]);
+    assert.equal(emitted.find((event) => event.kind === "fragment").content, "Bounded final result.");
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.reasoningFallback.status, "completed");
+    assert.equal(checkpoint.reasoningFallback.effort, "low");
+    assert.equal(checkpoint.reasoningFallback.attempts, 2);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -6637,6 +6753,57 @@ test("normal-budget active turns compact at the configured message cap", async (
   }
 });
 
+test("three identical applied compactions stop before a fourth discovery prediction", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-churn-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let predictionCalls = 0;
+    const model = {
+      identifier: "compaction-churn-model",
+      async applyPromptTemplate(chat) {
+        return JSON.stringify(core.snapshotMessages(chat.getMessagesArray()));
+      },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 24_000; },
+      respond() {
+        predictionCalls += 1;
+        return { async result() { return { stats: { stopReason: "stop" } }; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("system", "rules");
+    history.append("user", "Inspect the active source without changing the workflow frontier.");
+    for (let index = 0; index < 8; index += 1) {
+      history.append("assistant", `unchanged-evidence-${index}-${"x".repeat(3_500)}`);
+      history.append("user", `continue-${index}`);
+    }
+    const controller = controllerFor(model, {
+      softRemainingTokens: 14_000,
+      hardRemainingTokens: 8_000,
+      maxOutputReserve: 512,
+      normalToolResultReserve: 512,
+      targetRemainingTokensAfterCompaction: 18_000,
+    }, stateRoot, [], []);
+
+    await generate(controller, history);
+    await generate(controller, history);
+    await generate(controller, history);
+    await assert.rejects(
+      generate(controller, history),
+      /compaction repeated three times without authoritative workflow progress/i,
+    );
+
+    assert.equal(predictionCalls, 3);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.compactionChurn.consecutiveWithoutProgress, 3);
+    assert.match(checkpoint.compactionChurn.progressSignature, /^[a-f0-9]{64}$/);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("major objective changes retain no prior verbatim turns", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-major-goal-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -6957,9 +7124,84 @@ test("prepared mutation dispatch is re-emitted with the same id after restart", 
   }
 });
 
+test("resumed checkpoints preserve only validated model fence and prediction policy", () => {
+  const history = Chat.from({ messages: [
+    { role: "user", content: [{ type: "text", text: "현재 프로젝트 소스를 감사해." }] },
+  ] }).getMessagesArray();
+  const prior = core.buildCheckpoint(history, {}, { maxCheckpointFacts: 32 });
+  prior.modelFence = {
+    version: 1,
+    identifier: "qwen/qwen3.8-27b",
+    instanceReference: "qwen-instance-1",
+    contextLength: 131072,
+    observationLevel: "instance",
+    loadConfigObservable: false,
+  };
+  const policyBody = {
+    version: 2,
+    policyVersion: "qwen-reasoning-runtime-v2",
+    modelIdentifier: "qwen/qwen3.8-27b",
+    modelInstanceReference: "qwen-instance-1",
+    modelLoadConfigHash: null,
+    modelLoadConfigObservable: false,
+    samplingProfile: "qwen3_8_27b",
+    phase: "prediction",
+    sampling: { temperature: 0.6, topPSampling: 0.95, topKSampling: 20, minPSampling: 0 },
+    budgets: { maxOutputTokens: 4096 },
+    reasoningControl: { transport: "generator_raw_kv_config", effort: "xhigh" },
+  };
+  prior.predictionPolicy = {
+    ...policyBody,
+    fingerprint: core.sha256(core.stableStringify(policyBody)),
+  };
+
+  const resumed = core.buildCheckpoint(history, prior, { maxCheckpointFacts: 32 });
+  assert.deepEqual(resumed.modelFence, prior.modelFence);
+  assert.deepEqual(resumed.predictionPolicy, prior.predictionPolicy);
+  assert.equal(core.validateCheckpoint(resumed), true);
+
+  const forged = structuredClone(resumed);
+  forged.predictionPolicy.fingerprint = "0".repeat(64);
+  assert.equal(core.validateCheckpoint(forged), false);
+  forged.predictionPolicy = resumed.predictionPolicy;
+  forged.modelFence.observationLevel = "identifier";
+  assert.equal(core.validateCheckpoint(forged), false);
+});
+
+test("checkpoint store CAS rejects a concurrent stale writer", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-cas-"));
+  try {
+    const store = require("../src/checkpoint-store.js");
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "현재 상태를 계속 처리해." }] },
+    ] }).getMessagesArray();
+    const base = core.buildCheckpoint(history, {}, { maxCheckpointFacts: 32 });
+    const left = structuredClone(base);
+    const right = structuredClone(base);
+    left.diagnostics = ["writer=left"];
+    right.diagnostics = ["writer=right"];
+
+    const settled = await Promise.allSettled([
+      store.saveCheckpoint("cas-session", left, stateRoot),
+      store.saveCheckpoint("cas-session", right, stateRoot),
+    ]);
+    assert.equal(settled.filter((item) => item.status === "fulfilled").length, 1);
+    const rejected = settled.find((item) => item.status === "rejected");
+    assert.equal(rejected.reason.code, "STALE_CHECKPOINT_WRITER");
+    const persisted = await store.loadCheckpoint("cas-session", stateRoot);
+    assert.equal(persisted.storeRevision, 1);
+    assert.deepEqual(persisted.diagnostics, left.storeRevision === 1
+      ? ["writer=left"]
+      : ["writer=right"]);
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("tool-free synthesis emits a durable server-owned commit handshake", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-commit-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = "ab".repeat(16);
   try {
     const { generate } = require("../dist/generator.js");
     const emitted = [];
@@ -6974,6 +7216,7 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
       control: {
         version: 2,
         epoch: 21,
+        fingerprint: "1".repeat(64),
         taskSessionId: ownership.taskSessionId,
         routeHash: "route-synthesis-1",
         phase: "synthesis",
@@ -7022,22 +7265,69 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
     await generate(controllerFor(model, {}, stateRoot, emitted, [commitTool]), history);
 
     assert.equal(maxTokens, 8192);
-    const fragmentIndex = emitted.findIndex((event) => event.kind === "fragment");
     const endIndex = emitted.findIndex((event) => event.kind === "end");
-    assert.ok(fragmentIndex >= 0 && endIndex > fragmentIndex);
+    assert.equal(emitted.some((event) => event.kind === "fragment"), false);
+    assert.ok(endIndex >= 0);
     const commit = emitted[endIndex].request;
     assert.equal(commit.name, "unreal_task_commit_synthesis");
     assert.deepEqual(commit.arguments.taskAuthorization, ownership);
     assert.equal(commit.arguments.controlEpoch, 21);
+    assert.equal(commit.arguments.controlFingerprint, "1".repeat(64));
+    assert.equal(commit.arguments.mutationGeneration, 0);
     assert.match(commit.arguments.objectiveHash, /^[a-f0-9]{64}$/);
     assert.match(commit.arguments.outputDigest, /^[a-f0-9]{64}$/);
+    assert.match(commit.arguments.synthesisTransactionId, /^[a-f0-9]{64}$/);
     const persisted = activeCheckpoint(stateRoot);
-    assert.equal(persisted.synthesisState.status, "committed");
+    assert.equal(persisted.synthesisState.status, "commit_sent");
     assert.equal(persisted.synthesisState.outputDigest, commit.arguments.outputDigest);
     assert.equal(persisted.pendingToolCalls[0].id, commit.id);
     assert.equal(persisted.pendingToolCalls[0].dispatchState, "emitted");
+
+    const ackHistory = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Audit the current project and report every verified issue." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: commit }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: commit.id,
+        name: commit.name,
+        content: JSON.stringify({
+          ok: true,
+          taskSessionId: ownership.taskSessionId,
+          synthesisLifecycle: {
+            status: "committed",
+            taskSessionId: ownership.taskSessionId,
+            controlEpoch: 21,
+            outputDigest: commit.arguments.outputDigest,
+          },
+        }),
+      }] },
+    ] });
+    const delivered = [];
+    let modelCallsAfterAck = 0;
+    const postAckModel = {
+      ...model,
+      respond() { modelCallsAfterAck += 1; throw new Error("model must not run after ACK"); },
+    };
+    const deliveryFailureController = controllerFor(postAckModel, {}, stateRoot, [], [commitTool]);
+    deliveryFailureController.fragmentGenerated = () => {
+      throw new Error("injected UI delivery failure after server ACK");
+    };
+    await assert.rejects(
+      generate(deliveryFailureController, ackHistory),
+      /injected UI delivery failure after server ACK/,
+    );
+    const acknowledged = activeCheckpoint(stateRoot);
+    assert.equal(acknowledged.synthesisState.status, "commit_acked");
+    assert.equal(acknowledged.synthesisDelivery.output, "Evidence-backed final synthesis.");
+
+    await generate(controllerFor(postAckModel, {}, stateRoot, delivered, [commitTool]), ackHistory);
+    assert.equal(modelCallsAfterAck, 0);
+    assert.equal(delivered.find((event) => event.kind === "fragment").content, "Evidence-backed final synthesis.");
+    assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "delivered");
+    assert.equal(activeCheckpoint(stateRoot).pendingToolCalls.length, 0);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
@@ -7058,6 +7348,7 @@ test("tool-free read-only planner final emits a durable server-owned commit hand
       control: {
         version: 2,
         epoch: 22,
+        fingerprint: "2".repeat(64),
         taskSessionId: ownership.taskSessionId,
         routeHash: "route-read-only-final-1",
         taskMode: "read_only",
@@ -7104,19 +7395,85 @@ test("tool-free read-only planner final emits a durable server-owned commit hand
 
     await generate(controllerFor(model, {}, stateRoot, emitted, [commitTool]), history);
 
-    const fragmentIndex = emitted.findIndex((event) => event.kind === "fragment");
     const endIndex = emitted.findIndex((event) => event.kind === "end");
-    assert.ok(fragmentIndex >= 0 && endIndex > fragmentIndex);
+    assert.equal(emitted.some((event) => event.kind === "fragment"), false);
+    assert.ok(endIndex >= 0);
     const commit = emitted[endIndex].request;
     assert.equal(commit.name, "unreal_task_commit_synthesis");
     assert.deepEqual(commit.arguments.taskAuthorization, ownership);
     assert.equal(commit.arguments.controlEpoch, 22);
     assert.match(commit.arguments.outputDigest, /^[a-f0-9]{64}$/);
     const persisted = activeCheckpoint(stateRoot);
-    assert.equal(persisted.synthesisState.status, "committed");
+    assert.equal(persisted.synthesisState.status, "commit_sent");
     assert.equal(persisted.pendingToolCalls[0].id, commit.id);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("failed synthesis commit ACK never delivers or persists committed state", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-rejected-"));
+  const sessionId = "ef".repeat(16);
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = sessionId;
+  try {
+    const store = require("../src/checkpoint-store.js");
+    const { generate } = require("../dist/generator.js");
+    const preparedOutput = "This text must not be delivered.";
+    const outputDigest = core.sha256(preparedOutput);
+    const callId = "synthesis-commit-rejected-1";
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Audit current project source." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: callId,
+        type: "function",
+        name: "unreal_task_commit_synthesis",
+        arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: callId,
+        name: "unreal_task_commit_synthesis",
+        content: JSON.stringify({ ok: false, errorCode: "SYNTHESIS_CONTROL_STALE" }),
+      }] },
+    ] });
+    const checkpoint = core.buildCheckpoint(history.getMessagesArray().slice(0, 1), {}, { maxCheckpointFacts: 32 });
+    checkpoint.synthesisState = {
+      version: 1,
+      status: "commit_sent",
+      objectiveHash: checkpoint.objectiveHash,
+      outputDigest,
+      updatedAt: new Date().toISOString(),
+    };
+    checkpoint.pendingToolCalls = [{
+      id: callId,
+      type: "function",
+      name: "unreal_task_commit_synthesis",
+      arguments: {
+        taskAuthorization: { taskSessionId: "task-rejected" },
+        controlEpoch: 5,
+        outputDigest,
+      },
+      dispatchState: "emitted",
+      preparedSynthesisOutput: preparedOutput,
+      preparedSynthesisOutputDigest: outputDigest,
+      observedToolResultCount: 0,
+    }];
+    await store.saveCheckpoint(sessionId, checkpoint);
+    const emitted = [];
+
+    await assert.rejects(
+      generate(controllerFor({}, {}, stateRoot, emitted, []), history),
+      /was not acknowledged/,
+    );
+
+    assert.equal(emitted.some((event) => event.kind === "fragment"), false);
+    assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "prepared");
+    assert.notEqual(activeCheckpoint(stateRoot).synthesisState.status, "committed");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
@@ -7188,6 +7545,7 @@ test("an emitted synthesis commit is replayed with the same id after result loss
       { role: "user", content: [{ type: "text", text: "Audit current project source." }] },
     ] });
     const checkpoint = core.buildCheckpoint(history.getMessagesArray(), {}, { maxCheckpointFacts: 32 });
+    const preparedOutput = "Recovered synthesis output.";
     checkpoint.pendingToolCalls = [{
       id: "synthesis-commit-replay-1",
       type: "function",
@@ -7195,10 +7553,10 @@ test("an emitted synthesis commit is replayed with the same id after result loss
       arguments: {
         objectiveHash: checkpoint.objectiveHash,
         controlEpoch: 4,
-        outputDigest: "a".repeat(64),
+        outputDigest: core.sha256(preparedOutput),
       },
       dispatchState: "emitted",
-      preparedSynthesisOutput: "Recovered synthesis output.",
+      preparedSynthesisOutput: preparedOutput,
       observedToolResultCount: 0,
     }];
     await store.saveCheckpoint(sessionId, checkpoint);

@@ -64,12 +64,12 @@ def test_model_alias_resolves_qwen38_27b_without_family_fallback(monkeypatch):
     )
 
 
-def test_qwen38_profile_has_explicit_server_reasoning_policy():
+def test_qwen38_profile_has_one_compactor_resolved_reasoning_policy():
     limits = sampling.profile_edit_limits("qwen3_8_27b")
     policy = limits["reasoningPolicy"]
     plan = sampling.load_sampling_preset(turn="plan", profile="qwen3_8_27b")
 
-    assert policy["owner"] == "server"
+    assert policy["owner"] == "compactor_generator_resolved_prediction_policy"
     assert policy["transport"] == "generator_raw_kv_config"
     assert policy["capabilityStatus"] == "model_profile_bound"
     assert policy["fieldKey"] == (
@@ -81,6 +81,9 @@ def test_qwen38_profile_has_explicit_server_reasoning_policy():
     assert plan["reasoningEffort"] == "low"
     assert plan["topK"] == 20
     assert plan["minP"] == 0
+    assert plan["thinking"] == "on"
+    execute = sampling.load_sampling_preset(turn="execute", profile="qwen3_8_27b")
+    assert execute["thinking"] == "off"
 
 
 def test_sampling_cli_can_resolve_profile_from_model_alias():

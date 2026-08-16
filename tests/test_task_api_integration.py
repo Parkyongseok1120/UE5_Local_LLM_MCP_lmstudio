@@ -46,6 +46,26 @@ def _wait_for_job_file(workspace: Path, job_id: str, *, timeout_sec: float = 10.
     raise AssertionError(f"Timed out waiting for job record: {path} ({last_error})")
 
 
+def _synthesis_commit_binding(state: dict, digest: str) -> dict:
+    control = state["controlState"]
+    binding = {
+        "taskSessionId": state["taskSessionId"],
+        "objectiveHash": state["objectiveHash"],
+        "controlEpoch": control["epoch"],
+        "controlFingerprint": control["fingerprint"],
+        "mutationGeneration": int(state.get("mutationGeneration") or 0),
+        "outputDigest": digest,
+    }
+    return {
+        "objective_hash_value": binding["objectiveHash"],
+        "control_epoch": binding["controlEpoch"],
+        "control_fingerprint": binding["controlFingerprint"],
+        "mutation_generation": binding["mutationGeneration"],
+        "output_digest": digest,
+        "synthesis_transaction_id": task_api_module._canonical_hash(binding),
+    }
+
+
 def test_task_start_and_status_phase_fields(tmp_path: Path) -> None:
     started = task_start(tmp_path, request="Fix compile error in Demo.cpp")
     assert started["ok"] is True
@@ -56,6 +76,88 @@ def test_task_start_and_status_phase_fields(tmp_path: Path) -> None:
     status = task_status(tmp_path, task_id)
     assert status["phase"] == "planning"
     assert (task_root(tmp_path, task_id) / "logs" / "task.log").is_file()
+
+
+def test_repository_audit_frontier_is_durable_and_blocks_early_synthesis(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    project_root = tmp_path / "AuditProject"
+    source = project_root / "Source" / "AuditProject"
+    ignored = project_root / "Intermediate"
+    config = project_root / "Config"
+    source.mkdir(parents=True)
+    ignored.mkdir(parents=True)
+    config.mkdir(parents=True)
+    project_file = project_root / "AuditProject.uproject"
+    project_file.write_text("{}", encoding="utf-8")
+    (source / "A.cpp").write_text("int A = 1;\n", encoding="utf-8")
+    (source / "B.h").write_text("#pragma once\n", encoding="utf-8")
+    (ignored / "Generated.cpp").write_text("int Generated;\n", encoding="utf-8")
+    (config / "DefaultGame.ini").write_text("[/Script/Demo.Settings]\n", encoding="utf-8")
+
+    started = task_start(
+        tmp_path,
+        request="프로젝트 전체 코드를 실제 근거로 감사해줘",
+        mode="read_only",
+        project_file=str(project_file),
+        plan_payload={
+            "taskKind": "cpp_analysis",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [],
+        },
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    ledger = state["repoAuditLedger"]
+    assert ledger["required"] is True
+    assert ledger["boundedCount"] == 3
+    assert ledger["queuedTargets"] == [
+        "Source/AuditProject/A.cpp",
+        "Source/AuditProject/B.h",
+        "Config/DefaultGame.ini",
+    ]
+    assert state["controlState"]["requiredTool"] == {
+        "name": "read_file",
+        "args": {"path": "Source/AuditProject/A.cpp"},
+    }
+    resumed = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert resumed["repoAuditLedger"]["cursor"] == 0
+    assert resumed["repoAuditLedger"]["nextTargets"][0] == "Source/AuditProject/A.cpp"
+
+    digest = "b" * 64
+    rejected = task_commit_synthesis(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        **_synthesis_commit_binding(state, digest),
+    )
+    assert rejected["ok"] is False
+    assert rejected["errorCode"] == "SYNTHESIS_AUDIT_FRONTIER_INCOMPLETE"
+
+    completed_ledger_state = json.loads(state_path.read_text(encoding="utf-8"))
+    completed_ledger = completed_ledger_state["repoAuditLedger"]
+    for entry in completed_ledger["entries"].values():
+        entry["status"] = "analyzed"
+        entry["analysisVersion"] = completed_ledger["analysisVersion"]
+        entry["coveredRanges"] = [[1, entry["lineCount"]]]
+    completed_ledger.update(
+        {
+            "status": "complete",
+            "cursor": completed_ledger["boundedCount"],
+            "analyzedCount": completed_ledger["boundedCount"],
+            "remainingCount": 0,
+        }
+    )
+    state_path.write_text(json.dumps(completed_ledger_state), encoding="utf-8")
+    (source / "B.h").write_text("#pragma once\nstruct FChanged {};\n", encoding="utf-8")
+
+    changed = task_status(tmp_path, started["taskSessionId"])["state"]["repoAuditLedger"]
+    assert changed["status"] == "active"
+    assert changed["analyzedCount"] == 2
+    assert changed["remainingCount"] == 1
+    assert changed["nextTargets"][0] == "Source/AuditProject/B.h"
 
 
 def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
@@ -99,12 +201,23 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
     state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     digest = "d" * 64
+    stale_state = json.loads(json.dumps(state))
+    stale_state["controlState"]["epoch"] = max(
+        0, int(state["controlState"]["epoch"]) - 1
+    )
+    stale = task_commit_synthesis(
+        tmp_path,
+        task_authorization=ready["taskAuthorization"],
+        **_synthesis_commit_binding(stale_state, digest),
+    )
+    assert stale["ok"] is False
+    assert stale["errorCode"] == "SYNTHESIS_CONTROL_STALE"
+    assert task_status(tmp_path, started["taskSessionId"])["state"]["status"] == "running"
+
     committed = task_commit_synthesis(
         tmp_path,
         task_authorization=ready["taskAuthorization"],
-        objective_hash_value=state["objectiveHash"],
-        control_epoch=ready["control"]["epoch"],
-        output_digest=digest,
+        **_synthesis_commit_binding(state, digest),
     )
     assert committed["ok"] is True
     assert committed["active"] is False
@@ -116,9 +229,7 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
     replay = task_commit_synthesis(
         tmp_path,
         task_authorization=ready["taskAuthorization"],
-        objective_hash_value=state["objectiveHash"],
-        control_epoch=ready["control"]["epoch"],
-        output_digest=digest,
+        **_synthesis_commit_binding(state, digest),
     )
     assert replay["ok"] is True
     assert replay["idempotentReplay"] is True
@@ -153,9 +264,7 @@ def test_read_only_tool_free_final_requires_durable_evidence_before_direct_commi
     rejected = task_commit_synthesis(
         tmp_path,
         task_authorization=started["taskAuthorization"],
-        objective_hash_value=state["objectiveHash"],
-        control_epoch=state["controlState"]["epoch"],
-        output_digest=digest,
+        **_synthesis_commit_binding(state, digest),
     )
     assert rejected["ok"] is False
     assert rejected["errorCode"] == "SYNTHESIS_NOT_READY"
@@ -177,9 +286,7 @@ def test_read_only_tool_free_final_requires_durable_evidence_before_direct_commi
     committed = task_commit_synthesis(
         tmp_path,
         task_authorization=started["taskAuthorization"],
-        objective_hash_value=state["objectiveHash"],
-        control_epoch=state["controlState"]["epoch"],
-        output_digest=digest,
+        **_synthesis_commit_binding(state, digest),
     )
 
     assert committed["ok"] is True
@@ -435,11 +542,27 @@ def test_exact_control_args_project_through_status_finalize_and_active_list(
             "requiredNextToolArgs": exact_args,
             "firstError": f"{target}:20: error",
             "mutationGeneration": 0,
+            "commandFingerprint": "a" * 64,
+            "diagnosticFingerprint": "b" * 64,
+            "outputHash": "c" * 64,
+            "outputTail": ["localized compiler failure"],
+            "exitCode": 6,
+            "fullLogPath": ".agent/logs/latest-build.log",
+            "target": "DemoEditor",
+            "platform": "Win64",
+            "configuration": "Development",
         },
     )
     assert recorded["ok"] is True
 
     status = task_status(tmp_path, started["taskSessionId"])
+    for evidence in (status["state"]["buildRecovery"], status["state"]["recoveryObligation"]):
+        assert evidence["commandFingerprint"] == "a" * 64
+        assert evidence["diagnosticFingerprint"] == "b" * 64
+        assert evidence["outputHash"] == "c" * 64
+        assert evidence["outputTail"] == ["localized compiler failure"]
+        assert evidence["exitCode"] == 6
+        assert evidence["target"] == "DemoEditor"
     assert status["control"]["requiredTool"] == {
         "name": "read_file_range",
         "args": exact_args,

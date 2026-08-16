@@ -8468,9 +8468,8 @@ class McpServer:
                 "title": "Commit displayed read-only synthesis",
                 "description": (
                     "Internal idempotent completion handshake for the context compactor. "
-                    "Call only after a task-bound, tool-free synthesis was generated completely "
-                    "and emitted to the LM Studio UI. The objective, control epoch, and output "
-                    "digest must match the durable read-only task."
+                    "Call after a task-bound synthesis is prepared and before it is delivered. "
+                    "Only the exact authoritative ACK permits final UI delivery."
                 ),
                 "inputSchema": self._schema(
                     {
@@ -8480,7 +8479,16 @@ class McpServer:
                             "pattern": "^[a-f0-9]{64}$",
                         },
                         "controlEpoch": {"type": "integer", "minimum": 0},
+                        "controlFingerprint": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$",
+                        },
+                        "mutationGeneration": {"type": "integer", "minimum": 0},
                         "outputDigest": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$",
+                        },
+                        "synthesisTransactionId": {
                             "type": "string",
                             "pattern": "^[a-f0-9]{64}$",
                         },
@@ -8489,7 +8497,10 @@ class McpServer:
                         "taskAuthorization",
                         "objectiveHash",
                         "controlEpoch",
+                        "controlFingerprint",
+                        "mutationGeneration",
                         "outputDigest",
+                        "synthesisTransactionId",
                     ],
                 ),
             },
@@ -9593,7 +9604,12 @@ class McpServer:
                     task_authorization=task_authorization_for_state(synthesis_state),
                     objective_hash_value=str(arguments.get("objectiveHash") or ""),
                     control_epoch=int(arguments.get("controlEpoch") or 0),
+                    control_fingerprint=str(arguments.get("controlFingerprint") or ""),
+                    mutation_generation=int(arguments.get("mutationGeneration") or 0),
                     output_digest=str(arguments.get("outputDigest") or ""),
+                    synthesis_transaction_id=str(
+                        arguments.get("synthesisTransactionId") or ""
+                    ),
                 )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()

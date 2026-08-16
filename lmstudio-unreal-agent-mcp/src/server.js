@@ -306,6 +306,8 @@ const {
   beginBuildAttempt,
   finishBuildAttempt,
   cancelBuildAttempt,
+  recordBuildBookkeepingPending,
+  completeBuildBookkeeping,
   recordBuildRecoveryContract,
   recordRecoveryEvidenceCall,
   markRecoveryEvidenceSatisfied,
@@ -7767,6 +7769,101 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         buildGuardScope
       );
       if (!buildAttempt.ok) {
+        if (buildAttempt.reason === "build_bookkeeping_pending") {
+          const transaction = buildAttempt.buildBookkeeping || {};
+          const evidence = {
+            proofLevel: String(transaction.proofLevel || ""),
+            buildProofDigest: String(transaction.buildProofDigest || ""),
+            proofKind: String(transaction.proofKind || "build"),
+            mutationGeneration: Number(transaction.mutationGeneration || mutation.mutationGeneration),
+            buildLogPath: String(transaction.buildLogPath || ""),
+            projectFile: String(transaction.projectFile || projectPath),
+            engineRoot: String(transaction.engineRoot || build.engineRoot || ""),
+            resolvedEngineVersion: String(transaction.resolvedEngineVersion || ""),
+            target: String(transaction.target || target),
+            platform: String(transaction.platform || platform),
+            configuration: String(transaction.configuration || configuration),
+            bookkeepingTransactionId: String(transaction.transactionId || ""),
+            testFilter: Array.isArray(transaction.testFilters) && transaction.testFilters.length === 1
+              ? String(transaction.testFilters[0])
+              : "",
+            testFilters: Array.isArray(transaction.testFilters) ? transaction.testFilters.map(String) : [],
+            declaredTests: Array.isArray(transaction.declaredTests) ? transaction.declaredTests.map(String) : [],
+          };
+          const lifecycleResult = transaction.operation === "require_automation"
+            ? requireAutomationAfterBuildViaPython(WORKSPACE_ROOT, args, evidence)
+            : completeTaskAfterBuildViaPython(WORKSPACE_ROOT, args, evidence);
+          const payload = {
+            ok: lifecycleResult?.ok === true,
+            buildOutcome: "succeeded",
+            proofLevel: evidence.proofLevel,
+            mutationGeneration: evidence.mutationGeneration,
+            fullLogPath: evidence.buildLogPath,
+            commandExecuted: false,
+            bookkeepingReplayed: true,
+            bookkeepingTransactionId: String(transaction.transactionId || ""),
+            taskLifecycle: lifecycleResult?.ok === true
+              ? transaction.operation === "require_automation"
+                ? {
+                  status: "awaiting_automation",
+                  routeOwnershipReleased: false,
+                  taskAuthorization: lifecycleResult.taskAuthorization || undefined,
+                  toolRoute: lifecycleResult.toolRoute || undefined,
+                }
+                : lifecycleResult?.active === true
+                  ? {
+                    status: "slice_advanced",
+                    routeOwnershipReleased: false,
+                    completedSliceId: String(lifecycleResult.completedSliceId || ""),
+                    activeSliceId: String(lifecycleResult.activeSliceId || ""),
+                    pendingSlices: Array.isArray(lifecycleResult.pendingSlices)
+                      ? lifecycleResult.pendingSlices.map(String)
+                      : [],
+                    taskAuthorization: lifecycleResult.taskAuthorization || undefined,
+                    toolRoute: lifecycleResult.toolRoute || undefined,
+                  }
+                  : { status: "completed", routeOwnershipReleased: true }
+              : {
+                status: "completion_failed",
+                errorCode: String(lifecycleResult?.errorCode || "TASK_BUILD_COMPLETION_FAILED"),
+              },
+          };
+          bindAuthoritativeLifecycleControl(payload, lifecycleResult);
+          if (lifecycleResult?.ok !== true) {
+            payload.errorCode = String(lifecycleResult?.errorCode || "TASK_BUILD_COMPLETION_FAILED");
+            payload.error = String(lifecycleResult?.error || "Successful build proof bookkeeping is still pending.");
+            payload.retryable = true;
+            return fail("Build already passed, but its authoritative bookkeeping replay failed.", payload);
+          }
+          if (transaction.operation === "require_automation") {
+            payload.requiredNextTool = "run_unreal_automation_tests";
+            payload.requiredNextToolArgs = { testFilters: evidence.testFilters };
+            payload.pendingMutationTransactions = await markPendingMutationJournals(
+              pendingMutationQuery(projectRoot, args, evidence.mutationGeneration),
+              "built_awaiting_automation",
+              {
+                proofKind: evidence.proofKind,
+                buildLogPath: evidence.buildLogPath,
+                builtAt: new Date().toISOString(),
+              }
+            );
+          } else {
+            payload.finalizedMutationTransactions = await finalizePendingBuildJournals(
+              pendingMutationQuery(projectRoot, args, evidence.mutationGeneration),
+              "completed"
+            );
+          }
+          completeBuildBookkeeping(
+            projectRoot,
+            evidence.mutationGeneration,
+            transaction.transactionId,
+            buildGuardScope
+          );
+          const budgetFail = commitDeferredBudgetOrFail();
+          if (budgetFail) return budgetFail;
+          try { await server.sendToolListChanged(); } catch { /* advisory */ }
+          return text(JSON.stringify(payload, null, 2));
+        }
         const mutationRollback = await rollbackPendingMutationJournals(
           pendingMutationQuery(projectRoot, args, mutation.mutationGeneration),
           "build_recovery_exhausted",
@@ -7910,6 +8007,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       );
       let durableBuildRecoveryBound = false;
       if (payload.recovery) {
+        Object.assign(payload.recovery, {
+          commandFingerprint: payload.commandFingerprint,
+          diagnosticFingerprint: payload.diagnosticFingerprint,
+          outputHash: payload.outputHash,
+          outputTail: payload.outputTail,
+          exitCode: payload.exitCode,
+          fullLogPath: payload.fullLogPath,
+          target,
+          platform,
+          configuration,
+        });
         const sourceScopedRecovery = Boolean(
           String(payload.recovery.targetFile || "").trim()
           && ["read_file", "read_file_range", "search_files", "unreal_symbol_lookup"].includes(
@@ -7995,10 +8103,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       payload.buildStartGeneration = buildGen.buildStartGeneration;
       payload.buildEndGeneration = endGen.buildEndGeneration;
+      payload.buildAttemptId = String(buildAttempt.buildAttemptId || "");
       if (endGen.buildStale) {
         payload.proofLevel = "BuiltStale";
+        payload.proofSemantic = "StaleDuringBuild";
         payload.phase = "stale";
         payload.ok = false;
+      }
+      if (
+        execResult.commandSucceeded === true
+        && String(payload.proofLevel || "").trim() !== "Built"
+      ) {
+        payload.phase = String(payload.proofLevel || "") === "BuiltStale"
+          ? "stale"
+          : "unverified";
+        payload.ok = false;
+        payload.errorCode = payload.phase === "stale"
+          ? "BUILD_PROOF_STALE"
+          : "BUILD_PROOF_UNVERIFIED";
+        payload.error = (
+          "The build process exited successfully, but did not produce authoritative "
+          + "current-generation compile/UHT/link proof."
+        );
       }
       if (execResult.errorCode === "BUILD_TIMEOUT") {
         payload.errorCode = "BUILD_TIMEOUT";
@@ -8006,6 +8132,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       const disposition = buildToolDisposition(payload);
       payload.buildOutcome = disposition.buildOutcome;
+      payload.failureClass = disposition.failureClass;
       payload.toolExecutionSucceeded = disposition.toolExecutionSucceeded;
       payload.recoverable = disposition.recoverable;
       if (disposition.buildOutcome === "compile_failed") {
@@ -8032,6 +8159,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               mutationGeneration: endGen.mutationGeneration,
               requiredTool: { name: "read_unreal_logs", args: diagnosticArgs },
               targetFiles: scopeTargets,
+              commandFingerprint: payload.commandFingerprint,
+              diagnosticFingerprint: payload.diagnosticFingerprint,
+              outputHash: payload.outputHash,
+              outputTail: payload.outputTail,
+              exitCode: payload.exitCode,
+              fullLogPath: payload.fullLogPath,
+              target,
+              platform,
+              configuration,
               message: String(
                 payload.error
                 || payload.summary
@@ -8075,8 +8211,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
         bindAuthoritativeLifecycleControl(payload, recovery);
       }
-      const budgetFail = commitDeferredBudgetOrFail();
-      if (budgetFail) return budgetFail;
+      payload.buildProofDigest = String(payload.proofLevel || "") === "Built"
+        && endGen.buildStale !== true
+        ? crypto.createHash("sha256").update(JSON.stringify({
+          version: 1,
+          buildAttemptId: payload.buildAttemptId,
+          taskSessionId: String(args.taskAuthorization?.taskSessionId || ""),
+          mutationGeneration: endGen.mutationGeneration,
+          projectFile: projectPath,
+          engineRoot: build.engineRoot,
+          target,
+          platform,
+          configuration,
+          proofLevel: payload.proofLevel,
+          outputHash: payload.outputHash,
+          buildLogPath: logPath,
+        })).digest("hex")
+        : "";
+      if (disposition.buildOutcome !== "succeeded") {
+        const budgetFail = commitDeferredBudgetOrFail();
+        if (budgetFail) return budgetFail;
+      }
       if (disposition.buildOutcome === "succeeded") {
         const automationScope = automationScopeForTask(args, endGen.mutationGeneration);
         const automationCoverage = automationScope.kind === "task_scope_unavailable"
@@ -8161,11 +8316,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const testFilters = Array.isArray(automationCoverage.suggestedFilters)
             ? automationCoverage.suggestedFilters.map(String).filter(Boolean)
             : [];
+          const bookkeepingTransactionId = crypto.createHash("sha256").update(JSON.stringify({
+            taskSessionId: String(args.taskAuthorization?.taskSessionId || ""),
+            mutationGeneration: endGen.mutationGeneration,
+            proofLevel: payload.proofLevel,
+            buildProofDigest: payload.buildProofDigest,
+            buildAttemptId: payload.buildAttemptId,
+            buildLogPath: logPath,
+            operation: "require_automation",
+            testFilters,
+          })).digest("hex");
+          const pendingBookkeeping = hasTaskAuthorization ? recordBuildBookkeepingPending(
+            projectRoot,
+            endGen.mutationGeneration,
+            {
+              transactionId: bookkeepingTransactionId,
+              operation: "require_automation",
+              proofLevel: payload.proofLevel,
+              buildProofDigest: payload.buildProofDigest,
+              buildAttemptId: payload.buildAttemptId,
+              proofKind: "build",
+              buildLogPath: logPath,
+              projectFile: projectPath,
+              engineRoot: build.engineRoot,
+              resolvedEngineVersion: String(execResult.resolvedEngineVersion || ""),
+              target,
+              platform,
+              configuration,
+              testFilters,
+              declaredTests: automationCoverage.names,
+            },
+            buildGuardScope
+          ) : { durable: true };
+          if (pendingBookkeeping.durable !== true) {
+            cancelBuildAttempt(projectRoot, endGen.mutationGeneration, buildGuardScope);
+            return fail("Build passed, but the bookkeeping replay transaction could not be persisted.", {
+              errorCode: "BUILD_BOOKKEEPING_JOURNAL_PERSIST_FAILED",
+              retryable: true,
+              buildOutcome: "succeeded",
+              proofLevel: payload.proofLevel,
+              buildProofDigest: payload.buildProofDigest,
+              mutationGeneration: endGen.mutationGeneration,
+            });
+          }
           lifecycleResult = requireAutomationAfterBuildViaPython(
             WORKSPACE_ROOT,
             args,
             {
               mutationGeneration: endGen.mutationGeneration,
+              proofLevel: payload.proofLevel,
+              buildProofDigest: payload.buildProofDigest,
               buildLogPath: logPath,
               testFilter: testFilters.length === 1 ? testFilters[0] : "",
               testFilters,
@@ -8173,6 +8373,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               projectFile: projectPath,
               engineRoot: build.engineRoot,
               resolvedEngineVersion: String(execResult.resolvedEngineVersion || ""),
+              target,
+              platform,
+              configuration,
+              bookkeepingTransactionId,
             }
           );
           payload.requiredNextTool = "run_unreal_automation_tests";
@@ -8203,6 +8407,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 builtAt: new Date().toISOString(),
               }
             );
+            if (hasTaskAuthorization) {
+              completeBuildBookkeeping(
+                projectRoot,
+                endGen.mutationGeneration,
+                bookkeepingTransactionId,
+                buildGuardScope
+              );
+            }
           } else {
             payload.ok = false;
             payload.errorCode = String(
@@ -8213,17 +8425,62 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             );
           }
         } else {
+          const bookkeepingTransactionId = crypto.createHash("sha256").update(JSON.stringify({
+            taskSessionId: String(args.taskAuthorization?.taskSessionId || ""),
+            mutationGeneration: endGen.mutationGeneration,
+            proofLevel: payload.proofLevel,
+            buildProofDigest: payload.buildProofDigest,
+            buildAttemptId: payload.buildAttemptId,
+            buildLogPath: logPath,
+            operation: "complete_task",
+          })).digest("hex");
+          const pendingBookkeeping = hasTaskAuthorization ? recordBuildBookkeepingPending(
+            projectRoot,
+            endGen.mutationGeneration,
+            {
+              transactionId: bookkeepingTransactionId,
+              operation: "complete_task",
+              proofLevel: payload.proofLevel,
+              buildProofDigest: payload.buildProofDigest,
+              buildAttemptId: payload.buildAttemptId,
+              proofKind: "build",
+              buildLogPath: logPath,
+              projectFile: projectPath,
+              engineRoot: build.engineRoot,
+              resolvedEngineVersion: String(execResult.resolvedEngineVersion || ""),
+              target,
+              platform,
+              configuration,
+            },
+            buildGuardScope
+          ) : { durable: true };
+          if (pendingBookkeeping.durable !== true) {
+            cancelBuildAttempt(projectRoot, endGen.mutationGeneration, buildGuardScope);
+            return fail("Build passed, but the bookkeeping replay transaction could not be persisted.", {
+              errorCode: "BUILD_BOOKKEEPING_JOURNAL_PERSIST_FAILED",
+              retryable: true,
+              buildOutcome: "succeeded",
+              proofLevel: payload.proofLevel,
+              buildProofDigest: payload.buildProofDigest,
+              mutationGeneration: endGen.mutationGeneration,
+            });
+          }
           lifecycleResult = completeTaskAfterBuildViaPython(
             WORKSPACE_ROOT,
             args,
             {
               proofLevel: payload.proofLevel,
+              buildProofDigest: payload.buildProofDigest,
               proofKind: "build",
               mutationGeneration: endGen.mutationGeneration,
               buildLogPath: logPath,
               projectFile: projectPath,
               engineRoot: build.engineRoot,
               resolvedEngineVersion: String(execResult.resolvedEngineVersion || ""),
+              target,
+              platform,
+              configuration,
+              bookkeepingTransactionId,
             }
           );
           payload.taskLifecycle = lifecycleResult?.ok === true && lifecycleResult?.active === true
@@ -8250,6 +8507,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               pendingMutationQuery(projectRoot, args, endGen.mutationGeneration),
               "completed"
             );
+            if (hasTaskAuthorization) {
+              completeBuildBookkeeping(
+                projectRoot,
+                endGen.mutationGeneration,
+                bookkeepingTransactionId,
+                buildGuardScope
+              );
+            }
           } else {
             payload.ok = false;
             payload.errorCode = String(
@@ -8272,6 +8537,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           payload.retryable = false;
           return fail("Build execution passed, but task lifecycle persistence failed.", payload);
         }
+        const budgetFail = commitDeferredBudgetOrFail();
+        if (budgetFail) return budgetFail;
       }
       await agentNotify(
         payload.userMessage || payload.summary,

@@ -291,18 +291,88 @@ async function loadCheckpoint(sessionId, root = defaultRoot()) {
   }
   const activeGeneration = Number(active?.checkpointGeneration || -1);
   const newestGeneration = Number(newest?.checkpointGeneration || -1);
-  return newest && newestGeneration > activeGeneration ? newest : active;
+  const activeRevision = Number(active?.storeRevision || 0);
+  const newestRevision = Number(newest?.storeRevision || 0);
+  return newest && (
+    newestGeneration > activeGeneration
+    || (newestGeneration === activeGeneration && newestRevision > activeRevision)
+  ) ? newest : active;
+}
+
+async function withSessionWriteLock(dir, action) {
+  const lockPath = path.join(dir, ".checkpoint-write.lock");
+  const deadline = Date.now() + 5_000;
+  const lockToken = crypto.randomBytes(16).toString("hex");
+  let handle = null;
+  while (!handle) {
+    try {
+      handle = await fs.open(lockPath, "wx");
+      await handle.writeFile(JSON.stringify({
+        pid: process.pid,
+        token: lockToken,
+        createdAt: new Date().toISOString(),
+      }));
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      try {
+        const info = await fs.stat(lockPath);
+        if (Date.now() - Number(info.mtimeMs || 0) > 30_000) {
+          await fs.unlink(lockPath);
+          continue;
+        }
+      } catch (statError) {
+        if (statError?.code === "ENOENT") continue;
+        throw statError;
+      }
+      if (Date.now() >= deadline) {
+        const timeout = new Error("Timed out acquiring the session checkpoint write lock.");
+        timeout.code = "CHECKPOINT_WRITE_LOCK_TIMEOUT";
+        throw timeout;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  try {
+    return await action();
+  } finally {
+    await handle.close().catch(() => undefined);
+    try {
+      const current = JSON.parse(await fs.readFile(lockPath, "utf8"));
+      if (String(current?.token || "") === lockToken) await fs.unlink(lockPath);
+    } catch {
+      // Another process may already have recovered an expired lock.
+    }
+  }
 }
 
 async function saveCheckpoint(sessionId, checkpoint, root = defaultRoot()) {
   const dir = sessionDir(sessionId, root);
   await fs.mkdir(dir, { recursive: true });
-  const parsedGeneration = Number(checkpoint?.checkpointGeneration);
-  const generation = Number.isFinite(parsedGeneration) && parsedGeneration >= 0
-    ? Math.trunc(parsedGeneration)
-    : Date.now();
-  await atomicWrite(path.join(dir, `checkpoint-${String(generation).padStart(6, "0")}.json`), checkpoint);
-  await atomicWrite(path.join(dir, "active-checkpoint.json"), checkpoint);
+  await withSessionWriteLock(dir, async () => {
+    const activePath = path.join(dir, "active-checkpoint.json");
+    const active = await readJsonSafe(activePath, null);
+    const currentRevision = Math.max(0, Number(active?.storeRevision || 0));
+    const expectedRevision = Math.max(0, Number(checkpoint?.storeRevision || 0));
+    if (currentRevision !== expectedRevision) {
+      const stale = new Error(
+        `Checkpoint CAS rejected stale writer: expected revision ${expectedRevision}, current ${currentRevision}.`,
+      );
+      stale.code = "STALE_CHECKPOINT_WRITER";
+      stale.expectedStoreRevision = expectedRevision;
+      stale.currentStoreRevision = currentRevision;
+      throw stale;
+    }
+    checkpoint.storeRevision = currentRevision + 1;
+    const parsedGeneration = Number(checkpoint?.checkpointGeneration);
+    const generation = Number.isFinite(parsedGeneration) && parsedGeneration >= 0
+      ? Math.trunc(parsedGeneration)
+      : Date.now();
+    await atomicWrite(
+      path.join(dir, `checkpoint-${String(generation).padStart(6, "0")}.json`),
+      checkpoint,
+    );
+    await atomicWrite(activePath, checkpoint);
+  });
   await pruneFiles(dir, (name) => /^checkpoint-\d+\.json$/.test(name), 20);
   maybeCleanupSessions(root, sessionId);
 }

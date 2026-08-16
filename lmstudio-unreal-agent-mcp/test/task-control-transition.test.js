@@ -9,6 +9,37 @@ const {
 } = require("../src/task-control-transition");
 const { validateToolRoute } = require("../src/task-auth");
 
+test("repository audit frontier requires the next unvisited source and only then synthesizes", () => {
+  const current = state();
+  current.mode = "read_only";
+  current.toolRoute.phase = "planner";
+  current.toolRoute.activeTools = ["read_file", "read_file_range", "search_files"];
+  current.repoAuditLedger = {
+    version: 1,
+    required: true,
+    status: "active",
+    inventoryHash: "a".repeat(64),
+    queuedTargets: ["Source/Sample/A.cpp", "Source/Sample/B.h"],
+    cursor: 1,
+    remainingCount: 1,
+  };
+
+  const pending = deriveNextObligation(current);
+  assert.deepEqual(pending.requiredTool, {
+    name: "read_file",
+    args: { path: "Source/Sample/B.h" },
+  });
+  assert.deepEqual(pending.allowedTools, ["read_file"]);
+
+  current.repoAuditLedger.status = "complete";
+  current.repoAuditLedger.cursor = 2;
+  current.repoAuditLedger.remainingCount = 0;
+  const complete = deriveNextObligation(current);
+  assert.equal(complete.requiredTool, null);
+  assert.deepEqual(complete.allowedTools, []);
+  assert.equal(complete.disposition, "continue");
+});
+
 function state() {
   return {
     taskSessionId: "task_transition",

@@ -290,6 +290,13 @@ function deriveNextObligation(state) {
       ? { ...recoveryTool.args }
       : {};
     const recoveryFingerprint = String(recoveryObligation.fingerprint || "");
+    const repoAudit = state.repoAuditLedger && typeof state.repoAuditLedger === "object"
+      ? state.repoAuditLedger
+      : {};
+    const repoAuditRequired = repoAudit.required === true;
+    const repoAuditStatus = String(repoAudit.status || "").toLowerCase();
+    const repoAuditQueue = cleanStrings(repoAudit.queuedTargets);
+    const repoAuditCursor = Math.min(repoAuditQueue.length, nonNegativeInt(repoAudit.cursor));
     const pendingGate = String(pendingGates[0] || "");
     const failedGateAttempt = pendingGate
       ? failedGateAttemptForCurrentScope(state, pendingGate)
@@ -314,6 +321,30 @@ function deriveNextObligation(state) {
         code: String(recoveryObligation.errorCode || "RECOVERY_EXTERNAL_BLOCKER"),
         fingerprint: recoveryFingerprint,
       };
+    } else if (repoAuditRequired && repoAuditStatus === "inventory_overflow") {
+      disposition = "workflow_stop";
+      retryValue = "forbidden";
+      blocker = {
+        code: "REPO_AUDIT_INVENTORY_OVERFLOW",
+        fingerprint: String(repoAudit.inventoryHash || ""),
+      };
+    } else if (repoAuditRequired && repoAuditStatus !== "complete") {
+      if (repoAuditCursor < repoAuditQueue.length) {
+        requiredName = "read_file";
+        requiredArgs = { path: repoAuditQueue[repoAuditCursor] };
+        retryValue = "once";
+      } else {
+        disposition = "workflow_stop";
+        retryValue = "forbidden";
+        blocker = {
+          code: "REPO_AUDIT_FRONTIER_INCONSISTENT",
+          fingerprint: String(repoAudit.inventoryHash || ""),
+        };
+      }
+    } else if (repoAuditRequired && repoAuditStatus === "complete") {
+      disposition = "continue";
+      retryValue = "forbidden";
+      noToolsForSynthesis = true;
     } else if (recoveryStatus === "evidence_complete") {
       // Read-only evidence exhaustion is not an infrastructure failure.  Keep
       // the conversation available for a source-backed final answer while

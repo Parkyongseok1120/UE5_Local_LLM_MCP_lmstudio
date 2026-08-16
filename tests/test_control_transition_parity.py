@@ -303,6 +303,27 @@ def _state_corpus() -> list[dict]:
     ]
     states.append(selected_snapshot_miss)
 
+    audit_active = deepcopy(base)
+    audit_active["taskKind"] = "read_only"
+    audit_active["repoAuditLedger"] = {
+        "required": True,
+        "status": "active",
+        "cursor": 1,
+        "remainingCount": 1,
+        "queuedTargets": ["Source/Demo/A.cpp", "Source/Demo/B.h"],
+    }
+    states.append(audit_active)
+
+    audit_complete = deepcopy(audit_active)
+    audit_complete["repoAuditLedger"].update(
+        {"status": "complete", "cursor": 2, "remainingCount": 0}
+    )
+    states.append(audit_complete)
+
+    audit_overflow = deepcopy(audit_active)
+    audit_overflow["repoAuditLedger"].update({"status": "overflow"})
+    states.append(audit_overflow)
+
     return states
 
 

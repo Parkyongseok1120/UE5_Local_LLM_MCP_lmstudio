@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -494,8 +496,10 @@ def test_successful_build_completion_releases_route_ownership(
         tmp_path,
         task_authorization=started["taskAuthorization"],
         proof_level="Built",
+        build_proof_digest="b" * 64,
         mutation_generation=3,
         build_log_path=".agent/logs/latest-build.log",
+        bookkeeping_transaction_id="e" * 64,
     )
 
     assert completed["ok"] is True
@@ -511,9 +515,56 @@ def test_successful_build_completion_releases_route_ownership(
     repeated = task_complete_after_successful_build(
         tmp_path,
         task_authorization=started["taskAuthorization"],
+        bookkeeping_transaction_id="e" * 64,
     )
     assert repeated["ok"] is True
-    assert repeated["alreadyCompleted"] is True
+    assert repeated["idempotentReplay"] is True
+
+
+@pytest.mark.parametrize("proof_level", ["BuiltStale", "BuiltUnverified", "", "Failed"])
+def test_non_authoritative_build_proof_never_completes_task(
+    tmp_path: Path,
+    monkeypatch,
+    proof_level: str,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement and authoritatively build one Unreal source slice",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "task", "files": ["Source/Demo/Foo.cpp"]}
+            ],
+        },
+    )
+    _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 3)
+
+    rejected = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        proof_level=proof_level,
+        mutation_generation=3,
+        build_log_path=".agent/logs/latest-build.log",
+    )
+
+    assert rejected["ok"] is False
+    assert rejected["errorCode"] == "BUILD_PROOF_LEVEL_NOT_AUTHORITATIVE"
+    assert task_status(tmp_path, started["taskSessionId"])["state"]["status"] == "running"
+    automation_gate = task_require_automation_after_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        mutation_generation=3,
+        proof_level=proof_level,
+        build_proof_digest="b" * 64,
+        build_log_path=".agent/logs/latest-build.log",
+        test_filter="Demo.Runtime",
+    )
+    assert automation_gate["ok"] is False
+    assert automation_gate["errorCode"] == "BUILD_PROOF_LEVEL_NOT_AUTHORITATIVE"
 
 
 def test_build_proof_cannot_complete_a_different_task_project_at_same_generation(
@@ -555,6 +606,7 @@ def test_build_proof_cannot_complete_a_different_task_project_at_same_generation
         tmp_path,
         task_authorization=started["taskAuthorization"],
         proof_level="Built",
+        build_proof_digest="b" * 64,
         mutation_generation=7,
         build_log_path=str(project_b.parent / ".agent/logs/latest-build.log"),
         project_file=str(project_b),
@@ -567,6 +619,7 @@ def test_build_proof_cannot_complete_a_different_task_project_at_same_generation
         tmp_path,
         task_authorization=started["taskAuthorization"],
         proof_level="Built",
+        build_proof_digest="b" * 64,
         mutation_generation=7,
         build_log_path=str(project_a.parent / ".agent/logs/latest-build.log"),
         project_file=str(project_a),
@@ -608,10 +661,13 @@ def test_automation_proof_is_bound_to_build_project_engine_and_exact_filters(
         tmp_path,
         task_authorization=started["taskAuthorization"],
         mutation_generation=9,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
         build_log_path=str(project_a.parent / ".agent/logs/latest-build.log"),
         project_file=str(project_a),
         engine_root=str(engine_a),
         resolved_engine_version="5.5.4",
+        bookkeeping_transaction_id="d" * 64,
         test_filter="",
         test_filters=filters,
         declared_tests=["ProjectA.Runtime.Rule", "ProjectA.Tools.Rule"],
@@ -625,6 +681,25 @@ def test_automation_proof_is_bound_to_build_project_engine_and_exact_filters(
             "engineRoot": os.path.normcase(str(engine_a.resolve())),
         },
     }
+    replayed_gate = task_require_automation_after_build(
+        tmp_path,
+        # Simulate a lost first response: the caller can only replay the
+        # original pre-rotation authorization plus the exact receipt identity.
+        task_authorization=started["taskAuthorization"],
+        mutation_generation=9,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
+        build_log_path=str(project_a.parent / ".agent/logs/latest-build.log"),
+        project_file=str(project_a),
+        engine_root=str(engine_a),
+        resolved_engine_version="5.5.4",
+        bookkeeping_transaction_id="d" * 64,
+        test_filters=filters,
+        declared_tests=["ProjectA.Runtime.Rule", "ProjectA.Tools.Rule"],
+    )
+    assert replayed_gate["ok"] is True
+    assert replayed_gate["idempotentReplay"] is True
+    assert replayed_gate["control"]["requiredTool"]["name"] == "run_unreal_automation_tests"
 
     wrong_project = task_complete_after_successful_build(
         tmp_path,
@@ -656,6 +731,27 @@ def test_automation_proof_is_bound_to_build_project_engine_and_exact_filters(
     assert wrong_engine["ok"] is False
     assert wrong_engine["errorCode"] == "AUTOMATION_PROOF_ENGINE_MISMATCH"
     assert task_status(tmp_path, started["taskSessionId"])["state"]["status"] == "running"
+
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    tampered = json.loads(state_path.read_text(encoding="utf-8"))
+    tampered["buildVerification"]["proofLevel"] = "BuiltUnverified"
+    state_path.write_text(json.dumps(tampered), encoding="utf-8")
+    unverified_build = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=pending["taskAuthorization"],
+        proof_kind="automation",
+        mutation_generation=9,
+        project_file=str(project_a),
+        engine_root=str(engine_a),
+        automation_filters=filters,
+        automation_succeeded_count=2,
+        automation_failed_count=0,
+        automation_queue_empty=True,
+    )
+    assert unverified_build["ok"] is False
+    assert unverified_build["errorCode"] == "AUTOMATION_BUILD_PROOF_NOT_AUTHORITATIVE"
+    tampered["buildVerification"]["proofLevel"] = "Built"
+    state_path.write_text(json.dumps(tampered), encoding="utf-8")
 
     completed = task_complete_after_successful_build(
         tmp_path,
@@ -719,8 +815,10 @@ def test_successful_build_advances_multi_slice_plan_before_completion(
         tmp_path,
         task_authorization=started["taskAuthorization"],
         proof_level="Built",
+        build_proof_digest="b" * 64,
         mutation_generation=1,
         build_log_path=".agent/logs/rules-build.log",
+        bookkeeping_transaction_id="f" * 64,
     )
 
     assert advanced["ok"] is True
@@ -744,11 +842,23 @@ def test_successful_build_advances_multi_slice_plan_before_completion(
     assert len(state["buildProofHistory"]) == 1
     assert active_task_route_context(tmp_path)["status"] == "active"
 
+    replayed_advance = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        bookkeeping_transaction_id="f" * 64,
+    )
+    assert replayed_advance["ok"] is True
+    assert replayed_advance["idempotentReplay"] is True
+    assert replayed_advance["active"] is True
+    assert replayed_advance["activeSliceId"] == "network"
+    assert replayed_advance["pendingSlices"] == ["network"]
+
     _bind_passed_static_checkpoint(tmp_path, started["taskSessionId"], 2)
     completed = task_complete_after_successful_build(
         tmp_path,
         task_authorization=advanced["taskAuthorization"],
         proof_level="Built",
+        build_proof_digest="b" * 64,
         mutation_generation=2,
         build_log_path=".agent/logs/network-build.log",
     )
@@ -822,6 +932,8 @@ def test_successful_build_binds_automation_gate_without_completing_task(
         tmp_path,
         task_authorization=started["taskAuthorization"],
         mutation_generation=4,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
         build_log_path=".agent/logs/latest-build.log",
         test_filter="Gomoku",
         declared_tests=["Gomoku.Stage3.Rule", "Gomoku.Stage4.Items"],
@@ -864,6 +976,8 @@ def test_successful_build_binds_all_automation_filters_into_control_args(
         tmp_path,
         task_authorization=started["taskAuthorization"],
         mutation_generation=4,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
         build_log_path=".agent/logs/latest-build.log",
         test_filter="",
         test_filters=filters,
@@ -903,6 +1017,8 @@ def test_large_automation_filter_set_advances_durable_batches_before_completion(
         tmp_path,
         task_authorization=started["taskAuthorization"],
         mutation_generation=4,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
         build_log_path=".agent/logs/latest-build.log",
         test_filters=filters,
         declared_tests=filters,
@@ -977,6 +1093,8 @@ def test_post_build_automation_transition_rejects_stale_generation_and_static_bi
         tmp_path,
         task_authorization=started["taskAuthorization"],
         mutation_generation=3,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
         build_log_path=".agent/logs/stale-build.log",
         test_filter="Runtime.Feature",
     )
@@ -991,6 +1109,8 @@ def test_post_build_automation_transition_rejects_stale_generation_and_static_bi
         tmp_path,
         task_authorization=started["taskAuthorization"],
         mutation_generation=4,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
         build_log_path=".agent/logs/current-build.log",
         test_filter="Runtime.Feature",
     )
@@ -1023,6 +1143,8 @@ def test_automation_completion_rejects_stale_binding_before_final_release(
         tmp_path,
         task_authorization=started["taskAuthorization"],
         mutation_generation=4,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
         build_log_path=".agent/logs/current-build.log",
         test_filter="Runtime.Feature",
     )
@@ -1103,6 +1225,8 @@ def test_compiler_required_gate_is_bound_to_build_before_automation(
         tmp_path,
         task_authorization=recorded["taskAuthorization"],
         mutation_generation=3,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
         build_log_path=".agent/logs/api-build.log",
         test_filter="Demo.Api",
         declared_tests=["Demo.Api.Runtime"],
@@ -1385,6 +1509,7 @@ def test_in_slice_build_recovery_closes_evidence_repair_and_revalidation_loop(
         tmp_path,
         task_authorization=validated["taskAuthorization"],
         proof_level="Built",
+        build_proof_digest="b" * 64,
         mutation_generation=1,
         build_log_path=".agent/logs/latest-build.log",
         project_file=str(project_file),
@@ -1651,6 +1776,36 @@ def test_build_contract_binds_one_target_and_rejects_another_valid_target(
         consume_budget=False,
     )
     assert exact["ok"] is True
+
+    wrong_proof = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=bound_authorization,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
+        mutation_generation=1,
+        build_log_path=str(project_root / ".agent/logs/latest-build.log"),
+        project_file=str(project_file),
+        target="SampleServer",
+        platform="Win64",
+        configuration="Development",
+    )
+    assert wrong_proof["ok"] is False
+    assert wrong_proof["errorCode"] == "BUILD_PROOF_TUPLE_MISMATCH"
+    assert task_status(tmp_path, started["taskSessionId"])["state"]["status"] == "running"
+
+    exact_proof = task_complete_after_successful_build(
+        tmp_path,
+        task_authorization=bound_authorization,
+        proof_level="Built",
+        build_proof_digest="b" * 64,
+        mutation_generation=1,
+        build_log_path=str(project_root / ".agent/logs/latest-build.log"),
+        project_file=str(project_file),
+        target="SampleEditor",
+        platform="Win64",
+        configuration="Development",
+    )
+    assert exact_proof["ok"] is True
 
 
 def test_build_recovery_does_not_expand_beyond_active_slice(

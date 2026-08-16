@@ -26,12 +26,70 @@ const {
   reserveRouteCall,
   commitRouteReservation,
   rollbackRouteReservation,
+  recordDirectSourceEvidence,
   scopedAbsentEvidencePath,
   selectionBindingForState,
   validateMutationAuth,
   validateResolvedTaskProject,
   validateTaskRouteScope,
 } = require("../src/task-auth");
+
+test("direct source evidence advances the durable repository audit cursor", () => {
+  const state = {
+    planRevision: "1",
+    sourceEvidence: { version: 2, planRevision: "1", files: {} },
+    directSourceEvidence: { version: 1, planRevision: "1", files: {} },
+    repoAuditLedger: {
+      version: 1,
+      required: true,
+      status: "active",
+      overflow: false,
+      queuedTargets: ["Source/Demo/A.cpp", "Source/Demo/B.h"],
+      entries: {
+        "Source/Demo/A.cpp": { path: "Source/Demo/A.cpp", contentHash: "1".repeat(64), lineCount: 2, status: "queued", coveredRanges: [] },
+        "Source/Demo/B.h": { path: "Source/Demo/B.h", contentHash: "2".repeat(64), lineCount: 1, status: "queued", coveredRanges: [] },
+      },
+      cursor: 0,
+      analyzedCount: 0,
+      remainingCount: 2,
+    },
+  };
+  recordDirectSourceEvidence(state, "read_file", {
+    directSourceEvidence: {
+      projectRelativePath: "Source/Demo/A.cpp",
+      contentHash: "a".repeat(64),
+      lineRange: "1-2",
+    },
+  });
+  assert.equal(state.repoAuditLedger.cursor, 1);
+  assert.equal(state.repoAuditLedger.analyzedCount, 1);
+  assert.equal(state.repoAuditLedger.remainingCount, 1);
+  assert.equal(state.repoAuditLedger.status, "active");
+
+  recordDirectSourceEvidence(state, "read_file_range", {
+    directSourceEvidence: {
+      projectRelativePath: "Source/Demo/B.h",
+      contentHash: "b".repeat(64),
+      lineRange: "1-1",
+    },
+  });
+  assert.equal(state.repoAuditLedger.cursor, 2);
+  assert.equal(state.repoAuditLedger.remainingCount, 0);
+  assert.equal(state.repoAuditLedger.status, "complete");
+
+  recordDirectSourceEvidence(state, "read_file_range", {
+    directSourceEvidence: {
+      projectRelativePath: "Source/Demo/A.cpp",
+      contentHash: "c".repeat(64),
+      lineRange: "2-2",
+    },
+  });
+  assert.equal(state.repoAuditLedger.cursor, 0);
+  assert.equal(state.repoAuditLedger.analyzedCount, 1);
+  assert.equal(state.repoAuditLedger.remainingCount, 1);
+  assert.equal(state.repoAuditLedger.entries["Source/Demo/A.cpp"].status, "partial");
+  assert.equal(state.repoAuditLedger.status, "active");
+});
 
 test("complete absent filename evidence is scoped to its project-relative search root", () => {
   assert.strictEqual(
@@ -162,6 +220,7 @@ test("successful build bridge completes task state and releases its lease", () =
       { taskAuthorization: authorization },
       {
         proofLevel: "Built",
+        buildProofDigest: "b".repeat(64),
         mutationGeneration: 4,
         buildLogPath: ".agent/logs/latest-build.log",
       }

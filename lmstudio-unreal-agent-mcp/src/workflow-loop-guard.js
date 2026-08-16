@@ -46,8 +46,10 @@ function emptyState(generation) {
     buildGateFailureCode: "",
     buildGateFailureCount: 0,
     buildAttempted: false,
+    buildAttemptId: "",
     buildFailed: false,
     buildFingerprint: "",
+    buildBookkeeping: null,
     buildRecoveryContract: null,
     recoveryEvidenceByScope: new Map(),
     recoveryEvidencePrechecks: new Map(),
@@ -62,8 +64,12 @@ function serializeState(state) {
     buildGateFailureCode: String(state.buildGateFailureCode || ""),
     buildGateFailureCount: Math.max(0, Number(state.buildGateFailureCount || 0)),
     buildAttempted: state.buildAttempted === true,
+    buildAttemptId: String(state.buildAttemptId || ""),
     buildFailed: state.buildFailed === true,
     buildFingerprint: String(state.buildFingerprint || ""),
+    buildBookkeeping: state.buildBookkeeping && typeof state.buildBookkeeping === "object"
+      ? JSON.parse(JSON.stringify(state.buildBookkeeping))
+      : null,
     buildRecoveryContract: state.buildRecoveryContract && typeof state.buildRecoveryContract === "object"
       ? { ...state.buildRecoveryContract }
       : null,
@@ -86,8 +92,12 @@ function hydrateState(saved, generation) {
   state.buildGateFailureCode = String(saved.buildGateFailureCode || "");
   state.buildGateFailureCount = Math.max(0, Number(saved.buildGateFailureCount || 0));
   state.buildAttempted = saved.buildAttempted === true;
+  state.buildAttemptId = String(saved.buildAttemptId || "");
   state.buildFailed = saved.buildFailed === true;
   state.buildFingerprint = String(saved.buildFingerprint || "");
+  state.buildBookkeeping = saved.buildBookkeeping && typeof saved.buildBookkeeping === "object"
+    ? JSON.parse(JSON.stringify(saved.buildBookkeeping))
+    : null;
   state.buildRecoveryContract = saved.buildRecoveryContract && typeof saved.buildRecoveryContract === "object"
     ? { ...saved.buildRecoveryContract }
     : null;
@@ -199,6 +209,14 @@ function recordBuildGateFailure(projectRoot, mutationGeneration, errorCode, opti
 
 function beginBuildAttempt(projectRoot, mutationGeneration, options = {}) {
   const state = stateFor(projectRoot, mutationGeneration, options);
+  if (["pending", "accepted"].includes(state.buildBookkeeping?.status)) {
+    return {
+      ok: false,
+      reason: "build_bookkeeping_pending",
+      mutationGeneration: state.mutationGeneration,
+      buildBookkeeping: JSON.parse(JSON.stringify(state.buildBookkeeping)),
+    };
+  }
   if (state.buildAttempted) {
     return {
       ok: false,
@@ -208,8 +226,13 @@ function beginBuildAttempt(projectRoot, mutationGeneration, options = {}) {
     };
   }
   state.buildAttempted = true;
+  state.buildAttemptId = crypto.randomUUID();
   persistState(state);
-  return { ok: true, mutationGeneration: state.mutationGeneration };
+  return {
+    ok: true,
+    mutationGeneration: state.mutationGeneration,
+    buildAttemptId: state.buildAttemptId,
+  };
 }
 
 function finishBuildAttempt(projectRoot, mutationGeneration, outcome, options = {}) {
@@ -217,6 +240,7 @@ function finishBuildAttempt(projectRoot, mutationGeneration, outcome, options = 
   state.buildAttempted = true;
   state.buildFailed = outcome?.commandSucceeded !== true;
   state.buildFingerprint = state.buildFailed ? buildFingerprint(outcome) : "";
+  state.buildBookkeeping = null;
   state.buildRecoveryContract = null;
   state.recoveryEvidenceByScope = new Map();
   state.recoveryEvidencePrechecks = new Map();
@@ -227,8 +251,10 @@ function finishBuildAttempt(projectRoot, mutationGeneration, outcome, options = 
 function cancelBuildAttempt(projectRoot, mutationGeneration, options = {}) {
   const state = stateFor(projectRoot, mutationGeneration, options);
   state.buildAttempted = false;
+  state.buildAttemptId = "";
   state.buildFailed = false;
   state.buildFingerprint = "";
+  state.buildBookkeeping = null;
   persistState(state);
   return state;
 }
@@ -251,6 +277,67 @@ function recordBuildRecoveryContract(projectRoot, mutationGeneration, recovery, 
   state.recoveryEvidencePrechecks = new Map();
   persistState(state);
   return { ...state.buildRecoveryContract };
+}
+
+function recordBuildBookkeepingPending(projectRoot, mutationGeneration, transaction, options = {}) {
+  const state = stateFor(projectRoot, mutationGeneration, options);
+  const input = transaction && typeof transaction === "object" ? transaction : {};
+  state.buildAttempted = true;
+  state.buildFailed = false;
+  state.buildFingerprint = "";
+  state.buildBookkeeping = {
+    version: 1,
+    status: "pending",
+    transactionId: String(input.transactionId || "").slice(0, 128),
+    operation: String(input.operation || "classify").slice(0, 64),
+    proofLevel: String(input.proofLevel || "").slice(0, 32),
+    proofKind: String(input.proofKind || "build").slice(0, 32),
+    mutationGeneration: generationNumber(mutationGeneration),
+    buildAttemptId: String(input.buildAttemptId || state.buildAttemptId || "").slice(0, 128),
+    buildProofDigest: String(input.buildProofDigest || "").slice(0, 64),
+    buildLogPath: String(input.buildLogPath || "").slice(0, 2048),
+    projectFile: String(input.projectFile || "").slice(0, 2048),
+    engineRoot: String(input.engineRoot || "").slice(0, 2048),
+    resolvedEngineVersion: String(input.resolvedEngineVersion || "").slice(0, 128),
+    target: String(input.target || "").slice(0, 128),
+    platform: String(input.platform || "").slice(0, 64),
+    configuration: String(input.configuration || "").slice(0, 64),
+    testFilters: Array.isArray(input.testFilters)
+      ? input.testFilters.map(String).filter(Boolean).slice(0, 64)
+      : [],
+    declaredTests: Array.isArray(input.declaredTests)
+      ? input.declaredTests.map(String).filter(Boolean).slice(0, 256)
+      : [],
+    createdAt: String(input.createdAt || new Date().toISOString()).slice(0, 64),
+    updatedAt: new Date().toISOString(),
+  };
+  const persistence = persistState(state);
+  return {
+    ...JSON.parse(JSON.stringify(state.buildBookkeeping)),
+    durable: persistence?.persisted === true,
+  };
+}
+
+function completeBuildBookkeeping(projectRoot, mutationGeneration, transactionId, options = {}) {
+  const state = stateFor(projectRoot, mutationGeneration, options);
+  const pending = state.buildBookkeeping;
+  if (!pending || !["pending", "accepted"].includes(pending.status)) {
+    return { ok: true, completed: false };
+  }
+  if (String(transactionId || "") !== String(pending.transactionId || "")) {
+    return { ok: false, completed: false, reason: "build_bookkeeping_transaction_mismatch" };
+  }
+  if (pending.status === "accepted") {
+    return { ok: true, completed: false, replayable: true };
+  }
+  state.buildBookkeeping = {
+    ...pending,
+    status: "accepted",
+    acceptedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  persistState(state);
+  return { ok: true, completed: true, replayable: true };
 }
 
 function recoveryArgsMatch(expectedValue, actualValue, hostPlatform = process.platform) {
@@ -525,6 +612,8 @@ module.exports = {
   beginBuildAttempt,
   finishBuildAttempt,
   cancelBuildAttempt,
+  recordBuildBookkeepingPending,
+  completeBuildBookkeeping,
   recordBuildRecoveryContract,
   recordRecoveryEvidenceCall,
   markRecoveryEvidenceSatisfied,

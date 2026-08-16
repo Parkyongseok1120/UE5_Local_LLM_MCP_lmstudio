@@ -1088,6 +1088,67 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     planRevision,
     files: Object.fromEntries(boundedEntries),
   };
+
+  const audit = state.repoAuditLedger && typeof state.repoAuditLedger === "object"
+    ? { ...state.repoAuditLedger }
+    : null;
+  if (audit?.required === true) {
+    const entries = audit.entries && typeof audit.entries === "object"
+      ? { ...audit.entries }
+      : {};
+    const inventoryPath = Object.keys(entries).find(
+      (candidate) => filesystemPathIdentity(normalizeEvidencePath(candidate)) === key,
+    );
+    if (inventoryPath) {
+      const priorAuditEntry = entries[inventoryPath] && typeof entries[inventoryPath] === "object"
+        ? { ...entries[inventoryPath] }
+        : { path: inventoryPath };
+      const priorHash = String(priorAuditEntry.contentHash || "");
+      const auditRanges = mergeEvidenceRanges([
+        ...(priorHash === contentHash && Array.isArray(priorAuditEntry.coveredRanges)
+          ? priorAuditEntry.coveredRanges
+          : []),
+        lineRange,
+      ]);
+      const lineCount = Math.max(1, Number(priorAuditEntry.lineCount || 1));
+      const fullyCovered = String(toolName) === "read_file"
+        || auditRanges.some((range) => Number(range[0]) <= 1 && Number(range[1]) >= lineCount);
+      entries[inventoryPath] = {
+        ...priorAuditEntry,
+        path: inventoryPath,
+        contentHash,
+        coveredRanges: auditRanges,
+        status: fullyCovered ? "analyzed" : "partial",
+        analysisVersion: fullyCovered ? Math.max(1, Number(audit.analysisVersion || 1)) : 0,
+        analyzedAt: fullyCovered ? new Date().toISOString() : "",
+      };
+      const queuedTargets = Array.isArray(audit.queuedTargets)
+        ? audit.queuedTargets.map(String)
+        : Object.keys(entries);
+      const analyzedCount = queuedTargets.filter(
+        (candidate) => String(entries[candidate]?.status || "") === "analyzed",
+      ).length;
+      let cursor = 0;
+      while (
+        cursor < queuedTargets.length
+        && String(entries[queuedTargets[cursor]]?.status || "") === "analyzed"
+      ) cursor += 1;
+      const remainingCount = Math.max(0, queuedTargets.length - analyzedCount);
+      audit.entries = entries;
+      audit.cursor = cursor;
+      audit.analyzedCount = analyzedCount;
+      audit.remainingCount = remainingCount;
+      audit.inventoryHash = canonicalHash(queuedTargets.map((candidate) => ({
+        path: candidate,
+        contentHash: String(entries[candidate]?.contentHash || ""),
+      })));
+      audit.status = audit.overflow === true
+        ? "inventory_overflow"
+        : (remainingCount === 0 ? "complete" : "active");
+      audit.updatedAt = new Date().toISOString();
+      state.repoAuditLedger = audit;
+    }
+  }
 }
 
 function recordAbsentSourceEvidence(state, toolName, callMetadata) {
@@ -2834,11 +2895,16 @@ function completeTaskAfterBuildViaPython(workspaceRoot, args, buildEvidence = {}
       "payload = task_complete_after_successful_build(Path(sys.argv[1]), "
       + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
       + "proof_level=str((_stdin or {}).get('proofLevel') or ''), "
+      + "build_proof_digest=str((_stdin or {}).get('buildProofDigest') or ''), "
       + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0), "
       + "build_log_path=str((_stdin or {}).get('buildLogPath') or ''), "
       + "project_file=str((_stdin or {}).get('projectFile') or ''), "
       + "engine_root=str((_stdin or {}).get('engineRoot') or ''), "
       + "resolved_engine_version=str((_stdin or {}).get('resolvedEngineVersion') or ''), "
+      + "target=str((_stdin or {}).get('target') or ''), "
+      + "platform=str((_stdin or {}).get('platform') or ''), "
+      + "configuration=str((_stdin or {}).get('configuration') or ''), "
+      + "bookkeeping_transaction_id=str((_stdin or {}).get('bookkeepingTransactionId') or ''), "
       + "proof_kind=str((_stdin or {}).get('proofKind') or 'build'), "
       + "automation_filters=list((_stdin or {}).get('automationFilters') or []), "
       + "automation_succeeded_count=int((_stdin or {}).get('automationSucceededCount') or 0), "
@@ -2849,13 +2915,20 @@ function completeTaskAfterBuildViaPython(workspaceRoot, args, buildEvidence = {}
     {
       stdinPayload: {
         taskAuthorization: nested,
-        proofLevel: String(buildEvidence.proofLevel || "Built"),
+        // Missing proof is never promoted to Built at the language boundary.
+        // The Python task authority independently rejects every non-Built value.
+        proofLevel: String(buildEvidence.proofLevel || ""),
+        buildProofDigest: String(buildEvidence.buildProofDigest || ""),
         proofKind: String(buildEvidence.proofKind || "build"),
         mutationGeneration: Number(buildEvidence.mutationGeneration || 0),
         buildLogPath: String(buildEvidence.buildLogPath || ""),
         projectFile: String(buildEvidence.projectFile || ""),
         engineRoot: String(buildEvidence.engineRoot || ""),
         resolvedEngineVersion: String(buildEvidence.resolvedEngineVersion || ""),
+        target: String(buildEvidence.target || ""),
+        platform: String(buildEvidence.platform || ""),
+        configuration: String(buildEvidence.configuration || ""),
+        bookkeepingTransactionId: String(buildEvidence.bookkeepingTransactionId || ""),
         automationFilters: Array.isArray(buildEvidence.automationFilters)
           ? buildEvidence.automationFilters.map(String)
           : [],
@@ -2880,10 +2953,16 @@ function requireAutomationAfterBuildViaPython(workspaceRoot, args, buildEvidence
       "payload = task_require_automation_after_build(Path(sys.argv[1]), "
       + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
       + "mutation_generation=int((_stdin or {}).get('mutationGeneration') or 0), "
+      + "proof_level=str((_stdin or {}).get('proofLevel') or ''), "
+      + "build_proof_digest=str((_stdin or {}).get('buildProofDigest') or ''), "
       + "build_log_path=str((_stdin or {}).get('buildLogPath') or ''), "
       + "project_file=str((_stdin or {}).get('projectFile') or ''), "
       + "engine_root=str((_stdin or {}).get('engineRoot') or ''), "
       + "resolved_engine_version=str((_stdin or {}).get('resolvedEngineVersion') or ''), "
+      + "target=str((_stdin or {}).get('target') or ''), "
+      + "platform=str((_stdin or {}).get('platform') or ''), "
+      + "configuration=str((_stdin or {}).get('configuration') or ''), "
+      + "bookkeeping_transaction_id=str((_stdin or {}).get('bookkeepingTransactionId') or ''), "
       + "test_filter=str((_stdin or {}).get('testFilter') or ''), "
       + "test_filters=list((_stdin or {}).get('testFilters') or []), "
       + "declared_tests=list((_stdin or {}).get('declaredTests') or []))"
@@ -2893,10 +2972,16 @@ function requireAutomationAfterBuildViaPython(workspaceRoot, args, buildEvidence
       stdinPayload: {
         taskAuthorization: nested,
         mutationGeneration: Number(buildEvidence.mutationGeneration || 0),
+        proofLevel: String(buildEvidence.proofLevel || ""),
+        buildProofDigest: String(buildEvidence.buildProofDigest || ""),
         buildLogPath: String(buildEvidence.buildLogPath || ""),
         projectFile: String(buildEvidence.projectFile || ""),
         engineRoot: String(buildEvidence.engineRoot || ""),
         resolvedEngineVersion: String(buildEvidence.resolvedEngineVersion || ""),
+        target: String(buildEvidence.target || ""),
+        platform: String(buildEvidence.platform || ""),
+        configuration: String(buildEvidence.configuration || ""),
+        bookkeepingTransactionId: String(buildEvidence.bookkeepingTransactionId || ""),
         proofKind: String(buildEvidence.proofKind || "build"),
         testFilter: String(buildEvidence.testFilter || ""),
         testFilters: Array.isArray(buildEvidence.testFilters)
@@ -3785,4 +3870,5 @@ module.exports = {
   scopedAbsentEvidencePath,
   pendingDirectEvidenceGate,
   pendingRepeatedGateRediscovery,
+  recordDirectSourceEvidence,
 };

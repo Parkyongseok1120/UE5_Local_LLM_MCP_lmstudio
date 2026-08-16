@@ -2,6 +2,9 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {
   recordValidationFailure,
   recordValidationSuccess,
@@ -9,6 +12,8 @@ const {
   beginBuildAttempt,
   finishBuildAttempt,
   cancelBuildAttempt,
+  recordBuildBookkeepingPending,
+  completeBuildBookkeeping,
   recordBuildRecoveryContract,
   recordRecoveryEvidenceCall,
   markRecoveryEvidenceSatisfied,
@@ -179,6 +184,50 @@ test("failed build enforces the exact first-error range before other reads", () 
   });
   assert.equal(extra.blocked, true);
   assert.equal(extra.reason, "build_recovery_evidence_complete");
+});
+
+test("successful build bookkeeping is replayable without another process attempt", () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "build-bookkeeping-replay-"));
+  const project = path.join(stateRoot, "Demo");
+  const options = { stateRoot, taskSessionId: "task-build-proof-12" };
+  try {
+    assert.equal(beginBuildAttempt(project, 12, options).ok, true);
+    finishBuildAttempt(project, 12, { commandSucceeded: true }, options);
+    const pending = recordBuildBookkeepingPending(project, 12, {
+      transactionId: "build-proof-12",
+      operation: "complete_task",
+      proofLevel: "Built",
+      buildLogPath: path.join(project, ".agent", "logs", "latest-build.log"),
+    }, options);
+    assert.equal(pending.durable, true);
+
+    resetWorkflowLoopGuardForTests();
+    const replay = beginBuildAttempt(project, 12, options);
+    assert.equal(replay.ok, false);
+    assert.equal(replay.reason, "build_bookkeeping_pending");
+    assert.equal(replay.buildBookkeeping.transactionId, "build-proof-12");
+    assert.equal(replay.buildBookkeeping.proofLevel, "Built");
+
+    assert.deepEqual(
+      completeBuildBookkeeping(project, 12, "wrong-transaction", options),
+      { ok: false, completed: false, reason: "build_bookkeeping_transaction_mismatch" },
+    );
+    const completed = completeBuildBookkeeping(project, 12, "build-proof-12", options);
+    assert.equal(completed.ok, true);
+    assert.equal(completed.completed, true);
+
+    resetWorkflowLoopGuardForTests();
+    const acceptedReplay = beginBuildAttempt(project, 12, options);
+    assert.equal(acceptedReplay.reason, "build_bookkeeping_pending");
+    assert.equal(acceptedReplay.buildBookkeeping.status, "accepted");
+    assert.equal(acceptedReplay.buildBookkeeping.transactionId, "build-proof-12");
+    assert.deepEqual(
+      completeBuildBookkeeping(project, 12, "build-proof-12", options),
+      { ok: true, completed: false, replayable: true },
+    );
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("failed build does not consume recovery evidence for the wrong source range", () => {

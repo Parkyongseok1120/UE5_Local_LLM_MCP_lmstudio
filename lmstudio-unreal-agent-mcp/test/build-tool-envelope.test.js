@@ -74,6 +74,7 @@ test("compiler failure is a recoverable build outcome, not an MCP tool error", (
 
   assert.strictEqual(payload.ok, false);
   assert.strictEqual(payload.buildOutcome, "compile_failed");
+  assert.strictEqual(payload.failureClass, "compile_failed_parsed");
   assert.strictEqual(payload.toolExecutionSucceeded, true);
   assert.strictEqual(payload.recoverable, true);
   assert.strictEqual(disposition.mcpIsError, false);
@@ -81,6 +82,37 @@ test("compiler failure is a recoverable build outcome, not an MCP tool error", (
   assert.deepStrictEqual(payload.requiredNextToolArgs, {
     query: "StreamLevel", top_k: 8, detailLevel: "compact",
   });
+});
+
+test("unparsed non-zero build exit is compile recovery, not a blind infrastructure retry", () => {
+  const payload = buildResponsePayload({
+    result: {
+      ok: false,
+      exitCode: 6,
+      stdout: "지역화된 컴파일러 실패: 변환되지 않은 진단 형식",
+      stderr: "",
+      error: "",
+    },
+    build: { target: "GameEditor", platform: "Win64", configuration: "Development" },
+    planResult: { ok: true },
+    projectPath: "C:\\Game\\Game.uproject",
+    command: "Build.bat GameEditor Win64 Development",
+    logPath: "C:\\Game\\.agent\\logs\\latest-build.log",
+    verbose: false,
+  });
+
+  assert.deepStrictEqual(payload.likelyErrors, []);
+  assert.strictEqual(payload.buildOutcome, "compile_failed");
+  assert.strictEqual(payload.failureClass, "compile_failed_unparsed");
+  assert.strictEqual(payload.toolExecutionSucceeded, true);
+  assert.strictEqual(payload.recoverable, true);
+  assert.match(payload.commandFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(payload.diagnosticFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(payload.outputHash, /^[a-f0-9]{64}$/);
+  assert.deepStrictEqual(payload.outputTail, ["지역화된 컴파일러 실패: 변환되지 않은 진단 형식"]);
+  assert.strictEqual(payload.exitCode, 6);
+  assert.match(payload.fullLogPath, /latest-build\.log$/);
+  assert.strictEqual(buildToolDisposition(payload).mcpIsError, false);
 });
 
 test("compact compiler diagnostics remove machine path and mojibake tail", () => {
@@ -291,6 +323,7 @@ test("build infrastructure failures still set the MCP error disposition", () => 
   });
 
   assert.strictEqual(disposition.buildOutcome, "tool_failed");
+  assert.strictEqual(disposition.failureClass, "timeout");
   assert.strictEqual(disposition.toolExecutionSucceeded, false);
   assert.strictEqual(disposition.recoverable, false);
   assert.strictEqual(disposition.mcpIsError, true);
@@ -324,6 +357,40 @@ test("error clustering finds UHT failure before a long build tail", () => {
   assert.ok(cluster.some((line) => line.includes("Status.h(75): Warning:")));
   assert.ok(cluster.some((line) => line.includes("OtherCompilationError")));
   assert.ok(!cluster.some((line) => line === "timeline 99"));
+});
+
+test("non-authoritative successful process proof is a build gate failure, not completion", () => {
+  const disposition = buildToolDisposition({
+    ok: false,
+    phase: "unverified",
+    proofLevel: "BuiltUnverified",
+    exitCode: 0,
+    errorCode: "BUILD_PROOF_UNVERIFIED",
+  });
+  assert.strictEqual(disposition.buildOutcome, "tool_failed");
+  assert.strictEqual(disposition.failureClass, "command_succeeded_unverified");
+  assert.strictEqual(disposition.mcpIsError, true);
+});
+
+test("up-to-date and mutation-during-build proofs have distinct non-terminal classes", () => {
+  const upToDate = buildToolDisposition({
+    ok: false,
+    phase: "stale",
+    upToDate: true,
+    proofLevel: "BuiltStale",
+    exitCode: 0,
+  });
+  const changedDuringBuild = buildToolDisposition({
+    ok: false,
+    phase: "stale",
+    upToDate: false,
+    proofLevel: "BuiltStale",
+    exitCode: 0,
+  });
+  assert.strictEqual(upToDate.failureClass, "up_to_date_without_compile");
+  assert.strictEqual(changedDuringBuild.failureClass, "stale_during_build");
+  assert.strictEqual(upToDate.buildOutcome, "tool_failed");
+  assert.strictEqual(changedDuringBuild.buildOutcome, "tool_failed");
 });
 
 test("error clustering recognizes UE Automation failure records", () => {

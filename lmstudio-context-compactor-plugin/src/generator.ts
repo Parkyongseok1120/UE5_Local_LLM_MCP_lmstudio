@@ -28,6 +28,11 @@ function isoNow(): string {
 
 type ReasoningEffort = "low" | "medium" | "xhigh";
 
+function isQwen38_27b(modelIdentifier: unknown): boolean {
+  const identity = String(modelIdentifier || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return identity.includes("qwen38") && identity.includes("27b");
+}
+
 function normalizeReasoningEffort(value: unknown): ReasoningEffort {
   const normalized = String(value || "low").trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (normalized === "medium") return "medium";
@@ -35,24 +40,47 @@ function normalizeReasoningEffort(value: unknown): ReasoningEffort {
   return "low";
 }
 
+function resolvedPredictionPhase(checkpoint: any, architectureValidationRequired: boolean): string {
+  const controlPhase = String(checkpoint?.serverControl?.phase || "").trim().toLowerCase();
+  const requiredTool = String(checkpoint?.serverControl?.requiredTool?.name || "").trim();
+  const recoverySource = String(
+    checkpoint?.serverControl?.recoveryObligation?.source
+    || checkpoint?.buildState?.recovery?.source
+    || "",
+  ).trim().toLowerCase();
+  if (requiredTool) {
+    return recoverySource === "build" || recoverySource === "automation"
+      ? "compile_fix_patch"
+      : "execute";
+  }
+  if (controlPhase === "synthesis") return "critique";
+  if (architectureValidationRequired || controlPhase === "architecture") return "plan";
+  if (recoverySource === "build" || recoverySource === "automation") return "compile_fix_analyze";
+  if (controlPhase === "api_lookup") return "api_lookup";
+  return "plan";
+}
+
 function qwen38ReasoningRawConfig(
   modelIdentifier: unknown,
-  effort: ReasoningEffort,
+  thinkingEnabled: boolean,
+  effort: ReasoningEffort | null,
 ): { fields: Array<{ key: string; value: unknown }> } | undefined {
-  const identity = String(modelIdentifier || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (!identity.includes("qwen38") || !identity.includes("27b")) return undefined;
+  if (!isQwen38_27b(modelIdentifier)) return undefined;
+  const fields: Array<{ key: string; value: unknown }> = [
+    { key: "llm.prediction.reasoning.enableThinking", value: thinkingEnabled },
+    {
+      key: "ext.virtualModel.customField.qwen.qwen3.827b.enableThinking",
+      value: thinkingEnabled,
+    },
+  ];
+  if (thinkingEnabled && effort) {
+    fields.push({
+      key: "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort",
+      value: effort,
+    });
+  }
   return {
-    fields: [
-      { key: "llm.prediction.reasoning.enableThinking", value: true },
-      {
-        key: "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort",
-        value: effort,
-      },
-      {
-        key: "ext.virtualModel.customField.qwen.qwen3.827b.enableThinking",
-        value: true,
-      },
-    ],
+    fields,
   };
 }
 
@@ -149,7 +177,7 @@ function checkpointLifecycleIdentity(checkpoint: any): {
 
 function lifecycleState(
   checkpoint: any,
-  status: "pending" | "completed" | "committed",
+  status: "pending" | "prepared" | "completed" | "commit_sent" | "commit_acked" | "committed" | "delivered",
   options: { outputDigest?: string; stopReason?: string } = {},
 ): any {
   return {
@@ -459,14 +487,14 @@ async function loadCheckpointBestEffort(sessionId: string): Promise<any | null> 
 async function saveCheckpointBestEffort(
   sessionId: string,
   checkpoint: any,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; code?: string }> {
   try {
     await store.saveCheckpoint(sessionId, checkpoint);
     return { ok: true };
   } catch (error: any) {
     const message = String(error?.message || error);
     console.warn(`[unreal-context-compactor] Checkpoint save failed: ${message}`);
-    return { ok: false, error: message };
+    return { ok: false, error: message, code: String(error?.code || "") };
   }
 }
 
@@ -477,11 +505,13 @@ async function persistCheckpoint(
   stage: string,
 ): Promise<void> {
   const saved = await saveCheckpointBestEffort(sessionId, checkpoint);
-  if (!saved.ok && required) {
-    throw new Error(
+  if (!saved.ok && (required || String(saved.code || "") === "STALE_CHECKPOINT_WRITER")) {
+    const persistenceError: any = new Error(
       `Context safety checkpoint could not be persisted (${stage}): ${saved.error || "unknown error"}. `
       + "Generation was stopped before unsafe output was committed.",
     );
+    persistenceError.code = String(saved.code || "CHECKPOINT_PERSIST_FAILED");
+    throw persistenceError;
   }
 }
 
@@ -855,6 +885,27 @@ function predictionSupervisorError(code: string, elapsedMs: number): Error {
   error.code = code;
   error.elapsedMs = elapsedMs;
   return error;
+}
+
+function compactionWorkflowProgressSignature(checkpoint: any): string {
+  return core.sha256(core.stableStringify({
+    objectiveHash: String(checkpoint?.objectiveHash || ""),
+    taskSessionId: String(
+      checkpoint?.serverControl?.taskSessionId
+      || checkpoint?.taskRouteOwnership?.taskSessionId
+      || "",
+    ),
+    controlEpoch: Number(checkpoint?.serverControl?.epoch || 0),
+    controlFingerprint: String(checkpoint?.serverControl?.controlFingerprint || ""),
+    routeHash: String(checkpoint?.serverControl?.routeHash || checkpoint?.toolRoute?.routeHash || ""),
+    requiredNextTool: checkpoint?.requiredNextTool || null,
+    mutationGeneration: Number(checkpoint?.mutationGeneration || 0),
+    sourceEvidence: checkpoint?.sourceEvidence || null,
+    absentEvidence: checkpoint?.absentEvidence || null,
+    buildState: checkpoint?.buildState || null,
+    buildVerification: checkpoint?.buildVerification || null,
+    synthesisStatus: String(checkpoint?.synthesisState?.status || ""),
+  }));
 }
 
 async function predictionResultWithSupervision(
@@ -2640,6 +2691,7 @@ function validateToolRequest(request: any, checkpoint: any): { ok: boolean; reas
 function reconcilePendingToolCalls(pendingCalls: any[], currentSnapshots: any[]): {
   remainingPending: any[];
   matchedIds: string[];
+  matchedCalls: Array<{ pending: any; result: any }>;
   abandonedIds: string[];
 } {
   const completed = currentSnapshots.flatMap((message: any) => message.toolResults || []);
@@ -2651,18 +2703,22 @@ function reconcilePendingToolCalls(pendingCalls: any[], currentSnapshots: any[])
   );
   const anonymousCompletedCount = completed.filter((result: any) => !result.toolCallId).length;
   const matchedIds: string[] = [];
+  const matchedCalls: Array<{ pending: any; result: any }> = [];
   const abandonedIds: string[] = [];
   const remainingPending = pendingCalls.filter((pending: any) => {
     const pendingId = String(pending?.id || "").trim();
     const observedResultCount = Number(pending?.observedToolResultCount || 0);
     const hasAnonymousBaseline = Number.isFinite(Number(pending?.observedAnonymousToolResultCount));
-    const matched = pendingId
-      ? completed.some((result: any) => String(result?.toolCallId || "").trim() === pendingId)
+    const matchedResult = pendingId
+      ? completed.find((result: any) => String(result?.toolCallId || "").trim() === pendingId)
       : (hasAnonymousBaseline
-        ? anonymousCompletedCount > Number(pending.observedAnonymousToolResultCount)
-        : completed.length > observedResultCount);
-    if (matched) {
+        ? (anonymousCompletedCount > Number(pending.observedAnonymousToolResultCount)
+          ? completed.filter((result: any) => !result.toolCallId).at(-1)
+          : null)
+        : (completed.length > observedResultCount ? completed.at(-1) : null));
+    if (matchedResult) {
       if (pendingId) matchedIds.push(pendingId);
+      matchedCalls.push({ pending, result: matchedResult });
       return false;
     }
     const architectureCallRemovedFromActiveHistory = Boolean(
@@ -2682,7 +2738,33 @@ function reconcilePendingToolCalls(pendingCalls: any[], currentSnapshots: any[])
     }
     return true;
   });
-  return { remainingPending, matchedIds, abandonedIds };
+  return { remainingPending, matchedIds, matchedCalls, abandonedIds };
+}
+
+function synthesisCommitAcknowledged(result: any, pending: any): boolean {
+  if (!core.toolResultSucceeded(result)) return false;
+  const args = pending?.arguments && typeof pending.arguments === "object"
+    ? pending.arguments
+    : {};
+  const expectedTask = String(args?.taskAuthorization?.taskSessionId || "").trim();
+  const expectedDigest = String(args.outputDigest || "").trim().toLowerCase();
+  const expectedEpoch = Number(args.controlEpoch);
+  const preparedOutput = String(pending?.preparedSynthesisOutput || "");
+  if (!preparedOutput || core.sha256(preparedOutput) !== expectedDigest) return false;
+  for (const payload of core.parseJsonObjects(result?.content || "")) {
+    const lifecycle = payload?.synthesisLifecycle && typeof payload.synthesisLifecycle === "object"
+      ? payload.synthesisLifecycle
+      : payload?.state?.synthesisLifecycle;
+    if (
+      payload?.ok === true
+      && lifecycle
+      && String(lifecycle.status || "").toLowerCase() === "committed"
+      && String(payload.taskSessionId || lifecycle.taskSessionId || "").trim() === expectedTask
+      && String(lifecycle.outputDigest || "").trim().toLowerCase() === expectedDigest
+      && Number(lifecycle.controlEpoch) === expectedEpoch
+    ) return true;
+  }
+  return false;
 }
 
 async function generate(ctl: GeneratorController, history: Chat): Promise<void> {
@@ -2754,16 +2836,95 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   });
   let checkpoint = await loadCheckpointBestEffort(sessionId);
 
+  const deliverAcknowledgedSynthesis = async (): Promise<boolean> => {
+    const delivery = checkpoint?.synthesisDelivery;
+    if (
+      String(checkpoint?.synthesisState?.status || "") !== "commit_acked"
+      || !delivery
+      || typeof delivery !== "object"
+      || !String(delivery.output || "")
+    ) return false;
+    const output = String(delivery.output);
+    const outputDigest = String(delivery.outputDigest || "");
+    ctl.fragmentGenerated(output, { reasoningType: "none" });
+    checkpoint.synthesisState = lifecycleState(checkpoint, "delivered", {
+      outputDigest,
+      stopReason: "synthesis_delivery_after_ack",
+    });
+    checkpoint.synthesisDelivery = null;
+    await persistCheckpoint(
+      sessionId,
+      checkpoint,
+      requireCheckpointPersistence,
+      "synthesis_delivered_after_ack",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "synthesis_delivered_after_ack",
+      at: isoNow(),
+      outputDigest,
+      transactionId: String(delivery.transactionId || ""),
+    });
+    return true;
+  };
+  if (await deliverAcknowledgedSynthesis()) return;
+
   let unresolvedPendingCalls: any[] = [
     ...(Array.isArray(checkpoint?.pendingToolCalls) ? checkpoint.pendingToolCalls : []),
     ...(checkpoint?.pendingToolCall ? [checkpoint.pendingToolCall] : []),
   ];
+  let synthesisCommitRejected = false;
   if (checkpoint && unresolvedPendingCalls.length > 0) {
     const currentSnapshots = core.snapshotMessages(messages);
-    const { remainingPending, matchedIds, abandonedIds } = reconcilePendingToolCalls(
+    const { remainingPending, matchedIds, matchedCalls, abandonedIds } = reconcilePendingToolCalls(
       unresolvedPendingCalls,
       currentSnapshots,
     );
+    for (const match of matchedCalls) {
+      const pendingName = String(match.pending?.name || "").trim();
+      if (!toolNamesMatch("unreal_task_commit_synthesis", pendingName)) continue;
+      const outputDigest = String(
+        match.pending?.preparedSynthesisOutputDigest
+        || match.pending?.arguments?.outputDigest
+        || "",
+      );
+      if (synthesisCommitAcknowledged(match.result, match.pending)) {
+        checkpoint.synthesisState = lifecycleState(checkpoint, "commit_acked", {
+          outputDigest,
+          stopReason: "authoritative_commit_ack",
+        });
+        checkpoint.synthesisDelivery = {
+          output: String(match.pending?.preparedSynthesisOutput || "").slice(0, 131_072),
+          outputDigest,
+          transactionId: String(
+            match.pending?.arguments?.synthesisTransactionId
+            || match.pending?.id
+            || "",
+          ),
+          acknowledgedAt: isoNow(),
+        };
+        await appendEventBestEffort(sessionId, {
+          type: "synthesis_commit_acked",
+          at: isoNow(),
+          outputDigest,
+          toolCallId: String(match.pending?.id || ""),
+        });
+      } else {
+        // A transport result without the authoritative digest-bound ACK is a
+        // failed commit, even if the transport itself did not set isError.
+        checkpoint.synthesisState = lifecycleState(checkpoint, "prepared", {
+          outputDigest,
+          stopReason: "synthesis_commit_not_acked",
+        });
+        checkpoint.synthesisDelivery = null;
+        synthesisCommitRejected = true;
+        await appendEventBestEffort(sessionId, {
+          type: "synthesis_commit_rejected",
+          at: isoNow(),
+          outputDigest,
+          toolCallId: String(match.pending?.id || ""),
+        });
+      }
+    }
     if (remainingPending.length !== unresolvedPendingCalls.length) {
       checkpoint.completedToolCallIds = [
         ...(checkpoint.completedToolCallIds || []),
@@ -2787,6 +2948,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       }
     }
     unresolvedPendingCalls = remainingPending;
+    if (await deliverAcknowledgedSynthesis()) return;
+    if (synthesisCommitRejected) {
+      throw new Error(
+        "Authoritative synthesis commit was not acknowledged. Final output remains prepared and resumable; refresh task control before retrying.",
+      );
+    }
   }
 
   if (checkpoint && unresolvedPendingCalls.length > 0) {
@@ -2820,6 +2987,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         toolNamesMatch("unreal_task_commit_synthesis", name)
         && String(pending?.preparedSynthesisOutput || "")
       ) {
+        if (
+          core.sha256(String(pending.preparedSynthesisOutput))
+          !== String(pending?.arguments?.outputDigest || "").trim().toLowerCase()
+        ) {
+          throw new Error(
+            "Prepared synthesis bytes do not match the durable commit digest; replay was blocked.",
+          );
+        }
         ctl.fragmentGenerated(String(pending.preparedSynthesisOutput), { reasoningType: "none" });
       }
       ctl.toolCallGenerationStarted({ toolCallId: id });
@@ -2940,6 +3115,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     resolvedTargetModel,
     contextLength,
   );
+  if (isQwen38_27b(resolvedTargetModel) && !transactionModelFence.instanceReference) {
+    const error: any = new Error(
+      "Qwen 3.8 27B reasoning policy requires an observable LM Studio instance reference; "
+      + "prediction was blocked because the runtime instance could not be pinned.",
+    );
+    error.code = "REASONING_MODEL_INSTANCE_UNPINNED";
+    throw error;
+  }
   let toolDefinitions = ctl.getToolDefinitions();
   const nextCheckpoint: any = preliminaryCheckpoint;
   nextCheckpoint.modelFence = transactionModelFence;
@@ -3947,7 +4130,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       configValue(ctl, "predictionWallClockSeconds", 180), 180, 5, 1800,
     ),
     predictionNoProgressSeconds: finiteNumber(
-      configValue(ctl, "predictionNoProgressSeconds", 45), 45, 5, 300,
+      configValue(ctl, "predictionNoProgressSeconds", 45), 45, 0.01, 300,
     ),
     rejectTruncatedPredictions: Boolean(configValue(ctl, "rejectTruncatedPredictions", true)),
     requireCheckpointPersistence,
@@ -3977,12 +4160,27 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     preRouteDiscoveryLimit,
     durableInspectionDiscoveryLimit,
   };
+  const predictionPhase = resolvedPredictionPhase(
+    nextCheckpoint,
+    architectureValidationRequired,
+  );
+  const thinkingEnabled = new Set(["plan", "critique", "compile_fix_analyze"])
+    .has(predictionPhase);
+  const effectiveReasoningEffort = thinkingEnabled ? config.reasoningEffort : null;
   const reasoningRawConfig = qwen38ReasoningRawConfig(
     resolvedTargetModel,
-    config.reasoningEffort,
+    thinkingEnabled,
+    effectiveReasoningEffort,
   );
   const predictionPolicy = {
-    version: 1,
+    version: 2,
+    policyVersion: "qwen-reasoning-runtime-v2",
+    modelIdentifier: transactionModelFence.identifier || resolvedTargetModel,
+    modelInstanceReference: transactionModelFence.instanceReference,
+    modelLoadConfigHash: null,
+    modelLoadConfigObservable: false,
+    samplingProfile: isQwen38_27b(resolvedTargetModel) ? "qwen3_8_27b" : "generic",
+    phase: predictionPhase,
     sampling: {
       temperature: config.temperature,
       topPSampling: config.topPSampling,
@@ -3991,14 +4189,28 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     },
     budgets: {
       maxOutputTokens: config.maxOutputReserve,
+      reasoningTokens: null,
+      finalAnswerReserveTokens: modelFacingToolDefinitions.length === 0
+        ? synthesisOutputReserve
+        : configuredOutputReserve,
+      toolCallReserveTokens: toolCallOutputReserve,
+      separateReasoningBudgetSupported: false,
       wallClockSeconds: config.predictionWallClockSeconds,
       noProgressSeconds: config.predictionNoProgressSeconds,
     },
     reasoningControl: {
       transport: reasoningRawConfig ? "generator_raw_kv_config" : "unsupported_model",
       sdkVersion: "1.5.0",
-      effort: reasoningRawConfig ? config.reasoningEffort : null,
-      perPredictionEffortObservable: Boolean(reasoningRawConfig),
+      effort: reasoningRawConfig ? effectiveReasoningEffort : null,
+      enableThinking: Boolean(reasoningRawConfig && thinkingEnabled),
+      policyRequested: Boolean(reasoningRawConfig),
+      transportConfigured: Boolean(reasoningRawConfig),
+      backendApplied: "unknown",
+      backendObserved: false,
+      failClosedIfUnpinned: Boolean(reasoningRawConfig),
+      runtimePinned: Boolean(reasoningRawConfig && transactionModelFence.instanceReference),
+      externalLoadConfigStatus: "not_observable_by_public_sdk",
+      perPredictionEffortObservable: false,
     },
   };
   const predictionPolicyHash = core.sha256(core.stableStringify(predictionPolicy));
@@ -4186,6 +4398,22 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       nextCheckpoint.lastCompactionSourceMessageCount = messages.length;
     }
     if (applied && compactedMetrics) modelChat = compactedMetrics.chat;
+    const progressSignature = compactionWorkflowProgressSignature(nextCheckpoint);
+    const priorChurn = checkpoint?.compactionChurn && typeof checkpoint.compactionChurn === "object"
+      ? checkpoint.compactionChurn
+      : {};
+    const consecutiveWithoutProgress = applied
+      ? (String(priorChurn.progressSignature || "") === progressSignature
+        ? Math.max(0, Number(priorChurn.consecutiveWithoutProgress || 0)) + 1
+        : 1)
+      : Math.max(0, Number(priorChurn.consecutiveWithoutProgress || 0));
+    nextCheckpoint.compactionChurn = {
+      version: 1,
+      progressSignature,
+      consecutiveWithoutProgress,
+      lastAction: effectiveAction,
+      updatedAt: isoNow(),
+    };
     await appendEventBestEffort(sessionId, {
       type: "compaction_decision",
       at: new Date().toISOString(),
@@ -4204,6 +4432,28 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       currentTurnCap: compactedMetrics?.currentTurnCap,
       objectivePreview: String(nextCheckpoint.objective || "").slice(0, 160),
     });
+    const deterministicTransitionPending = Boolean(
+      exactRequiredToolForced
+      || initialActiveProjectBootstrapForced
+      || catalogRefreshForced
+    );
+    if (applied && consecutiveWithoutProgress >= 3 && !deterministicTransitionPending) {
+      await persistCheckpoint(
+        sessionId,
+        nextCheckpoint,
+        requireCheckpointPersistence,
+        "compaction_churn_blocked",
+      );
+      await appendEventBestEffort(sessionId, {
+        type: "compaction_churn_blocked",
+        at: isoNow(),
+        progressSignature,
+        consecutiveWithoutProgress,
+      });
+      throw new Error(
+        "Context compaction repeated three times without authoritative workflow progress. Generation stopped before another identical discovery cycle; resume from a narrowed server-owned route or a changed evidence frontier.",
+      );
+    }
   } else {
     await appendEventBestEffort(sessionId, {
       type: "compaction_decision",
@@ -4249,12 +4499,6 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       nextCheckpoint.predictionState,
       lifecycleState(nextCheckpoint, "completed", { outputDigest, stopReason: reason }),
     );
-    if (nextCheckpoint.synthesisState) {
-      nextCheckpoint.synthesisState = mergeLifecycleState(
-        nextCheckpoint.synthesisState,
-        lifecycleState(nextCheckpoint, "completed", { outputDigest, stopReason: reason }),
-      );
-    }
     await persistCheckpoint(
       sessionId,
       nextCheckpoint,
@@ -4266,12 +4510,6 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       nextCheckpoint.predictionState,
       lifecycleState(nextCheckpoint, "committed", { outputDigest, stopReason: reason }),
     );
-    if (nextCheckpoint.synthesisState) {
-      nextCheckpoint.synthesisState = mergeLifecycleState(
-        nextCheckpoint.synthesisState,
-        lifecycleState(nextCheckpoint, "committed", { outputDigest, stopReason: reason }),
-      );
-    }
     await persistCheckpoint(
       sessionId,
       nextCheckpoint,
@@ -4450,40 +4688,65 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     } else if (outputBuffered) events.push(event);
     else emitEvent(event);
   };
-  const runPrediction = async (
+  const runPredictionAttempt = async (
     predictionTools: any[],
     forceTool: boolean,
     progressLabel = "Model reasoning",
+    effortOverride?: ReasoningEffort,
   ): Promise<string> => {
     guardGeneratorAbort(ctl);
+    const attemptEffort = effortOverride || config.reasoningEffort;
+    const attemptPolicy = {
+      ...nextCheckpoint.predictionPolicy,
+      reasoningControl: {
+        ...(nextCheckpoint.predictionPolicy?.reasoningControl || {}),
+        effort: reasoningRawConfig && thinkingEnabled ? attemptEffort : null,
+      },
+      attemptStartedAt: isoNow(),
+    };
+    delete attemptPolicy.fingerprint;
+    nextCheckpoint.predictionPolicy = {
+      ...attemptPolicy,
+      fingerprint: core.sha256(core.stableStringify(attemptPolicy)),
+    };
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "before_prediction_attempt",
+    );
     // LM Studio callback ids are scoped to one model prediction and can be
     // reused by a bounded repair prediction in the same generator turn.
     const callbackFsm = createToolCallCallbackFsm();
     const predictionStartedAt = Date.now();
-    let lastSemanticProgressAt = predictionStartedAt;
+    const lastSemanticProgressAt = predictionStartedAt;
+    let lastInferenceActivityAt = predictionStartedAt;
     const eventStartIndex = events.length;
     const requestStartIndex = requests.length;
-    const markSemanticProgress = (value: unknown = "") => {
-      if (String(value || "").length > 0) lastSemanticProgressAt = Date.now();
+    const markInferenceActivity = () => {
+      lastInferenceActivityAt = Date.now();
     };
     let lastVisibleProgressAt = predictionStartedAt;
     const heartbeatIntervalMs = Number(config.predictionHeartbeatSeconds) * 1000;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
+    const emitHeartbeatIfDue = () => {
+      const now = Date.now();
+      if ((ctl as any)?.abortSignal?.aborted || now - lastVisibleProgressAt < heartbeatIntervalMs) {
+        return;
+      }
+      predictionHeartbeatCount += 1;
+      lastVisibleProgressAt = now;
+      ctl.fragmentGenerated(
+        `\n[Working: ${progressLabel} - ${Math.max(1, Math.floor((now - predictionStartedAt) / 1000))}s elapsed]\n`,
+        {
+          reasoningType: "reasoning",
+          containsDrafted: false,
+          isStructural: true,
+        },
+      );
+    };
     if (config.streamReasoningProgress && heartbeatIntervalMs > 0) {
-      heartbeat = setInterval(() => {
-        const now = Date.now();
-        if ((ctl as any)?.abortSignal?.aborted || now - lastVisibleProgressAt < heartbeatIntervalMs) return;
-        predictionHeartbeatCount += 1;
-        lastVisibleProgressAt = now;
-        ctl.fragmentGenerated(
-          `\n[Working: ${progressLabel} - ${Math.max(1, Math.floor((now - predictionStartedAt) / 1000))}s elapsed]\n`,
-          {
-            reasoningType: "reasoning",
-            containsDrafted: false,
-            isStructural: true,
-          },
-        );
-      }, Math.min(1000, heartbeatIntervalMs));
+      heartbeat = setInterval(emitHeartbeatIfDue, Math.min(1000, heartbeatIntervalMs));
     }
     try {
       const predictionModelFence = await captureModelFence(
@@ -4494,13 +4757,18 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       if (!modelFencesMatch(transactionModelFence, predictionModelFence)) {
         throw modelFenceChangedError(transactionModelFence, predictionModelFence);
       }
+      const attemptReasoningRawConfig = qwen38ReasoningRawConfig(
+        resolvedTargetModel,
+        thinkingEnabled,
+        thinkingEnabled ? attemptEffort : null,
+      );
       const prediction = model.respond(modelChat, {
         maxTokens: Number(config.maxOutputReserve),
         temperature: Number(config.temperature),
         topPSampling: Number(config.topPSampling),
         topKSampling: Number(config.topKSampling),
         minPSampling: Number(config.minPSampling),
-        ...(reasoningRawConfig ? { raw: reasoningRawConfig } : {}),
+        ...(attemptReasoningRawConfig ? { raw: attemptReasoningRawConfig } : {}),
         ...(predictionTools.length > 0 ? {
           rawTools: {
             type: "toolArray",
@@ -4511,9 +4779,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         contextOverflowPolicy: "stopAtLimit",
         signal: ctl.abortSignal,
         onPredictionFragment(fragment: any) {
-          markSemanticProgress(fragment?.content);
+          const reasoningType = String(fragment?.reasoningType || "none");
+          // Reasoning, final text, and tool JSON are inference activity only.
+          // Authoritative semantic progress is observed between predictions
+          // from task/control/evidence state, never from uncommitted tokens.
+          markInferenceActivity();
           const observedTokens = Math.max(0, Number(fragment?.tokensCount || 0));
-          if (String(fragment?.reasoningType || "none") === "none") {
+          if (reasoningType === "none") {
             finalTokensObserved += observedTokens;
           } else {
             reasoningTokensObserved += observedTokens;
@@ -4532,16 +4804,16 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         },
         onToolCallRequestStart(callId: number, info: any) {
           if (!callbackFsm.start(callId, info?.toolCallId)) return;
-          markSemanticProgress(info?.toolCallId || `call:${callId}`);
+          markInferenceActivity();
           recordEvent({ kind: "start", callId, toolCallId: info?.toolCallId });
         },
         onToolCallRequestNameReceived(callId: number, name: string) {
           if (!callbackFsm.name(callId, name)) return;
-          markSemanticProgress(name);
+          markInferenceActivity();
           recordEvent({ kind: "name", callId, name });
         },
         onToolCallRequestArgumentFragmentGenerated(callId: number, content: string) {
-          markSemanticProgress(content);
+          markInferenceActivity();
           toolJsonCharactersObserved += String(content || "").length;
           recordEvent({ kind: "args", callId, content });
         },
@@ -4555,7 +4827,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             modelFacingToolDefinitions,
           );
           if (!callbackFsm.end(callId, request)) return;
-          markSemanticProgress(requestedToolName(request) || `call:${callId}:end`);
+          markInferenceActivity();
           if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
             replaceBufferedArgumentFragments(events, callId, request.arguments);
           }
@@ -4564,7 +4836,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         },
         onToolCallRequestFailure(callId: number, error: Error) {
           if (!callbackFsm.failure(callId, error)) return;
-          markSemanticProgress(error?.message || `call:${callId}:failure`);
+          markInferenceActivity();
           recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
         },
       });
@@ -4573,6 +4845,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         noProgressMs: Number(config.predictionNoProgressSeconds) * 1000,
         getLastProgressAt: () => lastSemanticProgressAt,
       });
+      // setInterval may be delayed behind the prediction completion callback
+      // on a loaded Windows runner. Enforce the absolute heartbeat deadline
+      // once more before accepting completed output.
+      if (config.streamReasoningProgress && heartbeatIntervalMs > 0) emitHeartbeatIfDue();
+      nextCheckpoint.predictionActivity = {
+        version: 1,
+        inferenceActivityAt: new Date(lastInferenceActivityAt).toISOString(),
+        semanticProgressAt: new Date(lastSemanticProgressAt).toISOString(),
+      };
       guardGeneratorAbort(ctl);
       const completedModelFence = await captureModelFence(
         model,
@@ -4624,6 +4905,64 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       throw error;
     } finally {
       if (heartbeat) clearInterval(heartbeat);
+    }
+  };
+  const runPrediction = async (
+    predictionTools: any[],
+    forceTool: boolean,
+    progressLabel = "Model reasoning",
+  ): Promise<string> => {
+    const effortOrder: ReasoningEffort[] = ["xhigh", "medium", "low"];
+    const configuredEffort = config.reasoningEffort as ReasoningEffort;
+    const persistedEffort = String(nextCheckpoint?.reasoningFallback?.effort || "") as ReasoningEffort;
+    let effort = effortOrder.includes(persistedEffort) ? persistedEffort : configuredEffort;
+    while (true) {
+      try {
+        const result = await runPredictionAttempt(
+          predictionTools,
+          forceTool,
+          progressLabel,
+          effort,
+        );
+        if (nextCheckpoint.reasoningFallback) {
+          nextCheckpoint.reasoningFallback = {
+            ...nextCheckpoint.reasoningFallback,
+            status: "completed",
+            effort,
+            completedAt: isoNow(),
+          };
+        }
+        return result;
+      } catch (error: any) {
+        if (String(error?.code || "") !== "PREDICTION_NO_PROGRESS_EXCEEDED") throw error;
+        if (!thinkingEnabled) throw error;
+        const index = effortOrder.indexOf(effort);
+        if (index < 0 || index >= effortOrder.length - 1) throw error;
+        const nextEffort = effortOrder[index + 1];
+        nextCheckpoint.reasoningFallback = {
+          version: 1,
+          status: "downgraded",
+          configuredEffort,
+          effort: nextEffort,
+          reason: "semantic_no_progress",
+          attempts: Math.max(0, Number(nextCheckpoint?.reasoningFallback?.attempts || 0)) + 1,
+          updatedAt: isoNow(),
+        };
+        await persistCheckpoint(
+          sessionId,
+          nextCheckpoint,
+          requireCheckpointPersistence,
+          "reasoning_effort_downgraded",
+        );
+        await appendEventBestEffort(sessionId, {
+          type: "reasoning_effort_downgraded",
+          at: isoNow(),
+          fromEffort: effort,
+          toEffort: nextEffort,
+          reason: "semantic_no_progress",
+        });
+        effort = nextEffort;
+      }
     }
   };
   const unsafeStopReasons = new Set(["contextLengthReached", "failed", "modelUnloaded"]);
@@ -5255,6 +5594,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   }
 
   let synthesisCommitCallId: number | null = null;
+  let preparedSynthesisOutput = "";
   const synthesisCommitTool: any = toolDefinitions.find((tool: any) => toolNamesMatch(
     "unreal_task_commit_synthesis",
     tool?.function?.name || tool?.name || "",
@@ -5306,11 +5646,35 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     );
   }
   if (synthesisCommitEligible) {
-    const outputDigest = predictionOutputDigest(events, requests);
+    preparedSynthesisOutput = events
+      .filter((event: any) => (
+        event?.kind === "fragment"
+        && String(event?.opts?.reasoningType || "none") === "none"
+      ))
+      .map((event: any) => String(event?.content || ""))
+      .join("");
+    if (preparedSynthesisOutput.length > 131_072) {
+      throw new Error(
+        "Synthesis output exceeds the durable exactly-once delivery bound; output was discarded before commit.",
+      );
+    }
+    const outputDigest = core.sha256(preparedSynthesisOutput);
     const taskSessionId = String(serverControlV2?.taskSessionId || "").trim();
     const controlEpoch = Number(serverControlV2?.epoch);
+    const controlFingerprint = String(
+      serverControlV2?.controlFingerprint || "",
+    ).trim();
+    const mutationGeneration = Math.max(0, Number(nextCheckpoint?.mutationGeneration || 0));
+    const synthesisTransactionId = core.sha256(core.stableStringify({
+      taskSessionId,
+      objectiveHash: String(nextCheckpoint?.objectiveHash || ""),
+      controlEpoch,
+      controlFingerprint,
+      mutationGeneration,
+      outputDigest,
+    }));
     const rawRequest = {
-      id: `synthesis-commit-${core.sha256(`${taskSessionId}\n${controlEpoch}\n${outputDigest}`).slice(0, 32)}`,
+      id: `synthesis-commit-${synthesisTransactionId.slice(0, 32)}`,
       type: "function",
       name: String(
         synthesisCommitTool?.function?.name
@@ -5320,7 +5684,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       arguments: {
         objectiveHash: String(nextCheckpoint?.objectiveHash || ""),
         controlEpoch,
+        controlFingerprint,
+        mutationGeneration,
         outputDigest,
+        synthesisTransactionId,
       },
     };
     const request = enrichToolRequestControl(
@@ -5343,12 +5710,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       content: JSON.stringify(request.arguments || {}),
     });
     recordEvent({ kind: "end", callId: synthesisCommitCallId, request });
+    nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "prepared", {
+      outputDigest,
+      stopReason: "synthesis_commit_prepared",
+    });
     await appendEventBestEffort(sessionId, {
       type: "synthesis_commit_prepared",
       at: isoNow(),
       taskSessionId,
       controlEpoch,
       outputDigest,
+      synthesisTransactionId,
       toolCallId: request.id,
     });
   }
@@ -5487,14 +5859,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         preparedAt: isoNow(),
       } as any;
       if (entry.serverOwnedSynthesisCommit) {
-        pending.preparedSynthesisOutput = events
-          .filter((event: any) => (
-            event?.kind === "fragment"
-            && String(event?.opts?.reasoningType || "none") === "none"
-          ))
-          .map((event: any) => String(event?.content || ""))
-          .join("")
-          .slice(0, 131_072);
+        pending.preparedSynthesisOutput = preparedSynthesisOutput;
         pending.preparedSynthesisOutputDigest = String(
           entry.request?.arguments?.outputDigest || "",
         );
@@ -5514,6 +5879,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   }
 
   for (const event of events) {
+      if (synthesisCommitAccepted && event.kind === "fragment") {
+        // Final text is durable in pendingToolCalls and is not delivered until
+        // the authoritative task owner returns the exact digest-bound ACK.
+        continue;
+      }
       if (event.kind !== "end") {
         emitEvent(event);
         continue;
@@ -5558,9 +5928,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   ) {
     nextCheckpoint.synthesisState = mergeLifecycleState(
       nextCheckpoint.synthesisState,
-      lifecycleState(nextCheckpoint, "committed", {
+      lifecycleState(nextCheckpoint, "commit_sent", {
         outputDigest: committedSynthesisDigest,
-        stopReason: stopReason || "unspecified",
+        stopReason: "awaiting_authoritative_commit_ack",
       }),
     );
   }
@@ -5581,7 +5951,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     toolJsonCharactersObserved,
     predictionHeartbeatCount,
     toolRequestCount: requests.length,
-    outputCommitted: true,
+    outputCommitted: !synthesisCommitAccepted,
+    synthesisCommitSent: synthesisCommitAccepted,
   });
 }
 
@@ -5603,6 +5974,7 @@ export {
   requiresArchitectureValidation,
   requiresDurableInspectionPlanning,
   reconcilePendingToolCalls,
+  compactionWorkflowProgressSignature,
   resolveTargetModel,
   upsertLeadingSystemRule,
 };
