@@ -729,6 +729,7 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             "repair_planning_required",
             "revalidate_required",
             "checkpoint_rebase_required",
+            "phase_budget_checkpoint_required",
         }:
             if recovery_tool_name:
                 required_name = recovery_tool_name
@@ -965,6 +966,7 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
         "version": CONTROL_TRANSITION_VERSION,
         "authoritative": True,
         "taskSessionId": str(state.get("taskSessionId") or ""),
+        "taskMode": str(state.get("mode") or "").strip().casefold(),
         "planRevision": str(state.get("planRevision") or ""),
         "activeSliceId": str(state.get("activeSliceId") or ""),
         "phase": phase,

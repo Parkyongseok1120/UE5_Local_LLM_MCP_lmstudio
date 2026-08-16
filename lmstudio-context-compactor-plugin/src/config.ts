@@ -32,6 +32,18 @@ export const configSchematics = createConfigSchematics()
     4,
   )
   .field(
+    "predictionWallClockSeconds",
+    "numeric",
+    { displayName: "Prediction wall-clock limit", subtitle: "Cancel and discard a model prediction after this many total seconds (5-1800 seconds)." },
+    180,
+  )
+  .field(
+    "predictionNoProgressSeconds",
+    "numeric",
+    { displayName: "Prediction no-progress limit", subtitle: "Cancel and discard a prediction after this many seconds without a non-empty token or tool-call callback (5-300 seconds). Heartbeats do not count as progress." },
+    45,
+  )
+  .field(
     "rejectTruncatedPredictions",
     "boolean",
     { displayName: "Reject truncated output", subtitle: "Discard output stopped by the context or max-token limit instead of presenting a partial result as complete." },
@@ -119,7 +131,10 @@ export const configSchematics = createConfigSchematics()
     2,
   )
   .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra reserve for token-estimation and prompt-template variance." }, 1024)
-  .field("temperature", "numeric", { displayName: "Temperature", subtitle: "Sampling temperature used by the underlying model proxy (0 to 1)." }, 0.1)
+  .field("temperature", "numeric", { displayName: "Temperature", subtitle: "Sampling temperature pinned by the server-owned model proxy (0 to 1)." }, 0.1)
+  .field("topPSampling", "numeric", { displayName: "Top P sampling", subtitle: "Nucleus-sampling threshold pinned for every proxied prediction (0 to 1)." }, 0.85)
+  .field("topKSampling", "numeric", { displayName: "Top K sampling", subtitle: "Maximum candidate-token set pinned for every proxied prediction (1 to 1000)." }, 20)
+  .field("minPSampling", "numeric", { displayName: "Min P sampling", subtitle: "Minimum probability threshold pinned for every proxied prediction (0 to 1; 0 disables filtering)." }, 0)
   .field("normalToolResultReserve", "numeric", { displayName: "Normal tool reserve", subtitle: "Tokens reserved for ordinary tool results." }, 3000)
   .field("buildToolResultReserve", "numeric", { displayName: "Build tool reserve", subtitle: "Tokens reserved for build and compiler output." }, 8000)
   .field("recentCompleteTurns", "numeric", { displayName: "Recent turns", subtitle: "Complete recent turns retained verbatim after compaction. Goal changes force 0 retained turns." }, 1)

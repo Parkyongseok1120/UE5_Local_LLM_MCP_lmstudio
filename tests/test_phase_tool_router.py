@@ -2083,6 +2083,19 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     assert exhausted["taskSessionId"] == started["taskSessionId"]
     assert isinstance(exhausted["controlEpoch"], int)
     assert exhausted["controlEpoch"] >= 0
+    assert exhausted["control"]["version"] == 2
+    assert exhausted["control"]["authoritative"] is True
+    assert exhausted["control"]["epoch"] == exhausted["controlEpoch"]
+    assert exhausted["control"]["disposition"] == "checkpoint"
+    assert exhausted["control"]["requiredTool"]["name"] == "unreal_task_checkpoint"
+    persisted = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["controlEpoch"] == exhausted["controlEpoch"]
+    assert persisted["controlState"] == exhausted["control"]
+    assert persisted["recoveryObligation"]["source"] == "phase_tool_budget"
     assert "action=record" in exhausted["agentInstruction"]
     assert exhausted["nextAction"] == "unreal_task_checkpoint"
     assert exhausted["nextActionArgs"]["action"] == "record"

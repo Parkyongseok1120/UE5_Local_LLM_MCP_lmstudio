@@ -26,6 +26,75 @@ function isoNow(): string {
   return new Date().toISOString();
 }
 
+type ModelFenceSnapshot = {
+  version: 1;
+  identifier: string;
+  instanceReference: string;
+  contextLength: number;
+  observationLevel: "instance" | "identifier";
+  loadConfigObservable: false;
+};
+
+async function captureModelFence(
+  model: any,
+  resolvedTargetModel: string,
+  contextLength: number,
+): Promise<ModelFenceSnapshot> {
+  let info: any = null;
+  if (typeof model?.getModelInfo === "function") {
+    try {
+      info = await model.getModelInfo();
+    } catch {
+      // The public SDK does not expose load config and a dynamic model handle
+      // can temporarily lose its instance. Identifier fencing remains active.
+    }
+  }
+  const identifier = String(
+    info?.identifier || model?.identifier || resolvedTargetModel || "",
+  ).trim();
+  const instanceReference = String(info?.instanceReference || "").trim();
+  return {
+    version: 1,
+    identifier,
+    instanceReference,
+    contextLength: Math.max(0, Math.floor(Number(contextLength) || 0)),
+    observationLevel: instanceReference ? "instance" : "identifier",
+    // @lmstudio/sdk 1.5.0 exposes instanceReference but keeps getLoadConfig
+    // protected. Record that limitation instead of fabricating a config hash.
+    loadConfigObservable: false,
+  };
+}
+
+function modelFencesMatch(expected: ModelFenceSnapshot, actual: ModelFenceSnapshot): boolean {
+  if (expected.instanceReference) {
+    return Boolean(
+      actual.instanceReference
+      && actual.instanceReference === expected.instanceReference
+      && actual.identifier === expected.identifier
+      && actual.contextLength === expected.contextLength,
+    );
+  }
+  return Boolean(
+    expected.identifier
+    && actual.identifier === expected.identifier
+    && actual.contextLength === expected.contextLength,
+  );
+}
+
+function modelFenceChangedError(
+  expected: ModelFenceSnapshot,
+  actual: ModelFenceSnapshot,
+): Error {
+  const error: any = new Error(
+    "The loaded LM Studio model instance changed during the prediction transaction; "
+    + "all buffered output was discarded before commit.",
+  );
+  error.code = "MODEL_INSTANCE_CHANGED";
+  error.expectedModelFence = expected;
+  error.actualModelFence = actual;
+  return error;
+}
+
 function checkpointLifecycleIdentity(checkpoint: any): {
   taskSessionId?: string;
   objectiveHash?: string;
@@ -741,30 +810,79 @@ function guardGeneratorAbort(ctl: GeneratorController): void {
   }
 }
 
-async function predictionResultWithAbort(prediction: any, ctl: GeneratorController): Promise<any> {
+type PredictionSupervisionOptions = {
+  wallClockMs?: number;
+  noProgressMs?: number;
+  getLastProgressAt?: () => number;
+};
+
+function predictionSupervisorError(code: string, elapsedMs: number): Error {
+  const error: any = new Error(
+    code === "PREDICTION_NO_PROGRESS_EXCEEDED"
+      ? `Model prediction made no semantic progress for ${Math.max(1, Math.floor(elapsedMs / 1000))} seconds.`
+      : `Model prediction exceeded its ${Math.max(1, Math.floor(elapsedMs / 1000))}-second wall-clock budget.`,
+  );
+  error.code = code;
+  error.elapsedMs = elapsedMs;
+  return error;
+}
+
+async function predictionResultWithSupervision(
+  prediction: any,
+  ctl: GeneratorController,
+  options: PredictionSupervisionOptions = {},
+): Promise<any> {
   guardGeneratorAbort(ctl);
   const signal = (ctl as any)?.abortSignal;
-  if (!signal || typeof signal.addEventListener !== "function") {
-    return prediction.result();
-  }
-
+  const startedAt = Date.now();
+  const wallClockMs = Math.max(0, Number(options.wallClockMs || 0));
+  const noProgressMs = Math.max(0, Number(options.noProgressMs || 0));
+  const getLastProgressAt = options.getLastProgressAt || (() => startedAt);
   let abortListener: (() => void) | null = null;
-  const abortResult = new Promise<never>((_resolve, reject) => {
-    abortListener = () => {
+  let wallClockTimer: ReturnType<typeof setTimeout> | null = null;
+  let noProgressTimer: ReturnType<typeof setInterval> | null = null;
+  const cancellationResult = new Promise<never>((_resolve, reject) => {
+    let cancellationStarted = false;
+    const cancelAndReject = (error: Error) => {
+      if (cancellationStarted) return;
+      cancellationStarted = true;
       try {
         Promise.resolve(prediction?.cancel?.()).catch(() => {});
       } catch {
-        // The abort still terminates this generator even if the backend's
-        // cancellation hook itself is already closed or throws synchronously.
+        // The supervisor still rejects this generator even if the backend's
+        // cancellation hook is already closed or throws synchronously.
       }
-      reject(signal.reason instanceof Error ? signal.reason : new Error("Generation aborted"));
+      reject(error);
     };
-    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal && typeof signal.addEventListener === "function") {
+      abortListener = () => cancelAndReject(
+        signal.reason instanceof Error ? signal.reason : new Error("Generation aborted"),
+      );
+      signal.addEventListener("abort", abortListener, { once: true });
+    }
+    if (wallClockMs > 0) {
+      wallClockTimer = setTimeout(() => cancelAndReject(
+        predictionSupervisorError("PREDICTION_WALL_CLOCK_EXCEEDED", Date.now() - startedAt),
+      ), wallClockMs);
+    }
+    if (noProgressMs > 0) {
+      const pollMs = Math.max(10, Math.min(1000, Math.floor(noProgressMs / 4)));
+      noProgressTimer = setInterval(() => {
+        const stalledMs = Date.now() - Number(getLastProgressAt() || startedAt);
+        if (stalledMs >= noProgressMs) {
+          cancelAndReject(predictionSupervisorError("PREDICTION_NO_PROGRESS_EXCEEDED", stalledMs));
+        }
+      }, pollMs);
+    }
   });
   try {
-    return await Promise.race([Promise.resolve(prediction.result()), abortResult]);
+    return await Promise.race([Promise.resolve(prediction.result()), cancellationResult]);
   } finally {
-    if (abortListener) signal.removeEventListener("abort", abortListener);
+    if (wallClockTimer) clearTimeout(wallClockTimer);
+    if (noProgressTimer) clearInterval(noProgressTimer);
+    if (abortListener && signal && typeof signal.removeEventListener === "function") {
+      signal.removeEventListener("abort", abortListener);
+    }
   }
 }
 
@@ -2045,6 +2163,61 @@ function mergeServerOwnedArguments(modelValue: any, serverValue: any): any {
   return merged;
 }
 
+function deterministicControlToolDefinition(
+  definition: any,
+  injectedArguments: Record<string, any>,
+): any | null {
+  if (!definition) return null;
+  const schema = definition?.function?.parameters
+    || definition?.function?.inputSchema
+    || definition?.parameters
+    || definition?.inputSchema
+    || {};
+  const properties = schema?.properties && typeof schema.properties === "object"
+    ? schema.properties
+    : {};
+  const injected = mergeServerOwnedArguments({}, injectedArguments || {});
+  const originalRequired = Array.isArray(schema.required)
+    ? schema.required.map((key: any) => String(key || "")).filter(Boolean)
+    : [];
+  return {
+    ...definition,
+    function: {
+      ...definition.function,
+      parameters: {
+        ...schema,
+        properties,
+        required: originalRequired.filter((key: string) => (
+          !Object.prototype.hasOwnProperty.call(injected, key)
+        )),
+      },
+    },
+    __serverOwnedInjectedArgs: injected,
+    __serverOwnedDirectCallSafe: originalRequired.every((key: string) => (
+      Object.prototype.hasOwnProperty.call(injected, key)
+    )),
+  };
+}
+
+function phaseControlToolDefinition(
+  definition: any,
+  sessionId: string,
+  authoritativeGoal: string,
+): any | null {
+  if (!definition) return null;
+  const name = String(definition?.function?.name || definition?.name || "");
+  const injected: Record<string, any> = {};
+  for (const key of ["sessionId", "conversationSessionId"]) {
+    if (toolAcceptsArgument([definition], name, key)) injected[key] = sessionId;
+  }
+  if (toolNamesMatch(TASK_PLANNER_TOOL_NAME, name)) {
+    for (const key of ["request", "latestUserMessage"]) {
+      if (toolAcceptsArgument([definition], name, key)) injected[key] = authoritativeGoal;
+    }
+  }
+  return deterministicControlToolDefinition(definition, injected);
+}
+
 function taskOwnedRequiredToolDefinition(
   checkpoint: any,
   toolDefinitions: any[],
@@ -2732,8 +2905,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   }
 
   const contextLength = await model.getContextLength();
+  const transactionModelFence = await captureModelFence(
+    model,
+    resolvedTargetModel,
+    contextLength,
+  );
   let toolDefinitions = ctl.getToolDefinitions();
   const nextCheckpoint: any = preliminaryCheckpoint;
+  nextCheckpoint.modelFence = transactionModelFence;
   const persistedFeatureResume = checkpointBeforeModelReadiness?.featureIntentResume;
   nextCheckpoint.featureIntentResume = null;
   let featureIntentRediscoveryActive = false;
@@ -3525,6 +3704,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const exactRequiredToolDefinition: any = detachedSideQueryActive
     ? null
     : taskOwnedRequiredToolDefinition(nextCheckpoint, contractAwareToolDefinitions, sessionId);
+  const initialActiveProjectControlDefinition: any = initialActiveProjectBootstrapForced
+    ? phaseControlToolDefinition(activeProjectBootstrapTool, sessionId, authoritativeGoal)
+    : null;
+  const preRoutePlannerControlDefinition: any = preRoutePlannerForced
+    ? phaseControlToolDefinition(plannerTool, sessionId, authoritativeGoal)
+    : null;
+  const catalogRefreshControlDefinition: any = catalogRefreshForced
+    ? phaseControlToolDefinition(catalogRefreshTool, sessionId, authoritativeGoal)
+    : null;
   const exactRequiredToolForced = Boolean(
     !workflowStopActive
     && exactRequiredToolDefinition
@@ -3599,11 +3787,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     : (architectureToolForced
     ? [architectureContractTool].filter(toolAllowedBySemanticBlocker)
     : (initialActiveProjectBootstrapForced
-      ? [activeProjectBootstrapTool].filter(toolAllowedBySemanticBlocker)
+      ? [initialActiveProjectControlDefinition].filter(Boolean).filter(toolAllowedBySemanticBlocker)
     : (preRoutePlannerForced
-      ? [plannerTool].filter(toolAllowedBySemanticBlocker)
+      ? [preRoutePlannerControlDefinition].filter(Boolean).filter(toolAllowedBySemanticBlocker)
       : (catalogRefreshForced
-        ? [catalogRefreshTool].filter(toolAllowedBySemanticBlocker)
+        ? [catalogRefreshControlDefinition].filter(Boolean).filter(toolAllowedBySemanticBlocker)
       : (exactRequiredToolForced
         ? [exactRequiredToolDefinition].filter(toolAllowedBySemanticBlocker)
       : (featureIntentEvidenceRefillActive
@@ -3725,6 +3913,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     predictionHeartbeatSeconds: finiteNumber(
       configValue(ctl, "predictionHeartbeatSeconds", 4), 4, 1, 30,
     ),
+    predictionWallClockSeconds: finiteNumber(
+      configValue(ctl, "predictionWallClockSeconds", 180), 180, 5, 1800,
+    ),
+    predictionNoProgressSeconds: finiteNumber(
+      configValue(ctl, "predictionNoProgressSeconds", 45), 45, 5, 300,
+    ),
     rejectTruncatedPredictions: Boolean(configValue(ctl, "rejectTruncatedPredictions", true)),
     requireCheckpointPersistence,
     softRemainingTokens: finiteNumber(configValue(ctl, "softRemainingTokens", 14000), 14000, hardRemainingTokens),
@@ -3732,6 +3926,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     maxOutputReserve: dynamicOutputReserve,
     safetyMarginTokens: finiteNumber(configValue(ctl, "safetyMarginTokens", 1024), 1024),
     temperature: finiteNumber(configValue(ctl, "temperature", 0.1), 0.1, 0, 1),
+    topPSampling: finiteNumber(configValue(ctl, "topPSampling", 0.85), 0.85, 0, 1),
+    topKSampling: Math.floor(finiteNumber(configValue(ctl, "topKSampling", 20), 20, 1, 1000)),
+    minPSampling: finiteNumber(configValue(ctl, "minPSampling", 0), 0, 0, 1),
     normalToolResultReserve: finiteNumber(configValue(ctl, "normalToolResultReserve", 3000), 3000),
     buildToolResultReserve: finiteNumber(configValue(ctl, "buildToolResultReserve", 8000), 8000),
     recentCompleteTurns: Math.floor(finiteNumber(configValue(ctl, "recentCompleteTurns", 1), 1, 0, 100)),
@@ -3749,6 +3946,27 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     preRouteDiscoveryLimit,
     durableInspectionDiscoveryLimit,
   };
+  const predictionPolicy = {
+    version: 1,
+    sampling: {
+      temperature: config.temperature,
+      topPSampling: config.topPSampling,
+      topKSampling: config.topKSampling,
+      minPSampling: config.minPSampling,
+    },
+    budgets: {
+      maxOutputTokens: config.maxOutputReserve,
+      wallClockSeconds: config.predictionWallClockSeconds,
+      noProgressSeconds: config.predictionNoProgressSeconds,
+    },
+    reasoningControl: {
+      transport: "external_load_config",
+      sdkVersion: "1.5.0",
+      perPredictionEffortObservable: false,
+    },
+  };
+  const predictionPolicyHash = core.sha256(core.stableStringify(predictionPolicy));
+  nextCheckpoint.predictionPolicy = { ...predictionPolicy, fingerprint: predictionPolicyHash };
   const decision = core.budgetDecision({ contextLength, inputTokens, nextToolName, config, toolSchemaTokens });
   const currentTurnMessageCount = measureCurrentTurnLength(history);
   const currentTurnCapForced = Boolean(
@@ -3767,6 +3985,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     at: new Date().toISOString(),
     proxyActive: true,
     targetModel: resolvedTargetModel,
+    modelFence: transactionModelFence,
+    predictionPolicy: nextCheckpoint.predictionPolicy,
     inputTokens,
     contextLength,
     decision,
@@ -4167,6 +4387,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     else if (event.kind === "failure") ctl.toolCallGenerationFailed(new Error(event.error));
   };
   let streamedReasoningEventCount = 0;
+  let reasoningTokensObserved = 0;
+  let finalTokensObserved = 0;
+  let toolJsonCharactersObserved = 0;
   const recordEvent = (event: any) => {
     // Tool stages are always prepared durably before frontend dispatch. Atomic
     // text remains configurable for backward compatibility, while call ids and
@@ -4201,6 +4424,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     // reused by a bounded repair prediction in the same generator turn.
     const callbackFsm = createToolCallCallbackFsm();
     const predictionStartedAt = Date.now();
+    let lastSemanticProgressAt = predictionStartedAt;
+    const eventStartIndex = events.length;
+    const requestStartIndex = requests.length;
+    const markSemanticProgress = (value: unknown = "") => {
+      if (String(value || "").length > 0) lastSemanticProgressAt = Date.now();
+    };
     let lastVisibleProgressAt = predictionStartedAt;
     const heartbeatIntervalMs = Number(config.predictionHeartbeatSeconds) * 1000;
     let heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -4221,9 +4450,20 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       }, Math.min(1000, heartbeatIntervalMs));
     }
     try {
+      const predictionModelFence = await captureModelFence(
+        model,
+        resolvedTargetModel,
+        contextLength,
+      );
+      if (!modelFencesMatch(transactionModelFence, predictionModelFence)) {
+        throw modelFenceChangedError(transactionModelFence, predictionModelFence);
+      }
       const prediction = model.respond(modelChat, {
         maxTokens: Number(config.maxOutputReserve),
         temperature: Number(config.temperature),
+        topPSampling: Number(config.topPSampling),
+        topKSampling: Number(config.topKSampling),
+        minPSampling: Number(config.minPSampling),
         ...(predictionTools.length > 0 ? {
           rawTools: {
             type: "toolArray",
@@ -4234,6 +4474,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         contextOverflowPolicy: "stopAtLimit",
         signal: ctl.abortSignal,
         onPredictionFragment(fragment: any) {
+          markSemanticProgress(fragment?.content);
+          const observedTokens = Math.max(0, Number(fragment?.tokensCount || 0));
+          if (String(fragment?.reasoningType || "none") === "none") {
+            finalTokensObserved += observedTokens;
+          } else {
+            reasoningTokensObserved += observedTokens;
+          }
           if (
             config.streamReasoningProgress
             && String(fragment?.reasoningType || "none") !== "none"
@@ -4248,13 +4495,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         },
         onToolCallRequestStart(callId: number, info: any) {
           if (!callbackFsm.start(callId, info?.toolCallId)) return;
+          markSemanticProgress(info?.toolCallId || `call:${callId}`);
           recordEvent({ kind: "start", callId, toolCallId: info?.toolCallId });
         },
         onToolCallRequestNameReceived(callId: number, name: string) {
           if (!callbackFsm.name(callId, name)) return;
+          markSemanticProgress(name);
           recordEvent({ kind: "name", callId, name });
         },
         onToolCallRequestArgumentFragmentGenerated(callId: number, content: string) {
+          markSemanticProgress(content);
+          toolJsonCharactersObserved += String(content || "").length;
           recordEvent({ kind: "args", callId, content });
         },
         onToolCallRequestEnd(callId: number, info: any) {
@@ -4267,6 +4518,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             modelFacingToolDefinitions,
           );
           if (!callbackFsm.end(callId, request)) return;
+          markSemanticProgress(requestedToolName(request) || `call:${callId}:end`);
           if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
             replaceBufferedArgumentFragments(events, callId, request.arguments);
           }
@@ -4275,12 +4527,64 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         },
         onToolCallRequestFailure(callId: number, error: Error) {
           if (!callbackFsm.failure(callId, error)) return;
+          markSemanticProgress(error?.message || `call:${callId}:failure`);
           recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
         },
       });
-      const predictionResult: any = await predictionResultWithAbort(prediction, ctl);
+      const predictionResult: any = await predictionResultWithSupervision(prediction, ctl, {
+        wallClockMs: Number(config.predictionWallClockSeconds) * 1000,
+        noProgressMs: Number(config.predictionNoProgressSeconds) * 1000,
+        getLastProgressAt: () => lastSemanticProgressAt,
+      });
       guardGeneratorAbort(ctl);
+      const completedModelFence = await captureModelFence(
+        model,
+        resolvedTargetModel,
+        contextLength,
+      );
+      if (!modelFencesMatch(predictionModelFence, completedModelFence)) {
+        throw modelFenceChangedError(predictionModelFence, completedModelFence);
+      }
       return String(predictionResult?.stats?.stopReason || "");
+    } catch (error: any) {
+      const code = String(error?.code || "");
+      if (
+        code === "PREDICTION_WALL_CLOCK_EXCEEDED"
+        || code === "PREDICTION_NO_PROGRESS_EXCEEDED"
+        || code === "MODEL_INSTANCE_CHANGED"
+      ) {
+        // Every generated event from the cancelled prediction is uncommitted.
+        // Retain only output prepared before this bounded prediction attempt.
+        events.splice(eventStartIndex);
+        requests.splice(requestStartIndex);
+        nextCheckpoint.predictionState = mergeLifecycleState(
+          nextCheckpoint.predictionState,
+          lifecycleState(nextCheckpoint, "pending", { stopReason: code.toLowerCase() }),
+        );
+        await persistCheckpoint(
+          sessionId,
+          nextCheckpoint,
+          requireCheckpointPersistence,
+          code === "MODEL_INSTANCE_CHANGED"
+            ? "prediction_model_fence_rejected"
+            : "prediction_supervisor_cancelled",
+        );
+        await appendEventBestEffort(sessionId, {
+          type: code === "MODEL_INSTANCE_CHANGED"
+            ? "prediction_model_fence_rejected"
+            : "prediction_supervisor_cancelled",
+          at: new Date().toISOString(),
+          reason: code,
+          elapsedMs: Number(error?.elapsedMs || Date.now() - predictionStartedAt),
+          progressLabel,
+          bufferedOutputDiscarded: true,
+          ...(code === "MODEL_INSTANCE_CHANGED" ? {
+            expectedModelFence: error?.expectedModelFence || transactionModelFence,
+            actualModelFence: error?.actualModelFence || null,
+          } : {}),
+        });
+      }
+      throw error;
     } finally {
       if (heartbeat) clearInterval(heartbeat);
     }
@@ -4326,6 +4630,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       stopReason: reason || "unspecified",
       bufferedEventCount: events.length,
       streamedReasoningEventCount,
+      reasoningTokensObserved,
+      finalTokensObserved,
+      toolJsonCharactersObserved,
       predictionHeartbeatCount,
       toolRequestCount: requests.length,
       outputCommitted: false,
@@ -4342,8 +4649,60 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && serverControlV2?.requiredTool
     && exactRequiredToolDefinition?.__serverOwnedDirectCallSafe === true,
   );
+  const phaseControlDefinition: any = initialActiveProjectBootstrapForced
+    ? initialActiveProjectControlDefinition
+    : preRoutePlannerForced
+      ? preRoutePlannerControlDefinition
+      : catalogRefreshForced
+        ? catalogRefreshControlDefinition
+        : null;
+  const phaseControlKind = initialActiveProjectBootstrapForced
+    ? "initial_active_project"
+    : preRoutePlannerForced
+      ? "pre_route_planner"
+      : catalogRefreshForced
+        ? "catalog_refresh"
+        : "";
+  const phaseServerOwnedDirectCall = Boolean(
+    phaseControlDefinition?.__serverOwnedDirectCallSafe === true,
+  );
   let stopReason = "";
-  if (exactServerOwnedDirectCall) {
+  if (phaseServerOwnedDirectCall) {
+    const phaseToolName = String(
+      phaseControlDefinition?.function?.name || phaseControlDefinition?.name || "",
+    );
+    const rawRequest = {
+      id: `server-control-${phaseControlKind}-${String(sessionId).slice(0, 32)}`,
+      type: "function",
+      name: phaseToolName,
+      arguments: mergeServerOwnedArguments(
+        {},
+        phaseControlDefinition?.__serverOwnedInjectedArgs || {},
+      ),
+    };
+    const request = enrichToolRequestControl(
+      rawRequest,
+      sessionId,
+      nextCheckpoint,
+      authoritativeGoal,
+      modelFacingToolDefinitions,
+    );
+    const callId = 0;
+    requests.push({ callId, request });
+    recordEvent({ kind: "start", callId, toolCallId: rawRequest.id });
+    recordEvent({ kind: "name", callId, name: request.name });
+    recordEvent({ kind: "args", callId, content: JSON.stringify(request.arguments || {}) });
+    recordEvent({ kind: "end", callId, request });
+    stopReason = `server_owned_${phaseControlKind}`;
+    await appendEventBestEffort(sessionId, {
+      type: "server_control_tool_direct_emitted",
+      at: new Date().toISOString(),
+      phase: phaseControlKind,
+      tool: phaseToolName,
+      modelSerializationBypassed: true,
+    });
+    await recordPredictionCompletion(stopReason, phaseControlKind);
+  } else if (exactServerOwnedDirectCall) {
     // There is no model choice left: the server owns the exact tool and every
     // schema-required argument.  Inject it directly so compact models cannot
     // waste a turn serializing, correcting, or retrying an already-authorized
@@ -5180,6 +5539,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     stopReason: stopReason || "unspecified",
     emittedEventCount: events.length,
     streamedReasoningEventCount,
+    reasoningTokensObserved,
+    finalTokensObserved,
+    toolJsonCharactersObserved,
     predictionHeartbeatCount,
     toolRequestCount: requests.length,
     outputCommitted: true,
@@ -5190,6 +5552,7 @@ export {
   architectureGateStatus,
   createToolCallCallbackFsm,
   enrichToolRequestControl,
+  captureModelFence,
   generate,
   injectFeatureIntentAtomicRule,
   injectPreRoutePlannerHandoffRule,
@@ -5197,7 +5560,9 @@ export {
   injectTaskRouteOwnershipRule,
   hasTargetBoundDirectSourcePair,
   networkedArchitectureContractRequired,
+  modelFencesMatch,
   normalizeProjectSourcePath,
+  predictionResultWithSupervision,
   requiresArchitectureValidation,
   requiresDurableInspectionPlanning,
   reconcilePendingToolCalls,

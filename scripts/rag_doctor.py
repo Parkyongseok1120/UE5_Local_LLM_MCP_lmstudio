@@ -467,9 +467,41 @@ def main() -> int:
             if servers.get("unreal-rag") and servers.get("unreal-agent"):
                 cline_ok = True
                 cline_detail = str(cline_path)
-                rag_args = servers.get("unreal-rag", {}).get("args") or []
+                rag_entry = servers.get("unreal-rag", {})
+                rag_args = rag_entry.get("args") or []
                 rag_index = " ".join(str(a) for a in rag_args)
                 expected_index = str(index_path).replace("/", "\\")
+                rag_env = rag_entry.get("env") if isinstance(rag_entry, dict) else {}
+                rag_env = rag_env if isinstance(rag_env, dict) else {}
+                cline_shared_raw = str(rag_env.get("SHARED_UNREAL_CONFIG") or "").strip()
+                cline_shared_path = None
+                cline_shared_payload = {}
+                try:
+                    if cline_shared_raw:
+                        cline_shared_path = Path(cline_shared_raw).expanduser().resolve()
+                        if cline_shared_path.is_file():
+                            loaded_cline_shared = json.loads(
+                                cline_shared_path.read_text(encoding="utf-8-sig")
+                            )
+                            if isinstance(loaded_cline_shared, dict):
+                                cline_shared_payload = loaded_cline_shared
+                except (OSError, json.JSONDecodeError):
+                    cline_shared_payload = {}
+                shared_index_path = str(
+                    cline_shared_payload.get("indexPath") or ""
+                ).replace("/", "\\")
+                shared_namespace = str(
+                    cline_shared_payload.get("indexNamespace") or ""
+                ).strip()
+                shared_index_matches = bool(
+                    cline_shared_path
+                    and cline_shared_payload
+                    and shared_namespace == index_namespace
+                    and (
+                        index_namespace in shared_index_path
+                        or expected_index.casefold().endswith(shared_index_path.casefold())
+                    )
+                )
                 if "unreal57" in rag_index:
                     checks.append(
                         check(
@@ -479,12 +511,20 @@ def main() -> int:
                         )
                     )
                     fail_count += 1
-                elif index_namespace in rag_index.replace("/", "\\") or expected_index in rag_index:
+                elif (
+                    index_namespace in rag_index.replace("/", "\\")
+                    or expected_index in rag_index
+                    or shared_index_matches
+                ):
                     checks.append(
                         check(
                             "cline_index_path",
                             True,
-                            f"{cline_path} -> {index_namespace}",
+                            (
+                                f"{cline_path} -> {index_namespace}"
+                                if not shared_index_matches
+                                else f"{cline_path} -> {index_namespace} via {cline_shared_path}"
+                            ),
                         )
                     )
                 else:

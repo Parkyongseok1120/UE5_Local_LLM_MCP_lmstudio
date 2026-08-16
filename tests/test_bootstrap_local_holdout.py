@@ -381,12 +381,17 @@ def test_tracked_bootstrap_files_do_not_contain_user_paths():
     assert "/home/" not in text
 
 
-def test_bootstrap_detects_only_ue58_ubt_candidates():
-    text = (ROOT / "scripts" / "bootstrap_local_holdout.py").read_text(encoding="utf-8")
+def test_bootstrap_uses_portable_ubt_resolution(tmp_path, monkeypatch):
+    ubt = tmp_path / "CustomEngine" / "Engine" / "Binaries" / "DotNET" / "UnrealBuildTool.dll"
+    ubt.parent.mkdir(parents=True)
+    ubt.write_text("fixture", encoding="utf-8")
+    monkeypatch.setattr(bootstrap_local_holdout, "resolve_ubt_path", lambda _root: ubt)
 
-    assert "UE_5.8" in text
-    assert "UE_5.7" not in text
-    assert "UE_5.6" not in text
+    assert bootstrap_local_holdout.detect_ubt_path() == ubt.resolve()
+
+    source = (ROOT / "scripts" / "bootstrap_local_holdout.py").read_text(encoding="utf-8")
+    assert "C:/Program Files/Epic Games" not in source
+    assert '"UE_5.8"' not in source
 
 
 def test_local_holdout_paths_are_ignored_by_gitignore():

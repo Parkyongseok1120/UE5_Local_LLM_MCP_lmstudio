@@ -52,6 +52,34 @@ def test_model_alias_resolves_qwen36_lmstudio_gguf_profile(monkeypatch):
     )
 
 
+def test_model_alias_resolves_qwen38_27b_without_family_fallback(monkeypatch):
+    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
+    sampling.set_sampling_profile("")
+
+    assert (
+        sampling.resolve_profile_name_for_model(
+            "lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
+        )
+        == "qwen3_8_27b"
+    )
+
+
+def test_qwen38_profile_has_explicit_server_reasoning_policy():
+    limits = sampling.profile_edit_limits("qwen3_8_27b")
+    policy = limits["reasoningPolicy"]
+    plan = sampling.load_sampling_preset(turn="plan", profile="qwen3_8_27b")
+
+    assert policy["owner"] == "server"
+    assert policy["transport"] == "external_load_config"
+    assert policy["capabilityStatus"] == "observed_not_sdk_controllable"
+    assert policy["failClosedIfUnpinned"] is True
+    assert policy["supportedEfforts"] == ["low", "medium", "extra_high"]
+    assert limits["contextLength"] == 65536
+    assert plan["reasoningEffort"] == "low"
+    assert plan["topK"] == 20
+    assert plan["minP"] == 0
+
+
 def test_sampling_cli_can_resolve_profile_from_model_alias():
     proc = subprocess.run(
         [

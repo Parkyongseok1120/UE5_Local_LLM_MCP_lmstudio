@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from workspace_paths import resolve_ubt_path
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXAMPLE = ROOT / "config" / "rag_eval_real_project_holdout_cases.local.example.json"
@@ -390,11 +392,11 @@ ensure_eval_tiers(EXPANSION_CASES_36_EXTRA)
 
 
 def detect_ubt_path() -> Path | None:
-    """Return the UE 5.8 UBT path if present; never fail if absent."""
-    base = Path("C:/") / "Program Files" / "Epic Games"
-    candidate = base / "UE_5.8" / "Engine" / "Binaries" / "DotNET" / "UnrealBuildTool" / "UnrealBuildTool.exe"
+    """Return the configured/discovered UBT path; never fail if absent."""
+
+    candidate = resolve_ubt_path(ROOT)
     if candidate.is_file():
-        return candidate
+        return candidate.resolve()
     return None
 
 
@@ -2697,7 +2699,7 @@ def main() -> int:
     if detected_ubt:
         print(f"Detected UBT candidate: {detected_ubt}")
     else:
-        print("UE 5.8 UBT candidate not detected; pass --ubt-path explicitly for live eval.")
+        print("UnrealBuildTool candidate not detected; pass --ubt-path explicitly for live eval.")
     print(next_step_text(args.output_config, ubt_path=detected_ubt))
     return 0
 

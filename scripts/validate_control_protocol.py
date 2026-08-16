@@ -44,6 +44,11 @@ _ERROR_CODE_FALLBACK = re.compile(
     r"(?:\berrorCode\b|\berror_code\b|[\"']errorCode[\"']|[\"']error_code[\"'])"
     r"[^\r\n]{0,120}?(?:\|\||\bor\b)\s*[\"'`]([A-Z][A-Z0-9_]{2,})[\"'`]"
 )
+_ERROR_CODE_TERNARY = re.compile(
+    r"(?:\berrorCode\b|\berror_code\b|[\"']errorCode[\"']|[\"']error_code[\"'])"
+    r"[\s\S]{0,180}?\?[\s\S]{0,120}?[\"'`]([A-Z][A-Z0-9_]{2,})[\"'`]"
+    r"[\s\S]{0,80}?:[\s\S]{0,80}?[\"'`]([A-Z][A-Z0-9_]{2,})[\"'`]"
+)
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -75,9 +80,10 @@ def discover_emitted_error_codes() -> dict[str, list[str]]:
     for path in source_files():
         text = path.read_text(encoding="utf-8-sig")
         relative = path.relative_to(ROOT).as_posix()
-        for pattern in (_QUOTED_ERROR_CODE, _ERROR_CODE_FALLBACK):
+        for pattern in (_QUOTED_ERROR_CODE, _ERROR_CODE_FALLBACK, _ERROR_CODE_TERNARY):
             for match in pattern.finditer(text):
-                discovered.setdefault(match.group(1), set()).add(relative)
+                for code in (group for group in match.groups() if group):
+                    discovered.setdefault(code, set()).add(relative)
     return {code: sorted(paths) for code, paths in sorted(discovered.items())}
 
 

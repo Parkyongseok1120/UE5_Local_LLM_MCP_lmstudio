@@ -55,6 +55,11 @@ function taskDir(workspaceRoot, taskSessionId, stateRoot = resolveAgentStateRoot
 }
 
 function readTaskStateResult(_workspaceRoot, taskSessionId, stateRoot = null) {
+  const sanitized = sanitizeTaskSessionId(taskSessionId);
+  if (!sanitized.ok) {
+    return { state: null, errorCode: "TASK_AUTH_INVALID_FORMAT" };
+  }
+  taskSessionId = sanitized.taskSessionId;
   stateRoot = stateRoot || resolveAgentStateRoot(_workspaceRoot);
   let dir;
   try {

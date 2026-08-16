@@ -18,6 +18,11 @@
     "api_lookup": "api_lookup"
   },
   "modelAliases": {
+    "qwen3.8-27b": "qwen3_8_27b",
+    "qwen3.8-27b-gguf": "qwen3_8_27b",
+    "qwen3.8-27b-q4_k_m": "qwen3_8_27b",
+    "qwen/qwen3.8-27b": "qwen3_8_27b",
+    "lmstudio-community/qwen3.8-27b-gguf": "qwen3_8_27b",
     "qwen3.6-27b": "qwen3_6_27b",
     "qwen3.6": "qwen3_6_27b",
     "qwen3.6-27b-gguf": "qwen3_6_27b",
@@ -49,6 +54,106 @@
     "review-only": "review_only"
   },
   "profiles": {
+    "qwen3_8_27b": {
+      "contextLength": 65536,
+      "_contextNote": "The full stable MCP schema left only 3,739 tokens at 32K, below the compactor's 8K hard margin. Use 64K as the minimum production load context; the observed model advertises a 262K native maximum.",
+      "contextLengthVariant_nativeMax": 262144,
+      "assemblyBudgetScale": 1.1,
+      "targetTier": "sonnet_4_5_track",
+      "promptContract": "evidence_then_patch_strict",
+      "maxFilesPerEdit": 2,
+      "preferPatchOverFullFile": true,
+      "mcpEssentialTools": true,
+      "recommendedSystemPrompt": "prompts/lmstudio_qwen36_27b_compact_system.md",
+      "mcpToolDiscipline": "one_tool_per_turn",
+      "quantDefault": "Q4_K_M",
+      "reasoningPolicy": {
+        "owner": "server",
+        "transport": "external_load_config",
+        "capabilityStatus": "observed_not_sdk_controllable",
+        "supportedEfforts": ["low", "medium", "extra_high"],
+        "defaultEffort": "low",
+        "failClosedIfUnpinned": true,
+        "notes": "LM Studio SDK 1.5.0 has no public per-prediction reasoning-effort field. The loaded model custom field must be pinned externally; runtime supervision still enforces output and time budgets."
+      },
+      "agentPolicy": {
+        "ragBudgetScale": 1.1,
+        "maxFilesPerEdit": 2,
+        "preferPatch": true,
+        "planningRequired": true,
+        "deepSearch": true,
+        "compileFixMaxAttempts": 5,
+        "allowRefactorModes": true,
+        "jsonRepairStrict": true,
+        "historyTurns": 5,
+        "defaultTopK": 6,
+        "deltaTopK": 3,
+        "candidateLimitScale": 16,
+        "preferSymbolLookupOverFileRead": true,
+        "enforceRangeRead": true,
+        "rangeReadContextLines": 40,
+        "patchChangedLineLimit": 60,
+        "noOpGuard": true,
+        "targetTier": "sonnet_4_5_track",
+        "promptContract": "evidence_then_patch_strict"
+      },
+      "turnPresets": {
+        "plan": {
+          "thinking": "on",
+          "reasoningEffort": "low",
+          "temperature": 0.6,
+          "topP": 0.95,
+          "topK": 20,
+          "minP": 0,
+          "maxTokens": 3072
+        },
+        "critique": {
+          "thinking": "on",
+          "reasoningEffort": "medium",
+          "temperature": 0.6,
+          "topP": 0.95,
+          "topK": 20,
+          "minP": 0,
+          "maxTokens": 6144
+        },
+        "execute": {
+          "thinking": "off",
+          "reasoningEffort": "low",
+          "temperature": 0.1,
+          "topP": 0.85,
+          "topK": 20,
+          "minP": 0,
+          "maxTokens": 4096
+        },
+        "compile_fix_analyze": {
+          "thinking": "on",
+          "reasoningEffort": "medium",
+          "temperature": 0.6,
+          "topP": 0.95,
+          "topK": 20,
+          "minP": 0,
+          "maxTokens": 6144
+        },
+        "compile_fix_patch": {
+          "thinking": "off",
+          "reasoningEffort": "low",
+          "temperature": 0.07,
+          "topP": 0.82,
+          "topK": 20,
+          "minP": 0,
+          "maxTokens": 4096
+        },
+        "api_lookup": {
+          "thinking": "off",
+          "reasoningEffort": "low",
+          "temperature": 0.05,
+          "topP": 0.8,
+          "topK": 20,
+          "minP": 0,
+          "maxTokens": 2048
+        }
+      }
+    },
     "qwen3_6_27b": {
       "contextLength": 32768,
       "_contextNote": "Qwen3.6-27B supports very long native context, but this workflow defaults to 32K for LM Studio stability. If RAM/VRAM is sufficient, A/B test 64K before raising production defaults.",

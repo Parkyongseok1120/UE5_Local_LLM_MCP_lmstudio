@@ -8,9 +8,14 @@ compacted `Chat` to the configured underlying local model when the remaining bud
 With zero or multiple loaded LLMs, the plugin fails with a list of candidates and asks for an
 exact model key. The existing `mcp/unreal-agent` and `mcp/unreal-rag` plugins remain tool providers.
 
-Version 0.4.40 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
+Version 0.4.41 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
 before every prediction and buffers model text/tool calls until LM Studio confirms a safe stop.
 Context-limit and max-output truncations are discarded instead of being presented as completed work.
+Every proxied prediction pins temperature/top-p/top-k/min-p, has independent wall-clock and semantic
+no-progress limits, and rejects buffered output if the loaded model instance changes mid-transaction.
+UI heartbeats never renew the semantic-progress deadline. Exact active-project bootstrap, pre-route
+planner, catalog-refresh, and v2 required-tool calls bypass model serialization when every required
+argument is server-owned.
 Architecture proposals now carry an explicit local/network scope and stable invariant IDs. Bounded local
 features use the Bound contract without Strict-only alternatives, migration, or RPC ceremony.
 Explicit reasoning fragments stream as live progress while final text and tool calls remain atomic.

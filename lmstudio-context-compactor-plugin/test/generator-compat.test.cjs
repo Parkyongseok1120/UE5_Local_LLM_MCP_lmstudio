@@ -53,6 +53,89 @@ function controllerFor(model, config, stateRoot, emitted, toolDefinitions, worki
   };
 }
 
+test("prediction supervisor cancels and rejects a wall-clock overrun", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  let cancelCount = 0;
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() { return new Promise(() => {}); },
+  };
+  const ctl = { abortSignal: new AbortController().signal };
+
+  await assert.rejects(
+    predictionResultWithSupervision(prediction, ctl, { wallClockMs: 25 }),
+    (error) => error?.code === "PREDICTION_WALL_CLOCK_EXCEEDED",
+  );
+  assert.equal(cancelCount, 1);
+});
+
+test("prediction supervisor treats heartbeat-free semantic silence as no progress", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  let cancelCount = 0;
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() { return new Promise(() => {}); },
+  };
+  const ctl = { abortSignal: new AbortController().signal };
+  const lastProgressAt = Date.now();
+
+  await assert.rejects(
+    predictionResultWithSupervision(prediction, ctl, {
+      wallClockMs: 1000,
+      noProgressMs: 25,
+      getLastProgressAt: () => lastProgressAt,
+    }),
+    (error) => error?.code === "PREDICTION_NO_PROGRESS_EXCEEDED",
+  );
+  assert.equal(cancelCount, 1);
+});
+
+test("model fence rejects output when the loaded instance changes mid-prediction", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-model-fence-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let infoCalls = 0;
+    const model = {
+      identifier: "model-fence-test",
+      async getModelInfo() {
+        infoCalls += 1;
+        return {
+          identifier: "model-fence-test",
+          instanceReference: infoCalls < 3 ? "instance-a" : "instance-b",
+        };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        opts.onPredictionFragment({ content: "must-not-commit", reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "stop" } }; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("system", "rules");
+    history.append("user", "Explain this general Unreal concept without changing files.");
+
+    await assert.rejects(
+      generate(
+        controllerFor(model, { streamReasoningProgress: false }, stateRoot, emitted, []),
+        history,
+      ),
+      /model instance changed during the prediction transaction/i,
+    );
+    assert.equal(
+      emitted.some((event) => event.kind === "fragment" && event.content.includes("must-not-commit")),
+      false,
+    );
+    assert.equal(activeCheckpoint(stateRoot).predictionState.status, "pending");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("default mode preserves multiple tool calls and fragment metadata", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-generator-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -66,6 +149,9 @@ test("default mode preserves multiple tool calls and fragment metadata", async (
       async getContextLength() { return 100_000; },
       respond(_history, opts) {
         assert.equal(opts.temperature, 0.1);
+        assert.equal(opts.topPSampling, 0.85);
+        assert.equal(opts.topKSampling, 20);
+        assert.equal(opts.minPSampling, 0);
         opts.onPredictionFragment({
           content: "OK",
           tokensCount: 2,
@@ -2753,31 +2839,21 @@ test("fresh write task exposes only unreal_get_active_project before planner", a
   try {
     const { generate } = require("../dist/generator.js");
     const emitted = [];
-    let advertisedTools = [];
+    let respondCount = 0;
     let bootstrapRule = "";
     const model = {
       identifier: "initial-active-project-model",
-      async applyPromptTemplate() { return "formatted"; },
-      async countTokens(value) { return String(value || "").length; },
-      async getContextLength() { return 100_000; },
-      respond(history, opts) {
-        assert.equal(opts.rawTools.force, true);
-        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
+      async applyPromptTemplate(history) {
         bootstrapRule = history.getMessagesArray()
           .filter((message) => message.getRole() === "system")
           .map((message) => message.getText()).join("\n");
-        opts.onToolCallRequestStart(1, { toolCallId: "initial-active-project-1" });
-        opts.onToolCallRequestNameReceived(1, "unreal_get_active_project");
-        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
-        opts.onToolCallRequestEnd(1, {
-          toolCallRequest: {
-            id: "initial-active-project-1",
-            type: "function",
-            name: "unreal_get_active_project",
-            arguments: {},
-          },
-        });
-        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+        return "formatted";
+      },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        respondCount += 1;
+        throw new Error("deterministic bootstrap must bypass model serialization");
       },
     };
     const tools = [
@@ -2796,7 +2872,7 @@ test("fresh write task exposes only unreal_get_active_project before planner", a
 
     await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
 
-    assert.deepEqual(advertisedTools, ["unreal_get_active_project"]);
+    assert.equal(respondCount, 0);
     assert.match(bootstrapRule, /Do not call workspace, directory, read, search/);
     assert.equal(
       emitted.some((event) => event.kind === "end" && event.request.name === "unreal_get_active_project"),
@@ -2818,26 +2894,16 @@ test("matching server mutation requestIntent forces bootstrap for a read-looking
       operation: "modify",
       mutability: "source_files",
     });
-    let advertisedTools = [];
+    let respondCount = 0;
     const emitted = [];
     const model = {
       identifier: "request-intent-write-model",
       async applyPromptTemplate() { return "formatted"; },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
-      respond(_history, opts) {
-        assert.equal(opts.rawTools.force, true);
-        advertisedTools = opts.rawTools.tools.map((tool) => tool.function?.name || tool.name);
-        opts.onToolCallRequestStart(1, { toolCallId: "intent-write-bootstrap" });
-        opts.onToolCallRequestNameReceived(1, "unreal_get_active_project");
-        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
-        opts.onToolCallRequestEnd(1, { toolCallRequest: {
-          id: "intent-write-bootstrap",
-          type: "function",
-          name: "unreal_get_active_project",
-          arguments: {},
-        } });
-        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      respond() {
+        respondCount += 1;
+        throw new Error("deterministic bootstrap must bypass model serialization");
       },
     };
     const tools = [
@@ -2870,7 +2936,7 @@ test("matching server mutation requestIntent forces bootstrap for a read-looking
 
     await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
 
-    assert.deepEqual(advertisedTools, ["unreal_get_active_project"]);
+    assert.equal(respondCount, 0);
     assert.equal(
       emitted.some((event) => event.kind === "end" && event.request.name === "unreal_get_active_project"),
       true,
@@ -3027,28 +3093,18 @@ test("long-objective continuation keeps server requestIntent classification", as
     try {
       const { generate } = require("../dist/generator.js");
       const requestIntent = requestIntentFor(row.objective, row.overrides);
-      let forced = null;
+      let respondCount = 0;
+      const emitted = [];
       const model = {
         identifier: `long-request-intent-${row.name}`,
         async applyPromptTemplate() { return "formatted"; },
         async countTokens(value) { return String(value || "").length; },
         async getContextLength() { return 100_000; },
         respond(_history, opts) {
-          forced = opts.rawTools?.force === true;
-          if (row.expectedForce) {
-            opts.onToolCallRequestStart(1, { toolCallId: `bootstrap-${row.name}` });
-            opts.onToolCallRequestNameReceived(1, "unreal_get_active_project");
-            opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
-            opts.onToolCallRequestEnd(1, { toolCallRequest: {
-              id: `bootstrap-${row.name}`,
-              type: "function",
-              name: "unreal_get_active_project",
-              arguments: {},
-            } });
-          } else {
-            opts.onPredictionFragment({ content: "read-only", reasoningType: "none" });
-          }
-          return { async result() { return { stats: { stopReason: row.expectedForce ? "toolCalls" : "stop" } }; } };
+          respondCount += 1;
+          assert.equal(row.expectedForce, false, "mutation bootstrap must bypass model serialization");
+          opts.onPredictionFragment({ content: "read-only", reasoningType: "none" });
+          return { async result() { return { stats: { stopReason: "stop" } }; } };
         },
       };
       const tools = [
@@ -3083,9 +3139,14 @@ test("long-objective continuation keeps server requestIntent classification", as
         { role: "user", content: [{ type: "text", text: "continue" }] },
       ] });
 
-      await generate(controllerFor(model, {}, stateRoot, [], tools), history);
+      await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
 
-      assert.equal(forced, row.expectedForce, row.name);
+      assert.equal(respondCount, row.expectedForce ? 0 : 1, row.name);
+      assert.equal(
+        emitted.some((event) => event.kind === "end" && event.request.name === "unreal_get_active_project"),
+        row.expectedForce,
+        row.name,
+      );
       const checkpoint = activeCheckpoint(stateRoot);
       assert.equal(checkpoint.objective.length, 1_200);
       assert.equal(checkpoint.objectiveHash, core.objectiveHashOf(row.objective));
@@ -3185,38 +3246,34 @@ test("bounded pre-route discovery forces one planner handoff for write goals", a
   try {
     const { generate } = require("../dist/generator.js");
     const emitted = [];
-    let advertisedTools = [];
-    let forced = false;
+    let respondCount = 0;
     let sawHandoffRule = false;
     const model = {
       identifier: "pre-route-planner-model",
-      async applyPromptTemplate() { return "formatted"; },
-      async countTokens(value) { return String(value || "").length; },
-      async getContextLength() { return 100_000; },
-      respond(history, opts) {
-        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
-        forced = opts.rawTools?.force === true;
+      async applyPromptTemplate(history) {
         sawHandoffRule = history.getMessagesArray().some(
           (message) => message.getRole() === "system"
             && message.getText().includes("[UNREAL_PRE_ROUTE_PLANNER_HANDOFF]"),
         );
-        opts.onToolCallRequestStart(1, { toolCallId: "plan-after-discovery" });
-        opts.onToolCallRequestNameReceived(1, "unreal_agent_plan");
-        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"request":"implement bounded rule fix"}');
-        opts.onToolCallRequestEnd(1, {
-          toolCallRequest: {
-            id: "plan-after-discovery",
-            type: "function",
-            name: "unreal_agent_plan",
-            arguments: { request: "implement bounded rule fix" },
-          },
-        });
-        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+        return "formatted";
+      },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        respondCount += 1;
+        throw new Error("deterministic planner handoff must bypass model serialization");
       },
     };
     const tools = ["read_file", "list_directory", "unreal_agent_plan", "evidence_record"].map((name) => ({
       type: "function",
-      function: { name, parameters: { type: "object", properties: {} } },
+      function: {
+        name,
+        parameters: {
+          type: "object",
+          properties: name === "unreal_agent_plan" ? { request: { type: "string" } } : {},
+          required: name === "unreal_agent_plan" ? ["request"] : [],
+        },
+      },
     }));
     const messages = [
       { role: "system", content: [{ type: "text", text: "rules" }] },
@@ -3245,12 +3302,16 @@ test("bounded pre-route discovery forces one planner handoff for write goals", a
       history,
     );
 
-    assert.deepEqual(advertisedTools, ["unreal_agent_plan"]);
-    assert.equal(forced, true);
+    assert.equal(respondCount, 0);
     assert.equal(sawHandoffRule, true);
     assert.equal(
       emitted.some((event) => event.kind === "end" && event.request.name === "unreal_agent_plan"),
       true,
+    );
+    assert.equal(
+      emitted.find((event) => event.kind === "end" && event.request.name === "unreal_agent_plan")
+        .request.arguments.request,
+      "implement bounded rule fix",
     );
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -3383,33 +3444,22 @@ test("stale pre-route Agent catalog forces exactly one read-only catalog refresh
   try {
     const { generate } = require("../dist/generator.js");
     const emitted = [];
-    let advertisedTools = [];
-    let forced = false;
+    let respondCount = 0;
     let refreshRulePresent = false;
     const model = {
       identifier: "catalog-refresh-model",
-      async applyPromptTemplate() { return "formatted"; },
-      async countTokens(value) { return String(value || "").length; },
-      async getContextLength() { return 100_000; },
-      respond(history, opts) {
-        advertisedTools = (opts.rawTools?.tools || []).map((tool) => tool.function?.name || tool.name);
-        forced = opts.rawTools?.force === true;
+      async applyPromptTemplate(history) {
         refreshRulePresent = history.getMessagesArray().some(
           (message) => message.getRole() === "system"
             && message.getText().includes("[UNREAL_TOOL_CATALOG_REFRESH]"),
         );
-        opts.onToolCallRequestStart(1, { toolCallId: "catalog-refresh-1" });
-        opts.onToolCallRequestNameReceived(1, "get_active_project");
-        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
-        opts.onToolCallRequestEnd(1, {
-          toolCallRequest: {
-            id: "catalog-refresh-1",
-            type: "function",
-            name: "get_active_project",
-            arguments: {},
-          },
-        });
-        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+        return "formatted";
+      },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        respondCount += 1;
+        throw new Error("deterministic catalog refresh must bypass model serialization");
       },
     };
     const route = {
@@ -3448,8 +3498,7 @@ test("stale pre-route Agent catalog forces exactly one read-only catalog refresh
 
     await generate(controllerFor(model, {}, stateRoot, emitted, staleTools), history);
 
-    assert.deepEqual(advertisedTools, ["get_active_project"]);
-    assert.equal(forced, true);
+    assert.equal(respondCount, 0);
     assert.equal(refreshRulePresent, true);
     assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "get_active_project"), true);
     assert.deepEqual(activeCheckpoint(stateRoot).catalogRefresh, {
@@ -3531,16 +3580,21 @@ test("stale Agent catalog fails closed after the single refresh instead of polli
       controllerFor(model, {}, stateRoot, emitted, staleTools),
       Chat.from({ messages: baseMessages }),
     );
-    assert.equal(respondCount, 1);
+    assert.equal(respondCount, 0);
+    const directRefresh = emitted.find((event) => (
+      event.kind === "end" && event.request.name === "get_active_project"
+    ));
+    assert.ok(directRefresh);
+    const directRefreshId = directRefresh.request.id;
 
     const continued = Chat.from({ messages: [
       ...baseMessages,
       { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
-        id: "catalog-refresh-bounded-1", type: "function", name: "get_active_project", arguments: {},
+        id: directRefreshId, type: "function", name: "get_active_project", arguments: {},
       } }] },
       { role: "tool", content: [{
         type: "toolCallResult",
-        toolCallId: "catalog-refresh-bounded-1",
+        toolCallId: directRefreshId,
         name: "get_active_project",
         content: JSON.stringify({ ok: true, activeProject: "O-Mock" }),
       }] },
@@ -3549,7 +3603,7 @@ test("stale Agent catalog fails closed after the single refresh instead of polli
       generate(controllerFor(model, {}, stateRoot, emitted, staleTools), continued),
       /did not expose .* mutation schemas after one bounded refresh/,
     );
-    assert.equal(respondCount, 1, "A failed refresh must not start another model prediction");
+    assert.equal(respondCount, 0, "A deterministic refresh must not start a model prediction");
     assert.equal(activeCheckpoint(stateRoot).catalogRefresh.status, "failed");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;

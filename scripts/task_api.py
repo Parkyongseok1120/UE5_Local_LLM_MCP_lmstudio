@@ -8092,6 +8092,13 @@ def task_checkpoint(
                     reset_reason="checkpoint_record",
                     checkpointHash=checkpoint_hash,
                 )
+                recovery = (
+                    state.get("recoveryObligation")
+                    if isinstance(state.get("recoveryObligation"), dict)
+                    else {}
+                )
+                if str(recovery.get("source") or "") == "phase_tool_budget":
+                    state.pop("recoveryObligation", None)
         else:
             conflicts, discovery_warnings, discovery_issues = _checkpoint_conflicts(
                 workspace,
@@ -10109,6 +10116,34 @@ def authorize_task_tool(
             limit = int(route.get("maxToolCallsPerPhase") or 2)
             if count >= limit:
                 checkpoint_authorization = task_authorization_for_state(state)
+                checkpoint_args = {
+                    "action": "record",
+                    "phase": str(route.get("phase") or "working"),
+                    "requiredNextAction": tool_name,
+                    "includeGitChanges": False,
+                    "taskAuthorization": compact_task_authorization(
+                        checkpoint_authorization
+                    ),
+                }
+                # Budget exhaustion is a durable state transition, not a
+                # response-only hint. Persist it before an adapter creates the
+                # v2 envelope so clients never see a same-epoch semantic fork.
+                state["recoveryObligation"] = {
+                    "source": "phase_tool_budget",
+                    "status": "phase_budget_checkpoint_required",
+                    "errorCode": "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+                    "fingerprint": (
+                        f"{str(route.get('routeHash') or '')}:"
+                        f"{str(route.get('phase') or '')}:{count}:{limit}:{tool_name}"
+                    ),
+                    "requiredTool": {
+                        "name": "unreal_task_checkpoint",
+                        "args": checkpoint_args,
+                    },
+                }
+                commit_control_transition(state)
+                state["updatedAt"] = _utc_now()
+                _write_state(workspace, task_session_id, state)
                 return {
                     "ok": False,
                     "taskSessionId": task_session_id,
@@ -10122,15 +10157,7 @@ def authorize_task_tool(
                     "toolRouteUsage": usage,
                     "taskAuthorization": checkpoint_authorization,
                     "nextAction": "unreal_task_checkpoint",
-                    "nextActionArgs": {
-                        "action": "record",
-                        "phase": str(route.get("phase") or "working"),
-                        "requiredNextAction": tool_name,
-                        "includeGitChanges": False,
-                        "taskAuthorization": compact_task_authorization(
-                            checkpoint_authorization
-                        ),
-                    },
+                    "nextActionArgs": checkpoint_args,
                     "nextActions": [
                         "unreal_task_checkpoint",
                         "unreal_task_status",
@@ -10142,6 +10169,7 @@ def authorize_task_tool(
                         "renew the work-call budget. Then continue requiredNextAction with "
                         "the returned taskAuthorization."
                     ),
+                    "control": dict(state.get("controlState") or {}),
                 }
             calls = [
                 str(item)

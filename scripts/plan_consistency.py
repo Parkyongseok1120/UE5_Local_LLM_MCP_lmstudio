@@ -64,6 +64,7 @@ RAG_ESSENTIAL_TOOLS = frozenset(
         "unreal_task_quarantine_corrupt",
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
+        "unreal_task_commit_synthesis",
         "unreal_task_define_slices",
         "unreal_task_resume",
         "unreal_task_cancel",
