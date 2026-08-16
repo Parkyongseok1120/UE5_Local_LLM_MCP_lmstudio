@@ -3863,6 +3863,7 @@ test("low reasoning effort retries once at the immutable effort floor after sema
     const { generate } = require("../dist/generator.js");
     const emitted = [];
     const efforts = [];
+    const toolChoiceForced = [];
     let attempt = 0;
     const model = {
       identifier: "qwen/qwen3.8-27b",
@@ -3877,6 +3878,7 @@ test("low reasoning effort retries once at the immutable effort floor after sema
           (field) => field.key.endsWith("reasoningEffort"),
         ).value;
         efforts.push(effort);
+        toolChoiceForced.push(opts.rawTools?.force === true);
         attempt += 1;
         if (attempt === 1) {
           opts.onPredictionFragment({
@@ -3889,30 +3891,51 @@ test("low reasoning effort retries once at the immutable effort floor after sema
             async result() { return await new Promise(() => {}); },
           };
         }
-        opts.onPredictionFragment({
-          content: "Recovered at the selected effort.",
-          tokensCount: 4,
-          reasoningType: "none",
+        opts.onToolCallRequestStart(1, { toolCallId: "low-floor-recovery-read" });
+        opts.onToolCallRequestNameReceived(1, "read_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"project://Source/Feature.cpp"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "low-floor-recovery-read",
+            type: "function",
+            name: "read_file",
+            arguments: { path: "project://Source/Feature.cpp" },
+          },
         });
-        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
       },
     };
     const history = Chat.empty();
     history.append("user", "Inspect the project without changing files.");
 
+    const toolDefinitions = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        description: "Read one source file.",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    }];
     await generate(controllerFor(model, {
       reasoningEffort: "low",
       predictionNoProgressSeconds: 0.03,
       streamReasoningProgress: false,
-    }, stateRoot, emitted, []), history);
+    }, stateRoot, emitted, toolDefinitions), history);
 
     assert.deepEqual(efforts, ["low", "low"]);
-    assert.equal(emitted.find((event) => event.kind === "fragment").content, "Recovered at the selected effort.");
+    assert.deepEqual(toolChoiceForced, [false, true]);
+    assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
     const checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.reasoningFallback.status, "completed");
     assert.equal(checkpoint.reasoningFallback.effort, "low");
     assert.equal(checkpoint.reasoningFallback.attempts, 1);
     assert.equal(checkpoint.reasoningFallback.sameEffortRetries, 1);
+    assert.equal(checkpoint.reasoningFallback.toolChoiceForced, true);
+    assert.equal(checkpoint.reasoningFallback.recoveryStrategy, "force_advertised_tool_transition");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -3925,6 +3948,7 @@ test("low reasoning effort floor retry remains bounded when semantic progress ne
   try {
     const { generate } = require("../dist/generator.js");
     const efforts = [];
+    const toolChoiceForced = [];
     const model = {
       identifier: "qwen/qwen3.8-27b",
       async getModelInfo() {
@@ -3937,6 +3961,7 @@ test("low reasoning effort floor retry remains bounded when semantic progress ne
         efforts.push(opts.raw.fields.find(
           (field) => field.key.endsWith("reasoningEffort"),
         ).value);
+        toolChoiceForced.push(opts.rawTools?.force === true);
         opts.onPredictionFragment({
           content: "Still reasoning without semantic progress...",
           tokensCount: 5,
@@ -3951,19 +3976,33 @@ test("low reasoning effort floor retry remains bounded when semantic progress ne
     const history = Chat.empty();
     history.append("user", "Inspect the project without changing files.");
 
+    const toolDefinitions = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        description: "Read one source file.",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    }];
     await assert.rejects(
       generate(controllerFor(model, {
         reasoningEffort: "low",
         predictionNoProgressSeconds: 0.03,
         streamReasoningProgress: false,
-      }, stateRoot, [], []), history),
+      }, stateRoot, [], toolDefinitions), history),
       (error) => error?.code === "PREDICTION_NO_PROGRESS_EXCEEDED",
     );
 
     assert.deepEqual(efforts, ["low", "low"]);
+    assert.deepEqual(toolChoiceForced, [false, true]);
     const checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.reasoningFallback.status, "retrying");
     assert.equal(checkpoint.reasoningFallback.sameEffortRetries, 1);
+    assert.equal(checkpoint.reasoningFallback.toolChoiceForced, true);
     assert.equal(checkpoint.predictionState.status, "pending");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;

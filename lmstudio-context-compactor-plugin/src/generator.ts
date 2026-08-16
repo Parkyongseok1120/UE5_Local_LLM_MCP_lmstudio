@@ -4923,11 +4923,16 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     )
       ? Math.max(0, Number(nextCheckpoint?.reasoningFallback?.sameEffortRetries || 0))
       : 0;
+    let forceToolRecovery = Boolean(
+      nextCheckpoint?.reasoningFallback?.status === "retrying"
+      && nextCheckpoint?.reasoningFallback?.reason === "semantic_no_progress_at_effort_floor"
+      && nextCheckpoint?.reasoningFallback?.toolChoiceForced === true
+    );
     while (true) {
       try {
         const result = await runPredictionAttempt(
           predictionTools,
-          forceTool,
+          forceTool || forceToolRecovery,
           progressLabel,
           effort,
         );
@@ -4946,8 +4951,20 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         const index = effortOrder.indexOf(effort);
         if (index < 0) throw error;
         if (index >= effortOrder.length - 1) {
-          if (sameEffortRetries >= sameEffortRetryLimit) throw error;
+          // Replaying the same effort, chat, and unconstrained tool choice is
+          // deterministic in practice for local models and merely reproduces
+          // the same semantic stall.  A floor recovery is useful only when it
+          // introduces a distinct state transition: require one of the
+          // advertised tools on the retry.  Calls that are already forced (or
+          // have no tools) have no stronger bounded recovery edge.
+          if (
+            sameEffortRetries >= sameEffortRetryLimit
+            || forceTool
+            || forceToolRecovery
+            || predictionTools.length === 0
+          ) throw error;
           sameEffortRetries += 1;
+          forceToolRecovery = true;
           nextCheckpoint.reasoningFallback = {
             version: 1,
             status: "retrying",
@@ -4956,6 +4973,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             reason: "semantic_no_progress_at_effort_floor",
             attempts: Math.max(0, Number(nextCheckpoint?.reasoningFallback?.attempts || 0)) + 1,
             sameEffortRetries,
+            toolChoiceForced: true,
+            recoveryStrategy: "force_advertised_tool_transition",
             updatedAt: isoNow(),
           };
           await persistCheckpoint(
@@ -4971,6 +4990,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             reason: "semantic_no_progress_at_effort_floor",
             retry: sameEffortRetries,
             retryLimit: sameEffortRetryLimit,
+            toolChoiceForced: true,
+            recoveryStrategy: "force_advertised_tool_transition",
           });
           continue;
         }
