@@ -70,8 +70,11 @@ def test_qwen38_profile_has_explicit_server_reasoning_policy():
     plan = sampling.load_sampling_preset(turn="plan", profile="qwen3_8_27b")
 
     assert policy["owner"] == "server"
-    assert policy["transport"] == "external_load_config"
-    assert policy["capabilityStatus"] == "observed_not_sdk_controllable"
+    assert policy["transport"] == "generator_raw_kv_config"
+    assert policy["capabilityStatus"] == "model_profile_bound"
+    assert policy["fieldKey"] == (
+        "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort"
+    )
     assert policy["failClosedIfUnpinned"] is True
     assert policy["supportedEfforts"] == ["low", "medium", "extra_high"]
     assert limits["contextLength"] == 65536

@@ -69,12 +69,13 @@
       "quantDefault": "Q4_K_M",
       "reasoningPolicy": {
         "owner": "server",
-        "transport": "external_load_config",
-        "capabilityStatus": "observed_not_sdk_controllable",
+        "transport": "generator_raw_kv_config",
+        "capabilityStatus": "model_profile_bound",
         "supportedEfforts": ["low", "medium", "extra_high"],
         "defaultEffort": "low",
         "failClosedIfUnpinned": true,
-        "notes": "LM Studio SDK 1.5.0 has no public per-prediction reasoning-effort field. The loaded model custom field must be pinned externally; runtime supervision still enforces output and time budgets."
+        "fieldKey": "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort",
+        "notes": "The SDK has no public effort property; the generator binds LM Studio's Qwen3.8 model-profile KV field on every proxied prediction and records the selected effort in runtime telemetry."
       },
       "agentPolicy": {
         "ragBudgetScale": 1.1,

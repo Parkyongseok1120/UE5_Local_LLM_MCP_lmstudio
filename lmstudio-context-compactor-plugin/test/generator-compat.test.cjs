@@ -152,6 +152,7 @@ test("default mode preserves multiple tool calls and fragment metadata", async (
         assert.equal(opts.topPSampling, 0.85);
         assert.equal(opts.topKSampling, 20);
         assert.equal(opts.minPSampling, 0);
+        assert.equal(opts.raw, undefined);
         opts.onPredictionFragment({
           content: "OK",
           tokensCount: 2,
@@ -209,6 +210,71 @@ test("default mode preserves multiple tool calls and fragment metadata", async (
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("Qwen3.8 reasoning effort is bound on every proxied prediction", async () => {
+  const { generate } = require("../dist/generator.js");
+  for (const [configuredEffort, expectedEffort] of [
+    ["low", "low"],
+    ["medium", "medium"],
+    ["extra high", "xhigh"],
+  ]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-reasoning-effort-"));
+    process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+    try {
+      const emitted = [];
+      const capturedRaw = [];
+      const model = {
+        identifier: "qwen/qwen3.8-27b",
+        async applyPromptTemplate() { return "formatted"; },
+        async countTokens(value) { return String(value || "").length; },
+        async getContextLength() { return 100_000; },
+        respond(_history, opts) {
+          capturedRaw.push(opts.raw);
+          opts.onPredictionFragment({
+            content: "Grounded answer",
+            tokensCount: 2,
+            containsDrafted: false,
+            reasoningType: "none",
+            isStructural: false,
+          });
+          return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+        },
+      };
+      const history = Chat.empty();
+      history.append("user", "Explain this Unreal project without changing files.");
+
+      await generate(
+        controllerFor(model, { reasoningEffort: configuredEffort }, stateRoot, emitted, []),
+        history,
+      );
+
+      assert.equal(capturedRaw.length, 1);
+      assert.deepEqual(capturedRaw[0], {
+        fields: [
+          { key: "llm.prediction.reasoning.enableThinking", value: true },
+          {
+            key: "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort",
+            value: expectedEffort,
+          },
+          {
+            key: "ext.virtualModel.customField.qwen.qwen3.827b.enableThinking",
+            value: true,
+          },
+        ],
+      });
+      const checkpoint = activeCheckpoint(stateRoot);
+      assert.deepEqual(checkpoint.predictionPolicy.reasoningControl, {
+        transport: "generator_raw_kv_config",
+        sdkVersion: "1.5.0",
+        effort: expectedEffort,
+        perPredictionEffortObservable: true,
+      });
+    } finally {
+      delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
   }
 });
 

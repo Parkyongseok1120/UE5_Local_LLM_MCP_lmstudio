@@ -68,6 +68,12 @@ export const configSchematics = createConfigSchematics()
     "",
   )
   .field(
+    "reasoningEffort",
+    "string",
+    { displayName: "Reasoning effort", subtitle: "Server-owned Qwen3.8 effort: low, medium, or xhigh. Applied to every proxied prediction instead of relying on the direct-chat model control." },
+    "low",
+  )
+  .field(
     "modelReadinessTimeoutSeconds",
     "numeric",
     { displayName: "Model readiness timeout", subtitle: "Wait this many seconds for exactly one unloaded/starting LM Studio model to become ready while preserving the task checkpoint." },

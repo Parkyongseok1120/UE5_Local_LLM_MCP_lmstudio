@@ -26,6 +26,36 @@ function isoNow(): string {
   return new Date().toISOString();
 }
 
+type ReasoningEffort = "low" | "medium" | "xhigh";
+
+function normalizeReasoningEffort(value: unknown): ReasoningEffort {
+  const normalized = String(value || "low").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "medium") return "medium";
+  if (["xhigh", "extra_high", "extrahigh"].includes(normalized)) return "xhigh";
+  return "low";
+}
+
+function qwen38ReasoningRawConfig(
+  modelIdentifier: unknown,
+  effort: ReasoningEffort,
+): { fields: Array<{ key: string; value: unknown }> } | undefined {
+  const identity = String(modelIdentifier || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!identity.includes("qwen38") || !identity.includes("27b")) return undefined;
+  return {
+    fields: [
+      { key: "llm.prediction.reasoning.enableThinking", value: true },
+      {
+        key: "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort",
+        value: effort,
+      },
+      {
+        key: "ext.virtualModel.customField.qwen.qwen3.827b.enableThinking",
+        value: true,
+      },
+    ],
+  };
+}
+
 type ModelFenceSnapshot = {
   version: 1;
   identifier: string;
@@ -3929,6 +3959,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     topPSampling: finiteNumber(configValue(ctl, "topPSampling", 0.85), 0.85, 0, 1),
     topKSampling: Math.floor(finiteNumber(configValue(ctl, "topKSampling", 20), 20, 1, 1000)),
     minPSampling: finiteNumber(configValue(ctl, "minPSampling", 0), 0, 0, 1),
+    reasoningEffort: normalizeReasoningEffort(configValue(ctl, "reasoningEffort", "low")),
     normalToolResultReserve: finiteNumber(configValue(ctl, "normalToolResultReserve", 3000), 3000),
     buildToolResultReserve: finiteNumber(configValue(ctl, "buildToolResultReserve", 8000), 8000),
     recentCompleteTurns: Math.floor(finiteNumber(configValue(ctl, "recentCompleteTurns", 1), 1, 0, 100)),
@@ -3946,6 +3977,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     preRouteDiscoveryLimit,
     durableInspectionDiscoveryLimit,
   };
+  const reasoningRawConfig = qwen38ReasoningRawConfig(
+    resolvedTargetModel,
+    config.reasoningEffort,
+  );
   const predictionPolicy = {
     version: 1,
     sampling: {
@@ -3960,9 +3995,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       noProgressSeconds: config.predictionNoProgressSeconds,
     },
     reasoningControl: {
-      transport: "external_load_config",
+      transport: reasoningRawConfig ? "generator_raw_kv_config" : "unsupported_model",
       sdkVersion: "1.5.0",
-      perPredictionEffortObservable: false,
+      effort: reasoningRawConfig ? config.reasoningEffort : null,
+      perPredictionEffortObservable: Boolean(reasoningRawConfig),
     },
   };
   const predictionPolicyHash = core.sha256(core.stableStringify(predictionPolicy));
@@ -4464,6 +4500,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         topPSampling: Number(config.topPSampling),
         topKSampling: Number(config.topKSampling),
         minPSampling: Number(config.minPSampling),
+        ...(reasoningRawConfig ? { raw: reasoningRawConfig } : {}),
         ...(predictionTools.length > 0 ? {
           rawTools: {
             type: "toolArray",
