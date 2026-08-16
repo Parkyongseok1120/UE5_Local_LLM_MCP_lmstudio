@@ -4,6 +4,30 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const core = require("../src/compaction-core");
 
+test("legacy forced low-floor recovery migrates to suppressed-thinking recovery", () => {
+  const messages = [{ role: "user", content: "Inspect the current project." }];
+  const prior = core.buildCheckpoint(messages);
+  prior.reasoningFallback = {
+    version: 1,
+    status: "retrying",
+    configuredEffort: "low",
+    effort: "low",
+    reason: "semantic_no_progress_at_effort_floor",
+    attempts: 1,
+    sameEffortRetries: 1,
+    toolChoiceForced: true,
+    recoveryStrategy: "force_advertised_tool_transition",
+  };
+  const checkpoint = core.buildCheckpoint(messages, prior);
+
+  assert.equal(checkpoint.reasoningFallback.status, "retrying");
+  assert.equal(checkpoint.reasoningFallback.thinkingSuppressed, true);
+  assert.equal(
+    checkpoint.reasoningFallback.recoveryStrategy,
+    "suppress_thinking_and_force_advertised_tool_transition",
+  );
+});
+
 function requestIntentFor(objective, overrides = {}) {
   return {
     version: 1,

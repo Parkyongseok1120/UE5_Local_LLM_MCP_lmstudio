@@ -2340,16 +2340,34 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
       : null,
     reasoningFallback: canResume && prior.reasoningFallback && typeof prior.reasoningFallback === "object"
       && !Array.isArray(prior.reasoningFallback)
-      ? {
-        version: 1,
-        status: String(prior.reasoningFallback.status || "").slice(0, 32),
-        configuredEffort: String(prior.reasoningFallback.configuredEffort || "").slice(0, 16),
-        effort: String(prior.reasoningFallback.effort || "").slice(0, 16),
-        reason: String(prior.reasoningFallback.reason || "").slice(0, 80),
-        attempts: Math.max(0, Number(prior.reasoningFallback.attempts || 0)),
-        updatedAt: String(prior.reasoningFallback.updatedAt || "").slice(0, 64),
-        completedAt: String(prior.reasoningFallback.completedAt || "").slice(0, 64),
-      }
+      ? (() => {
+        const status = String(prior.reasoningFallback.status || "").slice(0, 32);
+        const reason = String(prior.reasoningFallback.reason || "").slice(0, 80);
+        const toolChoiceForced = prior.reasoningFallback.toolChoiceForced === true;
+        const thinkingSuppressed = prior.reasoningFallback.thinkingSuppressed === true || (
+          status === "retrying"
+          && reason === "semantic_no_progress_at_effort_floor"
+          && toolChoiceForced
+        );
+        return {
+          version: 1,
+          status,
+          configuredEffort: String(prior.reasoningFallback.configuredEffort || "").slice(0, 16),
+          effort: String(prior.reasoningFallback.effort || "").slice(0, 16),
+          reason,
+          attempts: Math.max(0, Number(prior.reasoningFallback.attempts || 0)),
+          sameEffortRetries: Math.max(0, Number(prior.reasoningFallback.sameEffortRetries || 0)),
+          toolChoiceForced,
+          thinkingSuppressed,
+          recoveryStrategy: String(
+            thinkingSuppressed
+              ? "suppress_thinking_and_force_advertised_tool_transition"
+              : prior.reasoningFallback.recoveryStrategy || "",
+          ).slice(0, 96),
+          updatedAt: String(prior.reasoningFallback.updatedAt || "").slice(0, 64),
+          completedAt: String(prior.reasoningFallback.completedAt || "").slice(0, 64),
+        };
+      })()
       : null,
     compactionChurn: canResume && prior.compactionChurn && typeof prior.compactionChurn === "object"
       && !Array.isArray(prior.compactionChurn)
@@ -2909,9 +2927,26 @@ function validateCheckpoint(checkpoint) {
     const fallback = checkpoint.reasoningFallback;
     if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) return false;
     if (Number(fallback.version) !== 1) return false;
-    if (!["downgraded", "completed"].includes(String(fallback.status || ""))) return false;
+    if (!["retrying", "downgraded", "completed"].includes(String(fallback.status || ""))) return false;
     if (!["low", "medium", "xhigh"].includes(String(fallback.effort || ""))) return false;
     if (!Number.isInteger(Number(fallback.attempts)) || Number(fallback.attempts) < 0) return false;
+    if (
+      fallback.sameEffortRetries !== undefined
+      && (!Number.isInteger(Number(fallback.sameEffortRetries)) || Number(fallback.sameEffortRetries) < 0)
+    ) return false;
+    if (fallback.toolChoiceForced !== undefined && typeof fallback.toolChoiceForced !== "boolean") return false;
+    if (fallback.thinkingSuppressed !== undefined && typeof fallback.thinkingSuppressed !== "boolean") return false;
+    if (fallback.recoveryStrategy !== undefined && typeof fallback.recoveryStrategy !== "string") return false;
+    if (String(fallback.status || "") === "retrying") {
+      if (String(fallback.reason || "") !== "semantic_no_progress_at_effort_floor") return false;
+      if (fallback.toolChoiceForced !== true) return false;
+      if (!Number.isInteger(Number(fallback.sameEffortRetries)) || Number(fallback.sameEffortRetries) < 1) return false;
+      const strategy = String(fallback.recoveryStrategy || "");
+      if (![
+        "force_advertised_tool_transition",
+        "suppress_thinking_and_force_advertised_tool_transition",
+      ].includes(strategy)) return false;
+    }
   }
   if (checkpoint.modelFence !== undefined && checkpoint.modelFence !== null) {
     const fence = compactModelFence(checkpoint.modelFence);

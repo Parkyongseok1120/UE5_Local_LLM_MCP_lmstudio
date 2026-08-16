@@ -4693,14 +4693,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     forceTool: boolean,
     progressLabel = "Model reasoning",
     effortOverride?: ReasoningEffort,
+    thinkingOverride?: boolean,
   ): Promise<string> => {
     guardGeneratorAbort(ctl);
     const attemptEffort = effortOverride || config.reasoningEffort;
+    const attemptThinkingEnabled = thinkingOverride ?? thinkingEnabled;
     const attemptPolicy = {
       ...nextCheckpoint.predictionPolicy,
       reasoningControl: {
         ...(nextCheckpoint.predictionPolicy?.reasoningControl || {}),
-        effort: reasoningRawConfig && thinkingEnabled ? attemptEffort : null,
+        effort: reasoningRawConfig && attemptThinkingEnabled ? attemptEffort : null,
+        enableThinking: Boolean(reasoningRawConfig && attemptThinkingEnabled),
       },
       attemptStartedAt: isoNow(),
     };
@@ -4759,8 +4762,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       }
       const attemptReasoningRawConfig = qwen38ReasoningRawConfig(
         resolvedTargetModel,
-        thinkingEnabled,
-        thinkingEnabled ? attemptEffort : null,
+        attemptThinkingEnabled,
+        attemptThinkingEnabled ? attemptEffort : null,
       );
       const prediction = model.respond(modelChat, {
         maxTokens: Number(config.maxOutputReserve),
@@ -4928,6 +4931,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       && nextCheckpoint?.reasoningFallback?.reason === "semantic_no_progress_at_effort_floor"
       && nextCheckpoint?.reasoningFallback?.toolChoiceForced === true
     );
+    let suppressThinkingRecovery = Boolean(
+      nextCheckpoint?.reasoningFallback?.status === "retrying"
+      && nextCheckpoint?.reasoningFallback?.reason === "semantic_no_progress_at_effort_floor"
+      && nextCheckpoint?.reasoningFallback?.thinkingSuppressed === true
+    );
     while (true) {
       try {
         const result = await runPredictionAttempt(
@@ -4935,6 +4943,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           forceTool || forceToolRecovery,
           progressLabel,
           effort,
+          suppressThinkingRecovery ? false : thinkingEnabled,
         );
         if (nextCheckpoint.reasoningFallback) {
           nextCheckpoint.reasoningFallback = {
@@ -4954,17 +4963,20 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           // Replaying the same effort, chat, and unconstrained tool choice is
           // deterministic in practice for local models and merely reproduces
           // the same semantic stall.  A floor recovery is useful only when it
-          // introduces a distinct state transition: require one of the
-          // advertised tools on the retry.  Calls that are already forced (or
-          // have no tools) have no stronger bounded recovery edge.
+          // introduces a distinct state transition: suppress the Qwen thinking
+          // stream and require one of the advertised tools on the retry.  Tool
+          // choice alone is insufficient because a forced Qwen prediction can
+          // still spend the entire no-progress budget in reasoning before it
+          // begins serializing the required call.  An already-forced server
+          // route may still use this stronger thinking-suppression edge; a
+          // prediction with no tools has no bounded recovery transition.
           if (
             sameEffortRetries >= sameEffortRetryLimit
-            || forceTool
-            || forceToolRecovery
             || predictionTools.length === 0
           ) throw error;
           sameEffortRetries += 1;
           forceToolRecovery = true;
+          suppressThinkingRecovery = true;
           nextCheckpoint.reasoningFallback = {
             version: 1,
             status: "retrying",
@@ -4974,7 +4986,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             attempts: Math.max(0, Number(nextCheckpoint?.reasoningFallback?.attempts || 0)) + 1,
             sameEffortRetries,
             toolChoiceForced: true,
-            recoveryStrategy: "force_advertised_tool_transition",
+            thinkingSuppressed: true,
+            recoveryStrategy: "suppress_thinking_and_force_advertised_tool_transition",
             updatedAt: isoNow(),
           };
           await persistCheckpoint(
@@ -4991,7 +5004,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             retry: sameEffortRetries,
             retryLimit: sameEffortRetryLimit,
             toolChoiceForced: true,
-            recoveryStrategy: "force_advertised_tool_transition",
+            thinkingSuppressed: true,
+            recoveryStrategy: "suppress_thinking_and_force_advertised_tool_transition",
           });
           continue;
         }
