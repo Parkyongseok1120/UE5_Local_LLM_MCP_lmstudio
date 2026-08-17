@@ -13,6 +13,7 @@ from typing import Any
 
 from task_gate_history import failed_gate_attempt_for_current_scope
 from workspace_paths import filesystem_path_identity as shared_filesystem_path_identity
+from synthesis_readiness import derive_synthesis_readiness, synthesis_latch_matches
 
 ROUTE_VERSION = 1
 CONTROL_TRANSITION_VERSION = 2
@@ -592,6 +593,8 @@ def validation_finding_recovery(
 
 
 def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
+    synthesis_readiness = derive_synthesis_readiness(state)
+    state["synthesisReadiness"] = synthesis_readiness
     """Derive the one authoritative next action for the complete task pipeline.
 
     Handlers record facts (gate result, mutation generation, validation checkpoint,
@@ -708,6 +711,19 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 or "RECOVERY_EXTERNAL_BLOCKER"
             )
             blocker_fingerprint = recovery_fingerprint
+        elif recovery_status in {
+            "phase_budget_checkpoint_required",
+            "phase_budget_replan_required",
+        }:
+            if recovery_tool_name:
+                required_name = recovery_tool_name
+                required_args = recovery_tool_args
+                retry_value = "once"
+            else:
+                disposition = "await_user"
+                retry_value = "forbidden"
+                blocker_code = "RECOVERY_REQUIRED_TOOL_MISSING"
+                blocker_fingerprint = recovery_fingerprint
         elif repo_audit_required and repo_audit_status == "inventory_overflow":
             disposition = "workflow_stop"
             retry_value = "forbidden"
@@ -724,21 +740,32 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 blocker_code = "REPO_AUDIT_FRONTIER_INCONSISTENT"
                 blocker_fingerprint = str(repo_audit.get("inventoryHash") or "")
         elif repo_audit_required and repo_audit_status == "complete":
-            disposition = "continue"
-            retry_value = "forbidden"
-            no_tools_for_synthesis = True
+            if synthesis_readiness["ready"]:
+                disposition = "continue"
+                retry_value = "forbidden"
+                no_tools_for_synthesis = True
+            else:
+                required_name = "unreal_agent_plan"
+                required_args = {"request": str(state.get("objective") or state.get("request") or "Continue bounded source analysis")}
+                retry_value = "once"
         elif recovery_status == "evidence_complete":
-            # Keep an analysis task open for a source-backed final answer, but
-            # make the exhausted evidence route uncallable. This must mirror
-            # the Node transition table because the Python task transaction is
-            # the durable source of truth published by the Agent bridge.
-            disposition = "continue"
-            retry_value = "forbidden"
-            no_tools_for_synthesis = True
-            blocker_code = str(
-                recovery_obligation.get("errorCode") or "EVIDENCE_STAGNATION"
-            )
-            blocker_fingerprint = recovery_fingerprint
+            if synthesis_readiness["ready"]:
+                disposition = "continue"
+                retry_value = "forbidden"
+                no_tools_for_synthesis = True
+                blocker_code = str(
+                    recovery_obligation.get("errorCode") or "EVIDENCE_STAGNATION"
+                )
+                blocker_fingerprint = recovery_fingerprint
+            else:
+                next_path = next(iter(synthesis_readiness["remainingFrontier"]), "")
+                required_name = "read_file" if next_path else "unreal_agent_plan"
+                required_args = (
+                    {"path": next_path}
+                    if next_path
+                    else {"request": str(state.get("objective") or state.get("request") or "Continue bounded source analysis")}
+                )
+                retry_value = "once"
         elif recovery_status == "environment_recovery":
             attempt_count = _non_negative_int(
                 recovery_obligation.get("attemptCount")
@@ -760,7 +787,6 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             "repair_planning_required",
             "revalidate_required",
             "checkpoint_rebase_required",
-            "phase_budget_checkpoint_required",
         }:
             if recovery_tool_name:
                 required_name = recovery_tool_name
@@ -1048,7 +1074,7 @@ def _phase_and_role(
         if isinstance(state.get("postBudgetAction"), dict)
         else {}
     )
-    if str(post_budget_action.get("name") or "") == "synthesize_current_evidence":
+    if synthesis_latch_matches(state) and str(post_budget_action.get("name") or "") == "synthesize_current_evidence":
         return "synthesis", "synthesis"
 
     recovery = (

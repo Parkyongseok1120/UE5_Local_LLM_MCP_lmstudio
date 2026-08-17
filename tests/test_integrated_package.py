@@ -200,6 +200,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "scripts/patch_candidate_sandbox.py",
         "scripts/semantic_refactor_guard.py",
         "scripts/phase_tool_router.py",
+        "scripts/synthesis_readiness.py",
         "scripts/approve_feature_intent.py",
         "scripts/mutation_semantic_guard.py",
         "scripts/unreal_api_denylist.py",
@@ -214,6 +215,9 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "lmstudio-unreal-agent-mcp/src/recovery-log-contract.js",
         "lmstudio-unreal-agent-mcp/src/route-watcher.js",
         "lmstudio-unreal-agent-mcp/src/mutation-semantic-guard.js",
+        "lmstudio-unreal-agent-mcp/src/synthesis-readiness.js",
+        "lmstudio-unreal-agent-mcp/src/evidence-recovery-decision.js",
+        "config/synthesis_readiness_policy.json",
         "lmstudio-context-compactor-plugin/package-lock.json",
         "package-manifest.json",
     ):

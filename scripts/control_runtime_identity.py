@@ -38,7 +38,11 @@ def _repository_root(value: str | Path | None = None) -> Path:
 def _component_files(root: Path, component: str) -> list[Path]:
     if component == "agent":
         base = root / "lmstudio-unreal-agent-mcp"
-        files = [base / "package.json", *(base / "src").rglob("*.js")]
+        files = [
+            base / "package.json",
+            root / "config" / "synthesis_readiness_policy.json",
+            *(base / "src").rglob("*.js"),
+        ]
     elif component == "compactor":
         base = root / "lmstudio-context-compactor-plugin"
         files = [
@@ -61,8 +65,10 @@ def _component_files(root: Path, component: str) -> list[Path]:
             "feature_intent_fast_path.py",
             "control_runtime_identity.py",
             "control_protocol_spec.py",
+            "synthesis_readiness.py",
         )
         files = [base / name for name in names]
+        files.append(root / "config" / "synthesis_readiness_policy.json")
     else:
         raise ValueError(f"unknown control component: {component}")
     return sorted(
@@ -83,8 +89,11 @@ def _build_hash(root: Path, component: str) -> str:
         if component == "compactor"
         else root / "scripts"
     ).resolve()
-    for file_path in sorted(files, key=lambda item: item.relative_to(component_base).as_posix()):
-        relative = file_path.relative_to(component_base).as_posix().encode("utf-8")
+    for file_path in sorted(
+        files,
+        key=lambda item: os.path.relpath(item, component_base).replace("\\", "/"),
+    ):
+        relative = os.path.relpath(file_path, component_base).replace("\\", "/").encode("utf-8")
         digest.update(relative)
         digest.update(b"\0")
         digest.update(file_path.read_bytes())

@@ -160,16 +160,13 @@ test("concurrent directory budget overflow preserves an open audit frontier thro
     const fields = { routeHash: "route-1", routePhase: "planner" };
     const first = reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "list_directory");
     const second = reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "list_directory");
+    assert.equal(second.ok, false);
+    assert.equal(second.errorCode, "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED");
+    assert.equal(second.nextActionArgs.requiredNextAction, "replan_after_phase_budget");
     assert.equal(commitRouteReservation(
       workspace, authorization.taskSessionId, fields, {}, "list_directory", first.reservationId,
       { inspectionDirectoryList: { entryCount: 1 } },
     ).ok, true);
-    const overflow = commitRouteReservation(
-      workspace, authorization.taskSessionId, fields, {}, "list_directory", second.reservationId,
-      { inspectionDirectoryList: { entryCount: 1 } },
-    );
-    assert.equal(overflow.errorCode, "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED");
-    assert.equal(overflow.nextActionArgs.requiredNextAction, "replan_after_phase_budget");
     const persisted = JSON.parse(fs.readFileSync(
       path.join(stateRoot, "tasks", authorization.taskSessionId, "state.json"), "utf8"
     ));

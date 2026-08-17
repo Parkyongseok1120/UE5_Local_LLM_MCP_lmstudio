@@ -111,6 +111,7 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 
 REQUIRED_RUNTIME_FILES = (
     "config/control_protocol_spec.json",
+    "config/synthesis_readiness_policy.json",
     "docs/Release_Notes_1_3_0_RC3.md",
     "scripts/project_name_resolver.py",
     "scripts/semantic_ambiguity.py",
@@ -119,6 +120,7 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/control_protocol_spec.py",
     "scripts/validate_control_protocol.py",
     "scripts/phase_tool_router.py",
+    "scripts/synthesis_readiness.py",
     "scripts/approve_feature_intent.py",
     "scripts/mutation_semantic_guard.py",
     "scripts/unreal_api_denylist.py",
@@ -135,6 +137,8 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/control-protocol-spec.js",
     "lmstudio-unreal-agent-mcp/src/durable-guard-store.js",
     "lmstudio-unreal-agent-mcp/src/task-control-transition.js",
+    "lmstudio-unreal-agent-mcp/src/synthesis-readiness.js",
+    "lmstudio-unreal-agent-mcp/src/evidence-recovery-decision.js",
     "lmstudio-unreal-agent-mcp/src/write-lock-reclaim-bridge.py",
     "lmstudio-context-compactor-plugin/src/runtime-identity.js",
     "lmstudio-context-compactor-plugin/src/control-protocol-spec.js",

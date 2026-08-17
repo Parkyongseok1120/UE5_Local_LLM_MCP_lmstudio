@@ -353,7 +353,22 @@ process.stdout.write(JSON.stringify(states.map(deriveNextObligation)));
 
 
 def test_evidence_complete_is_a_no_tool_synthesis_transition() -> None:
-    control = derive_next_obligation(_recovery_obligation_state("evidence_complete"))
+    state = _recovery_obligation_state("evidence_complete")
+    state.update({
+        "mode": "read_only",
+        "writesAllowed": False,
+        "writeGate": {"writesAllowed": False},
+        "taskKind": "cpp_analysis",
+        "inspectionContract": {"intent": "cpp_analysis", "evidenceBudget": {"representativePairs": 1}},
+        "sourceEvidence": {
+            "planRevision": state["planRevision"],
+            "files": {
+                "header": {"path": "Source/Demo/Feature.h", "sourceKind": "declaration", "evidenceId": "header"},
+                "source": {"path": "Source/Demo/Feature.cpp", "sourceKind": "implementation", "evidenceId": "source"},
+            },
+        },
+    })
+    control = derive_next_obligation(state)
 
     assert control["disposition"] == "continue"
     assert control["requiredTool"] is None

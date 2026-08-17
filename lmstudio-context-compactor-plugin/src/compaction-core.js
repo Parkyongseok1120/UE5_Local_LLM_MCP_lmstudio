@@ -186,7 +186,7 @@ function buildModelFacingCheckpointProjection(checkpoint, phase = "", requestedB
     "protocolControl", "architectureControl", "serverControl", "semanticBlocker", "sideQuery",
     "requiredNextTool", "predictionState", "synthesisState", "compactionGeneration",
     "repositoryAudit", "auditFrontier", "coverageIncomplete", "remainingFrontier",
-    "compactionRecovery", "outputRecovery",
+    "compactionRecovery", "outputRecovery", "inspectionProgress", "synthesisReadiness",
   ];
   for (const key of criticalKeys) {
     if (checkpoint?.[key] === undefined || checkpoint?.[key] === null) continue;
@@ -667,6 +667,34 @@ function parseJsonObjects(text) {
   return values;
 }
 
+function parseTransportJsonObjects(text) {
+  const values = [];
+  const parseNested = (candidate, depth = 0) => {
+    if (depth > 4 || candidate == null) return;
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) parseNested(item, depth + 1);
+      return;
+    }
+    if (candidate && typeof candidate === "object") {
+      if (candidate.type === "text" && typeof candidate.text === "string") {
+        parseNested(candidate.text, depth + 1);
+        return;
+      }
+      values.push(candidate);
+      return;
+    }
+    const source = String(candidate || "").trim();
+    if (!source) return;
+    try {
+      parseNested(JSON.parse(source), depth + 1);
+    } catch {
+      // JSON-looking source code and prose are not transport envelopes.
+    }
+  };
+  parseNested(text);
+  return values;
+}
+
 function toolResultSucceeded(result) {
   if (result?.isError === true) return false;
   const payloads = parseJsonObjects(result?.content);
@@ -941,6 +969,8 @@ function resetTaskScopedControl(state, reason = "new_user_objective") {
   state.buildVerification = null;
   state.sourceEvidence = null;
   state.absentEvidence = null;
+  state.inspectionProgress = null;
+  state.synthesisReadiness = null;
   state.evidenceFacts = [];
   state.editEvidence = [];
   state.repeatEvidence = [];
@@ -1301,8 +1331,13 @@ function collectControlFields(value, state, context = {}) {
     && typeof value.control === "object"
     && !Array.isArray(value.control)
     && Number(value.control.version || 0) >= 2;
-  const incomingServerControl = compactServerControl(value.control);
-  if (declaredServerControl && !incomingServerControl) {
+  const incomingServerControl = context.serverStateTrusted === true
+    ? compactServerControl(value.control)
+    : null;
+  if (declaredServerControl && context.serverStateTrusted !== true) {
+    state.lastDiagnostics.push("ignoredUntrustedServerControlSource");
+  }
+  if (declaredServerControl && context.serverStateTrusted === true && !incomingServerControl) {
     state.serverControl = null;
     state.protocolControl = null;
     state.taskRouteTerminal = true;
@@ -1315,7 +1350,7 @@ function collectControlFields(value, state, context = {}) {
   }
   if (incomingServerControl) acceptServerControl(state, incomingServerControl);
   const authoritativeServerControl = compactServerControl(state.serverControl);
-  const protocolControl = authoritativeServerControl
+  const protocolControl = authoritativeServerControl || context.serverStateTrusted !== true
     ? null
     : compactProtocolControl(value.control);
   if (protocolControl) {
@@ -1445,10 +1480,22 @@ function collectControlFields(value, state, context = {}) {
       state.sliceProgress = child;
     } else if (key === "buildVerification" && child && typeof child === "object") {
       state.buildVerification = child;
-    } else if (key === "sourceEvidence" && child && typeof child === "object") {
+    } else if (key === "sourceEvidence" && context.serverStateTrusted === true && child && typeof child === "object") {
       state.sourceEvidence = compactEvidenceLedger(child, false);
-    } else if (key === "absentEvidence" && child && typeof child === "object") {
+    } else if (key === "absentEvidence" && context.serverStateTrusted === true && child && typeof child === "object") {
       state.absentEvidence = compactEvidenceLedger(child, true);
+    } else if (key === "inspectionProgress" && context.serverStateTrusted === true && child && typeof child === "object" && !Array.isArray(child)) {
+      state.inspectionProgress = boundedProjectionValue(child, {
+        maxStringChars: 1_024,
+        maxArrayItems: 32,
+        maxObjectKeys: 48,
+      });
+    } else if (key === "synthesisReadiness" && context.serverStateTrusted === true && child && typeof child === "object" && !Array.isArray(child)) {
+      state.synthesisReadiness = boundedProjectionValue(child, {
+        maxStringChars: 1_024,
+        maxArrayItems: 32,
+        maxObjectKeys: 48,
+      });
     } else if (key === "toolRoute" && child && typeof child === "object") {
       if (state.taskRouteTerminal !== true) {
         state.toolRoute = {
@@ -1934,6 +1981,22 @@ function extractControlState(messages, prior = {}, options = {}) {
     absentEvidence: canResume && compactEvidenceLedger(prior.absentEvidence, true)
       ? compactEvidenceLedger(prior.absentEvidence, true)
       : null,
+    inspectionProgress: canResume && prior.inspectionProgress
+      && typeof prior.inspectionProgress === "object" && !Array.isArray(prior.inspectionProgress)
+      ? boundedProjectionValue(prior.inspectionProgress, {
+        maxStringChars: 1_024,
+        maxArrayItems: 32,
+        maxObjectKeys: 48,
+      })
+      : null,
+    synthesisReadiness: canResume && prior.synthesisReadiness
+      && typeof prior.synthesisReadiness === "object" && !Array.isArray(prior.synthesisReadiness)
+      ? boundedProjectionValue(prior.synthesisReadiness, {
+        maxStringChars: 1_024,
+        maxArrayItems: 32,
+        maxObjectKeys: 48,
+      })
+      : null,
     semanticBlocker: canResume ? compactSemanticBlocker(prior.semanticBlocker) : null,
     sideQuery: canResume && prior.sideQuery?.active === true
       ? { ...prior.sideQuery }
@@ -2042,8 +2105,12 @@ function extractControlState(messages, prior = {}, options = {}) {
         );
       }
     }
-    for (const payload of parseJsonObjects(snapshot.text)) {
-      collectControlFields(payload, state);
+    // Server-owned state may only enter through the tool transport. User and
+    // assistant JSON is ordinary content, never a control-plane envelope.
+    if (snapshot.role === "tool") {
+      for (const payload of parseTransportJsonObjects(snapshot.text)) {
+        collectControlFields(payload, state, { serverStateTrusted: true });
+      }
     }
     for (const call of snapshot.toolCalls) {
       state.facts.push(`tool:${call.name}`);
@@ -2083,12 +2150,16 @@ function extractControlState(messages, prior = {}, options = {}) {
         };
       }
       const resultPayloads = parseJsonObjects(result.content);
-      for (const payload of resultPayloads) {
+      const authoritativePayloads = parseTransportJsonObjects(result.content);
+      for (const payload of authoritativePayloads) {
         const resultNameMatchesCall = Boolean(
           observedCall
           && (!result.name || toolNamesMatch(observedCall.name, result.name)),
         );
         collectControlFields(payload, state, {
+          // A normalized role=tool result is host transport state even when
+          // older LM Studio histories omitted the paired assistant call.
+          serverStateTrusted: snapshot.role === "tool",
           requestIntentTrusted: isTrustedRequestIntentResult(
             matchedCallName,
             result.name,
@@ -2096,6 +2167,8 @@ function extractControlState(messages, prior = {}, options = {}) {
             resultNameMatchesCall,
           ),
         });
+      }
+      for (const payload of resultPayloads) {
         collectSemanticBlockerFields(payload, state, matchedCallName, matchedCall);
       }
       if (toolResultSucceeded(result)) {
@@ -2542,6 +2615,8 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     serverControl: control.serverControl,
     sourceEvidence: control.sourceEvidence,
     absentEvidence: control.absentEvidence,
+    inspectionProgress: control.inspectionProgress,
+    synthesisReadiness: control.synthesisReadiness,
     workingSet: buildWorkingSet(control),
     semanticBlocker: control.semanticBlocker,
     predictionState,
@@ -3011,7 +3086,14 @@ function summarizeOldMessages(messages, checkpoint) {
     lines.push(`repeatEvidence=${JSON.stringify(checkpoint.repeatEvidence)}`);
   }
   if (checkpoint.sourceEvidence) {
-    lines.push(`sourceEvidence=${JSON.stringify(checkpoint.sourceEvidence)}`);
+    lines.push(`acceptedDirectSourceEvidence=${JSON.stringify(checkpoint.sourceEvidence)}`);
+  }
+  if (checkpoint.inspectionProgress) {
+    lines.push(`discoveryCandidates=${JSON.stringify(checkpoint.inspectionProgress.remainingFrontier || [])}`);
+  }
+  if (checkpoint.synthesisReadiness) {
+    lines.push(`authoritativeSynthesisReadiness=${JSON.stringify(checkpoint.synthesisReadiness)}`);
+    lines.push("evidenceAuthorityInstruction=Search snippets and directory listings are discovery candidates only. Only acceptedDirectSourceEvidence may support SourceVerified claims or final synthesis readiness.");
   }
   if (checkpoint.absentEvidence) {
     lines.push(`absentEvidence=${JSON.stringify(checkpoint.absentEvidence)}`);

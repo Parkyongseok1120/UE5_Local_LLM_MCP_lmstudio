@@ -6,6 +6,7 @@ const {
   filesystemPathIdentity,
   normalizePortablePath,
 } = require("./filesystem-path-identity");
+const { deriveSynthesisReadiness } = require("./synthesis-readiness");
 
 const DISCOVERY_TOOLS = new Set([
   "unreal_rag_search",
@@ -240,6 +241,8 @@ function validationFindingRecovery(firstFinding) {
 }
 
 function deriveNextObligation(state) {
+  const synthesisReadiness = deriveSynthesisReadiness(state);
+  state.synthesisReadiness = synthesisReadiness;
   const route = state.toolRoute && typeof state.toolRoute === "object" ? state.toolRoute : {};
   const status = String(state.status || "running").trim().toLowerCase();
   const phase = String(route.phase || "unknown");
@@ -321,7 +324,7 @@ function deriveNextObligation(state) {
         code: String(recoveryObligation.errorCode || "RECOVERY_EXTERNAL_BLOCKER"),
         fingerprint: recoveryFingerprint,
       };
-    } else if (recoveryStatus === "phase_budget_checkpoint_required") {
+    } else if (["phase_budget_checkpoint_required", "phase_budget_replan_required"].includes(recoveryStatus)) {
       if (recoveryToolName) {
         requiredName = recoveryToolName;
         requiredArgs = recoveryToolArgs;
@@ -352,20 +355,32 @@ function deriveNextObligation(state) {
         };
       }
     } else if (repoAuditRequired && repoAuditStatus === "complete") {
-      disposition = "continue";
-      retryValue = "forbidden";
-      noToolsForSynthesis = true;
+      if (synthesisReadiness.ready) {
+        disposition = "continue";
+        retryValue = "forbidden";
+        noToolsForSynthesis = true;
+      } else {
+        requiredName = "unreal_agent_plan";
+        requiredArgs = { request: String(state.objective || state.request || "Continue bounded source analysis") };
+        retryValue = "once";
+      }
     } else if (recoveryStatus === "evidence_complete") {
-      // Read-only evidence exhaustion is not an infrastructure failure.  Keep
-      // the conversation available for a source-backed final answer while
-      // removing every tool from the current route so it cannot loop.
-      disposition = "continue";
-      retryValue = "forbidden";
-      noToolsForSynthesis = true;
-      blocker = {
-        code: String(recoveryObligation.errorCode || "EVIDENCE_STAGNATION"),
-        fingerprint: recoveryFingerprint,
-      };
+      if (synthesisReadiness.ready) {
+        disposition = "continue";
+        retryValue = "forbidden";
+        noToolsForSynthesis = true;
+        blocker = {
+          code: String(recoveryObligation.errorCode || "EVIDENCE_STAGNATION"),
+          fingerprint: recoveryFingerprint,
+        };
+      } else {
+        const nextPath = synthesisReadiness.remainingFrontier[0] || "";
+        requiredName = nextPath ? "read_file" : "unreal_agent_plan";
+        requiredArgs = nextPath
+          ? { path: nextPath }
+          : { request: String(state.objective || state.request || "Continue bounded source analysis") };
+        retryValue = "once";
+      }
     } else if (recoveryStatus === "environment_recovery") {
       const attemptCount = nonNegativeInt(recoveryObligation.attemptCount);
       if (recoveryToolName && attemptCount <= 1) {

@@ -37,9 +37,22 @@ function activeCheckpoint(stateRoot) {
   ));
 }
 
-function historyWithObservedUnrealHeader(userText = "Inspect the project without changing files.") {
-  const headerPath = "project://Source/Project_MJS/Public/Character/SharedComponent/StaminaComponent.h";
+function historyWithTrustedState(userText, payload) {
   return Chat.from({ messages: [
+    { role: "user", content: [{ type: "text", text: userText }] },
+    { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+      id: "trusted-state", type: "function", name: "unreal_task_status", arguments: {},
+    } }] },
+    { role: "tool", content: [{
+      type: "toolCallResult", toolCallId: "trusted-state", name: "unreal_task_status",
+      content: JSON.stringify(payload),
+    }] },
+  ] });
+}
+
+function historyWithObservedUnrealHeader(userText = "Inspect the project without changing files.", statePayload = null) {
+  const headerPath = "project://Source/Project_MJS/Public/Character/SharedComponent/StaminaComponent.h";
+  const messages = [
     { role: "user", content: [{ type: "text", text: userText }] },
     { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
       id: "observed-header", type: "function", name: "read_file", arguments: { path: headerPath },
@@ -50,7 +63,19 @@ function historyWithObservedUnrealHeader(userText = "Inspect the project without
       name: "read_file",
       content: '{"ok":true,"fileContent":"class UStaminaComponent {};"}',
     }] },
-  ] });
+  ];
+  if (statePayload) {
+    messages.push(
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "trusted-state", type: "function", name: "unreal_task_status", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "trusted-state", name: "unreal_task_status",
+        content: JSON.stringify(statePayload),
+      }] },
+    );
+  }
+  return Chat.from({ messages });
 }
 
 function controllerFor(model, config, stateRoot, emitted, toolDefinitions, workingDirectory = stateRoot) {
@@ -2819,9 +2844,9 @@ test("an active route keeps an explicitly server-required replan tool", async ()
         return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
       },
     };
-    const history = Chat.from({ messages: [
-      { role: "user", content: [{ type: "text", text: "Implement the earliest incomplete local-play feature." }] },
-      { role: "assistant", content: [{ type: "text", text: JSON.stringify({
+    const history = historyWithTrustedState(
+      "Implement the earliest incomplete local-play feature.",
+      {
         ok: true,
         taskAuthorization: ownership,
         requiredNextTool: "unreal_agent_plan",
@@ -2832,8 +2857,8 @@ test("an active route keeps an explicitly server-required replan tool", async ()
           activeTools: ["read_file", "unreal_agent_plan"],
           selectedSlice: { sliceId: "task", files: [] },
         },
-      }) }] },
-    ] });
+      },
+    );
     const tools = [
       { type: "function", function: { name: "read_file", parameters: { type: "object", properties: {} } } },
       { type: "function", function: {
@@ -5459,8 +5484,7 @@ test("an already-forced low tool route recovers without a second model predictio
         };
       },
     };
-    const history = historyWithObservedUnrealHeader("continue");
-    history.append("assistant", JSON.stringify({ requiredNextTool: "read_file" }));
+    const history = historyWithObservedUnrealHeader("continue", { requiredNextTool: "read_file" });
     const toolDefinitions = [{
       type: "function",
       function: {
@@ -7484,12 +7508,10 @@ test("control plane injects server-owned required arguments", async () => {
         return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
       },
     };
-    const history = Chat.empty();
-    history.append("user", "continue");
-    history.append("assistant", JSON.stringify({
+    const history = historyWithTrustedState("continue", {
       requiredNextTool: "search_files",
       requiredNextToolArgs: { query: "HandlePlaceStone", path: "project://Source" },
-    }));
+    });
     await generate(controllerFor(model, {}, stateRoot, emitted, [
       { type: "function", function: { name: "read_file" } },
       { type: "function", function: { name: "unreal_rag_health" } },
@@ -7538,9 +7560,7 @@ test("routed required tool missing from the chat catalog stops before model invo
         throw new Error("target model must not run for an impossible required-tool contract");
       },
     };
-    const history = Chat.empty();
-    history.append("user", "implement the first missing local-play feature");
-    history.append("assistant", JSON.stringify({
+    const history = historyWithTrustedState("implement the first missing local-play feature", {
       ok: true,
       requiredNextTool: "unreal_feature_intent_resolve",
       requiredNextToolArgs: { taskAuthorization: ownership },
@@ -7551,7 +7571,7 @@ test("routed required tool missing from the chat catalog stops before model invo
         activeTools: ["read_file", "unreal_feature_intent_resolve"],
         selectedSlice: { sliceId: "task", files: [] },
       },
-    }));
+    });
 
     const controller = controllerFor(model, {}, stateRoot, emitted, [{
       type: "function",
@@ -7640,12 +7660,10 @@ test("wrong forced tool name gets one bounded required-tool serialization repair
         return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
       },
     };
-    const history = Chat.empty();
-    history.append("user", "implement the first missing local-play feature");
-    history.append("assistant", JSON.stringify({
+    const history = historyWithTrustedState("implement the first missing local-play feature", {
       requiredNextTool: "unreal_feature_intent_resolve",
       requiredNextToolArgs: { taskAuthorization: ownership },
-    }));
+    });
     await generate(controllerFor(model, {}, stateRoot, emitted, [{
       type: "function",
       function: {
@@ -7729,12 +7747,10 @@ test("required-tool repair setup failure reopens pending lifecycle instead of re
         return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
       },
     };
-    const history = Chat.empty();
-    history.append("user", "implement the first missing local-play feature");
-    history.append("assistant", JSON.stringify({
+    const history = historyWithTrustedState("implement the first missing local-play feature", {
       requiredNextTool: "unreal_feature_intent_resolve",
       requiredNextToolArgs: { taskAuthorization: ownership },
-    }));
+    });
     const controller = controllerFor(model, {}, stateRoot, emitted, [{
       type: "function",
       function: {
@@ -7797,11 +7813,9 @@ test("required-tool serialization repair fails closed after exactly one retry", 
         return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
       },
     };
-    const history = Chat.empty();
-    history.append("user", "continue the bounded implementation");
-    history.append("assistant", JSON.stringify({
+    const history = historyWithTrustedState("continue the bounded implementation", {
       requiredNextTool: "unreal_feature_intent_resolve",
-    }));
+    });
     await assert.rejects(
       generate(controllerFor(model, {}, stateRoot, emitted, [{
         type: "function",
@@ -8899,7 +8913,7 @@ test("model readiness waits for one model and keeps a model-independent conversa
     await generate(controller, history);
 
     assert.equal(readinessChecks, 3);
-    assert.equal(maxTokens, 8192, "tool-free synthesis must receive the dynamic minimum reserve");
+    assert.equal(maxTokens, 6144, "ordinary tool-free output must not inherit the synthesis-final reserve");
     const checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.predictionState.status, "committed");
     // This readiness-only conversation has no server-owned synthesis task or
@@ -9366,13 +9380,23 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
       },
     };
     const model = {
-      identifier: "synthesis-commit-model",
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "synthesis-final-instance" };
+      },
       async applyPromptTemplate() { return "formatted"; },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
       respond(_history, opts) {
         maxTokens = opts.maxTokens;
         assert.equal(opts.rawTools, undefined);
+        assert.deepEqual(opts.raw, { fields: [
+          { key: "llm.prediction.reasoning.enableThinking", value: false },
+          {
+            key: "ext.virtualModel.customField.qwen.qwen3.827b.enableThinking",
+            value: false,
+          },
+        ] });
         opts.onPredictionFragment({ content: "Evidence-backed final synthesis.", reasoningType: "none" });
         return { async result() { return { stats: { stopReason: "eosFound" } }; } };
       },
@@ -9404,7 +9428,7 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
 
     await generate(controllerFor(model, {}, stateRoot, emitted, [commitTool]), history);
 
-    assert.equal(maxTokens, 8192);
+    assert.equal(maxTokens, 3072);
     const endIndex = emitted.findIndex((event) => event.kind === "end");
     assert.equal(emitted.some((event) => event.kind === "fragment"), false);
     assert.ok(endIndex >= 0);
@@ -9418,6 +9442,11 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
     assert.match(commit.arguments.outputDigest, /^[a-f0-9]{64}$/);
     assert.match(commit.arguments.synthesisTransactionId, /^[a-f0-9]{64}$/);
     const persisted = activeCheckpoint(stateRoot);
+    assert.equal(persisted.predictionPolicy.phase, "synthesis_final");
+    assert.equal(persisted.predictionPolicy.reasoningControl.enableThinking, false);
+    assert.equal(persisted.predictionPolicy.reasoningControl.effort, null);
+    assert.equal(persisted.predictionPolicy.budgets.maxOutputTokens, 3072);
+    assert.equal(persisted.predictionPolicy.budgets.synthesisCompatibility.compatible, true);
     assert.equal(persisted.synthesisState.status, "commit_sent");
     assert.equal(persisted.synthesisState.outputDigest, commit.arguments.outputDigest);
     assert.equal(persisted.pendingToolCalls[0].id, commit.id);
@@ -9468,6 +9497,156 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("aborted synthesis prediction preserves objective, evidence frontier, and resumable state", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-abort-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const abortController = new AbortController();
+    let started;
+    const predictionStarted = new Promise((resolve) => { started = resolve; });
+    let cancelCount = 0;
+    const ownership = { taskSessionId: "task-synthesis-abort", ownerCapability: "owner-abort" };
+    const payload = {
+      ok: true,
+      taskAuthorization: ownership,
+      inspectionProgress: { remainingFrontier: ["Source/Cine/Private/Next.cpp"] },
+      sourceEvidence: {
+        version: 2,
+        planRevision: "7",
+        files: {
+          header: { path: "Source/Cine/Public/Cine.h", evidenceId: "header", sourceKind: "declaration" },
+          source: { path: "Source/Cine/Private/Cine.cpp", evidenceId: "source", sourceKind: "implementation" },
+        },
+      },
+      control: {
+        version: 2,
+        epoch: 10,
+        fingerprint: "a".repeat(64),
+        taskSessionId: ownership.taskSessionId,
+        routeHash: "route-synthesis-abort",
+        phase: "synthesis",
+        disposition: "continue",
+        allowedTools: [],
+        retryPolicy: { sameSemanticInput: "forbidden" },
+      },
+    };
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "synthesis-abort-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        started();
+        return {
+          cancel() { cancelCount += 1; },
+          result() { return new Promise(() => {}); },
+        };
+      },
+    };
+    const commitTool = {
+      type: "function",
+      function: { name: "unreal_task_commit_synthesis", parameters: { type: "object", properties: {} } },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Analyze the cinematic C++ structure." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "synthesis-abort-route",
+        name: "unreal_task_status", content: JSON.stringify(payload),
+      }] },
+    ] });
+    const controller = controllerFor(model, {}, stateRoot, [], [commitTool]);
+    controller.abortSignal = abortController.signal;
+    const running = generate(controller, history);
+    await predictionStarted;
+    const reason = Object.assign(new Error("synthesis abort audit"), { code: "SYNTHESIS_ABORT_AUDIT" });
+    abortController.abort(reason);
+    await assert.rejects(running, (error) => error === reason);
+
+    assert.equal(cancelCount, 1);
+    const persisted = activeCheckpoint(stateRoot);
+    assert.equal(persisted.predictionState.status, "pending");
+    assert.equal(persisted.predictionState.stopReason, "synthesis_abort_audit");
+    assert.equal(persisted.objective, "Analyze the cinematic C++ structure.");
+    assert.equal(Object.keys(persisted.sourceEvidence.files).length, 2);
+    assert.deepEqual(persisted.inspectionProgress.remainingFrontier, ["Source/Cine/Private/Next.cpp"]);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("incompatible synthesis output and wall-clock policy rejects before prediction", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-budget-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let respondCalls = 0;
+    const ownership = { taskSessionId: "task-synthesis-budget", ownerCapability: "owner-budget" };
+    const payload = {
+      ok: true,
+      taskAuthorization: ownership,
+      synthesisReadiness: { ready: true, acceptedEvidenceIds: ["decl", "impl"] },
+      inspectionProgress: { remainingFrontier: ["Source/Cine/Next.cpp"] },
+      control: {
+        version: 2,
+        epoch: 9,
+        fingerprint: "9".repeat(64),
+        taskSessionId: ownership.taskSessionId,
+        routeHash: "route-synthesis-budget",
+        phase: "synthesis",
+        disposition: "continue",
+        allowedTools: [],
+        retryPolicy: { sameSemanticInput: "forbidden" },
+      },
+    };
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "synthesis-budget-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value) === "formatted" ? 10_000 : 0; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        respondCalls += 1;
+        throw new Error("prediction must not start");
+      },
+    };
+    const commitTool = {
+      type: "function",
+      function: { name: "unreal_task_commit_synthesis", parameters: { type: "object", properties: {} } },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Analyze the cinematic C++ structure." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "synthesis-budget-route",
+        name: "unreal_task_status", content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await assert.rejects(
+      generate(controllerFor(model, {
+        predictionWallClockSeconds: 5,
+        synthesisMaxOutputReserve: 3072,
+      }, stateRoot, [], [commitTool]), history),
+      (error) => error?.code === "SYNTHESIS_BUDGET_INCOMPATIBLE",
+    );
+    assert.equal(respondCalls, 0);
+    const persisted = activeCheckpoint(stateRoot);
+    assert.equal(persisted.predictionState.status, "pending");
+    assert.equal(persisted.predictionState.stopReason, "synthesis_budget_incompatible");
+    assert.equal(persisted.objective, "Analyze the cinematic C++ structure.");
+    assert.deepEqual(persisted.inspectionProgress.remainingFrontier, ["Source/Cine/Next.cpp"]);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });

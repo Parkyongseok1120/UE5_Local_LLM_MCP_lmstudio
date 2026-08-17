@@ -34,6 +34,15 @@ test("repository audit frontier requires the next unvisited source and only then
   current.repoAuditLedger.status = "complete";
   current.repoAuditLedger.cursor = 2;
   current.repoAuditLedger.remainingCount = 0;
+  current.taskKind = "cpp_analysis";
+  current.inspectionContract = { intent: "cpp_analysis", evidenceBudget: { representativePairs: 1 } };
+  current.sourceEvidence = {
+    planRevision: current.planRevision,
+    files: {
+      header: { path: "Source/Sample/Public/Sample.h", sourceKind: "declaration", evidenceId: "header" },
+      source: { path: "Source/Sample/Private/Sample.cpp", sourceKind: "implementation", evidenceId: "source" },
+    },
+  };
   const complete = deriveNextObligation(current);
   assert.equal(complete.requiredTool, null);
   assert.deepEqual(complete.allowedTools, []);
@@ -211,8 +220,23 @@ test("evidence exhaustion either routes a bounded repair or permits synthesis wi
   });
 
   const readOnlyTask = state();
+  readOnlyTask.mode = "read_only";
   readOnlyTask.writesAllowed = false;
   readOnlyTask.writeGate = { writesAllowed: false };
+  readOnlyTask.taskKind = "cpp_analysis";
+  readOnlyTask.planRevision = "plan-ready";
+  readOnlyTask.sourceEvidence = {
+    planRevision: "plan-ready",
+    files: {
+      "Source/Sample/Feature.h": {
+        path: "Source/Sample/Feature.h", sourceKind: "declaration", evidenceId: "decl-ready",
+      },
+      "Source/Sample/Feature.cpp": {
+        path: "Source/Sample/Feature.cpp", sourceKind: "implementation", evidenceId: "impl-ready",
+      },
+    },
+  };
+  readOnlyTask.inspectionContract = { intent: "cpp_analysis", evidenceBudget: { representativePairs: 1 } };
   readOnlyTask.recoveryObligation = {
     source: "evidence",
     status: "evidence_complete",
@@ -225,6 +249,29 @@ test("evidence exhaustion either routes a bounded repair or permits synthesis wi
   assert.equal(control.requiredTool, null);
   assert.deepEqual(control.allowedTools, []);
   assert.equal(control.retryPolicy.sameSemanticInput, "forbidden");
+});
+
+test("evidence exhaustion cannot synthesize a C++ analysis with discovery-only evidence", () => {
+  const value = state();
+  value.mode = "read_only";
+  value.writesAllowed = false;
+  value.writeGate = { writesAllowed: false };
+  value.taskKind = "cpp_analysis";
+  value.planRevision = "plan-discovery-only";
+  value.inspectionContract = { intent: "cpp_analysis", evidenceBudget: { representativePairs: 1 } };
+  value.inspectionProgress = { remainingFrontier: ["Source/Sample/Feature.cpp"] };
+  value.recoveryObligation = {
+    source: "evidence",
+    status: "evidence_complete",
+    fingerprint: "discovery-only",
+    errorCode: "EVIDENCE_STAGNATION",
+    requiredTool: {},
+  };
+
+  const control = deriveNextObligation(value);
+  assert.equal(control.disposition, "require_tool");
+  assert.equal(control.requiredTool.name, "read_file");
+  assert.equal(control.requiredTool.args.path, "Source/Sample/Feature.cpp");
 });
 
 test("expired gate route fallback atomically recommits authoritative control", () => {
@@ -674,6 +721,44 @@ test("phase budget exhaustion publishes one exact record checkpoint obligation",
   assert.deepEqual(control.requiredTool, value.recoveryObligation.requiredTool);
   assert.deepEqual(control.allowedTools, ["unreal_task_checkpoint"]);
   assert.deepEqual(control.retryPolicy, { sameSemanticInput: "once" });
+});
+
+test("phase budget replan publishes one exact planner obligation", () => {
+  const value = state();
+  value.recoveryObligation = {
+    source: "phase_tool_budget",
+    status: "phase_budget_replan_required",
+    fingerprint: "bounded-replan",
+    requiredTool: {
+      name: "unreal_agent_plan",
+      args: { request: "Continue bounded source analysis" },
+    },
+  };
+  const control = deriveNextObligation(value);
+  assert.equal(control.disposition, "require_tool");
+  assert.deepEqual(control.requiredTool, value.recoveryObligation.requiredTool);
+  assert.deepEqual(control.allowedTools, ["unreal_agent_plan"]);
+  assert.deepEqual(control.retryPolicy, { sameSemanticInput: "once" });
+});
+
+test("phase budget checkpoint outranks an open repository audit frontier", () => {
+  const value = state();
+  value.repoAuditLedger = {
+    required: true,
+    status: "active",
+    queuedTargets: ["Source/Sample/A.cpp"],
+    cursor: 0,
+    remainingCount: 1,
+  };
+  value.recoveryObligation = {
+    source: "phase_tool_budget",
+    status: "phase_budget_checkpoint_required",
+    fingerprint: "repo-checkpoint",
+    requiredTool: { name: "unreal_task_checkpoint", args: { action: "record" } },
+  };
+  const control = deriveNextObligation(value);
+  assert.deepEqual(control.requiredTool, value.recoveryObligation.requiredTool);
+  assert.deepEqual(control.allowedTools, ["unreal_task_checkpoint"]);
 });
 
 test("every successful late-stage tool replay is blocked and redirected", () => {

@@ -996,7 +996,7 @@ def test_failed_replace_requires_exact_bounded_recovery(
         rag.close()
 
 
-def test_task_bound_evidence_stagnation_commits_v2_synthesis_control(
+def test_task_bound_evidence_stagnation_without_a_source_pair_replans(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1084,14 +1084,15 @@ def test_task_bound_evidence_stagnation_commits_v2_synthesis_control(
         assert payload["errorCode"] == "EVIDENCE_STAGNATION", json.dumps(payload, indent=2)
         assert payload.get("taskRecoveryRecorded") is True, json.dumps(payload, indent=2)
         assert payload["control"]["version"] == 2
-        assert payload["control"]["disposition"] == "continue"
-        assert payload["control"]["allowedTools"] == []
-        assert payload["control"]["retryPolicy"]["sameSemanticInput"] == "forbidden"
+        assert payload["control"]["disposition"] == "require_tool"
+        assert payload["control"]["requiredTool"]["name"] == "unreal_agent_plan"
+        assert payload["control"]["allowedTools"] == ["unreal_agent_plan"]
 
         state_path = task_root(ROOT, started["taskSessionId"]) / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        assert state["recoveryObligation"]["status"] == "evidence_complete"
-        assert state["controlState"]["allowedTools"] == []
+        assert state["recoveryObligation"]["status"] == "phase_budget_replan_required"
+        assert state["synthesisReadiness"]["ready"] is False
+        assert state["controlState"]["allowedTools"] == ["unreal_agent_plan"]
         assert state["controlEpoch"] == payload["controlEpoch"]
 
         # Authorization rejects the fourth attempt before the read handler can
@@ -1099,10 +1100,7 @@ def test_task_bound_evidence_stagnation_commits_v2_synthesis_control(
         rejected = client.request("tools/call", {"name": "read_file", "arguments": args}, 5)
         assert rejected["result"].get("isError") is True
         rejected_payload = _tool_payload(rejected["result"])
-        # A synthesis transition has no required tool, so route authorization
-        # rejects the stale read as inactive rather than inventing a required
-        # tool obligation. Either path must occur before the read handler.
-        assert rejected_payload["errorCode"] == "TASK_TOOL_NOT_ACTIVE"
+        assert rejected_payload["errorCode"] == "TASK_CONTROL_OBLIGATION_REQUIRED"
         assert "EVIDENCE_STAGNATION_REPEAT" not in json.dumps(rejected_payload)
     finally:
         client.close()

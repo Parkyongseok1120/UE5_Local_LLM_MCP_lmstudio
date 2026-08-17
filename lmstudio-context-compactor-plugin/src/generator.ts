@@ -101,7 +101,7 @@ function resolvedPredictionPhase(checkpoint: any, architectureValidationRequired
       ? "compile_fix_patch"
       : "execute";
   }
-  if (controlPhase === "synthesis") return "critique";
+  if (controlPhase === "synthesis") return "synthesis_final";
   if (architectureValidationRequired || controlPhase === "architecture") return "plan";
   if (recoverySource === "build" || recoverySource === "automation") return "compile_fix_analyze";
   if (controlPhase === "api_lookup") return "api_lookup";
@@ -3423,6 +3423,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const configuredTargetModel = String(configValue(ctl, "targetModel", "") || "").trim();
 
   const messages = plainMessages(history);
+  const auxiliaryMetaRequest = trailingMetaUserMessage(messages);
   let workingDirectory = "";
   try {
     workingDirectory = String(ctl.getWorkingDirectory() || "");
@@ -3465,7 +3466,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       envSessionId,
     });
   }
-  const sessionId = String(sessionResolution.sessionId);
+  const primarySessionId = String(sessionResolution.sessionId);
+  // LM Studio title/summary requests observe the conversation but must never
+  // advance or dispatch the primary task's durable control state.
+  const sessionId = auxiliaryMetaRequest
+    ? `${primarySessionId}-aux-${core.sha256(String(auxiliaryMetaRequest.getText() || "")).slice(0, 16)}`
+    : primarySessionId;
   if (conversationSessionId) {
     tryInjectSessionMarker(history, conversationSessionId);
   } else if (!marker && sessionResolution.minted) {
@@ -3713,6 +3719,18 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     checkpoint || {},
     { maxCheckpointFacts: 32 },
   );
+  if (auxiliaryMetaRequest) {
+    preliminaryCheckpoint.serverControl = null;
+    preliminaryCheckpoint.protocolControl = null;
+    preliminaryCheckpoint.requiredNextTool = null;
+    preliminaryCheckpoint.requiredNextToolRef = null;
+    preliminaryCheckpoint.requiredNextToolArgs = null;
+    preliminaryCheckpoint.toolRoute = null;
+    preliminaryCheckpoint.taskRouteOwnership = null;
+    preliminaryCheckpoint.taskRouteTerminal = false;
+    preliminaryCheckpoint.recoveryObligation = null;
+    preliminaryCheckpoint.postBudgetAction = null;
+  }
   preliminaryCheckpoint.predictionState = mergeLifecycleState(
     preliminaryCheckpoint.predictionState,
     lifecycleState(preliminaryCheckpoint, "pending", { stopReason: "model_readiness" }),
@@ -3845,7 +3863,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   nextCheckpoint.compactionGeneration = Number(checkpointBeforeModelReadiness?.compactionGeneration || 0);
   const serverControlV2 = core.compactServerControl(nextCheckpoint?.serverControl);
   const serverControlV2Active = Boolean(serverControlV2);
-  const trailingMetaUser = trailingMetaUserMessage(messages);
+  const trailingMetaUser = auxiliaryMetaRequest;
   const architectureGoal = latestUserGoalText(messages);
   const latestTurnRequestIntentContext = matchingRequestIntentContext(
     architectureGoal,
@@ -4630,7 +4648,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     (name) => !toolNamesMatch(name, exactRequiredToolName),
   );
   injectRepeatedControlBoundaryRule(history, unchangedControlTools);
-  const exactRequiredToolDefinition: any = detachedSideQueryActive
+  const exactRequiredToolDefinition: any = detachedSideQueryActive || trailingMetaUser
     ? null
     : taskOwnedRequiredToolDefinition(nextCheckpoint, contractAwareToolDefinitions, sessionId);
   const initialActiveProjectControlDefinition: any = initialActiveProjectBootstrapForced
@@ -4901,16 +4919,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     Math.max(6144, configuredOutputReserve),
   );
   const synthesisOutputReserve = finiteNumber(
-    configValue(ctl, "synthesisMaxOutputReserve", 8192), 8192,
-    Math.max(8192, configuredOutputReserve),
+    configValue(ctl, "synthesisMaxOutputReserve", 3072), 3072,
+    512,
   );
   const toolCallOutputReserve = finiteNumber(
     configValue(ctl, "toolCallMaxOutputReserve", 6144), 6144,
     Math.max(6144, configuredOutputReserve),
   );
+  const synthesisFinal = String(nextCheckpoint?.serverControl?.phase || "").trim().toLowerCase() === "synthesis";
   const dynamicOutputReserve = architectureValidationRequired
     ? Math.max(architectureOutputReserve, toolCallOutputReserve)
-    : modelFacingToolDefinitions.length === 0
+    : synthesisFinal
       ? synthesisOutputReserve
       : toolCallOutputReserve;
   const currentTurnCapConfig = resolveCurrentTurnCapConfig(ctl);
@@ -4960,6 +4979,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   );
   const thinkingEnabled = new Set(["plan", "critique", "compile_fix_analyze"])
     .has(predictionPhase);
+  if (predictionPhase === "synthesis_final") {
+    config.maxOutputReserve = Math.min(config.maxOutputReserve, 4096);
+  }
+  const synthesisBudgetCompatibility = predictionPhase === "synthesis_final"
+    ? {
+      configuredTokens: synthesisOutputReserve,
+      effectiveTokens: null,
+      calculationStage: "attempt_prompt",
+      compatible: null,
+    }
+    : null;
   const effectiveReasoningEffort = thinkingEnabled ? config.reasoningEffort : null;
   const reasoningRawConfig = qwen38ReasoningRawConfig(
     resolvedTargetModel,
@@ -4985,12 +5015,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       maxOutputTokens: config.maxOutputReserve,
       reasoningTokens: null,
       finalAnswerReserveTokens: modelFacingToolDefinitions.length === 0
-        ? synthesisOutputReserve
+        ? config.maxOutputReserve
         : configuredOutputReserve,
       toolCallReserveTokens: toolCallOutputReserve,
       separateReasoningBudgetSupported: false,
       wallClockSeconds: config.predictionWallClockSeconds,
       noProgressSeconds: config.predictionNoProgressSeconds,
+      synthesisCompatibility: synthesisBudgetCompatibility,
     },
     currentTurnCap: currentTurnCapConfig,
     reasoningControl: {
@@ -5733,6 +5764,53 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       throw error;
     }
     const attemptEstimatedPromptTokens = attemptInputTokens + attemptToolSchemaTokens;
+    let attemptMaxOutputTokens = Number(config.maxOutputReserve);
+    let attemptSynthesisCompatibility = nextCheckpoint.predictionPolicy?.budgets?.synthesisCompatibility || null;
+    if (predictionPhase === "synthesis_final") {
+      const conservativePrefillTokensPerSecond = 512;
+      const conservativeDecodeTokensPerSecond = 40;
+      const finalizationMarginSeconds = 15;
+      const remainingWallClockSeconds = remainingPredictionWallClockMs() / 1000;
+      const estimatedPrefillSeconds = attemptInputTokens / conservativePrefillTokensPerSecond;
+      const availableDecodeSeconds = remainingWallClockSeconds
+        - estimatedPrefillSeconds - finalizationMarginSeconds;
+      const maximumCompatibleOutputTokens = Math.floor(
+        Math.max(0, availableDecodeSeconds) * conservativeDecodeTokensPerSecond,
+      );
+      if (maximumCompatibleOutputTokens < 512) {
+        const error: any = new Error(
+          "Synthesis prediction policy cannot fit within the remaining wall-clock budget.",
+        );
+        error.errorCode = "SYNTHESIS_BUDGET_INCOMPATIBLE";
+        error.code = error.errorCode;
+        error.details = {
+          attemptInputTokens,
+          remainingWallClockSeconds,
+          estimatedPrefillSeconds,
+          availableDecodeSeconds,
+          maximumCompatibleOutputTokens,
+        };
+        await persistPredictionSetupFailure(error, "synthesis_budget_compatibility");
+        throw error;
+      }
+      attemptMaxOutputTokens = Math.min(
+        attemptMaxOutputTokens,
+        maximumCompatibleOutputTokens,
+        4096,
+      );
+      attemptSynthesisCompatibility = {
+        configuredTokens: synthesisOutputReserve,
+        effectiveTokens: attemptMaxOutputTokens,
+        maximumCompatibleOutputTokens,
+        estimatedPrefillSeconds,
+        remainingWallClockSeconds,
+        conservativePrefillTokensPerSecond,
+        conservativeDecodeTokensPerSecond,
+        finalizationMarginSeconds,
+        calculationStage: "attempt_prompt",
+        compatible: true,
+      };
+    }
     const attemptInitialNoProgressMs = initialPredictionNoProgressMs(
       attemptEstimatedPromptTokens,
       Number(config.predictionNoProgressSeconds) * 1000,
@@ -5742,6 +5820,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     const attemptThinkingEnabled = thinkingOverride ?? thinkingEnabled;
     const attemptBudgets = {
       ...(nextCheckpoint.predictionPolicy?.budgets || {}),
+      maxOutputTokens: attemptMaxOutputTokens,
+      finalAnswerReserveTokens: predictionTools.length === 0
+        ? attemptMaxOutputTokens
+        : configuredOutputReserve,
+      synthesisCompatibility: attemptSynthesisCompatibility,
       inputTokens: attemptInputTokens,
       toolSchemaTokens: attemptToolSchemaTokens,
       estimatedPromptTokens: attemptEstimatedPromptTokens,
@@ -5863,7 +5946,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         attemptThinkingEnabled ? attemptEffort : null,
       );
       const prediction = model.respond(modelChat, {
-        maxTokens: Number(config.maxOutputReserve),
+        maxTokens: attemptMaxOutputTokens,
         temperature: Number(config.temperature),
         topPSampling: Number(config.topPSampling),
         topKSampling: Number(config.topKSampling),
@@ -6050,9 +6133,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       // exceptional exit so a retry can never inherit stale buffered output.
       events.splice(eventStartIndex);
       requests.splice(requestStartIndex);
-      const code = String(error?.code || "");
+      const signalAborted = Boolean((ctl as any)?.abortSignal?.aborted);
+      const code = String(error?.code || (signalAborted ? "GENERATION_ABORTED" : ""));
       if (
-        code === "PREDICTION_WALL_CLOCK_EXCEEDED"
+        signalAborted
+        || code === "GENERATION_ABORTED"
+        || code === "PREDICTION_WALL_CLOCK_EXCEEDED"
         || code === "PREDICTION_NO_PROGRESS_EXCEEDED"
         || code === "PREDICTION_PREFILL_NO_PROGRESS_EXCEEDED"
         || code === "MODEL_INSTANCE_CHANGED"

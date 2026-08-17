@@ -42,7 +42,11 @@ function componentLayout(root, component) {
     base = fs.existsSync(path.join(root, "package.json")) && fs.existsSync(path.join(root, "src"))
       ? root
       : path.join(root, "lmstudio-unreal-agent-mcp");
-    files = [path.join(base, "package.json"), ...walkFiles(path.join(base, "src"), [".js"])];
+    files = [
+      path.join(base, "package.json"),
+      path.join(path.dirname(base), "config", "synthesis_readiness_policy.json"),
+      ...walkFiles(path.join(base, "src"), [".js"]),
+    ];
   } else if (component === "compactor") {
     base = fs.existsSync(path.join(root, "package.json")) && fs.existsSync(path.join(root, "src"))
       ? root

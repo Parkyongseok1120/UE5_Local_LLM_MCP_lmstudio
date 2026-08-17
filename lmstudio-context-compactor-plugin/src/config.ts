@@ -103,8 +103,8 @@ export const configSchematics = createConfigSchematics()
   .field(
     "synthesisMaxOutputReserve",
     "numeric",
-    { displayName: "Synthesis output reserve", subtitle: "Output budget for tool-free evidence synthesis/final responses (minimum 8192 tokens)." },
-    8192,
+    { displayName: "Synthesis output reserve", subtitle: "Bounded final-answer budget for tool-free synthesis; runtime-clamped against prefill, wall-clock, and finalization margin." },
+    3072,
   )
   .field(
     "toolCallMaxOutputReserve",

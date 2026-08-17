@@ -78,6 +78,7 @@ from workspace_paths import (
     is_windows_host_platform,
     resolve_canonical_absolute_path,
 )
+from synthesis_readiness import derive_synthesis_readiness
 
 TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled", "failed", "cancellation_uncertain"})
 APPROVABLE_TASK_STATUSES = frozenset({"pending_approval", "awaiting_approval"})
@@ -946,6 +947,11 @@ def _refresh_server_owned_state(
         if isinstance(state.get("toolRoute"), dict)
         else {}
     )
+    readiness = derive_synthesis_readiness(state)
+    state["synthesisReadiness"] = readiness
+    action = state.get("postBudgetAction") if isinstance(state.get("postBudgetAction"), dict) else {}
+    if str(action.get("name") or "") == "synthesize_current_evidence" and not readiness["ready"]:
+        state.pop("postBudgetAction", None)
     route = derive_tool_route(state)
     state["toolRoute"] = route
     usage = (
@@ -966,7 +972,21 @@ def _refresh_server_owned_state(
     # Route, gate, checkpoint, mutation, build, and automation facts are inputs
     # only. One transition table owns the published obligation and advances the
     # epoch exactly when that semantic control changes.
-    return commit_control_transition(state)
+    state = commit_control_transition(state)
+    action = state.get("postBudgetAction") if isinstance(state.get("postBudgetAction"), dict) else {}
+    readiness = derive_synthesis_readiness(state)
+    state["synthesisReadiness"] = readiness
+    if str(action.get("name") or "") == "synthesize_current_evidence" and readiness["ready"]:
+        state["postBudgetAction"] = {
+            **action,
+            "controlEpoch": int(state.get("controlEpoch") or 0),
+            "planRevision": str(state.get("planRevision") or ""),
+            "acceptedEvidenceHash": readiness["acceptedEvidenceHash"],
+            "remainingFrontierHash": readiness["remainingFrontierHash"],
+            "remainingFrontierRequired": readiness["coverageIncomplete"],
+            "coverageIncomplete": readiness["coverageIncomplete"],
+        }
+    return state
 
 
 TASK_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -2724,6 +2744,9 @@ def _set_recovery_obligation(
         normalized["attemptCount"] = max(
             0, int(recovery.get("attemptCount") or 0)
         )
+    # A newer recovery fact always invalidates an older tool-free synthesis
+    # latch, even when the accepted evidence set itself has not changed.
+    state.pop("postBudgetAction", None)
     state["recoveryObligation"] = normalized
     return normalized
 
@@ -8293,6 +8316,7 @@ def task_checkpoint(
     journal_recovery_to_resolve: dict[str, Any] = {}
 
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal required_next_action
         nonlocal mutation_result
         nonlocal authorization_identity
         nonlocal prior_route
@@ -8569,6 +8593,27 @@ def task_checkpoint(
                     or dict(prior_checkpoint.get("validation") or {})
                     != dict(candidate_checkpoint.get("validation") or {})
                 )
+                mutation_progressed = bool(
+                    int(candidate_checkpoint.get("mutationGeneration") or 0)
+                    != int(prior_checkpoint.get("mutationGeneration") or 0)
+                    or snapshots
+                )
+                workflow_progressed = bool(
+                    list(prior_checkpoint.get("completedSlices") or [])
+                    != list(candidate_checkpoint.get("completedSlices") or [])
+                    or list(prior_checkpoint.get("pendingSlices") or [])
+                    != list(candidate_checkpoint.get("pendingSlices") or [])
+                    or dict(prior_checkpoint.get("validation") or {})
+                    != dict(candidate_checkpoint.get("validation") or {})
+                )
+                state["checkpointProgress"] = {
+                    "checkpointPersisted": checkpoint_substantive,
+                    "controlTransitioned": str(prior_checkpoint.get("requiredNextAction") or "")
+                    != str(candidate_checkpoint.get("requiredNextAction") or ""),
+                    "evidenceProgressed": False,
+                    "workflowProgressed": workflow_progressed,
+                    "mutationProgressed": mutation_progressed,
+                }
                 checkpoint_recorded = checkpoint_substantive
                 if checkpoint_substantive:
                     state["continuity"] = candidate_continuity
@@ -8664,8 +8709,9 @@ def task_checkpoint(
                 action=required_next_action or f"checkpoint:{phase or 'working'}",
                 error=_validation_error_text(validation),
                 count_retry=bool(
-                    checkpoint_substantive
-                    or required_next_action
+                    (state.get("checkpointProgress") or {}).get("evidenceProgressed")
+                    or (state.get("checkpointProgress") or {}).get("workflowProgressed")
+                    or (state.get("checkpointProgress") or {}).get("mutationProgressed")
                     or _validation_error_text(validation)
                 ),
             )
@@ -8704,10 +8750,12 @@ def task_checkpoint(
                     "checkpointSubstantive": checkpoint_substantive,
                 }
             else:
-                synthesis_handoff = (
-                    str(required_next_action or "")
-                    == "synthesize_current_evidence"
-                )
+                readiness = derive_synthesis_readiness(state)
+                state["synthesisReadiness"] = readiness
+                requested_synthesis = str(required_next_action or "") == "synthesize_current_evidence"
+                synthesis_handoff = requested_synthesis and readiness["ready"] is True
+                if requested_synthesis and not synthesis_handoff:
+                    required_next_action = "replan_after_phase_budget"
                 next_route = (
                     dict(state.get("toolRoute") or {})
                     if isinstance(state.get("toolRoute"), dict)
@@ -8733,7 +8781,13 @@ def task_checkpoint(
                     ),
                     "isTool": not synthesis_handoff,
                     "exhaustedTool": str(budget_recovery.get("exhaustedTool") or ""),
-                    "remainingFrontierRequired": True,
+                    "remainingFrontierRequired": readiness["coverageIncomplete"],
+                    "controlEpoch": int(state.get("controlEpoch") or 0),
+                    "planRevision": str(state.get("planRevision") or ""),
+                    "acceptedEvidenceHash": readiness["acceptedEvidenceHash"],
+                    "remainingFrontierHash": readiness["remainingFrontierHash"],
+                    "coverageIncomplete": readiness["coverageIncomplete"],
+                    "synthesisReadinessReason": readiness["reason"],
                     "updatedAt": _utc_now(),
                 }
                 state["toolRouteUsage"] = _reset_tool_route_usage(
@@ -8982,6 +9036,7 @@ def task_checkpoint(
                 "advancedGateSnapshots": advanced_gate_snapshots,
                 "checkpointRecorded": checkpoint_recorded,
                 "checkpointSubstantive": checkpoint_substantive,
+                "checkpointProgress": dict(state.get("checkpointProgress") or {}),
                 "heartbeatOnly": normalized_action == "heartbeat" or (
                     normalized_action == "record" and not checkpoint_substantive
                 ),
@@ -9386,7 +9441,12 @@ def task_commit_synthesis(
                 )
             )
         )
-        synthesis_ready = explicit_synthesis_ready or direct_evidence_ready
+        readiness = derive_synthesis_readiness(state)
+        state["synthesisReadiness"] = readiness
+        synthesis_ready = bool(
+            readiness["commitEligible"]
+            and (explicit_synthesis_ready or direct_evidence_ready)
+        )
         synthesis_entry_mode = (
             "explicit_evidence_complete"
             if explicit_synthesis_ready
@@ -9396,7 +9456,11 @@ def task_commit_synthesis(
             outcome = {
                 "ok": False,
                 "errorCode": "SYNTHESIS_NOT_READY",
-                "error": "The authoritative task control is not awaiting tool-free synthesis.",
+                "error": (
+                    "The authoritative task control is not awaiting tool-free synthesis: "
+                    f"{readiness['reason']}."
+                ),
+                "synthesisReadiness": readiness,
             }
             return None
         if int(control.get("epoch") or 0) != observed_epoch:
@@ -10878,27 +10942,9 @@ def authorize_task_tool(
             if count >= limit:
                 checkpoint_authorization = task_authorization_for_state(state)
                 exhausted_tool = str(tool_name or "")
-                audit_ledger = (
-                    state.get("repoAuditLedger")
-                    if isinstance(state.get("repoAuditLedger"), dict)
-                    else {}
-                )
-                audit_frontier_open = bool(
-                    audit_ledger.get("required") is True
-                    and (
-                        int(audit_ledger.get("remainingCount") or 0) > 0
-                        or audit_ledger.get("overflow") is True
-                    )
-                )
-                inspection_only = (
-                    str(state.get("mode") or "").casefold() == "read_only"
-                    and not bool(
-                        (state.get("writeGate") or {}).get("writesAllowed")
-                        if isinstance(state.get("writeGate"), dict)
-                        else False
-                    )
-                    and not audit_frontier_open
-                )
+                readiness = derive_synthesis_readiness(state)
+                state["synthesisReadiness"] = readiness
+                inspection_only = readiness["ready"] is True
                 required_next_phase_action = (
                     "synthesize_current_evidence"
                     if inspection_only
@@ -10926,6 +10972,7 @@ def authorize_task_tool(
                         if inspection_only
                         else "bounded_replan_handoff"
                     ),
+                    "synthesisReadiness": readiness,
                     "fingerprint": (
                         f"{str(route.get('routeHash') or '')}:"
                         f"{str(route.get('phase') or '')}:{count}:{limit}:{exhausted_tool}"
@@ -10960,9 +11007,9 @@ def authorize_task_tool(
                     "agentInstruction": (
                         "Call unreal_task_checkpoint exactly once with nextActionArgs "
                         "(action=record). action=status only inspects state and does not "
-                        "renew the work-call budget. Then synthesize the evidence already "
-                        "collected and record uninspected paths as remainingFrontier; do not "
-                        "repeat the exhausted discovery tool in this phase."
+                        "renew the work-call budget. Then follow the server-owned synthesis "
+                        "readiness result: synthesize only when ready=true; otherwise enter "
+                        "one bounded replan without repeating the exhausted tool."
                     ),
                     "control": dict(state.get("controlState") or {}),
                 }

@@ -29,6 +29,9 @@ const {
   commitControlTransition,
   failedGateAttemptForCurrentScope,
 } = require("./task-control-transition");
+const {
+  deriveSynthesisReadiness,
+} = require("./synthesis-readiness");
 
 const TASK_SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -883,6 +886,8 @@ const DIRECT_SOURCE_EXTENSIONS = new Set([
 function normalizeEvidencePath(value) {
   const relPath = String(value || "")
     .replace(/\\/g, "/")
+    .replace(/^project:\/\//i, "")
+    .replace(/^workspace:\/\//i, "")
     .replace(/^\.\/+/, "")
     .replace(/^\/+|\/+$/g, "");
   if (
@@ -894,12 +899,9 @@ function normalizeEvidencePath(value) {
 }
 
 function phaseBudgetRecoveryDecision(state = {}) {
-  const auditFrontierOpen = state.repoAuditLedger?.required === true
-    && (Number(state.repoAuditLedger?.remainingCount || 0) > 0
-      || state.repoAuditLedger?.overflow === true);
-  const boundedSynthesis = String(state.mode || "").toLowerCase() === "read_only"
-    && state.writeGate?.writesAllowed !== true
-    && !auditFrontierOpen;
+  const readiness = deriveSynthesisReadiness(state);
+  state.synthesisReadiness = readiness;
+  const boundedSynthesis = readiness.ready === true;
   return {
     requiredNextAction: boundedSynthesis
       ? "synthesize_current_evidence"
@@ -908,7 +910,31 @@ function phaseBudgetRecoveryDecision(state = {}) {
       ? "synthesis_handoff"
       : "bounded_replan_handoff",
     boundedSynthesis,
+    readiness,
   };
+}
+
+function updateInspectionFrontier(state, candidates = [], consumedPath = "") {
+  const progress = state.inspectionProgress && typeof state.inspectionProgress === "object"
+    ? state.inspectionProgress : {};
+  const current = Array.isArray(progress.remainingFrontier) ? progress.remainingFrontier : [];
+  const consumed = normalizeEvidencePath(consumedPath);
+  const rows = [...current, ...(Array.isArray(candidates) ? candidates : [])]
+    .map(normalizeEvidencePath)
+    .filter((value) => value && value !== consumed && DIRECT_SOURCE_EXTENSIONS.has(path.posix.extname(value).toLowerCase()));
+  state.inspectionProgress = {
+    ...progress,
+    remainingFrontier: [...new Set(rows)].sort().slice(0, 32),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function recordInspectionDiscovery(state, callMetadata) {
+  const metadata = callMetadata && typeof callMetadata === "object" ? callMetadata : {};
+  const discovery = metadata.inspectionDiscoveryCandidates;
+  if (discovery && typeof discovery === "object") {
+    updateInspectionFrontier(state, discovery.paths);
+  }
 }
 
 const CONTROL_TRANSPORT_ARG_KEYS = new Set([
@@ -1134,6 +1160,8 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
       updatedAt: new Date().toISOString(),
     };
   }
+  updateInspectionFrontier(state, [], relPath);
+  state.synthesisReadiness = deriveSynthesisReadiness(state);
 
   const audit = state.repoAuditLedger && typeof state.repoAuditLedger === "object"
     ? { ...state.repoAuditLedger }
@@ -1639,6 +1667,7 @@ function mutateRouteBudget(
       }
       current.toolRouteUsage = usage;
       recordDirectSourceEvidence(current, toolName, callMetadata);
+      recordInspectionDiscovery(current, callMetadata);
       if (
         String(toolName || "") === "list_directory"
         && callMetadata?.inspectionDirectoryList
@@ -1769,6 +1798,49 @@ function mutateRouteBudget(
         reservationId: targetId,
       };
     }
+    if (mode === "reserve" && String(toolName || "") === "list_directory") {
+      const progress = current.inspectionProgress && typeof current.inspectionProgress === "object"
+        ? current.inspectionProgress : {};
+      const directoryLimit = Math.max(1, Number(
+        current.inspectionContract?.evidenceBudget?.maxDirectoryLists || 1
+      ));
+      const reservedDirectories = reservations.filter(
+        (entry) => String(entry.tool || "") === "list_directory"
+      ).length;
+      if (Math.max(0, Number(progress.listedDirectories || 0)) + reservedDirectories >= directoryLimit) {
+        const handoff = phaseBudgetRecoveryDecision(current);
+        const checkpointAuthorization = taskAuthorizationForState(current);
+        const checkpointArgs = {
+          action: "record",
+          phase: String(route.phase || "planner"),
+          requiredNextAction: handoff.requiredNextAction,
+          includeGitChanges: false,
+          taskAuthorization: checkpointAuthorization,
+        };
+        current.recoveryObligation = {
+          source: "phase_tool_budget",
+          status: "phase_budget_checkpoint_required",
+          errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+          budgetErrorCode: "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED",
+          exhaustedTool: "list_directory",
+          recoveryStrategy: handoff.recoveryStrategy,
+          synthesisReadiness: handoff.readiness,
+          requiredTool: { name: "unreal_task_checkpoint", args: checkpointArgs },
+        };
+        commitControlTransition(current);
+        current.updatedAt = new Date().toISOString();
+        atomicWriteJson(statePath, current);
+        return {
+          ok: false,
+          errorCode: "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED",
+          error: "The durable inspection directory-list budget is exhausted before filesystem traversal.",
+          control: { ...(current.controlState || {}) },
+          controlEpoch: Number(current.controlEpoch || 0),
+          nextAction: "unreal_task_checkpoint",
+          nextActionArgs: checkpointArgs,
+        };
+      }
+    }
     if (count + reserved >= limit) {
       const checkpointAuthorization = taskAuthorizationForState(current);
       const exhaustedTool = String(toolName || "");
@@ -1795,6 +1867,7 @@ function mutateRouteBudget(
         errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
         exhaustedTool,
         recoveryStrategy: handoff.recoveryStrategy,
+        synthesisReadiness: handoff.readiness,
         fingerprint: [
           String(route.routeHash || ""),
           String(route.phase || ""),
@@ -4003,5 +4076,6 @@ module.exports = {
   scopedAbsentEvidencePath,
   pendingDirectEvidenceGate,
   pendingRepeatedGateRediscovery,
+  phaseBudgetRecoveryDecision,
   recordDirectSourceEvidence,
 };

@@ -182,6 +182,18 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
         },
     )
     assert started["status"] == "running"
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    seeded = json.loads(state_path.read_text(encoding="utf-8"))
+    seeded["inspectionContract"] = {"intent": "cpp_analysis", "evidenceBudget": {"representativePairs": 1}}
+    seeded["sourceEvidence"] = {
+        "version": 2,
+        "planRevision": seeded["planRevision"],
+        "files": {
+            "header": {"path": "Source/Sample/Foo.h", "contentHash": "a" * 64, "sourceKind": "declaration", "evidenceId": "header"},
+            "source": {"path": "Source/Sample/Foo.cpp", "contentHash": "b" * 64, "sourceKind": "implementation", "evidenceId": "source"},
+        },
+    }
+    state_path.write_text(json.dumps(seeded), encoding="utf-8")
     ready = task_record_recovery_obligation(
         tmp_path,
         task_authorization=started["taskAuthorization"],
@@ -198,7 +210,6 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
     assert ready["control"]["phase"] == "synthesis"
     assert ready["control"]["requiredTool"] is None
     assert ready["control"]["allowedTools"] == []
-    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     digest = "d" * 64
     stale_state = json.loads(json.dumps(state))
@@ -277,11 +288,22 @@ def test_read_only_tool_free_final_requires_durable_evidence_before_direct_commi
             "source/sample/foo.cpp": {
                 "path": "Source/Sample/Foo.cpp",
                 "contentHash": "f" * 64,
+                "sourceKind": "implementation",
+                "evidenceId": "source",
                 "coveredRanges": [[1, 20]],
                 "tools": ["read_file_range"],
-            }
+            },
+            "source/sample/foo.h": {
+                "path": "Source/Sample/Foo.h",
+                "contentHash": "a" * 64,
+                "sourceKind": "declaration",
+                "evidenceId": "header",
+                "coveredRanges": [[1, 20]],
+                "tools": ["read_file_range"],
+            },
         },
     }
+    state["inspectionContract"] = {"intent": "cpp_analysis", "evidenceBudget": {"representativePairs": 1}}
     state_path.write_text(json.dumps(state), encoding="utf-8")
     committed = task_commit_synthesis(
         tmp_path,

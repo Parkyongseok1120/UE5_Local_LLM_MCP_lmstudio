@@ -14,6 +14,7 @@ test("title meta prompt does not wipe objective or zero-tail the current turn", 
   try {
     const { generate } = require("../dist/generator.js");
     let captured = null;
+    let toolCallbackCount = 0;
     const model = {
       identifier: "title-model",
       async applyPromptTemplate(chat) {
@@ -55,17 +56,16 @@ test("title meta prompt does not wipe objective or zero-tail the current turn", 
       abortSignal: new AbortController().signal,
       getPluginConfig() { return { get(key) { return config[key]; } }; },
       getWorkingDirectory() { return stateRoot; },
-      getToolDefinitions() { return []; },
+      getToolDefinitions() { return [{ type: "function", function: { name: "read_file", parameters: { type: "object" } } }]; },
       fragmentGenerated() {},
-      toolCallGenerationStarted() {},
-      toolCallGenerationNameReceived() {},
-      toolCallGenerationArgumentFragmentGenerated() {},
-      toolCallGenerationEnded() {},
-      toolCallGenerationFailed() {},
+      toolCallGenerationStarted() { toolCallbackCount += 1; },
+      toolCallGenerationNameReceived() { toolCallbackCount += 1; },
+      toolCallGenerationArgumentFragmentGenerated() { toolCallbackCount += 1; },
+      toolCallGenerationEnded() { toolCallbackCount += 1; },
+      toolCallGenerationFailed() { toolCallbackCount += 1; },
     };
 
-    const history = Chat.from({
-      messages: [
+    const baseMessages = [
         { role: "system", content: [{ type: "text", text: "rules" }] },
         { role: "user", content: [{ type: "text", text: "현재 프로젝트 찾고 코드 구조 전체 적으로 확인해줘" }] },
         {
@@ -80,6 +80,33 @@ test("title meta prompt does not wipe objective or zero-tail the current turn", 
           content: [{ type: "toolCallResult", toolCallId: "a", content: JSON.stringify({ entries: ["Project_MJS"] }) }],
         },
         { role: "assistant", content: [{ type: "text", text: "Structure overview: Project_MJS ..." }] },
+    ];
+    await generate(controller, Chat.from({ messages: baseMessages }));
+    const primaryDir = fs.readdirSync(stateRoot, { withFileTypes: true }).find((e) => e.isDirectory()).name;
+    const primaryCheckpointPath = path.join(stateRoot, primaryDir, "active-checkpoint.json");
+    const primaryBeforeMeta = fs.readFileSync(primaryCheckpointPath, "utf8");
+    const callbacksBeforeMeta = toolCallbackCount;
+
+    const history = Chat.from({
+      messages: [
+        ...baseMessages,
+        {
+          role: "assistant",
+          content: [{ type: "toolCallRequest", toolCallRequest: {
+            id: "status-control", type: "function", name: "unreal_task_status", arguments: {},
+          } }],
+        },
+        {
+          role: "tool",
+          content: [{ type: "toolCallResult", toolCallId: "status-control", content: JSON.stringify({
+            control: {
+              version: 2, epoch: 7, taskSessionId: "active-task", routeHash: "route-7",
+              phase: "evidence", disposition: "require_tool",
+              requiredTool: { name: "read_file", args: { path: "Source/Project_MJS.cpp" } },
+              allowedTools: ["read_file"], retryPolicy: { sameSemanticInput: "once" },
+            },
+          }) }],
+        },
         { role: "user", content: [{ type: "text", text: title }] },
       ],
     });
@@ -87,8 +114,9 @@ test("title meta prompt does not wipe objective or zero-tail the current turn", 
     await generate(controller, history);
 
     const sessionDirs = fs.readdirSync(stateRoot, { withFileTypes: true }).filter((e) => e.isDirectory());
-    const checkpoint = JSON.parse(fs.readFileSync(path.join(stateRoot, sessionDirs[0].name, "active-checkpoint.json"), "utf8"));
-    const events = fs.readFileSync(path.join(stateRoot, sessionDirs[0].name, "events.jsonl"), "utf8")
+    const auxiliaryDir = sessionDirs.find((entry) => entry.name !== primaryDir).name;
+    const checkpoint = JSON.parse(fs.readFileSync(primaryCheckpointPath, "utf8"));
+    const events = fs.readFileSync(path.join(stateRoot, auxiliaryDir, "events.jsonl"), "utf8")
       .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
     const compaction = events.find((e) => e.type === "compaction_decision");
 
@@ -119,7 +147,9 @@ test("title meta prompt does not wipe objective or zero-tail the current turn", 
     assert.equal(compaction?.zeroRetainedTurns, false);
     assert.equal(captured?.at(-1)?.role, "user");
     assert.match(String(captured?.at(-1)?.text || ""), /2-5 word title/);
-    assert.equal(captured?.flatMap((m) => m.toolResults || []).length, 1);
+    assert.equal(captured?.flatMap((m) => m.toolResults || []).length, 2);
+    assert.equal(toolCallbackCount, callbacksBeforeMeta);
+    assert.equal(fs.readFileSync(primaryCheckpointPath, "utf8"), primaryBeforeMeta);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });

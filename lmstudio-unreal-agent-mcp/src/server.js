@@ -122,6 +122,7 @@ const {
   markRecoveryEvidenceViaPython,
   scopedAbsentEvidencePath,
 } = require("./task-auth");
+const { evidenceRecoveryDecision } = require("./evidence-recovery-decision");
 const {
   MAX_AUTOMATION_FILTERS,
   discoverAutomationTests,
@@ -279,6 +280,7 @@ function consumeMutationRecoveryHint(fileAbsPath) {
     mutationRecoveryHints.delete(key);
     return null;
   }
+  if (hint) mutationRecoveryHints.delete(key);
   return hint;
 }
 // #endregion
@@ -2391,33 +2393,13 @@ function recordTaskBoundEvidenceStagnation(context = {}, errorCode, recoveryHint
   if (!authorization || !taskSessionId || context.detachedReadOnlyObservation === true) return null;
   const taskState = readTaskState(WORKSPACE_ROOT, taskSessionId);
   if (!taskState || String(taskState.status || "").toLowerCase() !== "running") return null;
-  const writesAllowed = taskState.writesAllowed === true
-    || taskState.writeGate?.writesAllowed === true;
   const targetFiles = evidenceStagnationTargetFiles(taskState, context);
-  const recovery = writesAllowed || recoveryHint
-    ? {
-      source: "evidence",
-      status: "repair_planning_required",
-      scopeDisposition: "in_slice",
-      errorCode,
-      mutationGeneration: Number(taskState.mutationGeneration || context.mutationGeneration || 0),
-      requiredTool: {
-        name: "unreal_code_sketch_claim_validate",
-        args: targetFiles.length ? { targetFiles } : {},
-      },
-      targetFiles,
-      message: "Evidence reads are exhausted. Reuse retained source evidence and validate the bounded repair claim before writing.",
-    }
-    : {
-      source: "evidence",
-      status: "evidence_complete",
-      scopeDisposition: "in_slice",
-      errorCode,
-      mutationGeneration: Number(taskState.mutationGeneration || context.mutationGeneration || 0),
-      requiredTool: {},
-      targetFiles,
-      message: "Evidence reads are exhausted. Answer from retained source evidence; no additional tool call is permitted for this turn.",
-    };
+  const recovery = evidenceRecoveryDecision(taskState, {
+    errorCode,
+    recoveryHint,
+    targetFiles,
+    mutationGeneration: context.mutationGeneration,
+  });
   // The read route was already authorized above. Persist with the freshly
   // loaded server-owned credential instead of echoing a model-provided compact
   // handle back into the Python transaction; that handle may intentionally
@@ -2479,7 +2461,12 @@ function evidenceStagnationFail(tool, guard, options = {}) {
     bindAuthoritativeLifecycleControl(payload, lifecycle);
     return fail(String(lifecycle.error || "Could not commit task-bound evidence recovery."), payload);
   }
-  if (recoveryHint) {
+  const repairRecoveryActive = Boolean(
+    recoveryHint
+    && lifecycle?.control?.requiredTool
+    && String(lifecycle.control.requiredTool.name || "") === "unreal_code_sketch_claim_validate"
+  );
+  if (repairRecoveryActive) {
     const payload = {
       ...(lifecycle?.ok === true ? {
         taskRecoveryRecorded: true,
@@ -4049,6 +4036,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       LIST_DIRECTORY_BUDGET.commit(budgetScope, relative || ".");
       const budgetFail = commitDeferredBudgetOrFail({
         inspectionDirectoryList: { entryCount: rows.length },
+        inspectionDiscoveryCandidates: {
+          paths: rows.filter((entry) => entry.type === "file")
+            .map((entry) => `${relative}/${entry.name}`.replace(/^\/+/, "")),
+        },
       });
       if (budgetFail) return budgetFail;
       return attachCommittedToolOutcomeControl(
@@ -6952,6 +6943,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         resolution.projectRelativePath,
         query
       );
+      const discoveryPaths = [...results.map((entry) => entry.file), ...fileNameResults.map((entry) => entry.file)];
       const budgetFail = commitDeferredBudgetOrFail(
         completeFileNameMiss
           ? {
@@ -6962,7 +6954,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               searchComplete: true,
             },
           }
-          : null
+          : {
+            inspectionDiscoveryCandidates: { paths: discoveryPaths },
+          }
       );
       if (budgetFail) return budgetFail;
       recordReadSuccess("search_files", normalizedArgs, {

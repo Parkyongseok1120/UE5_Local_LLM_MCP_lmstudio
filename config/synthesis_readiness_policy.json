@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "directEvidenceTaskKinds": [
+    "cpp_analysis",
+    "inspect_only",
+    "project_review"
+  ],
+  "evidenceFreeTaskKinds": [
+    "answer_only",
+    "conversation"
+  ],
+  "minimumAcceptedDirectEvidence": 2,
+  "minimumDeclarationEvidence": 1,
+  "minimumImplementationEvidence": 1,
+  "defaultRepresentativePairs": 1,
+  "maximumFrontierEntries": 32,
+  "partialSynthesisRequiresBoundReached": true,
+  "partialSynthesisRequiresDurableFrontier": true
+}
