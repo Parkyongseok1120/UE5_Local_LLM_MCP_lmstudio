@@ -246,7 +246,7 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
     assert replay["idempotentReplay"] is True
 
 
-def test_read_only_tool_free_final_requires_durable_evidence_before_direct_commit(
+def test_read_only_tool_free_final_requires_explicit_synthesis_transition(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -305,6 +305,23 @@ def test_read_only_tool_free_final_requires_durable_evidence_before_direct_commi
     }
     state["inspectionContract"] = {"intent": "cpp_analysis", "evidenceBudget": {"representativePairs": 1}}
     state_path.write_text(json.dumps(state), encoding="utf-8")
+    ready = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        recovery={
+            "source": "evidence",
+            "status": "evidence_complete",
+            "scopeDisposition": "in_slice",
+            "errorCode": "EVIDENCE_COMPLETE",
+            "requiredTool": {},
+            "targetFiles": ["Source/Sample/Foo.cpp", "Source/Sample/Foo.h"],
+        },
+    )
+    assert ready["ok"] is True
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["controlState"]["phase"] == "synthesis"
+    assert state["controlState"]["requiredTool"] is None
+    assert state["controlState"]["allowedTools"] == []
     committed = task_commit_synthesis(
         tmp_path,
         task_authorization=started["taskAuthorization"],
@@ -314,7 +331,7 @@ def test_read_only_tool_free_final_requires_durable_evidence_before_direct_commi
     assert committed["ok"] is True
     completed = task_status(tmp_path, started["taskSessionId"])["state"]
     assert completed["status"] == "completed"
-    assert completed["synthesisLifecycle"]["entryMode"] == "direct_evidence_final"
+    assert completed["synthesisLifecycle"]["entryMode"] == "explicit_evidence_complete"
 
 
 def test_checkpoint_rebase_resolves_bound_transaction_before_releasing_control(

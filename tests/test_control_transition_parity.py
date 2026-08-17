@@ -802,4 +802,11 @@ process.stdout.write(JSON.stringify(snapshots));
         for key, value in changed.items()
         if key not in {"epoch", "fingerprint", "retryPolicy"}
     }
+    for material in (first_material, changed_material):
+        readiness = material.get("synthesisReadiness")
+        if isinstance(readiness, dict):
+            readiness.pop("controlEpoch", None)
+        latch = material.get("synthesisLatch")
+        if isinstance(latch, dict):
+            latch.pop("controlEpoch", None)
     assert changed_material == first_material

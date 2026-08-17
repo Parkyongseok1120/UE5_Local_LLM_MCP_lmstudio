@@ -162,14 +162,19 @@ function hostLifecycleEvent(manager, hostToolCallId, stage, options = {}) {
 
 function hostManagerForTest() {
   const emitted = [];
+  const lmStudioEvents = [];
   const diagnostics = [];
   const { createHostToolCallTransactionManager } = require("../dist/generator.js");
   return {
     emitted,
+    lmStudioEvents,
     diagnostics,
     manager: createHostToolCallTransactionManager({
       outerGenerateRequestId: "outer-host-test",
-      emit(event) { emitted.push(event); },
+      emit(event) {
+        emitted.push(event);
+        lmStudioEvents.push({ kind: event.kind, hostToolCallId: event.hostToolCallId });
+      },
       onDiagnostic(event) { diagnostics.push(event); },
     }),
   };
@@ -9272,6 +9277,14 @@ test("duplicate tool callbacks are exactly-once and use the tool-call output res
       committed.hostToolCallLifecycle.lmStudioNameEventCount,
       committed.hostToolCallLifecycle.acceptedHostTransactionCount,
     );
+    assert.equal(
+      committed.hostToolCallLifecycle.lmStudioLifecycleEventCounts.name,
+      emitted.filter((event) => event.kind === "name").length,
+    );
+    assert.equal(
+      committed.hostToolCallLifecycle.lmStudioNameEventCount,
+      emitted.filter((event) => event.kind === "name").length,
+    );
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -9346,12 +9359,14 @@ test("tool callback FSM rejects arguments and contradictory terminal events afte
 });
 
 test("host transaction emits one contiguous lifecycle for an ordinary call", () => {
-  const { manager, emitted } = hostManagerForTest();
+  const { manager, emitted, lmStudioEvents } = hostManagerForTest();
   hostLifecycleEvent(manager, "host-ordinary", "start");
   hostLifecycleEvent(manager, "host-ordinary", "name");
   hostLifecycleEvent(manager, "host-ordinary", "args", { content: '{"path":"A.cpp"}' });
   hostLifecycleEvent(manager, "host-ordinary", "end", { arguments: { path: "A.cpp" } });
   assert.deepEqual(emitted.map((event) => event.kind), ["start", "name", "args", "end"]);
+  assert.equal(lmStudioEvents.filter((event) => event.kind === "name").length, 1);
+  assert.equal(lmStudioEvents.filter((event) => event.kind === "name")[0].hostToolCallId, "host-ordinary");
   assert.deepEqual(manager.snapshot(), {
     acceptedHostTransactionCount: 1,
     hostStartCount: 1,
@@ -9803,11 +9818,42 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
         epoch: 21,
         fingerprint: "1".repeat(64),
         taskSessionId: ownership.taskSessionId,
+        taskMode: "read_only",
+        planRevision: "21",
+        mutationGeneration: 0,
         routeHash: "route-synthesis-1",
         phase: "synthesis",
         disposition: "continue",
         allowedTools: [],
         retryPolicy: { sameSemanticInput: "allowed" },
+        synthesisReadiness: {
+          version: 1,
+          ready: true,
+          commitEligible: true,
+          pendingEvidenceObligation: false,
+          planRevision: "21",
+          sourceEvidencePlanRevision: "21",
+          controlEpoch: 21,
+          acceptedEvidenceHash: "a".repeat(64),
+          remainingFrontierHash: "b".repeat(64),
+          acceptedDirectEvidenceCount: 2,
+          declarationCount: 1,
+          implementationCount: 1,
+          representativePairCount: 1,
+          requiredRepresentativePairs: 1,
+          coverageIncomplete: false,
+          remainingFrontier: [],
+        },
+        synthesisLatch: {
+          version: 1,
+          name: "synthesize_current_evidence",
+          controlEpoch: 21,
+          planRevision: "21",
+          acceptedEvidenceHash: "a".repeat(64),
+          remainingFrontierHash: "b".repeat(64),
+          commitEligible: true,
+          pendingEvidenceObligation: false,
+        },
       },
     };
     const model = {
@@ -10082,7 +10128,7 @@ test("incompatible synthesis output and wall-clock policy rejects before predict
   }
 });
 
-test("tool-free read-only planner final emits a durable server-owned commit handshake", async () => {
+test("tool-free read-only planner final is withheld without an explicit synthesis latch", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-read-only-final-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -10143,19 +10189,15 @@ test("tool-free read-only planner final emits a durable server-owned commit hand
       }] },
     ] });
 
-    await generate(controllerFor(model, {}, stateRoot, emitted, [commitTool]), history);
+    await assert.rejects(
+      generate(controllerFor(model, {}, stateRoot, emitted, [commitTool]), history),
+      /not a valid synthesis latch/,
+    );
 
-    const endIndex = emitted.findIndex((event) => event.kind === "end");
     assert.equal(emitted.some((event) => event.kind === "fragment"), false);
-    assert.ok(endIndex >= 0);
-    const commit = emitted[endIndex].request;
-    assert.equal(commit.name, "unreal_task_commit_synthesis");
-    assert.deepEqual(commit.arguments.taskAuthorization, ownership);
-    assert.equal(commit.arguments.controlEpoch, 22);
-    assert.match(commit.arguments.outputDigest, /^[a-f0-9]{64}$/);
     const persisted = activeCheckpoint(stateRoot);
-    assert.equal(persisted.synthesisState.status, "commit_sent");
-    assert.equal(persisted.pendingToolCalls[0].id, commit.id);
+    assert.equal(persisted.synthesisState.status, "evidence_recovery");
+    assert.deepEqual(persisted.pendingToolCalls, []);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -10185,14 +10227,55 @@ test("failed synthesis commit ACK never delivers or persists committed state", a
         type: "toolCallResult",
         toolCallId: callId,
         name: "unreal_task_commit_synthesis",
-        content: JSON.stringify({ ok: false, errorCode: "SYNTHESIS_CONTROL_STALE" }),
+        content: JSON.stringify({
+          ok: false,
+          errorCode: "SYNTHESIS_NOT_READY",
+          control: {
+            version: 2,
+            epoch: 6,
+            fingerprint: "c".repeat(64),
+            taskSessionId: "task-rejected",
+            taskMode: "read_only",
+            planRevision: "5",
+            mutationGeneration: 0,
+            routeHash: "route-rejected-recovery",
+            phase: "execute",
+            disposition: "require_tool",
+            requiredTool: {
+              name: "read_file",
+              args: { path: "Source/Cine/Public/Cine.h" },
+            },
+            allowedTools: ["read_file"],
+            retryPolicy: { sameSemanticInput: "once" },
+            synthesisReadiness: {
+              version: 1,
+              ready: false,
+              commitEligible: false,
+              pendingEvidenceObligation: true,
+              planRevision: "5",
+              sourceEvidencePlanRevision: "5",
+              controlEpoch: 6,
+              acceptedEvidenceHash: "d".repeat(64),
+              remainingFrontierHash: "e".repeat(64),
+              acceptedDirectEvidenceCount: 1,
+              declarationCount: 1,
+              implementationCount: 0,
+              representativePairCount: 0,
+              requiredRepresentativePairs: 1,
+              coverageIncomplete: true,
+              remainingFrontier: ["Source/Cine/Private/Cine.cpp"],
+            },
+          },
+        }),
       }] },
     ] });
     const checkpoint = core.buildCheckpoint(history.getMessagesArray().slice(0, 1), {}, { maxCheckpointFacts: 32 });
     checkpoint.synthesisState = {
       version: 1,
       status: "commit_sent",
+      taskSessionId: "task-rejected",
       objectiveHash: checkpoint.objectiveHash,
+      controlEpoch: 5,
       outputDigest,
       updatedAt: new Date().toISOString(),
     };
@@ -10210,16 +10293,38 @@ test("failed synthesis commit ACK never delivers or persists committed state", a
       preparedSynthesisOutputDigest: outputDigest,
       observedToolResultCount: 0,
     }];
+    checkpoint.preparedSynthesis = {
+      version: 1,
+      status: "commit_sent",
+      output: preparedOutput,
+      outputDigest,
+      synthesisTransactionId: "f".repeat(64),
+      taskSessionId: "task-rejected",
+      objectiveHash: checkpoint.objectiveHash,
+      controlEpoch: 5,
+      controlFingerprint: "b".repeat(64),
+      planRevision: "5",
+      acceptedEvidenceHash: "a".repeat(64),
+      remainingFrontierHash: "9".repeat(64),
+      mutationGeneration: 0,
+      preparedAt: new Date().toISOString(),
+      dispatchedAt: "",
+      rejectedAt: "",
+      rejectionCode: "",
+      staleReason: "",
+    };
+    checkpoint.pendingToolCalls[0].arguments.synthesisTransactionId = "f".repeat(64);
     await store.saveCheckpoint(sessionId, checkpoint);
     const emitted = [];
 
-    await assert.rejects(
-      generate(controllerFor({}, {}, stateRoot, emitted, []), history),
-      /was not acknowledged/,
-    );
+    await generate(controllerFor({}, {}, stateRoot, emitted, []), history);
 
     assert.equal(emitted.some((event) => event.kind === "fragment"), false);
-    assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "prepared");
+    assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "rejected_stale");
+    assert.equal(activeCheckpoint(stateRoot).preparedSynthesis.status, "rejected_stale");
+    assert.equal(activeCheckpoint(stateRoot).preparedSynthesis.output, preparedOutput);
+    assert.equal(activeCheckpoint(stateRoot).requiredNextTool.name, "read_file");
+    assert.deepEqual(activeCheckpoint(stateRoot).pendingToolCalls, []);
     assert.notEqual(activeCheckpoint(stateRoot).synthesisState.status, "committed");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -10243,12 +10348,44 @@ test("synthesis stays uncommitted when the server commit tool is absent", async 
       control: {
         version: 2,
         epoch: 7,
+        fingerprint: "7".repeat(64),
         taskSessionId: "task-synthesis-missing",
+        taskMode: "read_only",
+        planRevision: "7",
+        mutationGeneration: 0,
         routeHash: "route-synthesis-missing",
         phase: "synthesis",
         disposition: "continue",
         allowedTools: [],
         retryPolicy: { sameSemanticInput: "allowed" },
+        synthesisReadiness: {
+          version: 1,
+          ready: true,
+          commitEligible: true,
+          pendingEvidenceObligation: false,
+          planRevision: "7",
+          sourceEvidencePlanRevision: "7",
+          controlEpoch: 7,
+          acceptedEvidenceHash: "1".repeat(64),
+          remainingFrontierHash: "2".repeat(64),
+          acceptedDirectEvidenceCount: 2,
+          declarationCount: 1,
+          implementationCount: 1,
+          representativePairCount: 1,
+          requiredRepresentativePairs: 1,
+          coverageIncomplete: false,
+          remainingFrontier: [],
+        },
+        synthesisLatch: {
+          version: 1,
+          name: "synthesize_current_evidence",
+          controlEpoch: 7,
+          planRevision: "7",
+          acceptedEvidenceHash: "1".repeat(64),
+          remainingFrontierHash: "2".repeat(64),
+          commitEligible: true,
+          pendingEvidenceObligation: false,
+        },
       },
     };
     const model = {

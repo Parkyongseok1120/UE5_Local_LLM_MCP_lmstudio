@@ -139,9 +139,12 @@ function prune(now, maxEntries, ttlMs) {
 }
 
 function mergeRanges(ranges) {
-  if (!ranges.length) return [];
+  if (!Array.isArray(ranges) || !ranges.length) return [];
   const sorted = ranges
-    .map((r) => ({ start: Number(r.start), end: Number(r.end) }))
+    .map((r) => ({
+      start: Number(Array.isArray(r) ? r[0] : r?.start),
+      end: Number(Array.isArray(r) ? r[1] : r?.end),
+    }))
     .filter((r) => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end >= r.start)
     .sort((a, b) => a.start - b.start || a.end - b.end);
   if (!sorted.length) return [];
@@ -156,6 +159,61 @@ function mergeRanges(ranges) {
     }
   }
   return merged;
+}
+
+function hydrateDurableCoverage(context = {}, versionKey = null) {
+  if (!versionKey || !context.durableCoverage || typeof context.durableCoverage !== "object") {
+    return null;
+  }
+  const contextHash = String(context.contentHash || context.fileContentHash || "")
+    .trim()
+    .toLowerCase();
+  const durable = context.durableCoverage;
+  const durableHash = String(durable.contentHash || durable.evidenceHash || "")
+    .trim()
+    .toLowerCase();
+  if (!contextHash || !durableHash || contextHash !== durableHash) return null;
+
+  const mutationGeneration = Math.max(0, Number(context.mutationGeneration || 0));
+  const durableMutationGeneration = Math.max(0, Number(durable.mutationGeneration || 0));
+  if (mutationGeneration !== durableMutationGeneration) return null;
+
+  const identity = canonicalCoverageIdentity(context);
+  if (!identity) return null;
+  const ranges = mergeRanges(durable.coveredRanges || durable.ranges || []);
+  const lineCount = Math.max(0, Number(durable.lineCount || 0));
+  const wholeFileComplete = durable.wholeFileComplete === true
+    || (lineCount > 0 && ranges.some((range) => range.start <= 1 && range.end >= lineCount));
+  const coverage = {
+    canonicalPath: identity.canonicalPath,
+    contentHash: identity.contentHash,
+    mutationGeneration,
+    ranges,
+    nonRangeCount: Math.max(0, Number(
+      durable.nonRangeCount || (wholeFileComplete ? 1 : 0),
+    )),
+    stagnationCount: Math.max(0, Number(durable.stagnationCount || 0)),
+    coveredRepeatCount: Math.max(0, Number(durable.coveredRepeatCount || 0)),
+    materializedCoveredRangeCount: Math.max(0, Number(durable.materializedCoveredRangeCount || 0)),
+    lastKey: null,
+    lineCount,
+    wholeFileComplete,
+    truncated: durable.truncated === true && !wholeFileComplete,
+    nextUnreadLine: wholeFileComplete
+      ? null
+      : Math.max(1, Number(durable.nextUnreadLine || 1)),
+    largestMaterialization: durable.largestMaterialization
+      && typeof durable.largestMaterialization === "object"
+      ? { ...durable.largestMaterialization }
+      : null,
+    acceptedEvidenceId: String(durable.acceptedEvidenceId || durable.evidenceId || "").slice(0, 80),
+    semanticAnchors: Array.isArray(durable.semanticAnchors)
+      ? durable.semanticAnchors.map(String).filter(Boolean).slice(0, 16)
+      : [],
+    lastEvidenceProgressed: true,
+  };
+  fileCoverage.set(versionKey, coverage);
+  return coverage;
 }
 
 function lineRangeFromArgs(tool, args) {
@@ -210,7 +268,9 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
 
   const key = buildEvidenceKey(tool, args, context);
   const versionKey = fileVersionKey(context);
-  const coverage = versionKey ? fileCoverage.get(versionKey) : null;
+  const coverage = versionKey
+    ? fileCoverage.get(versionKey) || hydrateDurableCoverage(context, versionKey)
+    : null;
   const coverageIdentity = canonicalCoverageIdentity(context);
   const requested = lineRangeFromArgs(tool, args);
 

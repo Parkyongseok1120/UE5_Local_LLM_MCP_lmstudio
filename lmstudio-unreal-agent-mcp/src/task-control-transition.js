@@ -1,12 +1,33 @@
 "use strict";
 
 const crypto = require("crypto");
+const fs = require("fs");
 const path = require("path");
 const {
   filesystemPathIdentity,
   normalizePortablePath,
 } = require("./filesystem-path-identity");
 const { deriveSynthesisReadiness } = require("./synthesis-readiness");
+
+const SOURCE_EVIDENCE_TASK_KINDS = new Set([
+  "cpp_analysis",
+  "inspect_only",
+  "project_review",
+  "source_analysis",
+]);
+
+function isSourceEvidenceTask(state = {}) {
+  const taskKind = String(state.taskKind || "").trim().toLowerCase();
+  if (SOURCE_EVIDENCE_TASK_KINDS.has(taskKind)) return true;
+  const contract = state.inspectionContract && typeof state.inspectionContract === "object"
+    ? state.inspectionContract
+    : {};
+  if (SOURCE_EVIDENCE_TASK_KINDS.has(String(contract.intent || "").trim().toLowerCase())) return true;
+  const repositoryAudit = state.repoAuditLedger && typeof state.repoAuditLedger === "object"
+    ? state.repoAuditLedger
+    : {};
+  return repositoryAudit.required === true;
+}
 
 const DISCOVERY_TOOLS = new Set([
   "unreal_rag_search",
@@ -165,6 +186,233 @@ function preGateSourceReadPath(state, pendingGates, hostPlatform = process.platf
   return "";
 }
 
+const SOURCE_DECLARATION_EXTENSIONS = new Set([".h", ".hpp", ".inl"]);
+const SOURCE_IMPLEMENTATION_EXTENSIONS = new Set([".cpp", ".c", ".cc", ".cxx"]);
+
+function usableSourcePath(value) {
+  const candidate = normalizePath(value);
+  if (!candidate || candidate.includes("://") || candidate.split("/").includes("..")) return "";
+  return candidate;
+}
+
+function sourceEvidenceRows(state) {
+  const planRevision = String(state.planRevision || "");
+  const rows = [];
+  for (const field of ["sourceEvidence", "directSourceEvidence"]) {
+    const ledger = state[field] && typeof state[field] === "object" ? state[field] : {};
+    if (String(ledger.planRevision || "") !== planRevision) continue;
+    const files = ledger.files && typeof ledger.files === "object" ? ledger.files : {};
+    for (const [key, raw] of Object.entries(files)) {
+      if (!raw || typeof raw !== "object") continue;
+      const sourcePath = usableSourcePath(raw.path || key);
+      if (sourcePath) rows.push({ ...raw, path: sourcePath });
+    }
+  }
+  return rows;
+}
+
+function sourceAbsentPaths(state) {
+  const ledger = state.absentEvidence && typeof state.absentEvidence === "object"
+    ? state.absentEvidence
+    : {};
+  const files = ledger.files && typeof ledger.files === "object" ? ledger.files : {};
+  return new Set(Object.entries(files).map(([key, raw]) => (
+    transitionPathIdentity(usableSourcePath(raw?.path || key))
+  )).filter(Boolean));
+}
+
+function sourceRecoveryCandidates(state) {
+  const progress = state.inspectionProgress && typeof state.inspectionProgress === "object"
+    ? state.inspectionProgress
+    : {};
+  const values = [];
+  for (const container of [progress, state]) {
+    for (const key of [
+      "remainingFrontier", "discoveredCandidates", "discoveryCandidates",
+      "knownSourceCandidates", "sourceCandidates", "pairCandidates", "declarationCandidates",
+    ]) {
+      const raw = container[key];
+      for (const value of (Array.isArray(raw) ? raw.slice(0, 64) : [raw])) {
+        const candidate = usableSourcePath(
+          value && typeof value === "object"
+            ? value.path || value.relativePath || value.projectRelativePath
+            : value,
+        );
+        if (candidate) values.push(candidate);
+      }
+    }
+  }
+  const discovery = state.inspectionDiscovery && typeof state.inspectionDiscovery === "object"
+    ? state.inspectionDiscovery
+    : {};
+  for (const key of ["candidates", "paths", "files", "remainingFrontier"]) {
+    for (const value of (Array.isArray(discovery[key]) ? discovery[key].slice(0, 64) : [])) {
+      const candidate = usableSourcePath(value?.path || value?.relativePath || value);
+      if (candidate) values.push(candidate);
+    }
+  }
+  return [...new Set(values)].slice(0, 64);
+}
+
+function sourcePairHeaderCandidates(value) {
+  const sourcePath = usableSourcePath(value);
+  const suffix = path.posix.extname(sourcePath).toLowerCase();
+  if (!sourcePath || !SOURCE_IMPLEMENTATION_EXTENSIONS.has(suffix)) return [];
+  const stem = sourcePath.slice(0, -suffix.length);
+  const parts = stem.split("/").filter(Boolean);
+  const candidates = [];
+  const add = (candidate) => {
+    const normalized = usableSourcePath(candidate);
+    if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
+  };
+  const sourceIndex = parts.map((part) => part.toLowerCase()).lastIndexOf("source");
+  if (sourceIndex >= 0 && parts.length > sourceIndex + 2) {
+    const moduleRoot = parts.slice(0, sourceIndex + 2);
+    let relative = parts.slice(sourceIndex + 2);
+    if (["public", "private", "classes"].includes(String(relative[0] || "").toLowerCase())) {
+      relative = relative.slice(1);
+    }
+    if (relative.length) {
+      for (const directory of ["Public", "Classes", ""]) {
+        const prefix = directory ? [...moduleRoot, directory] : moduleRoot;
+        for (const declarationSuffix of [".h", ".hpp", ".inl"]) {
+          add([...prefix, ...relative].join("/") + declarationSuffix);
+        }
+      }
+    }
+  }
+  const parent = sourcePath.includes("/") ? sourcePath.slice(0, sourcePath.lastIndexOf("/")) : "";
+  const basename = path.posix.basename(stem);
+  for (const declarationSuffix of [".h", ".hpp", ".inl"]) {
+    add(parent ? `${parent}/${basename}${declarationSuffix}` : `${basename}${declarationSuffix}`);
+  }
+  return candidates.slice(0, 24);
+}
+
+function nextEvidenceRecovery(state, readiness) {
+  if (readiness?.ready === true) return null;
+  const rows = sourceEvidenceRows(state);
+  const accepted = new Set(rows.map((row) => transitionPathIdentity(row.path)).filter(Boolean));
+  const absent = sourceAbsentPaths(state);
+  const declaration = (value) => {
+    const candidate = usableSourcePath(value);
+    const suffix = path.posix.extname(candidate).toLowerCase();
+    if (!candidate || !SOURCE_DECLARATION_EXTENSIONS.has(suffix)) return "";
+    const identity = transitionPathIdentity(candidate);
+    return !accepted.has(identity) && !absent.has(identity) ? candidate : "";
+  };
+  for (const candidate of sourceRecoveryCandidates(state)) {
+    const header = declaration(candidate);
+    if (header) return { name: "read_file", args: { path: header } };
+  }
+  const implementations = rows.filter((row) => (
+    String(row.sourceKind || "").toLowerCase() === "implementation"
+      || SOURCE_IMPLEMENTATION_EXTENSIONS.has(path.posix.extname(String(row.path || "")).toLowerCase())
+  ));
+  for (const row of implementations) {
+    for (const key of [
+      "includePath", "headerPath", "declarationPath", "includedHeader", "includedHeaders",
+      "includePaths", "pairCandidates", "declarationCandidates",
+    ]) {
+      const values = Array.isArray(row[key]) ? row[key] : [row[key]];
+      for (const value of values) {
+        const header = declaration(value?.path || value?.relativePath || value);
+        if (header) return { name: "read_file", args: { path: header } };
+      }
+    }
+    for (const candidate of sourcePairHeaderCandidates(row.path)) {
+      const header = declaration(candidate);
+      if (!header) continue;
+      const root = authoritativeProjectRoot(state);
+      if (root && fs.existsSync(path.join(root, ...header.split("/")))) {
+        return { name: "read_file", args: { path: header } };
+      }
+    }
+    const sourcePath = usableSourcePath(row.path);
+    if (sourcePath) {
+      const basename = path.posix.basename(sourcePath, path.posix.extname(sourcePath));
+      const parts = sourcePath.split("/");
+      const sourceIndex = parts.map((part) => part.toLowerCase()).lastIndexOf("source");
+      const searchPath = sourceIndex >= 0 && parts.length > sourceIndex + 1
+        ? parts.slice(0, sourceIndex + 2).join("/")
+        : "Source";
+      return {
+        name: "search_files",
+        args: {
+          query: `${basename}.h`,
+          path: searchPath,
+          regex: false,
+          matchFileNames: true,
+          maxResults: 8,
+        },
+      };
+    }
+  }
+  const progress = state.inspectionProgress && typeof state.inspectionProgress === "object"
+    ? state.inspectionProgress
+    : {};
+  const frontier = Array.isArray(progress.remainingFrontier)
+    ? progress.remainingFrontier
+    : (Array.isArray(state.remainingFrontier) ? state.remainingFrontier : []);
+  for (const value of frontier) {
+    const candidate = usableSourcePath(value);
+    const identity = transitionPathIdentity(candidate);
+    if (candidate && !accepted.has(identity) && !absent.has(identity)) {
+      return { name: "read_file", args: { path: candidate } };
+    }
+  }
+  return null;
+}
+
+function prepareSynthesisHandoff(state, readiness) {
+  if (
+    readiness?.ready !== true
+    || !isSourceEvidenceTask(state)
+    || String(state.status || "running").toLowerCase() !== "running"
+    || String(state.mode || "").toLowerCase() !== "read_only"
+  ) return false;
+  const route = state.toolRoute && typeof state.toolRoute === "object" ? state.toolRoute : {};
+  if (Array.isArray(route.pendingGates) && route.pendingGates.length > 0) return false;
+  const recovery = state.recoveryObligation && typeof state.recoveryObligation === "object"
+    ? state.recoveryObligation
+    : {};
+  const recoveryStatus = String(recovery.status || "").toLowerCase();
+  if (!["", "evidence_complete"].includes(recoveryStatus)) return false;
+  if (String(route.phase || "").toLowerCase() === "synthesis") return false;
+  const action = state.postBudgetAction && typeof state.postBudgetAction === "object"
+    ? state.postBudgetAction
+    : {};
+  if (String(action.name || "") === "synthesize_current_evidence") return false;
+  if (!recoveryStatus) {
+    state.recoveryObligation = {
+      source: "evidence",
+      status: "evidence_complete",
+      scopeDisposition: "in_slice",
+      errorCode: "EVIDENCE_COMPLETE",
+      requiredTool: {},
+      targetFiles: [],
+    };
+  }
+  state.postBudgetAction = {
+    name: "synthesize_current_evidence",
+    isTool: false,
+    controlEpoch: nonNegativeInt(state.controlEpoch),
+    planRevision: String(state.planRevision || ""),
+    acceptedEvidenceHash: String(readiness.acceptedEvidenceHash || ""),
+    remainingFrontierHash: String(readiness.remainingFrontierHash || ""),
+    remainingFrontierRequired: readiness.coverageIncomplete === true,
+    coverageIncomplete: readiness.coverageIncomplete === true,
+  };
+  state.toolRoute = {
+    ...route,
+    phase: "synthesis",
+    roleSession: "synthesis",
+    activeTools: [],
+    maxToolCallsPerPhase: 0,
+  };
+  return true;
+}
+
 function validationFindingRecovery(firstFinding) {
   const finding = firstFinding && typeof firstFinding === "object" ? firstFinding : {};
   const targetPath = normalizePath(finding.path);
@@ -243,6 +491,7 @@ function validationFindingRecovery(firstFinding) {
 function deriveNextObligation(state) {
   const synthesisReadiness = deriveSynthesisReadiness(state);
   state.synthesisReadiness = synthesisReadiness;
+  prepareSynthesisHandoff(state, synthesisReadiness);
   const route = state.toolRoute && typeof state.toolRoute === "object" ? state.toolRoute : {};
   const status = String(state.status || "running").trim().toLowerCase();
   const phase = String(route.phase || "unknown");
@@ -360,8 +609,14 @@ function deriveNextObligation(state) {
         retryValue = "forbidden";
         noToolsForSynthesis = true;
       } else {
-        requiredName = "unreal_agent_plan";
-        requiredArgs = { request: String(state.objective || state.request || "Continue bounded source analysis") };
+        const evidenceAction = nextEvidenceRecovery(state, synthesisReadiness);
+        if (evidenceAction) {
+          requiredName = evidenceAction.name;
+          requiredArgs = evidenceAction.args;
+        } else {
+          requiredName = "unreal_agent_plan";
+          requiredArgs = { request: String(state.objective || state.request || "Continue bounded source analysis") };
+        }
         retryValue = "once";
       }
     } else if (recoveryStatus === "evidence_complete") {
@@ -370,15 +625,18 @@ function deriveNextObligation(state) {
         retryValue = "forbidden";
         noToolsForSynthesis = true;
         blocker = {
-          code: String(recoveryObligation.errorCode || "EVIDENCE_STAGNATION"),
+          code: "EVIDENCE_COMPLETE",
           fingerprint: recoveryFingerprint,
         };
       } else {
-        const nextPath = synthesisReadiness.remainingFrontier[0] || "";
-        requiredName = nextPath ? "read_file" : "unreal_agent_plan";
-        requiredArgs = nextPath
-          ? { path: nextPath }
-          : { request: String(state.objective || state.request || "Continue bounded source analysis") };
+        const evidenceAction = nextEvidenceRecovery(state, synthesisReadiness);
+        if (evidenceAction) {
+          requiredName = evidenceAction.name;
+          requiredArgs = evidenceAction.args;
+        } else {
+          requiredName = "unreal_agent_plan";
+          requiredArgs = { request: String(state.objective || state.request || "Continue bounded source analysis") };
+        }
         retryValue = "once";
       }
     } else if (recoveryStatus === "environment_recovery") {
@@ -516,6 +774,36 @@ function deriveNextObligation(state) {
         requiredName = checkpointAction;
       }
     }
+    // Never publish an incomplete read-only task as an unqualified
+    // planner/continue state. If all ordinary branches failed to reconstruct
+    // the next evidence action, fail closed with a durable blocker.
+    if (
+      String(state.mode || "").toLowerCase() === "read_only"
+      && isSourceEvidenceTask(state)
+      && synthesisReadiness.ready !== true
+      && !requiredName
+      && !blocker
+    ) {
+      const evidenceAction = nextEvidenceRecovery(state, synthesisReadiness);
+      if (evidenceAction) {
+        requiredName = evidenceAction.name;
+        requiredArgs = evidenceAction.args;
+        retryValue = "once";
+      } else {
+        disposition = "await_user";
+        retryValue = "forbidden";
+        blocker = {
+          code: "EVIDENCE_FRONTIER_LOST",
+          fingerprint: canonicalHash({
+            taskSessionId: String(state.taskSessionId || ""),
+            planRevision: String(state.planRevision || ""),
+            acceptedEvidenceHash: String(synthesisReadiness.acceptedEvidenceHash || ""),
+            remainingFrontierHash: String(synthesisReadiness.remainingFrontierHash || ""),
+            reason: String(synthesisReadiness.reason || ""),
+          }),
+        };
+      }
+    }
     if (requiredName === "static_validate_project") {
       const projectRoot = authoritativeProjectRoot(state);
       if (projectRoot) requiredArgs = { projectRoot, fullAudit: false };
@@ -581,10 +869,54 @@ function deriveNextObligation(state) {
 }
 
 function commitControlTransition(state) {
+  const readiness = deriveSynthesisReadiness(state);
+  prepareSynthesisHandoff(state, readiness);
   const control = deriveNextObligation(state);
-  const fingerprint = canonicalHash(control);
-  let epoch = nonNegativeInt(state.controlEpoch);
-  if (fingerprint !== String(state.controlFingerprint || "")) epoch += 1;
+  control.synthesisReadiness = { ...readiness };
+  const previousControl = state.controlState && typeof state.controlState === "object"
+    ? state.controlState
+    : null;
+  const semanticView = (value) => {
+    const material = value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : {};
+    delete material.epoch;
+    delete material.fingerprint;
+    if (material.synthesisReadiness && typeof material.synthesisReadiness === "object") {
+      delete material.synthesisReadiness.controlEpoch;
+    }
+    if (material.synthesisLatch && typeof material.synthesisLatch === "object") {
+      delete material.synthesisLatch.controlEpoch;
+    }
+    return material;
+  };
+  const baseEpoch = nonNegativeInt(state.controlEpoch);
+  control.synthesisReadiness.controlEpoch = baseEpoch;
+  if (control.phase === "synthesis" && readiness.ready === true) {
+    control.synthesisLatch = {
+      version: 1,
+      name: "synthesize_current_evidence",
+      controlEpoch: baseEpoch,
+      planRevision: String(readiness.planRevision || ""),
+      acceptedEvidenceHash: String(readiness.acceptedEvidenceHash || ""),
+      remainingFrontierHash: String(readiness.remainingFrontierHash || ""),
+      commitEligible: true,
+      pendingEvidenceObligation: false,
+    };
+  }
+  let fingerprint = canonicalHash(control);
+  const semanticChanged = previousControl
+    ? canonicalHash(semanticView(control)) !== canonicalHash(semanticView(previousControl))
+    : fingerprint !== String(state.controlFingerprint || "");
+  let epoch = baseEpoch;
+  if (semanticChanged) epoch += 1;
+  control.synthesisReadiness.controlEpoch = epoch;
+  fingerprint = canonicalHash(control);
+  if (control.phase === "synthesis" && readiness.ready === true) {
+    control.synthesisReadiness.controlEpoch = epoch;
+    control.synthesisLatch.controlEpoch = epoch;
+    fingerprint = canonicalHash(control);
+  } else {
+    fingerprint = canonicalHash(control);
+  }
   control.epoch = epoch;
   control.fingerprint = fingerprint;
   state.controlEpoch = epoch;
@@ -604,4 +936,5 @@ module.exports = {
   validationFindingRecovery,
   authoritativeProjectFile,
   authoritativeProjectRoot,
+  isSourceEvidenceTask,
 };

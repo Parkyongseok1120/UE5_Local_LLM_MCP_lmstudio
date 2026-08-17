@@ -46,6 +46,7 @@ from phase_tool_router import (
     derive_tool_route,
     effective_tool_route,
     normalized_selection_snapshots,
+    _prepare_synthesis_handoff,
     request_files,
     selection_binding,
     validation_finding_recovery,
@@ -78,7 +79,7 @@ from workspace_paths import (
     is_windows_host_platform,
     resolve_canonical_absolute_path,
 )
-from synthesis_readiness import derive_synthesis_readiness
+from synthesis_readiness import derive_synthesis_readiness, synthesis_latch_matches
 
 TERMINAL_TASK_STATUSES = frozenset({"completed", "cancelled", "failed", "cancellation_uncertain"})
 APPROVABLE_TASK_STATUSES = frozenset({"pending_approval", "awaiting_approval"})
@@ -952,6 +953,7 @@ def _refresh_server_owned_state(
     action = state.get("postBudgetAction") if isinstance(state.get("postBudgetAction"), dict) else {}
     if str(action.get("name") or "") == "synthesize_current_evidence" and not readiness["ready"]:
         state.pop("postBudgetAction", None)
+    _prepare_synthesis_handoff(state, readiness)
     route = derive_tool_route(state)
     state["toolRoute"] = route
     usage = (
@@ -986,6 +988,9 @@ def _refresh_server_owned_state(
             "remainingFrontierRequired": readiness["coverageIncomplete"],
             "coverageIncomplete": readiness["coverageIncomplete"],
         }
+        # Bind the latch to the post-transition epoch and fingerprint before
+        # exposing the tool-free synthesis turn.
+        state = commit_control_transition(state)
     return state
 
 
@@ -9196,6 +9201,72 @@ def task_checkpoint(
     return result
 
 
+def _synthesis_control_nack(
+    state: dict[str, Any],
+    error: dict[str, Any],
+    *,
+    readiness: dict[str, Any] | None = None,
+    transaction_id: str = "",
+    output_digest: str = "",
+) -> dict[str, Any]:
+    """Return a semantic synthesis NACK with the complete v2 recovery route."""
+
+    control = state.get("controlState") if isinstance(state.get("controlState"), dict) else {}
+    required = control.get("requiredTool") if isinstance(control.get("requiredTool"), dict) else {}
+    required_name = str(required.get("name") or "").strip()
+    required_args = dict(required.get("args") or {}) if isinstance(required.get("args"), dict) else {}
+    authorization = task_authorization_for_state(state)
+    if required_name:
+        required_args.setdefault("taskAuthorization", compact_task_authorization(authorization))
+    blocker = control.get("blocker") if isinstance(control.get("blocker"), dict) else None
+    next_action = required_name
+    next_action_is_tool = bool(required_name)
+    if not next_action and blocker:
+        next_action = "evidence_recovery_blocked"
+    payload: dict[str, Any] = {
+        "ok": False,
+        "errorCode": str(error.get("errorCode") or "SYNTHESIS_NOT_READY"),
+        "error": str(error.get("error") or "Synthesis commit was rejected by authoritative task control."),
+        "taskSessionId": str(state.get("taskSessionId") or ""),
+        "taskMode": str(state.get("mode") or "").casefold(),
+        "planRevision": str(state.get("planRevision") or control.get("planRevision") or ""),
+        "activeSliceId": str(state.get("activeSliceId") or control.get("activeSliceId") or ""),
+        "phase": str(control.get("phase") or ""),
+        "disposition": str(control.get("disposition") or ""),
+        "requiredTool": control.get("requiredTool") if required_name else None,
+        "allowedTools": list(control.get("allowedTools") or []),
+        "blocker": blocker,
+        "retryPolicy": dict(control.get("retryPolicy") or {"sameSemanticInput": "once"}),
+        "controlEpoch": int(control.get("epoch") or state.get("controlEpoch") or 0),
+        "controlFingerprint": str(control.get("fingerprint") or state.get("controlFingerprint") or ""),
+        "control": dict(control),
+        "synthesisReadiness": dict(readiness or state.get("synthesisReadiness") or {}),
+        "taskAuthorization": authorization,
+        "retryable": True,
+        "recoveryActionRequired": True,
+        "nextAction": next_action,
+        "nextActionIsTool": next_action_is_tool,
+        "nextActionArgs": required_args,
+    }
+    if required_name:
+        payload["requiredNextTool"] = required_name
+        payload["requiredNextToolArgs"] = required_args
+    elif blocker:
+        payload["agentInstruction"] = (
+            "Synthesis was rejected as stale. Follow the authoritative evidence recovery "
+            "control and do not retry the same synthesis transaction."
+        )
+    if transaction_id:
+        payload["synthesisTransactionId"] = transaction_id
+    if output_digest:
+        payload["outputDigest"] = output_digest
+    if error.get("inventoryHash"):
+        payload["inventoryHash"] = str(error["inventoryHash"])
+    if "remainingCount" in error:
+        payload["remainingCount"] = int(error.get("remainingCount") or 0)
+    return payload
+
+
 def task_commit_synthesis(
     workspace: Path,
     *,
@@ -9317,6 +9388,22 @@ def task_commit_synthesis(
                 mismatched_fields=mismatches,
             )
             return None
+        if (
+            str(prior.get("status") or "") == "rejected_stale"
+            and str(prior.get("synthesisTransactionId") or "").casefold() == transaction_id
+            and str(prior.get("outputDigest") or "").casefold() == digest
+        ):
+            outcome = _synthesis_control_nack(
+                state,
+                {
+                    "errorCode": str(prior.get("rejectionCode") or "SYNTHESIS_NOT_READY"),
+                    "error": "The same synthesis transaction was already rejected; follow the current evidence recovery control.",
+                },
+                transaction_id=transaction_id,
+                output_digest=digest,
+            )
+            outcome["synthesisLifecycle"] = prior
+            return state
         if str(state.get("status") or "") != "running":
             outcome = {
                 "ok": False,
@@ -9375,6 +9462,8 @@ def task_commit_synthesis(
         )
         state = _refresh_repository_audit_ledger(workspace, state)
         state = _refresh_server_owned_state(state)
+        recovery = state.get("recoveryObligation") if isinstance(state.get("recoveryObligation"), dict) else {}
+        control = state.get("controlState") if isinstance(state.get("controlState"), dict) else {}
         repo_audit = (
             state.get("repoAuditLedger")
             if isinstance(state.get("repoAuditLedger"), dict)
@@ -9385,119 +9474,104 @@ def task_commit_synthesis(
             and int(repo_audit.get("remainingCount") or 0) == 0
             and repo_audit.get("overflow") is not True
         ):
-            outcome = {
-                "ok": False,
-                "errorCode": "SYNTHESIS_AUDIT_FRONTIER_INCOMPLETE",
-                "error": (
-                    "Repository-wide synthesis cannot commit until every bounded "
-                    "inventory target is analyzed or explicitly excluded."
-                ),
-                "inventoryHash": str(repo_audit.get("inventoryHash") or ""),
-                "remainingCount": int(repo_audit.get("remainingCount") or 0),
-            }
-            return None
-        evidence_tools = {
-            "unreal_rag_search",
-            "unreal_symbol_lookup",
-            "list_directory",
-            "search_files",
-            "read_file",
-            "read_file_range",
-            "read_symbol",
-            "read_unreal_logs",
-        }
-        current_plan_revision = str(state.get("planRevision") or "")
+            outcome = _synthesis_control_nack(
+                state,
+                {
+                    "errorCode": "SYNTHESIS_AUDIT_FRONTIER_INCOMPLETE",
+                    "error": (
+                        "Repository-wide synthesis cannot commit until every bounded "
+                        "inventory target is analyzed or explicitly excluded."
+                    ),
+                    "inventoryHash": str(repo_audit.get("inventoryHash") or ""),
+                    "remainingCount": int(repo_audit.get("remainingCount") or 0),
+                },
+                transaction_id=transaction_id,
+                output_digest=digest,
+            )
+            return state
         explicit_synthesis_ready = bool(
             str(recovery.get("status") or "").casefold() == "evidence_complete"
             and str(control.get("phase") or "").casefold() == "synthesis"
             and control.get("requiredTool") is None
             and not list(control.get("allowedTools") or [])
-        )
-        direct_evidence_ready = bool(
-            not list(state.get("pendingGates") or [])
-            and str(recovery.get("status") or "").casefold()
-            in {"", "evidence_complete"}
             and control.get("authoritative") is True
-            and str(control.get("disposition") or "").casefold() == "continue"
-            and control.get("requiredTool") is None
-            and (
-                (
-                    str(source_ledger.get("planRevision") or "")
-                    == current_plan_revision
-                    and bool(source_files)
-                )
-                or (
-                    str(absent_ledger.get("planRevision") or "")
-                    == current_plan_revision
-                    and bool(absent_files)
-                )
-                or (
-                    str(last_outcome.get("status") or "").casefold() == "succeeded"
-                    and str(last_outcome.get("tool") or "") in evidence_tools
-                    and str(last_outcome.get("planRevision") or "")
-                    == current_plan_revision
-                    and str(last_outcome.get("activeSliceId") or "")
-                    == str(state.get("activeSliceId") or "")
-                )
-            )
         )
         readiness = derive_synthesis_readiness(state)
         state["synthesisReadiness"] = readiness
+        latch = control.get("synthesisLatch") if isinstance(control.get("synthesisLatch"), dict) else {}
+        authoritative_latch = bool(
+            synthesis_latch_matches(state, readiness)
+            and int(latch.get("controlEpoch") or -1) == int(control.get("epoch") or -2)
+            and str(latch.get("planRevision") or "") == str(readiness.get("planRevision") or "")
+            and str(latch.get("acceptedEvidenceHash") or "") == str(readiness.get("acceptedEvidenceHash") or "")
+            and str(latch.get("remainingFrontierHash") or "") == str(readiness.get("remainingFrontierHash") or "")
+            and latch.get("commitEligible") is True
+            and latch.get("pendingEvidenceObligation") is False
+        )
         synthesis_ready = bool(
             readiness["commitEligible"]
-            and (explicit_synthesis_ready or direct_evidence_ready)
-        )
-        synthesis_entry_mode = (
-            "explicit_evidence_complete"
-            if explicit_synthesis_ready
-            else "direct_evidence_final"
+            and explicit_synthesis_ready
+            and authoritative_latch
         )
         if not synthesis_ready:
-            outcome = {
-                "ok": False,
-                "errorCode": "SYNTHESIS_NOT_READY",
-                "error": (
-                    "The authoritative task control is not awaiting tool-free synthesis: "
-                    f"{readiness['reason']}."
-                ),
-                "synthesisReadiness": readiness,
-            }
-            return None
+            outcome = _synthesis_control_nack(
+                state,
+                {
+                    "errorCode": "SYNTHESIS_NOT_READY",
+                    "error": (
+                        "The authoritative task control is not awaiting tool-free synthesis: "
+                        f"{readiness['reason']}."
+                    ),
+                },
+                readiness=readiness,
+                transaction_id=transaction_id,
+                output_digest=digest,
+            )
+            return state
         if int(control.get("epoch") or 0) != observed_epoch:
-            outcome = _auth_refresh_failure(
+            outcome = _synthesis_control_nack(
+                state,
                 {
                     "ok": False,
                     "errorCode": "SYNTHESIS_CONTROL_STALE",
                     "error": "The synthesis control epoch is stale.",
                 },
-                state,
+                readiness=readiness,
+                transaction_id=transaction_id,
+                output_digest=digest,
             )
-            return None
+            return state
         if str(control.get("fingerprint") or "").casefold() != observed_fingerprint:
-            outcome = _auth_refresh_failure(
+            outcome = _synthesis_control_nack(
+                state,
                 {
                     "ok": False,
                     "errorCode": "SYNTHESIS_CONTROL_FINGERPRINT_STALE",
                     "error": "The synthesis control fingerprint is stale.",
                 },
-                state,
+                readiness=readiness,
+                transaction_id=transaction_id,
+                output_digest=digest,
             )
-            return None
+            return state
         if int(state.get("mutationGeneration") or 0) != observed_generation:
-            outcome = _auth_refresh_failure(
+            outcome = _synthesis_control_nack(
+                state,
                 {
                     "ok": False,
                     "errorCode": "SYNTHESIS_MUTATION_GENERATION_STALE",
                     "error": "The synthesis mutation generation is stale.",
                 },
-                state,
+                readiness=readiness,
+                transaction_id=transaction_id,
+                output_digest=digest,
             )
-            return None
+            return state
         committed_at = _utc_now()
         lifecycle = {
             "version": 2,
             "status": "committed",
-            "entryMode": synthesis_entry_mode,
+            "entryMode": "explicit_evidence_complete",
             "taskSessionId": task_session_id,
             "objectiveHash": objective_identity,
             "controlEpoch": observed_epoch,

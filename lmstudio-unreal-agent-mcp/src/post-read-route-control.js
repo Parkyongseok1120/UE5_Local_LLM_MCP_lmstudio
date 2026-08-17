@@ -6,6 +6,10 @@ const {
   pendingDirectEvidenceGate,
   taskAuthorizationForState,
 } = require("./task-auth.js");
+const {
+  commitControlTransition,
+  isSourceEvidenceTask,
+} = require("./task-control-transition.js");
 
 function postReadGatePayload(commitResult, toolName) {
   const state = commitResult?.state && typeof commitResult.state === "object"
@@ -13,14 +17,37 @@ function postReadGatePayload(commitResult, toolName) {
     : null;
   if (!state || String(state.status || "") !== "running") return null;
   const gateName = pendingDirectEvidenceGate(state, toolName);
-  const control = state.controlState && typeof state.controlState === "object"
+  let control = state.controlState && typeof state.controlState === "object"
     ? { ...state.controlState }
     : {};
   if (!gateName && control.authoritative !== true) return null;
-  const authoritative = Number(control.version || 0) >= 2 && control.authoritative === true;
-  const requiredName = String(
+  let authoritative = Number(control.version || 0) >= 2 && control.authoritative === true;
+  let requiredName = String(
     authoritative ? control.requiredTool?.name || "" : control.requiredTool?.name || gateName || ""
   );
+  const initialReadiness = state.synthesisReadiness && typeof state.synthesisReadiness === "object"
+    ? state.synthesisReadiness
+    : {};
+  if (
+    authoritative
+    && isSourceEvidenceTask(state)
+    && initialReadiness.ready === false
+    && !requiredName
+  ) {
+    // Defensive repair for mixed-version callers: a read result must never
+    // project a non-tool continuation while evidence is incomplete.
+    commitControlTransition(state);
+    control = state.controlState && typeof state.controlState === "object"
+      ? { ...state.controlState }
+      : control;
+    authoritative = Number(control.version || 0) >= 2 && control.authoritative === true;
+    requiredName = String(control.requiredTool?.name || "");
+  }
+  const projectedReadiness = state.synthesisReadiness && typeof state.synthesisReadiness === "object"
+    ? state.synthesisReadiness
+    : control.synthesisReadiness && typeof control.synthesisReadiness === "object"
+      ? control.synthesisReadiness
+      : {};
 
   const taskAuthorization = taskAuthorizationForState(state);
   const requiredArgs = control.requiredTool?.args && typeof control.requiredTool.args === "object"
@@ -40,11 +67,13 @@ function postReadGatePayload(commitResult, toolName) {
     inspectionProgress: state.inspectionProgress && typeof state.inspectionProgress === "object"
       ? state.inspectionProgress
       : undefined,
-    synthesisReadiness: state.synthesisReadiness && typeof state.synthesisReadiness === "object"
-      ? state.synthesisReadiness
+    synthesisReadiness: projectedReadiness
+      && typeof projectedReadiness === "object"
+      ? projectedReadiness
       : undefined,
     controlEpoch: Math.max(0, Number(state.controlEpoch || 0)),
-    nextAction: requiredName || "use_authoritative_control",
+    nextAction: requiredName
+      || (projectedReadiness.ready === false ? "evidence_recovery_blocked" : "use_authoritative_control"),
     nextActionIsTool: Boolean(requiredName),
     requiredNextTool: control.requiredTool || null,
     nextActionArgs: {
@@ -79,6 +108,9 @@ function modelTextProjection(structuredContent, toolName, sourceText) {
     ? structuredContent.control
     : {};
   const requiredName = String(control.requiredTool?.name || "");
+  const readiness = structuredContent.synthesisReadiness && typeof structuredContent.synthesisReadiness === "object"
+    ? structuredContent.synthesisReadiness
+    : {};
   return {
     ok: structuredContent.ok,
     status: structuredContent.status,
@@ -92,7 +124,8 @@ function modelTextProjection(structuredContent, toolName, sourceText) {
     control,
     taskAuthorization: structuredContent.taskAuthorization,
     toolRoute: currentRouteProjection(structuredContent.toolRoute),
-    nextAction: requiredName || "use_authoritative_control",
+    nextAction: requiredName
+      || (readiness.ready === false ? "evidence_recovery_blocked" : "use_authoritative_control"),
     nextActionIsTool: Boolean(requiredName),
     retryable: structuredContent.retryable,
     agentInstruction: structuredContent.agentInstruction,

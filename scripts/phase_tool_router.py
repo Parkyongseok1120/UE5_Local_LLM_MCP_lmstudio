@@ -13,7 +13,11 @@ from typing import Any
 
 from task_gate_history import failed_gate_attempt_for_current_scope
 from workspace_paths import filesystem_path_identity as shared_filesystem_path_identity
-from synthesis_readiness import derive_synthesis_readiness, synthesis_latch_matches
+from synthesis_readiness import (
+    derive_synthesis_readiness,
+    is_source_evidence_task,
+    synthesis_latch_matches,
+)
 
 ROUTE_VERSION = 1
 CONTROL_TRANSITION_VERSION = 2
@@ -505,6 +509,253 @@ def _pre_gate_source_read_path(
     return ""
 
 
+_SOURCE_DECLARATION_EXTENSIONS = frozenset({".h", ".hpp", ".inl"})
+_SOURCE_IMPLEMENTATION_EXTENSIONS = frozenset({".cpp", ".c", ".cc", ".cxx"})
+
+
+def _bounded_source_values(value: Any, limit: int = 64) -> list[Any]:
+    if isinstance(value, list):
+        return list(value[:limit])
+    if value is None:
+        return []
+    return [value]
+
+
+def _source_evidence_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
+    plan_revision = str(state.get("planRevision") or "")
+    rows: list[dict[str, Any]] = []
+    for field in ("sourceEvidence", "directSourceEvidence"):
+        ledger = state.get(field) if isinstance(state.get(field), dict) else {}
+        if str(ledger.get("planRevision") or "") != plan_revision:
+            continue
+        files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
+        for key, raw in files.items():
+            if not isinstance(raw, dict):
+                continue
+            path = _usable_route_file(raw.get("path") or key)
+            if path:
+                rows.append({**raw, "path": path})
+    return rows
+
+
+def _source_pair_header_candidates(source_path: Any) -> list[str]:
+    source_path = _usable_route_file(source_path)
+    suffix = os.path.splitext(source_path)[1].casefold()
+    if not source_path or suffix not in _SOURCE_IMPLEMENTATION_EXTENSIONS:
+        return []
+    stem = source_path[: -len(suffix)]
+    parts = [part for part in stem.replace("\\", "/").split("/") if part]
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        candidate = _usable_route_file(value)
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    source_index = max(
+        (index for index, part in enumerate(parts) if part.casefold() == "source"),
+        default=-1,
+    )
+    if source_index >= 0 and len(parts) > source_index + 2:
+        module_root = parts[: source_index + 2]
+        relative = parts[source_index + 2 :]
+        if relative and relative[0].casefold() in {"public", "private", "classes"}:
+            relative = relative[1:]
+        if relative:
+            for directory in ("Public", "Classes", ""):
+                prefix = [*module_root, directory] if directory else module_root
+                for declaration_suffix in (".h", ".hpp", ".inl"):
+                    add("/".join([*prefix, *relative]) + declaration_suffix)
+    parent = source_path.rsplit("/", 1)[0] if "/" in source_path else ""
+    basename = os.path.basename(stem)
+    for declaration_suffix in (".h", ".hpp", ".inl"):
+        add(
+            f"{parent}/{basename}{declaration_suffix}"
+            if parent
+            else f"{basename}{declaration_suffix}"
+        )
+    return candidates[:24]
+
+
+def _source_recovery_candidates(state: dict[str, Any]) -> list[str]:
+    progress = state.get("inspectionProgress") if isinstance(state.get("inspectionProgress"), dict) else {}
+    values: list[Any] = []
+    for container in (progress, state):
+        for key in (
+            "remainingFrontier",
+            "discoveredCandidates",
+            "discoveryCandidates",
+            "knownSourceCandidates",
+            "sourceCandidates",
+            "pairCandidates",
+            "declarationCandidates",
+        ):
+            values.extend(_bounded_source_values(container.get(key)))
+    discovery = state.get("inspectionDiscovery") if isinstance(state.get("inspectionDiscovery"), dict) else {}
+    for key in ("candidates", "paths", "files", "remainingFrontier"):
+        values.extend(_bounded_source_values(discovery.get(key)))
+    candidates: list[str] = []
+    for value in values:
+        if isinstance(value, dict):
+            value = value.get("path") or value.get("relativePath") or value.get("projectRelativePath")
+        candidate = _usable_route_file(value)
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates[:64]
+
+
+def _source_absent_paths(state: dict[str, Any]) -> set[str]:
+    absent = state.get("absentEvidence") if isinstance(state.get("absentEvidence"), dict) else {}
+    files = absent.get("files") if isinstance(absent.get("files"), dict) else {}
+    return {
+        _path_identity(row.get("path") if isinstance(row, dict) else key)
+        for key, row in files.items()
+        if _path_identity(row.get("path") if isinstance(row, dict) else key)
+    }
+
+
+def _next_evidence_recovery(
+    state: dict[str, Any],
+    readiness: dict[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    """Select one exact bounded evidence action when readiness is incomplete."""
+
+    if readiness.get("ready") is True:
+        return None
+    rows = _source_evidence_rows(state)
+    accepted = {
+        _path_identity(row.get("path"))
+        for row in rows
+        if _path_identity(row.get("path"))
+    }
+    absent = _source_absent_paths(state)
+
+    def usable_declaration(value: Any) -> str:
+        candidate = _usable_route_file(value)
+        identity = _path_identity(candidate)
+        if (
+            not candidate
+            or os.path.splitext(candidate)[1].casefold() not in _SOURCE_DECLARATION_EXTENSIONS
+            or identity in accepted
+            or identity in absent
+        ):
+            return ""
+        return candidate
+
+    for candidate in _source_recovery_candidates(state):
+        declaration = usable_declaration(candidate)
+        if declaration:
+            return "read_file", {"path": declaration}
+
+    implementations = [
+        row
+        for row in rows
+        if str(row.get("sourceKind") or "").casefold() == "implementation"
+        or os.path.splitext(str(row.get("path") or ""))[1].casefold()
+        in _SOURCE_IMPLEMENTATION_EXTENSIONS
+    ]
+    for row in implementations:
+        for key in (
+            "includePath",
+            "headerPath",
+            "declarationPath",
+            "includedHeader",
+            "includedHeaders",
+            "includePaths",
+            "pairCandidates",
+            "declarationCandidates",
+        ):
+            for value in _bounded_source_values(row.get(key)):
+                if isinstance(value, dict):
+                    value = value.get("path") or value.get("relativePath")
+                declaration = usable_declaration(value)
+                if declaration:
+                    return "read_file", {"path": declaration}
+        for candidate in _source_pair_header_candidates(row.get("path")):
+            declaration = usable_declaration(candidate)
+            if not declaration:
+                continue
+            root = _authoritative_project_root(state)
+            if root and os.path.isfile(os.path.join(root, declaration.replace("/", os.sep))):
+                return "read_file", {"path": declaration}
+
+        source_path = _usable_route_file(row.get("path"))
+        if source_path:
+            stem = os.path.splitext(os.path.basename(source_path))[0]
+            parts = source_path.split("/")
+            source_index = max(
+                (index for index, part in enumerate(parts) if part.casefold() == "source"),
+                default=-1,
+            )
+            search_path = (
+                "/".join(parts[: source_index + 2])
+                if source_index >= 0 and len(parts) > source_index + 1
+                else "Source"
+            )
+            return "search_files", {
+                "query": f"{stem}.h",
+                "path": search_path,
+                "regex": False,
+                "matchFileNames": True,
+                "maxResults": 8,
+            }
+
+    progress = state.get("inspectionProgress") if isinstance(state.get("inspectionProgress"), dict) else {}
+    frontier = progress.get("remainingFrontier") or state.get("remainingFrontier") or []
+    for value in frontier if isinstance(frontier, list) else []:
+        candidate = _usable_route_file(value)
+        identity = _path_identity(candidate)
+        if candidate and identity not in accepted and identity not in absent:
+            return "read_file", {"path": candidate}
+    return None
+
+
+def _prepare_synthesis_handoff(
+    state: dict[str, Any],
+    readiness: dict[str, Any],
+) -> bool:
+    """Publish the explicit server-owned synthesis latch once evidence is ready."""
+
+    if readiness.get("ready") is not True or not is_source_evidence_task(state):
+        return False
+    if str(state.get("status") or "running").casefold() != "running":
+        return False
+    if str(state.get("mode") or "").casefold() != "read_only":
+        return False
+    if pending_gates_for_state(state):
+        return False
+    recovery = state.get("recoveryObligation") if isinstance(state.get("recoveryObligation"), dict) else {}
+    recovery_status = str(recovery.get("status") or "").casefold()
+    if recovery_status not in {"", "evidence_complete"}:
+        return False
+    route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
+    if str(route.get("phase") or "").casefold() == "synthesis":
+        return False
+    action = state.get("postBudgetAction") if isinstance(state.get("postBudgetAction"), dict) else {}
+    if str(action.get("name") or "") == "synthesize_current_evidence":
+        return False
+    if not recovery_status:
+        state["recoveryObligation"] = {
+            "source": "evidence",
+            "status": "evidence_complete",
+            "scopeDisposition": "in_slice",
+            "errorCode": "EVIDENCE_COMPLETE",
+            "requiredTool": {},
+            "targetFiles": [],
+        }
+    state["postBudgetAction"] = {
+        "name": "synthesize_current_evidence",
+        "isTool": False,
+        "controlEpoch": _non_negative_int(state.get("controlEpoch")),
+        "planRevision": str(state.get("planRevision") or ""),
+        "acceptedEvidenceHash": str(readiness.get("acceptedEvidenceHash") or ""),
+        "remainingFrontierHash": str(readiness.get("remainingFrontierHash") or ""),
+        "remainingFrontierRequired": readiness.get("coverageIncomplete") is True,
+        "coverageIncomplete": readiness.get("coverageIncomplete") is True,
+    }
+    return True
+
+
 def validation_finding_recovery(
     first_finding: dict[str, Any],
 ) -> tuple[str, str, dict[str, Any], list[str]]:
@@ -950,6 +1201,32 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 # exclusively from persisted facts.
                 required_name = checkpoint_action
 
+        if (
+            status == "running"
+            and str(state.get("mode") or "").strip().casefold() == "read_only"
+            and is_source_evidence_task(state)
+            and synthesis_readiness.get("ready") is not True
+            and not required_name
+            and not blocker_code
+        ):
+            evidence_action = _next_evidence_recovery(state, synthesis_readiness)
+            if evidence_action:
+                required_name, required_args = evidence_action
+                retry_value = "once"
+            else:
+                disposition = "await_user"
+                retry_value = "forbidden"
+                blocker_code = "EVIDENCE_FRONTIER_LOST"
+                blocker_fingerprint = canonical_hash(
+                    {
+                        "taskSessionId": str(state.get("taskSessionId") or ""),
+                        "planRevision": str(state.get("planRevision") or ""),
+                        "acceptedEvidenceHash": str(synthesis_readiness.get("acceptedEvidenceHash") or ""),
+                        "remainingFrontierHash": str(synthesis_readiness.get("remainingFrontierHash") or ""),
+                        "reason": str(synthesis_readiness.get("reason") or ""),
+                    }
+                )
+
         if required_name == "static_validate_project":
             project_root = _authoritative_project_root(state)
             if project_root:
@@ -1045,12 +1322,53 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
 def commit_control_transition(state: dict[str, Any]) -> dict[str, Any]:
     """Persist control and advance epoch iff its semantic fingerprint changed."""
 
+    readiness = derive_synthesis_readiness(state)
+    _prepare_synthesis_handoff(state, readiness)
     control = derive_next_obligation(state)
+    control["synthesisReadiness"] = dict(readiness)
+    base_epoch = _non_negative_int(state.get("controlEpoch"))
+    control["synthesisReadiness"]["controlEpoch"] = base_epoch
+    if control.get("phase") == "synthesis" and readiness.get("ready") is True:
+        control["synthesisLatch"] = {
+            "version": 1,
+            "name": "synthesize_current_evidence",
+            "controlEpoch": base_epoch,
+            "planRevision": str(readiness.get("planRevision") or ""),
+            "acceptedEvidenceHash": str(readiness.get("acceptedEvidenceHash") or ""),
+            "remainingFrontierHash": str(readiness.get("remainingFrontierHash") or ""),
+            "commitEligible": True,
+            "pendingEvidenceObligation": False,
+        }
+    previous_control = state.get("controlState") if isinstance(state.get("controlState"), dict) else {}
+
+    def semantic_view(value: dict[str, Any]) -> dict[str, Any]:
+        material = deepcopy(value)
+        material.pop("epoch", None)
+        material.pop("fingerprint", None)
+        readiness_value = material.get("synthesisReadiness")
+        if isinstance(readiness_value, dict):
+            readiness_value.pop("controlEpoch", None)
+        latch_value = material.get("synthesisLatch")
+        if isinstance(latch_value, dict):
+            latch_value.pop("controlEpoch", None)
+        return material
+
     fingerprint = canonical_hash(control)
     previous = str(state.get("controlFingerprint") or "")
-    epoch = _non_negative_int(state.get("controlEpoch"))
-    if fingerprint != previous:
+    semantic_changed = bool(previous_control)
+    if semantic_changed:
+        semantic_changed = canonical_hash(semantic_view(control)) != canonical_hash(
+            semantic_view(previous_control)
+        )
+    else:
+        semantic_changed = bool(fingerprint != previous)
+    epoch = base_epoch
+    if semantic_changed:
         epoch += 1
+    control["synthesisReadiness"]["controlEpoch"] = epoch
+    if control.get("phase") == "synthesis" and readiness.get("ready") is True:
+        control["synthesisLatch"]["controlEpoch"] = epoch
+    fingerprint = canonical_hash(control)
     control["epoch"] = epoch
     control["fingerprint"] = fingerprint
     state["controlEpoch"] = epoch

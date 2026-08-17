@@ -12,6 +12,27 @@ POLICY = json.loads(
     .read_text(encoding="utf-8")
 )
 
+SOURCE_EVIDENCE_TASK_KINDS = frozenset(
+    {
+        *(str(item).casefold() for item in POLICY.get("directEvidenceTaskKinds", [])),
+        "source_analysis",
+    }
+)
+
+
+def is_source_evidence_task(state: dict[str, Any] | None) -> bool:
+    """Return whether source-evidence liveness controls apply to this task."""
+
+    value = state if isinstance(state, dict) else {}
+    task_kind = str(value.get("taskKind") or "").strip().casefold()
+    if task_kind in SOURCE_EVIDENCE_TASK_KINDS:
+        return True
+    contract = value.get("inspectionContract") if isinstance(value.get("inspectionContract"), dict) else {}
+    if str(contract.get("intent") or "").strip().casefold() in SOURCE_EVIDENCE_TASK_KINDS:
+        return True
+    repository_audit = value.get("repoAuditLedger") if isinstance(value.get("repoAuditLedger"), dict) else {}
+    return repository_audit.get("required") is True
+
 
 def _hash(value: Any) -> str:
     return hashlib.sha256(

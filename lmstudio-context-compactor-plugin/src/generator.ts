@@ -289,7 +289,7 @@ function checkpointLifecycleIdentity(checkpoint: any): {
 
 function lifecycleState(
   checkpoint: any,
-  status: "pending" | "prepared" | "completed" | "commit_sent" | "commit_acked" | "committed" | "delivered",
+  status: "pending" | "prepared" | "completed" | "commit_sent" | "commit_acked" | "committed" | "delivered" | "rejected_stale" | "evidence_recovery",
   options: { outputDigest?: string; stopReason?: string } = {},
 ): any {
   return {
@@ -586,6 +586,97 @@ function createToolCallCallbackFsm(): {
   };
 }
 
+function authoritativeSynthesisFinality(control: any, checkpoint: any): {
+  eligible: boolean;
+  reason: string;
+} {
+  const readiness = control?.synthesisReadiness;
+  const latch = control?.synthesisLatch;
+  const controlEpoch = Number(control?.epoch);
+  const planRevision = String(control?.planRevision || "").trim();
+  const sourceEvidencePlanRevision = String(
+    readiness?.sourceEvidencePlanRevision || checkpoint?.sourceEvidence?.planRevision || "",
+  ).trim();
+  const checkpointReadiness = checkpoint?.synthesisReadiness;
+  const hashesMatch = Boolean(
+    /^[a-f0-9]{64}$/.test(String(readiness?.acceptedEvidenceHash || ""))
+    && String(readiness.acceptedEvidenceHash) === String(latch?.acceptedEvidenceHash)
+    && /^[a-f0-9]{64}$/.test(String(readiness?.remainingFrontierHash || ""))
+    && String(readiness.remainingFrontierHash) === String(latch?.remainingFrontierHash),
+  );
+  const eligible = Boolean(
+    String(control?.phase || "").trim().toLowerCase() === "synthesis"
+    && String(control?.disposition || "").trim().toLowerCase() === "continue"
+    && !control?.requiredTool
+    && Array.isArray(control?.allowedTools)
+    && control.allowedTools.length === 0
+    && (!Array.isArray(control?.pendingGates) || control.pendingGates.length === 0)
+    && readiness
+    && readiness.ready === true
+    && readiness.commitEligible === true
+    && readiness.pendingEvidenceObligation === false
+    && latch
+    && Number(latch.version) === 1
+    && String(latch.name || "") === "synthesize_current_evidence"
+    && Number.isInteger(controlEpoch)
+    && controlEpoch >= 0
+    && Number(readiness.controlEpoch) === controlEpoch
+    && Number(latch.controlEpoch) === controlEpoch
+    && planRevision
+    && String(readiness.planRevision || "") === planRevision
+    && String(latch.planRevision || "") === planRevision
+    && (!sourceEvidencePlanRevision || sourceEvidencePlanRevision === planRevision)
+    && (!checkpointReadiness || (
+      String(checkpointReadiness.planRevision || "") === planRevision
+      && String(checkpointReadiness.acceptedEvidenceHash || "") === String(readiness.acceptedEvidenceHash)
+      && String(checkpointReadiness.remainingFrontierHash || "") === String(readiness.remainingFrontierHash)
+    ))
+    && hashesMatch
+    && latch.commitEligible === true
+    && latch.pendingEvidenceObligation === false
+  );
+  if (eligible) return { eligible: true, reason: "authoritative_synthesis_latch_valid" };
+  if (String(control?.phase || "").trim().toLowerCase() !== "synthesis") {
+    return { eligible: false, reason: "server_phase_not_synthesis" };
+  }
+  if (control?.requiredTool || (Array.isArray(control?.allowedTools) && control.allowedTools.length > 0)) {
+    return { eligible: false, reason: "authoritative_tool_obligation_present" };
+  }
+  if (readiness?.ready !== true || readiness?.commitEligible !== true) {
+    return { eligible: false, reason: "synthesis_readiness_not_committable" };
+  }
+  return { eligible: false, reason: "synthesis_latch_identity_mismatch" };
+}
+
+function preparedSynthesisRecord(
+  checkpoint: any,
+  output: string,
+  outputDigest: string,
+  synthesisTransactionId: string,
+  control: any,
+): any {
+  return {
+    version: 1,
+    status: "prepared",
+    output,
+    outputDigest,
+    synthesisTransactionId,
+    taskSessionId: String(control?.taskSessionId || "").trim(),
+    objectiveHash: String(checkpoint?.objectiveHash || "").trim().toLowerCase(),
+    controlEpoch: Number(control?.epoch),
+    controlFingerprint: String(control?.controlFingerprint || control?.fingerprint || "").trim().toLowerCase(),
+    planRevision: String(control?.planRevision || control?.synthesisReadiness?.planRevision || "").trim(),
+    acceptedEvidenceHash: String(control?.synthesisReadiness?.acceptedEvidenceHash || "").trim().toLowerCase(),
+    remainingFrontierHash: String(control?.synthesisReadiness?.remainingFrontierHash || "").trim().toLowerCase(),
+    mutationGeneration: Math.max(0, Number(control?.mutationGeneration ?? checkpoint?.mutationGeneration ?? 0)),
+    preparedAt: isoNow(),
+    dispatchedAt: "",
+    rejectedAt: "",
+    rejectionCode: "",
+    staleReason: "",
+  };
+}
+
 type HostToolCallStage = "start" | "name" | "args" | "end" | "failure";
 
 type HostToolCallLifecycleEvent = {
@@ -803,6 +894,27 @@ function createHostToolCallTransactionManager(options: {
       order.shift();
     }
   };
+  const validateTransactionIdentity = (
+    event: HostToolCallLifecycleEvent,
+    transaction: HostToolCallTransaction,
+  ): void => {
+    const identityFields: Array<[string, unknown, unknown]> = [
+      ["predictionAttemptId", event.predictionAttemptId, transaction.predictionAttemptId],
+      ["modelLocalCallId", event.modelLocalCallId, transaction.modelLocalCallId],
+      ["rawToolCallId", event.rawToolCallId, transaction.rawToolCallId],
+      ["source", event.source, transaction.source],
+    ];
+    for (const [field, incomingValue, existingValue] of identityFields) {
+      const incoming = text(incomingValue, 240);
+      const existing = text(existingValue, 240);
+      if (incoming && existing && incoming !== existing) {
+        anomaly(
+          event,
+          `Conflicting ${field} for host tool-call ${transaction.hostToolCallId}.`,
+        );
+      }
+    }
+  };
   const record = (event: HostToolCallLifecycleEvent): boolean => {
     const hostToolCallId = eventHostId(event);
     if (!active) {
@@ -854,6 +966,7 @@ function createHostToolCallTransactionManager(options: {
         );
       }
     }
+    validateTransactionIdentity(event, transaction);
     if (transaction.terminal) {
       const replayIdentity = event.durableIdentity === true
         || /(?:^|_)replay$/u.test(text(event.source || "", 80));
@@ -1036,12 +1149,30 @@ function createHostToolCallTransactionManager(options: {
   };
 }
 
-function emitToolLifecycleEvent(ctl: GeneratorController, event: any): void {
-  if (event.kind === "start") ctl.toolCallGenerationStarted({ toolCallId: event.toolCallId });
-  else if (event.kind === "name") ctl.toolCallGenerationNameReceived(event.name);
-  else if (event.kind === "args") ctl.toolCallGenerationArgumentFragmentGenerated(event.content);
-  else if (event.kind === "end") ctl.toolCallGenerationEnded(event.request);
-  else if (event.kind === "failure") ctl.toolCallGenerationFailed(new Error(event.error));
+type HostFacingLifecycleCounts = {
+  start: number;
+  name: number;
+  args: number;
+  end: number;
+  failure: number;
+};
+
+function emitToolLifecycleEvent(
+  ctl: GeneratorController,
+  event: any,
+  onHostFacingEmit?: (event: any) => void,
+): void {
+  const kind = String(event?.kind || "");
+  if (!["start", "name", "args", "end", "failure"].includes(kind)) return;
+  // Count at the actual LM Studio callback boundary.  Transaction acceptance
+  // is intentionally not used here: buffered events are not host-facing until
+  // this function is reached during the durable flush.
+  onHostFacingEmit?.(event);
+  if (kind === "start") ctl.toolCallGenerationStarted({ toolCallId: event.toolCallId });
+  else if (kind === "name") ctl.toolCallGenerationNameReceived(event.name);
+  else if (kind === "args") ctl.toolCallGenerationArgumentFragmentGenerated(event.content);
+  else if (kind === "end") ctl.toolCallGenerationEnded(event.request);
+  else if (kind === "failure") ctl.toolCallGenerationFailed(new Error(event.error));
 }
 
 function debugAgentLog(hypothesisId: string, location: string, message: string, data: Record<string, unknown>) {
@@ -3840,7 +3971,7 @@ function reconcilePendingToolCalls(pendingCalls: any[], currentSnapshots: any[])
   return { remainingPending, matchedIds, matchedCalls, abandonedIds };
 }
 
-function synthesisCommitAcknowledged(result: any, pending: any): boolean {
+function synthesisCommitAcknowledged(result: any, pending: any, prepared: any = null): boolean {
   if (!core.toolResultSucceeded(result)) return false;
   const args = pending?.arguments && typeof pending.arguments === "object"
     ? pending.arguments
@@ -3848,7 +3979,11 @@ function synthesisCommitAcknowledged(result: any, pending: any): boolean {
   const expectedTask = String(args?.taskAuthorization?.taskSessionId || "").trim();
   const expectedDigest = String(args.outputDigest || "").trim().toLowerCase();
   const expectedEpoch = Number(args.controlEpoch);
-  const preparedOutput = String(pending?.preparedSynthesisOutput || "");
+  const preparedOutput = String(
+    pending?.preparedSynthesisOutput
+    || prepared?.output
+    || "",
+  );
   if (!preparedOutput || core.sha256(preparedOutput) !== expectedDigest) return false;
   for (const payload of core.parseJsonObjects(result?.content || "")) {
     const lifecycle = payload?.synthesisLifecycle && typeof payload.synthesisLifecycle === "object"
@@ -3864,6 +3999,40 @@ function synthesisCommitAcknowledged(result: any, pending: any): boolean {
     ) return true;
   }
   return false;
+}
+
+function applyAuthoritativeControlFromSynthesisResult(
+  messages: ChatMessage[],
+  checkpoint: any,
+  result: any,
+): any | null {
+  const payloads = core.parseJsonObjects(result?.content || "");
+  if (!payloads.some((payload: any) => core.compactServerControl(payload?.control))) return null;
+  let projection: any;
+  try {
+    projection = core.buildCheckpoint(messages, checkpoint || {}, { maxCheckpointFacts: 32 });
+  } catch {
+    return null;
+  }
+  const control = core.compactServerControl(projection?.serverControl);
+  if (!control) return null;
+  checkpoint.serverControl = control;
+  checkpoint.protocolControl = projection.protocolControl || null;
+  checkpoint.requiredNextTool = projection.requiredNextTool || null;
+  checkpoint.requiredNextToolRef = projection.requiredNextTool?.reference || null;
+  checkpoint.requiredNextToolArgs = projection.requiredNextTool?.args || null;
+  checkpoint.toolRoute = projection.toolRoute || null;
+  checkpoint.taskRouteOwnership = projection.taskRouteOwnership || checkpoint.taskRouteOwnership || null;
+  checkpoint.synthesisReadiness = projection.synthesisReadiness || control.synthesisReadiness || null;
+  checkpoint.mutationGeneration = Math.max(
+    Number(checkpoint.mutationGeneration || 0),
+    Number(projection.mutationGeneration || 0),
+    Number(control.mutationGeneration || 0),
+  );
+  checkpoint.diagnostics = Array.isArray(projection.diagnostics)
+    ? projection.diagnostics.slice(-64)
+    : checkpoint.diagnostics;
+  return control;
 }
 
 async function generate(ctl: GeneratorController, history: Chat): Promise<void> {
@@ -3952,16 +4121,39 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const directToolCallRequestId = (prefix: string, discriminator: unknown = "0"): string => (
     `${prefix}-${outerGenerateRequestId}-${String(discriminator || "0")}`.slice(0, 240)
   );
+  const hostFacingLifecycleCounts: HostFacingLifecycleCounts = {
+    start: 0,
+    name: 0,
+    args: 0,
+    end: 0,
+    failure: 0,
+  };
+  const observeHostFacingLifecycleEvent = (event: any): void => {
+    const kind = String(event?.kind || "");
+    if (kind === "start") hostFacingLifecycleCounts.start += 1;
+    else if (kind === "name") hostFacingLifecycleCounts.name += 1;
+    else if (kind === "args") hostFacingLifecycleCounts.args += 1;
+    else if (kind === "end") hostFacingLifecycleCounts.end += 1;
+    else if (kind === "failure") hostFacingLifecycleCounts.failure += 1;
+  };
+  const emitHostFacingLifecycleEvent = (event: any): void => {
+    emitToolLifecycleEvent(ctl, event, observeHostFacingLifecycleEvent);
+  };
   const hostToolCallLifecycleDiagnostics: HostToolCallLifecycleDiagnostic[] = [];
   const hostToolCallLifecycle = createHostToolCallTransactionManager({
     outerGenerateRequestId,
-    emit: (event) => emitToolLifecycleEvent(ctl, event),
+    emit: emitHostFacingLifecycleEvent,
     onDiagnostic: (diagnostic) => {
       hostToolCallLifecycleDiagnostics.push(diagnostic);
       while (hostToolCallLifecycleDiagnostics.length > 256) {
         hostToolCallLifecycleDiagnostics.shift();
       }
     },
+  });
+  const hostToolCallLifecycleSnapshot = (): any => ({
+    ...hostToolCallLifecycle.snapshot(),
+    lmStudioLifecycleEventCounts: { ...hostFacingLifecycleCounts },
+    lmStudioNameEventCount: hostFacingLifecycleCounts.name,
   });
 
   const deliverAcknowledgedSynthesis = async (): Promise<boolean> => {
@@ -3975,6 +4167,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     const output = String(delivery.output);
     const outputDigest = String(delivery.outputDigest || "");
     ctl.fragmentGenerated(output, { reasoningType: "none" });
+    if (checkpoint?.preparedSynthesis && typeof checkpoint.preparedSynthesis === "object") {
+      checkpoint.preparedSynthesis = {
+        ...checkpoint.preparedSynthesis,
+        status: "delivered",
+      };
+    }
     checkpoint.synthesisState = lifecycleState(checkpoint, "delivered", {
       outputDigest,
       stopReason: "synthesis_delivery_after_ack",
@@ -4001,6 +4199,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ...(checkpoint?.pendingToolCall ? [checkpoint.pendingToolCall] : []),
   ];
   let synthesisCommitRejected = false;
+  let synthesisNackControlApplied = false;
   if (checkpoint && unresolvedPendingCalls.length > 0) {
     const currentSnapshots = core.snapshotMessages(messages);
     const { remainingPending, matchedIds, matchedCalls, abandonedIds } = reconcilePendingToolCalls(
@@ -4015,13 +4214,24 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         || match.pending?.arguments?.outputDigest
         || "",
       );
-      if (synthesisCommitAcknowledged(match.result, match.pending)) {
+      if (synthesisCommitAcknowledged(match.result, match.pending, checkpoint?.preparedSynthesis)) {
         checkpoint.synthesisState = lifecycleState(checkpoint, "commit_acked", {
           outputDigest,
           stopReason: "authoritative_commit_ack",
         });
+        if (checkpoint?.preparedSynthesis && typeof checkpoint.preparedSynthesis === "object") {
+          checkpoint.preparedSynthesis = {
+            ...checkpoint.preparedSynthesis,
+            status: "commit_acked",
+            dispatchedAt: String(checkpoint.preparedSynthesis.dispatchedAt || isoNow()),
+          };
+        }
         checkpoint.synthesisDelivery = {
-          output: String(match.pending?.preparedSynthesisOutput || "").slice(0, 131_072),
+          output: String(
+            match.pending?.preparedSynthesisOutput
+            || checkpoint?.preparedSynthesis?.output
+            || "",
+          ).slice(0, 131_072),
           outputDigest,
           transactionId: String(
             match.pending?.arguments?.synthesisTransactionId
@@ -4037,19 +4247,112 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           toolCallId: String(match.pending?.id || ""),
         });
       } else {
-        // A transport result without the authoritative digest-bound ACK is a
-        // failed commit, even if the transport itself did not set isError.
-        checkpoint.synthesisState = lifecycleState(checkpoint, "prepared", {
+        // A semantic NACK is a durable control transition, not a transport
+        // failure.  Keep the prepared bytes independently of pendingToolCalls,
+        // ingest the complete authoritative v2 route, and let the next turn
+        // execute that exact recovery action instead of retrying this tx.
+        const resultPayloads = core.parseJsonObjects(match.result?.content || "");
+        const nackPayload = [...resultPayloads].reverse().find((payload: any) => (
+          String(payload?.errorCode || payload?.code || "").trim()
+          || core.compactServerControl(payload?.control)
+        )) || {};
+        const authoritativeControl = applyAuthoritativeControlFromSynthesisResult(
+          messages,
+          checkpoint,
+          match.result,
+        );
+        synthesisNackControlApplied = synthesisNackControlApplied || Boolean(authoritativeControl);
+        const pendingOutput = String(match.pending?.preparedSynthesisOutput || "");
+        const pendingDigest = String(
+          match.pending?.preparedSynthesisOutputDigest
+          || match.pending?.arguments?.outputDigest
+          || (pendingOutput ? core.sha256(pendingOutput) : outputDigest)
+          || "",
+        ).trim().toLowerCase();
+        const controlForPrepared = authoritativeControl || core.compactServerControl(checkpoint?.serverControl) || {};
+        const preparedCandidate = checkpoint?.preparedSynthesis && typeof checkpoint.preparedSynthesis === "object"
+          ? checkpoint.preparedSynthesis
+          : {
+            version: 1,
+            status: "prepared",
+            output: pendingOutput,
+            outputDigest: pendingDigest,
+            synthesisTransactionId: String(
+              match.pending?.arguments?.synthesisTransactionId
+              || match.pending?.id
+              || "",
+            ).trim().toLowerCase(),
+            taskSessionId: String(
+              controlForPrepared?.taskSessionId
+              || match.pending?.arguments?.taskAuthorization?.taskSessionId
+              || "",
+            ).trim(),
+            objectiveHash: String(
+              match.pending?.arguments?.objectiveHash
+              || checkpoint?.objectiveHash
+              || "",
+            ).trim().toLowerCase(),
+            controlEpoch: Number(
+              controlForPrepared?.epoch
+              ?? match.pending?.arguments?.controlEpoch
+              ?? 0,
+            ),
+            controlFingerprint: String(
+              controlForPrepared?.controlFingerprint
+              || match.pending?.arguments?.controlFingerprint
+              || "",
+            ).trim().toLowerCase(),
+            planRevision: String(
+              controlForPrepared?.planRevision
+              || controlForPrepared?.synthesisReadiness?.planRevision
+              || "",
+            ).trim(),
+            acceptedEvidenceHash: String(
+              controlForPrepared?.synthesisReadiness?.acceptedEvidenceHash || "",
+            ).trim().toLowerCase(),
+            remainingFrontierHash: String(
+              controlForPrepared?.synthesisReadiness?.remainingFrontierHash || "",
+            ).trim().toLowerCase(),
+            mutationGeneration: Math.max(
+              0,
+              Number(controlForPrepared?.mutationGeneration ?? checkpoint?.mutationGeneration ?? 0),
+            ),
+            preparedAt: isoNow(),
+          };
+        const rejectionCode = String(
+          nackPayload?.errorCode
+          || nackPayload?.code
+          || "SYNTHESIS_NOT_READY",
+        ).trim().slice(0, 120);
+        const rejectedPrepared = {
+          ...preparedCandidate,
+          status: "rejected_stale",
+          outputDigest: pendingDigest || String(preparedCandidate.outputDigest || "").trim().toLowerCase(),
+          rejectedAt: isoNow(),
+          rejectionCode,
+          staleReason: String(
+            nackPayload?.error
+            || nackPayload?.message
+            || "authoritative synthesis control rejected the prepared transaction",
+          ).slice(0, 160),
+        };
+        if (core.compactPreparedSynthesis(rejectedPrepared)) {
+          checkpoint.preparedSynthesis = rejectedPrepared;
+        }
+        checkpoint.synthesisState = lifecycleState(checkpoint, "rejected_stale", {
           outputDigest,
-          stopReason: "synthesis_commit_not_acked",
+          stopReason: `synthesis_commit_${rejectionCode.toLowerCase()}`,
         });
         checkpoint.synthesisDelivery = null;
         synthesisCommitRejected = true;
         await appendEventBestEffort(sessionId, {
-          type: "synthesis_commit_rejected",
+          type: "synthesis_commit_nack",
           at: isoNow(),
           outputDigest,
           toolCallId: String(match.pending?.id || ""),
+          errorCode: rejectionCode,
+          controlEpoch: Number(authoritativeControl?.epoch ?? checkpoint?.serverControl?.epoch ?? 0),
+          requiredTool: authoritativeControl?.requiredTool?.name || null,
         });
       }
     }
@@ -4078,9 +4381,20 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     unresolvedPendingCalls = remainingPending;
     if (await deliverAcknowledgedSynthesis()) return;
     if (synthesisCommitRejected) {
-      throw new Error(
-        "Authoritative synthesis commit was not acknowledged. Final output remains prepared and resumable; refresh task control before retrying.",
-      );
+      if (!synthesisNackControlApplied) {
+        throw new Error(
+          "Synthesis commit was rejected without a complete authoritative v2 control envelope; final output was withheld.",
+        );
+      }
+      await appendEventBestEffort(sessionId, {
+        type: "synthesis_nack_recovery_ready",
+        at: isoNow(),
+        nextRequiredTool: checkpoint?.requiredNextTool?.name || null,
+        controlEpoch: Number(checkpoint?.serverControl?.epoch || 0),
+        outputDurable: Boolean(core.compactPreparedSynthesis(checkpoint?.preparedSynthesis)),
+        sameTransactionRetry: false,
+      });
+      return;
     }
   }
 
@@ -6236,11 +6550,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     || Boolean(config.rejectTruncatedPredictions);
   const emitEvent = (event: any) => {
     if (event.kind === "fragment") ctl.fragmentGenerated(event.content, event.opts);
-    else if (event.kind === "start") ctl.toolCallGenerationStarted({ toolCallId: event.toolCallId });
-    else if (event.kind === "name") ctl.toolCallGenerationNameReceived(event.name);
-    else if (event.kind === "args") ctl.toolCallGenerationArgumentFragmentGenerated(event.content);
-    else if (event.kind === "end") ctl.toolCallGenerationEnded(event.request);
-    else if (event.kind === "failure") ctl.toolCallGenerationFailed(new Error(event.error));
+    else if (
+      event.kind === "start"
+      || event.kind === "name"
+      || event.kind === "args"
+      || event.kind === "end"
+      || event.kind === "failure"
+    ) emitHostFacingLifecycleEvent(event);
   };
   let streamedReasoningEventCount = 0;
   let reasoningTokensObserved = 0;
@@ -7112,7 +7428,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       recoveryAttempt: Boolean(recoveryKind),
       recoveryKind,
       architectureFinalRecoveryAttempt: recoveryKind.startsWith("architecture_"),
-      hostToolCallLifecycle: hostToolCallLifecycle.snapshot(),
+      hostToolCallLifecycle: hostToolCallLifecycleSnapshot(),
       hostToolCallLifecycleDiagnostics: hostToolCallLifecycle.diagnostics().slice(-64),
     });
   };
@@ -7775,21 +8091,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     "unreal_task_commit_synthesis",
     tool?.function?.name || tool?.name || "",
   ));
-  const directReadOnlyFinal = Boolean(
-    String(serverControlV2?.taskMode || "").trim().toLowerCase() === "read_only"
-    && String(serverControlV2?.disposition || "").trim().toLowerCase() === "continue"
-    && !serverControlV2?.requiredTool
-  );
-  const explicitSynthesisFinal = Boolean(
-    String(serverControlV2?.phase || "").trim().toLowerCase() === "synthesis"
-    && !serverControlV2?.requiredTool
-    && Array.isArray(serverControlV2?.allowedTools)
-    && serverControlV2.allowedTools.length === 0
-  );
+  const synthesisFinality = authoritativeSynthesisFinality(serverControlV2, nextCheckpoint);
+  const explicitSynthesisFinal = synthesisFinality.eligible;
   const synthesisCommitRequired = Boolean(
     !detachedSideQueryActive
     && serverControlV2Active
-    && (explicitSynthesisFinal || directReadOnlyFinal)
+    && explicitSynthesisFinal
     && requests.length === 0
     && events.some((event: any) => (
       event?.kind === "fragment"
@@ -7816,9 +8123,48 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       type: "synthesis_commit_blocked",
       at: isoNow(),
       reason: "commit_tool_unavailable",
+      finality: synthesisFinality.reason,
     });
     throw new Error(
       "Read-only synthesis output was not emitted because unreal_task_commit_synthesis is missing from the active tool catalog. Refresh the MCP tool catalog and retry the same task.",
+    );
+  }
+  const synthesisTextPresent = events.some((event: any) => (
+    event?.kind === "fragment"
+    && String(event?.opts?.reasoningType || "none") === "none"
+    && String(event?.content || "").length > 0
+  ));
+  const invalidReadOnlySynthesisFinal = Boolean(
+    !detachedSideQueryActive
+    && serverControlV2Active
+    && (
+      String(serverControlV2?.taskMode || "").trim().toLowerCase() === "read_only"
+      || String(serverControlV2?.phase || "").trim().toLowerCase() === "synthesis"
+    )
+    && !explicitSynthesisFinal
+    && !serverControlV2?.requiredTool
+    && requests.length === 0
+    && synthesisTextPresent
+  );
+  if (invalidReadOnlySynthesisFinal) {
+    nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "evidence_recovery", {
+      outputDigest: predictionOutputDigest(events, requests),
+      stopReason: `synthesis_finality_blocked_${synthesisFinality.reason}`,
+    });
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "synthesis_finality_blocked",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "synthesis_finality_blocked",
+      at: isoNow(),
+      reason: synthesisFinality.reason,
+      outputWithheld: true,
+    });
+    throw new Error(
+      `Read-only final output was withheld because the authoritative server phase is not a valid synthesis latch (${synthesisFinality.reason}).`,
     );
   }
   if (synthesisCommitEligible) {
@@ -7873,6 +8219,29 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       authoritativeGoal,
       toolDefinitions,
     );
+    const durablePreparedSynthesis = preparedSynthesisRecord(
+      nextCheckpoint,
+      preparedSynthesisOutput,
+      outputDigest,
+      synthesisTransactionId,
+      serverControlV2,
+    );
+    if (!core.compactPreparedSynthesis(durablePreparedSynthesis)) {
+      throw new Error(
+        "Synthesis output could not be represented by the durable identity envelope; commit was withheld.",
+      );
+    }
+    nextCheckpoint.preparedSynthesis = durablePreparedSynthesis;
+    nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "prepared", {
+      outputDigest,
+      stopReason: "synthesis_commit_prepared",
+    });
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "synthesis_prepared_durable",
+    );
     synthesisCommitCallId = Math.max(
       1_000_000,
       ...requests.map((entry: any) => Number(entry?.callId || 0) + 1),
@@ -7887,10 +8256,6 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       request,
       hostToolCallId,
       serverOwnedSynthesisCommit: true,
-    });
-    nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "prepared", {
-      outputDigest,
-      stopReason: "synthesis_commit_prepared",
     });
     await appendEventBestEffort(sessionId, {
       type: "synthesis_commit_prepared",
@@ -8105,6 +8470,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       pending.dispatchIntentAt = isoNow();
       pending.dispatchAttempt = Math.max(0, Number(pending.dispatchAttempt || 0)) + 1;
     }
+    if (
+      synthesisCommitAccepted
+      && nextCheckpoint?.preparedSynthesis
+      && typeof nextCheckpoint.preparedSynthesis === "object"
+    ) {
+      nextCheckpoint.preparedSynthesis = {
+        ...nextCheckpoint.preparedSynthesis,
+        status: "commit_sent",
+        dispatchedAt: isoNow(),
+      };
+    }
     await persistCheckpoint(
       sessionId,
       nextCheckpoint,
@@ -8145,7 +8521,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           `Tool call rejected by control plane: ${verdict.reason}`,
         );
         if (replaced) emitEvent(event);
-        else ctl.toolCallGenerationFailed(new Error(`Tool call rejected by control plane: ${verdict.reason}`));
+        else emitEvent({
+          ...event,
+          kind: "failure",
+          error: `Tool call rejected by control plane: ${verdict.reason}`,
+        });
       }
   }
   const committedOutputDigest = predictionOutputDigest(events, acceptedRequests);
@@ -8194,7 +8574,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     toolRequestCount: requests.length,
     outputCommitted: !synthesisCommitAccepted,
     synthesisCommitSent: synthesisCommitAccepted,
-    hostToolCallLifecycle: hostToolCallLifecycle.snapshot(),
+    hostToolCallLifecycle: hostToolCallLifecycleSnapshot(),
     hostToolCallLifecycleDiagnostics: hostToolCallLifecycle.diagnostics().slice(-64),
   });
 }

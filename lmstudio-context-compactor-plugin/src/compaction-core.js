@@ -60,10 +60,14 @@ const CHECKPOINT_LIFECYCLE_STATUSES = new Set([
   "commit_acked",
   "committed",
   "delivered",
+  "rejected_stale",
+  "evidence_recovery",
 ]);
 const CHECKPOINT_LIFECYCLE_STATUS_RANK = Object.freeze({
   pending: 0,
+  evidence_recovery: 0,
   prepared: 1,
+  rejected_stale: 1,
   completed: 2,
   commit_sent: 2,
   commit_acked: 3,
@@ -687,6 +691,122 @@ function parseJsonObjects(text) {
   return values;
 }
 
+function compactSynthesisReadiness(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const planRevision = String(value.planRevision || "").slice(0, 160);
+  const sourcePlanRevision = String(value.sourceEvidencePlanRevision || "").slice(0, 160);
+  const acceptedEvidenceHash = String(value.acceptedEvidenceHash || "").trim().toLowerCase();
+  const remainingFrontierHash = String(value.remainingFrontierHash || "").trim().toLowerCase();
+  const controlEpoch = Number(value.controlEpoch);
+  if (
+    typeof value.ready !== "boolean"
+    || typeof value.commitEligible !== "boolean"
+    || typeof value.pendingEvidenceObligation !== "boolean"
+    || !Number.isInteger(controlEpoch)
+    || controlEpoch < 0
+    || !/^[a-f0-9]{64}$/.test(acceptedEvidenceHash)
+    || !/^[a-f0-9]{64}$/.test(remainingFrontierHash)
+    || !planRevision
+  ) return null;
+  return {
+    version: 1,
+    ready: value.ready === true,
+    commitEligible: value.commitEligible === true,
+    pendingEvidenceObligation: value.pendingEvidenceObligation === true,
+    reason: String(value.reason || "").slice(0, 96),
+    planRevision,
+    sourceEvidencePlanRevision: sourcePlanRevision,
+    controlEpoch,
+    acceptedEvidenceHash,
+    remainingFrontierHash,
+    acceptedDirectEvidenceCount: Math.max(0, Number(value.acceptedDirectEvidenceCount || 0)),
+    declarationCount: Math.max(0, Number(value.declarationCount || 0)),
+    implementationCount: Math.max(0, Number(value.implementationCount || 0)),
+    representativePairCount: Math.max(0, Number(value.representativePairCount || 0)),
+    requiredRepresentativePairs: Math.max(1, Number(value.requiredRepresentativePairs || 1)),
+    coverageIncomplete: value.coverageIncomplete === true,
+    remainingFrontier: Array.isArray(value.remainingFrontier)
+      ? value.remainingFrontier.map((item) => String(item || "").replace(/\\/g, "/")).filter(Boolean).slice(0, 32)
+      : [],
+  };
+}
+
+function compactSynthesisLatch(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const controlEpoch = Number(value.controlEpoch);
+  const planRevision = String(value.planRevision || "").slice(0, 160);
+  const acceptedEvidenceHash = String(value.acceptedEvidenceHash || "").trim().toLowerCase();
+  const remainingFrontierHash = String(value.remainingFrontierHash || "").trim().toLowerCase();
+  if (
+    Number(value.version || 0) !== 1
+    || !Number.isInteger(controlEpoch)
+    || controlEpoch < 0
+    || !planRevision
+    || !/^[a-f0-9]{64}$/.test(acceptedEvidenceHash)
+    || !/^[a-f0-9]{64}$/.test(remainingFrontierHash)
+    || value.commitEligible !== true
+    || value.pendingEvidenceObligation !== false
+  ) return null;
+  return {
+    version: 1,
+    name: String(value.name || "").slice(0, 80),
+    controlEpoch,
+    planRevision,
+    acceptedEvidenceHash,
+    remainingFrontierHash,
+    commitEligible: true,
+    pendingEvidenceObligation: false,
+  };
+}
+
+function compactPreparedSynthesis(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const status = String(value.status || "").trim().toLowerCase();
+  if (!["pending", "prepared", "commit_sent", "commit_acked", "delivered", "rejected_stale", "evidence_recovery"].includes(status)) return null;
+  const output = String(value.output || "");
+  const outputDigest = String(value.outputDigest || "").trim().toLowerCase();
+  const taskSessionId = String(value.taskSessionId || "").trim().slice(0, 160);
+  const objectiveHash = String(value.objectiveHash || "").trim().toLowerCase();
+  const planRevision = String(value.planRevision || "").trim().slice(0, 160);
+  const synthesisTransactionId = String(value.synthesisTransactionId || "").trim().toLowerCase();
+  if (
+    !taskSessionId
+    || !output
+    || output.length > 131072
+    || !/^[a-f0-9]{64}$/.test(outputDigest)
+    || sha256(output) !== outputDigest
+    || (objectiveHash && !/^[a-f0-9]{64}$/.test(objectiveHash))
+    || !planRevision
+    || !/^[a-f0-9]{64}$/.test(synthesisTransactionId)
+  ) return null;
+  const acceptedEvidenceHash = String(value.acceptedEvidenceHash || "").trim().toLowerCase();
+  const remainingFrontierHash = String(value.remainingFrontierHash || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(acceptedEvidenceHash) || !/^[a-f0-9]{64}$/.test(remainingFrontierHash)) return null;
+  const controlEpoch = Number(value.controlEpoch);
+  const mutationGeneration = Number(value.mutationGeneration || 0);
+  if (!Number.isInteger(controlEpoch) || controlEpoch < 0 || !Number.isInteger(mutationGeneration) || mutationGeneration < 0) return null;
+  return {
+    version: 1,
+    status,
+    output,
+    outputDigest,
+    synthesisTransactionId,
+    taskSessionId,
+    objectiveHash,
+    controlEpoch,
+    controlFingerprint: String(value.controlFingerprint || "").trim().toLowerCase().slice(0, 64),
+    planRevision,
+    acceptedEvidenceHash,
+    remainingFrontierHash,
+    mutationGeneration,
+    preparedAt: String(value.preparedAt || "").slice(0, 64),
+    dispatchedAt: String(value.dispatchedAt || "").slice(0, 64),
+    rejectedAt: String(value.rejectedAt || "").slice(0, 64),
+    rejectionCode: String(value.rejectionCode || "").slice(0, 120),
+    staleReason: String(value.staleReason || "").slice(0, 160),
+  };
+}
+
 function parseTransportJsonObjects(text) {
   const values = [];
   const parseNested = (candidate, depth = 0) => {
@@ -792,9 +912,18 @@ function compactServerControl(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   if (Number(value.version || 0) < 2) return null;
   const epoch = Number(value.epoch);
+  const mutationGeneration = Number(value.mutationGeneration || 0);
   const disposition = String(value.disposition || "").trim().toLowerCase();
   const taskSessionId = String(value.taskSessionId || "").trim().slice(0, 160);
-  if (!Number.isInteger(epoch) || epoch < 0 || !taskSessionId) return null;
+  const planRevision = String(value.planRevision || "").trim().slice(0, 160);
+  const activeSliceId = String(value.activeSliceId || "").trim().slice(0, 160);
+  if (
+    !Number.isInteger(epoch)
+    || epoch < 0
+    || !Number.isSafeInteger(mutationGeneration)
+    || mutationGeneration < 0
+    || !taskSessionId
+  ) return null;
   if (!SERVER_CONTROL_DISPOSITIONS.has(disposition)) return null;
   const requiredValue = value.requiredTool;
   let requiredTool = null;
@@ -831,11 +960,22 @@ function compactServerControl(value) {
       fingerprint: String(value.blocker.fingerprint || "").slice(0, 160),
     }
     : null;
+  const synthesisReadiness = value.synthesisReadiness === undefined
+    ? null
+    : compactSynthesisReadiness(value.synthesisReadiness);
+  const synthesisLatch = value.synthesisLatch === undefined
+    ? null
+    : compactSynthesisLatch(value.synthesisLatch);
+  if (value.synthesisReadiness !== undefined && !synthesisReadiness) return null;
+  if (value.synthesisLatch !== undefined && !synthesisLatch) return null;
   return {
     version: 2,
     epoch,
     taskSessionId,
     taskMode: String(value.taskMode || "").trim().toLowerCase().slice(0, 40),
+    ...(planRevision ? { planRevision } : {}),
+    ...(activeSliceId ? { activeSliceId } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "mutationGeneration") ? { mutationGeneration } : {}),
     controlFingerprint: String(value.controlFingerprint || value.fingerprint || "").trim().slice(0, 160),
     routeHash: String(value.routeHash || "").slice(0, 160),
     phase: String(value.phase || "unknown").slice(0, 160),
@@ -845,6 +985,8 @@ function compactServerControl(value) {
     ...(pendingGates.length ? { pendingGates } : {}),
     retryPolicy: { sameSemanticInput: retryValue },
     blocker,
+    ...(synthesisReadiness ? { synthesisReadiness } : {}),
+    ...(synthesisLatch ? { synthesisLatch } : {}),
   };
 }
 
@@ -1021,6 +1163,7 @@ function resetTaskScopedControl(state, reason = "new_user_objective") {
   state.mutationGeneration = 0;
   state.predictionState = null;
   state.synthesisState = null;
+  state.preparedSynthesis = null;
   state.lastDiagnostics.push(`taskScopedControlReset=${reason}`);
 }
 
@@ -2218,6 +2361,7 @@ function extractControlState(messages, prior = {}, options = {}) {
       : null,
     predictionState: canResume ? compactLifecycleState(prior.predictionState) : null,
     synthesisState: canResume ? compactLifecycleState(prior.synthesisState) : null,
+    preparedSynthesis: canResume ? compactPreparedSynthesis(prior.preparedSynthesis) : null,
     failedToolResults: canResume && Array.isArray(prior.failedToolResults) ? [...prior.failedToolResults] : [],
     facts: canResume && Array.isArray(prior.facts) ? [...prior.facts] : [],
     evidenceFacts: canResume && Array.isArray(prior.evidenceFacts) ? [...prior.evidenceFacts] : [],
@@ -2838,6 +2982,7 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     semanticBlocker: control.semanticBlocker,
     predictionState,
     synthesisState,
+    preparedSynthesis: compactPreparedSynthesis(control.preparedSynthesis),
     sideQuery: control.sideQuery,
     coverageIncomplete: recoveryIncomplete && prior.coverageIncomplete === true,
     remainingFrontier: recoveryIncomplete ? compactRemainingFrontier(prior.remainingFrontier) : [],
@@ -3623,6 +3768,10 @@ function validateCheckpoint(checkpoint) {
     if (!/^[a-f0-9]{64}$/.test(String(delivery.outputDigest || ""))) return false;
     if (!String(delivery.transactionId || "").trim()) return false;
   }
+  if (checkpoint.preparedSynthesis !== undefined && checkpoint.preparedSynthesis !== null) {
+    const prepared = compactPreparedSynthesis(checkpoint.preparedSynthesis);
+    if (!prepared || stableStringify(prepared) !== stableStringify(checkpoint.preparedSynthesis)) return false;
+  }
   if (checkpoint.reasoningFallback !== undefined && checkpoint.reasoningFallback !== null) {
     const fallback = checkpoint.reasoningFallback;
     if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) return false;
@@ -3811,6 +3960,9 @@ module.exports = {
   compactModelFence,
   compactPredictionPolicy,
   compactLifecycleState,
+  compactPreparedSynthesis,
+  compactSynthesisReadiness,
+  compactSynthesisLatch,
   mergeLifecycleState,
   hasUncommittedPrediction,
   compactRequestIntent,

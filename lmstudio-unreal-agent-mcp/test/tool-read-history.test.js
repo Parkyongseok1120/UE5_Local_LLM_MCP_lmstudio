@@ -367,6 +367,72 @@ test("semantic coverage coalesces large, compact, and default whole-file materia
   assert.equal(getFileCoverage(context).wholeFileComplete, true);
 });
 
+test("durable complete coverage hydrates after reconnect and blocks a changed-detail reread", () => {
+  clearReadSuccessHistory();
+  const context = {
+    ...CONTEXT,
+    taskSessionId: "task-reconnect-coverage",
+    contentHash: "9".repeat(64),
+    durableCoverage: {
+      path: "Source/Foo.cpp",
+      contentHash: "9".repeat(64),
+      mutationGeneration: 3,
+      lineCount: 120,
+      coveredRanges: [[1, 120]],
+      wholeFileComplete: true,
+      largestMaterialization: { detailLevel: "large", bytesReturned: 18_000 },
+      acceptedEvidenceId: "evidence-reconnect-1",
+    },
+  };
+  const decision = checkReadRepeat(
+    "read_file",
+    normalizeReadToolArgs("read_file", { path: "Source/Foo.cpp", detailLevel: "compact" }),
+    context,
+  );
+  assert.equal(decision.action, "cache");
+  assert.equal(decision.resultKind, "cache_hit");
+  assert.equal(decision.evidenceProgressed, false);
+  assert.equal(Object.hasOwn(decision, "errorCode"), false);
+  assert.equal(getFileCoverage(context).wholeFileComplete, true);
+});
+
+test("durable truncated coverage hydrates after reconnect with the exact unread continuation", () => {
+  clearReadSuccessHistory();
+  const context = {
+    ...CONTEXT,
+    taskSessionId: "task-reconnect-truncated",
+    contentHash: "8".repeat(64),
+    coverageContinuation: {
+      requiredNextTool: "read_file_range",
+      requiredNextToolArgs: { path: "Source/Foo.cpp", startLine: 41, endLine: 120 },
+    },
+    durableCoverage: {
+      path: "Source/Foo.cpp",
+      contentHash: "8".repeat(64),
+      mutationGeneration: 3,
+      lineCount: 120,
+      coveredRanges: [[1, 40]],
+      wholeFileComplete: false,
+      truncated: true,
+      nextUnreadLine: 41,
+    },
+  };
+  const decision = checkReadRepeat(
+    "read_file",
+    normalizeReadToolArgs("read_file", { path: "Source/Foo.cpp" }),
+    context,
+  );
+  assert.equal(decision.action, "blocked");
+  assert.equal(decision.resultKind, "repeat_blocked");
+  assert.equal(decision.errorCode, "READ_REPEAT_BLOCKED");
+  assert.deepEqual(decision.continuation.requiredNextToolArgs, {
+    path: "Source/Foo.cpp",
+    startLine: 41,
+    endLine: 120,
+  });
+  assert.equal(decision.evidenceProgressed, false);
+});
+
 test("truncated whole-file coverage returns an exact unread continuation", () => {
   clearReadSuccessHistory();
   const context = {

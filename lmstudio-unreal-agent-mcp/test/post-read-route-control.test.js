@@ -112,3 +112,62 @@ test("authoritative v2 control cannot be overridden by a legacy pending gate", (
   assert.strictEqual(JSON.stringify(result.structuredContent).includes("expiryTransition"), false);
   assert.ok(result.content[0].text.length < 4_000);
 });
+
+test("incomplete readiness projects the same authoritative recovery tool in every view", () => {
+  const commit = recoveryCommit();
+  commit.state.mode = "read_only";
+  commit.state.writesAllowed = false;
+  commit.state.writeGate = { writesAllowed: false };
+  commit.state.taskKind = "cpp_analysis";
+  commit.state.planRevision = "post-read-recovery";
+  commit.state.toolRoute.phase = "planner";
+  commit.state.toolRoute.pendingGates = [];
+  commit.state.toolRoute.activeTools = ["read_file", "search_files"];
+  commit.state.pendingGates = [];
+  commit.state.recoveryObligation = {
+    source: "evidence",
+    status: "evidence_complete",
+    requiredTool: {},
+  };
+  commit.state.sourceEvidence = {
+    planRevision: "post-read-recovery",
+    files: {
+      implementation: {
+        path: "Source/Sample/Private/Feature.cpp",
+        sourceKind: "implementation",
+        evidenceId: "impl-only",
+        includePath: "Source/Sample/Public/Feature.h",
+      },
+    },
+  };
+  commit.state.synthesisReadiness = { ready: false };
+  commit.state.controlState = {
+    version: 2,
+    authoritative: true,
+    epoch: 5,
+    taskSessionId: commit.state.taskSessionId,
+    phase: "planner",
+    disposition: "continue",
+    requiredTool: null,
+    allowedTools: ["read_file", "search_files"],
+  };
+
+  const payload = postReadGatePayload(commit, "read_file");
+  assert.equal(payload.nextAction, "read_file");
+  assert.equal(payload.nextActionIsTool, true);
+  assert.equal(payload.control.requiredTool.name, "read_file");
+  assert.deepEqual(payload.control.requiredTool.args, { path: "Source/Sample/Public/Feature.h" });
+  assert.equal(payload.control.allowedTools.length, 1);
+
+  const result = attachPostReadRouteControl(
+    { content: [{ type: "text", text: "file body" }] },
+    commit,
+    "read_file",
+  );
+  const mirrored = JSON.parse(result.content[0].text);
+  assert.equal(mirrored.nextAction, payload.control.requiredTool.name);
+  assert.equal(mirrored.nextActionIsTool, true);
+  assert.equal(mirrored.control.requiredTool.name, payload.control.requiredTool.name);
+  assert.deepEqual(mirrored.control.requiredTool.args, payload.control.requiredTool.args);
+  assert.notEqual(mirrored.nextAction, "use_authoritative_control");
+});

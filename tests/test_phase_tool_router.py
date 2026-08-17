@@ -2310,7 +2310,7 @@ def test_checkpoint_without_server_required_action_preserves_budget(
     assert state["checkpointProgress"]["evidenceProgressed"] is False
 
 
-def test_cpp_analysis_phase_budget_with_zero_direct_reads_replans_instead_of_synthesis(
+def test_cpp_analysis_without_reconstructable_frontier_fails_closed(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2329,20 +2329,10 @@ def test_cpp_analysis_phase_budget_with_zero_direct_reads_replans_instead_of_syn
             },
         },
     )
-    route = started["toolRoute"]
-    active_tool = route["activeTools"][0]
-    for _ in range(route["maxToolCallsPerPhase"]):
-        assert authorize_active_task_tool(
-            tmp_path,
-            tool_name=active_tool,
-            arguments={"taskAuthorization": started["taskAuthorization"]},
-        )["ok"]
-    exhausted = authorize_active_task_tool(
-        tmp_path,
-        tool_name=active_tool,
-        arguments={"taskAuthorization": started["taskAuthorization"]},
-    )
-    assert exhausted["nextActionArgs"]["requiredNextAction"] == "replan_after_phase_budget"
+    assert started["control"]["disposition"] == "await_user"
+    assert started["control"]["requiredTool"] is None
+    assert started["control"]["blocker"]["code"] == "EVIDENCE_FRONTIER_LOST"
+    assert started["control"]["retryPolicy"]["sameSemanticInput"] == "forbidden"
     persisted = json.loads(
         (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(encoding="utf-8")
     )

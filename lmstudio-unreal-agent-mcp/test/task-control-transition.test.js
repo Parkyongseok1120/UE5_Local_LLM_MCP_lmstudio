@@ -49,6 +49,126 @@ test("repository audit frontier requires the next unvisited source and only then
   assert.equal(complete.disposition, "continue");
 });
 
+test("readiness false never publishes tool-free continue", () => {
+  const value = state();
+  value.mode = "read_only";
+  value.writesAllowed = false;
+  value.writeGate = { writesAllowed: false };
+  value.taskKind = "cpp_analysis";
+  value.planRevision = "readiness-not-ready";
+  value.toolRoute.phase = "planner";
+  value.toolRoute.activeTools = ["read_file", "search_files"];
+  value.recoveryObligation = {
+    source: "evidence",
+    status: "evidence_complete",
+    requiredTool: {},
+  };
+
+  const control = deriveNextObligation(value);
+  assert.notEqual(control.disposition, "continue");
+  assert.ok(control.requiredTool || control.blocker);
+  if (control.requiredTool) {
+    assert.equal(control.allowedTools.length, 1);
+    assert.equal(control.allowedTools[0], control.requiredTool.name);
+  } else {
+    assert.equal(control.disposition, "await_user");
+    assert.equal(control.blocker.code, "EVIDENCE_FRONTIER_LOST");
+    assert.equal(control.retryPolicy.sameSemanticInput, "forbidden");
+  }
+});
+
+test("missing declaration selects a bounded matching header read", () => {
+  const value = state();
+  value.mode = "read_only";
+  value.writesAllowed = false;
+  value.writeGate = { writesAllowed: false };
+  value.taskKind = "cpp_analysis";
+  value.planRevision = "missing-declaration";
+  value.inspectionContract = { intent: "cpp_analysis", evidenceBudget: { representativePairs: 1 } };
+  value.sourceEvidence = {
+    planRevision: value.planRevision,
+    files: {
+      implementation: {
+        path: "Source/Sample/Private/Feature.cpp",
+        sourceKind: "implementation",
+        evidenceId: "impl-only",
+        includePath: "Source/Sample/Public/Feature.h",
+      },
+    },
+  };
+  value.recoveryObligation = { source: "evidence", status: "evidence_complete", requiredTool: {} };
+
+  const control = deriveNextObligation(value);
+  assert.deepEqual(control.requiredTool, {
+    name: "read_file",
+    args: { path: "Source/Sample/Public/Feature.h" },
+  });
+  assert.deepEqual(control.allowedTools, ["read_file"]);
+});
+
+test("empty frontier rebuilds a source pair search or returns an explicit blocker", () => {
+  const value = state();
+  value.mode = "read_only";
+  value.writesAllowed = false;
+  value.writeGate = { writesAllowed: false };
+  value.taskKind = "cpp_analysis";
+  value.planRevision = "empty-frontier";
+  value.inspectionContract = { intent: "cpp_analysis", evidenceBudget: { representativePairs: 2 } };
+  value.sourceEvidence = {
+    planRevision: value.planRevision,
+    files: {
+      implementation: {
+        path: "Source/Sample/Private/Feature.cpp",
+        sourceKind: "implementation",
+        evidenceId: "impl-only",
+      },
+    },
+  };
+  value.inspectionProgress = { remainingFrontier: [] };
+  value.recoveryObligation = { source: "evidence", status: "evidence_complete", requiredTool: {} };
+
+  const control = deriveNextObligation(value);
+  assert.ok(control.requiredTool || control.blocker);
+  if (control.requiredTool) {
+    assert.equal(control.requiredTool.name, "search_files");
+    assert.equal(control.requiredTool.args.query, "Feature.h");
+    assert.equal(control.requiredTool.args.matchFileNames, true);
+    assert.equal(control.allowedTools[0], "search_files");
+  } else {
+    assert.equal(control.disposition, "await_user");
+    assert.equal(control.blocker.code, "EVIDENCE_FRONTIER_LOST");
+  }
+});
+
+test("accepted evidence is never selected again as the recovery read", () => {
+  const value = state();
+  value.mode = "read_only";
+  value.writesAllowed = false;
+  value.writeGate = { writesAllowed: false };
+  value.taskKind = "cpp_analysis";
+  value.planRevision = "accepted-not-repeat";
+  value.inspectionContract = { intent: "cpp_analysis", evidenceBudget: { representativePairs: 2 } };
+  value.sourceEvidence = {
+    planRevision: value.planRevision,
+    files: {
+      header: {
+        path: "Source/Sample/Public/Feature.h",
+        sourceKind: "declaration",
+        evidenceId: "header-accepted",
+      },
+    },
+  };
+  value.inspectionProgress = { remainingFrontier: ["Source/Sample/Public/Feature.h"] };
+  value.recoveryObligation = { source: "evidence", status: "evidence_complete", requiredTool: {} };
+
+  const control = deriveNextObligation(value);
+  assert.notDeepEqual(control.requiredTool, {
+    name: "read_file",
+    args: { path: "Source/Sample/Public/Feature.h" },
+  });
+  assert.ok(control.requiredTool || control.blocker);
+});
+
 function state() {
   return {
     taskSessionId: "task_transition",
