@@ -769,7 +769,8 @@ def test_inventory_plan_source_first():
     policy = payload["toolPolicy"]
     assert "search_files" in policy
     assert policy.index("search_files") < policy.index("unreal_rag_search")
-    assert "direct_source_evidence" in payload["evidencePlan"]["gates"]
+    assert "direct_source_evidence" in payload["evidencePlan"]["recommendedValidators"]
+    assert "gates" not in payload["evidencePlan"]
     tools = [c["tool"] for c in payload["suggestedToolCalls"]]
     assert tools.count("search_files") >= 1
     search_queries = [c["args"].get("query") for c in payload["suggestedToolCalls"] if c["tool"] == "search_files"]

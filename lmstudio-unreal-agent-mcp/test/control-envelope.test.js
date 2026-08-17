@@ -24,8 +24,9 @@ test("control envelope preserves tool-vs-non-tool recovery semantics", () => {
 
   assert.strictEqual(payload.control.taskId, "task-1");
   assert.strictEqual(payload.control.phase, "replace_in_file");
-  assert.strictEqual(payload.control.nextAction, "unreal_agent_plan");
-  assert.strictEqual(payload.control.nextActionIsTool, true);
+  assert.strictEqual(payload.control.status, "MissingAuthoritativeControl");
+  assert.strictEqual(payload.control.nextAction, "");
+  assert.strictEqual(payload.control.nextActionIsTool, false);
   assert.strictEqual(payload.control.retryPolicy, "forbidden");
   assert.strictEqual(JSON.stringify(payload.control).includes("owner-secret"), false);
 });
@@ -95,7 +96,7 @@ test("existing server control survives a second envelope pass", () => {
   });
 });
 
-test("task recovery responses use control v2 with the current epoch and one allowed tool", () => {
+test("legacy task fields cannot synthesize a non-authoritative control v2", () => {
   const payload = attachControlEnvelope({
     ok: false,
     taskSessionId: "task-v2",
@@ -111,31 +112,31 @@ test("task recovery responses use control v2 with the current epoch and one allo
     },
   }, "read_file");
 
-  assert.deepStrictEqual({
-    ...payload.control,
-    blocker: {
-      ...payload.control.blocker,
-      fingerprint: "<fingerprint>",
-    },
-  }, {
+  assert.strictEqual(payload.control.version, 1);
+  assert.strictEqual(payload.control.taskId, "task-v2");
+  assert.strictEqual(payload.control.status, "MissingAuthoritativeControl");
+  assert.strictEqual(payload.control.nextAction, "");
+  assert.strictEqual(payload.control.nextActionIsTool, false);
+  assert.strictEqual(payload.control.retryPolicy, "forbidden");
+  assert.strictEqual(Object.hasOwn(payload.control, "disposition"), false);
+  assert.strictEqual(Object.hasOwn(payload.control, "allowedTools"), false);
+});
+
+test("transaction-committed authoritative control v2 is forwarded verbatim", () => {
+  const control = {
     version: 2,
-    epoch: 7,
-    taskSessionId: "task-v2",
-    routeHash: "route-v2",
+    authoritative: true,
+    epoch: 8,
+    fingerprint: "8".repeat(64),
+    taskSessionId: "task-v2-authoritative",
     phase: "planner",
-    disposition: "checkpoint",
-    requiredTool: {
-      name: "unreal_task_checkpoint",
-      args: { action: "record" },
-    },
-    allowedTools: ["unreal_task_checkpoint"],
-    retryPolicy: { sameSemanticInput: "allowed" },
-    blocker: {
-      code: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
-      fingerprint: "<fingerprint>",
-    },
-  });
-  assert.match(payload.control.blocker.fingerprint, /^[a-f0-9]{24}$/);
+    disposition: "require_tool",
+    requiredTool: { name: "read_file", args: { path: "Source/Demo.cpp" } },
+    allowedTools: ["read_file"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
+  const payload = attachControlEnvelope({ ok: true, control, nextAction: "delete_file" }, "bridge");
+  assert.deepStrictEqual(payload.control, control);
 });
 
 test("concise text points to structured content instead of duplicating payload", () => {

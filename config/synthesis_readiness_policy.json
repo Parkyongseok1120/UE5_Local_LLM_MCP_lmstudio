@@ -15,5 +15,7 @@
   "defaultRepresentativePairs": 1,
   "maximumFrontierEntries": 32,
   "partialSynthesisRequiresBoundReached": true,
-  "partialSynthesisRequiresDurableFrontier": true
+  "partialSynthesisRequiresDurableFrontier": false,
+  "representativePairsBoundedByDiscoveredRelevantPairs": true,
+  "distinctSourceFilesOwnReadBudget": true
 }

@@ -320,7 +320,7 @@ test("delete validation and durable checkpoint precede its single budget commit"
   assert.strictEqual((handler.match(/commitDeferredBudgetOrFail\(\{/gu) || []).length, 1);
 });
 
-test("environment recovery attempt id is deterministic per committed control attempt", () => {
+test("environment recovery attempt id ignores Node-proposed commands and control projection churn", () => {
   const recovery = {
     status: "environment_recovery",
     errorCode: "VALIDATOR_TIMEOUT",
@@ -353,8 +353,18 @@ test("environment recovery attempt id is deterministic per committed control att
     controlEpoch: 5,
     toolRoute: { routeHash: "route-five" },
   });
+  const forgedProposal = environmentRecoveryAttempt({
+    ...recovery,
+    status: "evidence_complete",
+    requiredTool: { name: "proposal_two", args: { forged: true } },
+  }, {}, {
+    taskSessionId: "task_environment_retry",
+    controlEpoch: 99,
+    toolRoute: { routeHash: "forged-route" },
+  });
   assert.strictEqual(first.attemptId, replay.attemptId);
-  assert.notStrictEqual(first.attemptId, nextAttempt.attemptId);
+  assert.strictEqual(first.attemptId, nextAttempt.attemptId);
+  assert.strictEqual(first.attemptId, forgedProposal.attemptId);
   assert.notStrictEqual(first.attemptId, "caller-supplied-id-must-not-win");
   assert.strictEqual(first.attemptOutcome, "failed");
 });

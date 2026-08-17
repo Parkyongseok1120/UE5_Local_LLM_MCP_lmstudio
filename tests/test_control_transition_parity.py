@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -354,6 +355,25 @@ process.stdout.write(JSON.stringify(states.map(deriveNextObligation)));
 
 def test_evidence_complete_is_a_no_tool_synthesis_transition() -> None:
     state = _recovery_obligation_state("evidence_complete")
+    def complete(path: str, kind: str, evidence_id: str, content_hash: str, text: str) -> dict:
+        return {
+            "path": path,
+            "sourceKind": kind,
+            "evidenceId": evidence_id,
+            "contentHash": content_hash,
+            "evidenceSnapshotGeneration": 0,
+            "coveredRanges": [[1, 3]],
+            "wholeFileComplete": True,
+            "truncated": False,
+            "lineCount": 3,
+            "coverageLevel": "FILE_COMPLETE",
+            "supportingExcerpts": [{
+                "startLine": 1,
+                "endLine": 3,
+                "text": text,
+                "excerptDigest": hashlib.sha256(text.encode()).hexdigest(),
+            }],
+        }
     state.update({
         "mode": "read_only",
         "writesAllowed": False,
@@ -363,8 +383,8 @@ def test_evidence_complete_is_a_no_tool_synthesis_transition() -> None:
         "sourceEvidence": {
             "planRevision": state["planRevision"],
             "files": {
-                "header": {"path": "Source/Demo/Feature.h", "sourceKind": "declaration", "evidenceId": "header"},
-                "source": {"path": "Source/Demo/Feature.cpp", "sourceKind": "implementation", "evidenceId": "source"},
+                "header": complete("Source/Demo/Feature.h", "declaration", "header", "a" * 64, "class FFeature {};"),
+                "source": complete("Source/Demo/Feature.cpp", "implementation", "source", "b" * 64, "void FFeature::Run() {}"),
             },
         },
     })
@@ -374,10 +394,8 @@ def test_evidence_complete_is_a_no_tool_synthesis_transition() -> None:
     assert control["requiredTool"] is None
     assert control["allowedTools"] == []
     assert control["retryPolicy"] == {"sameSemanticInput": "forbidden"}
-    assert control["blocker"] == {
-        "code": "RECOVERY_EVIDENCE_COMPLETE",
-        "fingerprint": "fingerprint-evidence_complete-0",
-    }
+    assert control["blocker"] is None
+    assert control["transitionReason"] == "EVIDENCE_COMPLETE"
 
 
 def test_static_finding_recovery_is_total_and_never_emits_empty_read_args() -> None:

@@ -18,6 +18,7 @@ DEFAULT_PRESET = {
 }
 
 _PROFILE_OVERRIDE = ""
+_MODEL_PROFILE = ""
 
 
 def set_sampling_profile(name: str) -> None:
@@ -49,6 +50,8 @@ def resolve_profile_name(config: dict[str, Any] | None = None) -> str:
     env_name = os.environ.get("UNREAL_RAG_MODEL_PROFILE", "").strip()
     if env_name:
         return env_name
+    if _MODEL_PROFILE:
+        return _MODEL_PROFILE
     cfg = config or load_sampling_config()
     return str(cfg.get("activeProfile") or cfg.get("model") or "qwen3_6_27b")
 
@@ -90,11 +93,12 @@ def resolve_profile_name_for_model(model_name: str, config: dict[str, Any] | Non
 
 def set_sampling_profile_for_model(model_name: str, config: dict[str, Any] | None = None) -> str:
     """Use modelAliases unless the user explicitly selected a profile."""
+    global _MODEL_PROFILE
     if _PROFILE_OVERRIDE or os.environ.get("UNREAL_RAG_MODEL_PROFILE", "").strip():
         return ""
     profile = resolve_profile_name_for_model(model_name, config)
     if profile:
-        set_sampling_profile(profile)
+        _MODEL_PROFILE = profile
     return profile
 
 

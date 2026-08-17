@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const {
   deriveSynthesisReadiness,
   synthesisLatchMatches,
@@ -26,16 +27,35 @@ function state(files = {}, overrides = {}) {
   };
 }
 
-const declaration = {
-  path: "Source/Cinematic/Public/CinematicSystem.h",
-  sourceKind: "declaration",
-  evidenceId: "decl-1",
-};
-const implementation = {
-  path: "Source/Cinematic/Private/CinematicSystem.cpp",
-  sourceKind: "implementation",
-  evidenceId: "impl-1",
-};
+function completeEvidence(path, sourceKind, evidenceId, contentHash, text) {
+  return {
+    path,
+    sourceKind,
+    evidenceId,
+    contentHash,
+    evidenceSnapshotGeneration: 0,
+    coveredRanges: [[1, 3]],
+    wholeFileComplete: true,
+    truncated: false,
+    lineCount: 3,
+    coverageLevel: "FILE_COMPLETE",
+    supportingExcerpts: [{
+      startLine: 1,
+      endLine: 3,
+      text,
+      excerptDigest: crypto.createHash("sha256").update(text).digest("hex"),
+    }],
+  };
+}
+
+const declaration = completeEvidence(
+  "Source/Cinematic/Public/CinematicSystem.h", "declaration", "decl-1", "a".repeat(64),
+  "class FCinematicSystem {};",
+);
+const implementation = completeEvidence(
+  "Source/Cinematic/Private/CinematicSystem.cpp", "implementation", "impl-1", "b".repeat(64),
+  "void FCinematicSystem::Tick() {}",
+);
 
 test("zero direct reads cannot authorize C++ synthesis", () => {
   const result = deriveSynthesisReadiness(state());
@@ -94,7 +114,7 @@ test("same basenames in different Unreal modules are not representative pairs", 
   assert.equal(result.ready, false);
 });
 
-test("bounded partial synthesis is eligible only with a durable remaining frontier", () => {
+test("bounded partial synthesis remains eligible after its durable frontier is exhausted", () => {
   const files = { [declaration.path]: declaration, [implementation.path]: implementation };
   const partial = deriveSynthesisReadiness(state(files, {
     inspectionContract: {
@@ -104,6 +124,8 @@ test("bounded partial synthesis is eligible only with a durable remaining fronti
     },
     inspectionProgress: {
       directSourceReads: 2,
+      discoveryStarted: true,
+      discoveredRelevantPairs: 4,
       remainingFrontier: ["Source/Cinematic/Private/Next.cpp"],
     },
   }));
@@ -115,9 +137,15 @@ test("bounded partial synthesis is eligible only with a durable remaining fronti
       intent: "cpp_analysis",
       evidenceBudget: { representativePairs: 4, maxDirectSourceReadsPerPhase: 2 },
     },
-    inspectionProgress: { directSourceReads: 2, remainingFrontier: [] },
+    inspectionProgress: {
+      directSourceReads: 2,
+      discoveryStarted: true,
+      discoveredRelevantPairs: 4,
+      remainingFrontier: [],
+    },
   }));
-  assert.equal(missingFrontier.ready, false);
+  assert.equal(missingFrontier.ready, true);
+  assert.equal(missingFrontier.coverageIncomplete, true);
 });
 
 test("failed or stale-plan reads do not count as accepted evidence", () => {
@@ -166,11 +194,16 @@ test("synthesis latch is invalidated by evidence and epoch changes", () => {
     planRevision: value.planRevision,
     acceptedEvidenceHash: readiness.acceptedEvidenceHash,
     remainingFrontierHash: readiness.remainingFrontierHash,
+    synthesisEvidenceBundleHash: readiness.synthesisEvidenceBundleHash,
   };
   assert.equal(synthesisLatchMatches(value, readiness), true);
-  value.sourceEvidence.files[implementation.path].evidenceId = "impl-changed";
+  value.sourceEvidence.files[implementation.path].coveredRanges = [[1, 2]];
+  value.sourceEvidence.files[implementation.path].wholeFileComplete = false;
+  value.sourceEvidence.files[implementation.path].coverageLevel = "RANGE_PARTIAL";
   assert.equal(synthesisLatchMatches(value), false);
-  value.sourceEvidence.files[implementation.path].evidenceId = "impl-1";
+  value.sourceEvidence.files[implementation.path].coveredRanges = [[1, 3]];
+  value.sourceEvidence.files[implementation.path].wholeFileComplete = true;
+  value.sourceEvidence.files[implementation.path].coverageLevel = "FILE_COMPLETE";
   value.controlEpoch += 1;
   assert.equal(synthesisLatchMatches(value), false);
 });
@@ -187,6 +220,7 @@ test("synthesis latch accepts epoch zero and rejects invalid epochs", () => {
     planRevision: value.planRevision,
     acceptedEvidenceHash: readiness.acceptedEvidenceHash,
     remainingFrontierHash: readiness.remainingFrontierHash,
+    synthesisEvidenceBundleHash: readiness.synthesisEvidenceBundleHash,
   };
   assert.equal(synthesisLatchMatches(value, readiness), true);
   value.postBudgetAction.controlEpoch = -1;

@@ -28,7 +28,7 @@ test("agent runtime identity is deterministic and verifiable", () => {
     assert.equal(result.runtimeVerified, true);
     assert.equal(result.runtimeStale, false);
     assert.equal(result.running.buildHash, identity.buildHash);
-    assert.equal(identity.componentVersion, "0.3.16");
+    assert.equal(identity.componentVersion, "0.3.17");
     assert.equal(identity.protocolVersion, 2);
     for (const field of protocolHashFields) assert.match(identity[field], /^[0-9a-f]{64}$/);
     assert.throws(
@@ -52,11 +52,13 @@ test("agent runtime identity is deterministic and verifiable", () => {
 
 test("agent runtime identity fails closed after source drift", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-runtime-drift-"));
-  const componentRoot = path.join(root, "agent");
+  const componentRoot = path.join(root, "lmstudio-unreal-agent-mcp");
   try {
     fs.cpSync(path.resolve(__dirname, "../src"), path.join(componentRoot, "src"), { recursive: true });
     fs.copyFileSync(path.resolve(__dirname, "../package.json"), path.join(componentRoot, "package.json"));
-    const expected = componentIdentity("agent", componentRoot);
+    fs.cpSync(path.resolve(__dirname, "../../config"), path.join(root, "config"), { recursive: true });
+    fs.cpSync(path.resolve(__dirname, "../../scripts"), path.join(root, "scripts"), { recursive: true });
+    const expected = componentIdentity("agent", root);
     const manifestPath = path.join(root, "control-runtime.json");
     fs.writeFileSync(manifestPath, JSON.stringify({ components: { agent: expected } }));
     fs.writeFileSync(path.join(componentRoot, "src", "control-envelope.js"), "// drift\n");
@@ -80,7 +82,11 @@ test("agent runtime identity fails closed on protocol schema drift", () => {
       components: { agent: { ...expected, errorCatalogHash: "0".repeat(64) } },
     }));
     assert.throws(
-      () => verifyRuntimeComponent("agent", { componentRoot, manifestPath, required: true }),
+      () => verifyRuntimeComponent("agent", {
+        componentRoot,
+        manifestPath,
+        required: true,
+      }),
       /CONTROL_RUNTIME_VERSION_MISMATCH: agent differs in errorCatalogHash/
     );
   } finally {
@@ -88,13 +94,12 @@ test("agent runtime identity fails closed on protocol schema drift", () => {
   }
 });
 
-test("standalone installed runtime verifies the protocol spec embedded in its manifest", () => {
+test("incomplete standalone runtime is rejected even with an embedded protocol spec", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-runtime-embedded-protocol-"));
   const componentRoot = path.join(root, "agent");
   try {
     fs.cpSync(path.resolve(__dirname, "../src"), path.join(componentRoot, "src"), { recursive: true });
     fs.copyFileSync(path.resolve(__dirname, "../package.json"), path.join(componentRoot, "package.json"));
-    const expected = componentIdentity("agent", componentRoot);
     const protocolSpec = JSON.parse(fs.readFileSync(
       path.resolve(__dirname, "../../config/control_protocol_spec.json"),
       "utf8"
@@ -102,15 +107,18 @@ test("standalone installed runtime verifies the protocol spec embedded in its ma
     const manifestPath = path.join(componentRoot, "control-runtime.json");
     fs.writeFileSync(manifestPath, JSON.stringify({
       protocolSpec,
-      components: { agent: expected },
+      components: { agent: {} },
     }));
     const installedRuntime = require(path.join(componentRoot, "src", "runtime-identity.js"));
-    assert.equal(installedRuntime.verifyRuntimeComponent("agent", {
-      componentRoot,
-      repositoryRoot: componentRoot,
-      manifestPath,
-      required: true,
-    }).verified, true);
+    assert.throws(
+      () => installedRuntime.verifyRuntimeComponent("agent", {
+        componentRoot,
+        repositoryRoot: componentRoot,
+        manifestPath,
+        required: true,
+      }),
+      /CONTROL_RUNTIME_VERSION_MISMATCH: missing agent runtime dependencies/,
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

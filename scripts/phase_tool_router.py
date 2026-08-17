@@ -47,6 +47,7 @@ CONTROL_PLANE_TOOLS = frozenset(
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
         "unreal_task_commit_synthesis",
+        "unreal_task_ack_synthesis_delivery",
         "unreal_task_define_slices",
         "unreal_task_approve",
         "unreal_task_cancel",
@@ -63,6 +64,7 @@ ALWAYS_DISCOVERABLE_CONTROL_TOOLS = frozenset(
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
         "unreal_task_commit_synthesis",
+        "unreal_task_ack_synthesis_delivery",
         "unreal_task_define_slices",
         "unreal_task_resume",
         "unreal_task_cancel",
@@ -72,28 +74,76 @@ NON_BUDGETED_REPLAN_TOOLS = frozenset({"unreal_agent_plan"})
 MUTATION_TOOLS = frozenset(
     {"write_file", "replace_in_file", "delete_file", "apply_edit_bundle"}
 )
-_DISCOVERY_TOOL_NAMES = frozenset(
-    {
-        "unreal_rag_search",
-        "unreal_symbol_lookup",
-        "list_directory",
-        "search_files",
-        "read_file",
-        "read_file_range",
-        "read_symbol",
-        "read_unreal_logs",
-    }
+_DISCOVERY_TOOL_NAMES = (
+    "unreal_rag_search",
+    "unreal_symbol_lookup",
+    "list_directory",
+    "search_files",
+    "read_file",
+    "read_file_range",
+    "read_symbol",
+    "read_unreal_logs",
 )
-_REPEATED_GATE_REDISCOVERY_TOOLS = frozenset(
-    {
-        "list_directory",
-        "search_files",
-        "read_file",
-        "read_file_range",
-        "read_symbol",
-        "read_unreal_logs",
-    }
+_REPEATED_GATE_REDISCOVERY_TOOLS = (
+    "list_directory",
+    "search_files",
+    "read_file",
+    "read_file_range",
+    "read_symbol",
+    "read_unreal_logs",
 )
+
+
+def _initial_evidence_action(state: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    actions = state.get("initialEvidenceActions") if isinstance(state.get("initialEvidenceActions"), list) else []
+    progress = state.get("inspectionProgress") if isinstance(state.get("inspectionProgress"), dict) else {}
+    cursor = min(len(actions), _non_negative_int(progress.get("discoveryActionCursor")))
+    action = actions[cursor] if cursor < len(actions) and isinstance(actions[cursor], dict) else None
+    if not actions and action is None and isinstance(state.get("initialEvidenceAction"), dict):
+        action = state["initialEvidenceAction"]
+    name = str((action or {}).get("name") or "").strip()
+    args = dict((action or {}).get("args") or {}) if isinstance((action or {}).get("args"), dict) else {}
+    return (name, args) if name in _DISCOVERY_TOOL_NAMES else None
+
+
+def _fallback_discovery_action(state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    contract = state.get("inspectionContract") if isinstance(state.get("inspectionContract"), dict) else {}
+    topic = str(
+        contract.get("topicTarget")
+        or contract.get("target")
+        or state.get("objective")
+        or state.get("request")
+        or "Source"
+    ).strip()[:160]
+    return "search_files", {
+        "query": topic or "Source",
+        "path": "Source",
+        "regex": False,
+        "maxResults": 32,
+    }
+
+
+def _required_user_input(
+    state: dict[str, Any],
+    kind: str,
+    prompt: str,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    existing = state.get("requiredUserInput") if isinstance(state.get("requiredUserInput"), dict) else {}
+    normalized = {
+        "kind": str(existing.get("kind") or kind or "choose_option"),
+        "prompt": str(existing.get("prompt") or prompt or "Additional input is required to continue."),
+        "schema": dict(existing.get("schema") or schema) if isinstance(existing.get("schema") or schema, dict) else {},
+        "resumeToken": str(existing.get("resumeToken") or canonical_hash({
+            "taskSessionId": str(state.get("taskSessionId") or ""),
+            "planRevision": str(state.get("planRevision") or ""),
+            "controlEpoch": _non_negative_int(state.get("controlEpoch")),
+            "kind": kind,
+            "prompt": prompt,
+        })),
+    }
+    state["requiredUserInput"] = normalized
+    return normalized
 
 _GATE_TO_TOOL = {
     "architecture_approval": "unreal_architecture_reasoning",
@@ -577,6 +627,74 @@ def _source_pair_header_candidates(source_path: Any) -> list[str]:
     return candidates[:24]
 
 
+def _source_pair_implementation_candidates(header_path: Any) -> list[str]:
+    header_path = _usable_route_file(header_path)
+    suffix = os.path.splitext(header_path)[1].casefold()
+    if not header_path or suffix not in _SOURCE_DECLARATION_EXTENSIONS:
+        return []
+    stem = header_path[: -len(suffix)]
+    parts = [part for part in stem.replace("\\", "/").split("/") if part]
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        candidate = _usable_route_file(value)
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    source_index = max(
+        (index for index, part in enumerate(parts) if part.casefold() == "source"),
+        default=-1,
+    )
+    if source_index >= 0 and len(parts) > source_index + 2:
+        module_root = parts[: source_index + 2]
+        relative = parts[source_index + 2 :]
+        if relative and relative[0].casefold() in {"public", "private", "classes"}:
+            relative = relative[1:]
+        if relative:
+            for implementation_suffix in (".cpp", ".cc", ".cxx", ".c"):
+                add("/".join([*module_root, "Private", *relative]) + implementation_suffix)
+                add("/".join([*module_root, *relative]) + implementation_suffix)
+    parent = header_path.rsplit("/", 1)[0] if "/" in header_path else ""
+    basename = os.path.basename(stem)
+    for implementation_suffix in (".cpp", ".cc", ".cxx", ".c"):
+        add(f"{parent}/{basename}{implementation_suffix}" if parent else f"{basename}{implementation_suffix}")
+    return candidates[:24]
+
+
+def _include_path_candidates(source_path: Any, include_path: Any) -> list[str]:
+    """Resolve a C++ include using the owning Unreal module before guessing."""
+
+    source_path = _usable_route_file(source_path)
+    include_path = _usable_route_file(include_path)
+    if not source_path or not include_path:
+        return []
+    values: list[str] = []
+
+    def add(value: str) -> None:
+        candidate = _usable_route_file(value)
+        if candidate and candidate not in values:
+            values.append(candidate)
+
+    if include_path.casefold().startswith("source/"):
+        add(include_path)
+        return values
+    parts = source_path.split("/")
+    source_index = max(
+        (index for index, part in enumerate(parts) if part.casefold() == "source"),
+        default=-1,
+    )
+    if source_index >= 0 and len(parts) > source_index + 1:
+        module_root = parts[: source_index + 2]
+        include_parts = include_path.split("/")
+        if include_parts and include_parts[0].casefold() == module_root[-1].casefold():
+            include_parts = include_parts[1:]
+        for directory in ("Public", "Classes", "Private", ""):
+            prefix = [*module_root, directory] if directory else module_root
+            add("/".join([*prefix, *include_parts]))
+    add(include_path)
+    return values[:16]
+
+
 def _source_recovery_candidates(state: dict[str, Any]) -> list[str]:
     progress = state.get("inspectionProgress") if isinstance(state.get("inspectionProgress"), dict) else {}
     values: list[Any] = []
@@ -629,6 +747,26 @@ def _next_evidence_recovery(
         if _path_identity(row.get("path"))
     }
     absent = _source_absent_paths(state)
+    root = _authoritative_project_root(state)
+
+    # Coverage continuation is deterministic and must precede discovering a
+    # second file: an accepted path is not complete merely because it exists.
+    for row in rows:
+        path_value = _usable_route_file(row.get("path"))
+        next_line = _non_negative_int(row.get("nextUnreadLine"))
+        if (
+            path_value
+            and row.get("wholeFileComplete") is not True
+            and next_line > 0
+            and _path_identity(path_value) not in absent
+        ):
+            line_count = _non_negative_int(row.get("lineCount"))
+            end_line = min(line_count, next_line + 299) if line_count >= next_line else next_line + 299
+            return "read_file_range", {
+                "path": path_value,
+                "startLine": next_line,
+                "endLine": end_line,
+            }
 
     def usable_declaration(value: Any) -> str:
         candidate = _usable_route_file(value)
@@ -641,11 +779,6 @@ def _next_evidence_recovery(
         ):
             return ""
         return candidate
-
-    for candidate in _source_recovery_candidates(state):
-        declaration = usable_declaration(candidate)
-        if declaration:
-            return "read_file", {"path": declaration}
 
     implementations = [
         row
@@ -668,14 +801,16 @@ def _next_evidence_recovery(
             for value in _bounded_source_values(row.get(key)):
                 if isinstance(value, dict):
                     value = value.get("path") or value.get("relativePath")
-                declaration = usable_declaration(value)
-                if declaration:
-                    return "read_file", {"path": declaration}
+                for resolved in _include_path_candidates(row.get("path"), value):
+                    declaration = usable_declaration(resolved)
+                    if not declaration:
+                        continue
+                    if not root or os.path.isfile(os.path.join(root, declaration.replace("/", os.sep))):
+                        return "read_file", {"path": declaration}
         for candidate in _source_pair_header_candidates(row.get("path")):
             declaration = usable_declaration(candidate)
             if not declaration:
                 continue
-            root = _authoritative_project_root(state)
             if root and os.path.isfile(os.path.join(root, declaration.replace("/", os.sep))):
                 return "read_file", {"path": declaration}
 
@@ -699,6 +834,48 @@ def _next_evidence_recovery(
                 "matchFileNames": True,
                 "maxResults": 8,
             }
+
+    # A declaration-first traversal is equally schedulable. Prefer an exact
+    # Unreal Public/Classes -> Private mapping before bounded filename search.
+    declarations = [
+        row
+        for row in rows
+        if str(row.get("sourceKind") or "").casefold() == "declaration"
+        or os.path.splitext(str(row.get("path") or ""))[1].casefold()
+        in _SOURCE_DECLARATION_EXTENSIONS
+    ]
+    for row in declarations:
+        for candidate in _source_pair_implementation_candidates(row.get("path")):
+            identity = _path_identity(candidate)
+            if not candidate or identity in accepted or identity in absent:
+                continue
+            if root and os.path.isfile(os.path.join(root, candidate.replace("/", os.sep))):
+                return "read_file", {"path": candidate}
+        source_path = _usable_route_file(row.get("path"))
+        if source_path:
+            stem = os.path.splitext(os.path.basename(source_path))[0]
+            parts = source_path.split("/")
+            source_index = max(
+                (index for index, part in enumerate(parts) if part.casefold() == "source"),
+                default=-1,
+            )
+            search_path = (
+                "/".join(parts[: source_index + 2])
+                if source_index >= 0 and len(parts) > source_index + 1
+                else "Source"
+            )
+            return "search_files", {
+                "query": f"{stem}.cpp",
+                "path": search_path,
+                "regex": False,
+                "matchFileNames": True,
+                "maxResults": 8,
+            }
+
+    for candidate in _source_recovery_candidates(state):
+        declaration = usable_declaration(candidate)
+        if declaration:
+            return "read_file", {"path": declaration}
 
     progress = state.get("inspectionProgress") if isinstance(state.get("inspectionProgress"), dict) else {}
     frontier = progress.get("remainingFrontier") or state.get("remainingFrontier") or []
@@ -739,7 +916,6 @@ def _prepare_synthesis_handoff(
             "source": "evidence",
             "status": "evidence_complete",
             "scopeDisposition": "in_slice",
-            "errorCode": "EVIDENCE_COMPLETE",
             "requiredTool": {},
             "targetFiles": [],
         }
@@ -750,6 +926,9 @@ def _prepare_synthesis_handoff(
         "planRevision": str(state.get("planRevision") or ""),
         "acceptedEvidenceHash": str(readiness.get("acceptedEvidenceHash") or ""),
         "remainingFrontierHash": str(readiness.get("remainingFrontierHash") or ""),
+        "synthesisEvidenceBundleHash": str(
+            readiness.get("synthesisEvidenceBundleHash") or ""
+        ),
         "remainingFrontierRequired": readiness.get("coverageIncomplete") is True,
         "coverageIncomplete": readiness.get("coverageIncomplete") is True,
     }
@@ -843,6 +1022,541 @@ def validation_finding_recovery(
     )
 
 
+def derive_handler_recovery_obligation(
+    state: dict[str, Any],
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    """Derive one recovery command from committed handler facts.
+
+    Handlers may report an error and concrete parameters they observed, but
+    they do not own ``status`` or ``requiredTool.name``. Unknown facts fail
+    closed to a typed user handoff instead of accepting an injected command.
+    """
+
+    fact = event if isinstance(event, dict) else {}
+    source = str(fact.get("source") or "handler").strip().casefold()
+    error_code = str(fact.get("errorCode") or "HANDLER_RECOVERY_REQUIRED").strip()
+    targets = _clean_strings(fact.get("targetFiles"))[:4]
+    observed_args = (
+        dict(fact.get("observedArgs") or {})
+        if isinstance(fact.get("observedArgs"), dict)
+        else {}
+    )
+    message = str(fact.get("message") or "")[:1000]
+    generation = _non_negative_int(
+        fact.get("mutationGeneration")
+        if fact.get("mutationGeneration") is not None
+        else state.get("mutationGeneration")
+    )
+    common: dict[str, Any] = {
+        "source": source,
+        "scopeDisposition": "in_slice",
+        "errorCode": error_code,
+        "mutationGeneration": generation,
+        "targetFiles": targets,
+        "message": message,
+    }
+    checkpoint_tool = {
+        "name": "unreal_task_checkpoint",
+        "args": {
+            "action": "rebase",
+            "acceptCurrentFiles": True,
+            "includeGitChanges": False,
+        },
+    }
+    sketch_tool = {
+        "name": "unreal_code_sketch_claim_validate",
+        "args": {"targetFiles": targets} if targets else {},
+    }
+    static_args = {
+        key: value
+        for key, value in observed_args.items()
+        if key in {"projectRoot", "fullAudit"}
+    }
+    static_tool = {"name": "static_validate_project", "args": static_args}
+    log_args: dict[str, Any] = {
+        "mode": "first_error",
+        "maxFiles": 1,
+        "maxLines": 200,
+        "summaryOnly": True,
+    }
+    if source == "automation":
+        log_args["fileName"] = "latest-automation.log"
+    elif source == "build":
+        log_args["fileName"] = "latest-build.log"
+    observed_log_args = {
+        key: value
+        for key, value in observed_args.items()
+        if key in {
+            "mode", "fileName", "cursorByte", "maxBytes", "maxFiles",
+            "maxLines", "summaryOnly", "filter",
+        }
+    }
+    if observed_log_args:
+        log_args = observed_log_args
+
+    def result(
+        status: str,
+        tool: dict[str, Any],
+        *,
+        scope: str = "in_slice",
+    ) -> dict[str, Any]:
+        value = {
+            **common,
+            "status": status,
+            "scopeDisposition": scope,
+            "requiredTool": tool,
+        }
+        value["fingerprint"] = canonical_hash(value)
+        return value
+
+    if source == "evidence":
+        working = deepcopy(state)
+        reduce_committed_event(
+            working,
+            {
+                "kind": "EVIDENCE_STAGNATION",
+                "errorCode": error_code,
+                "targetFiles": targets,
+            },
+        )
+        obligation = working.get("recoveryObligation")
+        if isinstance(obligation, dict) and obligation:
+            return dict(obligation)
+
+    if source == "transaction_journal" or error_code in {
+        "TRANSACTION_RECONCILIATION_REQUIRED",
+        "STATIC_PROJECT_UNAVAILABLE",
+        "STATIC_VALIDATION_SCOPE_UNAVAILABLE",
+        "AUTOMATION_SCOPE_UNAVAILABLE",
+        "AUTOMATION_FILTER_SET_TOO_LARGE",
+    }:
+        scope = "out_of_slice" if "SCOPE" in error_code else "in_slice"
+        return result("checkpoint_rebase_required", checkpoint_tool, scope=scope)
+
+    if error_code in {
+        "VALIDATION_REQUIRED",
+        "VALIDATION_PROOF_REQUIRED",
+        "VALIDATION_STALE",
+        "AUTOMATION_GENERATION_STALE",
+    } or error_code.endswith("_VALIDATION_PROOF_REQUIRED"):
+        return result("revalidate_required", static_tool)
+
+    if source == "mutation":
+        if error_code in {
+            "MUTATION_EVIDENCE_REFRESH_REQUIRED",
+            "OLD_TEXT_NOT_FOUND",
+            "PATCH_CAS_FAILED",
+            "PATCH_OLD_TEXT_MISSING",
+            "PATCH_OLD_TEXT_AMBIGUOUS",
+            "PATCH_PREIMAGE_MISMATCH",
+            "REPLACEMENT_PREIMAGE_MISMATCH",
+        } or "EVIDENCE" in error_code or "cas" in error_code.casefold():
+            return result(
+                "evidence_required",
+                {"name": "read_file_range", "args": observed_args},
+            )
+        if bool(fact.get("rollbackIncomplete")) or bool(fact.get("externalChange")):
+            return result("checkpoint_rebase_required", checkpoint_tool)
+        return result("repair_planning_required", sketch_tool)
+
+    if error_code == "RECOVERY_LOG_SCAN_CONTINUATION_REQUIRED":
+        range_args = {
+            key: value
+            for key, value in observed_args.items()
+            if key in {
+                "mode", "fileName", "cursorByte", "maxBytes", "maxFiles",
+                "maxLines", "summaryOnly", "filter",
+            }
+        }
+        return result(
+            "evidence_required",
+            {"name": "read_unreal_logs", "args": range_args},
+        )
+
+    if source == "static":
+        if error_code == "WORKFLOW_LOOP_BLOCKED":
+            return result(
+                "repair_planning_required" if targets else "checkpoint_rebase_required",
+                sketch_tool if targets else checkpoint_tool,
+            )
+        return result("environment_recovery", static_tool, scope="infrastructure")
+
+    if source == "automation":
+        if error_code in {
+            "AUTOMATION_TEST_FAILED",
+            "AUTOMATION_FAILED",
+            "BUILD_DIAGNOSTIC_SCOPE_UNAVAILABLE",
+        }:
+            return result(
+                "evidence_required",
+                {"name": "read_unreal_logs", "args": log_args},
+            )
+        if error_code in {
+            "AUTOMATION_SCOPE_UNMAPPED",
+            "NO_AUTOMATION_TESTS_DECLARED",
+            "AUTOMATION_FILTER_REQUIRED",
+        } and targets:
+            return result("repair_planning_required", sketch_tool, scope="out_of_slice")
+        if error_code == "AUTOMATION_DISCOVERY_TRUNCATED":
+            return result("checkpoint_rebase_required", checkpoint_tool, scope="infrastructure")
+        automation_args = {
+            key: value
+            for key, value in observed_args.items()
+            if key in {"testFilter", "testFilters", "project", "timeoutMs"}
+        }
+        return result(
+            "environment_recovery",
+            {"name": "run_unreal_automation_tests", "args": automation_args},
+            scope="infrastructure",
+        )
+
+    if source == "build":
+        if error_code in {
+            "WORKFLOW_LOOP_BLOCKED",
+            "BUILD_FAILED",
+            "BUILD_DIAGNOSTIC_SCOPE_UNAVAILABLE",
+        } or error_code.startswith("COMPILE_"):
+            return result(
+                "evidence_required",
+                {"name": "read_unreal_logs", "args": log_args},
+            )
+        if error_code.startswith("VALIDATION_"):
+            return result("revalidate_required", static_tool)
+        build_args = {
+            key: value
+            for key, value in observed_args.items()
+            if key in {
+                "project", "engineRoot", "target", "platform", "configuration",
+                "timeoutMs", "allowEngineFallback", "engineFallbackAuditNote",
+            }
+        }
+        return result(
+            "environment_recovery",
+            {"name": "build_unreal_project", "args": build_args},
+            scope="infrastructure",
+        )
+
+    return result("await_user", {}, scope="external")
+
+
+_EVENT_TRANSPORT_KEYS = frozenset(
+    {
+        "taskAuthorization", "task_authorization", "sessionId",
+        "taskSessionId", "task_session_id", "authToken", "auth_token",
+        "ownerCapability", "owner_capability", "conversationId", "conversation_id",
+        "planId", "plan_id", "planRevision", "plan_revision",
+        "activeSliceId", "active_slice_id", "routeHash", "route_hash",
+        "routePhase", "route_phase",
+    }
+)
+
+
+def _committed_event_args_match(expected: Any, observed: Any, key: str = "") -> bool:
+    if key in _EVENT_TRANSPORT_KEYS:
+        return True
+    if isinstance(expected, dict):
+        if not isinstance(observed, dict):
+            return False
+        return all(
+            name in observed and _committed_event_args_match(value, observed[name], name)
+            for name, value in expected.items()
+            if name not in _EVENT_TRANSPORT_KEYS
+        )
+    if isinstance(expected, list):
+        return isinstance(observed, list) and expected == observed
+    if key.casefold() in {"path", "project", "projectfile", "targetpath"}:
+        return _path_identity(expected) == _path_identity(observed)
+    if isinstance(expected, bool):
+        return observed is expected
+    if isinstance(expected, (int, float)):
+        try:
+            return float(expected) == float(observed)
+        except (TypeError, ValueError, OverflowError):
+            return False
+    return str(expected if expected is not None else "") == str(observed if observed is not None else "")
+
+
+def _reopen_code_sketch_for_recovery(state: dict[str, Any]) -> None:
+    completed = dict(state.get("completedGates") or {})
+    completed.pop("unreal_code_sketch_claim_validate", None)
+    state["completedGates"] = completed
+    required = [str(item) for item in state.get("requiredBeforeWrite") or [] if str(item)]
+    pending = [gate for gate in required if gate not in completed]
+    state["pendingGates"] = pending
+    gate = dict(state.get("writeGate") or {})
+    gate["completedBeforeWrite"] = sorted(completed)
+    gate["pendingBeforeWrite"] = pending
+    state["writeGate"] = gate
+
+
+def reduce_committed_event(
+    state: dict[str, Any],
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    """Reduce one host-committed fact into the sole semantic task state."""
+
+    kind = str(event.get("kind") or "").strip().upper()
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if kind == "PHASE_BUDGET_EXHAUSTED":
+        readiness = derive_synthesis_readiness(state)
+        state["synthesisReadiness"] = readiness
+        required_next = (
+            "synthesize_current_evidence"
+            if readiness.get("ready") is True
+            else "replan_after_phase_budget"
+        )
+        authorization = {
+            "taskSessionId": str(state.get("taskSessionId") or ""),
+            "ownerCapability": str(state.get("ownerCapability") or ""),
+        }
+        checkpoint_args = {
+            "action": "record",
+            "phase": str(event.get("phase") or state.get("toolRoute", {}).get("phase") or "working"),
+            "requiredNextAction": required_next,
+            "includeGitChanges": False,
+            "taskAuthorization": authorization,
+        }
+        obligation = {
+            "source": "phase_tool_budget",
+            "status": "phase_budget_checkpoint_required",
+            "errorCode": "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+            "budgetErrorCode": str(event.get("budgetErrorCode") or ""),
+            "exhaustedTool": str(event.get("toolName") or ""),
+            "recoveryStrategy": (
+                "synthesis_handoff"
+                if readiness.get("ready") is True
+                else "bounded_replan_handoff"
+            ),
+            "synthesisReadiness": readiness,
+            "requiredTool": {"name": "unreal_task_checkpoint", "args": checkpoint_args},
+        }
+        obligation["fingerprint"] = canonical_hash(obligation)
+        state["recoveryObligation"] = obligation
+    elif kind == "EVIDENCE_STAGNATION":
+        readiness = derive_synthesis_readiness(state)
+        state["synthesisReadiness"] = readiness
+        error_code = str(event.get("errorCode") or "EVIDENCE_STAGNATION")
+        targets = _clean_strings(event.get("targetFiles"))[:4]
+        common = {
+            "source": "evidence",
+            "scopeDisposition": "in_slice",
+            "mutationGeneration": _non_negative_int(state.get("mutationGeneration")),
+        }
+        writes_allowed = bool(
+            state.get("writesAllowed") is True
+            or (
+                isinstance(state.get("writeGate"), dict)
+                and state["writeGate"].get("writesAllowed") is True
+            )
+        )
+        if writes_allowed:
+            obligation = {
+                **common,
+                "status": "repair_planning_required",
+                "errorCode": error_code,
+                "requiredTool": {
+                    "name": "unreal_code_sketch_claim_validate",
+                    "args": {"targetFiles": targets} if targets else {},
+                },
+                "targetFiles": targets,
+                "message": (
+                    "Evidence reads are exhausted. Reuse retained source evidence "
+                    "and validate the bounded repair claim before writing."
+                ),
+            }
+        elif readiness.get("ready") is True:
+            obligation = {
+                **common,
+                "status": "evidence_complete",
+                "errorCode": error_code,
+                "requiredTool": {},
+                "targetFiles": targets,
+                "synthesisReadiness": readiness,
+                "message": (
+                    "Evidence reads are exhausted. Answer from retained source evidence; "
+                    "no additional tool call is permitted for this turn."
+                ),
+            }
+        else:
+            recovery_action = _next_evidence_recovery(state, readiness)
+            if recovery_action:
+                recovery_name, recovery_args = recovery_action
+                obligation = {
+                    **common,
+                    "status": "evidence_required",
+                    "errorCode": "EVIDENCE_ROUTE_EXHAUSTED",
+                    "requiredTool": {"name": recovery_name, "args": recovery_args},
+                    "targetFiles": [str(recovery_args.get("path") or "")]
+                    if recovery_args.get("path")
+                    else targets,
+                    "synthesisReadiness": readiness,
+                    "message": (
+                        "The current read route stagnated before synthesis readiness; "
+                        "continue with the next canonical bounded evidence action."
+                    ),
+                }
+            else:
+                obligation = {
+                    **common,
+                    "status": "phase_budget_replan_required",
+                    "errorCode": "EVIDENCE_ROUTE_EXHAUSTED",
+                    "requiredTool": {
+                        "name": "unreal_agent_plan",
+                        "args": {
+                            "request": str(
+                                state.get("objective")
+                                or state.get("request")
+                                or "Continue bounded source analysis"
+                            )
+                        },
+                    },
+                    "targetFiles": targets,
+                    "synthesisReadiness": readiness,
+                    "message": (
+                        "The current evidence route is exhausted but synthesis readiness "
+                        "is false; perform one bounded server-owned replan."
+                    ),
+                }
+        obligation["fingerprint"] = canonical_hash(obligation)
+        state["recoveryObligation"] = obligation
+    elif kind == "GATE_VALIDATION_FAILED":
+        error_code = str(event.get("errorCode") or "GATE_VALIDATION_FAILED")
+        targets = _clean_strings(event.get("targetFiles"))[:4]
+        if error_code == "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED" and targets:
+            obligation = {
+                "source": "feature_intent_gate",
+                "status": "evidence_required",
+                "scopeDisposition": "in_slice",
+                "errorCode": error_code,
+                "mutationGeneration": _non_negative_int(state.get("mutationGeneration")),
+                "requiredTool": {"name": "read_file", "args": {"path": targets[0]}},
+                "targetFiles": targets,
+                "message": (
+                    "Read the first missing or stale active-slice target before "
+                    "retrying the feature-intent gate."
+                ),
+            }
+            obligation["fingerprint"] = canonical_hash(obligation)
+            state["recoveryObligation"] = obligation
+    elif kind == "HANDLER_RECOVERY_FACT":
+        state["recoveryObligation"] = derive_handler_recovery_obligation(state, event)
+    elif kind == "TOOL_RESULT_COMMITTED":
+        tool_name = str(event.get("toolName") or "")
+        args = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        obligation = dict(state.get("recoveryObligation") or {})
+        required = obligation.get("requiredTool") if isinstance(obligation.get("requiredTool"), dict) else {}
+        if (
+            str(obligation.get("status") or "") == "frontier_reconstruction_search_required"
+            and str(required.get("name") or "") == tool_name
+            and _committed_event_args_match(required.get("args") or {}, args)
+        ):
+            progress = (
+                state.get("inspectionProgress")
+                if isinstance(state.get("inspectionProgress"), dict)
+                else {}
+            )
+            reconstruction = (
+                dict(progress.get("frontierReconstruction") or {})
+                if isinstance(progress.get("frontierReconstruction"), dict)
+                else {}
+            )
+            frontier = _clean_strings(progress.get("remainingFrontier"))
+            reconstruction.update(
+                {
+                    "boundedSearchAttempted": True,
+                    "noBoundedSearchCandidates": not bool(frontier),
+                    "lastSearchTool": tool_name,
+                    "lastSearchAt": now,
+                }
+            )
+            progress["frontierReconstruction"] = reconstruction
+            state["inspectionProgress"] = progress
+            if frontier:
+                state["recoveryObligation"] = {
+                    "source": "evidence",
+                    "status": "evidence_required",
+                    "errorCode": "EVIDENCE_FRONTIER_RECONSTRUCTED",
+                    "requiredTool": {},
+                    "targetFiles": frontier,
+                    "fingerprint": canonical_hash(frontier),
+                }
+        if (
+            str(obligation.get("status") or "") == "evidence_required"
+            and str(required.get("name") or "") == tool_name
+            and int(obligation.get("mutationGeneration") or 0)
+            == int(state.get("mutationGeneration") or 0)
+            and event.get("evidenceProgressed") is not False
+            and _committed_event_args_match(required.get("args") or {}, args)
+        ):
+            targets = [str(item) for item in obligation.get("targetFiles") or [] if str(item)]
+            feature_gate_recovery = str(obligation.get("source") or "") == "feature_intent_gate"
+            obligation.update(
+                {
+                    "status": "repair_planning_required",
+                    "requiredTool": {
+                        "name": (
+                            "unreal_feature_intent_resolve"
+                            if feature_gate_recovery
+                            else "unreal_code_sketch_claim_validate"
+                        ),
+                        "args": (
+                            {}
+                            if feature_gate_recovery
+                            else ({"targetFiles": targets} if targets else {})
+                        ),
+                    },
+                    "evidenceSatisfiedBy": tool_name,
+                    "evidenceSatisfiedAt": now,
+                    "evidenceHash": str(metadata.get("contentHash") or ""),
+                    "attemptCount": 0,
+                }
+            )
+            obligation["fingerprint"] = canonical_hash(
+                {
+                    key: obligation.get(key)
+                    for key in (
+                        "source", "status", "scopeDisposition", "errorCode",
+                        "mutationGeneration", "requiredTool", "targetFiles",
+                    )
+                }
+            )
+            state["recoveryObligation"] = obligation
+            legacy = dict(state.get("buildRecovery") or {})
+            if legacy and str(obligation.get("source") or "") == "build":
+                legacy.update(
+                    {
+                        "status": "repair_planning_required",
+                        "evidenceSatisfied": True,
+                        "evidenceRecordedAt": now,
+                    }
+                )
+                state["buildRecovery"] = legacy
+            if not feature_gate_recovery:
+                _reopen_code_sketch_for_recovery(state)
+        checkpoint = state.get("continuity", {}).get("checkpoint")
+        validation = checkpoint.get("validation") if isinstance(checkpoint, dict) else None
+        recovery = validation.get("recovery") if isinstance(validation, dict) else None
+        direct = metadata.get("directSourceEvidence") if isinstance(metadata.get("directSourceEvidence"), dict) else metadata
+        if (
+            tool_name in {"read_file", "read_file_range"}
+            and isinstance(recovery, dict)
+            and str(validation.get("status") or "").casefold() == "failed"
+            and str(recovery.get("status") or "") == "evidence_required"
+            and int(recovery.get("mutationGeneration") or 0) == int(state.get("mutationGeneration") or 0)
+            and _path_identity(recovery.get("targetPath") or validation.get("firstFinding", {}).get("path"))
+            == _path_identity(direct.get("projectRelativePath"))
+        ):
+            validation["recovery"] = {
+                **recovery,
+                "status": "evidence_satisfied",
+                "evidenceSatisfiedBy": tool_name,
+                "evidenceSatisfiedAt": now,
+            }
+    return commit_control_transition(state)
+
+
 def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
     synthesis_readiness = derive_synthesis_readiness(state)
     state["synthesisReadiness"] = synthesis_readiness
@@ -864,6 +1578,8 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
     retry_value = "allowed"
     blocker_code = ""
     blocker_fingerprint = ""
+    required_input: dict[str, Any] | None = None
+    transition_reason = ""
     discovery_only = False
     no_tools_for_synthesis = False
 
@@ -873,6 +1589,12 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
         disposition = "workflow_stop"
     elif status in {"pending_approval", "awaiting_approval"}:
         disposition = "await_user"
+        required_input = _required_user_input(
+            state,
+            "approve_scope",
+            "Approve or reject the pending task scope before execution continues.",
+            {"type": "object", "required": ["approved"], "properties": {"approved": {"type": "boolean"}}},
+        )
     elif status == "running":
         recovery_obligation = (
             state.get("recoveryObligation")
@@ -947,7 +1669,42 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             and int(failed_gate_attempt.get("attemptCount") or 0) >= 2
             and not failed_gate_attempt.get("recoverySatisfiedAt")
         )
-        if repeated_gate_blocker:
+        progress = state.get("inspectionProgress") if isinstance(state.get("inspectionProgress"), dict) else {}
+        initial_discovery_contract = bool(
+            (isinstance(state.get("initialEvidenceActions"), list) and state.get("initialEvidenceActions"))
+            or str(progress.get("status") or "") == "initial_discovery_required"
+        )
+        pending_initial_discovery = (
+            _initial_evidence_action(state)
+            if (
+                str(state.get("mode") or "").casefold() == "read_only"
+                and is_source_evidence_task(state)
+                and synthesis_readiness.get("ready") is not True
+                and not repo_audit_required
+            )
+            else None
+        )
+        needs_initial_discovery = bool(
+            str(state.get("mode") or "").casefold() == "read_only"
+            and is_source_evidence_task(state)
+            and synthesis_readiness.get("ready") is not True
+            and not repo_audit_required
+            and initial_discovery_contract
+            and (
+                pending_initial_discovery is not None
+                or progress.get("discoveryStarted") is not True
+            )
+        )
+        first_evidence_action = pending_initial_discovery if needs_initial_discovery else None
+        if first_evidence_action:
+            required_name, required_args = first_evidence_action
+            retry_value = "once"
+            transition_reason = "INITIAL_EVIDENCE_DISCOVERY"
+        elif needs_initial_discovery:
+            required_name, required_args = _fallback_discovery_action(state)
+            retry_value = "once"
+            transition_reason = "INITIAL_EVIDENCE_DISCOVERY_FALLBACK"
+        elif repeated_gate_blocker:
             disposition = "rediscover"
             retry_value = "forbidden"
             blocker_code = "REPEATED_GATE_BLOCKER"
@@ -957,11 +1714,14 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
         elif recovery_status in {"external_blocker", "await_user"}:
             disposition = "await_user"
             retry_value = "forbidden"
-            blocker_code = str(
-                recovery_obligation.get("errorCode")
-                or "RECOVERY_EXTERNAL_BLOCKER"
-            )
+            blocker_code = str(recovery_obligation.get("errorCode") or "RECOVERY_EXTERNAL_BLOCKER")
             blocker_fingerprint = recovery_fingerprint
+            required_input = _required_user_input(
+                state,
+                "choose_option",
+                str(recovery_obligation.get("userPrompt") or "Choose how to resolve the external blocker."),
+                {"type": "object", "minProperties": 1},
+            )
         elif recovery_status in {
             "phase_budget_checkpoint_required",
             "phase_budget_replan_required",
@@ -971,7 +1731,7 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 required_args = recovery_tool_args
                 retry_value = "once"
             else:
-                disposition = "await_user"
+                disposition = "workflow_stop"
                 retry_value = "forbidden"
                 blocker_code = "RECOVERY_REQUIRED_TOOL_MISSING"
                 blocker_fingerprint = recovery_fingerprint
@@ -996,26 +1756,26 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 retry_value = "forbidden"
                 no_tools_for_synthesis = True
             else:
-                required_name = "unreal_agent_plan"
-                required_args = {"request": str(state.get("objective") or state.get("request") or "Continue bounded source analysis")}
+                evidence_action = _next_evidence_recovery(state, synthesis_readiness)
+                if evidence_action:
+                    required_name, required_args = evidence_action
+                else:
+                    required_name = "unreal_agent_plan"
+                    required_args = {"request": str(state.get("objective") or state.get("request") or "Continue bounded source analysis")}
                 retry_value = "once"
         elif recovery_status == "evidence_complete":
             if synthesis_readiness["ready"]:
                 disposition = "continue"
                 retry_value = "forbidden"
                 no_tools_for_synthesis = True
-                blocker_code = str(
-                    recovery_obligation.get("errorCode") or "EVIDENCE_STAGNATION"
-                )
-                blocker_fingerprint = recovery_fingerprint
+                transition_reason = "EVIDENCE_COMPLETE"
             else:
-                next_path = next(iter(synthesis_readiness["remainingFrontier"]), "")
-                required_name = "read_file" if next_path else "unreal_agent_plan"
-                required_args = (
-                    {"path": next_path}
-                    if next_path
-                    else {"request": str(state.get("objective") or state.get("request") or "Continue bounded source analysis")}
-                )
+                evidence_action = _next_evidence_recovery(state, synthesis_readiness)
+                if evidence_action:
+                    required_name, required_args = evidence_action
+                else:
+                    required_name = "unreal_agent_plan"
+                    required_args = {"request": str(state.get("objective") or state.get("request") or "Continue bounded source analysis")}
                 retry_value = "once"
         elif recovery_status == "environment_recovery":
             attempt_count = _non_negative_int(
@@ -1028,11 +1788,14 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             else:
                 disposition = "await_user"
                 retry_value = "forbidden"
-                blocker_code = str(
-                    recovery_obligation.get("errorCode")
-                    or "RECOVERY_ENVIRONMENT_BLOCKED"
-                )
+                blocker_code = str(recovery_obligation.get("errorCode") or "RECOVERY_ENVIRONMENT_BLOCKED")
                 blocker_fingerprint = recovery_fingerprint
+                required_input = _required_user_input(
+                    state,
+                    "provide_path",
+                    str(recovery_obligation.get("userPrompt") or "Provide an accessible project or source path to continue."),
+                    {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "minLength": 1}}},
+                )
         elif recovery_status in {
             "evidence_required",
             "repair_planning_required",
@@ -1044,7 +1807,7 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 required_args = recovery_tool_args
                 retry_value = "once"
             else:
-                disposition = "await_user"
+                disposition = "workflow_stop"
                 retry_value = "forbidden"
                 blocker_code = "RECOVERY_REQUIRED_TOOL_MISSING"
                 blocker_fingerprint = recovery_fingerprint
@@ -1064,6 +1827,12 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                     retry_value = "forbidden"
                     blocker_code = "RECOVERY_MUTATION_SCOPE_MISSING"
                     blocker_fingerprint = recovery_fingerprint
+                    required_input = _required_user_input(
+                        state,
+                        "choose_option",
+                        "Select the concrete file scope for the required repair.",
+                        {"type": "object", "required": ["files"], "properties": {"files": {"type": "array", "minItems": 1, "items": {"type": "string"}}}},
+                    )
         elif state.get("slicePlanningRequired") is True:
             # A feature gate cannot bind a placeholder slice. Discovery is a
             # server-declared state of the transition table, not a permission
@@ -1214,18 +1983,129 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 required_name, required_args = evidence_action
                 retry_value = "once"
             else:
-                disposition = "await_user"
-                retry_value = "forbidden"
-                blocker_code = "EVIDENCE_FRONTIER_LOST"
+                raw_frontier = _clean_strings(progress.get("remainingFrontier"))
+                absent_paths = _source_absent_paths(state)
+                usable_frontier = [
+                    path for path in raw_frontier if _path_identity(path) not in absent_paths
+                ]
+                if usable_frontier != raw_frontier:
+                    # An accepted absence proof consumes the corresponding
+                    # discovery candidate. Keeping it in the raw frontier made
+                    # status reconciliation repeat forever even though no
+                    # callable evidence action remained.
+                    progress["remainingFrontier"] = usable_frontier
+                    state["inspectionProgress"] = progress
+                discovery_started = progress.get("discoveryStarted") is True
+                ever_had_frontier = progress.get("everHadFrontier") is True
+                attempts = _non_negative_int(progress.get("discoveryAttempts"))
+                reconstruction = (
+                    dict(progress.get("frontierReconstruction") or {})
+                    if isinstance(progress.get("frontierReconstruction"), dict)
+                    else {}
+                )
+                if (
+                    reconstruction.get("boundedSearchAttempted") is True
+                    and not usable_frontier
+                ):
+                    # The bounded search receipt plus consumption/absence of its
+                    # final candidate is the durable exhaustion proof. Recompute
+                    # it from current authoritative facts instead of waiting on
+                    # a status call that cannot change evidence state.
+                    reconstruction["noBoundedSearchCandidates"] = True
+                    progress["frontierReconstruction"] = reconstruction
+                    state["inspectionProgress"] = progress
+                genuine_frontier_loss = bool(
+                    discovery_started
+                    and ever_had_frontier
+                    and reconstruction.get("failedReconstruction") is True
+                    and reconstruction.get("noDeterministicPair") is True
+                    and reconstruction.get("boundedReplanApplied") is True
+                    and reconstruction.get("boundedSearchAttempted") is True
+                    and reconstruction.get("noBoundedSearchCandidates") is True
+                )
+                if discovery_started and ever_had_frontier and not genuine_frontier_loss:
+                    reconstruction.update(
+                        {
+                            "failedReconstruction": True,
+                            "noDeterministicPair": True,
+                        }
+                    )
+                    progress["frontierReconstruction"] = reconstruction
+                    state["inspectionProgress"] = progress
+                    if reconstruction.get("boundedReplanApplied") is not True:
+                        required_name = "unreal_agent_plan"
+                        required_args = {
+                            "request": str(
+                                state.get("objective")
+                                or state.get("request")
+                                or "Reconstruct the bounded source evidence frontier"
+                            )
+                        }
+                        retry_value = "once"
+                        transition_reason = "EVIDENCE_FRONTIER_RECONSTRUCTION_REPLAN"
+                        recovery_status = "frontier_reconstruction_replan_required"
+                    elif reconstruction.get("boundedSearchAttempted") is not True:
+                        required_name, required_args = _fallback_discovery_action(state)
+                        retry_value = "once"
+                        transition_reason = "EVIDENCE_FRONTIER_RECONSTRUCTION_SEARCH"
+                        recovery_status = "frontier_reconstruction_search_required"
+                    else:
+                        # A malformed/incomplete receipt cannot prove loss. Ask
+                        # the task owner to reconcile once instead of inventing
+                        # a terminal frontier claim.
+                        required_name = "unreal_task_status"
+                        required_args = {}
+                        retry_value = "once"
+                        transition_reason = "EVIDENCE_FRONTIER_PROOF_RECONCILIATION"
+                        recovery_status = "frontier_reconstruction_proof_incomplete"
+                    state["recoveryObligation"] = {
+                        "source": "evidence",
+                        "status": recovery_status,
+                        "scopeDisposition": "in_slice",
+                        "errorCode": "EVIDENCE_FRONTIER_RECONSTRUCTION_REQUIRED",
+                        "fingerprint": canonical_hash(reconstruction),
+                        "requiredTool": {"name": required_name, "args": required_args},
+                        "targetFiles": [],
+                    }
+                    blocker_code = ""
+                    disposition = "require_tool"
+                else:
+                    disposition = "workflow_stop"
+                    retry_value = "forbidden"
+                    blocker_code = (
+                        "EVIDENCE_FRONTIER_LOST"
+                        if genuine_frontier_loss
+                        else "EVIDENCE_DISCOVERY_EXHAUSTED"
+                    )
                 blocker_fingerprint = canonical_hash(
                     {
                         "taskSessionId": str(state.get("taskSessionId") or ""),
                         "planRevision": str(state.get("planRevision") or ""),
                         "acceptedEvidenceHash": str(synthesis_readiness.get("acceptedEvidenceHash") or ""),
                         "remainingFrontierHash": str(synthesis_readiness.get("remainingFrontierHash") or ""),
+                        "synthesisEvidenceBundleHash": str(
+                            synthesis_readiness.get("synthesisEvidenceBundleHash") or ""
+                        ),
                         "reason": str(synthesis_readiness.get("reason") or ""),
+                        "discoveryStarted": discovery_started,
+                        "everHadFrontier": ever_had_frontier,
+                        "attempts": attempts,
                     }
                 )
+                if blocker_code:
+                    state["recoveryObligation"] = {
+                        "source": "evidence",
+                        "status": (
+                            "evidence_frontier_lost"
+                            if genuine_frontier_loss
+                            else "evidence_discovery_exhausted"
+                        ),
+                        "scopeDisposition": "in_slice",
+                        "errorCode": blocker_code,
+                        "fingerprint": blocker_fingerprint,
+                        "requiredTool": {},
+                        "targetFiles": [],
+                    }
 
         if required_name == "static_validate_project":
             project_root = _authoritative_project_root(state)
@@ -1272,22 +2152,14 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
         if disposition in {"complete", "workflow_stop", "await_user"}
         else []
         if no_tools_for_synthesis
-        else [
-            name
-            for name in active_tools
-            if (
-                name
-                in (
-                    _REPEATED_GATE_REDISCOVERY_TOOLS
-                    if blocker_code == "REPEATED_GATE_BLOCKER"
-                    else _DISCOVERY_TOOL_NAMES
-                )
-                or (
-                    discovery_only
-                    and name == (pending_gates[0] if pending_gates else "")
-                )
-            )
-        ]
+        else list(dict.fromkeys([
+            *(
+                _REPEATED_GATE_REDISCOVERY_TOOLS
+                if blocker_code == "REPEATED_GATE_BLOCKER"
+                else _DISCOVERY_TOOL_NAMES
+            ),
+            *([pending_gates[0]] if discovery_only and pending_gates else []),
+        ]))
         if disposition == "rediscover" or discovery_only
         else active_tools
     )
@@ -1315,6 +2187,8 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
             if blocker_code
             else None
         ),
+        "requiredUserInput": required_input if disposition == "await_user" else None,
+        "transitionReason": transition_reason,
         "mutationGeneration": _non_negative_int(state.get("mutationGeneration")),
     }
 
@@ -1324,7 +2198,70 @@ def commit_control_transition(state: dict[str, Any]) -> dict[str, Any]:
 
     readiness = derive_synthesis_readiness(state)
     _prepare_synthesis_handoff(state, readiness)
+    state["synthesisReadiness"] = readiness
+    # Route phase and catalog are derived facts, not adapter inputs. Refresh
+    # them inside the reducer so a committed final evidence event reaches the
+    # synthesis latch without requiring a later task_status side effect.
+    if is_source_evidence_task(state):
+        state["toolRoute"] = derive_tool_route(state)
     control = derive_next_obligation(state)
+    readiness = derive_synthesis_readiness(state)
+    state["synthesisReadiness"] = readiness
+    prior_route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
+    effective_route = {
+        **prior_route,
+        "phase": str(control.get("phase") or prior_route.get("phase") or "unknown"),
+        "roleSession": (
+            "synthesis"
+            if str(control.get("phase") or "") == "synthesis"
+            else str(prior_route.get("roleSession") or "")
+        ),
+        "activeTools": list(control.get("allowedTools") or []),
+        "pendingGates": list(control.get("pendingGates") or []),
+    }
+    if str(control.get("disposition") or "") in {"complete", "workflow_stop", "await_user"}:
+        effective_route["maxToolCallsPerPhase"] = 0
+    effective_route.pop("routeHash", None)
+    effective_route["routeHash"] = canonical_hash(effective_route)
+    state["toolRoute"] = effective_route
+    control["routeHash"] = effective_route["routeHash"]
+    if (
+        effective_route["phase"] != control.get("phase")
+        or _clean_strings(effective_route.get("activeTools"))
+        != _clean_strings(control.get("allowedTools"))
+        or (
+            control.get("disposition") == "await_user"
+            and bool(effective_route.get("activeTools"))
+        )
+        or (
+            isinstance(control.get("requiredTool"), dict)
+            and effective_route.get("activeTools")
+            != [str(control["requiredTool"].get("name") or "")]
+        )
+    ):
+        raise RuntimeError("TASK_CONTROL_ROUTE_INVARIANT_VIOLATION")
+    usage = state.get("toolRouteUsage") if isinstance(state.get("toolRouteUsage"), dict) else {}
+    if str(usage.get("routeHash") or "") != effective_route["routeHash"]:
+        preserved_reservations = [
+            dict(item)
+            for item in (usage.get("reservations") or [])
+            if isinstance(item, dict) and str(item.get("reservationId") or "")
+        ]
+        state["toolRouteUsage"] = {
+            "routeHash": effective_route["routeHash"],
+            "phase": effective_route["phase"],
+            "roleSession": effective_route["roleSession"],
+            "count": 0,
+            "reserved": len(preserved_reservations),
+            "reservations": preserved_reservations,
+            "calls": [],
+            "priorRouteCommits": [
+                dict(item)
+                for item in (usage.get("priorRouteCommits") or [])[-8:]
+                if isinstance(item, dict)
+            ],
+            "resetReason": "control_route_projection",
+        }
     control["synthesisReadiness"] = dict(readiness)
     base_epoch = _non_negative_int(state.get("controlEpoch"))
     control["synthesisReadiness"]["controlEpoch"] = base_epoch
@@ -1336,6 +2273,9 @@ def commit_control_transition(state: dict[str, Any]) -> dict[str, Any]:
             "planRevision": str(readiness.get("planRevision") or ""),
             "acceptedEvidenceHash": str(readiness.get("acceptedEvidenceHash") or ""),
             "remainingFrontierHash": str(readiness.get("remainingFrontierHash") or ""),
+            "synthesisEvidenceBundleHash": str(
+                readiness.get("synthesisEvidenceBundleHash") or ""
+            ),
             "commitEligible": True,
             "pendingEvidenceObligation": False,
         }
@@ -1809,9 +2749,12 @@ def derive_tool_route(
         else {}
     )
     if phase == "planner" and inspection_budget:
+        direct_reads = max(1, int(inspection_budget.get("maxDirectSourceReadsPerPhase") or 1))
+        discovery_and_range_reserve = 3
+        mandatory_gate_reserve = 1 if pending_gates else 0
         max_calls = min(
-            max_calls,
-            max(1, int(inspection_budget.get("maxDirectSourceReadsPerPhase") or max_calls)),
+            MAX_PHASE_TOOL_CALLS,
+            direct_reads + discovery_and_range_reserve + mandatory_gate_reserve,
         )
     route: dict[str, Any] = {
         "version": ROUTE_VERSION,

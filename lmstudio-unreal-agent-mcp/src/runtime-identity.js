@@ -37,14 +37,25 @@ function walkFiles(directory, suffixes) {
 
 function componentLayout(root, component) {
   let files = [];
+  let requiredFiles = [];
   let base;
   if (component === "agent") {
     base = fs.existsSync(path.join(root, "package.json")) && fs.existsSync(path.join(root, "src"))
       ? root
       : path.join(root, "lmstudio-unreal-agent-mcp");
-    files = [
+    requiredFiles = [
       path.join(base, "package.json"),
       path.join(path.dirname(base), "config", "synthesis_readiness_policy.json"),
+      path.join(path.dirname(base), "config", "control_state_machine.json"),
+      path.join(path.dirname(base), "scripts", "control_transition_bridge.py"),
+      path.join(path.dirname(base), "scripts", "phase_tool_router.py"),
+      path.join(path.dirname(base), "scripts", "synthesis_readiness.py"),
+      path.join(path.dirname(base), "scripts", "task_api.py"),
+      path.join(path.dirname(base), "scripts", "task_gate_history.py"),
+      path.join(path.dirname(base), "scripts", "workspace_paths.py"),
+    ];
+    files = [
+      ...requiredFiles,
       ...walkFiles(path.join(base, "src"), [".js"]),
     ];
   } else if (component === "compactor") {
@@ -58,6 +69,13 @@ function componentLayout(root, component) {
     ];
   } else {
     throw new Error(`unknown control component: ${component}`);
+  }
+  const missing = requiredFiles.filter((file) => !fs.existsSync(file));
+  if (missing.length) {
+    throw controlProtocolError(
+      "CONTROL_RUNTIME_VERSION_MISMATCH",
+      `missing ${component} runtime dependencies: ${missing.map((file) => path.basename(file)).join(", ")}`,
+    );
   }
   return {
     base: path.resolve(base),

@@ -8,6 +8,17 @@ const core = require("../src/compaction-core");
 // JSON. Production LM Studio history always carries a paired tool call/result;
 // normalize only authoritative legacy fixtures to that real transport shape.
 const rawBuildCheckpoint = core.buildCheckpoint;
+const canonicalFixtureContent = (content, trusted) => {
+  if (!trusted) return content;
+  try {
+    const payload = JSON.parse(String(content || ""));
+    if (Number(payload?.control?.version || 0) >= 2 && payload.control.authoritative === undefined) {
+      payload.control.authoritative = true;
+      return JSON.stringify(payload);
+    }
+  } catch { /* ordinary tool text */ }
+  return content;
+};
 core.buildCheckpoint = (messages, ...args) => {
   const normalized = [];
   let fixtureId = 0;
@@ -20,7 +31,7 @@ core.buildCheckpoint = (messages, ...args) => {
     if (toolResults.length) {
       for (const result of toolResults) {
         const name = String(result?.name || "");
-        const trusted = /(?:^|[/:_])(unreal_task_(?:status|start|recover_active|checkpoint)|unreal_agent_plan|read_file(?:_range)?|read_symbol|search_files|list_directory)$/u.test(name);
+        const trusted = /(?:^|[/:_])(unreal_task_(?:status|start|recover_active|checkpoint)|unreal_agent_plan|unreal_feature_intent_resolve|unreal_code_sketch_claim_validate|read_file(?:_range)?|read_symbol|search_files|list_directory)$/u.test(name);
         const alreadyPaired = normalized.some((row) => (row?.toolCalls || []).some(
           (call) => String(call?.id || "") === String(result?.toolCallId || ""),
         ));
@@ -30,7 +41,14 @@ core.buildCheckpoint = (messages, ...args) => {
           }] });
         }
       }
-      normalized.push(message);
+      normalized.push({
+        ...message,
+        toolResults: toolResults.map((result) => {
+          const name = String(result?.name || "");
+          const trusted = /(?:^|[/:_])(unreal_task_(?:status|start|recover_active|checkpoint)|unreal_agent_plan|unreal_feature_intent_resolve|unreal_code_sketch_claim_validate|read_file(?:_range)?|read_symbol|search_files|list_directory)$/u.test(name);
+          return { ...result, content: canonicalFixtureContent(result?.content, trusted) };
+        }),
+      });
       continue;
     }
     let payload = null;
@@ -47,12 +65,26 @@ core.buildCheckpoint = (messages, ...args) => {
     normalized.push(
       { role: "assistant", toolCalls: [{ id, name: "unreal_task_status", arguments: {} }] },
       { role: "tool", toolResults: [{
-        toolCallId: id, name: "unreal_task_status", content: JSON.stringify(payload),
+        toolCallId: id,
+        name: "unreal_task_status",
+        content: canonicalFixtureContent(JSON.stringify(payload), true),
       }] },
     );
   }
   return rawBuildCheckpoint(normalized, ...args);
 };
+
+test("non-authoritative server control v2 is rejected", () => {
+  assert.equal(core.compactServerControl({
+    version: 2,
+    epoch: 1,
+    taskSessionId: "non-authoritative-task",
+    phase: "planner",
+    disposition: "continue",
+    allowedTools: [],
+    retryPolicy: { sameSemanticInput: "allowed" },
+  }), null);
+});
 
 test("legacy forced low-floor recovery migrates to a server-owned transition", () => {
   const messages = [{ role: "user", content: "Inspect the current project." }];
@@ -1043,6 +1075,18 @@ test("terminal task response clears stale route ownership and exact tool gates",
     taskAuthorization: { taskSessionId: "task-terminal", ownerCapability: "owner-terminal" },
     toolRoute: { routeHash: "route-terminal", phase: "executor", activeTools: ["apply_edit_bundle"] },
     requiredNextTool: "apply_edit_bundle",
+    control: {
+      version: 2,
+      authoritative: true,
+      epoch: 1,
+      taskSessionId: "task-terminal",
+      routeHash: "route-terminal",
+      phase: "executor",
+      disposition: "require_tool",
+      requiredTool: { name: "apply_edit_bundle", args: {} },
+      allowedTools: ["apply_edit_bundle"],
+      retryPolicy: { sameSemanticInput: "once" },
+    },
   };
   const messages = [
     { role: "user", content: "implement the bounded change" },
@@ -1064,6 +1108,17 @@ test("terminal task response clears stale route ownership and exact tool gates",
         status: "cancelled",
         taskRouteTerminal: true,
         toolRoute: {},
+        control: {
+          version: 2,
+          authoritative: true,
+          epoch: 2,
+          taskSessionId: "task-terminal",
+          phase: "complete",
+          disposition: "complete",
+          requiredTool: null,
+          allowedTools: [],
+          retryPolicy: { sameSemanticInput: "forbidden" },
+        },
         routeAuthorization: { routeHash: "", routePhase: "" },
         resumeAction: "unreal_task_resume",
       }),
@@ -1469,6 +1524,18 @@ test("checkpoint accepts matching requestIntent v1 only from observed Python con
       taskKind: "cpp_analysis",
       writeGate: { writesAllowed: false },
       requestIntent,
+      taskAuthorization: { taskSessionId: "task-request-intent", ownerCapability: "owner-request-intent" },
+      control: {
+        version: 2,
+        authoritative: true,
+        epoch: 1,
+        taskSessionId: "task-request-intent",
+        phase: "planner",
+        disposition: "continue",
+        requiredTool: null,
+        allowedTools: ["search_files"],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
     }),
   ]);
   assert.deepEqual(accepted.requestIntent, requestIntent);
@@ -1480,6 +1547,21 @@ test("checkpoint accepts matching requestIntent v1 only from observed Python con
     ...toolExchange("unreal_task_status", "status-accepted", {
       ok: true,
       taskSessionId: "task-request-intent-status",
+      taskAuthorization: {
+        taskSessionId: "task-request-intent-status",
+        ownerCapability: "owner-request-intent-status",
+      },
+      control: {
+        version: 2,
+        authoritative: true,
+        epoch: 1,
+        taskSessionId: "task-request-intent-status",
+        phase: "planner",
+        disposition: "continue",
+        requiredTool: null,
+        allowedTools: ["search_files"],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
       state: {
         taskSessionId: "task-request-intent-status",
         objective,
@@ -1730,6 +1812,18 @@ test("a long objective prefix is still a new goal and clears the old route", () 
         routeHash: "route-long-objective-prefix",
         phase: "executor",
         activeTools: ["read_file"],
+      },
+      control: {
+        version: 2,
+        authoritative: true,
+        epoch: 1,
+        taskSessionId,
+        routeHash: "route-long-objective-prefix",
+        phase: "executor",
+        disposition: "require_tool",
+        requiredTool: { name: "read_file", args: {} },
+        allowedTools: ["read_file"],
+        retryPolicy: { sameSemanticInput: "once" },
       },
       requestIntent: requestIntentFor(oldObjective, {
         operation: "modify",
@@ -2161,6 +2255,18 @@ test("workflow stop discards a later generic required tool control", () => {
 
 test("read-only side query suspends and continuation restores an active write objective", () => {
   const ownership = { taskSessionId: "task-side-query", ownerCapability: "owner-side-query" };
+  const sideControl = {
+    version: 2,
+    authoritative: true,
+    epoch: 1,
+    taskSessionId: ownership.taskSessionId,
+    routeHash: "route-side-query",
+    phase: "verifier",
+    disposition: "require_tool",
+    requiredTool: { name: "unreal_code_sketch_claim_validate", args: {} },
+    allowedTools: ["unreal_code_sketch_claim_validate"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
   const initial = core.buildCheckpoint([
     { role: "user", content: "로컬 입력 변경을 검증하고 필요한 최소 수정 후 빌드해" },
     { role: "assistant", toolCalls: [{ id: "plan-1", name: "unreal_agent_plan", arguments: {} }] },
@@ -2170,6 +2276,7 @@ test("read-only side query suspends and continuation restores an active write ob
       content: JSON.stringify({
         ok: true,
         taskAuthorization: ownership,
+        control: sideControl,
         toolRoute: {
           routeHash: "route-side-query",
           phase: "verifier",
@@ -2189,6 +2296,7 @@ test("read-only side query suspends and continuation restores an active write ob
       content: JSON.stringify({
         ok: true,
         taskAuthorization: ownership,
+        control: sideControl,
         toolRoute: {
           routeHash: "route-side-query",
           phase: "verifier",
@@ -2216,6 +2324,7 @@ test("read-only side query suspends and continuation restores an active write ob
       content: JSON.stringify({
         ok: true,
         taskAuthorization: ownership,
+        control: sideControl,
         toolRoute: {
           routeHash: "route-side-query",
           phase: "verifier",
@@ -2448,6 +2557,18 @@ test("checkpoint preserves compact route ownership without exposing authToken", 
       role: "tool",
       content: JSON.stringify({
         toolRoute: { routeHash: "route-1", phase: "executor", activeTools: ["unreal_symbol_lookup"] },
+        control: {
+          version: 2,
+          authoritative: true,
+          epoch: 1,
+          taskSessionId: "task-1",
+          routeHash: "route-1",
+          phase: "executor",
+          disposition: "require_tool",
+          requiredTool: { name: "unreal_symbol_lookup", args: {} },
+          allowedTools: ["unreal_symbol_lookup"],
+          retryPolicy: { sameSemanticInput: "once" },
+        },
         taskAuthorization: {
           taskSessionId: "task-1",
           authToken: "must-not-survive",
@@ -2469,7 +2590,7 @@ test("checkpoint preserves compact route ownership without exposing authToken", 
   assert.match(summary, /Do not recover, cancel, or replace/);
 });
 
-test("legacy active-route checkpoint rescans history to recover compact ownership", () => {
+test("legacy active-route checkpoint without authoritative v2 cannot recover ownership", () => {
   const messages = [
     { role: "user", content: "continue" },
     {
@@ -2483,10 +2604,9 @@ test("legacy active-route checkpoint rescans history to recover compact ownershi
   const prior = core.buildCheckpoint(messages);
   delete prior.taskRouteOwnership;
   const next = core.buildCheckpoint([...messages, { role: "user", content: "look up the symbol" }], prior);
-  assert.deepEqual(next.taskRouteOwnership, {
-    taskSessionId: "task-legacy",
-    ownerCapability: "owner-legacy",
-  });
+  assert.equal(next.taskRouteOwnership, null);
+  assert.equal(next.toolRoute, null);
+  assert.ok(next.diagnostics.includes("taskControlV2Missing=fail_closed"));
 });
 
 test("checkpoint normalizes LM Studio content blocks and preserves negative discovery evidence", () => {
@@ -3420,7 +3540,7 @@ test("server control marks architecture instructions as non-tool actions", () =>
   }
 });
 
-test("structured control outranks concise text and nested legacy actions", () => {
+test("structured legacy v1 control cannot drive task routing", () => {
   const checkpoint = core.buildCheckpoint([
     { role: "user", content: "continue" },
     { role: "assistant", toolCalls: [{
@@ -3456,12 +3576,9 @@ test("structured control outranks concise text and nested legacy actions", () =>
     },
   ]);
 
-  assert.equal(checkpoint.requiredNextTool.name, "read_file");
-  assert.deepEqual(checkpoint.requiredNextTool.args, {
-    path: "Source/Demo.cpp",
-    requiredNextAction: "submit_full_architecture_proposal",
-  });
-  assert.equal(checkpoint.protocolControl.taskId, "task-1");
+  assert.equal(checkpoint.requiredNextTool, null);
+  assert.equal(checkpoint.protocolControl, null);
+  assert.equal(checkpoint.serverControl, null);
 });
 
 test("architecture repair continuity survives hard compaction without repeating a patch", () => {

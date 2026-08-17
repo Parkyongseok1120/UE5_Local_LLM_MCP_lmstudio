@@ -765,7 +765,9 @@ def test_task_bound_feature_intent_derives_request_and_active_slice(
     )
     repeated = sent[-1]["result"]["structuredContent"]
     assert repeated["ok"] is False, repeated
-    assert repeated["errorCode"] == "TASK_TOOL_NOT_ACTIVE", repeated
+    assert repeated["errorCode"] == "TASK_CONTROL_OBLIGATION_REQUIRED", repeated
+    assert repeated["nextAction"] == "unreal_code_sketch_claim_validate", repeated
+    assert repeated["nextActionIsTool"] is True, repeated
     after_repeat = task_status(tmp_path, started["taskSessionId"])["state"]
     assert GATE in after_repeat["completedGates"]
     assert GATE not in after_repeat["pendingGates"]

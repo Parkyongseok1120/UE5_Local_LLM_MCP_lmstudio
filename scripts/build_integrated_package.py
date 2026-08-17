@@ -112,6 +112,7 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 REQUIRED_RUNTIME_FILES = (
     "config/control_protocol_spec.json",
     "config/synthesis_readiness_policy.json",
+    "config/control_state_machine.json",
     "docs/Release_Notes_1_3_0_RC3.md",
     "scripts/project_name_resolver.py",
     "scripts/semantic_ambiguity.py",
@@ -120,7 +121,9 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/control_protocol_spec.py",
     "scripts/validate_control_protocol.py",
     "scripts/phase_tool_router.py",
+    "scripts/control_transition_bridge.py",
     "scripts/synthesis_readiness.py",
+    "scripts/task_api.py",
     "scripts/approve_feature_intent.py",
     "scripts/mutation_semantic_guard.py",
     "scripts/unreal_api_denylist.py",
@@ -468,6 +471,19 @@ def _assert_source_tree_matches_head(source: Path) -> str:
         if diff.returncode != 0:
             detail = (diff.stderr or diff.stdout or "git diff failed").strip()
             raise ValueError(f"unable to verify tracked source tree: {detail}")
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=source,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if untracked.returncode != 0:
+            detail = (untracked.stderr or untracked.stdout or "git ls-files failed").strip()
+            raise ValueError(f"unable to verify untracked source files: {detail}")
+        if untracked.stdout.strip():
+            raise ValueError("untracked source files exist; add and commit or remove them before packaging")
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=source,

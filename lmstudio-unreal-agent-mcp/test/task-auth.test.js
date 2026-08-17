@@ -187,7 +187,10 @@ test("duplicate direct source evidence is non-progressing and preserves the unre
   const second = recordDirectSourceEvidence(state, "read_file", metadata);
   assert.equal(second.evidenceProgressed, false);
   assert.equal(second.semanticDuplicate, true);
-  assert.equal(JSON.stringify(state.inspectionProgress), before);
+  assert.notEqual(JSON.stringify(state.inspectionProgress), before);
+  assert.equal(state.inspectionProgress.directSourceReadCalls, 2);
+  assert.equal(state.inspectionProgress.distinctDirectSourceFiles, 1);
+  assert.equal(state.inspectionProgress.evidenceCharacters, 800);
   assert.deepEqual(state.inspectionProgress.remainingFrontier, [
     "Source/Cinematic/Private/Director/X.cpp",
   ]);
@@ -1216,8 +1219,9 @@ test("route discovery persists gate-TTL fallback and control in one state write"
       path.join(stateRoot, "tasks", authorization.taskSessionId, "state.json"),
       "utf8"
     ));
-    assert.strictEqual(persisted.toolRoute.routeHash, "gate-expiry-fallback");
-    assert.strictEqual(persisted.controlState.routeHash, "gate-expiry-fallback");
+    assert.notStrictEqual(persisted.toolRoute.routeHash, "gate-expiry-fallback");
+    assert.strictEqual(persisted.controlState.routeHash, persisted.toolRoute.routeHash);
+    assert.deepStrictEqual(persisted.toolRoute.activeTools, persisted.controlState.allowedTools);
     assert.strictEqual(
       persisted.controlState.requiredTool.name,
       "unreal_code_sketch_claim_validate"
@@ -1427,7 +1431,7 @@ test("static validation rejects a projectRoot outside the authoritative task pro
 
   const previous = process.env.AGENT_STATE_ROOT;
   process.env.AGENT_STATE_ROOT = stateRoot;
-  const fields = { routeHash: "route-static-project", routePhase: "executor" };
+  const fields = { routeHash: value.toolRoute.routeHash, routePhase: value.toolRoute.phase };
   try {
     assert.deepStrictEqual(value.controlState.requiredTool, {
       name: "static_validate_project",
@@ -2059,11 +2063,20 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
     // unreal_task_checkpoint before resuming work.
     delete primaryState.recoveryObligation;
     delete primaryState.controlState;
+    primaryState.toolRoute = routeState(projectFile).toolRoute;
+    primaryState.toolRouteUsage = {
+      routeHash: primaryState.toolRoute.routeHash,
+      phase: primaryState.toolRoute.phase,
+      count: 0,
+      reserved: 0,
+      reservations: [],
+      calls: [],
+    };
     fs.writeFileSync(primaryStatePath, JSON.stringify(primaryState));
     const explicitAuthorization = {
       ...authorization,
-      routeHash: "route-1",
-      routePhase: "executor",
+      routeHash: primaryState.toolRoute.routeHash,
+      routePhase: primaryState.toolRoute.phase,
     };
     const explicit = authorizeTaskRouteTool(
       workspace,
@@ -2252,9 +2265,10 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
     const state = JSON.parse(
       fs.readFileSync(path.join(taskDir, "state.json"), "utf8")
     );
-    assert.strictEqual(state.toolRouteUsage.count, 1);
+    assert.strictEqual(state.toolRouteUsage.count, 0);
     assert.strictEqual(state.toolRouteUsage.reserved, 0);
     assert.deepStrictEqual(state.toolRouteUsage.reservations, []);
+    assert.strictEqual(state.toolRouteUsage.priorRouteCommits.length, 1);
     assert.strictEqual(state.continuity.lease.renewalReason, "route_tool_activity");
     assert.ok(Date.parse(state.continuity.lease.expiresAt) > Date.now() + 20 * 60_000);
   } finally {
@@ -2270,7 +2284,7 @@ test("planner route honors an advertised twelve-call budget", () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-budget-twelve-state-"));
   const taskDir = path.join(stateRoot, "tasks", authorization.taskSessionId);
   fs.mkdirSync(taskDir, { recursive: true });
-  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify({
+  const value = {
     ...authorization,
     status: "running",
     writeGate: { writesAllowed: true },
@@ -2289,10 +2303,12 @@ test("planner route honors an advertised twelve-call budget", () => {
       reservations: [],
       calls: [],
     },
-  }));
+  };
+  commitControlTransition(value);
+  fs.writeFileSync(path.join(taskDir, "state.json"), JSON.stringify(value));
   const previous = process.env.AGENT_STATE_ROOT;
   process.env.AGENT_STATE_ROOT = stateRoot;
-  const fields = { routeHash: "route-budget-twelve", routePhase: "planner" };
+  const fields = { routeHash: value.toolRoute.routeHash, routePhase: value.toolRoute.phase };
   try {
     for (let index = 0; index < 12; index += 1) {
       const reservation = reserveRouteCall(
@@ -2401,17 +2417,17 @@ test("required first tool blocks speculative reads and unlocks after commit", ()
       ).ok,
       true
     );
-    assert.strictEqual(
-      commitRouteReservation(
+    const buildCommit = commitRouteReservation(
         workspace,
         authorization.taskSessionId,
         fields,
         {},
         "build_unreal_project",
         build.reservationId
-      ).ok,
-      true
-    );
+      );
+    assert.strictEqual(buildCommit.ok, true);
+    fields.routeHash = buildCommit.state.toolRoute.routeHash;
+    fields.routePhase = buildCommit.state.toolRoute.phase;
 
     const read = reserveRouteCall(
       workspace,
@@ -2804,6 +2820,8 @@ test("successful direct source reads persist bounded target evidence on commit",
       }
     );
     assert.strictEqual(committed.ok, true);
+    fields.routeHash = committed.state.toolRoute.routeHash;
+    fields.routePhase = committed.state.toolRoute.phase;
     const state = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
     const sourceEvidenceKey = filesystemPathIdentity("Source/Demo/RuleEngine.cpp");
     assert.strictEqual(state.directSourceEvidence.planRevision, "4");
@@ -2843,6 +2861,8 @@ test("successful direct source reads persist bounded target evidence on commit",
       }
     );
     assert.strictEqual(rangedCommit.ok, true);
+    fields.routeHash = rangedCommit.state.toolRoute.routeHash;
+    fields.routePhase = rangedCommit.state.toolRoute.phase;
     const rangedState = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
     const source = rangedState.sourceEvidence.files[sourceEvidenceKey];
     assert.strictEqual(rangedState.sourceEvidence.version, 2);
@@ -3186,7 +3206,7 @@ for (const recoveryCase of [
 
     const previous = process.env.AGENT_STATE_ROOT;
     process.env.AGENT_STATE_ROOT = stateRoot;
-    const fields = { routeHash: "route-generic-recovery", routePhase: "executor" };
+    const fields = { routeHash: value.toolRoute.routeHash, routePhase: value.toolRoute.phase };
     try {
       const reserved = reserveRouteCall(
         workspace,
@@ -3274,7 +3294,7 @@ test("one committed rediscovery tool reopens a repeatedly blocked gate", () => {
 
   const previous = process.env.AGENT_STATE_ROOT;
   process.env.AGENT_STATE_ROOT = stateRoot;
-  const fields = { routeHash: "route-gate-rediscovery", routePhase: "planner" };
+  const fields = { routeHash: value.toolRoute.routeHash, routePhase: value.toolRoute.phase };
   try {
     assert.strictEqual(value.controlState.blocker.code, "REPEATED_GATE_BLOCKER");
     assert.strictEqual(value.controlState.allowedTools.includes(gate), false);
@@ -3295,6 +3315,8 @@ test("one committed rediscovery tool reopens a repeatedly blocked gate", () => {
       discovery.reservationId
     );
     assert.strictEqual(committed.ok, true);
+    fields.routeHash = committed.state.toolRoute.routeHash;
+    fields.routePhase = committed.state.toolRoute.phase;
     assert.strictEqual(
       committed.state.failedGateAttempts[gate].recoverySatisfiedBy,
       "read_file"
@@ -3441,6 +3463,19 @@ test("RC2 replay D: NOT_FOUND then complete zero-result search records final abs
       reservations: [],
       calls: [],
     },
+    inspectionProgress: {
+      version: 2,
+      discoveryStarted: true,
+      everHadFrontier: true,
+      remainingFrontier: ["Source/Demo/MissingRule.cpp"],
+      frontierReconstruction: {
+        failedReconstruction: true,
+        noDeterministicPair: true,
+        boundedReplanApplied: true,
+        boundedSearchAttempted: true,
+        noBoundedSearchCandidates: false,
+      },
+    },
   }));
   const previous = process.env.AGENT_STATE_ROOT;
   process.env.AGENT_STATE_ROOT = stateRoot;
@@ -3482,6 +3517,7 @@ test("RC2 replay D: NOT_FOUND then complete zero-result search records final abs
     assert.deepStrictEqual(absent.queries, ["MissingRule.cpp"]);
     assert.deepStrictEqual(absent.tools, ["read_file"]);
     assert.match(absent.evidenceId, /^[0-9a-f]{24}$/u);
+    assert.deepStrictEqual(state.inspectionProgress.remainingFrontier, []);
 
     const searchReserved = reserveRouteCall(
       workspace,
@@ -3510,7 +3546,11 @@ test("RC2 replay D: NOT_FOUND then complete zero-result search records final abs
     assert.strictEqual(searchCommitted.ok, true);
     const completedState = JSON.parse(fs.readFileSync(path.join(taskDir, "state.json"), "utf8"));
     const completedAbsence = completedState.absentEvidence.files[absenceKey];
-    assert.strictEqual(completedState.toolRouteUsage.count, 1);
+    assert.strictEqual(completedState.toolRouteUsage.count, 0);
+    assert.strictEqual(
+      completedState.toolRouteUsage.routeHash,
+      completedState.controlState.routeHash
+    );
     assert.strictEqual(completedAbsence.searchComplete, true);
     assert.deepStrictEqual(completedAbsence.tools, ["read_file", "search_files"]);
   } finally {

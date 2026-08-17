@@ -14,6 +14,7 @@ from task_api import (  # noqa: E402
     authorize_task_tool,
     finalize_task_result,
     task_cancel,
+    task_ack_synthesis_delivery,
     task_checkpoint,
     task_commit_synthesis,
     task_complete_after_successful_build,
@@ -54,6 +55,7 @@ def _synthesis_commit_binding(state: dict, digest: str) -> dict:
         "controlEpoch": control["epoch"],
         "controlFingerprint": control["fingerprint"],
         "mutationGeneration": int(state.get("mutationGeneration") or 0),
+        "synthesisEvidenceBundleHash": state["synthesisReadiness"]["synthesisEvidenceBundleHash"],
         "outputDigest": digest,
     }
     return {
@@ -61,8 +63,25 @@ def _synthesis_commit_binding(state: dict, digest: str) -> dict:
         "control_epoch": binding["controlEpoch"],
         "control_fingerprint": binding["controlFingerprint"],
         "mutation_generation": binding["mutationGeneration"],
+        "synthesis_evidence_bundle_hash": binding["synthesisEvidenceBundleHash"],
         "output_digest": digest,
         "synthesis_transaction_id": task_api_module._canonical_hash(binding),
+    }
+
+
+def _complete_source_evidence(path: str, kind: str, digest: str, text: str) -> dict:
+    return {
+        "path": path,
+        "contentHash": digest,
+        "sourceKind": kind,
+        "evidenceId": f"{kind}-evidence",
+        "evidenceSnapshotGeneration": 0,
+        "coveredRanges": [[1, 2]],
+        "wholeFileComplete": True,
+        "truncated": False,
+        "lineCount": 2,
+        "coverageLevel": "FILE_COMPLETE",
+        "supportingExcerpts": [{"startLine": 1, "endLine": 2, "text": text}],
     }
 
 
@@ -189,8 +208,8 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
         "version": 2,
         "planRevision": seeded["planRevision"],
         "files": {
-            "header": {"path": "Source/Sample/Foo.h", "contentHash": "a" * 64, "sourceKind": "declaration", "evidenceId": "header"},
-            "source": {"path": "Source/Sample/Foo.cpp", "contentHash": "b" * 64, "sourceKind": "implementation", "evidenceId": "source"},
+            "header": _complete_source_evidence("Source/Sample/Foo.h", "declaration", "a" * 64, "class FFoo {};"),
+            "source": _complete_source_evidence("Source/Sample/Foo.cpp", "implementation", "b" * 64, "void FFoo::Run() {}"),
         },
     }
     state_path.write_text(json.dumps(seeded), encoding="utf-8")
@@ -231,9 +250,10 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
         **_synthesis_commit_binding(state, digest),
     )
     assert committed["ok"] is True
-    assert committed["active"] is False
+    assert committed["active"] is True
     committed_state = task_status(tmp_path, started["taskSessionId"])["state"]
-    assert committed_state["status"] == "completed"
+    assert committed_state["status"] == "running"
+    assert committed_state["synthesisLifecycle"]["status"] == "commit_acked"
     assert committed_state["synthesisLifecycle"]["entryMode"] == "explicit_evidence_complete"
     assert committed_state["synthesisLifecycle"]["outputDigest"] == digest
 
@@ -244,6 +264,20 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
     )
     assert replay["ok"] is True
     assert replay["idempotentReplay"] is True
+    receipt = task_api_module._canonical_hash({
+        "synthesisTransactionId": committed_state["synthesisLifecycle"]["synthesisTransactionId"],
+        "outputDigest": digest,
+        "uiDeliveryCompleted": True,
+    })
+    delivered = task_ack_synthesis_delivery(
+        tmp_path,
+        task_authorization=ready["taskAuthorization"],
+        synthesis_transaction_id=committed_state["synthesisLifecycle"]["synthesisTransactionId"],
+        output_digest=digest,
+        delivery_receipt_id=receipt,
+    )
+    assert delivered["ok"] is True
+    assert task_status(tmp_path, started["taskSessionId"])["state"]["status"] == "completed"
 
 
 def test_read_only_tool_free_final_requires_explicit_synthesis_transition(
@@ -285,22 +319,8 @@ def test_read_only_tool_free_final_requires_explicit_synthesis_transition(
         "version": 2,
         "planRevision": state["planRevision"],
         "files": {
-            "source/sample/foo.cpp": {
-                "path": "Source/Sample/Foo.cpp",
-                "contentHash": "f" * 64,
-                "sourceKind": "implementation",
-                "evidenceId": "source",
-                "coveredRanges": [[1, 20]],
-                "tools": ["read_file_range"],
-            },
-            "source/sample/foo.h": {
-                "path": "Source/Sample/Foo.h",
-                "contentHash": "a" * 64,
-                "sourceKind": "declaration",
-                "evidenceId": "header",
-                "coveredRanges": [[1, 20]],
-                "tools": ["read_file_range"],
-            },
+            "source/sample/foo.cpp": _complete_source_evidence("Source/Sample/Foo.cpp", "implementation", "f" * 64, "void FFoo::Run() {}"),
+            "source/sample/foo.h": _complete_source_evidence("Source/Sample/Foo.h", "declaration", "a" * 64, "class FFoo {};"),
         },
     }
     state["inspectionContract"] = {"intent": "cpp_analysis", "evidenceBudget": {"representativePairs": 1}}
@@ -329,9 +349,9 @@ def test_read_only_tool_free_final_requires_explicit_synthesis_transition(
     )
 
     assert committed["ok"] is True
-    completed = task_status(tmp_path, started["taskSessionId"])["state"]
-    assert completed["status"] == "completed"
-    assert completed["synthesisLifecycle"]["entryMode"] == "explicit_evidence_complete"
+    pending_delivery = task_status(tmp_path, started["taskSessionId"])["state"]
+    assert pending_delivery["status"] == "running"
+    assert pending_delivery["synthesisLifecycle"]["status"] == "commit_acked"
 
 
 def test_checkpoint_rebase_resolves_bound_transaction_before_releasing_control(
@@ -448,6 +468,46 @@ def test_environment_recovery_counts_unique_committed_attempt_ids_only(
     )
     assert second["recoveryObligation"]["attemptCount"] == 2
     assert second["control"]["disposition"] == "await_user"
+
+
+def test_handler_cannot_forge_canonical_recovery_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Repair a build infrastructure failure",
+        mode="agent_edit",
+        plan_payload={
+            "taskKind": "edit",
+            "writeGate": {"writesAllowed": True},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "repair", "files": ["Source/Sample/Foo.cpp"]}
+            ],
+        },
+    )
+    forged = task_record_recovery_obligation(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        recovery={
+            "source": "build",
+            "status": "evidence_complete",
+            "scopeDisposition": "in_slice",
+            "errorCode": "BUILD_TOOL_FAILED",
+            "requiredTool": {
+                "name": "read_file",
+                "args": {"path": "Source/Injected.cpp"},
+            },
+        },
+    )
+
+    assert forged["ok"] is True
+    assert forged["recoveryObligation"]["status"] == "environment_recovery"
+    assert forged["recoveryObligation"]["requiredTool"]["name"] == "build_unreal_project"
+    assert forged["control"]["requiredTool"]["name"] == "build_unreal_project"
+    assert "path" not in forged["control"]["requiredTool"]["args"]
 
 
 def test_bounded_strategy_budget_is_scoped_to_the_concrete_failure_fingerprint(

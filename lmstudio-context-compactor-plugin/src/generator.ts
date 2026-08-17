@@ -289,7 +289,7 @@ function checkpointLifecycleIdentity(checkpoint: any): {
 
 function lifecycleState(
   checkpoint: any,
-  status: "pending" | "prepared" | "completed" | "commit_sent" | "commit_acked" | "committed" | "delivered" | "rejected_stale" | "evidence_recovery",
+  status: "pending" | "prepared" | "completed" | "commit_sent" | "commit_acked" | "delivery_pending" | "committed" | "delivered" | "rejected_stale" | "evidence_recovery",
   options: { outputDigest?: string; stopReason?: string } = {},
 ): any {
   return {
@@ -602,7 +602,11 @@ function authoritativeSynthesisFinality(control: any, checkpoint: any): {
     /^[a-f0-9]{64}$/.test(String(readiness?.acceptedEvidenceHash || ""))
     && String(readiness.acceptedEvidenceHash) === String(latch?.acceptedEvidenceHash)
     && /^[a-f0-9]{64}$/.test(String(readiness?.remainingFrontierHash || ""))
-    && String(readiness.remainingFrontierHash) === String(latch?.remainingFrontierHash),
+    && String(readiness.remainingFrontierHash) === String(latch?.remainingFrontierHash)
+    && /^[a-f0-9]{64}$/.test(String(readiness?.synthesisEvidenceBundleHash || ""))
+    && String(readiness.synthesisEvidenceBundleHash) === String(latch?.synthesisEvidenceBundleHash)
+    && core.compactSynthesisEvidenceBundle(readiness?.synthesisEvidenceBundle)?.bundleHash
+      === String(readiness.synthesisEvidenceBundleHash),
   );
   const eligible = Boolean(
     String(control?.phase || "").trim().toLowerCase() === "synthesis"
@@ -630,6 +634,8 @@ function authoritativeSynthesisFinality(control: any, checkpoint: any): {
       String(checkpointReadiness.planRevision || "") === planRevision
       && String(checkpointReadiness.acceptedEvidenceHash || "") === String(readiness.acceptedEvidenceHash)
       && String(checkpointReadiness.remainingFrontierHash || "") === String(readiness.remainingFrontierHash)
+      && String(checkpointReadiness.synthesisEvidenceBundleHash || "")
+        === String(readiness.synthesisEvidenceBundleHash)
     ))
     && hashesMatch
     && latch.commitEligible === true
@@ -668,12 +674,17 @@ function preparedSynthesisRecord(
     planRevision: String(control?.planRevision || control?.synthesisReadiness?.planRevision || "").trim(),
     acceptedEvidenceHash: String(control?.synthesisReadiness?.acceptedEvidenceHash || "").trim().toLowerCase(),
     remainingFrontierHash: String(control?.synthesisReadiness?.remainingFrontierHash || "").trim().toLowerCase(),
+    synthesisEvidenceBundleHash: String(
+      control?.synthesisReadiness?.synthesisEvidenceBundleHash || "",
+    ).trim().toLowerCase(),
     mutationGeneration: Math.max(0, Number(control?.mutationGeneration ?? checkpoint?.mutationGeneration ?? 0)),
     preparedAt: isoNow(),
     dispatchedAt: "",
     rejectedAt: "",
     rejectionCode: "",
     staleReason: "",
+    rejectedByControlEpoch: 0,
+    rejectedByControlFingerprint: "",
   };
 }
 
@@ -3165,109 +3176,6 @@ function normalizeProjectSourcePath(
   return identity.slice((pluginMarker >= 0 ? pluginMarker : sourceMarker) + 1);
 }
 
-function selectServerOwnedFloorRecovery(
-  checkpoint: any,
-  toolDefinitions: any[],
-  hostPlatform: string = process.platform,
-): { toolName: string; path: string; transitionKind: string } | null {
-  const windowsHost = core.isWindowsHostPlatform(hostPlatform as any);
-  const pathMatches = (value: string, pattern: string): boolean => (
-    new RegExp(pattern, windowsHost ? "i" : "").test(value)
-  );
-  const definitionFor = (expected: string): any => toolDefinitions.find((tool: any) => (
-    toolNamesMatch(expected, String(tool?.function?.name || tool?.name || ""))
-  ));
-  const readDefinition = definitionFor("read_file");
-  const listDefinition = definitionFor("list_directory");
-  const workingSetEntries = Array.isArray(checkpoint?.workingSet)
-    ? checkpoint.workingSet
-    : [];
-  const evidenceFacts = Array.isArray(checkpoint?.evidenceFacts)
-    ? checkpoint.evidenceFacts
-    : [];
-  const directSourceEvidence = evidenceFacts.filter((entry: any) => (
-    DIRECT_SOURCE_FILE_TOOLS.some((tool) => toolNamesMatch(tool, String(entry?.tool || "")))
-  ));
-  const observedPaths = [...workingSetEntries, ...directSourceEvidence]
-    .map((entry: any) => String(entry?.path || "").replace(/\\/g, "/"))
-    .filter(Boolean);
-  const observedPathKeys = new Set(observedPaths.map((sourcePath: string) => (
-    normalizeProjectSourcePath(sourcePath, hostPlatform)
-  )));
-
-  if (readDefinition) {
-    for (const sourcePath of observedPaths) {
-      if (!pathMatches(sourcePath, "^project://Source/[^/]+/Public/.+\\.h$")) continue;
-      const candidate = (windowsHost
-        ? sourcePath.replace(/\/Public\//i, "/Private/")
-        : sourcePath.replace("/Public/", "/Private/")
-      ).replace(/\.h$/i, ".cpp");
-      if (observedPathKeys.has(normalizeProjectSourcePath(candidate, hostPlatform))) continue;
-      return {
-        toolName: String(readDefinition?.function?.name || readDefinition?.name || "read_file"),
-        path: candidate,
-        transitionKind: "mapped_implementation_read",
-      };
-    }
-  }
-
-  const listedDirectories = evidenceFacts.filter((entry: any) => (
-    toolNamesMatch("list_directory", String(entry?.tool || ""))
-    && pathMatches(
-      String(entry?.path || "").replace(/\\/g, "/").replace(/\/+$/, ""),
-      "^project://Source/[^/]+(?:/(?:Public|Private)(?:/.*)?)?$",
-    )
-  ));
-  const listedPathKeys = new Set(listedDirectories.map((entry: any) => (
-    normalizeProjectSourcePath(String(entry?.path || ""), hostPlatform)
-  )));
-  const safeEntries = (entry: any): string[] => (Array.isArray(entry?.entries)
-    ? entry.entries
-    : []
-  ).map((value: any) => String(value || "").trim()).filter((value: string) => (
-    value.length > 0
-    && value !== "."
-    && value !== ".."
-    && !value.includes("/")
-    && !value.includes("\\")
-    && /^[A-Za-z0-9_.-]+$/.test(value)
-  ));
-
-  if (readDefinition) {
-    for (const entry of listedDirectories) {
-      const parent = String(entry?.path || "").replace(/\\/g, "/").replace(/\/+$/, "");
-      if (!pathMatches(parent, "^project://Source/[^/]+/(?:Public|Private)(?:/.*)?$")) continue;
-      for (const name of safeEntries(entry)) {
-        if (!/\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|m|mm)$/i.test(name)) continue;
-        const candidate = `${parent}/${name}`;
-        if (observedPathKeys.has(normalizeProjectSourcePath(candidate, hostPlatform))) continue;
-        return {
-          toolName: String(readDefinition?.function?.name || readDefinition?.name || "read_file"),
-          path: candidate,
-          transitionKind: "listed_source_read",
-        };
-      }
-    }
-  }
-
-  if (listDefinition) {
-    for (const entry of listedDirectories) {
-      const parent = String(entry?.path || "").replace(/\\/g, "/").replace(/\/+$/, "");
-      for (const name of safeEntries(entry)) {
-        if (name.includes(".")) continue;
-        const candidate = `${parent}/${name}`;
-        if (listedPathKeys.has(normalizeProjectSourcePath(candidate, hostPlatform))) continue;
-        return {
-          toolName: String(listDefinition?.function?.name || listDefinition?.name || "list_directory"),
-          path: candidate,
-          transitionKind: "listed_source_frontier_expand",
-        };
-      }
-    }
-  }
-  return null;
-}
-
 function directSourcePairStem(value: any, hostPlatform: string = process.platform): string {
   const normalized = normalizeProjectSourcePath(value, hostPlatform);
   const moduleVisibility = core.isWindowsHostPlatform(hostPlatform as any)
@@ -3289,24 +3197,6 @@ function hasTargetBoundDirectSourcePair(
   return implementationPaths.some((value) => (
     declarationStems.has(directSourcePairStem(value, hostPlatform))
   ));
-}
-
-function serverV2AllowsFeatureIntentHandoff(control: any, active: boolean = true): boolean {
-  return Boolean(
-    active
-    && String(control?.taskMode || "").toLowerCase() === "agent_edit"
-    && String(control?.phase || "").toLowerCase() === "planner"
-    && String(control?.disposition || "").toLowerCase() === "continue"
-    && !control?.requiredTool
-    && Array.isArray(control?.allowedTools)
-    && control.allowedTools.some((name: any) => (
-      toolNamesMatch(FEATURE_INTENT_TOOL_NAME, String(name || ""))
-    ))
-    && Array.isArray(control?.pendingGates)
-    && control.pendingGates.some((name: any) => (
-      toolNamesMatch(FEATURE_INTENT_TOOL_NAME, String(name || ""))
-    ))
-  );
 }
 
 function featureIntentRequestedTargetFiles(request: any): string[] {
@@ -3514,6 +3404,7 @@ function phaseControlToolDefinition(
   definition: any,
   sessionId: string,
   authoritativeGoal: string,
+  runtimeModelId = "",
 ): any | null {
   if (!definition) return null;
   const name = String(definition?.function?.name || definition?.name || "");
@@ -3524,6 +3415,9 @@ function phaseControlToolDefinition(
   if (toolNamesMatch(TASK_PLANNER_TOOL_NAME, name)) {
     for (const key of ["request", "latestUserMessage"]) {
       if (toolAcceptsArgument([definition], name, key)) injected[key] = authoritativeGoal;
+    }
+    if (runtimeModelId && toolAcceptsArgument([definition], name, "runtimeModelId")) {
+      injected.runtimeModelId = runtimeModelId;
     }
   }
   return deterministicControlToolDefinition(definition, injected);
@@ -3603,6 +3497,13 @@ function enrichToolRequestControl(
     ? sessionBound.arguments
     : {};
   let args = sourceArgs;
+  if (
+    toolNamesMatch(TASK_PLANNER_TOOL_NAME, name)
+    && String(checkpoint?.runtimeModelId || "").trim()
+    && toolAcceptsArgument(toolDefinitions, name, "runtimeModelId")
+  ) {
+    args = { ...args, runtimeModelId: String(checkpoint.runtimeModelId) };
+  }
 
   if (toolNamesMatch(TASK_PLANNER_TOOL_NAME, name) && latestUserGoal) {
     // The planner request is an authority-bearing copy of the user's goal,
@@ -3979,6 +3880,10 @@ function synthesisCommitAcknowledged(result: any, pending: any, prepared: any = 
   const expectedTask = String(args?.taskAuthorization?.taskSessionId || "").trim();
   const expectedDigest = String(args.outputDigest || "").trim().toLowerCase();
   const expectedEpoch = Number(args.controlEpoch);
+  const expectedTransactionId = String(args.synthesisTransactionId || "").trim().toLowerCase();
+  const expectedControlFingerprint = String(args.controlFingerprint || "").trim().toLowerCase();
+  const expectedMutationGeneration = Number(args.mutationGeneration);
+  const expectedBundleHash = String(args.synthesisEvidenceBundleHash || "").trim().toLowerCase();
   const preparedOutput = String(
     pending?.preparedSynthesisOutput
     || prepared?.output
@@ -3992,10 +3897,14 @@ function synthesisCommitAcknowledged(result: any, pending: any, prepared: any = 
     if (
       payload?.ok === true
       && lifecycle
-      && String(lifecycle.status || "").toLowerCase() === "committed"
+      && ["commit_acked", "committed"].includes(String(lifecycle.status || "").toLowerCase())
       && String(payload.taskSessionId || lifecycle.taskSessionId || "").trim() === expectedTask
       && String(lifecycle.outputDigest || "").trim().toLowerCase() === expectedDigest
       && Number(lifecycle.controlEpoch) === expectedEpoch
+      && String(lifecycle.synthesisTransactionId || "").trim().toLowerCase() === expectedTransactionId
+      && String(lifecycle.controlFingerprint || "").trim().toLowerCase() === expectedControlFingerprint
+      && Number(lifecycle.mutationGeneration) === expectedMutationGeneration
+      && String(lifecycle.synthesisEvidenceBundleHash || "").trim().toLowerCase() === expectedBundleHash
     ) return true;
   }
   return false;
@@ -4164,34 +4073,142 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       || typeof delivery !== "object"
       || !String(delivery.output || "")
     ) return false;
+    if (["emitting", "emitted"].includes(String(delivery.deliveryState || ""))) {
+      return false;
+    }
+    const ackTool: any = ctl.getToolDefinitions().find((tool: any) => toolNamesMatch(
+      "unreal_task_ack_synthesis_delivery",
+      tool?.function?.name || tool?.name || "",
+    ));
+    if (!ackTool) {
+      throw new Error("SYNTHESIS_DELIVERY_ACK_TOOL_UNAVAILABLE");
+    }
     const output = String(delivery.output);
     const outputDigest = String(delivery.outputDigest || "");
-    ctl.fragmentGenerated(output, { reasoningType: "none" });
-    if (checkpoint?.preparedSynthesis && typeof checkpoint.preparedSynthesis === "object") {
-      checkpoint.preparedSynthesis = {
-        ...checkpoint.preparedSynthesis,
-        status: "delivered",
-      };
+    if (core.sha256(output) !== outputDigest) {
+      throw new Error("SYNTHESIS_DELIVERY_DIGEST_MISMATCH");
     }
-    checkpoint.synthesisState = lifecycleState(checkpoint, "delivered", {
+    const transactionId = String(delivery.transactionId || "");
+    const deliveryReceiptId = core.sha256(core.stableStringify({
+      synthesisTransactionId: transactionId,
       outputDigest,
-      stopReason: "synthesis_delivery_after_ack",
-    });
-    checkpoint.synthesisDelivery = null;
+      uiDeliveryCompleted: true,
+    }));
+    const ackToolCallId = directToolCallRequestId(
+      "synthesis-delivery-ack",
+      deliveryReceiptId.slice(0, 32),
+    );
+    checkpoint.synthesisDelivery = {
+      ...delivery,
+      deliveryState: "emitting",
+      deliveryReceiptId,
+      ackToolCallId,
+    };
     await persistCheckpoint(
       sessionId,
       checkpoint,
       requireCheckpointPersistence,
-      "synthesis_delivered_after_ack",
+      "synthesis_delivery_emit_intent",
+    );
+    ctl.fragmentGenerated(output, { reasoningType: "none" });
+    if (checkpoint?.preparedSynthesis && typeof checkpoint.preparedSynthesis === "object") {
+      checkpoint.preparedSynthesis = {
+        ...checkpoint.preparedSynthesis,
+        status: "delivery_pending",
+      };
+    }
+    const ackArguments = {
+      taskAuthorization: delivery.taskAuthorization || {
+        taskSessionId: String(checkpoint?.serverControl?.taskSessionId || ""),
+        ownerCapability: String(checkpoint?.taskRouteOwnership?.ownerCapability || ""),
+      },
+      synthesisTransactionId: transactionId,
+      outputDigest,
+      deliveryReceiptId,
+    };
+    const ackName = String(
+      ackTool?.function?.name || ackTool?.name || "unreal_task_ack_synthesis_delivery",
+    );
+    const ackIdentity = {
+      hostToolCallId: ackToolCallId,
+      predictionAttemptId: `${outerGenerateRequestId}:synthesis-delivery-ack`,
+      modelLocalCallId: "delivery-ack",
+      rawToolCallId: ackToolCallId,
+      toolCallId: ackToolCallId,
+      toolName: ackName,
+      source: "synthesis_delivery_ack",
+      callId: 1_000_001,
+      durableIdentity: true,
+    };
+    hostToolCallLifecycle.record({ stage: "start", ...ackIdentity });
+    hostToolCallLifecycle.record({ stage: "name", ...ackIdentity, name: ackName });
+    hostToolCallLifecycle.record({
+      stage: "args",
+      ...ackIdentity,
+      content: JSON.stringify(ackArguments),
+    });
+    hostToolCallLifecycle.record({
+      stage: "end",
+      ...ackIdentity,
+      request: { id: ackToolCallId, type: "function", name: ackName, arguments: ackArguments },
+    });
+    const ackPending = {
+      id: ackToolCallId,
+      name: ackName,
+      arguments: ackArguments,
+      dispatchState: "emitted",
+      dispatchIntentAt: isoNow(),
+      dispatchedAt: isoNow(),
+      dispatchAttempt: 1,
+      hostToolCallId: ackToolCallId,
+      synthesisDeliveryAck: true,
+    };
+    checkpoint.pendingToolCall = null;
+    checkpoint.pendingToolCalls = [
+      ...(Array.isArray(checkpoint.pendingToolCalls) ? checkpoint.pendingToolCalls : []),
+      ackPending,
+    ];
+    checkpoint.synthesisState = lifecycleState(checkpoint, "delivery_pending", {
+      outputDigest,
+      stopReason: "synthesis_delivery_after_ack",
+    });
+    checkpoint.synthesisDelivery = {
+      ...checkpoint.synthesisDelivery,
+      deliveryState: "emitted",
+      emittedAt: isoNow(),
+    };
+    await persistCheckpoint(
+      sessionId,
+      checkpoint,
+      requireCheckpointPersistence,
+      "synthesis_delivery_pending_server_receipt",
     );
     await appendEventBestEffort(sessionId, {
-      type: "synthesis_delivered_after_ack",
+      type: "synthesis_delivery_emitted_ack_pending",
       at: isoNow(),
       outputDigest,
-      transactionId: String(delivery.transactionId || ""),
+      transactionId,
+      deliveryReceiptId,
     });
     return true;
   };
+  if (
+    String(checkpoint?.synthesisState?.status || "") === "commit_acked"
+    && String(checkpoint?.synthesisDelivery?.deliveryState || "") === "emitting"
+  ) {
+    await appendEventBestEffort(sessionId, {
+      type: "synthesis_delivery_state_uncertain",
+      at: isoNow(),
+      outputDigest: String(checkpoint?.synthesisDelivery?.outputDigest || ""),
+      transactionId: String(checkpoint?.synthesisDelivery?.transactionId || ""),
+      reason: "durable_emit_intent_without_atomic_ui_receipt",
+    });
+    const error: any = new Error(
+      "SYNTHESIS_DELIVERY_STATE_UNCERTAIN: a durable UI-delivery intent exists without an atomic LM Studio receipt; automatic replay is disabled to prevent duplicate final output.",
+    );
+    error.code = "SYNTHESIS_DELIVERY_STATE_UNCERTAIN";
+    throw error;
+  }
   if (await deliverAcknowledgedSynthesis()) return;
 
   let unresolvedPendingCalls: any[] = [
@@ -4199,6 +4216,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ...(checkpoint?.pendingToolCall ? [checkpoint.pendingToolCall] : []),
   ];
   let synthesisCommitRejected = false;
+  let synthesisDeliveryAcknowledged = false;
   let synthesisNackControlApplied = false;
   if (checkpoint && unresolvedPendingCalls.length > 0) {
     const currentSnapshots = core.snapshotMessages(messages);
@@ -4208,6 +4226,27 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     );
     for (const match of matchedCalls) {
       const pendingName = String(match.pending?.name || "").trim();
+      if (toolNamesMatch("unreal_task_ack_synthesis_delivery", pendingName)) {
+        const delivered = core.parseJsonObjects(match.result?.content || "").some((payload: any) => (
+          payload?.ok === true
+          && String(payload?.synthesisLifecycle?.status || payload?.state?.synthesisLifecycle?.status || "").toLowerCase() === "delivered"
+          && String(payload?.synthesisLifecycle?.deliveryReceiptId || payload?.state?.synthesisLifecycle?.deliveryReceiptId || "")
+            === String(match.pending?.arguments?.deliveryReceiptId || "")
+        ));
+        if (!delivered) {
+          throw new Error("SYNTHESIS_DELIVERY_ACK_REJECTED");
+        }
+        synthesisDeliveryAcknowledged = true;
+        checkpoint.synthesisState = lifecycleState(checkpoint, "delivered", {
+          outputDigest: String(match.pending?.arguments?.outputDigest || ""),
+          stopReason: "authoritative_delivery_ack",
+        });
+        if (checkpoint?.preparedSynthesis && typeof checkpoint.preparedSynthesis === "object") {
+          checkpoint.preparedSynthesis = { ...checkpoint.preparedSynthesis, status: "delivered" };
+        }
+        checkpoint.synthesisDelivery = null;
+        continue;
+      }
       if (!toolNamesMatch("unreal_task_commit_synthesis", pendingName)) continue;
       const outputDigest = String(
         match.pending?.preparedSynthesisOutputDigest
@@ -4239,6 +4278,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             || "",
           ),
           acknowledgedAt: isoNow(),
+          deliveryState: "pending",
+          taskAuthorization: match.pending?.arguments?.taskAuthorization || null,
         };
         await appendEventBestEffort(sessionId, {
           type: "synthesis_commit_acked",
@@ -4251,6 +4292,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         // failure.  Keep the prepared bytes independently of pendingToolCalls,
         // ingest the complete authoritative v2 route, and let the next turn
         // execute that exact recovery action instead of retrying this tx.
+        const rejectedTransactionControl: any = core.compactServerControl(checkpoint?.serverControl) || {};
         const resultPayloads = core.parseJsonObjects(match.result?.content || "");
         const nackPayload = [...resultPayloads].reverse().find((payload: any) => (
           String(payload?.errorCode || payload?.code || "").trim()
@@ -4269,7 +4311,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           || (pendingOutput ? core.sha256(pendingOutput) : outputDigest)
           || "",
         ).trim().toLowerCase();
-        const controlForPrepared = authoritativeControl || core.compactServerControl(checkpoint?.serverControl) || {};
+        const controlForPrepared = rejectedTransactionControl;
         const preparedCandidate = checkpoint?.preparedSynthesis && typeof checkpoint.preparedSynthesis === "object"
           ? checkpoint.preparedSynthesis
           : {
@@ -4313,6 +4355,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             remainingFrontierHash: String(
               controlForPrepared?.synthesisReadiness?.remainingFrontierHash || "",
             ).trim().toLowerCase(),
+            synthesisEvidenceBundleHash: String(
+              controlForPrepared?.synthesisReadiness?.synthesisEvidenceBundleHash || "",
+            ).trim().toLowerCase(),
             mutationGeneration: Math.max(
               0,
               Number(controlForPrepared?.mutationGeneration ?? checkpoint?.mutationGeneration ?? 0),
@@ -4330,6 +4375,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           outputDigest: pendingDigest || String(preparedCandidate.outputDigest || "").trim().toLowerCase(),
           rejectedAt: isoNow(),
           rejectionCode,
+          rejectedByControlEpoch: Number(authoritativeControl?.epoch ?? 0),
+          rejectedByControlFingerprint: String(
+            authoritativeControl?.controlFingerprint || authoritativeControl?.fingerprint || "",
+          ).trim().toLowerCase(),
           staleReason: String(
             nackPayload?.error
             || nackPayload?.message
@@ -4379,12 +4428,136 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       }
     }
     unresolvedPendingCalls = remainingPending;
+    if (synthesisDeliveryAcknowledged) {
+      await persistCheckpoint(
+        sessionId,
+        checkpoint,
+        requireCheckpointPersistence,
+        "synthesis_delivery_acknowledged",
+      );
+      return;
+    }
     if (await deliverAcknowledgedSynthesis()) return;
     if (synthesisCommitRejected) {
       if (!synthesisNackControlApplied) {
         throw new Error(
           "Synthesis commit was rejected without a complete authoritative v2 control envelope; final output was withheld.",
         );
+      }
+      const refreshedControl: any = core.compactServerControl(checkpoint?.serverControl);
+      const prepared = core.compactPreparedSynthesis(checkpoint?.preparedSynthesis);
+      const refreshedReadiness = refreshedControl?.synthesisReadiness;
+      const unchangedEvidence = Boolean(
+        prepared
+        && authoritativeSynthesisFinality(refreshedControl, checkpoint).eligible
+        && prepared.objectiveHash === String(checkpoint?.objectiveHash || "").trim().toLowerCase()
+        && prepared.acceptedEvidenceHash === String(refreshedReadiness?.acceptedEvidenceHash || "")
+        && prepared.remainingFrontierHash === String(refreshedReadiness?.remainingFrontierHash || "")
+        && prepared.synthesisEvidenceBundleHash === String(refreshedReadiness?.synthesisEvidenceBundleHash || "")
+        && Number(prepared.mutationGeneration) === Number(refreshedControl?.mutationGeneration || 0)
+      );
+      if (unchangedEvidence && prepared) {
+        const commitTool: any = ctl.getToolDefinitions().find((tool: any) => toolNamesMatch(
+          "unreal_task_commit_synthesis",
+          tool?.function?.name || tool?.name || "",
+        ));
+        if (!commitTool) throw new Error("SYNTHESIS_COMMIT_TOOL_UNAVAILABLE_DURING_STALE_RETRY");
+        const outputDigest = String(prepared.outputDigest || "");
+        const retryArguments = {
+          taskAuthorization: {
+            taskSessionId: String(refreshedControl.taskSessionId || ""),
+            ownerCapability: String(checkpoint?.taskRouteOwnership?.ownerCapability || ""),
+          },
+          objectiveHash: String(checkpoint?.objectiveHash || ""),
+          controlEpoch: Number(refreshedControl.epoch),
+          controlFingerprint: String(refreshedControl.controlFingerprint || refreshedControl.fingerprint || ""),
+          mutationGeneration: Number(refreshedControl.mutationGeneration || 0),
+          synthesisEvidenceBundleHash: String(refreshedReadiness.synthesisEvidenceBundleHash || ""),
+          outputDigest,
+        } as any;
+        retryArguments.synthesisTransactionId = core.sha256(core.stableStringify({
+          taskSessionId: retryArguments.taskAuthorization.taskSessionId,
+          objectiveHash: retryArguments.objectiveHash,
+          controlEpoch: retryArguments.controlEpoch,
+          controlFingerprint: retryArguments.controlFingerprint,
+          mutationGeneration: retryArguments.mutationGeneration,
+          synthesisEvidenceBundleHash: retryArguments.synthesisEvidenceBundleHash,
+          outputDigest,
+        }));
+        const retryId = `synthesis-commit-${retryArguments.synthesisTransactionId.slice(0, 32)}`;
+        const retryName = String(
+          commitTool?.function?.name || commitTool?.name || "unreal_task_commit_synthesis",
+        );
+        const retryPending: any = {
+          id: retryId,
+          name: retryName,
+          arguments: retryArguments,
+          hostToolCallId: retryId,
+          callbackCallId: 1_000_002,
+          dispatchState: "emitting",
+          dispatchIntentAt: isoNow(),
+          dispatchAttempt: 1,
+          preparedSynthesisOutput: prepared.output,
+          preparedSynthesisOutputDigest: outputDigest,
+        };
+        checkpoint.preparedSynthesis = {
+          ...prepared,
+          status: "commit_sent",
+          synthesisTransactionId: retryArguments.synthesisTransactionId,
+          controlEpoch: retryArguments.controlEpoch,
+          controlFingerprint: retryArguments.controlFingerprint,
+          rejectedAt: "",
+          rejectionCode: "",
+          staleReason: "",
+          dispatchedAt: isoNow(),
+        };
+        checkpoint.synthesisState = lifecycleState(checkpoint, "commit_sent", {
+          outputDigest,
+          stopReason: "stale_control_identical_digest_retry",
+        });
+        checkpoint.pendingToolCall = null;
+        checkpoint.pendingToolCalls = [retryPending];
+        await persistCheckpoint(
+          sessionId,
+          checkpoint,
+          requireCheckpointPersistence,
+          "stale_control_identical_digest_retry_intent",
+        );
+        const identity = {
+          hostToolCallId: retryId,
+          predictionAttemptId: `${outerGenerateRequestId}:stale-synthesis-retry`,
+          modelLocalCallId: "stale-synthesis-retry",
+          rawToolCallId: retryId,
+          toolCallId: retryId,
+          toolName: retryName,
+          source: "stale_synthesis_retry",
+          callId: 1_000_002,
+          durableIdentity: true,
+        };
+        hostToolCallLifecycle.record({ stage: "start", ...identity });
+        hostToolCallLifecycle.record({ stage: "name", ...identity, name: retryName });
+        hostToolCallLifecycle.record({ stage: "args", ...identity, content: JSON.stringify(retryArguments) });
+        hostToolCallLifecycle.record({
+          stage: "end",
+          ...identity,
+          request: { id: retryId, type: "function", name: retryName, arguments: retryArguments },
+        });
+        retryPending.dispatchState = "emitted";
+        retryPending.dispatchedAt = isoNow();
+        await persistCheckpoint(
+          sessionId,
+          checkpoint,
+          requireCheckpointPersistence,
+          "stale_control_identical_digest_retry_emitted",
+        );
+        await appendEventBestEffort(sessionId, {
+          type: "synthesis_stale_control_identical_digest_retried",
+          at: isoNow(),
+          outputDigest,
+          synthesisTransactionId: retryArguments.synthesisTransactionId,
+          modelInvoked: false,
+        });
+        return;
       }
       await appendEventBestEffort(sessionId, {
         type: "synthesis_nack_recovery_ready",
@@ -4393,8 +4566,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         controlEpoch: Number(checkpoint?.serverControl?.epoch || 0),
         outputDurable: Boolean(core.compactPreparedSynthesis(checkpoint?.preparedSynthesis)),
         sameTransactionRetry: false,
+        identicalDigestRetryEligible: unchangedEvidence,
       });
-      return;
     }
   }
 
@@ -4405,14 +4578,23 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     for (const pending of unresolvedPendingCalls) {
       const dispatchState = String(pending?.dispatchState || "emitted");
       const pendingName = String(pending?.name || "").trim();
-      if (!["prepared", "emitting"].includes(dispatchState)) {
+      const replayableSynthesisHandshake = toolNamesMatch("unreal_task_commit_synthesis", pendingName)
+        || toolNamesMatch("unreal_task_ack_synthesis_delivery", pendingName);
+      if (
+        !["prepared", "emitting"].includes(dispatchState)
+        && !(replayableSynthesisHandshake && dispatchState === "emitted")
+      ) {
         retainedPending.push(pending);
         continue;
       }
       const id = String(pending?.id || "").trim();
       const name = pendingName;
       const durableHostToolCallId = String(pending?.hostToolCallId || id).trim() || id;
-      if (!core.mutationToolName(name) && !toolNamesMatch("unreal_task_commit_synthesis", name)) {
+      if (
+        !core.mutationToolName(name)
+        && !toolNamesMatch("unreal_task_commit_synthesis", name)
+        && !toolNamesMatch("unreal_task_ack_synthesis_delivery", name)
+      ) {
         if (id) abandonedPreparedIds.push(id);
         continue;
       }
@@ -4540,6 +4722,89 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     preliminaryCheckpoint.recoveryObligation = null;
     preliminaryCheckpoint.postBudgetAction = null;
   }
+  const directProjectStatusGoal = latestUserGoalText(messages).trim();
+  const directProjectStatusQuery = Boolean(
+    !auxiliaryMetaRequest
+    && !preliminaryCheckpoint?.serverControl
+    && !preliminaryCheckpoint?.taskRouteOwnership
+    && directProjectStatusGoal
+    && directProjectStatusGoal.length <= 160
+    && (
+      /\b(?:current|active)\s+project\b|\b(?:what|which|show|report)\b[^.!?\n]{0,48}\bproject\b/iu.test(directProjectStatusGoal)
+      || /(?:현재|활성)\s*프로젝트|프로젝트[^.!?\n]{0,24}(?:뭐|어디|알려|확인)/u.test(directProjectStatusGoal)
+    )
+    && !/(?:set|switch|change|select|clear|설정|변경|전환|선택|해제)/iu.test(directProjectStatusGoal)
+    && !/(?:status|state|source|code|implementation|feature|module|build|test|fix|create|write|complete|develop|상태|소스|코드|구현|기능|모듈|빌드|테스트|수정|생성|추가|삭제|완성|개발)/iu.test(directProjectStatusGoal)
+  );
+  const directProjectStatusTool: any = directProjectStatusQuery
+    ? ctl.getToolDefinitions().find((tool: any) => toolNamesMatch(
+      "unreal_get_active_project",
+      tool?.function?.name || tool?.name || "",
+    ))
+    : null;
+  if (directProjectStatusTool) {
+    const requestId = directToolCallRequestId("direct-project-status", "active-project");
+    const toolName = String(
+      directProjectStatusTool?.function?.name
+      || directProjectStatusTool?.name
+      || "unreal_get_active_project"
+    );
+    const request = { id: requestId, type: "function", name: toolName, arguments: {} };
+    const pending: any = {
+      id: requestId,
+      name: toolName,
+      arguments: {},
+      dispatchState: "emitting",
+      dispatchIntentAt: isoNow(),
+      dispatchAttempt: 1,
+      hostToolCallId: requestId,
+    };
+    preliminaryCheckpoint.pendingToolCall = null;
+    preliminaryCheckpoint.pendingToolCalls = [pending];
+    preliminaryCheckpoint.predictionState = lifecycleState(
+      preliminaryCheckpoint,
+      "completed",
+      { stopReason: "server_owned_direct_project_status" },
+    );
+    await persistCheckpoint(
+      sessionId,
+      preliminaryCheckpoint,
+      requireCheckpointPersistence,
+      "direct_project_status_dispatch_intent",
+    );
+    const identity = {
+      hostToolCallId: requestId,
+      predictionAttemptId: `${outerGenerateRequestId}:direct-project-status`,
+      modelLocalCallId: "0",
+      rawToolCallId: requestId,
+      toolCallId: requestId,
+      toolName,
+      source: "server_owned_project_status",
+      callId: 0,
+      durableIdentity: true,
+    };
+    hostToolCallLifecycle.record({ stage: "start", ...identity });
+    hostToolCallLifecycle.record({ stage: "name", ...identity, name: toolName });
+    hostToolCallLifecycle.record({ stage: "args", ...identity, content: "{}" });
+    hostToolCallLifecycle.record({ stage: "end", ...identity, request });
+    pending.dispatchState = "emitted";
+    pending.dispatchedAt = isoNow();
+    await persistCheckpoint(
+      sessionId,
+      preliminaryCheckpoint,
+      requireCheckpointPersistence,
+      "direct_project_status_emitted",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "server_control_tool_direct_emitted",
+      at: isoNow(),
+      phase: "project_status",
+      tool: toolName,
+      modelSerializationBypassed: true,
+      modelReadinessBypassed: true,
+    });
+    return;
+  }
   preliminaryCheckpoint.predictionState = mergeLifecycleState(
     preliminaryCheckpoint.predictionState,
     lifecycleState(preliminaryCheckpoint, "pending", { stopReason: "model_readiness" }),
@@ -4601,6 +4866,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   }
 
   const nextCheckpoint: any = preliminaryCheckpoint;
+  nextCheckpoint.runtimeModelId = resolvedTargetModel;
   const persistPredictionSetupFailure = async (error: any, phase: string): Promise<void> => {
     const signalAborted = Boolean((ctl as any)?.abortSignal?.aborted);
     const errorCode = String(
@@ -4672,6 +4938,20 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   nextCheckpoint.compactionGeneration = Number(checkpointBeforeModelReadiness?.compactionGeneration || 0);
   const serverControlV2 = core.compactServerControl(nextCheckpoint?.serverControl);
   const serverControlV2Active = Boolean(serverControlV2);
+  const latestRawMessage: any = messages.length > 0 ? messages[messages.length - 1] : null;
+  const latestRawRole = String(
+    typeof latestRawMessage?.getRole === "function"
+      ? latestRawMessage.getRole()
+      : latestRawMessage?.role || latestRawMessage?.type || "",
+  ).trim().toLowerCase();
+  const userInputResumeOwnership = core.compactTaskRouteOwnership(nextCheckpoint?.taskRouteOwnership);
+  const userInputResumeActive = Boolean(
+    serverControlV2Active
+    && String(serverControlV2?.disposition || "") === "await_user"
+    && serverControlV2?.requiredUserInput
+    && latestRawRole === "user"
+    && userInputResumeOwnership
+  );
   const trailingMetaUser = auxiliaryMetaRequest;
   const architectureGoal = latestUserGoalText(messages);
   const latestTurnRequestIntentContext = matchingRequestIntentContext(
@@ -4684,7 +4964,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ...latestTurnRequestIntentContext,
   });
   const detachedSideQueryActive = Boolean(
-    nextCheckpoint?.sideQuery?.active
+    !serverControlV2Active
+    && nextCheckpoint?.sideQuery?.active
     && (
       !latestTurnRequestIntentContext.requestIntent
       || latestTurnIntent === "SIDE_QUERY"
@@ -4737,7 +5018,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const workflowStopActive = Boolean(
     !detachedSideQueryActive
     && (
-      ["workflow_stop", "complete", "await_user"].includes(
+      ["workflow_stop", "complete", ...(userInputResumeActive ? [] : ["await_user"])].includes(
         String(serverControlV2?.disposition || ""),
       )
       || (
@@ -4910,6 +5191,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ? Math.max(featureIntentEvidenceReadThreshold, 6)
     : featureIntentEvidenceReadThreshold;
   if (
+    !serverControlV2Active
+    &&
     persistedFeatureResume
     && typeof persistedFeatureResume === "object"
     && !Array.isArray(persistedFeatureResume)
@@ -5002,7 +5285,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     }
   }
   if (
-    featureIntentRediscoveryActive
+    !serverControlV2Active
+    && featureIntentRediscoveryActive
     && toolNamesMatch(
       FEATURE_INTENT_TOOL_NAME,
       String(nextCheckpoint?.requiredNextTool?.name || ""),
@@ -5069,10 +5353,6 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       epoch: Number(serverControlV2.epoch),
       requiredTool: String(serverControlV2.requiredTool.name || ""),
     });
-    throw new Error(
-      `Server control epoch ${serverControlV2.epoch} requires ${serverControlV2.requiredTool.name}, `
-      + "but its MCP schema is not present in the current catalog. Refresh/reconnect the MCP providers before retrying.",
-    );
   }
   if (invalidRequiredToolContract) {
     // A server-owned exact-tool contract must resolve either to an advertised
@@ -5118,7 +5398,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const featureFrontierRecovery = featureFrontierState.recovery;
   const featureFrontierTerminalRepeated = featureFrontierState.terminalRepeated;
   if (
-    featureFrontierTerminalRepeated
+    !serverControlV2Active
+    && featureFrontierTerminalRepeated
     && toolNamesMatch(
       FEATURE_INTENT_TOOL_NAME,
       String(nextCheckpoint?.requiredNextTool?.name || ""),
@@ -5131,7 +5412,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     nextCheckpoint.featureIntentResume = null;
   }
   const featureFrontierRecoveryActive = Boolean(
-    !detachedSideQueryActive
+    !serverControlV2Active
+    && !detachedSideQueryActive
     && !featureIntentRediscoveryActive
     && plannerPhaseActive
     && featureCompletionAuditRequired
@@ -5312,10 +5594,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     !requiredBeforeFeatureHandoff
     || toolNamesMatch(FEATURE_INTENT_TOOL_NAME, requiredBeforeFeatureHandoff)
   );
-  const serverV2FeatureIntentHandoffAllowed = serverV2AllowsFeatureIntentHandoff(
-    serverControlV2,
-    serverControlV2Active,
-  );
+  // An allowed schema is not a required semantic transition. Only Python's
+  // authoritative v2 requiredTool may select/force a task-bound gate.
+  const serverV2FeatureIntentHandoffAllowed = false;
   const featureIntentDiscoveryHandoffForced = Boolean(
     !detachedSideQueryActive
     && (!serverControlV2Active || serverV2FeatureIntentHandoffAllowed)
@@ -5534,27 +5815,50 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     (name) => !toolNamesMatch(name, exactRequiredToolName),
   );
   injectRepeatedControlBoundaryRule(history, unchangedControlTools);
-  const exactRequiredToolDefinition: any = detachedSideQueryActive || trailingMetaUser
+  const localConversationMaySuppressRequiredTool = Boolean(
+    !serverControlV2Active
+    && (detachedSideQueryActive || trailingMetaUser)
+  );
+  const exactRequiredToolDefinition: any = localConversationMaySuppressRequiredTool
     ? null
     : taskOwnedRequiredToolDefinition(nextCheckpoint, contractAwareToolDefinitions, sessionId);
   const initialActiveProjectControlDefinition: any = initialActiveProjectBootstrapForced
-    ? phaseControlToolDefinition(activeProjectBootstrapTool, sessionId, authoritativeGoal)
+    ? phaseControlToolDefinition(activeProjectBootstrapTool, sessionId, authoritativeGoal, resolvedTargetModel)
     : null;
   const preRoutePlannerControlDefinition: any = preRoutePlannerForced
-    ? phaseControlToolDefinition(plannerTool, sessionId, authoritativeGoal)
+    ? phaseControlToolDefinition(plannerTool, sessionId, authoritativeGoal, resolvedTargetModel)
     : null;
   const catalogRefreshControlDefinition: any = catalogRefreshForced
-    ? phaseControlToolDefinition(catalogRefreshTool, sessionId, authoritativeGoal)
+    ? phaseControlToolDefinition(catalogRefreshTool, sessionId, authoritativeGoal, resolvedTargetModel)
+    : null;
+  const userInputResumeTool: any = userInputResumeActive
+    ? toolDefinitions.find((tool: any) => toolNamesMatch(
+      "unreal_task_resume",
+      tool?.function?.name || tool?.name || "",
+    ))
+    : null;
+  const userInputResumeDefinition: any = userInputResumeActive && userInputResumeTool
+    ? deterministicControlToolDefinition(userInputResumeTool, {
+      taskSessionId: String(serverControlV2?.taskSessionId || ""),
+      taskAuthorization: userInputResumeOwnership,
+      userResponse: architectureGoal,
+      resumeToken: String(serverControlV2?.requiredUserInput?.resumeToken || ""),
+    })
     : null;
   const exactRequiredToolForced = Boolean(
-    !workflowStopActive
-    && exactRequiredToolDefinition
-    && !architectureToolForced
-    && !architectureEvidenceRefillActive
-    && !featureIntentEvidenceRefillActive
-    && !initialActiveProjectBootstrapForced
-    && !preRoutePlannerForced
-    && !catalogRefreshForced
+    exactRequiredToolDefinition
+    && (
+      (serverControlV2Active && Boolean(serverControlV2?.requiredTool))
+      || (
+        !workflowStopActive
+        && !architectureToolForced
+        && !architectureEvidenceRefillActive
+        && !featureIntentEvidenceRefillActive
+        && !initialActiveProjectBootstrapForced
+        && !preRoutePlannerForced
+        && !catalogRefreshForced
+      )
+    )
   );
   if (exactRequiredToolForced) {
     injectServerRequiredToolRule(
@@ -5616,7 +5920,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ))
   )).filter(toolAllowedBySemanticBlocker);
   const phaseToolDefinitions = serverControlV2Active
-    ? (serverV2FeatureIntentToolForced
+    ? (userInputResumeDefinition
+      ? [userInputResumeDefinition].filter(toolAllowedBySemanticBlocker)
+      : serverV2FeatureIntentToolForced
       ? [exactRequiredToolDefinition].filter(Boolean).filter(toolAllowedBySemanticBlocker)
       : serverProjectedToolDefinitions)
     : workflowStopActive
@@ -5711,7 +6017,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     : boundedToolDefinitions.filter((tool: any) => !core.mutationToolName(
       tool?.function?.name || tool?.name || "",
     ));
-  let modelFacingToolDefinitions = effectiveToolDefinitions.map((tool: any) => {
+  let modelFacingToolDefinitions = effectiveToolDefinitions.filter((tool: any) => {
+    const name = String(tool?.function?.name || tool?.name || "");
+    return ![
+      "unreal_task_commit_synthesis",
+      "unreal_task_ack_synthesis_delivery",
+    ].some((internalName) => toolNamesMatch(internalName, name));
+  }).map((tool: any) => {
     if (!tool?.__serverOwnedInjectedArgs) return tool;
     const {
       __serverOwnedInjectedArgs: _injected,
@@ -5729,14 +6041,18 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && serverControlV2?.requiredTool
     && exactRequiredToolDefinition?.__serverOwnedDirectCallSafe === true,
   );
-  const phaseControlDefinition: any = initialActiveProjectBootstrapForced
+  const phaseControlDefinition: any = userInputResumeDefinition
+    ? userInputResumeDefinition
+    : initialActiveProjectBootstrapForced
     ? initialActiveProjectControlDefinition
     : preRoutePlannerForced
       ? preRoutePlannerControlDefinition
       : catalogRefreshForced
         ? catalogRefreshControlDefinition
         : null;
-  const phaseControlKind = initialActiveProjectBootstrapForced
+  const phaseControlKind = userInputResumeDefinition
+    ? "user_input_resume"
+    : initialActiveProjectBootstrapForced
     ? "initial_active_project"
     : preRoutePlannerForced
       ? "pre_route_planner"
@@ -5750,7 +6066,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   // Prompt projection cannot change them, so do not let an oversized prompt or
   // tool catalog block their direct, control-plane-validated dispatch.
   const serverOwnedDirectControlPending = Boolean(
-    exactServerOwnedDirectCall,
+    exactServerOwnedDirectCall || phaseServerOwnedDirectCall,
   );
   const initialSetupStartedAt = performance.now();
   const initialSetupWallClockMs = finiteNumber(
@@ -5987,9 +6303,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
 
   console.info(
     `[unreal-context-compactor] Proxy active: target=${resolvedTargetModel} `
-    + `input=${inputTokens} context=${contextLength} action=${decision.action}`,
+    + `historyPromptTokens=${inputTokens} toolSchemaTokens=${toolSchemaTokens} `
+    + `totalEstimatedPromptTokens=${inputTokens + toolSchemaTokens} `
+    + `actualBackendPromptTokens=unknown context=${contextLength} action=${decision.action}`,
   );
 
+  const checkpointProjectionTokens = Number(
+    core.buildModelFacingCheckpointProjection(nextCheckpoint, predictionPhase)
+      ?.metrics?.tokenEstimate || 0,
+  );
   await appendEventBestEffort(sessionId, {
     type: "context_measurement",
     at: new Date().toISOString(),
@@ -5998,6 +6320,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     modelFence: transactionModelFence,
     predictionPolicy: nextCheckpoint.predictionPolicy,
     inputTokens,
+    historyPromptTokens: inputTokens,
+    toolSchemaTokens,
+    checkpointProjectionTokens,
+    systemContractTokens: null,
+    totalEstimatedPromptTokens: inputTokens + toolSchemaTokens,
+    actualBackendPromptTokens: null,
     contextLength,
     decision,
     promptMeasurementBypassedForExactServerControl: serverOwnedDirectControlPending,
@@ -6193,10 +6521,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
               compactionGeneration: Number(nextCheckpoint?.compactionGeneration || 0),
               inputTokensBefore: inputTokens,
               systemPromptTokens: null,
-              checkpointProjectionTokens: Number(
-                core.buildModelFacingCheckpointProjection(nextCheckpoint, predictionPhase)
-                  ?.metrics?.tokenEstimate || 0,
-              ),
+              checkpointProjectionTokens,
               toolSchemaTokens,
               outputReserveTokens: config.maxOutputReserve,
               toolResultReserveTokens: core.expectedToolReserve(nextToolName, config),
@@ -6470,7 +6795,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         serverControlV2?.disposition === "complete"
           ? "The server reports that the active task is complete. No further tool call is permitted."
           : serverControlV2?.disposition === "await_user"
-          ? `The server is waiting for user input${serverControlV2?.blocker?.code ? ` (${serverControlV2.blocker.code})` : ""}. No tool call is permitted until the user responds.`
+          ? String(serverControlV2?.requiredUserInput?.prompt || "The server is waiting for user input.")
           : `The server stopped the current workflow${serverControlV2?.blocker?.code ? ` (${serverControlV2.blocker.code})` : ""}. No further tool call is permitted for this control epoch.`
       )
       : workflowStopFinalResponse(
@@ -7142,6 +7467,25 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       if (!modelFencesMatch(predictionModelFence, completedModelFence)) {
         throw modelFenceChangedError(predictionModelFence, completedModelFence);
       }
+      const backendPromptCandidates = [
+        predictionResult?.stats?.promptTokens,
+        predictionResult?.stats?.promptTokensCount,
+        predictionResult?.stats?.promptEvalCount,
+        predictionResult?.stats?.tokensEvaluated,
+      ];
+      const backendPromptValue = backendPromptCandidates
+        .map((value) => Number(value))
+        .find((value) => Number.isFinite(value) && value >= 0);
+      nextCheckpoint.actualBackendPromptTokens = backendPromptValue ?? null;
+      await appendEventBestEffort(sessionId, {
+        type: "backend_prompt_measurement",
+        at: isoNow(),
+        actualBackendPromptTokens: backendPromptValue ?? null,
+        available: backendPromptValue !== undefined,
+        historyPromptTokens: attemptInputTokens,
+        toolSchemaTokens: attemptToolSchemaTokens,
+        totalEstimatedPromptTokens: attemptEstimatedPromptTokens,
+      });
       return String(predictionResult?.stats?.stopReason || "");
     } catch (error: any) {
       attemptCallbacksActive = false;
@@ -7217,17 +7561,28 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     const recoveryThinkingEnabled = overrides.thinkingEnabled ?? thinkingEnabled;
     const persistedEffort = String(nextCheckpoint?.reasoningFallback?.effort || "") as ReasoningEffort;
     let effort = effortOrder.includes(persistedEffort) ? persistedEffort : configuredEffort;
-    const floorRecoveryStrategy = "server_owned_implementation_evidence_transition";
+    const floorRecoveryStrategy = "execute_exact_canonical_control";
     const emitServerOwnedFloorRecovery = async (): Promise<string | null> => {
-      const recovery = selectServerOwnedFloorRecovery(nextCheckpoint, predictionTools);
-      if (!recovery) return null;
-      const toolName = recovery.toolName;
-      const recoveryPathDigest = core.sha256(`${toolName}\0${recovery.path}`).slice(0, 16);
+      const control = core.compactServerControl(nextCheckpoint?.serverControl);
+      const required = control?.requiredTool;
+      const toolName = String(required?.name || "").trim();
+      if (!toolName || !required?.args || typeof required.args !== "object") return null;
+      if (!control) return null;
+      if (!predictionTools.some((tool: any) => toolNamesMatch(
+        toolName,
+        tool?.function?.name || tool?.name || "",
+      ))) return null;
+      const recoveryPathDigest = core.sha256(core.stableStringify({
+        toolName,
+        args: required.args,
+        epoch: control.epoch,
+        fingerprint: control.controlFingerprint,
+      })).slice(0, 16);
       const rawRequest = {
         id: directToolCallRequestId("server-owned-low-floor", recoveryPathDigest),
         type: "function",
         name: toolName,
-        arguments: { path: recovery.path },
+        arguments: { ...required.args },
       };
       const request = enrichToolRequestControl(
         rawRequest,
@@ -7255,7 +7610,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         thinkingSuppressed: false,
         serverOwnedTransition: true,
         recoveryStrategy: floorRecoveryStrategy,
-        transitionKind: recovery.transitionKind,
+        transitionKind: "canonical_required_tool",
         updatedAt: isoNow(),
       };
       await persistCheckpoint(
@@ -7270,8 +7625,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         effort,
         reason: "semantic_no_progress_at_effort_floor",
         tool: toolName,
-        path: recovery.path,
-        transitionKind: recovery.transitionKind,
+        path: String(required.args.path || ""),
+        transitionKind: "canonical_required_tool",
         taskSessionId: String(nextCheckpoint?.taskRouteOwnership?.taskSessionId || ""),
         modelSerializationBypassed: true,
         outputPrepared: false,
@@ -8193,6 +8548,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       controlEpoch,
       controlFingerprint,
       mutationGeneration,
+      synthesisEvidenceBundleHash: String(
+        serverControlV2?.synthesisReadiness?.synthesisEvidenceBundleHash || "",
+      ).trim().toLowerCase(),
       outputDigest,
     }));
     const rawRequest = {
@@ -8208,6 +8566,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         controlEpoch,
         controlFingerprint,
         mutationGeneration,
+        synthesisEvidenceBundleHash: String(
+          serverControlV2?.synthesisReadiness?.synthesisEvidenceBundleHash || "",
+        ).trim().toLowerCase(),
         outputDigest,
         synthesisTransactionId,
       },
@@ -8434,7 +8795,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       stopReason === "server_owned_low_floor_recovery"
       && nextCheckpoint?.reasoningFallback?.status === "retrying"
       && nextCheckpoint?.reasoningFallback?.recoveryStrategy
-        === "server_owned_implementation_evidence_transition"
+        === "execute_exact_canonical_control"
     );
     if (lowFloorTransitionPrepared) {
       nextCheckpoint.reasoningFallback = {
@@ -8459,7 +8820,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         toolCallId: String(preparedRequest?.id || ""),
         modelSerializationBypassed: true,
         outputPrepared: true,
-        recoveryStrategy: "server_owned_implementation_evidence_transition",
+            recoveryStrategy: "execute_exact_canonical_control",
       });
     }
   }
@@ -8602,8 +8963,6 @@ export {
   reconcilePendingToolCalls,
   compactionWorkflowProgressSignature,
   compactToTarget,
-  selectServerOwnedFloorRecovery,
-  serverV2AllowsFeatureIntentHandoff,
   resolveTargetModel,
   upsertLeadingSystemRule,
 };

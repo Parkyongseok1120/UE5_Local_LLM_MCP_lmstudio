@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const { evidenceRecoveryDecision } = require("../src/evidence-recovery-decision");
 
 function task(files = {}, progress = {}) {
@@ -17,12 +18,29 @@ function task(files = {}, progress = {}) {
   };
 }
 
-const header = {
-  path: "Source/Cine/Public/Cine.h", sourceKind: "declaration", evidenceId: "header",
-};
-const source = {
-  path: "Source/Cine/Private/Cine.cpp", sourceKind: "implementation", evidenceId: "source",
-};
+function complete(path, sourceKind, evidenceId, contentHash, text) {
+  return {
+    path, sourceKind, evidenceId, contentHash,
+    evidenceSnapshotGeneration: 0,
+    coveredRanges: [[1, 3]],
+    wholeFileComplete: true,
+    truncated: false,
+    lineCount: 3,
+    coverageLevel: "FILE_COMPLETE",
+    supportingExcerpts: [{
+      startLine: 1,
+      endLine: 3,
+      text,
+      excerptDigest: crypto.createHash("sha256").update(text).digest("hex"),
+    }],
+  };
+}
+const header = complete(
+  "Source/Cine/Public/Cine.h", "declaration", "header", "a".repeat(64), "class FCine {};",
+);
+const source = complete(
+  "Source/Cine/Private/Cine.cpp", "implementation", "source", "b".repeat(64), "void FCine::Run() {}",
+);
 
 test("read stagnation with no accepted source evidence cannot become evidence_complete", () => {
   const recovery = evidenceRecoveryDecision(task());

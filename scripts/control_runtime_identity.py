@@ -18,7 +18,7 @@ from control_protocol_spec import (
 
 
 PROTOCOL_VERSION = 2
-RAG_COMPONENT_VERSION = "0.3.0"
+RAG_COMPONENT_VERSION = "0.3.1"
 COMPONENTS = ("agent", "rag", "compactor")
 PROTOCOL_IDENTITY_FIELDS = tuple(HASH_SECTIONS)
 
@@ -41,6 +41,13 @@ def _component_files(root: Path, component: str) -> list[Path]:
         files = [
             base / "package.json",
             root / "config" / "synthesis_readiness_policy.json",
+            root / "config" / "control_state_machine.json",
+            root / "scripts" / "control_transition_bridge.py",
+            root / "scripts" / "phase_tool_router.py",
+            root / "scripts" / "synthesis_readiness.py",
+            root / "scripts" / "task_api.py",
+            root / "scripts" / "task_gate_history.py",
+            root / "scripts" / "workspace_paths.py",
             *(base / "src").rglob("*.js"),
         ]
     elif component == "compactor":
@@ -69,6 +76,7 @@ def _component_files(root: Path, component: str) -> list[Path]:
         )
         files = [base / name for name in names]
         files.append(root / "config" / "synthesis_readiness_policy.json")
+        files.append(root / "config" / "control_state_machine.json")
     else:
         raise ValueError(f"unknown control component: {component}")
     return sorted(

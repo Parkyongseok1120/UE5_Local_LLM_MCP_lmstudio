@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "semanticOwner": {
+    "id": "python_task_server",
+    "module": "scripts/phase_tool_router.py",
+    "reducer": "commit_control_transition",
+    "durableState": "task state.json"
+  },
+  "adapters": {
+    "nodeAgentMcp": {
+      "role": "execute_and_record_committed_events",
+      "mayChooseSemanticControl": false
+    },
+    "lmStudioCompactor": {
+      "role": "preserve_control_execute_exact_commands_and_deliver",
+      "mayChooseSemanticControl": false,
+      "localRecoveryNamespace": "proxyRecovery"
+    }
+  },
+  "lifecycleStates": [
+    "BOOTSTRAP",
+    "INITIAL_DISCOVERY_REQUIRED",
+    "DISCOVERY_IN_PROGRESS",
+    "EVIDENCE_REQUIRED",
+    "EVIDENCE_COLLECTING",
+    "EVIDENCE_READY",
+    "MUTATION_REQUIRED",
+    "STATIC_VALIDATION_REQUIRED",
+    "BUILD_REQUIRED",
+    "AUTOMATION_REQUIRED",
+    "SYNTHESIS_REQUIRED",
+    "SYNTHESIS_PREPARED",
+    "SYNTHESIS_COMMIT_REQUIRED",
+    "DELIVERY_REQUIRED",
+    "AWAITING_USER_INPUT",
+    "COMPLETE",
+    "TERMINAL_BLOCKED",
+    "CANCELLED"
+  ],
+  "events": [
+    "TASK_CREATED",
+    "DISCOVERY_SUCCEEDED",
+    "DISCOVERY_EMPTY",
+    "FRONTIER_CREATED",
+    "FRONTIER_EXHAUSTED",
+    "SOURCE_EVIDENCE_ACCEPTED",
+    "SOURCE_EVIDENCE_ABSENT",
+    "SOURCE_EVIDENCE_INVALIDATED",
+    "PHASE_BUDGET_EXHAUSTED",
+    "CHECKPOINT_RECORDED",
+    "PLAN_REVISED",
+    "GATE_SUCCEEDED",
+    "GATE_FAILED",
+    "MUTATION_COMMITTED",
+    "STATIC_VALIDATION_FAILED",
+    "STATIC_VALIDATION_PASSED",
+    "RECOVERY_EVIDENCE_ACCEPTED",
+    "BUILD_FAILED",
+    "BUILD_PASSED",
+    "AUTOMATION_FAILED",
+    "AUTOMATION_PASSED",
+    "SYNTHESIS_PREPARED",
+    "SYNTHESIS_COMMIT_ACKED",
+    "SYNTHESIS_COMMIT_REJECTED_STALE",
+    "OUTPUT_DELIVERED",
+    "TASK_CANCELLED"
+  ],
+  "runningLivenessAlternatives": [
+    "exact_required_tool",
+    "deterministic_internal_command",
+    "bounded_exploratory_route",
+    "typed_resumable_user_input",
+    "truthful_terminal_control"
+  ],
+  "discoveryLifecycle": {
+    "emptyInitialFrontier": "INITIAL_DISCOVERY_REQUIRED",
+    "frontierLostRequires": [
+      "discoveryStarted",
+      "everHadFrontier",
+      "failedReconstruction",
+      "noDeterministicPairRecovery",
+      "noBoundedSearchRecovery",
+      "boundedReplanApplied"
+    ]
+  },
+  "evidenceLevels": [
+    "DISCOVERED",
+    "RANGE_PARTIAL",
+    "SYMBOL_COMPLETE",
+    "FILE_COMPLETE",
+    "CLAIM_VALIDATED"
+  ],
+  "evidenceIdentityFields": [
+    "canonicalPath",
+    "contentHash",
+    "applicableGeneration",
+    "coveredRanges",
+    "wholeFileComplete",
+    "truncated",
+    "lineCount",
+    "sourceKind",
+    "semanticAnchorDigest"
+  ],
+  "compatibleReplanRequires": [
+    "sameTaskSession",
+    "sameObjectiveHash",
+    "sameCanonicalProject",
+    "sameCanonicalPath",
+    "sameContentHash",
+    "sameApplicableMutationGeneration",
+    "sameEvidenceSemantics"
+  ],
+  "recoveryTransitions": {
+    "evidence_required": {
+      "satisfactionEvent": "RECOVERY_EVIDENCE_ACCEPTED",
+      "nextStatus": "repair_planning_required",
+      "nextLifecycle": "EVIDENCE_READY"
+    },
+    "repair_planning_required": {
+      "satisfactionEvent": "GATE_SUCCEEDED",
+      "nextStatus": "repair_required",
+      "nextLifecycle": "MUTATION_REQUIRED"
+    },
+    "repair_required": {
+      "satisfactionEvent": "MUTATION_COMMITTED",
+      "nextStatus": "revalidate_required",
+      "nextLifecycle": "STATIC_VALIDATION_REQUIRED"
+    },
+    "revalidate_required": {
+      "satisfactionEvent": "STATIC_VALIDATION_PASSED",
+      "nextStatus": "build_required",
+      "nextLifecycle": "BUILD_REQUIRED"
+    },
+    "checkpoint_rebase_required": {
+      "satisfactionEvent": "CHECKPOINT_RECORDED",
+      "nextStatus": "prior_active_status",
+      "nextLifecycle": "prior_active_lifecycle"
+    },
+    "phase_budget_checkpoint_required": {
+      "satisfactionEvent": "CHECKPOINT_RECORDED",
+      "nextStatus": "phase_budget_replan_required",
+      "nextLifecycle": "EVIDENCE_REQUIRED"
+    },
+    "phase_budget_replan_required": {
+      "satisfactionEvent": "PLAN_REVISED",
+      "nextStatus": "evidence_required",
+      "nextLifecycle": "EVIDENCE_REQUIRED"
+    },
+    "environment_recovery": {
+      "satisfactionEvent": "DISCOVERY_SUCCEEDED",
+      "nextStatus": "prior_active_status",
+      "nextLifecycle": "prior_active_lifecycle"
+    },
+    "evidence_complete": {
+      "satisfactionEvent": "SYNTHESIS_PREPARED",
+      "nextStatus": "synthesis_prepared",
+      "nextLifecycle": "SYNTHESIS_PREPARED"
+    }
+  },
+  "synthesisLifecycle": [
+    "pending",
+    "prepared",
+    "commit_sent",
+    "commit_acked",
+    "delivery_pending",
+    "delivered",
+    "rejected_stale",
+    "evidence_recovery",
+    "failed_internal"
+  ],
+  "synthesisBindingFields": [
+    "taskSessionId",
+    "objectiveHash",
+    "evidenceStateHash",
+    "remainingFrontierHash",
+    "planRevision",
+    "controlEpoch",
+    "mutationGeneration",
+    "synthesisEvidenceBundleHash",
+    "outputDigest"
+  ],
+  "completionRule": "task completion requires synthesis commit acknowledgement and delivery acknowledgement"
+}

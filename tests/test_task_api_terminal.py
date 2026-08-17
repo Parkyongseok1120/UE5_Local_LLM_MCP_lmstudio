@@ -159,6 +159,62 @@ def test_task_resume_rejects_unconfirmed_or_completed_task(
     assert completed["ok"] is False
 
 
+def test_task_resume_consumes_structured_user_input_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(tmp_path, request="inspect selected source")
+    task_id = str(started["taskSessionId"])
+    state_path = task_root(tmp_path, task_id) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    resume_token = "a" * 64
+    required_input = {
+        "kind": "provide_path",
+        "prompt": "Provide the source root to inspect.",
+        "schema": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {"path": {"type": "string"}},
+        },
+        "resumeToken": resume_token,
+    }
+    state["controlState"] = {
+        "version": 2,
+        "disposition": "await_user",
+        "requiredUserInput": required_input,
+    }
+    state["requiredUserInput"] = required_input
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    authorization = {
+        "taskSessionId": task_id,
+        "ownerCapability": state["ownerCapability"],
+    }
+
+    stale = task_resume(
+        tmp_path,
+        task_id,
+        task_authorization=authorization,
+        user_response={"path": "Source/Demo"},
+        resume_token="stale-token",
+    )
+    assert stale["ok"] is False
+    assert stale["errorCode"] == "TASK_RESUME_TOKEN_MISMATCH"
+
+    resumed = task_resume(
+        tmp_path,
+        task_id,
+        task_authorization=authorization,
+        user_response={"path": "Source/Demo"},
+        resume_token=resume_token,
+    )
+    assert resumed["ok"] is True
+    assert resumed["control"]["requiredTool"]["name"] == "unreal_agent_plan"
+    assert resumed["control"]["allowedTools"] == ["unreal_agent_plan"]
+    assert resumed["state"]["userInputHistory"][-1]["kind"] == "provide_path"
+    assert "requiredUserInput" not in resumed["state"]
+
+
 def test_plan_only_rejects_start_background_job(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
     result = task_start(

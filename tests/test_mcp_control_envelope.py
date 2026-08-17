@@ -33,10 +33,10 @@ def test_control_envelope_normalizes_recovery_without_guessing_tool_names() -> N
 
     assert payload["control"]["taskId"] == "task-1234"
     assert payload["control"]["phase"] == "unreal_feature_intent_resolve"
-    assert payload["control"]["status"] == "Blocked"
-    assert payload["control"]["nextAction"] == "answer_feature_questions"
+    assert payload["control"]["status"] == "MissingAuthoritativeControl"
+    assert payload["control"]["nextAction"] == ""
     assert payload["control"]["nextActionIsTool"] is False
-    assert payload["control"]["retryPolicy"] == "once"
+    assert payload["control"]["retryPolicy"] == "forbidden"
     assert len(payload["control"]["blockerFingerprint"]) == 24
     assert "owner-secret" not in str(payload["control"])
 
@@ -70,7 +70,7 @@ def test_existing_server_control_survives_a_second_envelope_pass() -> None:
     }
 
 
-def test_task_control_v2_projects_one_exact_required_tool() -> None:
+def test_task_fields_without_committed_control_cannot_project_v2() -> None:
     payload = attach_control_envelope(
         {
             "ok": True,
@@ -89,34 +89,29 @@ def test_task_control_v2_projects_one_exact_required_tool() -> None:
         tool_name="task_api",
     )
 
-    assert payload["control"] == {
-        "version": 2,
-        "epoch": 7,
-        "taskSessionId": "task-v2",
-        "routeHash": "route-7",
-        "phase": "implementation",
-        "disposition": "require_tool",
-        "requiredTool": {
-            "name": "replace_in_file",
-            "args": {"path": "Source/Demo.cpp"},
-        },
-        "allowedTools": ["replace_in_file"],
-        "retryPolicy": {"sameSemanticInput": "allowed"},
-    }
+    assert payload["control"]["version"] == 1
+    assert payload["control"]["status"] == "MissingAuthoritativeControl"
+    assert payload["control"]["nextActionIsTool"] is False
+    assert "disposition" not in payload["control"]
 
 
 def test_task_control_v2_survives_a_second_transport_pass() -> None:
+    control = {
+        "version": 2,
+        "authoritative": True,
+        "epoch": 8,
+        "taskSessionId": "task-v2",
+        "routeHash": "route-8",
+        "phase": "validation",
+        "disposition": "require_tool",
+        "requiredTool": {"name": "build_project", "args": {}},
+        "allowedTools": ["build_project"],
+        "retryPolicy": {"sameSemanticInput": "once"},
+    }
     first = attach_control_envelope(
         {
             "ok": True,
-            "taskSessionId": "task-v2",
-            "controlEpoch": 8,
-            "toolRoute": {
-                "phase": "validation",
-                "routeHash": "route-8",
-                "activeTools": ["build_project", "run_tests"],
-            },
-            "requiredNextTool": "build_project",
+            "control": control,
         },
         tool_name="task_api",
     )
@@ -127,7 +122,7 @@ def test_task_control_v2_survives_a_second_transport_pass() -> None:
     assert second["control"]["allowedTools"] == ["build_project"]
 
 
-def test_rc2_replay_a_repeated_gate_blocker_forces_rediscovery_without_stale_action() -> None:
+def test_repeated_gate_legacy_fields_cannot_shadow_the_canonical_reducer() -> None:
     payload = attach_control_envelope(
         {
             "ok": False,
@@ -149,38 +144,36 @@ def test_rc2_replay_a_repeated_gate_blocker_forces_rediscovery_without_stale_act
         tool_name="task_api",
     )
 
-    assert payload["control"]["disposition"] == "rediscover"
-    assert "requiredTool" not in payload["control"]
-    assert payload["control"]["allowedTools"] == [
-        "search_files",
-        "read_file_range",
-    ]
-    assert payload["control"]["retryPolicy"] == {
-        "sameSemanticInput": "forbidden"
-    }
-    assert payload["control"]["blocker"]["code"] == "REPEATED_GATE_BLOCKER"
+    assert payload["control"]["version"] == 1
+    assert payload["control"]["status"] == "MissingAuthoritativeControl"
+    assert payload["control"]["nextActionIsTool"] is False
+    assert "disposition" not in payload["control"]
 
 
 def test_terminal_task_control_exposes_no_tools() -> None:
+    control = {
+        "version": 2,
+        "authoritative": True,
+        "epoch": 10,
+        "taskSessionId": "task-v2",
+        "routeHash": "route-10",
+        "phase": "complete",
+        "disposition": "complete",
+        "requiredTool": None,
+        "allowedTools": [],
+        "retryPolicy": {"sameSemanticInput": "forbidden"},
+    }
     payload = attach_control_envelope(
         {
             "ok": True,
-            "taskSessionId": "task-v2",
-            "controlEpoch": 10,
-            "status": "completed",
-            "taskRouteTerminal": True,
-            "toolRoute": {
-                "phase": "complete",
-                "routeHash": "route-10",
-                "activeTools": ["read_file"],
-            },
+            "control": control,
         },
         tool_name="task_api",
     )
 
     assert payload["control"]["disposition"] == "complete"
     assert payload["control"]["allowedTools"] == []
-    assert "requiredTool" not in payload["control"]
+    assert payload["control"]["requiredTool"] is None
     assert "blocker" not in payload["control"]
 
 

@@ -43,6 +43,7 @@ RAG_ESSENTIAL = {
     "unreal_task_retry_job_cancel",
     "unreal_task_checkpoint",
     "unreal_task_commit_synthesis",
+    "unreal_task_ack_synthesis_delivery",
     "unreal_task_define_slices",
     "unreal_task_resume",
     "unreal_task_cancel",
@@ -327,8 +328,10 @@ def test_symbol_recovery_evidence_mark_failure_is_authoritative_error(
         lambda **_kwargs: {},
     )
     authoritative_control = {
+        "version": 2,
         "authoritative": True,
         "epoch": 7,
+        "taskSessionId": "task-symbol-recovery",
         "disposition": "require_tool",
         "requiredTool": {
             "name": "unreal_symbol_lookup",
@@ -1530,9 +1533,18 @@ def test_failed_feature_intent_does_not_rebind_slice_or_rotate_ownership(
         "activeSliceId": persisted["activeSliceId"],
         "mutationGeneration": persisted["mutationGeneration"],
     }
-    from phase_tool_router import commit_control_transition
+    from phase_tool_router import commit_control_transition, reduce_committed_event
     from task_api import task_authorization_for_state
 
+    reduce_committed_event(
+        persisted,
+        {
+            "kind": "TOOL_RESULT_COMMITTED",
+            "toolName": "read_file",
+            "arguments": {"path": relative},
+            "evidenceProgressed": True,
+        },
+    )
     commit_control_transition(persisted)
     # The owner capability remains stable, while the server-owned route hash
     # is intentionally refreshed when recovery changes the authoritative next
@@ -1672,8 +1684,8 @@ def test_compile_fix_plan_reproduces_build_before_requesting_fix_sketch(
     assert payload["nextActionArgs"]["allowEngineFallback"] is False
     assert "build_unreal_project" in payload["toolRoute"]["activeTools"]
     assert "requiredFirstTool" not in payload["toolRoute"]
-    assert "static_validate_project" in payload["toolRoute"]["activeTools"]
-    assert "read_file" in payload["toolRoute"]["activeTools"]
+    assert payload["toolRoute"]["activeTools"] == ["build_unreal_project"]
+    assert payload["control"]["allowedTools"] == ["build_unreal_project"]
     assert "unreal_code_sketch_claim_validate" in payload["toolRoute"]["pendingGates"]
     assert "Reproduce the current build first" in payload["agentInstruction"]
 

@@ -3,5 +3,5 @@
   "runner": "node",
   "owner": "codex",
   "name": "unreal-context-compactor",
-  "revision": 87
+  "revision": 88
 }

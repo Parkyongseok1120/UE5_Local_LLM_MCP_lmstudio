@@ -1598,8 +1598,6 @@ def _reconcile_gate_completion(
         "blockerFingerprint",
         "control",
     ):
-        if key == "control" and local_failed and not repeated_blocker:
-            continue
         if key in gate_completion and (
             repeated_blocker or not local_failed or key not in payload
         ):
@@ -5987,6 +5985,7 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_task_retry_job_cancel",
         "unreal_task_checkpoint",
         "unreal_task_commit_synthesis",
+        "unreal_task_ack_synthesis_delivery",
         "unreal_task_define_slices",
         "unreal_task_resume",
         "unreal_task_cancel",
@@ -6774,7 +6773,7 @@ class McpServer:
                     },
                     "serverInfo": {
                         "name": "unreal-rag",
-                        "version": "0.3.0",
+                        "version": "0.3.1",
                         "runtimeIdentity": (
                             getattr(self, "runtime_component_status", {}).get("running")
                         ),
@@ -8301,6 +8300,10 @@ class McpServer:
                                 "validated architecture handoff to this planner call."
                             ),
                         },
+                        "runtimeModelId": {
+                            "type": "string",
+                            "description": "Host-injected loaded LM Studio model identifier used to bind the sampling profile.",
+                        },
                         "projectSwitchResumeToken": {
                             "type": "string",
                             "description": (
@@ -8554,6 +8557,10 @@ class McpServer:
                             "pattern": "^[a-f0-9]{64}$",
                         },
                         "mutationGeneration": {"type": "integer", "minimum": 0},
+                        "synthesisEvidenceBundleHash": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$",
+                        },
                         "outputDigest": {
                             "type": "string",
                             "pattern": "^[a-f0-9]{64}$",
@@ -8569,9 +8576,27 @@ class McpServer:
                         "controlEpoch",
                         "controlFingerprint",
                         "mutationGeneration",
+                        "synthesisEvidenceBundleHash",
                         "outputDigest",
                         "synthesisTransactionId",
                     ],
+                ),
+            },
+            {
+                "name": "unreal_task_ack_synthesis_delivery",
+                "title": "Acknowledge delivered read-only synthesis",
+                "description": (
+                    "Internal idempotent host receipt. Call only after the exact "
+                    "commit-ACKed synthesis bytes were emitted to the UI."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "taskAuthorization": _checkpoint_authorization_schema(),
+                        "synthesisTransactionId": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                        "outputDigest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                        "deliveryReceiptId": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                    },
+                    ["taskAuthorization", "synthesisTransactionId", "outputDigest", "deliveryReceiptId"],
                 ),
             },
             {
@@ -8635,14 +8660,17 @@ class McpServer:
             },
             {
                 "name": "unreal_task_resume",
-                "title": "Resume cancelled task",
+                "title": "Resume task",
                 "description": (
-                    "Resume a confirmed cancelled task. Expired/stale pre-write evidence is discarded; "
-                    "failed, completed, or cancellation-uncertain tasks require a new plan."
+                    "Resume a confirmed cancelled task, or submit the exact structured response "
+                    "and resumeToken requested by an authoritative await_user control."
                 ),
                 "inputSchema": self._schema(
                     {
                         "taskSessionId": {"type": "string"},
+                        "taskAuthorization": _task_authorization_schema(),
+                        "userResponse": {},
+                        "resumeToken": {"type": "string"},
                     },
                     ["taskSessionId"],
                 ),
@@ -9676,10 +9704,53 @@ class McpServer:
                     control_epoch=int(arguments.get("controlEpoch") or 0),
                     control_fingerprint=str(arguments.get("controlFingerprint") or ""),
                     mutation_generation=int(arguments.get("mutationGeneration") or 0),
+                    synthesis_evidence_bundle_hash=str(
+                        arguments.get("synthesisEvidenceBundleHash") or ""
+                    ),
                     output_digest=str(arguments.get("outputDigest") or ""),
                     synthesis_transaction_id=str(
                         arguments.get("synthesisTransactionId") or ""
                     ),
+                )
+                if payload.get("ok"):
+                    self.notify_tools_list_changed()
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_ack_synthesis_delivery":
+                from task_api import (
+                    task_ack_synthesis_delivery,
+                    task_authorization_for_state,
+                    task_root,
+                )
+
+                compact = dict(arguments.get("taskAuthorization") or {})
+                task_session_id = str(compact.get("taskSessionId") or "").strip()
+                owner_capability = str(compact.get("ownerCapability") or "").strip()
+                try:
+                    delivery_state = json.loads(
+                        (task_root(self.workspace, task_session_id) / "state.json").read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError, TypeError):
+                    delivery_state = {}
+                if (
+                    not task_session_id
+                    or not owner_capability
+                    or str(delivery_state.get("ownerCapability") or "") != owner_capability
+                ):
+                    self.structured_tool_result(
+                        message_id,
+                        {
+                            "ok": False,
+                            "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
+                            "error": "Delivery receipt does not own the active task.",
+                        },
+                    )
+                    return
+                payload = task_ack_synthesis_delivery(
+                    self.workspace,
+                    task_authorization=task_authorization_for_state(delivery_state),
+                    synthesis_transaction_id=str(arguments.get("synthesisTransactionId") or ""),
+                    output_digest=str(arguments.get("outputDigest") or ""),
+                    delivery_receipt_id=str(arguments.get("deliveryReceiptId") or ""),
                 )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()
@@ -9744,7 +9815,17 @@ class McpServer:
             elif name == "unreal_task_resume":
                 from task_api import task_resume
 
-                payload = task_resume(self.workspace, str(arguments.get("taskSessionId") or ""))
+                payload = task_resume(
+                    self.workspace,
+                    str(arguments.get("taskSessionId") or ""),
+                    task_authorization=(
+                        arguments.get("taskAuthorization")
+                        if isinstance(arguments.get("taskAuthorization"), dict)
+                        else None
+                    ),
+                    user_response=arguments.get("userResponse"),
+                    resume_token=str(arguments.get("resumeToken") or ""),
+                )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()
                 self.structured_tool_result(message_id, payload)
@@ -10213,12 +10294,24 @@ class McpServer:
                     )
                     return
                 self.progress_phase(message_id, "Classifying task and building guarded plan")
+                runtime_model_id = str(arguments.get("runtimeModelId") or "").strip()
+                runtime_sampling_profile = ""
+                if runtime_model_id:
+                    from load_sampling_preset import resolve_profile_name, set_sampling_profile_for_model
+
+                    set_sampling_profile_for_model(runtime_model_id)
+                    runtime_sampling_profile = resolve_profile_name()
                 payload = build_agent_plan(
                     request,
                     mode,
                     latest_user_message=latest_user_message,
                     original_objective=original_objective,
                 ).to_dict()
+                payload["runtimeModel"] = {
+                    "identifier": runtime_model_id,
+                    "samplingProfile": runtime_sampling_profile,
+                    "profileBoundByHost": bool(runtime_model_id and runtime_sampling_profile),
+                }
                 if project_control_context:
                     payload["projectControl"] = project_control_context
                 writes_allowed = (
@@ -10506,9 +10599,14 @@ class McpServer:
                 payload["selectedCandidateId"] = str(
                     task_state.get("selectedCandidateId") or ""
                 )
+                writes_allowed = bool(
+                    task_state.get("writesAllowed") is True
+                    and (task_state.get("writeGate") or {}).get("writesAllowed") is True
+                )
                 payload["taskAuthorization"] = task_authorization
-                payload["taskAuthorizationRequiredForWrites"] = True
-                payload["writeToolAuthorizationArgs"] = {"taskAuthorization": task_authorization}
+                payload["taskAuthorizationRequiredForWrites"] = writes_allowed
+                if writes_allowed:
+                    payload["writeToolAuthorizationArgs"] = {"taskAuthorization": task_authorization}
                 payload["authorizationRetryPolicy"] = {
                     "reuseExistingAuthorization": True,
                     "doNotReplanFor": [
@@ -10596,8 +10694,8 @@ class McpServer:
                     "fullExistingFileContentInBundleAllowed": False,
                 }
                 payload["agentInstruction"] = (
-                    "Copy the complete taskAuthorization object, including ownerCapability, "
-                    "into every routed tool call. Follow nextAction exactly. "
+                    "Authorization is host-injected; never copy, print, or invent ownerCapability. "
+                    "Follow nextAction exactly. "
                     + (
                         "Reproduce the current build first; use its first actionable error to "
                         "choose no more than two targetFiles, then complete the pending code-sketch "
@@ -10629,6 +10727,15 @@ class McpServer:
                     "and 8000 combined oldText/newText characters. Never send a full existing "
                     "file in apply_edit_bundle.files; split larger work into bounded patches."
                 )
+                if not writes_allowed and task_mode != "plan_only":
+                    payload.pop("writeToolAuthorizationArgs", None)
+                    payload.pop("executionContract", None)
+                    payload.pop("authorizationRetryPolicy", None)
+                    payload["agentInstruction"] = (
+                        "Authorization is host-injected and must not be copied or printed. "
+                        "Follow the exact server-owned read/search nextAction, retain direct source "
+                        "evidence, and synthesize only after the server publishes the synthesis latch."
+                    )
                 if task_mode == "plan_only":
                     # The task owner has already completed and released this
                     # session. Never recreate a callable capability while
@@ -10652,6 +10759,14 @@ class McpServer:
                         "terminal and carries no write or continuation authorization."
                     )
                 compact_plan = compact_agent_plan_payload(payload)
+                compact_authorization = compact_plan.get("taskAuthorization") or {}
+                model_authorization = {
+                    "taskSessionId": str(compact_authorization.get("taskSessionId") or ""),
+                    "authorizationBound": bool(compact_authorization),
+                }
+                model_next_action_args = dict(compact_plan.get("nextActionArgs") or {})
+                if "taskAuthorization" in model_next_action_args:
+                    model_next_action_args["taskAuthorization"] = model_authorization
                 plan_summary = {
                     "taskKind": compact_plan.get("taskKind"),
                     "editStrategy": compact_plan.get("editStrategy"),
@@ -10661,11 +10776,12 @@ class McpServer:
                     "maxFilesPerSlice": (compact_plan.get("toolRoute") or {}).get("maxFilesPerSlice") or 2,
                     "nextAction": compact_plan.get("nextAction"),
                     "nextActionIsTool": compact_plan.get("nextActionIsTool") is True,
-                    "nextActionArgs": compact_plan.get("nextActionArgs") or {},
-                    "executionContract": compact_plan.get("executionContract") or {},
+                    "nextActionArgs": model_next_action_args,
                     "agentInstruction": compact_plan.get("agentInstruction"),
-                    "taskAuthorization": compact_plan.get("taskAuthorization") or {},
+                    "taskAuthorization": model_authorization,
                 }
+                if writes_allowed and compact_plan.get("executionContract"):
+                    plan_summary["executionContract"] = compact_plan["executionContract"]
                 if compact_plan.get("contextCompactorRouting"):
                     plan_summary["contextCompactorRouting"] = compact_plan[
                         "contextCompactorRouting"

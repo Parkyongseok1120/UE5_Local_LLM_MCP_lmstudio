@@ -1609,11 +1609,8 @@ def test_automation_failure_recovery_routes_logs_to_sketch_then_mutation(
     )
     assert planned["ok"] is True, planned
     assert planned["control"]["requiredTool"]["name"] == "replace_in_file"
-    assert {
-        "read_unreal_logs",
-        "unreal_code_sketch_claim_validate",
-        "replace_in_file",
-    }.issubset(planned["toolRoute"]["activeTools"])
+    assert planned["toolRoute"]["activeTools"] == ["replace_in_file"]
+    assert planned["control"]["allowedTools"] == ["replace_in_file"]
 
 
 def test_expired_recovery_sketch_must_be_reapproved_before_mutation(
@@ -2310,7 +2307,7 @@ def test_checkpoint_without_server_required_action_preserves_budget(
     assert state["checkpointProgress"]["evidenceProgressed"] is False
 
 
-def test_cpp_analysis_without_reconstructable_frontier_fails_closed(
+def test_fresh_cpp_analysis_requires_initial_discovery_not_await_user(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2329,15 +2326,139 @@ def test_cpp_analysis_without_reconstructable_frontier_fails_closed(
             },
         },
     )
-    assert started["control"]["disposition"] == "await_user"
-    assert started["control"]["requiredTool"] is None
-    assert started["control"]["blocker"]["code"] == "EVIDENCE_FRONTIER_LOST"
-    assert started["control"]["retryPolicy"]["sameSemanticInput"] == "forbidden"
+    assert started["control"]["disposition"] == "require_tool"
+    assert started["control"]["requiredTool"]["name"] == "search_files"
+    assert started["control"]["transitionReason"].startswith("INITIAL_EVIDENCE_DISCOVERY")
+    assert started["control"]["blocker"] is None
     persisted = json.loads(
         (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(encoding="utf-8")
     )
     assert persisted["synthesisReadiness"]["acceptedDirectEvidenceCount"] == 0
     assert persisted["synthesisReadiness"]["ready"] is False
+
+
+def test_initial_discovery_queue_advances_after_an_empty_first_action() -> None:
+    state = {
+        "taskSessionId": "queued-discovery",
+        "status": "running",
+        "mode": "read_only",
+        "writesAllowed": False,
+        "writeGate": {"writesAllowed": False},
+        "taskKind": "cpp_analysis",
+        "planRevision": "1",
+        "controlEpoch": 2,
+        "mutationGeneration": 0,
+        "inspectionContract": {
+            "intent": "cpp_analysis",
+            "evidenceBudget": {"representativePairs": 1},
+        },
+        "initialEvidenceActions": [
+            {"name": "search_files", "args": {"query": "Foo", "path": "Source"}},
+            {"name": "search_files", "args": {"query": "Bar", "path": "Source"}},
+        ],
+        "inspectionProgress": {
+            "status": "initial_discovery_required",
+            "discoveryStarted": True,
+            "discoveryAttempts": 1,
+            "discoveryActionCursor": 1,
+            "remainingFrontier": [],
+        },
+        "sourceEvidence": {"planRevision": "1", "files": {}},
+        "toolRoute": {"phase": "planner", "activeTools": ["search_files"]},
+    }
+
+    control = derive_next_obligation(state)
+
+    assert control["disposition"] == "require_tool"
+    assert control["requiredTool"] == {
+        "name": "search_files",
+        "args": {"query": "Bar", "path": "Source"},
+    }
+    assert control["allowedTools"] == ["search_files"]
+    assert control["transitionReason"] == "INITIAL_EVIDENCE_DISCOVERY"
+
+
+def test_consumed_last_reconstruction_candidate_does_not_loop_on_task_status() -> None:
+    state = {
+        "taskSessionId": "frontier-reconstruction-exhausted",
+        "status": "running",
+        "mode": "read_only",
+        "writesAllowed": False,
+        "writeGate": {"writesAllowed": False},
+        "taskKind": "cpp_analysis",
+        "planRevision": "2",
+        "controlEpoch": 3,
+        "mutationGeneration": 0,
+        "inspectionContract": {
+            "intent": "cpp_analysis",
+            "evidenceBudget": {"representativePairs": 1},
+        },
+        "inspectionProgress": {
+            "discoveryStarted": True,
+            "everHadFrontier": True,
+            "remainingFrontier": [],
+            "frontierReconstruction": {
+                "failedReconstruction": True,
+                "noDeterministicPair": True,
+                "boundedReplanApplied": True,
+                "boundedSearchAttempted": True,
+                # The search originally found one candidate. Its later
+                # consume/absence is represented by the now-empty frontier.
+                "noBoundedSearchCandidates": False,
+            },
+        },
+        "sourceEvidence": {"planRevision": "2", "files": {}},
+        "toolRoute": {"phase": "planner", "activeTools": []},
+    }
+
+    control = derive_next_obligation(state)
+
+    assert control["disposition"] == "workflow_stop"
+    assert control["requiredTool"] is None
+    assert control["blocker"]["code"] == "EVIDENCE_FRONTIER_LOST"
+    assert state["inspectionProgress"]["frontierReconstruction"]["noBoundedSearchCandidates"] is True
+
+
+def test_absent_last_reconstruction_candidate_is_consumed_without_status_loop() -> None:
+    path = "Source/Demo/Foo.cpp"
+    state = {
+        "taskSessionId": "frontier-reconstruction-absent",
+        "status": "running",
+        "mode": "read_only",
+        "writesAllowed": False,
+        "writeGate": {"writesAllowed": False},
+        "taskKind": "cpp_analysis",
+        "planRevision": "2",
+        "controlEpoch": 3,
+        "mutationGeneration": 0,
+        "inspectionContract": {
+            "intent": "cpp_analysis",
+            "evidenceBudget": {"representativePairs": 1},
+        },
+        "inspectionProgress": {
+            "discoveryStarted": True,
+            "everHadFrontier": True,
+            "remainingFrontier": [path],
+            "frontierReconstruction": {
+                "failedReconstruction": True,
+                "noDeterministicPair": True,
+                "boundedReplanApplied": True,
+                "boundedSearchAttempted": True,
+                "noBoundedSearchCandidates": False,
+            },
+        },
+        "absentEvidence": {"files": {"source/demo/foo.cpp": {"path": path}}},
+        "sourceEvidence": {"planRevision": "2", "files": {}},
+        "toolRoute": {"phase": "planner", "activeTools": []},
+    }
+
+    control = derive_next_obligation(state)
+
+    assert control["disposition"] == "workflow_stop"
+    assert control["requiredTool"] is None
+    assert control["blocker"]["code"] == "EVIDENCE_FRONTIER_LOST"
+    assert state["inspectionProgress"]["remainingFrontier"] == []
+    assert state["inspectionProgress"]["frontierReconstruction"]["noBoundedSearchCandidates"] is True
 
 
 def test_new_recovery_obligation_invalidates_old_synthesis_latch(
@@ -2359,6 +2480,12 @@ def test_new_recovery_obligation_invalidates_old_synthesis_latch(
         "planRevision": str(state.get("planRevision") or ""),
         "acceptedEvidenceHash": "old",
         "remainingFrontierHash": "old",
+    }
+    state["inspectionProgress"] = {
+        "version": 2,
+        "discoveryStarted": True,
+        "everHadFrontier": True,
+        "remainingFrontier": ["Source/Demo/Foo.cpp"],
     }
     state_path.write_text(json.dumps(state), encoding="utf-8")
     recorded = task_record_recovery_obligation(
@@ -2662,7 +2789,8 @@ def test_checkpoint_pending_gate_overrides_deferred_work_tool_everywhere(
         plan_payload=plan,
     )
     deferred_work_tool = "read_file_range"
-    assert deferred_work_tool in started["toolRoute"]["activeTools"]
+    assert deferred_work_tool not in started["toolRoute"]["activeTools"]
+    assert started["toolRoute"]["activeTools"] == ["unreal_feature_intent_resolve"]
 
     recorded = task_checkpoint(
         tmp_path,
@@ -3411,8 +3539,7 @@ def test_executor_cannot_rebind_code_generation_slice_before_mutation(
     )
     assert first["ok"] is True
     assert first["toolRoute"]["roleSession"] == "executor"
-    assert "unreal_code_sketch_claim_validate" in first["toolRoute"]["activeTools"]
-    assert "search_files" in first["toolRoute"]["activeTools"]
+    assert first["toolRoute"]["activeTools"] == ["write_file"]
 
     gate_auth = authorize_task_tool(
         tmp_path,
@@ -3455,7 +3582,7 @@ def test_compile_fix_executor_cannot_replace_sketch_before_mutation(
     )
     assert first["ok"] is True
     assert first["toolRoute"]["roleSession"] == "executor"
-    assert "unreal_code_sketch_claim_validate" in first["toolRoute"]["activeTools"]
+    assert first["toolRoute"]["activeTools"] == ["replace_in_file"]
 
     gate_auth = authorize_task_tool(
         tmp_path,
@@ -3596,7 +3723,7 @@ def test_stale_planner_auth_reports_pending_gate_instead_of_retrying_write(
         arguments={"path": "Source/Demo/NewThing.h"},
     )
 
-    assert denied["errorCode"] == "TASK_TOOL_NOT_ACTIVE"
+    assert denied["errorCode"] == "TASK_CONTROL_OBLIGATION_REQUIRED"
     assert denied["nextAction"] == "unreal_code_sketch_claim_validate"
     assert denied["taskAuthorization"]["routePhase"] == "planner"
     assert denied["nextAction"] != "retry_same_tool_with_returned_taskAuthorization"

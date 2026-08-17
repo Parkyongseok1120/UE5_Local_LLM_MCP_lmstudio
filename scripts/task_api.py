@@ -43,11 +43,13 @@ from phase_tool_router import (
     NON_BUDGETED_REPLAN_TOOLS,
     compact_tool_route,
     commit_control_transition,
+    derive_handler_recovery_obligation,
     derive_tool_route,
     effective_tool_route,
     normalized_selection_snapshots,
     _prepare_synthesis_handoff,
     request_files,
+    reduce_committed_event,
     selection_binding,
     validation_finding_recovery,
     validate_runtime_selection,
@@ -985,6 +987,7 @@ def _refresh_server_owned_state(
             "planRevision": str(state.get("planRevision") or ""),
             "acceptedEvidenceHash": readiness["acceptedEvidenceHash"],
             "remainingFrontierHash": readiness["remainingFrontierHash"],
+            "synthesisEvidenceBundleHash": readiness["synthesisEvidenceBundleHash"],
             "remainingFrontierRequired": readiness["coverageIncomplete"],
             "coverageIncomplete": readiness["coverageIncomplete"],
         }
@@ -2919,7 +2922,48 @@ def task_record_recovery_obligation(
                 "error": "Recovery requires a running task",
             }
             return None
-        requested_recovery = dict(recovery or {})
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_AUTH_MISMATCH",
+                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+            }
+            return None
+        handler_fact = dict(recovery or {})
+        proposed_required = (
+            dict(handler_fact.get("requiredTool") or {})
+            if isinstance(handler_fact.get("requiredTool"), dict)
+            else {}
+        )
+        raw_event = {
+            key: value
+            for key, value in handler_fact.items()
+            if key not in {"status", "requiredTool", "scopeDisposition", "fingerprint"}
+        }
+        raw_event.update(
+            {
+                "kind": "HANDLER_RECOVERY_FACT",
+                # These are observed handler parameters. The canonical reducer
+                # independently selects the executable tool name.
+                "observedArgs": (
+                    dict(handler_fact.get("observedArgs") or {})
+                    if isinstance(handler_fact.get("observedArgs"), dict)
+                    else dict(proposed_required.get("args") or {})
+                    if isinstance(proposed_required.get("args"), dict)
+                    else {}
+                ),
+            }
+        )
+        requested_recovery = derive_handler_recovery_obligation(state, raw_event)
+        for key in (
+            "transactionId", "projectRoot", "journalPaths", "failureFingerprint",
+            "commandFingerprint", "diagnosticFingerprint", "outputHash", "exitCode",
+            "outputTail", "fullLogPath", "target", "platform", "configuration",
+            "attemptId", "attemptOutcome",
+        ):
+            if handler_fact.get(key) is not None:
+                requested_recovery[key] = handler_fact.get(key)
         if (
             str(requested_recovery.get("status") or "").casefold()
             == "repair_planning_required"
@@ -5435,6 +5479,71 @@ def _bind_plan_request_intent(
     return request_intent, original_objective, authoritative_hash, None
 
 
+_INITIAL_EVIDENCE_TOOLS = {
+    "unreal_rag_search",
+    "unreal_symbol_lookup",
+    "list_directory",
+    "search_files",
+    "read_file",
+    "read_file_range",
+    "read_symbol",
+    "read_unreal_logs",
+}
+
+
+def _initial_evidence_actions(
+    plan_payload: dict[str, Any],
+    request: str,
+) -> list[dict[str, Any]]:
+    """Persist bounded, executable discovery actions instead of prose suggestions."""
+
+    def contains_placeholder(value: Any) -> bool:
+        if isinstance(value, str):
+            return bool(re.search(r"<[^>]+>", value))
+        if isinstance(value, dict):
+            return any(contains_placeholder(item) for item in value.values())
+        if isinstance(value, list):
+            return any(contains_placeholder(item) for item in value)
+        return False
+
+    actions: list[dict[str, Any]] = []
+    raw_actions = plan_payload.get("suggestedToolCalls")
+    for raw in raw_actions if isinstance(raw_actions, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("tool") or raw.get("name") or "").strip()
+        args = dict(raw.get("args") or {}) if isinstance(raw.get("args"), dict) else {}
+        if name not in _INITIAL_EVIDENCE_TOOLS or contains_placeholder(args):
+            continue
+        for transport_key in ("taskAuthorization", "authToken", "ownerCapability"):
+            args.pop(transport_key, None)
+        raw_path = str(args.get("path") or "").replace("\\", "/").strip("/")
+        if raw_path:
+            parts = [part for part in raw_path.split("/") if part]
+            source_index = next(
+                (index for index, part in enumerate(parts) if part.casefold() == "source"),
+                -1,
+            )
+            if source_index >= 0:
+                args["path"] = "/".join(parts[source_index:])
+            elif ".." in parts or re.match(r"^[A-Za-z]:", raw_path):
+                args["path"] = "Source"
+        actions.append({"name": name, "args": args})
+    priority = {"search_files": 0, "list_directory": 1, "unreal_symbol_lookup": 2, "unreal_rag_search": 3}
+    actions.sort(key=lambda item: priority.get(str(item.get("name") or ""), 4))
+    if not actions:
+        query = str(
+            (plan_payload.get("inspectionContract") or {}).get("topicTarget")
+            if isinstance(plan_payload.get("inspectionContract"), dict)
+            else ""
+        ).strip() or request.strip()[:160] or "Source"
+        actions.append({
+            "name": "search_files",
+            "args": {"query": query, "path": "Source", "regex": False, "maxResults": 32},
+        })
+    return actions[:4]
+
+
 def task_start(
     workspace: Path,
     *,
@@ -5559,6 +5668,7 @@ def task_start(
     )
     write_gate["requiredBeforeWrite"] = required_before_write
     write_gate["pendingBeforeWrite"] = list(required_before_write)
+    initial_evidence_actions = _initial_evidence_actions(plan_payload, original_objective)
     state = {
         "taskSessionId": task_session_id,
         "workspaceRoot": str(workspace.expanduser().resolve()),
@@ -5602,19 +5712,32 @@ def task_start(
         "taskKind": str(plan_payload.get("taskKind") or ""),
         "editStrategy": str(plan_payload.get("editStrategy") or ""),
         "inspectionContract": dict(plan_payload.get("inspectionContract") or {}),
+        "initialEvidenceActions": initial_evidence_actions,
+        "initialEvidenceAction": dict(initial_evidence_actions[0]),
         "inspectionProgress": {
-            "version": 1,
+            "version": 2,
             "status": (
-                "collecting"
+                "initial_discovery_required"
                 if isinstance(plan_payload.get("inspectionContract"), dict)
                 and plan_payload.get("inspectionContract")
                 else "not_applicable"
             ),
             "directSourceReads": 0,
+            "directSourceReadCalls": 0,
+            "distinctDirectSourceFiles": 0,
             "fullSourceReads": 0,
+            "completeDirectSourceFiles": 0,
+            "distinctDeclarationFiles": 0,
+            "distinctImplementationFiles": 0,
             "listedDirectories": 0,
             "evidenceCharacters": 0,
             "remainingFrontier": [],
+            "discoveryStarted": False,
+            "everHadFrontier": False,
+            "discoveryGeneration": 0,
+            "discoveryActionCursor": 0,
+            "discoveryAttempts": 0,
+            "frontierReconstruction": {},
         },
         "planScope": plan_scope,
         "slicePlanningRequired": _requires_runtime_slice_plan(
@@ -7434,6 +7557,18 @@ def task_replan(
             if isinstance(state.get("autonomySupervisor"), dict)
             else {}
         )
+        prior_evidence = {
+            "objectiveHash": str(state.get("objectiveHash") or "").casefold(),
+            "projectFile": current_project,
+            "mutationGeneration": int(state.get("mutationGeneration") or 0),
+            "taskKind": str(state.get("taskKind") or "").casefold(),
+            "sourceEvidence": copy.deepcopy(state.get("sourceEvidence") or {}),
+            "directSourceEvidence": copy.deepcopy(state.get("directSourceEvidence") or {}),
+            "absentEvidence": copy.deepcopy(state.get("absentEvidence") or {}),
+            "inspectionProgress": copy.deepcopy(state.get("inspectionProgress") or {}),
+            "inspectionDiscovery": copy.deepcopy(state.get("inspectionDiscovery") or {}),
+            "repoAuditLedger": copy.deepcopy(state.get("repoAuditLedger") or {}),
+        }
 
         plan_scope = _bind_explicit_request_slice(
             _capture_plan_scope(plan_payload),
@@ -7500,6 +7635,12 @@ def task_replan(
             )
         )
         task_kind = str(plan_payload.get("taskKind") or "")
+        compatible_evidence_replan = bool(
+            prior_evidence["objectiveHash"]
+            and prior_evidence["objectiveHash"] == intent_objective_hash.casefold()
+            and prior_evidence["projectFile"] == (current_project or project_identity)
+            and prior_evidence["taskKind"] == task_kind.casefold()
+        )
         if (
             task_kind.strip().lower() == "refactor"
             and "unreal_semantic_refactor_guard" not in required
@@ -7533,6 +7674,10 @@ def task_replan(
         )
         feature_required = "unreal_feature_intent_resolve" in required
         new_auth_token = uuid.uuid4().hex
+        replan_initial_evidence_actions = _initial_evidence_actions(
+            plan_payload,
+            original_objective,
+        )
         state.update(
             {
                 "request": request,
@@ -7568,19 +7713,32 @@ def task_replan(
                 "inspectionContract": dict(
                     plan_payload.get("inspectionContract") or {}
                 ),
+                "initialEvidenceActions": replan_initial_evidence_actions,
+                "initialEvidenceAction": dict(replan_initial_evidence_actions[0]),
                 "inspectionProgress": {
-                    "version": 1,
+                    "version": 2,
                     "status": (
-                        "collecting"
+                        "initial_discovery_required"
                         if isinstance(plan_payload.get("inspectionContract"), dict)
                         and plan_payload.get("inspectionContract")
                         else "not_applicable"
                     ),
                     "directSourceReads": 0,
+                    "directSourceReadCalls": 0,
+                    "distinctDirectSourceFiles": 0,
                     "fullSourceReads": 0,
+                    "completeDirectSourceFiles": 0,
+                    "distinctDeclarationFiles": 0,
+                    "distinctImplementationFiles": 0,
                     "listedDirectories": 0,
                     "evidenceCharacters": 0,
                     "remainingFrontier": [],
+                    "discoveryStarted": False,
+                    "everHadFrontier": False,
+                    "discoveryGeneration": 0,
+                    "discoveryActionCursor": 0,
+                    "discoveryAttempts": 0,
+                    "frontierReconstruction": {},
                 },
                 "planScope": plan_scope,
                 "slicePlanningRequired": _requires_runtime_slice_plan(
@@ -7709,20 +7867,124 @@ def task_replan(
             state.get("toolRouteUsage"),
             reset_reason="atomic_replan",
         )
+        migrated_source: dict[str, Any] = {}
+        invalidated_source: list[str] = []
+        if compatible_evidence_replan:
+            project_path = Path(current_project or project_identity)
+            project_root = project_path.parent if project_path.suffix.casefold() == ".uproject" else project_path
+            prior_source_files = (
+                prior_evidence["sourceEvidence"].get("files")
+                if isinstance(prior_evidence["sourceEvidence"].get("files"), dict)
+                else {}
+            )
+            for key, raw in prior_source_files.items():
+                if not isinstance(raw, dict):
+                    invalidated_source.append(str(key))
+                    continue
+                relative = str(raw.get("path") or key).replace("\\", "/").strip("/")
+                expected_hash = str(raw.get("contentHash") or "").casefold()
+                snapshot_generation = int(
+                    raw.get("evidenceSnapshotGeneration", raw.get("mutationGeneration", -1))
+                    or 0
+                )
+                absolute = project_root.joinpath(*relative.split("/"))
+                try:
+                    disk_hash = hashlib.sha256(absolute.read_bytes()).hexdigest()
+                except OSError:
+                    disk_hash = ""
+                if (
+                    re.fullmatch(r"[a-f0-9]{64}", expected_hash)
+                    and disk_hash == expected_hash
+                    and snapshot_generation == prior_evidence["mutationGeneration"]
+                ):
+                    migrated_source[str(key)] = {
+                        **copy.deepcopy(raw),
+                        "migratedFromPlanRevision": prior_revision,
+                        "planRevision": next_revision,
+                    }
+                else:
+                    invalidated_source.append(relative)
+        prior_direct_files = (
+            prior_evidence["directSourceEvidence"].get("files")
+            if isinstance(prior_evidence["directSourceEvidence"].get("files"), dict)
+            else {}
+        )
+        migrated_direct = {
+            key: copy.deepcopy(value)
+            for key, value in prior_direct_files.items()
+            if key in migrated_source
+        }
+        migrated_absent = (
+            copy.deepcopy(prior_evidence["absentEvidence"].get("files") or {})
+            if compatible_evidence_replan
+            and isinstance(prior_evidence["absentEvidence"].get("files"), dict)
+            else {}
+        )
         state["directSourceEvidence"] = {
             "version": 1,
             "planRevision": next_revision,
-            "files": {},
+            "files": migrated_direct,
         }
         state["sourceEvidence"] = {
             "version": 2,
             "planRevision": next_revision,
-            "files": {},
+            "files": migrated_source,
         }
         state["absentEvidence"] = {
             "version": 1,
             "planRevision": next_revision,
-            "files": {},
+            "files": migrated_absent,
+        }
+        if compatible_evidence_replan:
+            prior_progress = prior_evidence["inspectionProgress"]
+            current_progress = state.get("inspectionProgress") if isinstance(state.get("inspectionProgress"), dict) else {}
+            remaining_frontier = list(prior_progress.get("remainingFrontier") or [])[:64]
+            state["inspectionProgress"] = {
+                **current_progress,
+                **prior_progress,
+                "remainingFrontier": remaining_frontier,
+                "discoveryStarted": prior_progress.get("discoveryStarted") is True,
+                "everHadFrontier": (
+                    prior_progress.get("everHadFrontier") is True or bool(remaining_frontier)
+                ),
+                "phaseDirectSourceReadCalls": 0,
+                "planRevision": next_revision,
+                "updatedAt": _utc_now(),
+            }
+            if (
+                prior_progress.get("everHadFrontier") is True
+                and not remaining_frontier
+            ):
+                reconstruction = dict(
+                    state["inspectionProgress"].get("frontierReconstruction") or {}
+                )
+                reconstruction.update(
+                    {
+                        "failedReconstruction": True,
+                        "noDeterministicPair": True,
+                        "boundedReplanApplied": True,
+                        "boundedReplanAt": _utc_now(),
+                    }
+                )
+                state["inspectionProgress"]["frontierReconstruction"] = reconstruction
+            if prior_evidence["inspectionDiscovery"]:
+                state["inspectionDiscovery"] = prior_evidence["inspectionDiscovery"]
+            if prior_evidence["repoAuditLedger"]:
+                state["repoAuditLedger"] = prior_evidence["repoAuditLedger"]
+        state["evidenceMigration"] = {
+            "version": 1,
+            "compatible": compatible_evidence_replan,
+            "fromPlanRevision": prior_revision,
+            "toPlanRevision": next_revision,
+            "retainedSourceCount": len(migrated_source),
+            "retainedAbsentCount": len(migrated_absent),
+            "invalidatedPaths": invalidated_source[:64],
+            "reason": (
+                "identity_and_content_match"
+                if compatible_evidence_replan
+                else "objective_project_or_task_kind_changed"
+            ),
+            "recordedAt": _utc_now(),
         }
         _append_log(
             workspace,
@@ -8791,6 +9053,7 @@ def task_checkpoint(
                     "planRevision": str(state.get("planRevision") or ""),
                     "acceptedEvidenceHash": readiness["acceptedEvidenceHash"],
                     "remainingFrontierHash": readiness["remainingFrontierHash"],
+                    "synthesisEvidenceBundleHash": readiness["synthesisEvidenceBundleHash"],
                     "coverageIncomplete": readiness["coverageIncomplete"],
                     "synthesisReadinessReason": readiness["reason"],
                     "updatedAt": _utc_now(),
@@ -9276,6 +9539,7 @@ def task_commit_synthesis(
     output_digest: str,
     control_fingerprint: str = "",
     mutation_generation: int = 0,
+    synthesis_evidence_bundle_hash: str = "",
     synthesis_transaction_id: str = "",
 ) -> dict[str, Any]:
     """Atomically ACK a prepared read-only synthesis and release its task.
@@ -9300,6 +9564,7 @@ def task_commit_synthesis(
     observed_epoch = max(0, int(control_epoch or 0))
     observed_fingerprint = str(control_fingerprint or "").strip().casefold()
     observed_generation = max(0, int(mutation_generation or 0))
+    observed_bundle_hash = str(synthesis_evidence_bundle_hash or "").strip().casefold()
     transaction_id = str(synthesis_transaction_id or "").strip().casefold()
     if not task_session_id:
         return {
@@ -9325,6 +9590,12 @@ def task_commit_synthesis(
             "errorCode": "SYNTHESIS_CONTROL_FINGERPRINT_INVALID",
             "error": "controlFingerprint must be a SHA-256 identity",
         }
+    if re.fullmatch(r"[a-f0-9]{64}", observed_bundle_hash) is None:
+        return {
+            "ok": False,
+            "errorCode": "SYNTHESIS_EVIDENCE_BUNDLE_HASH_INVALID",
+            "error": "synthesisEvidenceBundleHash must be a SHA-256 identity",
+        }
     expected_transaction_id = _canonical_hash(
         {
             "taskSessionId": task_session_id,
@@ -9332,6 +9603,7 @@ def task_commit_synthesis(
             "controlEpoch": observed_epoch,
             "controlFingerprint": observed_fingerprint,
             "mutationGeneration": observed_generation,
+            "synthesisEvidenceBundleHash": observed_bundle_hash,
             "outputDigest": digest,
         }
     )
@@ -9350,8 +9622,7 @@ def task_commit_synthesis(
             if isinstance(state.get("synthesisLifecycle"), dict)
             else {}
         )
-        if str(state.get("status") or "") == "completed" and prior:
-            if (
+        prior_identity_matches = bool(
                 str(prior.get("objectiveHash") or "").casefold() == objective_identity
                 and str(prior.get("outputDigest") or "").casefold() == digest
                 and int(prior.get("controlEpoch") or 0) == observed_epoch
@@ -9359,12 +9630,18 @@ def task_commit_synthesis(
                 == observed_fingerprint
                 and int(prior.get("mutationGeneration") or 0)
                 == observed_generation
+                and str(prior.get("synthesisEvidenceBundleHash") or "").casefold()
+                == observed_bundle_hash
                 and str(prior.get("synthesisTransactionId") or "").casefold()
                 == transaction_id
-            ):
+        )
+        if str(prior.get("status") or "").casefold() in {
+            "commit_acked", "delivery_pending", "delivered"
+        }:
+            if prior_identity_matches:
                 outcome = {
                     "ok": True,
-                    "active": False,
+                    "active": str(prior.get("status") or "").casefold() != "delivered",
                     "idempotentReplay": True,
                     "taskSessionId": task_session_id,
                     "synthesisLifecycle": prior,
@@ -9373,7 +9650,7 @@ def task_commit_synthesis(
             outcome = {
                 "ok": False,
                 "errorCode": "SYNTHESIS_COMMIT_CONFLICT",
-                "error": "The task was completed by a different synthesis identity.",
+                "error": "The task already owns a different synthesis identity.",
             }
             return None
         mismatches = _task_authorization_mismatches(state, authorization)
@@ -9425,41 +9702,6 @@ def task_commit_synthesis(
                 "error": "The synthesis objective does not match the durable task.",
             }
             return None
-        recovery = (
-            state.get("recoveryObligation")
-            if isinstance(state.get("recoveryObligation"), dict)
-            else {}
-        )
-        control = (
-            state.get("controlState")
-            if isinstance(state.get("controlState"), dict)
-            else {}
-        )
-        source_ledger = (
-            state.get("sourceEvidence")
-            if isinstance(state.get("sourceEvidence"), dict)
-            else {}
-        )
-        absent_ledger = (
-            state.get("absentEvidence")
-            if isinstance(state.get("absentEvidence"), dict)
-            else {}
-        )
-        source_files = (
-            source_ledger.get("files")
-            if isinstance(source_ledger.get("files"), dict)
-            else {}
-        )
-        absent_files = (
-            absent_ledger.get("files")
-            if isinstance(absent_ledger.get("files"), dict)
-            else {}
-        )
-        last_outcome = (
-            state.get("lastToolOutcome")
-            if isinstance(state.get("lastToolOutcome"), dict)
-            else {}
-        )
         state = _refresh_repository_audit_ledger(workspace, state)
         state = _refresh_server_owned_state(state)
         recovery = state.get("recoveryObligation") if isinstance(state.get("recoveryObligation"), dict) else {}
@@ -9505,6 +9747,8 @@ def task_commit_synthesis(
             and str(latch.get("planRevision") or "") == str(readiness.get("planRevision") or "")
             and str(latch.get("acceptedEvidenceHash") or "") == str(readiness.get("acceptedEvidenceHash") or "")
             and str(latch.get("remainingFrontierHash") or "") == str(readiness.get("remainingFrontierHash") or "")
+            and str(latch.get("synthesisEvidenceBundleHash") or "")
+            == str(readiness.get("synthesisEvidenceBundleHash") or "")
             and latch.get("commitEligible") is True
             and latch.get("pendingEvidenceObligation") is False
         )
@@ -9567,35 +9811,137 @@ def task_commit_synthesis(
                 output_digest=digest,
             )
             return state
+        if (
+            str(readiness.get("synthesisEvidenceBundleHash") or "").casefold()
+            != observed_bundle_hash
+        ):
+            outcome = _synthesis_control_nack(
+                state,
+                {
+                    "ok": False,
+                    "errorCode": "SYNTHESIS_EVIDENCE_BUNDLE_STALE",
+                    "error": "The synthesis evidence bundle changed after output preparation.",
+                },
+                readiness=readiness,
+                transaction_id=transaction_id,
+                output_digest=digest,
+            )
+            return state
         committed_at = _utc_now()
         lifecycle = {
             "version": 2,
-            "status": "committed",
+            "status": "commit_acked",
+            "deliveryStatus": "delivery_pending",
             "entryMode": "explicit_evidence_complete",
             "taskSessionId": task_session_id,
             "objectiveHash": objective_identity,
             "controlEpoch": observed_epoch,
             "controlFingerprint": observed_fingerprint,
             "mutationGeneration": observed_generation,
+            "synthesisEvidenceBundleHash": observed_bundle_hash,
             "outputDigest": digest,
             "synthesisTransactionId": transaction_id,
             "committedAt": committed_at,
         }
         state["synthesisLifecycle"] = lifecycle
+        state["updatedAt"] = committed_at
+        _append_log(
+            workspace,
+            task_session_id,
+            f"Read-only synthesis commit ACK; delivery pending: {digest[:16]}",
+        )
+        outcome = {
+            "ok": True,
+            "active": True,
+            "taskSessionId": task_session_id,
+            "synthesisLifecycle": lifecycle,
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return _task_outcome_with_control(outcome, result) if outcome else result
+
+
+def task_ack_synthesis_delivery(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    synthesis_transaction_id: str,
+    output_digest: str,
+    delivery_receipt_id: str,
+) -> dict[str, Any]:
+    """Complete a read-only task only after the host reports UI delivery."""
+
+    authorization = dict(task_authorization) if isinstance(task_authorization, dict) else {}
+    task_session_id = str(authorization.get("taskSessionId") or "").strip()
+    transaction_id = str(synthesis_transaction_id or "").strip().casefold()
+    digest = str(output_digest or "").strip().casefold()
+    receipt = str(delivery_receipt_id or "").strip().casefold()
+    if not task_session_id:
+        return {"ok": False, "errorCode": "TASK_SESSION_REQUIRED", "error": "taskSessionId is required"}
+    if not all(re.fullmatch(r"[a-f0-9]{64}", value) for value in (transaction_id, digest, receipt)):
+        return {"ok": False, "errorCode": "SYNTHESIS_DELIVERY_IDENTITY_INVALID", "error": "Delivery identities must be SHA-256 values."}
+    expected_receipt = _canonical_hash(
+        {
+            "synthesisTransactionId": transaction_id,
+            "outputDigest": digest,
+            "uiDeliveryCompleted": True,
+        }
+    )
+    if receipt != expected_receipt:
+        return {"ok": False, "errorCode": "SYNTHESIS_DELIVERY_RECEIPT_MISMATCH", "error": "deliveryReceiptId does not match the committed output."}
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        lifecycle = dict(state.get("synthesisLifecycle") or {})
+        matches = bool(
+            str(lifecycle.get("synthesisTransactionId") or "").casefold() == transaction_id
+            and str(lifecycle.get("outputDigest") or "").casefold() == digest
+        )
+        if str(lifecycle.get("status") or "").casefold() == "delivered":
+            if matches and str(lifecycle.get("deliveryReceiptId") or "").casefold() == receipt:
+                outcome = {
+                    "ok": True,
+                    "active": False,
+                    "idempotentReplay": True,
+                    "taskSessionId": task_session_id,
+                    "synthesisLifecycle": lifecycle,
+                }
+                return state
+            outcome = {"ok": False, "errorCode": "SYNTHESIS_DELIVERY_CONFLICT", "error": "A different delivery was already acknowledged."}
+            return None
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = _auth_refresh_failure(
+                {"ok": False, "errorCode": "TASK_AUTH_MISMATCH", "error": f"Task authorization mismatch: {', '.join(mismatches)}"},
+                state,
+                mismatched_fields=mismatches,
+            )
+            return None
+        if str(lifecycle.get("status") or "").casefold() != "commit_acked" or not matches:
+            outcome = {"ok": False, "errorCode": "SYNTHESIS_DELIVERY_NOT_COMMITTED", "error": "Delivery cannot complete before the exact synthesis commit ACK."}
+            return None
+        delivered_at = _utc_now()
+        lifecycle.update(
+            {
+                "status": "delivered",
+                "deliveryStatus": "delivered",
+                "deliveryReceiptId": receipt,
+                "deliveredAt": delivered_at,
+            }
+        )
+        state["synthesisLifecycle"] = lifecycle
         state["status"] = "completed"
-        state["completionNote"] = "read_only_synthesis_committed"
+        state["completionNote"] = "read_only_synthesis_delivered"
         continuity = dict(state.get("continuity") or {})
         lease = dict(continuity.get("lease") or {})
         if lease:
             lease["status"] = "released"
             continuity["lease"] = lease
             state["continuity"] = continuity
-        state["updatedAt"] = committed_at
-        _append_log(
-            workspace,
-            task_session_id,
-            f"Read-only synthesis committed: {digest[:16]}",
-        )
+        state["updatedAt"] = delivered_at
+        _append_log(workspace, task_session_id, f"Read-only synthesis delivered: {digest[:16]}")
         outcome = {
             "ok": True,
             "active": False,
@@ -10807,6 +11153,33 @@ def authorize_task_tool(
         if (
             tool_name not in CONTROL_PLANE_TOOLS
             and control.get("authoritative") is True
+            and required_control_name
+            and tool_name != required_control_name
+        ):
+            current_authorization = task_authorization_for_state(state)
+            next_args = dict(required_control_args)
+            next_args["taskAuthorization"] = compact_task_authorization(
+                current_authorization
+            )
+            return {
+                "ok": False,
+                "errorCode": "TASK_CONTROL_OBLIGATION_REQUIRED",
+                "error": f"{required_control_name} is the only authoritative next action.",
+                "alreadySatisfied": True,
+                "reexecutionBlocked": True,
+                "taskSessionId": task_session_id,
+                "taskAuthorization": current_authorization,
+                "toolRoute": compact_tool_route(route),
+                "controlEpoch": _control_epoch(state.get("controlEpoch")),
+                "control": dict(control),
+                "nextAction": required_control_name,
+                "nextActionIsTool": True,
+                "nextActionArgs": next_args,
+                "retryable": False,
+            }
+        if (
+            tool_name not in CONTROL_PLANE_TOOLS
+            and control.get("authoritative") is True
             and tool_name in {str(item) for item in route.get("activeTools") or []}
             and tool_name not in allowed_control_tools
         ):
@@ -11535,6 +11908,29 @@ def task_record_gate_failure(
             evidence=evidence,
             updated_at=_utc_now(),
         )
+        validation_error = str(evidence.get("errorCode") or "")
+        if validation_error == "FEATURE_INTENT_DIRECT_SOURCE_EVIDENCE_REQUIRED":
+            direct_evidence = (
+                evidence.get("directSourceEvidence")
+                if isinstance(evidence.get("directSourceEvidence"), dict)
+                else {}
+            )
+            targets = [
+                str(item)
+                for item in [
+                    *(direct_evidence.get("missingTargetFiles") or []),
+                    *(direct_evidence.get("staleTargetFiles") or []),
+                ]
+                if str(item)
+            ]
+            reduce_committed_event(
+                state,
+                {
+                    "kind": "GATE_VALIDATION_FAILED",
+                    "errorCode": validation_error,
+                    "targetFiles": targets,
+                },
+            )
         authorization_identity = {
             "ownerCapability": str(state.get("ownerCapability") or ""),
             "conversationId": str(state.get("conversationId") or ""),
@@ -11837,12 +12233,90 @@ def task_cancel(workspace: Path, task_session_id: str) -> dict[str, Any]:
     return result
 
 
-def task_resume(workspace: Path, task_session_id: str) -> dict[str, Any]:
+def task_resume(
+    workspace: Path,
+    task_session_id: str,
+    *,
+    task_authorization: dict[str, Any] | None = None,
+    user_response: Any = None,
+    resume_token: str = "",
+) -> dict[str, Any]:
     resume_error: dict[str, Any] = {}
 
     def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
         nonlocal resume_error
         status = str(state.get("status") or "")
+        if user_response is not None or resume_token:
+            authorization = task_authorization if isinstance(task_authorization, dict) else {}
+            supplied_capability = str(
+                authorization.get("ownerCapability")
+                or authorization.get("owner_capability")
+                or ""
+            ).strip()
+            expected_capability = str(state.get("ownerCapability") or "").strip()
+            required_input = (
+                (state.get("controlState") or {}).get("requiredUserInput")
+                if isinstance(state.get("controlState"), dict)
+                else None
+            )
+            if not isinstance(required_input, dict):
+                required_input = state.get("requiredUserInput") if isinstance(state.get("requiredUserInput"), dict) else {}
+            if status != "running" or not required_input:
+                resume_error = {
+                    "ok": False,
+                    "errorCode": "TASK_USER_INPUT_NOT_PENDING",
+                    "error": "The task is not waiting for structured user input.",
+                    "taskSessionId": task_session_id,
+                }
+                return None
+            if not supplied_capability or not expected_capability or not secrets.compare_digest(
+                supplied_capability,
+                expected_capability,
+            ):
+                resume_error = {
+                    "ok": False,
+                    "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
+                    "error": "taskAuthorization does not own this task session.",
+                    "taskSessionId": task_session_id,
+                }
+                return None
+            expected_token = str(required_input.get("resumeToken") or "").strip()
+            if not resume_token or not expected_token or not secrets.compare_digest(resume_token, expected_token):
+                resume_error = {
+                    "ok": False,
+                    "errorCode": "TASK_RESUME_TOKEN_MISMATCH",
+                    "error": "resumeToken is missing or stale for the pending user-input contract.",
+                    "taskSessionId": task_session_id,
+                }
+                return None
+            response_text = (
+                user_response
+                if isinstance(user_response, str)
+                else json.dumps(user_response, ensure_ascii=False, sort_keys=True)
+            )
+            history = state.get("userInputHistory") if isinstance(state.get("userInputHistory"), list) else []
+            history.append({
+                "kind": str(required_input.get("kind") or ""),
+                "response": response_text[:4000],
+                "resumedAt": _utc_now(),
+            })
+            state["userInputHistory"] = history[-8:]
+            state.pop("requiredUserInput", None)
+            state.pop("postBudgetAction", None)
+            objective = str(state.get("objective") or state.get("request") or "Continue task")
+            state["recoveryObligation"] = {
+                "source": "user_input",
+                "status": "phase_budget_replan_required",
+                "scopeDisposition": "in_slice",
+                "requiredTool": {
+                    "name": "unreal_agent_plan",
+                    "args": {"request": f"{objective}\nUser continuation: {response_text[:2000]}"},
+                },
+                "targetFiles": [],
+            }
+            state["updatedAt"] = _utc_now()
+            _append_log(workspace, task_session_id, "Task resumed from structured user input")
+            return state
         if status != "cancelled":
             resume_error = {
                 "ok": False,
@@ -12126,6 +12600,67 @@ def task_approve_feature_intent(
             "expiresAt": record["expiresAt"],
         }
         return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return _task_outcome_with_control(outcome, result) if outcome else result
+
+
+def task_record_control_event(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    """Atomically reduce a raw handler fact into canonical task control."""
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId")
+        or authorization.get("task_session_id")
+        or ""
+    ).strip()
+    if not task_session_id:
+        return {"ok": True, "active": False}
+    raw_event = dict(event) if isinstance(event, dict) else {}
+    if str(raw_event.get("kind") or "").strip().upper() not in {
+        "EVIDENCE_STAGNATION",
+        "HANDLER_RECOVERY_FACT",
+    }:
+        return {
+            "ok": False,
+            "active": True,
+            "errorCode": "TASK_CONTROL_EVENT_UNSUPPORTED",
+            "error": "The submitted control event kind is not public.",
+        }
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        if str(state.get("status") or "") != "running":
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_NOT_WRITABLE",
+                "error": "Control events require a running task.",
+            }
+            return None
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = {
+                "ok": False,
+                "errorCode": "TASK_AUTH_MISMATCH",
+                "error": f"Task authorization mismatch: {', '.join(mismatches)}",
+            }
+            return None
+        reduced = reduce_committed_event(state, raw_event)
+        reduced["updatedAt"] = _utc_now()
+        outcome = {
+            "ok": True,
+            "active": True,
+            "taskSessionId": task_session_id,
+            "eventKind": str(raw_event.get("kind") or "").strip().upper(),
+            "recoveryObligation": dict(reduced.get("recoveryObligation") or {}),
+        }
+        return reduced
 
     result = _mutate_task_state(workspace, task_session_id, mutate)
     return _task_outcome_with_control(outcome, result) if outcome else result

@@ -12,8 +12,57 @@ const core = require("../src/compaction-core");
 // assistant-call/tool-result transport. Product code intentionally rejects
 // unmatched tool JSON as an authoritative control source.
 const rawChatFrom = Chat.from.bind(Chat);
+const canonicalizeTrustedFixturePayload = (payload) => {
+  if (!payload || typeof payload !== "object") return payload;
+  const taskSessionId = String(
+    payload.taskAuthorization?.taskSessionId
+    || payload.taskSessionId
+    || payload.state?.taskSessionId
+    || "",
+  );
+  if (!taskSessionId) return payload;
+  if (Number(payload.control?.version || 0) >= 2) {
+    return payload.control.authoritative === undefined
+      ? { ...payload, control: { ...payload.control, authoritative: true } }
+      : payload;
+  }
+  const rawRequired = payload.requiredNextTool;
+  const requiredName = String(
+    (rawRequired && typeof rawRequired === "object" ? rawRequired.name : rawRequired)
+    || (payload.control?.nextActionIsTool === true ? payload.control?.nextAction : "")
+    || "",
+  );
+  const requiredArgs = rawRequired && typeof rawRequired === "object"
+    ? rawRequired.args || {}
+    : payload.requiredNextToolArgs || {};
+  const terminal = payload.taskRouteTerminal === true
+    || ["completed", "cancelled", "failed"].includes(String(payload.status || "").toLowerCase());
+  return {
+    ...payload,
+    control: {
+      version: 2,
+      authoritative: true,
+      epoch: Math.max(1, Number(payload.controlEpoch || payload.control?.epoch || 1)),
+      taskSessionId,
+      routeHash: String(payload.toolRoute?.routeHash || ""),
+      phase: terminal ? "complete" : String(payload.toolRoute?.phase || "planner"),
+      disposition: terminal ? "complete" : requiredName ? "require_tool" : "continue",
+      requiredTool: requiredName ? { name: requiredName, args: requiredArgs } : null,
+      allowedTools: terminal
+        ? []
+        : requiredName
+          ? [requiredName]
+          : Array.isArray(payload.toolRoute?.activeTools) ? payload.toolRoute.activeTools : [],
+      retryPolicy: { sameSemanticInput: requiredName ? "once" : "allowed" },
+    },
+  };
+};
 Chat.from = (input) => {
-  const source = Array.isArray(input?.messages) ? input.messages : [];
+  const source = Array.isArray(input)
+    ? input
+    : Array.isArray(input?.messages)
+      ? input.messages
+      : [];
   const normalized = [];
   for (const message of source) {
     if (message?.role === "tool" && Array.isArray(message.content)) {
@@ -34,9 +83,30 @@ Chat.from = (input) => {
         }
       }
     }
+    if (message?.role === "tool" && Array.isArray(message.content)) {
+      normalized.push({
+        ...message,
+        content: message.content.map((block) => {
+          const result = block?.toolCallResult || (block?.type === "toolCallResult" ? block : null);
+          const name = String(result?.name || "");
+          const trusted = /(?:^|[/:_])(unreal_task_(?:status|start|recover_active|checkpoint|commit_synthesis|ack_synthesis_delivery)|unreal_agent_plan|unreal_feature_intent_resolve|unreal_code_sketch_claim_validate|read_file(?:_range)?|read_symbol|search_files|list_directory)$/u.test(name);
+          if (!trusted) return block;
+          try {
+            const payload = canonicalizeTrustedFixturePayload(JSON.parse(String(result?.content || "")));
+            const canonicalResult = { ...result, content: JSON.stringify(payload) };
+            return block?.toolCallResult
+              ? { ...block, toolCallResult: canonicalResult }
+              : canonicalResult;
+          } catch {
+            return block;
+          }
+        }),
+      });
+      continue;
+    }
     normalized.push(message);
   }
-  return rawChatFrom({ ...input, messages: normalized });
+  return rawChatFrom(Array.isArray(input) ? normalized : { ...input, messages: normalized });
 };
 
 function requestIntentFor(objective, overrides = {}) {
@@ -52,6 +122,57 @@ function requestIntentFor(objective, overrides = {}) {
     ambiguity: { status: "resolved", material: false },
     ...overrides,
   };
+}
+
+function materializedSynthesisBundle(taskSessionId, planRevision, mutationGeneration = 0) {
+  const excerpt = (text) => ({
+    startLine: 1,
+    endLine: 2,
+    text,
+    excerptDigest: core.sha256(text),
+  });
+  const records = [
+    {
+      claimId: "decl",
+      sourcePath: "Source/Demo/Public/Demo.h",
+      coveredLineRanges: [[1, 2]],
+      supportingExcerpts: [excerpt("class FDemo {};")],
+      classification: "direct",
+      contentHash: "a".repeat(64),
+      coverageLevel: "FILE_COMPLETE",
+    },
+    {
+      claimId: "impl",
+      sourcePath: "Source/Demo/Private/Demo.cpp",
+      coveredLineRanges: [[1, 2]],
+      supportingExcerpts: [excerpt("void FDemo::Run() {}")],
+      classification: "direct",
+      contentHash: "b".repeat(64),
+      coverageLevel: "FILE_COMPLETE",
+    },
+  ];
+  const binding = {
+    version: 1,
+    taskSessionId,
+    objectiveHash: "",
+    planRevision: String(planRevision),
+    mutationGeneration,
+    records,
+  };
+  return { ...binding, bundleHash: core.sha256(core.stableStringify(binding)) };
+}
+
+function bindMaterializedSynthesis(control) {
+  control.authoritative = true;
+  const bundle = materializedSynthesisBundle(
+    control.taskSessionId,
+    control.planRevision,
+    Number(control.mutationGeneration || 0),
+  );
+  control.synthesisReadiness.synthesisEvidenceBundle = bundle;
+  control.synthesisReadiness.synthesisEvidenceBundleHash = bundle.bundleHash;
+  control.synthesisLatch.synthesisEvidenceBundleHash = bundle.bundleHash;
+  return control;
 }
 
 function activeCheckpoint(stateRoot) {
@@ -1495,7 +1616,7 @@ test("server-owned task authorization is injected into eligible tool calls", () 
   assert.equal(enriched.arguments.sketch, "void Test() {}");
 });
 
-test("active write task exposes a detached read-only side-query route and preserves its gate", async () => {
+test("a detached side query cannot override an authoritative write gate", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-side-query-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -1551,23 +1672,23 @@ test("active write task exposes a detached read-only side-query route and preser
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
       respond(modelHistory, opts) {
-        assert.equal(opts.rawTools.force, undefined);
+        assert.equal(opts.rawTools.force, true);
         assert.deepEqual(
           opts.rawTools.tools.map((tool) => tool.function.name).sort(),
-          ["list_directory", "read_file"],
+          ["unreal_code_sketch_claim_validate"],
         );
         const systemText = modelHistory.getMessagesArray()
           .filter((message) => message.getRole() === "system")
           .map((message) => message.getText()).join("\n");
-        assert.match(systemText, /UNREAL_DETACHED_SIDE_QUERY/);
-        opts.onToolCallRequestStart(1, { toolCallId: "side-list" });
-        opts.onToolCallRequestNameReceived(1, "list_directory");
-        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"project://"}');
+        assert.doesNotMatch(systemText, /UNREAL_DETACHED_SIDE_QUERY/);
+        opts.onToolCallRequestStart(1, { toolCallId: "canonical-gate" });
+        opts.onToolCallRequestNameReceived(1, "unreal_code_sketch_claim_validate");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{}');
         opts.onToolCallRequestEnd(1, { toolCallRequest: {
-          id: "side-list",
+          id: "canonical-gate",
           type: "function",
-          name: "list_directory",
-          arguments: { path: "project://" },
+          name: "unreal_code_sketch_claim_validate",
+          arguments: {},
         } });
         return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
       },
@@ -1577,7 +1698,7 @@ test("active write task exposes a detached read-only side-query route and preser
 
     const end = emitted.find((event) => event.kind === "end");
     assert.ok(end);
-    assert.deepEqual(end.request.arguments, { path: "project://" });
+    assert.equal(end.request.name, "unreal_code_sketch_claim_validate");
     const checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.objective, activeObjective);
     assert.equal(checkpoint.requestIntent.objectiveHash, core.objectiveHashOf(activeObjective));
@@ -1724,7 +1845,7 @@ test("provider-qualified required feature gate is forced with server-owned auth"
         selectedSlice: { sliceId: "task", files: [] },
       },
       requiredNextTool: "unreal_feature_intent_resolve",
-      requiredNextToolArgs: { taskAuthorization: ownership },
+      requiredNextToolArgs: { selectedIntentId: "bounded_local" },
       control: {
         version: 1,
         phase: "unreal_agent_plan",
@@ -2138,6 +2259,95 @@ test("control v2 emits an exact server-owned read without model serialization", 
   }
 });
 
+test("a user reply to await_user emits unreal_task_resume without model serialization", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-await-user-resume-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let predictionCount = 0;
+    let promptMeasurementCount = 0;
+    const model = {
+      identifier: "await-user-resume-model",
+      async applyPromptTemplate() {
+        promptMeasurementCount += 1;
+        throw new Error("structured resume must bypass prompt projection");
+      },
+      async countTokens() {
+        promptMeasurementCount += 1;
+        throw new Error("structured resume must bypass token measurement");
+      },
+      async getContextLength() { return 100_000; },
+      respond() {
+        predictionCount += 1;
+        throw new Error("structured resume must bypass model serialization");
+      },
+    };
+    const ownership = { taskSessionId: "task-await-user", ownerCapability: "owner-await-user" };
+    const resumeToken = "a".repeat(64);
+    const payload = {
+      ok: true,
+      taskAuthorization: ownership,
+      control: {
+        version: 2,
+        epoch: 4,
+        taskSessionId: ownership.taskSessionId,
+        routeHash: "route-await-user",
+        phase: "await_user",
+        disposition: "await_user",
+        requiredTool: null,
+        allowedTools: [],
+        retryPolicy: { sameSemanticInput: "forbidden" },
+        blocker: { code: "SOURCE_PATH_REQUIRED", fingerprint: "path-required" },
+        requiredUserInput: {
+          kind: "provide_path",
+          prompt: "Provide the source root to inspect.",
+          schema: { type: "object", required: ["path"] },
+          resumeToken,
+        },
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Inspect the selected source." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "await-user-status",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+      { role: "user", content: [{ type: "text", text: "Source/Demo로 계속해줘" }] },
+    ] });
+    const resumeTool = {
+      type: "function",
+      function: {
+        name: "unreal_task_resume",
+        parameters: {
+          type: "object",
+          properties: {
+            taskSessionId: { type: "string" },
+            taskAuthorization: { type: "object" },
+            userResponse: {},
+            resumeToken: { type: "string" },
+          },
+        },
+      },
+    };
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, [resumeTool]), history);
+
+    assert.equal(predictionCount, 0);
+    assert.equal(promptMeasurementCount, 0);
+    const end = emitted.find((event) => event.kind === "end");
+    assert.equal(end?.request?.name, "unreal_task_resume");
+    assert.equal(end.request.arguments.userResponse, "Source/Demo로 계속해줘");
+    assert.equal(end.request.arguments.resumeToken, resumeToken);
+    assert.deepEqual(end.request.arguments.taskAuthorization, ownership);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("server-owned direct checkpoint follow-ups use a fresh host tool-call id", async () => {
   const workingDirectory = path.join(os.tmpdir(), "context-compactor-direct-id-working-directory");
   const stateRoots = [
@@ -2265,22 +2475,20 @@ test("control v2 still blocks a missing mutation schema before model invocation"
       }] },
     ] });
 
-    await assert.rejects(
-      generate(controllerFor(model, {}, stateRoot, emitted, [{
-        type: "function",
-        function: { name: "read_file", parameters: { type: "object", properties: {} } },
-      }]), history),
-      /requires replace_in_file, but its MCP schema is not present/,
-    );
+    await generate(controllerFor(model, {}, stateRoot, emitted, [{
+      type: "function",
+      function: { name: "read_file", parameters: { type: "object", properties: {} } },
+    }]), history);
     assert.equal(predictionCount, 0);
     assert.equal(emitted.some((event) => event.kind === "end"), false);
+    assert.match(emitted.find((event) => event.kind === "fragment").content, /does not expose that tool schema/);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
-test("required feature intent is suspended until completion-audit evidence is grounded", async () => {
+test("canonical feature intent is not suspended by proxy-local evidence heuristics", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-refill-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -2355,25 +2563,20 @@ test("required feature intent is suspended until completion-audit evidence is gr
 
     await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
 
-    assert.match(systemText, /UNREAL_FEATURE_INTENT_EVIDENCE_REFILL/);
-    assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
+    assert.equal(systemText, "");
+    assert.equal(emitted.find((event) => event.kind === "end").request.name, "unreal_feature_intent_resolve");
     const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
       .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
     const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
       .trim().split(/\r?\n/).map((line) => JSON.parse(line));
-    assert.ok(events.some((event) => (
-      event.type === "context_measurement"
-      && event.featureIntentEvidenceRefillActive === true
-      && event.featureIntentEvidenceReady === false
-      && event.effectiveFeatureIntentEvidenceReadThreshold === 6
-    )));
+    assert.ok(events.some((event) => event.type === "server_required_tool_direct_emitted"));
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
-test("empty symbol lookup cannot substitute for the sixth direct source read", async () => {
+test("proxy evidence counts cannot override a canonical feature command", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-direct-read-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -2473,22 +2676,19 @@ test("empty symbol lookup cannot substitute for the sixth direct source read", a
 
     await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
 
-    assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
+    assert.equal(emitted.find((event) => event.kind === "end").request.name, "unreal_feature_intent_resolve");
     const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
       .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
     const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
       .trim().split(/\r?\n/).map((line) => JSON.parse(line));
-    const measurement = events.find((event) => event.type === "context_measurement");
-    assert.equal(measurement.directSourceFileEvidenceCount, 5);
-    assert.equal(measurement.featureIntentEvidenceReady, false);
-    assert.equal(measurement.featureIntentEvidenceRefillActive, true);
+    assert.ok(events.some((event) => event.type === "server_required_tool_direct_emitted"));
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
-test("Unreal Public and Private evidence pair unlocks the completion-audit handoff", async () => {
+test("an evidence pair does not let the proxy invent a required feature handoff", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-unreal-pair-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -2501,9 +2701,9 @@ test("Unreal Public and Private evidence pair unlocks the completion-audit hando
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
       respond(_history, opts) {
-        assert.equal(opts.rawTools.force, true);
-        assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name), [
-          "unreal_feature_intent_resolve",
+        assert.equal(opts.rawTools.force, undefined);
+        assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name).sort(), [
+          "read_file", "unreal_feature_intent_resolve",
         ]);
         opts.onToolCallRequestStart(1, { toolCallId: "feature-after-unreal-pair" });
         opts.onToolCallRequestNameReceived(1, "unreal_feature_intent_resolve");
@@ -2587,9 +2787,9 @@ test("Unreal Public and Private evidence pair unlocks the completion-audit hando
     assert.equal(measurement.directSourceFileEvidenceCount, 6);
     assert.equal(measurement.featureIntentTargetBoundEvidenceReady, true);
     assert.equal(measurement.featureIntentEvidenceReady, true);
-    assert.equal(measurement.serverV2FeatureIntentHandoffAllowed, true);
-    assert.equal(measurement.serverV2FeatureIntentToolForced, true);
-    assert.equal(measurement.featureIntentDiscoveryHandoffForced, true);
+    assert.equal(measurement.serverV2FeatureIntentHandoffAllowed, false);
+    assert.equal(measurement.serverV2FeatureIntentToolForced, false);
+    assert.equal(measurement.featureIntentDiscoveryHandoffForced, false);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -2609,7 +2809,9 @@ for (const recoveryCase of [
     committedPath: "Source/Demo/PlayerController.h",
     serverBoundPath: true,
   },
-]) test(`completion audit repairs payload and ${recoveryCase.label}`, async () => {
+]) test(`removed proxy-owned completion audit: ${recoveryCase.label}`, async () => {
+  assert.equal(require("../dist/generator.js").serverV2AllowsFeatureIntentHandoff, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-target-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -3042,7 +3244,9 @@ test("an active route keeps an explicitly server-required replan tool", async ()
   }
 });
 
-test("evidence-first contract is forced once after task routing and before business discovery", async () => {
+test("removed proxy-owned evidence-first forcing", async () => {
+  assert.equal(require("../dist/generator.js").serverV2AllowsFeatureIntentHandoff, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-evidence-first-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -3137,7 +3341,9 @@ test("evidence-first contract is forced once after task routing and before busin
   }
 });
 
-test("bounded source evidence clears a fake RAG action and hands off to feature intent", async () => {
+test("removed proxy-owned feature handoff after bounded source evidence", async () => {
+  assert.equal(require("../dist/generator.js").serverV2AllowsFeatureIntentHandoff, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-handoff-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -3288,7 +3494,9 @@ test("bounded source evidence clears a fake RAG action and hands off to feature 
   }
 });
 
-test("frontier payload repair with no required reads forces Feature Intent", async () => {
+test("removed proxy-owned feature handoff after frontier repair", async () => {
+  assert.equal(require("../dist/generator.js").serverV2AllowsFeatureIntentHandoff, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-frontier-repair-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -3416,7 +3624,9 @@ test("frontier payload repair with no required reads forces Feature Intent", asy
   }
 });
 
-test("source-contradicted frontier gets two bounded discovery calls before Feature Intent", async () => {
+test("removed proxy-owned source-contradicted frontier scheduling", async () => {
+  assert.equal(require("../dist/generator.js").serverV2AllowsFeatureIntentHandoff, undefined);
+  return;
   for (const discoveryCount of [0, 2]) {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `context-compactor-frontier-semantic-${discoveryCount}-`));
     process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -3837,9 +4047,7 @@ test("newer failed-result checkpoint control bypasses churn and deferred Feature
     // The exact server-owned checkpoint transition now precedes compaction, so
     // it neither trips nor mutates the prior churn counter.
     assert.equal(activeCheckpoint(stateRoot).compactionChurn.consecutiveWithoutProgress, 2);
-    assert.deepEqual(activeCheckpoint(stateRoot).featureIntentResume.args, {
-      selectedIntentId: "deferred-feature",
-    });
+    assert.equal(activeCheckpoint(stateRoot).featureIntentResume, null);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -3847,7 +4055,9 @@ test("newer failed-result checkpoint control bypasses churn and deferred Feature
 });
 
 
-test("post-read Feature Intent reevaluation does not resurrect stale semantic args after checkpoint", async () => {
+test("removed proxy-owned post-read feature reevaluation", async () => {
+  assert.equal(require("../dist/generator.js").serverV2AllowsFeatureIntentHandoff, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-reevaluate-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -4062,7 +4272,9 @@ test("active project bootstrap forces planner with the exact current user goal",
   }
 });
 
-test("complete zero-result basename search lets a new Feature target reach the validator", async () => {
+test("removed proxy-owned zero-result feature handoff", async () => {
+  assert.equal(require("../dist/generator.js").serverV2AllowsFeatureIntentHandoff, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-new-target-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -4272,7 +4484,7 @@ test("fresh write task exposes only unreal_get_active_project before planner", a
     await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
 
     assert.equal(respondCount, 0);
-    assert.match(bootstrapRule, /Do not call workspace, directory, read, search/);
+    assert.equal(bootstrapRule, "");
     assert.equal(
       emitted.some((event) => event.kind === "end" && event.request.name === "unreal_get_active_project"),
       true,
@@ -4702,7 +4914,7 @@ test("bounded pre-route discovery forces one planner handoff for write goals", a
     );
 
     assert.equal(respondCount, 0);
-    assert.equal(sawHandoffRule, true);
+    assert.equal(sawHandoffRule, false);
     assert.equal(
       emitted.some((event) => event.kind === "end" && event.request.name === "unreal_agent_plan"),
       true,
@@ -4763,7 +4975,7 @@ test("unrouted agent catalog removes mutation schemas before prediction", async 
   }
 });
 
-test("routed work catalog hides checkpoint until server explicitly requires it", async () => {
+test("canonical allowed tools exclude proxy helper catalogs", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-routed-checkpoint-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -4829,7 +5041,7 @@ test("routed work catalog hides checkpoint until server explicitly requires it",
 
     await generate(controllerFor(model, {}, stateRoot, emitted, tools), history);
 
-    assert.deepEqual(advertisedTools, ["replace_in_file", "get_active_project", "evidence_record"]);
+    assert.deepEqual(advertisedTools, ["replace_in_file"]);
     assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "replace_in_file"), true);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -4898,7 +5110,7 @@ test("stale pre-route Agent catalog forces exactly one read-only catalog refresh
     await generate(controllerFor(model, {}, stateRoot, emitted, staleTools), history);
 
     assert.equal(respondCount, 0);
-    assert.equal(refreshRulePresent, true);
+    assert.equal(refreshRulePresent, false);
     assert.equal(emitted.some((event) => event.kind === "end" && event.request.name === "get_active_project"), true);
     assert.deepEqual(activeCheckpoint(stateRoot).catalogRefresh, {
       routeHash: "route-catalog-refresh",
@@ -5137,7 +5349,7 @@ test("reasoning activity without semantic progress durably downgrades xhigh to l
   }
 });
 
-test("low reasoning effort commits a server-owned implementation read at the immutable floor", async () => {
+test("low reasoning effort never invents an implementation read from a nearby header", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-reasoning-retry-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -5188,23 +5400,21 @@ test("low reasoning effort commits a server-owned implementation read at the imm
         },
       },
     }];
-    await generate(controllerFor(model, {
-      reasoningEffort: "low",
-      predictionNoProgressSeconds: 0.03,
-      streamReasoningProgress: false,
-    }, stateRoot, emitted, toolDefinitions), history);
+    await assert.rejects(
+      generate(controllerFor(model, {
+        reasoningEffort: "low",
+        predictionNoProgressSeconds: 0.03,
+        streamReasoningProgress: false,
+      }, stateRoot, emitted, toolDefinitions), history),
+      (error) => error?.code === "PREDICTION_NO_PROGRESS_EXCEEDED",
+    );
 
     assert.deepEqual(efforts, ["low"]);
     assert.deepEqual(thinkingEnabled, [true]);
     assert.deepEqual(toolChoiceForced, [false]);
-    const request = emitted.find((event) => event.kind === "end").request;
-    assert.equal(request.name, "read_file");
-    assert.equal(
-      request.arguments.path,
-      "project://Source/Project_MJS/Private/Character/SharedComponent/StaminaComponent.cpp",
-    );
+    assert.equal(emitted.some((event) => event.kind === "end"), false);
     const checkpoint = activeCheckpoint(stateRoot);
-    assert.equal(checkpoint.reasoningFallback.status, "completed");
+    assert.equal(checkpoint.reasoningFallback.status, "retrying");
     assert.equal(checkpoint.reasoningFallback.effort, "low");
     assert.equal(checkpoint.reasoningFallback.attempts, 1);
     assert.equal(checkpoint.reasoningFallback.sameEffortRetries, 0);
@@ -5213,7 +5423,7 @@ test("low reasoning effort commits a server-owned implementation read at the imm
     assert.equal(checkpoint.reasoningFallback.serverOwnedTransition, true);
     assert.equal(
       checkpoint.reasoningFallback.recoveryStrategy,
-      "server_owned_implementation_evidence_transition",
+      "execute_exact_canonical_control",
     );
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -5291,7 +5501,7 @@ test("low reasoning effort floor fails without a provable implementation path an
     assert.equal(checkpoint.reasoningFallback.serverOwnedTransition, true);
     assert.equal(
       checkpoint.reasoningFallback.recoveryStrategy,
-      "server_owned_implementation_evidence_transition",
+      "execute_exact_canonical_control",
     );
     assert.equal(checkpoint.predictionState.status, "pending");
   } finally {
@@ -5367,7 +5577,9 @@ test("low floor recovery rejects header-shaped directory evidence", async () => 
   }
 });
 
-test("persisted low floor recovery resumes with a server-owned transition and no model replay", async () => {
+test("removed proxy-owned low-floor recovery", async () => {
+  assert.equal(require("../dist/generator.js").selectServerOwnedFloorRecovery, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-reasoning-resume-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -5447,7 +5659,9 @@ test("persisted low floor recovery resumes with a server-owned transition and no
   }
 });
 
-test("low floor recovery survives a crash before its prepared call checkpoint", async () => {
+test("removed proxy-owned low-floor crash recovery", async () => {
+  assert.equal(require("../dist/generator.js").selectServerOwnedFloorRecovery, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-prepare-crash-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   const checkpointStore = require("../dist/checkpoint-store.js");
@@ -5525,7 +5739,9 @@ test("low floor recovery survives a crash before its prepared call checkpoint", 
   }
 });
 
-test("successive low floor recoveries use path-bound call ids", async () => {
+test("removed proxy-owned successive low-floor recovery", async () => {
+  assert.equal(require("../dist/generator.js").selectServerOwnedFloorRecovery, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-path-bound-id-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -5614,7 +5830,9 @@ test("successive low floor recoveries use path-bound call ids", async () => {
   }
 });
 
-test("an already-forced low tool route recovers without a second model prediction", async () => {
+test("removed proxy-owned forced low-floor recovery", async () => {
+  assert.equal(require("../dist/generator.js").selectServerOwnedFloorRecovery, undefined);
+  return;
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-low-forced-recovery-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -6429,12 +6647,15 @@ test("semantic blocker rejects only the exact failed call and allows corrected e
       doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
       agentInstruction: "Do not call another evidence tool.",
       control: {
-        version: 1,
-        phase: "search_files",
-        status: "Blocked",
-        nextActionIsTool: false,
-        retryPolicy: "forbidden",
-        blockerFingerprint: "loop-1",
+        version: 2,
+        authoritative: true,
+        epoch: 1,
+        taskSessionId: "task-semantic-forward",
+        phase: "executor",
+        disposition: "continue",
+        requiredTool: null,
+        allowedTools: ["search_files", "read_file", "replace_in_file"],
+        retryPolicy: { sameSemanticInput: "allowed" },
       },
     };
     const history = Chat.from({ messages: [
@@ -6518,6 +6739,7 @@ test("v2 route survives an exact-call blocker while only corrected arguments adv
           taskAuthorization: ownership,
           control: {
             version: 2,
+            authoritative: true,
             epoch: 3,
             taskSessionId: ownership.taskSessionId,
             routeHash: "route-v2-blocker",
@@ -8851,8 +9073,10 @@ test("new durable direct-source evidence resets the compaction churn signature",
   );
 });
 
-test("low floor recovery walks a verified source directory after mapped implementations are exhausted", () => {
+test("proxy does not export a local low-floor semantic scheduler", () => {
   const { selectServerOwnedFloorRecovery } = require("../dist/generator.js");
+  assert.equal(selectServerOwnedFloorRecovery, undefined);
+  return;
   const headerPath = "project://Source/Project_MJS/Public/Character/SharedComponent/HealthComponent.h";
   const implementationPath = "project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp";
   const tools = ["read_file", "list_directory"].map((name) => ({
@@ -8957,8 +9181,10 @@ test("target-bound source pairs bridge Unreal Public and Private module roots on
   ), true);
 });
 
-test("v2 feature handoff requires the exact writable planner authority", () => {
+test("proxy does not export a local feature-handoff semantic scheduler", () => {
   const { serverV2AllowsFeatureIntentHandoff } = require("../dist/generator.js");
+  assert.equal(serverV2AllowsFeatureIntentHandoff, undefined);
+  return;
   const allowed = {
     taskMode: "agent_edit",
     phase: "planner",
@@ -9856,6 +10082,7 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
         },
       },
     };
+    bindMaterializedSynthesis(payload.control);
     const model = {
       identifier: "qwen/qwen3.8-27b",
       async getModelInfo() {
@@ -9929,6 +10156,20 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
     assert.equal(persisted.pendingToolCalls[0].id, commit.id);
     assert.equal(persisted.pendingToolCalls[0].dispatchState, "emitted");
 
+    const commitAckResult = JSON.stringify({
+      ok: true,
+      taskSessionId: ownership.taskSessionId,
+      synthesisLifecycle: {
+        status: "commit_acked",
+        taskSessionId: ownership.taskSessionId,
+        controlEpoch: 21,
+        controlFingerprint: commit.arguments.controlFingerprint,
+        mutationGeneration: commit.arguments.mutationGeneration,
+        synthesisEvidenceBundleHash: commit.arguments.synthesisEvidenceBundleHash,
+        outputDigest: commit.arguments.outputDigest,
+        synthesisTransactionId: commit.arguments.synthesisTransactionId,
+      },
+    });
     const ackHistory = Chat.from({ messages: [
       { role: "user", content: [{ type: "text", text: "Audit the current project and report every verified issue." }] },
       { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: commit }] },
@@ -9936,16 +10177,7 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
         type: "toolCallResult",
         toolCallId: commit.id,
         name: commit.name,
-        content: JSON.stringify({
-          ok: true,
-          taskSessionId: ownership.taskSessionId,
-          synthesisLifecycle: {
-            status: "committed",
-            taskSessionId: ownership.taskSessionId,
-            controlEpoch: 21,
-            outputDigest: commit.arguments.outputDigest,
-          },
-        }),
+        content: commitAckResult,
       }] },
     ] });
     const delivered = [];
@@ -9954,21 +10186,43 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
       ...model,
       respond() { modelCallsAfterAck += 1; throw new Error("model must not run after ACK"); },
     };
-    const deliveryFailureController = controllerFor(postAckModel, {}, stateRoot, [], [commitTool]);
-    deliveryFailureController.fragmentGenerated = () => {
-      throw new Error("injected UI delivery failure after server ACK");
+    const ackTool = {
+      type: "function",
+      function: {
+        name: "unreal_task_ack_synthesis_delivery",
+        parameters: { type: "object", properties: {} },
+      },
     };
-    await assert.rejects(
-      generate(deliveryFailureController, ackHistory),
-      /injected UI delivery failure after server ACK/,
-    );
-    const acknowledged = activeCheckpoint(stateRoot);
-    assert.equal(acknowledged.synthesisState.status, "commit_acked");
-    assert.equal(acknowledged.synthesisDelivery.output, "Evidence-backed final synthesis.");
-
-    await generate(controllerFor(postAckModel, {}, stateRoot, delivered, [commitTool]), ackHistory);
+    await generate(controllerFor(postAckModel, {}, stateRoot, delivered, [commitTool, ackTool]), ackHistory);
     assert.equal(modelCallsAfterAck, 0);
     assert.equal(delivered.find((event) => event.kind === "fragment").content, "Evidence-backed final synthesis.");
+    const deliveryAck = delivered.find(
+      (event) => event.kind === "end" && event.request?.name === "unreal_task_ack_synthesis_delivery",
+    ).request;
+    assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "delivery_pending");
+    assert.equal(activeCheckpoint(stateRoot).pendingToolCalls[0].id, deliveryAck.id);
+
+    const receiptHistory = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "Audit the current project and report every verified issue." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: commit }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: commit.id, name: commit.name, content: commitAckResult,
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: deliveryAck }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: deliveryAck.id,
+        name: deliveryAck.name,
+        content: JSON.stringify({
+          ok: true,
+          synthesisLifecycle: {
+            status: "delivered",
+            deliveryReceiptId: deliveryAck.arguments.deliveryReceiptId,
+          },
+        }),
+      }] },
+    ] });
+    await generate(controllerFor(postAckModel, {}, stateRoot, [], [commitTool, ackTool]), receiptHistory);
     assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "delivered");
     assert.equal(activeCheckpoint(stateRoot).pendingToolCalls.length, 0);
   } finally {
@@ -9977,6 +10231,10 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
+
+test.todo(
+  "delivery_crash_matrix_has_no_loss_or_duplicate requires a host idempotency key or durable UI receipt",
+);
 
 test("aborted synthesis prediction preserves objective, evidence frontier, and resumable state", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-abort-"));
@@ -10204,7 +10462,7 @@ test("tool-free read-only planner final is withheld without an explicit synthesi
   }
 });
 
-test("failed synthesis commit ACK never delivers or persists committed state", async () => {
+test("failed synthesis commit ACK dispatches authoritative recovery in the same invocation", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-rejected-"));
   const sessionId = "ef".repeat(16);
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -10232,6 +10490,7 @@ test("failed synthesis commit ACK never delivers or persists committed state", a
           errorCode: "SYNTHESIS_NOT_READY",
           control: {
             version: 2,
+            authoritative: true,
             epoch: 6,
             fingerprint: "c".repeat(64),
             taskSessionId: "task-rejected",
@@ -10257,6 +10516,7 @@ test("failed synthesis commit ACK never delivers or persists committed state", a
               controlEpoch: 6,
               acceptedEvidenceHash: "d".repeat(64),
               remainingFrontierHash: "e".repeat(64),
+              synthesisEvidenceBundleHash: "8".repeat(64),
               acceptedDirectEvidenceCount: 1,
               declarationCount: 1,
               implementationCount: 0,
@@ -10306,6 +10566,7 @@ test("failed synthesis commit ACK never delivers or persists committed state", a
       planRevision: "5",
       acceptedEvidenceHash: "a".repeat(64),
       remainingFrontierHash: "9".repeat(64),
+      synthesisEvidenceBundleHash: "8".repeat(64),
       mutationGeneration: 0,
       preparedAt: new Date().toISOString(),
       dispatchedAt: "",
@@ -10317,14 +10578,36 @@ test("failed synthesis commit ACK never delivers or persists committed state", a
     await store.saveCheckpoint(sessionId, checkpoint);
     const emitted = [];
 
-    await generate(controllerFor({}, {}, stateRoot, emitted, []), history);
+    const recoveryModel = {
+      identifier: "synthesis-nack-recovery-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() { throw new Error("authoritative NACK recovery must bypass the model"); },
+    };
+    const recoveryTool = {
+      type: "function",
+      function: {
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    };
+    await generate(controllerFor(recoveryModel, {}, stateRoot, emitted, [recoveryTool]), history);
 
     assert.equal(emitted.some((event) => event.kind === "fragment"), false);
+    const recoveryEnd = emitted.find((event) => event.kind === "end");
+    assert.equal(recoveryEnd?.request?.name, "read_file");
+    assert.equal(recoveryEnd.request.arguments.path, "Source/Cine/Public/Cine.h");
     assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "rejected_stale");
     assert.equal(activeCheckpoint(stateRoot).preparedSynthesis.status, "rejected_stale");
     assert.equal(activeCheckpoint(stateRoot).preparedSynthesis.output, preparedOutput);
     assert.equal(activeCheckpoint(stateRoot).requiredNextTool.name, "read_file");
-    assert.deepEqual(activeCheckpoint(stateRoot).pendingToolCalls, []);
+    assert.equal(activeCheckpoint(stateRoot).pendingToolCalls.length, 1);
+    assert.equal(activeCheckpoint(stateRoot).pendingToolCalls[0].name, "read_file");
     assert.notEqual(activeCheckpoint(stateRoot).synthesisState.status, "committed");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -10388,6 +10671,7 @@ test("synthesis stays uncommitted when the server commit tool is absent", async 
         },
       },
     };
+    bindMaterializedSynthesis(payload.control);
     const model = {
       identifier: "synthesis-missing-tool-model",
       async applyPromptTemplate() { return "formatted"; },
@@ -10420,7 +10704,7 @@ test("synthesis stays uncommitted when the server commit tool is absent", async 
   }
 });
 
-test("an emitted synthesis commit is not replayed after result loss", async () => {
+test("an emitted synthesis commit is replayed with the same identity after result loss", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-replay-"));
   const sessionId = "cd".repeat(16);
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -10458,8 +10742,12 @@ test("an emitted synthesis commit is not replayed after result loss", async () =
     await assert.rejects(generate(controller, history), /still lack a result/);
 
     assert.equal(readinessChecks, 0);
-    assert.deepEqual(emitted, []);
+    assert.deepEqual(emitted.map((event) => event.kind), ["start", "name", "args", "end"]);
+    assert.equal(emitted[3].request.id, "synthesis-commit-replay-1");
+    assert.equal(emitted[3].request.name, "unreal_task_commit_synthesis");
+    assert.deepEqual(emitted[3].request.arguments, checkpoint.pendingToolCalls[0].arguments);
     assert.equal(activeCheckpoint(stateRoot).pendingToolCalls[0].dispatchState, "emitted");
+    assert.equal(activeCheckpoint(stateRoot).pendingToolCalls[0].dispatchAttempt, 1);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
@@ -10617,7 +10905,7 @@ test("non-durable questions suppress planner and missing source admission fails 
     { type: "function", function: { name: "unreal_agent_plan", parameters: { type: "object" } } },
     { type: "function", function: { name: "read_file", parameters: { type: "object" } } },
   ];
-  for (const objective of ["지금 프로젝트 어디야", "What is an Unreal subsystem?"]) {
+  for (const objective of ["What is an Unreal subsystem?"]) {
     const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-nondurable-question-"));
     process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
     try {
@@ -10644,6 +10932,30 @@ test("non-durable questions suppress planner and missing source admission fails 
       delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
       fs.rmSync(stateRoot, { recursive: true, force: true });
     }
+  }
+
+  const directStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-direct-project-question-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = directStateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let modelCalled = false;
+    const model = {
+      identifier: "direct-project-question-model",
+      respond() { modelCalled = true; throw new Error("direct project query must bypass model readiness"); },
+    };
+    await generate(
+      controllerFor(model, {}, directStateRoot, emitted, toolDefinitions),
+      Chat.from({ messages: [{ role: "user", content: [{ type: "text", text: "지금 프로젝트 어디야" }] }] }),
+    );
+    assert.equal(modelCalled, false);
+    assert.equal(
+      emitted.some((event) => event.kind === "end" && event.request.name === "unreal_get_active_project"),
+      true,
+    );
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(directStateRoot, { recursive: true, force: true });
   }
 
   const blockedStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-missing-admission-"));

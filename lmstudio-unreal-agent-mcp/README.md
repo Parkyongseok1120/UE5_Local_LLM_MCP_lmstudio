@@ -8,11 +8,18 @@ This folder ships **inside** the [UE5_Local_LLM_MCP_lmstudio](https://github.com
 UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/
 ```
 
-Legacy standalone layout (still supported):
+Legacy installed-folder layout (still supported as an integrated-installer destination):
 
 ```text
 ~/.lmstudio/lmstudio-unreal-agent-mcp/
 ```
+
+The `lmstudio-unreal-agent-mcp` npm directory is not a self-contained release
+artifact. Its canonical control reducer and readiness adapter intentionally use
+the repository-level Python runtime and policy files. Build and install it only
+through the root integrated package/installer, which includes and verifies that
+dependency closure. `npm pack` of this subdirectory is unsupported and the
+package is marked private to prevent publishing an incomplete runtime.
 
 ## 포함 툴
 

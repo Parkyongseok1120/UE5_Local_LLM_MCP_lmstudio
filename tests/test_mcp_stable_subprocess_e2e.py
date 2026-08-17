@@ -587,7 +587,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
         )
         assert read["result"].get("isError") is True
         read_text = read["result"]["content"][0]["text"]
-        assert "TASK_CONTROL_OBLIGATION_REQUIRED" in read_text
+        assert "TASK_TOOL_NOT_ACTIVE" in read_text
         assert "static_validate_project" in read_text
         assert (source_dir / "NewThing.h").read_text(encoding="utf-8") == "int alpha = 1;\n"
 

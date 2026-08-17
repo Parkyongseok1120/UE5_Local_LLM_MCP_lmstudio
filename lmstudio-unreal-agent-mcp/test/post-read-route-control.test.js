@@ -22,6 +22,17 @@ function recoveryCommit() {
       mutationGeneration: 0,
       status: "running",
       controlEpoch: 5,
+      controlState: {
+        version: 2,
+        authoritative: true,
+        epoch: 5,
+        taskSessionId: "task_12345678",
+        phase: "verifier",
+        disposition: "require_tool",
+        requiredTool: { name: "unreal_feature_intent_resolve", args: {} },
+        allowedTools: ["unreal_feature_intent_resolve"],
+        retryPolicy: { sameSemanticInput: "once" },
+      },
       pendingGates: [
         "unreal_feature_intent_resolve",
         "unreal_code_sketch_claim_validate",
@@ -69,14 +80,14 @@ test("successful required source read resumes the pending feature gate", () => {
   );
 });
 
-test("ordinary discovery reads do not invent a gate continuation", () => {
+test("ordinary discovery reads only forward an already-authoritative gate continuation", () => {
   const commit = recoveryCommit();
   commit.state.failedGateAttempts = {};
   const original = { content: [{ type: "text", text: "file body" }] };
-  assert.strictEqual(
-    attachPostReadRouteControl(original, commit, "read_file"),
-    original
-  );
+  const result = attachPostReadRouteControl(original, commit, "read_file");
+  assert.equal(result.structuredContent.control.authoritative, true);
+  assert.equal(result.structuredContent.control.requiredTool.name, "unreal_feature_intent_resolve");
+  assert.equal(JSON.parse(result.content[0].text).fileContent, "file body");
 });
 
 test("authoritative v2 control cannot be overridden by a legacy pending gate", () => {

@@ -43,7 +43,8 @@
         "disposition": "require_tool",
         "retry": "once",
         "maxCommittedFailures": 2,
-        "onExhausted": "await_user"
+        "onExhausted": "await_user",
+        "requiredUserInputKind": "provide_path"
       },
       "evidence_required": {
         "disposition": "require_tool",
@@ -74,7 +75,23 @@
       "requiredToolMustBeAllowed": true,
       "requiredToolMustNotBeForbidden": true,
       "terminalDispositionsHaveNoAllowedTools": true,
-      "toolFreeSynthesisHasNoAllowedTools": true
+      "toolFreeSynthesisHasNoAllowedTools": true,
+      "toolRoutePhaseEqualsControlPhase": true,
+      "toolRouteActiveToolsEqualControlAllowedTools": true,
+      "awaitUserRequiresStructuredInput": true,
+      "missingInternalRecoveryToolStopsWorkflow": true
+    },
+    "sourceEvidenceDiscovery": {
+      "freshTaskRequiresPersistedInitialAction": true,
+      "freshTaskMayNotReportFrontierLost": true,
+      "frontierLostRequiresDiscoveryStarted": true,
+      "frontierLostRequiresPriorNonemptyFrontier": true,
+      "discoveryExhaustionDisposition": "workflow_stop"
+    },
+    "synthesisNack": {
+      "continueRecoveryInSameGenerateInvocation": true,
+      "retainPreparedBytes": true,
+      "preparedProvenanceUsesRejectedTransactionControl": true
     }
   },
   "authorizationSchema": {
@@ -132,12 +149,46 @@
       "code",
       "fingerprint"
     ],
+    "requiredUserInputFields": [
+      "kind",
+      "prompt",
+      "schema",
+      "resumeToken"
+    ],
     "identityFields": [
       "taskSessionId",
       "taskMode",
       "epoch",
       "routeHash",
       "mutationGeneration"
+    ],
+    "synthesisReadinessIdentityFields": [
+      "planRevision",
+      "controlEpoch",
+      "acceptedEvidenceHash",
+      "remainingFrontierHash",
+      "synthesisEvidenceBundleHash"
+    ],
+    "synthesisEvidenceBundleFields": [
+      "version",
+      "taskSessionId",
+      "objectiveHash",
+      "planRevision",
+      "mutationGeneration",
+      "records",
+      "bundleHash"
+    ],
+    "preparedSynthesisIdentityFields": [
+      "taskSessionId",
+      "objectiveHash",
+      "planRevision",
+      "controlEpoch",
+      "controlFingerprint",
+      "mutationGeneration",
+      "acceptedEvidenceHash",
+      "remainingFrontierHash",
+      "synthesisEvidenceBundleHash",
+      "outputDigest"
     ]
   },
   "errorCatalog": {
@@ -202,6 +253,10 @@
         "SYNTHESIS_COMMIT_CONFLICT",
         "SYNTHESIS_CONTROL_FINGERPRINT_STALE",
         "SYNTHESIS_CONTROL_STALE",
+        "SYNTHESIS_DELIVERY_CONFLICT",
+        "SYNTHESIS_DELIVERY_NOT_COMMITTED",
+        "SYNTHESIS_DELIVERY_RECEIPT_MISMATCH",
+        "SYNTHESIS_EVIDENCE_BUNDLE_STALE",
         "SYNTHESIS_MUTATION_GENERATION_STALE",
         "SYNTHESIS_OBJECTIVE_MISMATCH",
         "SYNTHESIS_TRANSACTION_ID_MISMATCH",
@@ -333,21 +388,26 @@
         "SLICE_PLAN_REQUIRED",
         "STATIC_VALIDATION_BINDING_REQUIRED",
         "SYNTHESIS_CONTROL_FINGERPRINT_INVALID",
+        "SYNTHESIS_DELIVERY_IDENTITY_INVALID",
+        "SYNTHESIS_EVIDENCE_BUNDLE_HASH_INVALID",
         "SYNTHESIS_OBJECTIVE_HASH_INVALID",
         "SYNTHESIS_OUTPUT_DIGEST_INVALID",
         "TARGET_NOT_FOUND",
         "TASK_ACTIVE_JOB_RECORD_MISSING",
         "TASK_BUILD_CONTRACT_INVALID",
         "TASK_BUILD_CONTRACT_NOT_REQUIRED",
+        "TASK_CONTROL_EVENT_UNSUPPORTED",
         "TASK_CONTROL_OBLIGATION_REQUIRED",
         "TASK_PLANNER_ROUTE_REQUIRED",
         "TASK_RECOVERY_REQUIRED",
         "TASK_REQUIRED_FIRST_TOOL",
         "TASK_RESERVATION_NOT_FOUND",
+        "TASK_RESUME_TOKEN_MISMATCH",
         "TASK_SESSION_INVALID",
         "TASK_SESSION_REQUIRED",
         "TASK_SLICE_SCOPE_REQUIRED",
         "TASK_STATE_MISSING",
+        "TASK_USER_INPUT_NOT_PENDING",
         "TRANSACTION_ID_INVALID",
         "TRANSACTION_JOURNAL_NOT_FOUND",
         "TRANSACTION_NOT_RECOVERY_REQUIRED",
@@ -428,7 +488,8 @@
         "DELETE_STATIC_VALIDATION_FAILED",
         "DUPLICATE_SLICE_FILE",
         "DUPLICATE_SLICE_ID",
-        "EVIDENCE_COMPLETE",
+        "EVIDENCE_FRONTIER_RECONSTRUCTED",
+        "EVIDENCE_FRONTIER_RECONSTRUCTION_REQUIRED",
         "EVIDENCE_RECOVERY_RECORD_FAILED",
         "EVIDENCE_ROUTE_EXHAUSTED",
         "EVIDENCE_STAGNATION",
@@ -470,7 +531,6 @@
         "RECOVERY_EXTERNAL_BLOCKER",
         "REPEATED_GATE_BLOCKER",
         "REPLAN_BUDGET_EXHAUSTED",
-        "SERVER_BLOCKED",
         "SKETCH_INDEX_LOOKUP_FAILED",
         "SLICE_PLAN_ALREADY_EXECUTING",
         "STATIC_VALIDATION_FAILED",
@@ -524,6 +584,7 @@
       ],
       "user_action": [
         "FEATURE_INTENT_BLOCKING_QUESTIONS",
+        "HANDLER_RECOVERY_REQUIRED",
         "HUMAN_APPROVAL_CHANNEL_REQUIRED"
       ]
     },

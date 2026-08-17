@@ -121,11 +121,11 @@ const {
   requireAutomationAfterBuildViaPython,
   recordBuildRecoveryViaPython,
   recordRecoveryObligationViaPython,
+  recordControlEventViaPython,
   bindBuildContractViaPython,
   markRecoveryEvidenceViaPython,
   scopedAbsentEvidencePath,
 } = require("./task-auth");
-const { evidenceRecoveryDecision } = require("./evidence-recovery-decision");
 const {
   MAX_AUTOMATION_FILTERS,
   discoverAutomationTests,
@@ -1634,9 +1634,28 @@ function bindAuthoritativeLifecycleControl(payload, lifecycleResult) {
     payload.requiredNextToolArgs = required.args && typeof required.args === "object"
       ? { ...required.args }
       : {};
+    payload.nextAction = payload.requiredNextTool;
+    payload.nextActionArgs = { ...payload.requiredNextToolArgs };
+    payload.nextActionIsTool = true;
   } else if (lifecycleResult.control?.authoritative === true) {
     delete payload.requiredNextTool;
     delete payload.requiredNextToolArgs;
+    if (
+      String(lifecycleResult.control?.phase || "").toLowerCase() === "synthesis"
+      && String(lifecycleResult.control?.disposition || "").toLowerCase() === "continue"
+    ) {
+      payload.nextAction = "synthesize_current_evidence";
+      payload.nextActionArgs = {};
+      payload.nextActionIsTool = false;
+    } else if (String(lifecycleResult.control?.disposition || "").toLowerCase() === "await_user") {
+      payload.nextAction = "await_user";
+      payload.nextActionArgs = lifecycleResult.control.requiredUserInput || {};
+      payload.nextActionIsTool = false;
+    } else {
+      delete payload.nextAction;
+      delete payload.nextActionArgs;
+      delete payload.nextActionIsTool;
+    }
   }
   return payload;
 }
@@ -2471,21 +2490,12 @@ function cachedReadSuccess(content, options = {}) {
     const currentControl = taskState.controlState && typeof taskState.controlState === "object"
       ? taskState.controlState
       : {};
-    payload.control = {
-      ...currentControl,
-      authoritative: true,
-      version: 2,
-      epoch: payload.controlEpoch,
-      taskSessionId: payload.taskSessionId,
-      ...(payload.requiredNextTool ? {
-        disposition: "require_tool",
-        requiredTool: {
-          name: payload.requiredNextTool,
-          args: payload.requiredNextToolArgs || {},
-        },
-        allowedTools: [payload.requiredNextTool],
-      } : {}),
-    };
+    bindAuthoritativeLifecycleControl(payload, {
+      taskAuthorization: payload.taskAuthorization,
+      toolRoute: taskState.toolRoute,
+      controlEpoch: Math.max(0, Number(currentControl.epoch ?? taskState.controlEpoch ?? 0)),
+      control: currentControl,
+    });
   }
   return text(JSON.stringify(payload, null, 2));
 }
@@ -2592,18 +2602,12 @@ function readRepeatBlocked(tool, guard, context = {}) {
     const currentControl = taskState.controlState && typeof taskState.controlState === "object"
       ? taskState.controlState
       : {};
-    payload.control = {
-      ...currentControl,
-      authoritative: true,
-      version: 2,
-      epoch: payload.controlEpoch,
-      taskSessionId: String(taskState.taskSessionId || context.taskSessionId || ""),
-      disposition: payload.nextActionIsTool ? "require_tool" : "continue",
-      requiredTool: payload.nextActionIsTool
-        ? { name: payload.requiredNextTool, args: payload.requiredNextToolArgs }
-        : null,
-      allowedTools: payload.nextActionIsTool ? [payload.requiredNextTool] : [],
-    };
+    bindAuthoritativeLifecycleControl(payload, {
+      taskAuthorization: payload.taskAuthorization,
+      toolRoute: taskState.toolRoute,
+      controlEpoch: Math.max(0, Number(currentControl.epoch ?? taskState.controlEpoch ?? 0)),
+      control: currentControl,
+    });
     if (lifecycle?.ok === true) payload.taskRecoveryRecorded = true;
   }
   return fail(`Repeated ${tool} read is a semantic duplicate.`, payload);
@@ -2642,20 +2646,20 @@ function recordTaskBoundEvidenceStagnation(context = {}, errorCode, recoveryHint
   const taskState = readTaskState(WORKSPACE_ROOT, taskSessionId);
   if (!taskState || String(taskState.status || "").toLowerCase() !== "running") return null;
   const targetFiles = evidenceStagnationTargetFiles(taskState, context);
-  const recovery = evidenceRecoveryDecision(taskState, {
-    errorCode,
-    recoveryHint,
-    targetFiles,
-    mutationGeneration: context.mutationGeneration,
-  });
   // The read route was already authorized above. Persist with the freshly
   // loaded server-owned credential instead of echoing a model-provided compact
   // handle back into the Python transaction; that handle may intentionally
   // omit rotating route fields and must not downgrade this P0 transition.
-  const lifecycle = recordRecoveryObligationViaPython(
+  const lifecycle = recordControlEventViaPython(
     WORKSPACE_ROOT,
     { taskAuthorization: taskAuthorizationForState(taskState) },
-    recovery,
+    {
+      kind: "EVIDENCE_STAGNATION",
+      errorCode: String(errorCode || "EVIDENCE_STAGNATION"),
+      targetFiles,
+      mutationGeneration: Number(context.mutationGeneration || 0),
+      recoveryHint: recoveryHint && typeof recoveryHint === "object" ? recoveryHint : null,
+    },
   );
   if (!lifecycle || typeof lifecycle !== "object") {
     return {
@@ -4853,6 +4857,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         completeRead: truncated.meta.truncated !== true,
         nextUnreadLine: truncated.meta.nextStartLine,
         semanticAnchors: summarizeCachedRead(rawOut).semanticAnchors,
+        includePaths: Array.from(rawOut.matchAll(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gmu))
+          .map((match) => String(match[1] || "").replace(/\\/gu, "/"))
+          .filter(Boolean)
+          .slice(0, 32),
+        supportingExcerpt: {
+          startLine: 1,
+          endLine: Math.min(
+            truncated.endLine,
+            Math.max(1, rawOut.slice(0, 4000).split("\n").length),
+          ),
+          text: rawOut.slice(0, 4000),
+        },
       };
       const budgetFail = commitDeferredBudgetOrFail({
         directSourceEvidence,
@@ -4985,6 +5001,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         wholeFileComplete,
         completeRead: wholeFileComplete,
         nextUnreadLine: completeEndLine >= startLine ? completeEndLine + 1 : startLine,
+        includePaths: Array.from(content.matchAll(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gmu))
+          .map((match) => String(match[1] || "").replace(/\\/gu, "/"))
+          .filter(Boolean)
+          .slice(0, 32),
+        supportingExcerpt: {
+          startLine,
+          endLine: Math.min(
+            Math.max(startLine, completeEndLine),
+            startLine + Math.max(0, delivered.slice(0, 120).length - 1),
+          ),
+          text: delivered.slice(0, 120).map((row) => row.replace(/^\d+\|/u, "")).join("\n").slice(0, 4000),
+        },
       };
       const budgetFail = commitDeferredBudgetOrFail({
         directSourceEvidence,
@@ -5110,6 +5138,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         wholeFileComplete: false,
         completeRead: false,
         nextUnreadLine: endLine + 1,
+        includePaths: Array.from(content.matchAll(/^\s*#\s*include\s*[<"]([^>"]+)[>"]/gmu))
+          .map((match) => String(match[1] || "").replace(/\\/gu, "/"))
+          .filter(Boolean)
+          .slice(0, 32),
+        supportingExcerpt: {
+          startLine,
+          endLine,
+          text: lines.slice(startLine - 1, endLine).join("\n").slice(0, 4000),
+        },
       };
       const budgetFail = commitDeferredBudgetOrFail({ directSourceEvidence });
       if (budgetFail) return budgetFail;

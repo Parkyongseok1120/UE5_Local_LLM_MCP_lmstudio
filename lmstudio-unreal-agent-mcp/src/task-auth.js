@@ -27,6 +27,7 @@ const { recoveryAction } = require("./route-recovery-policy");
 const { stripProjectNamePrefix } = require("./read-path-resolver");
 const {
   commitControlTransition,
+  reduceCommittedEvent,
   failedGateAttemptForCurrentScope,
 } = require("./task-control-transition");
 const {
@@ -600,11 +601,22 @@ function checkpointConflictFailure(state, conflicts, error = "Task checkpoint co
 
 function validateToolRoute(state, fields, args, toolName) {
   const route = effectiveToolRouteForState(state);
+  let acceptedExpiryTransition = null;
   if (
     route
     && String(route.routeHash || "")
     !== String(state.toolRoute?.routeHash || "")
   ) {
+    // The caller can legitimately hold the server-published fallback route
+    // which caused this expiry transition. commitControlTransition projects
+    // that fallback through the authoritative control state and therefore
+    // gives it a new canonical hash. Accept the triggering fallback token for
+    // this one validation only; every returned authorization uses the newly
+    // committed canonical route.
+    acceptedExpiryTransition = {
+      routeHash: String(route.routeHash || ""),
+      routePhase: String(route.phase || ""),
+    };
     state.toolRoute = route;
     state.toolRouteUsage = {
       routeHash: String(route.routeHash || ""),
@@ -662,6 +674,59 @@ function validateToolRoute(state, fields, args, toolName) {
       nextActionIsTool: true,
       nextActionArgs: nextArgs,
       retryable: true,
+    };
+  }
+  if (
+    toolName
+    && control?.authoritative === true
+    && requiredControlName
+    && toolName !== requiredControlName
+  ) {
+    const authorization = taskAuthorizationForState(state);
+    const nextArgs = {
+      ...requiredControlArgs,
+      taskAuthorization: compactTaskAuthorization(authorization),
+    };
+    return {
+      ok: false,
+      errorCode: "TASK_CONTROL_OBLIGATION_REQUIRED",
+      error: `${requiredControlName} is the only authoritative next action.`,
+      toolRoute: activeRoute,
+      taskAuthorization: authorization,
+      controlEpoch: Math.max(0, Number(state.controlEpoch || control.epoch || 0)),
+      control: { ...control },
+      nextAction: requiredControlName,
+      nextActionIsTool: true,
+      nextActionArgs: nextArgs,
+      alreadySatisfied: true,
+      reexecutionBlocked: true,
+      retryable: false,
+    };
+  }
+  if (
+    toolName
+    && control?.authoritative === true
+    && !requiredControlName
+    && ["rediscover", "complete", "workflow_stop", "await_user"].includes(
+      String(control.disposition || "")
+    )
+    && !allowedControlTools.has(toolName)
+  ) {
+    return {
+      ok: false,
+      errorCode: "TASK_CONTROL_OBLIGATION_REQUIRED",
+      error: `${toolName} is no longer an authoritative action.`,
+      alreadySatisfied: true,
+      reexecutionBlocked: true,
+      toolRoute: activeRoute,
+      taskAuthorization: taskAuthorizationForState(state),
+      controlEpoch: Math.max(0, Number(state.controlEpoch || control.epoch || 0)),
+      control: { ...control },
+      requiredUserInput: control.requiredUserInput || null,
+      nextAction: "use_authoritative_control",
+      nextActionIsTool: false,
+      nextActionArgs: {},
+      retryable: false,
     };
   }
   if (
@@ -733,12 +798,18 @@ function validateToolRoute(state, fields, args, toolName) {
       nextAction: pending[0] || "use_active_route_tool",
     };
   }
-  if (
-    !fields.routeHash
-    || !fields.routePhase
-    || fields.routeHash !== String(activeRoute.routeHash || "")
-    || fields.routePhase !== String(activeRoute.phase || "")
-  ) {
+  const matchesCurrentRoute = Boolean(
+    fields.routeHash
+    && fields.routePhase
+    && fields.routeHash === String(activeRoute.routeHash || "")
+    && fields.routePhase === String(activeRoute.phase || "")
+  );
+  const matchesTriggeringExpiryRoute = Boolean(
+    acceptedExpiryTransition
+    && fields.routeHash === acceptedExpiryTransition.routeHash
+    && fields.routePhase === acceptedExpiryTransition.routePhase
+  );
+  if (!matchesCurrentRoute && !matchesTriggeringExpiryRoute) {
     return {
       ok: false,
       errorCode: "TASK_ROUTE_STALE",
@@ -882,6 +953,10 @@ function purgeExpiredReservations(usage, nowMs = Date.now()) {
 const DIRECT_SOURCE_EXTENSIONS = new Set([
   ".h", ".hpp", ".inl", ".cpp", ".c", ".cc", ".cxx", ".cs",
 ]);
+const INSPECTION_DISCOVERY_TOOLS = new Set([
+  "unreal_rag_search", "unreal_symbol_lookup", "list_directory", "search_files",
+  "read_file", "read_file_range", "read_symbol", "read_unreal_logs",
+]);
 
 function normalizeEvidencePath(value) {
   const relPath = String(value || "")
@@ -929,12 +1004,41 @@ function updateInspectionFrontier(state, candidates = [], consumedPath = "") {
   };
 }
 
-function recordInspectionDiscovery(state, callMetadata) {
+function recordInspectionDiscovery(state, toolName, callMetadata) {
   const metadata = callMetadata && typeof callMetadata === "object" ? callMetadata : {};
   const discovery = metadata.inspectionDiscoveryCandidates;
   if (discovery && typeof discovery === "object") {
     updateInspectionFrontier(state, discovery.paths);
   }
+  if (!INSPECTION_DISCOVERY_TOOLS.has(String(toolName || ""))) return;
+  const progress = state.inspectionProgress && typeof state.inspectionProgress === "object"
+    ? state.inspectionProgress
+    : {};
+  const actions = Array.isArray(state.initialEvidenceActions) ? state.initialEvidenceActions : [];
+  const cursor = Math.min(actions.length, Math.max(0, Number(progress.discoveryActionCursor || 0)));
+  const expected = actions[cursor] && typeof actions[cursor] === "object" ? actions[cursor] : {};
+  const frontier = Array.isArray(state.inspectionProgress?.remainingFrontier)
+    ? state.inspectionProgress.remainingFrontier
+    : [];
+  const discoveredRelevantPairs = Math.max(
+    0,
+    Number(progress.discoveredRelevantPairs || 0),
+    Number(deriveSynthesisReadiness(state).discoveredRelevantPairs || 0),
+  );
+  state.inspectionProgress = {
+    ...(state.inspectionProgress || progress),
+    version: 2,
+    status: "collecting",
+    discoveryStarted: true,
+    everHadFrontier: progress.everHadFrontier === true || frontier.length > 0,
+    discoveredRelevantPairs,
+    discoveryGeneration: Math.max(0, Number(progress.discoveryGeneration || 0)) + 1,
+    discoveryAttempts: Math.max(0, Number(progress.discoveryAttempts || 0)) + 1,
+    discoveryActionCursor: String(expected.name || "") === String(toolName || "")
+      ? Math.min(actions.length, cursor + 1)
+      : cursor,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 const CONTROL_TRANSPORT_ARG_KEYS = new Set([
@@ -1063,9 +1167,10 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     ? "declaration"
     : "implementation";
   const lineRange = String(metadata.lineRange || "").trim();
-  const mutationGeneration = Math.max(
+  const mutationGeneration = Math.max(0, Number(state.mutationGeneration || 0));
+  const evidenceSnapshotGeneration = Math.max(
     0,
-    Number(metadata.mutationGeneration ?? state.mutationGeneration ?? 0),
+    Number(metadata.mutationGeneration ?? mutationGeneration),
   );
   const lineCount = Math.max(0, Number(metadata.lineCount || 0));
   const wholeFileComplete = metadata.wholeFileComplete === true
@@ -1113,6 +1218,55 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
   const boundedSymbols = (value) => Array.from(new Set(
     (Array.isArray(value) ? value : []).map(String).map((item) => item.trim()).filter(Boolean)
   )).slice(0, 32);
+  const priorMaterialization = sameVersion
+    && sourcePrior.largestMaterialization
+    && typeof sourcePrior.largestMaterialization === "object"
+    ? sourcePrior.largestMaterialization
+    : {};
+  const incomingBytes = Math.max(0, Number(metadata.bytesReturned || 0));
+  const priorBytes = Math.max(0, Number(priorMaterialization.bytesReturned || 0));
+  const largestMaterialization = metadata.bytesReturned != null && incomingBytes >= priorBytes
+    ? {
+      ...(metadata.detailLevel != null ? { detailLevel: String(metadata.detailLevel) } : {}),
+      ...(metadata.bytesReturned != null ? { bytesReturned: incomingBytes } : {}),
+    }
+    : { ...priorMaterialization };
+  const priorExcerpts = sameVersion && Array.isArray(sourcePrior.supportingExcerpts)
+    ? sourcePrior.supportingExcerpts
+    : [];
+  const incomingExcerpt = metadata.supportingExcerpt && typeof metadata.supportingExcerpt === "object"
+    ? metadata.supportingExcerpt
+    : null;
+  const supportingExcerpts = [...priorExcerpts];
+  if (incomingExcerpt && String(incomingExcerpt.text || "")) {
+    const startLine = Math.max(1, Number(incomingExcerpt.startLine || 1));
+    const endLine = Math.max(startLine, Number(incomingExcerpt.endLine || startLine));
+    const text = String(incomingExcerpt.text || "").slice(0, 4000);
+    const excerpt = {
+      startLine,
+      endLine,
+      text,
+      excerptDigest: crypto.createHash("sha256").update(text).digest("hex"),
+    };
+    const index = supportingExcerpts.findIndex(
+      (row) => Number(row?.startLine || 0) === startLine && Number(row?.endLine || 0) === endLine,
+    );
+    if (index >= 0) supportingExcerpts[index] = excerpt;
+    else supportingExcerpts.push(excerpt);
+  }
+  const boundedIncludePaths = Array.from(new Set([
+    ...(sameVersion && Array.isArray(sourcePrior.includePaths) ? sourcePrior.includePaths : []),
+    ...(Array.isArray(metadata.includePaths) ? metadata.includePaths : []),
+  ].map((item) => normalizeEvidencePath(item)).filter(Boolean))).slice(0, 32);
+  const coverageLevel = metadata.claimValidated === true
+    ? "CLAIM_VALIDATED"
+    : (sourcePrior.wholeFileComplete === true || wholeFileCompleteEffective) && metadata.truncated !== true
+      ? "FILE_COMPLETE"
+      : String(toolName) === "read_symbol"
+        ? "SYMBOL_COMPLETE"
+        : coveredRanges.length > 0
+          ? "RANGE_PARTIAL"
+          : "DISCOVERED";
   sourceFiles[key] = {
     evidenceId: crypto.createHash("sha256")
       .update(`${key}\0${contentHash}\0${mutationGeneration}\0${state.taskSessionId || ""}`)
@@ -1122,17 +1276,12 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     contentHash,
     fileSignature: String(metadata.fileSignature || "").slice(0, 120),
     mutationGeneration,
+    evidenceSnapshotGeneration,
     lineCount,
     wholeFileComplete: Boolean(sourcePrior.wholeFileComplete === true || wholeFileCompleteEffective),
     sourceKind,
     coveredRanges,
-    largestMaterialization: {
-      ...(sameVersion && sourcePrior.largestMaterialization && typeof sourcePrior.largestMaterialization === "object"
-        ? sourcePrior.largestMaterialization
-        : {}),
-      ...(metadata.detailLevel != null ? { detailLevel: String(metadata.detailLevel) } : {}),
-      ...(metadata.bytesReturned != null ? { bytesReturned: Math.max(0, Number(metadata.bytesReturned || 0)) } : {}),
-    },
+    largestMaterialization,
     truncated: metadata.truncated === true && !(sourcePrior.wholeFileComplete === true || wholeFileCompleteEffective),
     nextUnreadLine: (sourcePrior.wholeFileComplete === true || wholeFileCompleteEffective)
       ? null
@@ -1141,6 +1290,15 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
       ...(sameVersion && Array.isArray(sourcePrior.semanticAnchors) ? sourcePrior.semanticAnchors : []),
       ...(Array.isArray(metadata.semanticAnchors) ? metadata.semanticAnchors : []),
     ].map(String).filter(Boolean))).slice(0, 16),
+    semanticAnchorDigest: crypto.createHash("sha256")
+      .update(JSON.stringify(Array.from(new Set([
+        ...(sameVersion && Array.isArray(sourcePrior.semanticAnchors) ? sourcePrior.semanticAnchors : []),
+        ...(Array.isArray(metadata.semanticAnchors) ? metadata.semanticAnchors : []),
+      ].map(String).filter(Boolean))).sort()))
+      .digest("hex"),
+    coverageLevel,
+    supportingExcerpts: supportingExcerpts.slice(-8),
+    includePaths: boundedIncludePaths,
     declarations: boundedSymbols([
       ...(sameRevision && Array.isArray(sourcePrior.declarations)
         ? sourcePrior.declarations
@@ -1205,21 +1363,33 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     && typeof inspectionContract.evidenceBudget === "object"
     ? inspectionContract.evidenceBudget
     : null;
-  if (inspectionBudget && evidenceProgressed) {
+  if (inspectionBudget) {
     const priorProgress = state.inspectionProgress && typeof state.inspectionProgress === "object"
       ? state.inspectionProgress
       : {};
-    const directSourceReads = Math.max(0, Number(priorProgress.directSourceReads || 0)) + 1;
+    const currentRows = Object.values(state.sourceEvidence.files || {})
+      .filter((row) => row && typeof row === "object");
+    const directSourceReadCalls = Math.max(0, Number(priorProgress.directSourceReadCalls || 0)) + 1;
+    const distinctDirectSourceFiles = currentRows.length;
+    const completeDirectSourceFiles = currentRows.filter((row) => row.wholeFileComplete === true).length;
+    const distinctDeclarationFiles = currentRows.filter((row) => row.sourceKind === "declaration").length;
+    const distinctImplementationFiles = currentRows.filter((row) => row.sourceKind === "implementation").length;
     const evidenceCharacters = Math.max(0, Number(priorProgress.evidenceCharacters || 0))
-      + Math.max(0, Number(metadata.characterCount || 0));
+      + (evidenceProgressed ? Math.max(0, Number(metadata.characterCount || 0)) : 0);
     const maxReads = Math.max(1, Number(inspectionBudget.maxDirectSourceReadsPerPhase || 1));
     const maxChars = Math.max(1, Number(inspectionBudget.maxEvidenceCharsPerPhase || 1));
     state.inspectionProgress = {
       ...priorProgress,
-      version: 1,
-      directSourceReads,
+      version: 2,
+      directSourceReadCalls,
+      distinctDirectSourceFiles,
+      completeDirectSourceFiles,
+      distinctDeclarationFiles,
+      distinctImplementationFiles,
+      directSourceReads: distinctDirectSourceFiles,
+      fullSourceReads: completeDirectSourceFiles,
       evidenceCharacters,
-      status: directSourceReads >= maxReads || evidenceCharacters >= maxChars
+      status: distinctDirectSourceFiles >= maxReads || evidenceCharacters >= maxChars
         ? "synthesis_required"
         : "collecting",
       updatedAt: new Date().toISOString(),
@@ -1359,6 +1529,7 @@ function recordAbsentSourceEvidence(state, toolName, callMetadata) {
     planRevision,
     files: Object.fromEntries(boundedEntries),
   };
+  updateInspectionFrontier(state, [], relPath);
 }
 
 function recoveryArgsMatch(expected, observed, key = "", hostPlatform = process.platform) {
@@ -1752,7 +1923,7 @@ function mutateRouteBudget(
         usage.calls = calls.slice(-limit);
       }
       current.toolRouteUsage = usage;
-      recordInspectionDiscovery(current, callMetadata);
+      recordInspectionDiscovery(current, toolName, callMetadata);
       if (
         String(toolName || "") === "list_directory"
         && callMetadata?.inspectionDirectoryList
@@ -1765,26 +1936,12 @@ function mutateRouteBudget(
           current.inspectionContract?.evidenceBudget?.maxDirectoryLists || 1
         ));
         if (Math.max(0, Number(progress.listedDirectories || 0)) >= directoryLimit) {
-          const handoff = phaseBudgetRecoveryDecision(current);
-          current.recoveryObligation = {
-            source: "phase_tool_budget",
-            status: "phase_budget_checkpoint_required",
-            errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+          reduceCommittedEvent(current, {
+            kind: "PHASE_BUDGET_EXHAUSTED",
+            toolName: "list_directory",
+            phase: String(route.phase || "planner"),
             budgetErrorCode: "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED",
-            exhaustedTool: "list_directory",
-            recoveryStrategy: handoff.recoveryStrategy,
-            requiredTool: { name: "unreal_task_checkpoint", args: {
-              action: "record",
-              phase: String(route.phase || "planner"),
-              requiredNextAction: handoff.requiredNextAction,
-              includeGitChanges: false,
-              taskAuthorization: {
-                taskSessionId: String(current.taskSessionId || taskSessionId || ""),
-                ownerCapability: String(current.ownerCapability || ""),
-              },
-            } },
-          };
-          commitControlTransition(current);
+          });
           current.updatedAt = new Date().toISOString();
           atomicWriteJson(statePath, current);
           return {
@@ -1811,8 +1968,18 @@ function mutateRouteBudget(
       // Generic recovery may require any bounded evidence tool (for example
       // search_files or read_symbol). Validation-checkpoint recovery is the
       // narrower file-read concern handled immediately afterwards.
-      satisfyGenericRecovery(current, toolName, args, recoveryMetadata);
-      satisfyValidationRecovery(current, toolName, args, callMetadata);
+      reduceCommittedEvent(current, {
+        kind: "TOOL_RESULT_COMMITTED",
+        toolName,
+        arguments: args || {},
+        metadata: {
+          ...(recoveryMetadata && typeof recoveryMetadata === "object" ? recoveryMetadata : {}),
+          ...(callMetadata && typeof callMetadata === "object" ? callMetadata : {}),
+        },
+        evidenceProgressed: directEvidenceResult?.recorded === true
+          ? directEvidenceResult.evidenceProgressed !== false
+          : callMetadata?.evidenceProgressed !== false,
+      });
       const resumedGate = pendingDirectEvidenceGate(current, toolName, args)
         || pendingRepeatedGateRediscovery(current, toolName);
       if (resumedGate) {
@@ -1893,26 +2060,13 @@ function mutateRouteBudget(
         (entry) => String(entry.tool || "") === "list_directory"
       ).length;
       if (Math.max(0, Number(progress.listedDirectories || 0)) + reservedDirectories >= directoryLimit) {
-        const handoff = phaseBudgetRecoveryDecision(current);
-        const checkpointAuthorization = taskAuthorizationForState(current);
-        const checkpointArgs = {
-          action: "record",
+        reduceCommittedEvent(current, {
+          kind: "PHASE_BUDGET_EXHAUSTED",
+          toolName: "list_directory",
           phase: String(route.phase || "planner"),
-          requiredNextAction: handoff.requiredNextAction,
-          includeGitChanges: false,
-          taskAuthorization: checkpointAuthorization,
-        };
-        current.recoveryObligation = {
-          source: "phase_tool_budget",
-          status: "phase_budget_checkpoint_required",
-          errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
           budgetErrorCode: "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED",
-          exhaustedTool: "list_directory",
-          recoveryStrategy: handoff.recoveryStrategy,
-          synthesisReadiness: handoff.readiness,
-          requiredTool: { name: "unreal_task_checkpoint", args: checkpointArgs },
-        };
-        commitControlTransition(current);
+        });
+        const checkpointArgs = current.recoveryObligation?.requiredTool?.args || {};
         current.updatedAt = new Date().toISOString();
         atomicWriteJson(statePath, current);
         return {
@@ -1929,43 +2083,17 @@ function mutateRouteBudget(
     if (count + reserved >= limit) {
       const checkpointAuthorization = taskAuthorizationForState(current);
       const exhaustedTool = String(toolName || "");
-      const handoff = phaseBudgetRecoveryDecision(current);
-      const inspectionOnly = handoff.boundedSynthesis;
-      const requiredNextAction = handoff.requiredNextAction;
-      const checkpointArgs = {
-        action: "record",
+      reduceCommittedEvent(current, {
+        kind: "PHASE_BUDGET_EXHAUSTED",
+        toolName: exhaustedTool,
         phase: String(route.phase || "working"),
-        requiredNextAction,
-        includeGitChanges: false,
-        taskAuthorization: {
-          taskSessionId: checkpointAuthorization.taskSessionId,
-          ownerCapability: checkpointAuthorization.ownerCapability,
-        },
-      };
+      });
+      const checkpointArgs = current.recoveryObligation?.requiredTool?.args || {};
+      const inspectionOnly = String(current.recoveryObligation?.recoveryStrategy || "") === "synthesis_handoff";
       // Exhausting a phase budget changes the authoritative next action.  It
       // must therefore be committed before the error envelope is returned;
       // otherwise clients correctly reject the checkpoint route as a
       // same-epoch semantic fork and can count the failed work call as churn.
-      current.recoveryObligation = {
-        source: "phase_tool_budget",
-        status: "phase_budget_checkpoint_required",
-        errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
-        exhaustedTool,
-        recoveryStrategy: handoff.recoveryStrategy,
-        synthesisReadiness: handoff.readiness,
-        fingerprint: [
-          String(route.routeHash || ""),
-          String(route.phase || ""),
-          String(count + reserved),
-          String(limit),
-          exhaustedTool,
-        ].join(":"),
-        requiredTool: {
-          name: "unreal_task_checkpoint",
-          args: checkpointArgs,
-        },
-      };
-      commitControlTransition(current);
       current.updatedAt = new Date().toISOString();
       atomicWriteJson(statePath, current);
       return {
@@ -2924,7 +3052,7 @@ function invokePythonTaskApi(workspaceRoot, callExpression, extraArgs = [], opti
     "import json, sys",
     "from pathlib import Path",
     `sys.path.insert(0, ${JSON.stringify(scriptsDir)})`,
-    "from task_api import task_bind_build_contract, task_cancel, task_cancel_active, task_checkpoint, task_checkpoint_rollback_internal, task_quarantine_corrupt, task_record_build_recovery, task_mark_build_recovery_evidence, task_record_recovery_obligation, task_mark_recovery_evidence, task_complete_after_successful_build, task_require_automation_after_build",
+    "from task_api import task_bind_build_contract, task_cancel, task_cancel_active, task_checkpoint, task_checkpoint_rollback_internal, task_quarantine_corrupt, task_record_build_recovery, task_mark_build_recovery_evidence, task_record_recovery_obligation, task_record_control_event, task_mark_recovery_evidence, task_complete_after_successful_build, task_require_automation_after_build",
     stdinPayload
       ? "_stdin = json.load(sys.stdin)"
       : "_stdin = {}",
@@ -3079,21 +3207,21 @@ function checkpointRollbackViaPython(workspaceRoot, binding = {}) {
 
 function environmentRecoveryAttempt(recovery, authorization = {}, state = null) {
   const durableRecovery = { ...(recovery || {}) };
-  if (String(durableRecovery.status || "") !== "environment_recovery") {
-    return durableRecovery;
-  }
-  const required = durableRecovery.requiredTool && typeof durableRecovery.requiredTool === "object"
-    ? durableRecovery.requiredTool
-    : {};
   const attemptIdentity = {
     taskSessionId: String(state?.taskSessionId || authorization.taskSessionId || ""),
-    controlEpoch: Math.max(0, Number(state?.controlEpoch || authorization.controlEpoch || 0)),
-    routeHash: String(state?.toolRoute?.routeHash || authorization.routeHash || ""),
+    source: String(durableRecovery.source || ""),
     errorCode: String(durableRecovery.errorCode || ""),
-    requiredTool: {
-      name: String(required.name || ""),
-      args: required.args && typeof required.args === "object" ? required.args : {},
-    },
+    mutationGeneration: Math.max(0, Number(durableRecovery.mutationGeneration || 0)),
+    targetFiles: Array.isArray(durableRecovery.targetFiles)
+      ? durableRecovery.targetFiles.map(String).sort()
+      : [],
+    failureFingerprint: String(
+      durableRecovery.failureFingerprint
+      || durableRecovery.commandFingerprint
+      || durableRecovery.diagnosticFingerprint
+      || durableRecovery.transactionId
+      || ""
+    ),
   };
   return {
     ...durableRecovery,
@@ -3114,6 +3242,15 @@ function recordRecoveryObligationViaPython(workspaceRoot, args, recovery) {
   }
   const current = readTaskState(workspaceRoot, String(nested.taskSessionId || ""));
   const durableRecovery = environmentRecoveryAttempt(recovery, nested, current);
+  const required = durableRecovery.requiredTool && typeof durableRecovery.requiredTool === "object"
+    ? durableRecovery.requiredTool
+    : {};
+  const recoveryFact = Object.fromEntries(Object.entries(durableRecovery).filter(([key]) => (
+    !["status", "scopeDisposition", "requiredTool", "fingerprint"].includes(key)
+  )));
+  recoveryFact.observedArgs = required.args && typeof required.args === "object"
+    ? required.args
+    : {};
   return invokePythonTaskApi(
     workspaceRoot,
     (
@@ -3122,7 +3259,26 @@ function recordRecoveryObligationViaPython(workspaceRoot, args, recovery) {
       + "recovery=dict((_stdin or {}).get('recovery') or {}))"
     ),
     [],
-    { stdinPayload: { taskAuthorization: nested, recovery: durableRecovery } }
+    { stdinPayload: { taskAuthorization: nested, recovery: recoveryFact } }
+  );
+}
+
+function recordControlEventViaPython(workspaceRoot, args, event) {
+  const nested = args?.taskAuthorization && typeof args.taskAuthorization === "object"
+    ? args.taskAuthorization
+    : {};
+  if (!nested.taskSessionId || !event || typeof event !== "object") {
+    return { ok: true, active: false };
+  }
+  return invokePythonTaskApi(
+    workspaceRoot,
+    (
+      "payload = task_record_control_event(Path(sys.argv[1]), "
+      + "task_authorization=dict((_stdin or {}).get('taskAuthorization') or {}), "
+      + "event=dict((_stdin or {}).get('event') or {}))"
+    ),
+    [],
+    { stdinPayload: { taskAuthorization: nested, event } },
   );
 }
 
@@ -4150,6 +4306,7 @@ module.exports = {
   recordBuildRecoveryViaPython,
   markBuildRecoveryEvidenceViaPython,
   recordRecoveryObligationViaPython,
+  recordControlEventViaPython,
   environmentRecoveryAttempt,
   bindBuildContractViaPython,
   markRecoveryEvidenceViaPython,

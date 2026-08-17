@@ -6,7 +6,7 @@ import { verifyRuntimeComponent } from "./runtime-identity";
 
 export async function main(context: PluginContext) {
   const runtimeStatus = verifyRuntimeComponent({ componentRoot: path.resolve(__dirname, "..") });
-  console.error(JSON.stringify({
+  console.info(JSON.stringify({
     event: "control_runtime_verified",
     server: "unreal-context-compactor",
     runtimeComponent: runtimeStatus.running,

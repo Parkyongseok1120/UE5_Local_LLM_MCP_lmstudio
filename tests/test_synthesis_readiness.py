@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -9,16 +10,29 @@ import sys
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from synthesis_readiness import derive_synthesis_readiness, synthesis_latch_matches  # noqa: E402
-DECL = {
-    "path": "Source/Cinematic/Public/CinematicSystem.h",
-    "sourceKind": "declaration",
-    "evidenceId": "decl-1",
-}
-IMPL = {
-    "path": "Source/Cinematic/Private/CinematicSystem.cpp",
-    "sourceKind": "implementation",
-    "evidenceId": "impl-1",
-}
+def _complete(path: str, kind: str, evidence_id: str, content_hash: str, text: str):
+    return {
+        "path": path,
+        "sourceKind": kind,
+        "evidenceId": evidence_id,
+        "contentHash": content_hash,
+        "evidenceSnapshotGeneration": 0,
+        "coveredRanges": [[1, 3]],
+        "wholeFileComplete": True,
+        "truncated": False,
+        "lineCount": 3,
+        "coverageLevel": "FILE_COMPLETE",
+        "supportingExcerpts": [{
+            "startLine": 1,
+            "endLine": 3,
+            "text": text,
+            "excerptDigest": hashlib.sha256(text.encode()).hexdigest(),
+        }],
+    }
+
+
+DECL = _complete("Source/Cinematic/Public/CinematicSystem.h", "declaration", "decl-1", "a" * 64, "class FCinematicSystem {};")
+IMPL = _complete("Source/Cinematic/Private/CinematicSystem.cpp", "implementation", "impl-1", "b" * 64, "void FCinematicSystem::Tick() {}")
 
 
 def _state(files=None, **overrides):
@@ -68,6 +82,7 @@ def test_latch_rejects_stale_epoch_and_plan():
         "planRevision": value["planRevision"],
         "acceptedEvidenceHash": readiness["acceptedEvidenceHash"],
         "remainingFrontierHash": readiness["remainingFrontierHash"],
+        "synthesisEvidenceBundleHash": readiness["synthesisEvidenceBundleHash"],
     }
     assert synthesis_latch_matches(value, readiness) is True
     value["planRevision"] = "plan-8"
@@ -83,6 +98,7 @@ def test_latch_accepts_zero_epoch_and_rejects_invalid_epochs():
         "planRevision": value["planRevision"],
         "acceptedEvidenceHash": readiness["acceptedEvidenceHash"],
         "remainingFrontierHash": readiness["remainingFrontierHash"],
+        "synthesisEvidenceBundleHash": readiness["synthesisEvidenceBundleHash"],
     }
     assert synthesis_latch_matches(value, readiness) is True
     value["postBudgetAction"]["controlEpoch"] = -1
@@ -117,3 +133,31 @@ process.stdout.write(JSON.stringify(deriveSynthesisReadiness(JSON.parse(fs.readF
         text=True, encoding="utf-8", capture_output=True, check=True,
     )
     assert json.loads(completed.stdout) == derive_synthesis_readiness(value)
+
+
+def test_coverage_extension_changes_evidence_state_hash():
+    partial = dict(IMPL)
+    partial.update({
+        "coveredRanges": [[1, 2]],
+        "wholeFileComplete": False,
+        "coverageLevel": "RANGE_PARTIAL",
+    })
+    before = derive_synthesis_readiness(_state({DECL["path"]: DECL, IMPL["path"]: partial}))
+    after = derive_synthesis_readiness(_state({DECL["path"]: DECL, IMPL["path"]: IMPL}))
+    assert before["evidenceStateHash"] != after["evidenceStateHash"]
+    assert before["acceptedEvidenceHash"] != after["acceptedEvidenceHash"]
+
+
+def test_truncated_file_does_not_satisfy_file_complete_contract():
+    truncated = dict(IMPL)
+    truncated["truncated"] = True
+    result = derive_synthesis_readiness(_state({DECL["path"]: DECL, IMPL["path"]: truncated}))
+    assert result["ready"] is False
+    assert result["implementationCount"] == 0
+
+
+def test_materialized_bundle_is_bound_to_ready_control():
+    result = derive_synthesis_readiness(_state({DECL["path"]: DECL, IMPL["path"]: IMPL}))
+    assert result["ready"] is True
+    assert len(result["synthesisEvidenceBundle"]["records"]) == 2
+    assert result["synthesisEvidenceBundle"]["bundleHash"] == result["synthesisEvidenceBundleHash"]

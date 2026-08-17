@@ -577,7 +577,12 @@ class EvidencePlan:
     confidence: float = 0.5
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        if not self.writes_allowed and self.task_kind in {
+            "cpp_analysis", "inspect_only", "project_review", "answer_only"
+        }:
+            payload["recommendedValidators"] = payload.pop("gates", [])
+        return payload
 
 
 @dataclass

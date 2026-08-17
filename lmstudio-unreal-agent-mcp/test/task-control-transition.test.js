@@ -3,11 +3,33 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {
   commitControlTransition,
   deriveNextObligation,
 } = require("../src/task-control-transition");
 const { validateToolRoute } = require("../src/task-auth");
+
+function completeEvidence(pathValue, sourceKind, contentHash, text) {
+  return {
+    path: pathValue,
+    sourceKind,
+    evidenceId: `${sourceKind}-ready`,
+    contentHash,
+    evidenceSnapshotGeneration: 0,
+    coveredRanges: [[1, 2]],
+    wholeFileComplete: true,
+    truncated: false,
+    lineCount: 2,
+    coverageLevel: "FILE_COMPLETE",
+    supportingExcerpts: [{
+      startLine: 1,
+      endLine: 2,
+      text,
+      excerptDigest: crypto.createHash("sha256").update(text).digest("hex"),
+    }],
+  };
+}
 
 test("repository audit frontier requires the next unvisited source and only then synthesizes", () => {
   const current = state();
@@ -39,8 +61,8 @@ test("repository audit frontier requires the next unvisited source and only then
   current.sourceEvidence = {
     planRevision: current.planRevision,
     files: {
-      header: { path: "Source/Sample/Public/Sample.h", sourceKind: "declaration", evidenceId: "header" },
-      source: { path: "Source/Sample/Private/Sample.cpp", sourceKind: "implementation", evidenceId: "source" },
+      header: completeEvidence("Source/Sample/Public/Sample.h", "declaration", "a".repeat(64), "class FSample {};"),
+      source: completeEvidence("Source/Sample/Private/Sample.cpp", "implementation", "b".repeat(64), "void FSample::Run() {}"),
     },
   };
   const complete = deriveNextObligation(current);
@@ -71,10 +93,71 @@ test("readiness false never publishes tool-free continue", () => {
     assert.equal(control.allowedTools.length, 1);
     assert.equal(control.allowedTools[0], control.requiredTool.name);
   } else {
-    assert.equal(control.disposition, "await_user");
-    assert.equal(control.blocker.code, "EVIDENCE_FRONTIER_LOST");
+    assert.equal(control.disposition, "workflow_stop");
+    assert.equal(control.blocker.code, "EVIDENCE_DISCOVERY_EXHAUSTED");
     assert.equal(control.retryPolicy.sameSemanticInput, "forbidden");
   }
+});
+
+test("frontier lost requires failed reconstruction, bounded replan, and bounded search proof", () => {
+  const value = state();
+  value.mode = "read_only";
+  value.writesAllowed = false;
+  value.writeGate = { writesAllowed: false };
+  value.taskKind = "cpp_analysis";
+  value.planRevision = "frontier-loss-proof";
+  value.toolRoute.phase = "planner";
+  value.toolRoute.activeTools = [];
+  value.inspectionContract = {
+    intent: "cpp_analysis",
+    evidenceBudget: { representativePairs: 1 },
+  };
+  value.sourceEvidence = { planRevision: value.planRevision, files: {} };
+
+  value.inspectionProgress = {
+    discoveryStarted: false,
+    everHadFrontier: true,
+    discoveryAttempts: 2,
+    remainingFrontier: [],
+  };
+  const neverStarted = deriveNextObligation(value);
+  assert.equal(neverStarted.disposition, "workflow_stop");
+  assert.equal(neverStarted.blocker.code, "EVIDENCE_DISCOVERY_EXHAUSTED");
+
+  value.recoveryObligation = {};
+  value.inspectionProgress = {
+    discoveryStarted: true,
+    everHadFrontier: false,
+    discoveryAttempts: 2,
+    remainingFrontier: [],
+  };
+  const neverHadFrontier = deriveNextObligation(value);
+  assert.equal(neverHadFrontier.disposition, "workflow_stop");
+  assert.equal(neverHadFrontier.blocker.code, "EVIDENCE_DISCOVERY_EXHAUSTED");
+
+  value.recoveryObligation = {};
+  value.inspectionProgress = {
+    discoveryStarted: true,
+    everHadFrontier: true,
+    discoveryAttempts: 2,
+    remainingFrontier: [],
+  };
+  const reconstructionRequired = deriveNextObligation(value);
+  assert.equal(reconstructionRequired.disposition, "require_tool");
+  assert.equal(reconstructionRequired.requiredTool.name, "unreal_agent_plan");
+  assert.equal(reconstructionRequired.transitionReason, "EVIDENCE_FRONTIER_RECONSTRUCTION_REPLAN");
+
+  value.recoveryObligation = {};
+  value.inspectionProgress.frontierReconstruction = {
+    failedReconstruction: true,
+    noDeterministicPair: true,
+    boundedReplanApplied: true,
+    boundedSearchAttempted: true,
+    noBoundedSearchCandidates: true,
+  };
+  const genuinelyLost = deriveNextObligation(value);
+  assert.equal(genuinelyLost.disposition, "workflow_stop");
+  assert.equal(genuinelyLost.blocker.code, "EVIDENCE_FRONTIER_LOST");
 });
 
 test("missing declaration selects a bounded matching header read", () => {
@@ -135,8 +218,8 @@ test("empty frontier rebuilds a source pair search or returns an explicit blocke
     assert.equal(control.requiredTool.args.matchFileNames, true);
     assert.equal(control.allowedTools[0], "search_files");
   } else {
-    assert.equal(control.disposition, "await_user");
-    assert.equal(control.blocker.code, "EVIDENCE_FRONTIER_LOST");
+    assert.equal(control.disposition, "workflow_stop");
+    assert.equal(control.blocker.code, "EVIDENCE_DISCOVERY_EXHAUSTED");
   }
 });
 
@@ -348,12 +431,8 @@ test("evidence exhaustion either routes a bounded repair or permits synthesis wi
   readOnlyTask.sourceEvidence = {
     planRevision: "plan-ready",
     files: {
-      "Source/Sample/Feature.h": {
-        path: "Source/Sample/Feature.h", sourceKind: "declaration", evidenceId: "decl-ready",
-      },
-      "Source/Sample/Feature.cpp": {
-        path: "Source/Sample/Feature.cpp", sourceKind: "implementation", evidenceId: "impl-ready",
-      },
+      "Source/Sample/Feature.h": completeEvidence("Source/Sample/Feature.h", "declaration", "c".repeat(64), "class FFeature {};"),
+      "Source/Sample/Feature.cpp": completeEvidence("Source/Sample/Feature.cpp", "implementation", "d".repeat(64), "void FFeature::Run() {}"),
     },
   };
   readOnlyTask.inspectionContract = { intent: "cpp_analysis", evidenceBudget: { representativePairs: 1 } };
@@ -419,8 +498,9 @@ test("expired gate route fallback atomically recommits authoritative control", (
   );
 
   assert.equal(validated.ok, true);
-  assert.equal(value.toolRoute.routeHash, fallback.routeHash);
-  assert.equal(value.controlState.routeHash, fallback.routeHash);
+  assert.notEqual(value.toolRoute.routeHash, fallback.routeHash);
+  assert.equal(value.controlState.routeHash, value.toolRoute.routeHash);
+  assert.deepEqual(value.toolRoute.activeTools, value.controlState.allowedTools);
   assert.deepEqual(value.controlState.requiredTool, {
     name: "unreal_code_sketch_claim_validate",
     args: {},
@@ -604,6 +684,10 @@ test("out-of-slice recovery blocks the route for user direction", () => {
     code: "BUILD_FAILURE_OUTSIDE_ACTIVE_SLICE",
     fingerprint: "outside-active-slice",
   });
+  assert.equal(control.requiredUserInput.kind, "choose_option");
+  assert.match(control.requiredUserInput.prompt, /external blocker/i);
+  assert.equal(control.requiredUserInput.schema.type, "object");
+  assert.match(control.requiredUserInput.resumeToken, /^[a-f0-9]{64}$/u);
 });
 
 test("Automation failure recovery overrides pending Automation through repair mutation", () => {

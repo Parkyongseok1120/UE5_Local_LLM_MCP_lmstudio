@@ -29,7 +29,7 @@ const SERVER_STATE_TOOL_NAMES = new Set([
   "unreal_code_sketch_claim_validate", "unreal_semantic_refactor_guard",
   "unreal_review_claim_validate", "unreal_diagram_validate", "unreal_project_status",
   "unreal_task_list_active", "unreal_task_cancel_active", "unreal_task_quarantine_corrupt",
-  "unreal_task_retry_job_cancel", "unreal_task_commit_synthesis", "unreal_task_define_slices",
+  "unreal_task_retry_job_cancel", "unreal_task_commit_synthesis", "unreal_task_ack_synthesis_delivery", "unreal_task_define_slices",
   "unreal_task_resume", "unreal_task_cancel", "unreal_task_approve", "unreal_project_prepare",
   "unreal_job_log_read", "unreal_architecture_decision_status",
   "unreal_architecture_decision_approve", "unreal_architecture_decision_revoke",
@@ -58,6 +58,7 @@ const CHECKPOINT_LIFECYCLE_STATUSES = new Set([
   "completed",
   "commit_sent",
   "commit_acked",
+  "delivery_pending",
   "committed",
   "delivered",
   "rejected_stale",
@@ -71,6 +72,7 @@ const CHECKPOINT_LIFECYCLE_STATUS_RANK = Object.freeze({
   completed: 2,
   commit_sent: 2,
   commit_acked: 3,
+  delivery_pending: 3,
   committed: 3,
   delivered: 4,
 });
@@ -691,12 +693,77 @@ function parseJsonObjects(text) {
   return values;
 }
 
+function compactSynthesisEvidenceBundle(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const bundleHash = String(value.bundleHash || "").trim().toLowerCase();
+  const taskSessionId = String(value.taskSessionId || "").slice(0, 160);
+  const objectiveHash = String(value.objectiveHash || "").trim().toLowerCase();
+  const planRevision = String(value.planRevision || "").slice(0, 160);
+  const mutationGeneration = Math.max(0, Number(value.mutationGeneration || 0));
+  const records = [];
+  for (const raw of Array.isArray(value.records) ? value.records.slice(0, 16) : []) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const sourcePath = String(raw.sourcePath || "").replace(/\\/g, "/").slice(0, 500);
+    const contentHash = String(raw.contentHash || "").trim().toLowerCase();
+    if (!sourcePath || !/^[a-f0-9]{64}$/.test(contentHash)) continue;
+    const supportingExcerpts = [];
+    for (const excerpt of Array.isArray(raw.supportingExcerpts) ? raw.supportingExcerpts.slice(0, 8) : []) {
+      const text = String(excerpt?.text || "").slice(0, 4000);
+      const startLine = Number(excerpt?.startLine);
+      const endLine = Number(excerpt?.endLine);
+      const excerptDigest = String(excerpt?.excerptDigest || "").trim().toLowerCase();
+      if (
+        !text
+        || !Number.isInteger(startLine)
+        || !Number.isInteger(endLine)
+        || startLine < 1
+        || endLine < startLine
+        || !/^[a-f0-9]{64}$/.test(excerptDigest)
+        || sha256(text) !== excerptDigest
+      ) continue;
+      supportingExcerpts.push({ startLine, endLine, text, excerptDigest });
+    }
+    if (!supportingExcerpts.length) continue;
+    const coveredLineRanges = Array.isArray(raw.coveredLineRanges)
+      ? raw.coveredLineRanges.slice(0, 32).map((range) => [Number(range?.[0]), Number(range?.[1])])
+        .filter((range) => Number.isInteger(range[0]) && Number.isInteger(range[1]) && range[0] > 0 && range[1] >= range[0])
+      : [];
+    records.push({
+      claimId: String(raw.claimId || "").slice(0, 80),
+      sourcePath,
+      coveredLineRanges,
+      supportingExcerpts,
+      classification: String(raw.classification || "direct").slice(0, 40),
+      contentHash,
+      coverageLevel: String(raw.coverageLevel || "").slice(0, 40),
+    });
+  }
+  const binding = {
+    version: 1,
+    taskSessionId,
+    objectiveHash,
+    planRevision,
+    mutationGeneration,
+    records,
+  };
+  if (
+    !taskSessionId
+    || !planRevision
+    || !Number.isInteger(mutationGeneration)
+    || !/^[a-f0-9]{64}$/.test(bundleHash)
+    || sha256(stableStringify(binding)) !== bundleHash
+  ) return null;
+  return { ...binding, bundleHash };
+}
+
 function compactSynthesisReadiness(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const planRevision = String(value.planRevision || "").slice(0, 160);
   const sourcePlanRevision = String(value.sourceEvidencePlanRevision || "").slice(0, 160);
   const acceptedEvidenceHash = String(value.acceptedEvidenceHash || "").trim().toLowerCase();
   const remainingFrontierHash = String(value.remainingFrontierHash || "").trim().toLowerCase();
+  const synthesisEvidenceBundleHash = String(value.synthesisEvidenceBundleHash || "").trim().toLowerCase();
+  const synthesisEvidenceBundle = compactSynthesisEvidenceBundle(value.synthesisEvidenceBundle);
   const controlEpoch = Number(value.controlEpoch);
   if (
     typeof value.ready !== "boolean"
@@ -706,6 +773,11 @@ function compactSynthesisReadiness(value) {
     || controlEpoch < 0
     || !/^[a-f0-9]{64}$/.test(acceptedEvidenceHash)
     || !/^[a-f0-9]{64}$/.test(remainingFrontierHash)
+    || !/^[a-f0-9]{64}$/.test(synthesisEvidenceBundleHash)
+    || (value.ready === true && (
+      !synthesisEvidenceBundle
+      || synthesisEvidenceBundle.bundleHash !== synthesisEvidenceBundleHash
+    ))
     || !planRevision
   ) return null;
   return {
@@ -719,6 +791,8 @@ function compactSynthesisReadiness(value) {
     controlEpoch,
     acceptedEvidenceHash,
     remainingFrontierHash,
+    synthesisEvidenceBundleHash,
+    synthesisEvidenceBundle,
     acceptedDirectEvidenceCount: Math.max(0, Number(value.acceptedDirectEvidenceCount || 0)),
     declarationCount: Math.max(0, Number(value.declarationCount || 0)),
     implementationCount: Math.max(0, Number(value.implementationCount || 0)),
@@ -737,6 +811,7 @@ function compactSynthesisLatch(value) {
   const planRevision = String(value.planRevision || "").slice(0, 160);
   const acceptedEvidenceHash = String(value.acceptedEvidenceHash || "").trim().toLowerCase();
   const remainingFrontierHash = String(value.remainingFrontierHash || "").trim().toLowerCase();
+  const synthesisEvidenceBundleHash = String(value.synthesisEvidenceBundleHash || "").trim().toLowerCase();
   if (
     Number(value.version || 0) !== 1
     || !Number.isInteger(controlEpoch)
@@ -744,6 +819,7 @@ function compactSynthesisLatch(value) {
     || !planRevision
     || !/^[a-f0-9]{64}$/.test(acceptedEvidenceHash)
     || !/^[a-f0-9]{64}$/.test(remainingFrontierHash)
+    || !/^[a-f0-9]{64}$/.test(synthesisEvidenceBundleHash)
     || value.commitEligible !== true
     || value.pendingEvidenceObligation !== false
   ) return null;
@@ -754,6 +830,7 @@ function compactSynthesisLatch(value) {
     planRevision,
     acceptedEvidenceHash,
     remainingFrontierHash,
+    synthesisEvidenceBundleHash,
     commitEligible: true,
     pendingEvidenceObligation: false,
   };
@@ -762,7 +839,7 @@ function compactSynthesisLatch(value) {
 function compactPreparedSynthesis(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const status = String(value.status || "").trim().toLowerCase();
-  if (!["pending", "prepared", "commit_sent", "commit_acked", "delivered", "rejected_stale", "evidence_recovery"].includes(status)) return null;
+  if (!["pending", "prepared", "commit_sent", "commit_acked", "delivery_pending", "delivered", "rejected_stale", "evidence_recovery"].includes(status)) return null;
   const output = String(value.output || "");
   const outputDigest = String(value.outputDigest || "").trim().toLowerCase();
   const taskSessionId = String(value.taskSessionId || "").trim().slice(0, 160);
@@ -781,7 +858,12 @@ function compactPreparedSynthesis(value) {
   ) return null;
   const acceptedEvidenceHash = String(value.acceptedEvidenceHash || "").trim().toLowerCase();
   const remainingFrontierHash = String(value.remainingFrontierHash || "").trim().toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(acceptedEvidenceHash) || !/^[a-f0-9]{64}$/.test(remainingFrontierHash)) return null;
+  const synthesisEvidenceBundleHash = String(value.synthesisEvidenceBundleHash || "").trim().toLowerCase();
+  if (
+    !/^[a-f0-9]{64}$/.test(acceptedEvidenceHash)
+    || !/^[a-f0-9]{64}$/.test(remainingFrontierHash)
+    || !/^[a-f0-9]{64}$/.test(synthesisEvidenceBundleHash)
+  ) return null;
   const controlEpoch = Number(value.controlEpoch);
   const mutationGeneration = Number(value.mutationGeneration || 0);
   if (!Number.isInteger(controlEpoch) || controlEpoch < 0 || !Number.isInteger(mutationGeneration) || mutationGeneration < 0) return null;
@@ -798,12 +880,22 @@ function compactPreparedSynthesis(value) {
     planRevision,
     acceptedEvidenceHash,
     remainingFrontierHash,
+    synthesisEvidenceBundleHash,
     mutationGeneration,
     preparedAt: String(value.preparedAt || "").slice(0, 64),
     dispatchedAt: String(value.dispatchedAt || "").slice(0, 64),
     rejectedAt: String(value.rejectedAt || "").slice(0, 64),
     rejectionCode: String(value.rejectionCode || "").slice(0, 120),
     staleReason: String(value.staleReason || "").slice(0, 160),
+    ...(value.rejectedByControlEpoch !== undefined
+      ? { rejectedByControlEpoch: Math.max(0, Number(value.rejectedByControlEpoch || 0)) }
+      : {}),
+    ...(value.rejectedByControlFingerprint !== undefined
+      ? {
+        rejectedByControlFingerprint: String(value.rejectedByControlFingerprint || "")
+          .trim().toLowerCase().slice(0, 160),
+      }
+      : {}),
   };
 }
 
@@ -911,6 +1003,7 @@ const SERVER_CONTROL_DISPOSITIONS = new Set([
 function compactServerControl(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   if (Number(value.version || 0) < 2) return null;
+  if (value.authoritative !== true) return null;
   const epoch = Number(value.epoch);
   const mutationGeneration = Number(value.mutationGeneration || 0);
   const disposition = String(value.disposition || "").trim().toLowerCase();
@@ -960,6 +1053,22 @@ function compactServerControl(value) {
       fingerprint: String(value.blocker.fingerprint || "").slice(0, 160),
     }
     : null;
+  const inputValue = value.requiredUserInput;
+  const inputKind = String(inputValue?.kind || "").trim().toLowerCase();
+  const requiredUserInput = inputValue && typeof inputValue === "object" && !Array.isArray(inputValue)
+    && ["select_project", "provide_path", "approve_scope", "choose_option"].includes(inputKind)
+    && String(inputValue.prompt || "").trim()
+    && inputValue.schema && typeof inputValue.schema === "object" && !Array.isArray(inputValue.schema)
+    && String(inputValue.resumeToken || "").trim()
+    ? {
+      kind: inputKind,
+      prompt: String(inputValue.prompt).trim().slice(0, 1000),
+      schema: inputValue.schema,
+      resumeToken: String(inputValue.resumeToken).trim().slice(0, 160),
+    }
+    : null;
+  if (disposition === "await_user" && !requiredUserInput) return null;
+  if (disposition !== "await_user" && inputValue != null && requiredUserInput) return null;
   const synthesisReadiness = value.synthesisReadiness === undefined
     ? null
     : compactSynthesisReadiness(value.synthesisReadiness);
@@ -970,6 +1079,7 @@ function compactServerControl(value) {
   if (value.synthesisLatch !== undefined && !synthesisLatch) return null;
   return {
     version: 2,
+    authoritative: true,
     epoch,
     taskSessionId,
     taskMode: String(value.taskMode || "").trim().toLowerCase().slice(0, 40),
@@ -985,6 +1095,8 @@ function compactServerControl(value) {
     ...(pendingGates.length ? { pendingGates } : {}),
     retryPolicy: { sameSemanticInput: retryValue },
     blocker,
+    ...(requiredUserInput ? { requiredUserInput } : {}),
+    transitionReason: String(value.transitionReason || "").slice(0, 120),
     ...(synthesisReadiness ? { synthesisReadiness } : {}),
     ...(synthesisLatch ? { synthesisLatch } : {}),
   };
@@ -1095,6 +1207,24 @@ function compactEvidenceLedger(value, absent = false) {
         acceptedEvidenceId: String(rawEntry.acceptedEvidenceId || rawEntry.evidenceId || "").slice(0, 80),
         semanticAnchors: Array.isArray(rawEntry.semanticAnchors)
           ? rawEntry.semanticAnchors.map(String).slice(0, 16)
+          : [],
+        semanticAnchorDigest: String(rawEntry.semanticAnchorDigest || "").slice(0, 64),
+        coverageLevel: String(rawEntry.coverageLevel || "").slice(0, 40),
+        claimId: String(rawEntry.claimId || rawEntry.evidenceId || "").slice(0, 80),
+        includePaths: Array.isArray(rawEntry.includePaths)
+          ? rawEntry.includePaths.map((item) => String(item || "").replace(/\\/g, "/")).filter(Boolean).slice(0, 32)
+          : [],
+        supportingExcerpts: Array.isArray(rawEntry.supportingExcerpts)
+          ? rawEntry.supportingExcerpts.slice(0, 8).map((excerpt) => ({
+            startLine: Math.max(1, Number(excerpt?.startLine || 1)),
+            endLine: Math.max(1, Number(excerpt?.endLine || excerpt?.startLine || 1)),
+            text: String(excerpt?.text || "").slice(0, 4000),
+            excerptDigest: String(excerpt?.excerptDigest || "").slice(0, 64),
+          })).filter((excerpt) => (
+            excerpt.text
+            && /^[a-f0-9]{64}$/.test(excerpt.excerptDigest)
+            && sha256(excerpt.text) === excerpt.excerptDigest
+          ))
           : [],
         declarations: Array.isArray(rawEntry.declarations) ? rawEntry.declarations.map(String).slice(0, 32) : [],
         implementations: Array.isArray(rawEntry.implementations) ? rawEntry.implementations.map(String).slice(0, 32) : [],
@@ -1532,6 +1662,25 @@ function collectControlFields(value, state, context = {}) {
   }
   if (incomingServerControl) acceptServerControl(state, incomingServerControl);
   const authoritativeServerControl = compactServerControl(state.serverControl);
+  const taskScopedPayload = String(
+    value?.taskAuthorization?.taskSessionId
+      || value?.taskSessionId
+      || value?.state?.taskSessionId
+      || value?.control?.taskId
+      || value?.control?.taskSessionId
+      || "",
+  ).trim();
+  if (context.serverStateTrusted === true && taskScopedPayload && !authoritativeServerControl) {
+    state.protocolControl = null;
+    state.taskRouteTerminal = true;
+    state.toolRoute = null;
+    state.taskRouteOwnership = null;
+    state.requiredNextTool = null;
+    state.requiredNextToolRef = null;
+    state.requiredNextToolArgs = null;
+    state.lastDiagnostics.push("taskControlV2Missing=fail_closed");
+    return;
+  }
   const protocolControl = authoritativeServerControl || context.serverStateTrusted !== true
     ? null
     : compactProtocolControl(value.control);
@@ -2413,7 +2562,17 @@ function extractControlState(messages, prior = {}, options = {}) {
         activeObjective: state.objective,
         requestIntent: state.requestIntent,
       });
-      const continuation = Boolean(state.objective) && turnIntent === "CONTINUE_ACTIVE_TASK";
+      // The first real user message after a structured await_user control is
+      // the response to that server contract. Preserve task ownership even
+      // when the response is a path or option that looks unlike the original
+      // objective; the generator will bind it to the opaque resume token.
+      const structuredUserInputResponse = Boolean(
+        turnServerControl?.disposition === "await_user"
+        && turnServerControl?.requiredUserInput,
+      );
+      const continuation = Boolean(state.objective) && (
+        turnIntent === "CONTINUE_ACTIVE_TASK" || structuredUserInputResponse
+      );
       if (turnIntent === "SIDE_QUERY") {
         state.sideQuery = {
           active: true,
@@ -3010,6 +3169,18 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
         outputDigest: String(prior.synthesisDelivery.outputDigest || "").slice(0, 64),
         transactionId: String(prior.synthesisDelivery.transactionId || "").slice(0, 160),
         acknowledgedAt: String(prior.synthesisDelivery.acknowledgedAt || "").slice(0, 64),
+        deliveryState: String(prior.synthesisDelivery.deliveryState || "pending").slice(0, 32),
+        deliveryReceiptId: String(prior.synthesisDelivery.deliveryReceiptId || "").slice(0, 64),
+        ackToolCallId: String(prior.synthesisDelivery.ackToolCallId || "").slice(0, 240),
+        emittedAt: String(prior.synthesisDelivery.emittedAt || "").slice(0, 64),
+        taskAuthorization: prior.synthesisDelivery.taskAuthorization
+          && typeof prior.synthesisDelivery.taskAuthorization === "object"
+          && !Array.isArray(prior.synthesisDelivery.taskAuthorization)
+          ? {
+            taskSessionId: String(prior.synthesisDelivery.taskAuthorization.taskSessionId || "").slice(0, 160),
+            ownerCapability: String(prior.synthesisDelivery.taskAuthorization.ownerCapability || "").slice(0, 160),
+          }
+          : null,
       }
       : null,
     modelFence: canResume ? compactModelFence(prior.modelFence) : null,
@@ -3766,6 +3937,7 @@ function validateCheckpoint(checkpoint) {
     if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) return false;
     if (typeof delivery.output !== "string" || delivery.output.length > 131072) return false;
     if (!/^[a-f0-9]{64}$/.test(String(delivery.outputDigest || ""))) return false;
+    if (sha256(String(delivery.output || "")) !== String(delivery.outputDigest || "")) return false;
     if (!String(delivery.transactionId || "").trim()) return false;
   }
   if (checkpoint.preparedSynthesis !== undefined && checkpoint.preparedSynthesis !== null) {
@@ -3961,6 +4133,7 @@ module.exports = {
   compactPredictionPolicy,
   compactLifecycleState,
   compactPreparedSynthesis,
+  compactSynthesisEvidenceBundle,
   compactSynthesisReadiness,
   compactSynthesisLatch,
   mergeLifecycleState,
