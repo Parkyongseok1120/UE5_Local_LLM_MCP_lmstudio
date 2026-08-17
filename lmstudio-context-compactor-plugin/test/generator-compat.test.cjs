@@ -106,6 +106,130 @@ test("prediction supervisor treats heartbeat-free semantic silence as no progres
   assert.equal(cancelCount, 1);
 });
 
+test("generator watchdog accepts tool serialization progress beyond the initial silence window", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-tool-progress-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let cancelCount = 0;
+    const model = {
+      identifier: "tool-progress-test-model",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "tool-progress-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        const timers = [];
+        const later = (delay, callback) => timers.push(setTimeout(callback, delay));
+        later(20, () => opts.onToolCallRequestStart(1, { toolCallId: "call-progress" }));
+        later(40, () => opts.onToolCallRequestNameReceived(1, "read_file"));
+        later(60, () => opts.onToolCallRequestArgumentFragmentGenerated(
+          1,
+          '{"path":"project://Source/Project_MJS/Public/Test.h"}',
+        ));
+        later(80, () => opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "call-progress",
+            type: "function",
+            name: "read_file",
+            arguments: { path: "project://Source/Project_MJS/Public/Test.h" },
+          },
+        }));
+        return {
+          cancel() {
+            cancelCount += 1;
+            for (const timer of timers) clearTimeout(timer);
+          },
+          result() {
+            return new Promise((resolve) => later(90, () => resolve({
+              stats: { stopReason: "toolCalls" },
+            })));
+          },
+        };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect one source file without changing it.");
+    const tools = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    }];
+
+    await generate(controllerFor(model, {
+      predictionNoProgressSeconds: 0.03,
+      predictionWallClockSeconds: 1,
+      streamReasoningProgress: false,
+    }, stateRoot, emitted, tools), history);
+
+    assert.equal(cancelCount, 0);
+    assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
+    const activity = activeCheckpoint(stateRoot).predictionActivity;
+    assert.equal(activity.semanticProgressAt, activity.inferenceActivityAt);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("cancelled prediction persists inference activity without claiming semantic progress", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-cancel-activity-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "cancel-activity-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        let timer;
+        return {
+          cancel() { if (timer) clearTimeout(timer); },
+          result() {
+            return new Promise(() => {
+              timer = setTimeout(() => opts.onPredictionFragment({
+                content: "private reasoning only",
+                tokensCount: 3,
+                reasoningType: "reasoning",
+              }), 10);
+            });
+          },
+        };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect the project without changing files.");
+
+    await assert.rejects(
+      generate(controllerFor(model, {
+        reasoningEffort: "low",
+        predictionNoProgressSeconds: 0.04,
+        streamReasoningProgress: false,
+      }, stateRoot, [], []), history),
+      (error) => error?.code === "PREDICTION_NO_PROGRESS_EXCEEDED",
+    );
+
+    const activity = activeCheckpoint(stateRoot).predictionActivity;
+    assert.ok(Date.parse(activity.inferenceActivityAt) > Date.parse(activity.semanticProgressAt));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("model fence rejects output when the loaded instance changes mid-prediction", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-model-fence-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;

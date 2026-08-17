@@ -4915,12 +4915,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     // reused by a bounded repair prediction in the same generator turn.
     const callbackFsm = createToolCallCallbackFsm();
     const predictionStartedAt = Date.now();
-    const lastSemanticProgressAt = predictionStartedAt;
+    let lastSemanticProgressAt = predictionStartedAt;
     let lastInferenceActivityAt = predictionStartedAt;
     const eventStartIndex = events.length;
     const requestStartIndex = requests.length;
     const markInferenceActivity = () => {
       lastInferenceActivityAt = Date.now();
+    };
+    const markSemanticProgress = () => {
+      const now = Date.now();
+      lastInferenceActivityAt = now;
+      lastSemanticProgressAt = now;
     };
     let lastVisibleProgressAt = predictionStartedAt;
     const heartbeatIntervalMs = Number(config.predictionHeartbeatSeconds) * 1000;
@@ -4976,14 +4981,23 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         signal: ctl.abortSignal,
         onPredictionFragment(fragment: any) {
           const reasoningType = String(fragment?.reasoningType || "none");
-          // Reasoning, final text, and tool JSON are inference activity only.
-          // Authoritative semantic progress is observed between predictions
-          // from task/control/evidence state, never from uncommitted tokens.
-          markInferenceActivity();
+          // Private reasoning is inference activity only. Final text and tool
+          // JSON reset this prediction's serialization watchdog, but neither
+          // advances authoritative workflow state before the atomic commit.
           const observedTokens = Math.max(0, Number(fragment?.tokensCount || 0));
           if (reasoningType === "none") {
+            // Final-answer bytes are committed only after the prediction
+            // finishes, but their arrival is still real serialization
+            // progress for the prediction watchdog.  The wall-clock budget
+            // remains the hard bound on a backend that trickles output.
+            if (observedTokens > 0 || String(fragment?.content || "").length > 0) {
+              markSemanticProgress();
+            } else {
+              markInferenceActivity();
+            }
             finalTokensObserved += observedTokens;
           } else {
+            markInferenceActivity();
             reasoningTokensObserved += observedTokens;
           }
           if (
@@ -5000,16 +5014,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         },
         onToolCallRequestStart(callId: number, info: any) {
           if (!callbackFsm.start(callId, info?.toolCallId)) return;
-          markInferenceActivity();
+          markSemanticProgress();
           recordEvent({ kind: "start", callId, toolCallId: info?.toolCallId });
         },
         onToolCallRequestNameReceived(callId: number, name: string) {
           if (!callbackFsm.name(callId, name)) return;
-          markInferenceActivity();
+          markSemanticProgress();
           recordEvent({ kind: "name", callId, name });
         },
         onToolCallRequestArgumentFragmentGenerated(callId: number, content: string) {
-          markInferenceActivity();
+          if (String(content || "").length > 0) markSemanticProgress();
+          else markInferenceActivity();
           toolJsonCharactersObserved += String(content || "").length;
           recordEvent({ kind: "args", callId, content });
         },
@@ -5023,7 +5038,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             modelFacingToolDefinitions,
           );
           if (!callbackFsm.end(callId, request)) return;
-          markInferenceActivity();
+          markSemanticProgress();
           if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
             replaceBufferedArgumentFragments(events, callId, request.arguments);
           }
@@ -5032,7 +5047,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         },
         onToolCallRequestFailure(callId: number, error: Error) {
           if (!callbackFsm.failure(callId, error)) return;
-          markInferenceActivity();
+          markSemanticProgress();
           recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
         },
       });
@@ -5071,6 +5086,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         // Retain only output prepared before this bounded prediction attempt.
         events.splice(eventStartIndex);
         requests.splice(requestStartIndex);
+        nextCheckpoint.predictionActivity = {
+          version: 1,
+          inferenceActivityAt: new Date(lastInferenceActivityAt).toISOString(),
+          semanticProgressAt: new Date(lastSemanticProgressAt).toISOString(),
+        };
         nextCheckpoint.predictionState = mergeLifecycleState(
           nextCheckpoint.predictionState,
           lifecycleState(nextCheckpoint, "pending", { stopReason: code.toLowerCase() }),
@@ -5092,6 +5112,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           elapsedMs: Number(error?.elapsedMs || Date.now() - predictionStartedAt),
           progressLabel,
           bufferedOutputDiscarded: true,
+          reasoningTokensObserved,
+          finalTokensObserved,
+          toolJsonCharactersObserved,
+          inferenceActivityAt: nextCheckpoint.predictionActivity.inferenceActivityAt,
+          semanticProgressAt: nextCheckpoint.predictionActivity.semanticProgressAt,
           ...(code === "MODEL_INSTANCE_CHANGED" ? {
             expectedModelFence: error?.expectedModelFence || transactionModelFence,
             actualModelFence: error?.actualModelFence || null,
