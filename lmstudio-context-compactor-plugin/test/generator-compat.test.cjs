@@ -7506,10 +7506,47 @@ test("new durable direct-source evidence resets the compaction churn signature",
         implementationEvidence,
         headerEvidence,
         implementationEvidence,
-        { tool: "list_directory", path: "project://Source/Project_MJS/Private" },
       ],
     }),
     afterSignature,
+  );
+  const emptyDirectory = {
+    tool: "list_directory",
+    path: "project://Source/Project_MJS/Public/Animation",
+    entryCount: 0,
+    entries: [],
+  };
+  const emptyDirectorySignature = compactionWorkflowProgressSignature({
+    ...after,
+    evidenceFacts: [...after.evidenceFacts, emptyDirectory],
+  });
+  assert.notEqual(emptyDirectorySignature, afterSignature);
+  assert.equal(
+    compactionWorkflowProgressSignature({
+      ...after,
+      evidenceFacts: [emptyDirectory, ...after.evidenceFacts, emptyDirectory],
+    }),
+    emptyDirectorySignature,
+  );
+  const listedDirectory = {
+    ...emptyDirectory,
+    entryCount: 2,
+    entries: ["AnimationState.h", "AnimInstance.h"],
+  };
+  const listedDirectorySignature = compactionWorkflowProgressSignature({
+    ...after,
+    evidenceFacts: [...after.evidenceFacts, listedDirectory],
+  });
+  assert.notEqual(listedDirectorySignature, emptyDirectorySignature);
+  assert.equal(
+    compactionWorkflowProgressSignature({
+      ...after,
+      evidenceFacts: [
+        ...after.evidenceFacts,
+        { ...listedDirectory, entries: [...listedDirectory.entries].reverse() },
+      ],
+    }),
+    listedDirectorySignature,
   );
 });
 

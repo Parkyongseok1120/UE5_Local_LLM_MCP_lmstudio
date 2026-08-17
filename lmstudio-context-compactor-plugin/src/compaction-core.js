@@ -1401,11 +1401,14 @@ function compactToolEvidence(call, payload, resultContent = "") {
   }
   if (normalized.endsWith("list_directory")) {
     const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+    const entryNames = [...new Set(
+      entries.map((row) => String(row?.name || row?.path || row || "")).filter(Boolean)
+    )].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
     return {
       tool: name,
       path: String(args.path || payload?.path?.displayPath || payload?.path || "").slice(0, 260),
-      entryCount: entries.length,
-      entries: entries.map((row) => String(row?.name || row?.path || row || "")).filter(Boolean).slice(0, 32),
+      entryCount: entryNames.length,
+      entries: entryNames.slice(0, 32),
     };
   }
   if (normalized.endsWith("read_file") || normalized.endsWith("read_file_range")) {

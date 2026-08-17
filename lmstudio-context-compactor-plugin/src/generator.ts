@@ -920,6 +920,24 @@ function compactionWorkflowProgressSignature(checkpoint: any): string {
       repeatDetected: Boolean(entry?.repeatDetected),
     }))
     : []);
+  const directoryFrontier = stableUniqueFrontier(Array.isArray(checkpoint?.evidenceFacts)
+    ? checkpoint.evidenceFacts.filter((entry: any) => (
+      String(entry?.tool || "").toLowerCase().endsWith("list_directory")
+      && String(entry?.path || "").length > 0
+    )).map((entry: any) => {
+      const entries: string[] = [...new Set<string>(
+        (Array.isArray(entry?.entries) ? entry.entries : [])
+          .map((value: any) => String(value || "").trim())
+          .filter(Boolean),
+      )].sort((left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0));
+      return {
+        tool: String(entry?.tool || ""),
+        path: String(entry?.path || ""),
+        entryCount: Math.max(entries.length, Number(entry?.entryCount || 0)),
+        entries,
+      };
+    })
+    : []);
   return core.sha256(core.stableStringify({
     objectiveHash: String(checkpoint?.objectiveHash || ""),
     taskSessionId: String(
@@ -936,6 +954,7 @@ function compactionWorkflowProgressSignature(checkpoint: any): string {
     absentEvidence: checkpoint?.absentEvidence || null,
     workingSetFrontier,
     evidenceFrontier,
+    directoryFrontier,
     buildState: checkpoint?.buildState || null,
     buildVerification: checkpoint?.buildVerification || null,
     synthesisStatus: String(checkpoint?.synthesisState?.status || ""),

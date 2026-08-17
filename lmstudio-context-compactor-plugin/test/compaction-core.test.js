@@ -77,6 +77,38 @@ test("project evidence identity is POSIX-exact and folds Windows ASCII only", ()
   );
 });
 
+test("directory evidence canonicalizes duplicate and reordered entries", () => {
+  const messages = [
+    { role: "user", content: "Inspect the project source frontier." },
+    { role: "assistant", toolCalls: [{
+      id: "list-source-frontier",
+      name: "list_directory",
+      arguments: { path: "project://Source/Demo/Public/Animation" },
+    }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "list-source-frontier",
+      name: "list_directory",
+      content: JSON.stringify({
+        ok: true,
+        entries: [
+          { name: "AnimationState.h" },
+          { name: "AnimInstance.h" },
+          { name: "AnimationState.h" },
+        ],
+      }),
+    }] },
+  ];
+
+  const checkpoint = core.buildCheckpoint(messages);
+  const directory = checkpoint.evidenceFacts.find((fact) => fact.tool === "list_directory");
+  assert.deepEqual(directory, {
+    tool: "list_directory",
+    path: "project://Source/Demo/Public/Animation",
+    entryCount: 2,
+    entries: ["AnimInstance.h", "AnimationState.h"],
+  });
+});
+
 test("budget gate reserves output, tool schema, and build result space", () => {
   const soft = core.budgetDecision({
     contextLength: 32_000,
