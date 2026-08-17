@@ -2133,6 +2133,91 @@ test("control v2 emits an exact server-owned read without model serialization", 
   }
 });
 
+test("server-owned direct checkpoint follow-ups use a fresh host tool-call id", async () => {
+  const workingDirectory = path.join(os.tmpdir(), "context-compactor-direct-id-working-directory");
+  const stateRoots = [
+    fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-direct-id-a-")),
+    fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-direct-id-b-")),
+  ];
+  const emittedIds = [];
+  const model = {
+    identifier: "control-v2-planner-direct-id-model",
+    async applyPromptTemplate() { throw new Error("exact server-owned control must bypass prompt projection"); },
+    async countTokens() { throw new Error("exact server-owned control must bypass token measurement"); },
+    async getContextLength() { return 100_000; },
+    respond() { throw new Error("exact server-owned control must bypass model serialization"); },
+  };
+  const tools = [{
+    type: "function",
+    function: {
+      name: "unreal_agent_plan",
+      parameters: {
+        type: "object",
+        properties: {
+          request: { type: "string" },
+          taskAuthorization: { type: "object" },
+          sessionId: { type: "string" },
+          conversationSessionId: { type: "string" },
+        },
+        required: ["request"],
+      },
+    },
+  }];
+  const payload = {
+    ok: true,
+    taskAuthorization: {
+      taskSessionId: "task-checkpoint-direct-id",
+      ownerCapability: "owner-checkpoint-direct-id",
+    },
+    control: {
+      version: 2,
+      epoch: 8,
+      taskSessionId: "task-checkpoint-direct-id",
+      routeHash: "route-checkpoint-direct-id",
+      phase: "planner",
+      disposition: "require_tool",
+      requiredTool: {
+        name: "unreal_agent_plan",
+        args: { request: "시네마틱 C++ 시스템에 대해서 분석하고 알려줘." },
+      },
+      allowedTools: ["unreal_agent_plan"],
+      retryPolicy: { sameSemanticInput: "forbidden" },
+    },
+  };
+  const history = Chat.from({ messages: [
+    { role: "user", content: [{ type: "text", text: "시네마틱 C++ 시스템에 대해서 분석하고 알려줘." }] },
+    { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+      id: "checkpoint-result", type: "function", name: "unreal_task_checkpoint", arguments: {},
+    } }] },
+    { role: "tool", content: [{
+      type: "toolCallResult",
+      toolCallId: "checkpoint-result",
+      name: "unreal_task_checkpoint",
+      content: JSON.stringify(payload),
+    }] },
+  ] });
+
+  try {
+    for (const stateRoot of stateRoots) {
+      process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+      const emitted = [];
+      await require("../dist/generator.js").generate(
+        controllerFor(model, {}, stateRoot, emitted, tools, workingDirectory),
+        history,
+      );
+      const end = emitted.find((event) => event.kind === "end");
+      assert.ok(end);
+      emittedIds.push(end.request.id);
+    }
+    assert.notEqual(emittedIds[0], emittedIds[1]);
+    assert.match(emittedIds[0], /^server-owned-generate-[a-f0-9]{32}-\d+$/);
+    assert.match(emittedIds[1], /^server-owned-generate-[a-f0-9]{32}-\d+$/);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    for (const stateRoot of stateRoots) fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("control v2 still blocks a missing mutation schema before model invocation", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-control-v2-write-missing-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -5516,8 +5601,8 @@ test("successive low floor recoveries use path-bound call ids", async () => {
     assert.equal(modelCalls, 2);
     assert.notEqual(firstRequest.arguments.path, secondRequest.arguments.path);
     assert.notEqual(firstRequest.id, secondRequest.id);
-    assert.match(firstRequest.id, /^server-owned-low-floor-[a-f0-9]+-[a-f0-9]{16}$/);
-    assert.match(secondRequest.id, /^server-owned-low-floor-[a-f0-9]+-[a-f0-9]{16}$/);
+    assert.match(firstRequest.id, /^server-owned-low-floor-generate-[a-f0-9]{32}-[a-f0-9]{16}$/);
+    assert.match(secondRequest.id, /^server-owned-low-floor-generate-[a-f0-9]{32}-[a-f0-9]{16}$/);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });

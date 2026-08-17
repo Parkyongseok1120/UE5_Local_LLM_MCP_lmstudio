@@ -3945,6 +3945,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     checkpointGeneration: Number(checkpoint?.checkpointGeneration || 0),
     startedAt: Date.now(),
   })).slice(0, 32)}`;
+  // Server-owned direct calls still cross LM Studio's host callback boundary.
+  // Their request ids must therefore be unique per generator invocation; a
+  // session/epoch-only id is reused by retries and makes the host treat the
+  // second lifecycle as a duplicate tool call.
+  const directToolCallRequestId = (prefix: string, discriminator: unknown = "0"): string => (
+    `${prefix}-${outerGenerateRequestId}-${String(discriminator || "0")}`.slice(0, 240)
+  );
   const hostToolCallLifecycleDiagnostics: HostToolCallLifecycleDiagnostic[] = [];
   const hostToolCallLifecycle = createHostToolCallTransactionManager({
     outerGenerateRequestId,
@@ -6901,7 +6908,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       const toolName = recovery.toolName;
       const recoveryPathDigest = core.sha256(`${toolName}\0${recovery.path}`).slice(0, 16);
       const rawRequest = {
-        id: `server-owned-low-floor-${String(sessionId).slice(0, 16)}-${recoveryPathDigest}`,
+        id: directToolCallRequestId("server-owned-low-floor", recoveryPathDigest),
         type: "function",
         name: toolName,
         arguments: { path: recovery.path },
@@ -7116,7 +7123,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       phaseControlDefinition?.function?.name || phaseControlDefinition?.name || "",
     );
     const rawRequest = {
-      id: `server-control-${phaseControlKind}-${String(sessionId).slice(0, 32)}`,
+      id: directToolCallRequestId("server-control", phaseControlKind),
       type: "function",
       name: phaseToolName,
       arguments: mergeServerOwnedArguments(
@@ -7153,7 +7160,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     // waste a turn serializing, correcting, or retrying an already-authorized
     // request.  The normal control-plane validation below still guards commit.
     const rawRequest = {
-      id: `server-owned-${String(sessionId).slice(0, 32)}-${String(nextCheckpoint?.controlEpoch || "0")}`,
+      id: directToolCallRequestId(
+        "server-owned",
+        String(nextCheckpoint?.controlEpoch || "0"),
+      ),
       type: "function",
       name: String(exactRequiredToolDefinition?.function?.name || exactRequiredToolName),
       arguments: mergeServerOwnedArguments(
