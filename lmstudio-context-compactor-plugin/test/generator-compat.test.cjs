@@ -8,6 +8,37 @@ const test = require("node:test");
 const { Chat } = require("@lmstudio/sdk");
 const core = require("../src/compaction-core");
 
+// Normalize old synthetic tool-result-only fixtures to LM Studio's real paired
+// assistant-call/tool-result transport. Product code intentionally rejects
+// unmatched tool JSON as an authoritative control source.
+const rawChatFrom = Chat.from.bind(Chat);
+Chat.from = (input) => {
+  const source = Array.isArray(input?.messages) ? input.messages : [];
+  const normalized = [];
+  for (const message of source) {
+    if (message?.role === "tool" && Array.isArray(message.content)) {
+      for (const block of message.content) {
+        const result = block?.toolCallResult
+          || (block?.type === "toolCallResult" ? block : null);
+        if (!result?.toolCallId || !result?.name) continue;
+        const paired = normalized.some((row) => (row?.content || []).some(
+          (item) => String(item?.toolCallRequest?.id || "") === String(result.toolCallId),
+        ));
+        if (!paired) {
+          normalized.push({ role: "assistant", content: [{
+            type: "toolCallRequest",
+            toolCallRequest: {
+              id: result.toolCallId, type: "function", name: result.name, arguments: {},
+            },
+          }] });
+        }
+      }
+    }
+    normalized.push(message);
+  }
+  return rawChatFrom({ ...input, messages: normalized });
+};
+
 function requestIntentFor(objective, overrides = {}) {
   return {
     version: 1,

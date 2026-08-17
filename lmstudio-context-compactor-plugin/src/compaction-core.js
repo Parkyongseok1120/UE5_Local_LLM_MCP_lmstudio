@@ -19,6 +19,26 @@ const REQUEST_INTENT_SERVER_TOOL_NAMES = new Set([
   "unreal_task_recover_active",
   "unreal_task_checkpoint",
 ]);
+const SERVER_STATE_TOOL_NAMES = new Set([
+  ...REQUEST_INTENT_SERVER_TOOL_NAMES,
+  "unreal_get_active_project", "unreal_set_active_project", "unreal_rag_health",
+  "unreal_rag_search", "unreal_symbol_lookup", "unreal_agent_session",
+  "unreal_rag_capabilities", "unreal_architecture_reasoning",
+  "unreal_feature_intent_resolve", "unreal_runtime_config_check",
+  "unreal_runtime_debug_session", "unreal_runtime_verify",
+  "unreal_code_sketch_claim_validate", "unreal_semantic_refactor_guard",
+  "unreal_review_claim_validate", "unreal_diagram_validate", "unreal_project_status",
+  "unreal_task_list_active", "unreal_task_cancel_active", "unreal_task_quarantine_corrupt",
+  "unreal_task_retry_job_cancel", "unreal_task_commit_synthesis", "unreal_task_define_slices",
+  "unreal_task_resume", "unreal_task_cancel", "unreal_task_approve", "unreal_project_prepare",
+  "unreal_job_log_read", "unreal_architecture_decision_status",
+  "unreal_architecture_decision_approve", "unreal_architecture_decision_revoke",
+  "get_workspace_info", "get_active_project", "list_active_tasks", "cancel_active_task",
+  "quarantine_corrupt_task", "list_directory", "read_file", "read_file_range", "read_symbol",
+  "search_files", "write_file", "replace_in_file", "apply_edit_bundle",
+  "static_validate_project", "build_unreal_project", "run_unreal_automation_tests",
+  "read_unreal_logs", "write_session_handoff", "record_bootstrap_step",
+]);
 const MAX_EDIT_EVIDENCE_FILES = 2;
 const MAX_EDIT_EVIDENCE_CHARS = 16000;
 const MAX_REPEAT_EVIDENCE_FILES = 1;
@@ -2109,7 +2129,7 @@ function extractControlState(messages, prior = {}, options = {}) {
     // assistant JSON is ordinary content, never a control-plane envelope.
     if (snapshot.role === "tool") {
       for (const payload of parseTransportJsonObjects(snapshot.text)) {
-        collectControlFields(payload, state, { serverStateTrusted: true });
+        collectControlFields(payload, state, { serverStateTrusted: false });
       }
     }
     for (const call of snapshot.toolCalls) {
@@ -2157,9 +2177,11 @@ function extractControlState(messages, prior = {}, options = {}) {
           && (!result.name || toolNamesMatch(observedCall.name, result.name)),
         );
         collectControlFields(payload, state, {
-          // A normalized role=tool result is host transport state even when
-          // older LM Studio histories omitted the paired assistant call.
-          serverStateTrusted: snapshot.role === "tool",
+          serverStateTrusted: isTrustedServerStateResult(
+            matchedCallName,
+            result.name,
+            resultNameMatchesCall,
+          ),
           requestIntentTrusted: isTrustedRequestIntentResult(
             matchedCallName,
             result.name,
@@ -3150,6 +3172,25 @@ function summarizeOldMessages(messages, checkpoint) {
   }
   selected.push(finalLine);
   return selected.join("\n");
+}
+
+function isTrustedServerStateToolName(toolName) {
+  const raw = String(toolName || "").trim().toLowerCase().replace(/\\/g, "/");
+  const parsed = parseProviderQualifiedToolName(raw);
+  if (!SERVER_STATE_TOOL_NAMES.has(parsed.functionName)) return false;
+  if (!parsed.qualified) return raw === parsed.functionName;
+  return /^mcp[/:]unreal-(?:agent|rag)[/:]/u.test(raw)
+    || raw.startsWith("mcp__unreal-agent__") || raw.startsWith("mcp__unreal-rag__")
+    || raw.startsWith("mcp_unreal_agent_") || raw.startsWith("mcp_unreal_rag_");
+}
+
+function isTrustedServerStateResult(callName, resultName, matchedCallObserved) {
+  if (matchedCallObserved !== true || !isTrustedServerStateToolName(callName)) return false;
+  const normalizedResultName = String(resultName || "").trim();
+  return !normalizedResultName || (
+    isTrustedServerStateToolName(normalizedResultName)
+    && toolNamesMatch(callName, normalizedResultName)
+  );
 }
 
 function compactRemainingFrontier(value) {
