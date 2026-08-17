@@ -44,7 +44,7 @@ After pulling Hotfix 1–3 commits that change `lmstudio-unreal-agent-mcp` (`sha
 Confirm after restart:
 
 - Novel `read_file_range` windows are still served (not replaced by an older range body).
-- Identical re-reads return `READ_REPEAT_DETECTED` with `cached: true`, a content hash, and bounded semantic anchors; the unchanged full body is suppressed.
+- An unchanged materialization returns `resultKind=cache_hit` with `cached: true`, no error code, a content hash, and bounded semantic anchors; a prohibited semantic duplicate returns `resultKind=repeat_blocked` with `READ_REPEAT_BLOCKED` and an authoritative continuation.
 - Evidence stagnation returns `isError: true` / `EVIDENCE_STAGNATION` (repeat escalation: `EVIDENCE_STAGNATION_REPEAT`) with no substituted prior code body.
 - Cached covering ranges never cross files (file A body is never returned for file B).
 
@@ -237,7 +237,8 @@ Always include [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_
 | Model calls `run_javascript` / `js-code-sandbox` | Start a new chat with the bootstrap prompt, remove sandbox auto-approval, and hide/disable the sandbox plugin if available |
 | Hallucinated analysis | Force `read_file` before claims or edits |
 | False logic bugs (early return = "missing") | Read sibling `.h` UENUM/field docs first; classify `ByDesign`/`Ambiguous`; run `unreal_review_claim_validate` |
-| `READ_REPEAT_DETECTED` / `evidenceStatus=cached` | Do not re-read that path; continue other unread targets if needed, else finish the requested deliverable |
+| `resultKind=cache_hit` / `evidenceStatus=cached` | Treat as successful cached materialization with no new evidence; continue other unread targets if needed |
+| `READ_REPEAT_BLOCKED` / `resultKind=repeat_blocked` | Follow the authoritative continuation exactly; do not re-read that path |
 | `EVIDENCE_STAGNATION` / `EVIDENCE_STAGNATION_REPEAT` | Stop evidence tools; finish from existing context. Restart `unreal-agent` if Hotfix 3+ is not loaded |
 | `TOOL_REPEAT_BLOCKED` | Identical call failed internally twice — do **not** retry same args; handoff / fresh chat. Distinct from evidence stagnation |
 | Repeated no-op patch / `MUTATION_REPEAT_BLOCKED` | Re-read file, patch only missing current text, set `expectedOccurrences=1` |

@@ -996,15 +996,14 @@ def test_failed_replace_requires_exact_bounded_recovery(
         rag.close()
 
 
-def test_task_bound_evidence_stagnation_without_a_source_pair_replans(
+def test_task_bound_unchanged_source_read_is_cached_without_progress(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A guarded read must atomically replace its task route before replying.
+    """A guarded unchanged read is a total cache hit, not source progress.
 
     This exercises the real Agent subprocess plus the Python task-state bridge:
-    a stale evidence route cannot keep `read_file` callable after the third
-    equivalent read reaches EVIDENCE_STAGNATION.
+    repeated materialization keeps the durable task and readiness state intact.
     """
     require_agent_mcp_deps()
     workspace_dir = tmp_path / "workspace"
@@ -1078,30 +1077,19 @@ def test_task_bound_evidence_stagnation_without_a_source_pair_replans(
         assert first["result"].get("isError") is not True, first
         second = client.request("tools/call", {"name": "read_file", "arguments": args}, 3)
         assert second["result"].get("isError") is not True, second
-        stagnated = client.request("tools/call", {"name": "read_file", "arguments": args}, 4)
-        assert stagnated["result"].get("isError") is True, stagnated
-        payload = _tool_payload(stagnated["result"])
-        assert payload["errorCode"] == "EVIDENCE_STAGNATION", json.dumps(payload, indent=2)
-        assert payload.get("taskRecoveryRecorded") is True, json.dumps(payload, indent=2)
-        assert payload["control"]["version"] == 2
-        assert payload["control"]["disposition"] == "require_tool"
-        assert payload["control"]["requiredTool"]["name"] == "unreal_agent_plan"
-        assert payload["control"]["allowedTools"] == ["unreal_agent_plan"]
+        for req_id in (4, 5):
+            cached = client.request("tools/call", {"name": "read_file", "arguments": args}, req_id)
+            assert cached["result"].get("isError") is not True, cached
+            payload = _tool_payload(cached["result"])
+            assert payload["ok"] is True
+            assert payload["resultKind"] == "cache_hit"
+            assert payload["evidenceProgressed"] is False
+            assert payload["workflowProgressed"] is False
+            assert "errorCode" not in payload
 
         state_path = task_root(ROOT, started["taskSessionId"]) / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        assert state["recoveryObligation"]["status"] == "phase_budget_replan_required"
         assert state["synthesisReadiness"]["ready"] is False
-        assert state["controlState"]["allowedTools"] == ["unreal_agent_plan"]
-        assert state["controlEpoch"] == payload["controlEpoch"]
-
-        # Authorization rejects the fourth attempt before the read handler can
-        # manufacture EVIDENCE_STAGNATION_REPEAT or touch the source again.
-        rejected = client.request("tools/call", {"name": "read_file", "arguments": args}, 5)
-        assert rejected["result"].get("isError") is True
-        rejected_payload = _tool_payload(rejected["result"])
-        assert rejected_payload["errorCode"] == "TASK_CONTROL_OBLIGATION_REQUIRED"
-        assert "EVIDENCE_STAGNATION_REPEAT" not in json.dumps(rejected_payload)
     finally:
         client.close()
 
@@ -1400,10 +1388,11 @@ def test_agent_successful_read_repeat_returns_cached(tmp_path: Path) -> None:
         assert second["result"].get("isError") is not True
         payload = _tool_payload(second)
         assert payload.get("ok") is True
+        assert payload.get("resultKind") == "cache_hit"
         assert payload.get("cached") is True
         assert payload.get("repeatDetected") is True
         assert payload.get("doNotRepeatRead") is True
-        assert payload.get("errorCode") == "READ_REPEAT_DETECTED"
+        assert "errorCode" not in payload
         # Exact range text is intentionally replayed once so a compacted chat
         # can still form a bounded replace_in_file oldText.
         assert payload.get("contentSuppressed") is False
@@ -1509,7 +1498,7 @@ def test_agent_evidence_stagnation_is_error_without_wrong_body(tmp_path: Path) -
         )
         assert blocked_again["result"].get("isError") is True
         payload2 = _tool_payload(blocked_again)
-        assert payload2.get("errorCode") == "EVIDENCE_STAGNATION_REPEAT"
+        assert payload2.get("errorCode") == "READ_REPEAT_BLOCKED"
     finally:
         client.close()
 

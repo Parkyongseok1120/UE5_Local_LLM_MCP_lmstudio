@@ -55,7 +55,9 @@ test("covered range is materialized exactly before repeat cache/stagnation", () 
     { path: "Source/Mod/File.cpp", startLine: 1, endLine: 120 },
     context
   );
-  assert.equal(first.action, "allow");
+  assert.equal(first.action, "cache");
+  assert.equal(first.resultKind, "cache_hit");
+  assert.equal(first.evidenceProgressed, false);
   assert.equal(first.materializeCoveredRange, true);
   recordReadSuccess(
     "read_file_range",
@@ -75,6 +77,6 @@ test("covered range is materialized exactly before repeat cache/stagnation", () 
     { path: "Source/Mod/File.cpp", startLine: 1, endLine: 120 },
     context
   );
-  assert.equal(third.action, "stagnation");
-  assert.equal(third.reason, "EVIDENCE_STAGNATION");
+  assert.equal(third.action, "blocked");
+  assert.equal(third.reason, "READ_REPEAT_BLOCKED");
 });

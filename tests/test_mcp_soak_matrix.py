@@ -109,10 +109,13 @@ def test_agent_repeated_read_file_calls(agent_env: dict[str, str], tmp_path: Pat
         for idx in range(2, SOAK_CALLS):
             resp = _tools_call(client, 100 + idx, "read_file", {"path": str(sample)})
             assert "result" in resp
-            assert resp["result"].get("isError") is True
-            if idx == 2:
-                body = resp["result"]["content"][0]["text"]
-                assert "EVIDENCE_STAGNATION" in body
+            assert resp["result"].get("isError") is not True
+            payload = resp["result"].get("structuredContent") or {}
+            assert payload.get("ok") is True
+            assert payload.get("resultKind") == "cache_hit"
+            assert payload.get("evidenceProgressed") is False
+            assert payload.get("workflowProgressed") is False
+            assert "errorCode" not in payload
     finally:
         client.close()
 

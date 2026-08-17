@@ -33,6 +33,16 @@ function postReadGatePayload(commitResult, toolName) {
       ? "Direct source evidence was recorded; resume the pending gate once."
       : "Tool outcome and authoritative task control were committed atomically.",
     taskSessionId: String(state.taskSessionId || ""),
+    mutationGeneration: Math.max(0, Number(state.mutationGeneration || 0)),
+    sourceEvidence: state.sourceEvidence && typeof state.sourceEvidence === "object"
+      ? state.sourceEvidence
+      : undefined,
+    inspectionProgress: state.inspectionProgress && typeof state.inspectionProgress === "object"
+      ? state.inspectionProgress
+      : undefined,
+    synthesisReadiness: state.synthesisReadiness && typeof state.synthesisReadiness === "object"
+      ? state.synthesisReadiness
+      : undefined,
     controlEpoch: Math.max(0, Number(state.controlEpoch || 0)),
     nextAction: requiredName || "use_authoritative_control",
     nextActionIsTool: Boolean(requiredName),
@@ -74,6 +84,10 @@ function modelTextProjection(structuredContent, toolName, sourceText) {
     status: structuredContent.status,
     summary: structuredContent.summary,
     taskSessionId: structuredContent.taskSessionId,
+    mutationGeneration: structuredContent.mutationGeneration,
+    sourceEvidence: structuredContent.sourceEvidence,
+    inspectionProgress: structuredContent.inspectionProgress,
+    synthesisReadiness: structuredContent.synthesisReadiness,
     controlEpoch: structuredContent.controlEpoch,
     control,
     taskAuthorization: structuredContent.taskAuthorization,

@@ -586,6 +586,464 @@ function createToolCallCallbackFsm(): {
   };
 }
 
+type HostToolCallStage = "start" | "name" | "args" | "end" | "failure";
+
+type HostToolCallLifecycleEvent = {
+  stage: HostToolCallStage;
+  hostToolCallId: string;
+  outerGenerateRequestId?: string;
+  predictionAttemptId?: string;
+  modelLocalCallId?: string;
+  rawToolCallId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  source?: string;
+  callId?: number;
+  name?: string;
+  content?: string;
+  request?: any;
+  error?: string;
+  durableIdentity?: boolean;
+  allowImplicitStart?: boolean;
+};
+
+type HostToolCallTransaction = {
+  hostToolCallId: string;
+  outerGenerateRequestId: string;
+  predictionAttemptId: string;
+  modelLocalCallId: string;
+  rawToolCallId: string;
+  toolCallId: string;
+  source: string;
+  started: boolean;
+  name?: string;
+  startEvent?: any;
+  nameEvent?: any;
+  argumentFragments: any[];
+  terminal?: "end" | "failure";
+  terminalEvent?: any;
+  requestFingerprint?: string;
+  emittedEvents?: any[];
+  emitted: boolean;
+};
+
+type HostToolCallLifecycleDiagnostic = {
+  outerGenerateRequestId: string;
+  predictionAttemptId: string;
+  modelLocalCallId: string;
+  rawToolCallId: string;
+  hostToolCallId: string;
+  toolName: string;
+  stage: HostToolCallStage;
+  sequenceNumber: number;
+  source: string;
+  accepted: boolean;
+  outcome: string;
+  anomaly?: string;
+};
+
+type HostToolCallLifecycleManager = {
+  record: (event: HostToolCallLifecycleEvent) => boolean;
+  replaceArguments: (hostToolCallId: string, args: any) => boolean;
+  replaceTerminalWithFailure: (hostToolCallId: string, error: string) => boolean;
+  setEmitter: (emit: (event: any) => void) => void;
+  setActivePredictionAttempt: (predictionAttemptId: string) => void;
+  closePredictionAttempt: (predictionAttemptId: string) => void;
+  settle: (reason?: string) => void;
+  diagnostics: () => HostToolCallLifecycleDiagnostic[];
+  snapshot: () => {
+    acceptedHostTransactionCount: number;
+    hostStartCount: number;
+    hostNameCount: number;
+    hostTerminalCount: number;
+    lmStudioNameEventCount: number;
+    transactions: any[];
+  };
+};
+
+function createHostToolCallTransactionManager(options: {
+  outerGenerateRequestId?: string;
+  emit?: (event: any) => void;
+  onDiagnostic?: (diagnostic: HostToolCallLifecycleDiagnostic) => void;
+} = {}): HostToolCallLifecycleManager {
+  const outerGenerateRequestId = String(
+    options.outerGenerateRequestId || "outer-generate-unknown",
+  ).slice(0, 160);
+  const transactions = new Map<string, HostToolCallTransaction>();
+  const order: string[] = [];
+  const emittedTransactions = new Set<string>();
+  const diagnosticLog: HostToolCallLifecycleDiagnostic[] = [];
+  let emit = typeof options.emit === "function" ? options.emit : () => {};
+  let activePredictionAttemptId = "";
+  let sequenceNumber = 0;
+  let active = true;
+
+  const text = (value: unknown, limit = 160): string => String(value || "").trim().slice(0, limit);
+  const normalizedName = (value: unknown): string => text(value, 240).toLowerCase();
+  const eventToolName = (event: HostToolCallLifecycleEvent): string => text(
+    event.toolName || event.name || event.request?.name,
+    240,
+  );
+  const eventHostId = (event: HostToolCallLifecycleEvent): string => text(event.hostToolCallId, 240);
+  const report = (
+    event: HostToolCallLifecycleEvent,
+    accepted: boolean,
+    outcome: string,
+    anomaly = "",
+  ): HostToolCallLifecycleDiagnostic => {
+    const diagnostic: HostToolCallLifecycleDiagnostic = {
+      outerGenerateRequestId,
+      predictionAttemptId: text(event.predictionAttemptId, 160),
+      modelLocalCallId: text(event.modelLocalCallId, 120),
+      rawToolCallId: text(event.rawToolCallId, 240),
+      hostToolCallId: eventHostId(event),
+      toolName: eventToolName(event),
+      stage: event.stage,
+      sequenceNumber: sequenceNumber += 1,
+      source: text(event.source || "model_callback", 80),
+      accepted,
+      outcome: text(outcome, 80),
+      ...(anomaly ? { anomaly: text(anomaly, 240) } : {}),
+    };
+    diagnosticLog.push(diagnostic);
+    while (diagnosticLog.length > 256) diagnosticLog.shift();
+    try { options.onDiagnostic?.(diagnostic); } catch { /* diagnostics never change lifecycle */ }
+    return diagnostic;
+  };
+  const anomaly = (event: HostToolCallLifecycleEvent, message: string): never => {
+    report(event, false, "rejected", message);
+    throw new Error(message);
+  };
+  const lifecycleEvent = (
+    event: HostToolCallLifecycleEvent,
+    transaction: HostToolCallTransaction,
+  ): any => ({
+    kind: event.stage,
+    callId: event.callId,
+    toolCallId: event.toolCallId || transaction.toolCallId || transaction.hostToolCallId,
+    hostToolCallId: transaction.hostToolCallId,
+    outerGenerateRequestId: transaction.outerGenerateRequestId,
+    predictionAttemptId: transaction.predictionAttemptId,
+    modelLocalCallId: transaction.modelLocalCallId,
+    rawToolCallId: transaction.rawToolCallId,
+    source: transaction.source,
+    ...(event.stage === "name" ? { name: transaction.name || event.name || "" } : {}),
+    ...(event.stage === "args" ? { content: String(event.content || "") } : {}),
+    ...(event.stage === "end" ? { request: event.request } : {}),
+    ...(event.stage === "failure" ? { error: String(event.error || "unknown tool-call failure") } : {}),
+  });
+  const makeTransaction = (
+    event: HostToolCallLifecycleEvent,
+    implicitStart = false,
+  ): HostToolCallTransaction => {
+    const hostToolCallId = eventHostId(event);
+    const transaction: HostToolCallTransaction = {
+      hostToolCallId,
+      outerGenerateRequestId,
+      predictionAttemptId: text(event.predictionAttemptId, 160),
+      modelLocalCallId: text(event.modelLocalCallId, 120),
+      rawToolCallId: text(event.rawToolCallId || event.toolCallId, 240),
+      toolCallId: text(event.toolCallId || hostToolCallId, 240),
+      source: text(event.source || "model_callback", 80),
+      started: implicitStart,
+      argumentFragments: [],
+      emitted: false,
+    };
+    if (implicitStart) {
+      transaction.startEvent = lifecycleEvent({
+        ...event,
+        stage: "start",
+        toolCallId: transaction.toolCallId,
+        durableIdentity: true,
+      }, transaction);
+    }
+    transactions.set(hostToolCallId, transaction);
+    order.push(hostToolCallId);
+    return transaction;
+  };
+  const ensureAttempt = (event: HostToolCallLifecycleEvent): void => {
+    const attempt = text(event.predictionAttemptId, 160);
+    if (
+      activePredictionAttemptId
+      && attempt
+      && attempt !== activePredictionAttemptId
+      && text(event.source || "model_callback", 80) === "model_callback"
+    ) {
+      report(event, false, "late_attempt_discarded", "callback belongs to an inactive prediction attempt");
+      throw new Error(
+        `Tool-call callback from stale prediction attempt ${attempt} cannot enter ${activePredictionAttemptId}.`,
+      );
+    }
+  };
+  const flush = (): void => {
+    while (order.length > 0) {
+      const hostToolCallId = order[0];
+      const transaction = transactions.get(hostToolCallId);
+      if (!transaction || !transaction.terminal) break;
+      if (transaction.emitted) {
+        order.shift();
+        continue;
+      }
+      if (!transaction.started) {
+        throw new Error(`Host tool-call transaction ${hostToolCallId} has no durable start.`);
+      }
+      if (transaction.terminal === "end" && !transaction.name) {
+        throw new Error(`Host tool-call transaction ${hostToolCallId} ended without a name.`);
+      }
+      const output = [
+        transaction.startEvent,
+        ...(transaction.nameEvent ? [transaction.nameEvent] : []),
+        ...transaction.argumentFragments,
+        transaction.terminalEvent,
+      ].filter(Boolean);
+      transaction.emittedEvents = output;
+      transaction.emitted = true;
+      emittedTransactions.add(hostToolCallId);
+      for (const outputEvent of output) emit(outputEvent);
+      order.shift();
+    }
+  };
+  const record = (event: HostToolCallLifecycleEvent): boolean => {
+    const hostToolCallId = eventHostId(event);
+    if (!active) {
+      report(event, false, "late_callback_discarded", "host lifecycle already settled");
+      return false;
+    }
+    if (!hostToolCallId) return anomaly(event, "Tool-call lifecycle event has no hostToolCallId.");
+    try {
+      ensureAttempt(event);
+    } catch (error: any) {
+      if (String(error?.message || "").includes("stale prediction attempt")) return false;
+      throw error;
+    }
+    const stage = event.stage;
+    let transaction = transactions.get(hostToolCallId);
+    if (stage === "start") {
+      if (!transaction) transaction = makeTransaction(event);
+      if (transaction.terminal) {
+        if (transaction.rawToolCallId === text(event.rawToolCallId || event.toolCallId, 240)) {
+          report(event, false, "duplicate_start_coalesced");
+          return false;
+        }
+        return anomaly(event, `Conflicting duplicate start for host tool-call ${hostToolCallId}.`);
+      }
+      if (transaction.started) {
+        const incomingRawId = text(event.rawToolCallId || event.toolCallId, 240);
+        if (incomingRawId && transaction.rawToolCallId && incomingRawId !== transaction.rawToolCallId) {
+          return anomaly(event, `Conflicting duplicate start for host tool-call ${hostToolCallId}.`);
+        }
+        report(event, false, "duplicate_start_coalesced");
+        return false;
+      }
+      transaction.started = true;
+      transaction.rawToolCallId = text(event.rawToolCallId || event.toolCallId, 240);
+      transaction.toolCallId = text(event.toolCallId || transaction.toolCallId, 240);
+      transaction.startEvent = lifecycleEvent(event, transaction);
+      report(event, true, "started");
+      return true;
+    }
+    if (!transaction) {
+      if (stage === "name" && event.durableIdentity === true) {
+        transaction = makeTransaction(event, true);
+      } else if (stage === "failure" && event.allowImplicitStart === true) {
+        transaction = makeTransaction(event, true);
+      } else {
+        return anomaly(
+          event,
+          `Tool-call callback ${hostToolCallId} received ${stage} before a durable start.`,
+        );
+      }
+    }
+    if (transaction.terminal) {
+      const replayIdentity = event.durableIdentity === true
+        || /(?:^|_)replay$/u.test(text(event.source || "", 80));
+      if (replayIdentity && transaction.emitted) {
+        if (stage === "name" && normalizedName(transaction.name) === normalizedName(event.name || event.toolName)) {
+          report(event, false, "replay_name_coalesced");
+          return false;
+        }
+        if (stage === "args") {
+          const content = String(event.content || "");
+          const prior = transaction.argumentFragments.some((fragment) => String(fragment.content || "") === content);
+          if (prior) {
+            report(event, false, "replay_args_coalesced");
+            return false;
+          }
+        }
+      }
+      if (stage === "end" && transaction.terminal === "end") {
+        const fingerprint = core.sha256(core.stableStringify(event.request || {}));
+        if (transaction.requestFingerprint === fingerprint) {
+          report(event, false, replayIdentity ? "replay_end_coalesced" : "duplicate_end_coalesced");
+          return false;
+        }
+      }
+      if (stage === "failure" && transaction.terminal === "failure"
+          && String(transaction.terminalEvent?.error || "") === String(event.error || "")) {
+        report(event, false, replayIdentity ? "replay_failure_coalesced" : "duplicate_failure_coalesced");
+        return false;
+      }
+      return anomaly(event, `Tool-call callback ${hostToolCallId} received ${stage} after terminal ${transaction.terminal}.`);
+    }
+    if (stage === "name") {
+      const name = text(event.name || event.toolName, 240);
+      if (!name) return anomaly(event, `Tool-call callback ${hostToolCallId} received an empty name.`);
+      if (transaction.name !== undefined) {
+        if (normalizedName(transaction.name) === normalizedName(name)) {
+          report(event, false, "duplicate_name_coalesced");
+          return false;
+        }
+        return anomaly(
+          event,
+          `Conflicting duplicate tool-call name for host tool-call ${hostToolCallId}: ${transaction.name} != ${name}`,
+        );
+      }
+      transaction.name = name;
+      transaction.nameEvent = lifecycleEvent({ ...event, name }, transaction);
+      report(event, true, "named");
+      return true;
+    }
+    if (stage === "args") {
+      const content = String(event.content || "");
+      if (!content) {
+        report(event, false, "empty_argument_fragment_ignored");
+        return false;
+      }
+      const argumentEvent = lifecycleEvent({ ...event, content }, transaction);
+      transaction.argumentFragments.push(argumentEvent);
+      report(event, true, "argument_fragment_accepted");
+      return true;
+    }
+    if (stage === "end") {
+      if (!transaction.started) return anomaly(event, `Tool-call callback ${hostToolCallId} ended before start.`);
+      const requestId = text(event.request?.id || event.toolCallId, 240);
+      if (transaction.toolCallId && requestId && transaction.toolCallId !== requestId) {
+        return anomaly(event, `Host tool-call ${hostToolCallId} ended with a different id.`);
+      }
+      const requestName = text(event.request?.name || event.toolName || event.name, 240);
+      if (!transaction.name || !requestName) {
+        return anomaly(event, `Host tool-call ${hostToolCallId} ended without a valid start/name pair.`);
+      }
+      if (normalizedName(transaction.name) !== normalizedName(requestName)) {
+        return anomaly(event, `Host tool-call ${hostToolCallId} ended with a different name.`);
+      }
+      transaction.requestFingerprint = core.sha256(core.stableStringify(event.request || {}));
+      transaction.terminal = "end";
+      transaction.terminalEvent = lifecycleEvent({ ...event, request: event.request }, transaction);
+      report(event, true, "ended");
+      flush();
+      return true;
+    }
+    if (stage === "failure") {
+      transaction.terminal = "failure";
+      transaction.terminalEvent = lifecycleEvent({
+        ...event,
+        error: String(event.error || "unknown tool-call failure"),
+      }, transaction);
+      report(event, true, "failed");
+      flush();
+      return true;
+    }
+    return anomaly(event, `Unknown tool-call lifecycle stage ${stage}.`);
+  };
+  return {
+    record,
+    replaceArguments(hostToolCallId, args) {
+      const transaction = transactions.get(String(hostToolCallId || ""));
+      if (!transaction) return false;
+      const serialized = JSON.stringify(args || {});
+      const fragment = transaction.argumentFragments[0];
+      if (fragment) {
+        fragment.content = serialized;
+        for (const later of transaction.argumentFragments.slice(1)) later.content = "";
+      }
+      if (transaction.emittedEvents) {
+        const emittedArgs = transaction.emittedEvents.filter((event) => event.kind === "args");
+        if (emittedArgs[0]) emittedArgs[0].content = serialized;
+        for (const later of emittedArgs.slice(1)) later.content = "";
+      }
+      return Boolean(fragment || transaction.emittedEvents);
+    },
+    replaceTerminalWithFailure(hostToolCallId, error) {
+      const transaction = transactions.get(String(hostToolCallId || ""));
+      if (!transaction || transaction.terminal !== "end" || !transaction.emittedEvents) return false;
+      const failureEvent: HostToolCallLifecycleEvent = {
+        stage: "failure",
+        hostToolCallId: transaction.hostToolCallId,
+        outerGenerateRequestId: transaction.outerGenerateRequestId,
+        predictionAttemptId: transaction.predictionAttemptId,
+        modelLocalCallId: transaction.modelLocalCallId,
+        rawToolCallId: transaction.rawToolCallId,
+        toolCallId: transaction.toolCallId,
+        toolName: transaction.name || "",
+        source: transaction.source,
+        error: String(error || "tool call rejected by control plane"),
+      };
+      const replacement = lifecycleEvent(failureEvent, transaction);
+      const terminalIndex = transaction.emittedEvents.findIndex((event) => event.kind === "end");
+      if (terminalIndex < 0) return false;
+      const priorEvent = transaction.emittedEvents[terminalIndex];
+      for (const key of Object.keys(priorEvent)) delete priorEvent[key];
+      Object.assign(priorEvent, replacement);
+      transaction.terminal = "failure";
+      transaction.terminalEvent = priorEvent;
+      report(failureEvent, true, "control_plane_rejection_terminal");
+      return true;
+    },
+    setEmitter(nextEmit) {
+      emit = typeof nextEmit === "function" ? nextEmit : () => {};
+    },
+    setActivePredictionAttempt(predictionAttemptId) {
+      activePredictionAttemptId = text(predictionAttemptId, 160);
+    },
+    closePredictionAttempt(predictionAttemptId) {
+      if (!predictionAttemptId || activePredictionAttemptId === text(predictionAttemptId, 160)) {
+        activePredictionAttemptId = "";
+      }
+    },
+    settle(_reason = "settled") {
+      active = false;
+    },
+    diagnostics() {
+      return diagnosticLog.map((item) => ({ ...item }));
+    },
+    snapshot() {
+      const completed = [...emittedTransactions]
+        .map((id) => transactions.get(id))
+        .filter(Boolean) as HostToolCallTransaction[];
+      return {
+        acceptedHostTransactionCount: completed.length,
+        hostStartCount: completed.filter((item) => Boolean(item.startEvent)).length,
+        hostNameCount: completed.filter((item) => Boolean(item.nameEvent)).length,
+        hostTerminalCount: completed.filter((item) => Boolean(item.terminalEvent)).length,
+        lmStudioNameEventCount: completed.filter((item) => Boolean(item.nameEvent)).length,
+        transactions: completed.map((item) => ({
+          hostToolCallId: item.hostToolCallId,
+          predictionAttemptId: item.predictionAttemptId,
+          modelLocalCallId: item.modelLocalCallId,
+          rawToolCallId: item.rawToolCallId,
+          toolCallId: item.toolCallId,
+          toolName: item.name || "",
+          source: item.source,
+          started: item.started,
+          name: Boolean(item.nameEvent),
+          argumentFragments: item.argumentFragments.length,
+          terminal: item.terminal,
+          emitted: item.emitted,
+        })),
+      };
+    },
+  };
+}
+
+function emitToolLifecycleEvent(ctl: GeneratorController, event: any): void {
+  if (event.kind === "start") ctl.toolCallGenerationStarted({ toolCallId: event.toolCallId });
+  else if (event.kind === "name") ctl.toolCallGenerationNameReceived(event.name);
+  else if (event.kind === "args") ctl.toolCallGenerationArgumentFragmentGenerated(event.content);
+  else if (event.kind === "end") ctl.toolCallGenerationEnded(event.request);
+  else if (event.kind === "failure") ctl.toolCallGenerationFailed(new Error(event.error));
+}
+
 function debugAgentLog(hypothesisId: string, location: string, message: string, data: Record<string, unknown>) {
   // #region agent log
   try {
@@ -3482,6 +3940,22 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     hasMarker: Boolean(marker),
   });
   let checkpoint = await loadCheckpointBestEffort(sessionId);
+  const outerGenerateRequestId = `generate-${core.sha256(core.stableStringify({
+    sessionId,
+    checkpointGeneration: Number(checkpoint?.checkpointGeneration || 0),
+    startedAt: Date.now(),
+  })).slice(0, 32)}`;
+  const hostToolCallLifecycleDiagnostics: HostToolCallLifecycleDiagnostic[] = [];
+  const hostToolCallLifecycle = createHostToolCallTransactionManager({
+    outerGenerateRequestId,
+    emit: (event) => emitToolLifecycleEvent(ctl, event),
+    onDiagnostic: (diagnostic) => {
+      hostToolCallLifecycleDiagnostics.push(diagnostic);
+      while (hostToolCallLifecycleDiagnostics.length > 256) {
+        hostToolCallLifecycleDiagnostics.shift();
+      }
+    },
+  });
 
   const deliverAcknowledgedSynthesis = async (): Promise<boolean> => {
     const delivery = checkpoint?.synthesisDelivery;
@@ -3616,6 +4090,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       }
       const id = String(pending?.id || "").trim();
       const name = pendingName;
+      const durableHostToolCallId = String(pending?.hostToolCallId || id).trim() || id;
       if (!core.mutationToolName(name) && !toolNamesMatch("unreal_task_commit_synthesis", name)) {
         if (id) abandonedPreparedIds.push(id);
         continue;
@@ -3654,14 +4129,34 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         requireCheckpointPersistence,
         "prepared_tool_call_dispatch_intent",
       );
-      ctl.toolCallGenerationStarted({ toolCallId: id });
-      ctl.toolCallGenerationNameReceived(name);
-      ctl.toolCallGenerationArgumentFragmentGenerated(JSON.stringify(pending?.arguments || {}));
-      ctl.toolCallGenerationEnded({
-        id,
-        type: "function",
-        name,
-        arguments: pending?.arguments || {},
+      const replayPredictionAttemptId = `${outerGenerateRequestId}:reconnect-replay`;
+      const replayEventIdentity = {
+        hostToolCallId: durableHostToolCallId,
+        predictionAttemptId: replayPredictionAttemptId,
+        modelLocalCallId: String(pending?.callbackCallId ?? "prepared"),
+        rawToolCallId: id,
+        toolCallId: id,
+        toolName: name,
+        source: "reconnect_replay",
+        callId: Number(pending?.callbackCallId || 0),
+        durableIdentity: true,
+      };
+      hostToolCallLifecycle.record({ stage: "start", ...replayEventIdentity });
+      hostToolCallLifecycle.record({ stage: "name", ...replayEventIdentity, name });
+      hostToolCallLifecycle.record({
+        stage: "args",
+        ...replayEventIdentity,
+        content: JSON.stringify(pending?.arguments || {}),
+      });
+      hostToolCallLifecycle.record({
+        stage: "end",
+        ...replayEventIdentity,
+        request: {
+          id,
+          type: "function",
+          name,
+          arguments: pending?.arguments || {},
+        },
       });
       pending.dispatchState = "emitted";
       pending.dispatchedAt = isoNow();
@@ -5769,6 +6264,46 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     } else if (outputBuffered) events.push(event);
     else emitEvent(event);
   };
+  // Prepared/reconnect replay starts before this buffered prediction turn is
+  // assembled. From this point on, every accepted tool stage is routed through
+  // the same host transaction ledger so interleaved model callbacks cannot
+  // expose a second lifecycle to LM Studio.
+  hostToolCallLifecycle.setEmitter((event) => recordEvent(event));
+  const recordDirectToolCallLifecycle = (
+    request: any,
+    callId: number,
+    source: string,
+  ): string => {
+    const rawToolCallId = String(request?.id || `direct-${callId}`).trim();
+    const directAttemptId = `${outerGenerateRequestId}:direct:${String(source || "server_owned")}`;
+    const hostToolCallId = `${outerGenerateRequestId}:${String(source || "server_owned")}:${core.sha256(rawToolCallId).slice(0, 20)}`
+      .slice(0, 240);
+    const identity = {
+      hostToolCallId,
+      outerGenerateRequestId,
+      predictionAttemptId: directAttemptId,
+      modelLocalCallId: String(callId),
+      rawToolCallId,
+      toolCallId: rawToolCallId,
+      toolName: String(request?.name || ""),
+      source,
+      callId,
+      durableIdentity: true,
+    };
+    hostToolCallLifecycle.record({ stage: "start", ...identity });
+    hostToolCallLifecycle.record({
+      stage: "name",
+      ...identity,
+      name: String(request?.name || ""),
+    });
+    hostToolCallLifecycle.record({
+      stage: "args",
+      ...identity,
+      content: JSON.stringify(request?.arguments || {}),
+    });
+    hostToolCallLifecycle.record({ stage: "end", ...identity, request });
+    return hostToolCallId;
+  };
   const runPredictionAttempt = async (
     predictionTools: any[],
     forceTool: boolean,
@@ -5948,9 +6483,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     // LM Studio callback ids are scoped to one model prediction and can be
     // reused by a bounded repair prediction in the same generator turn.
     const callbackFsm = createToolCallCallbackFsm();
+    const predictionAttemptId = `${outerGenerateRequestId}:attempt-${predictionAttemptSequence}`;
+    hostToolCallLifecycle.setActivePredictionAttempt(predictionAttemptId);
+    const callbackHostToolCallIds = new Map<number, string>();
     const attemptQualifiedToolCallId = (callId: number, rawId: unknown): string => {
       const stableRawId = String(rawId || `callback-${callId}`).trim() || `callback-${callId}`;
       return `attempt-${predictionAttemptSequence}-${stableRawId}`;
+    };
+    const callbackHostToolCallId = (callId: number, rawId: unknown): string => {
+      const stableRawId = String(rawId || `callback-${callId}`).trim() || `callback-${callId}`;
+      const rawDigest = core.sha256(stableRawId).slice(0, 20);
+      return `${predictionAttemptId}:model-${callId}-${rawDigest}`.slice(0, 240);
     };
     let lastSemanticProgressAt = predictionStartedAt;
     let lastSerializationProgressMonotonicAt = predictionWallClockStartedAt;
@@ -6083,17 +6626,41 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         },
         onToolCallRequestStart(callId: number, info: any) {
           deferAttemptCallback(() => {
-            const hostToolCallId = attemptQualifiedToolCallId(callId, info?.toolCallId);
-            if (!callbackFsm.start(callId, hostToolCallId)) return;
+            const qualifiedToolCallId = attemptQualifiedToolCallId(callId, info?.toolCallId);
+            const hostToolCallId = callbackHostToolCallId(callId, info?.toolCallId);
+            if (!callbackFsm.start(callId, qualifiedToolCallId)) return;
+            callbackHostToolCallIds.set(callId, hostToolCallId);
             markSerializationProgress();
-            recordEvent({ kind: "start", callId, toolCallId: hostToolCallId });
+            hostToolCallLifecycle.record({
+              stage: "start",
+              hostToolCallId,
+              outerGenerateRequestId,
+              predictionAttemptId,
+              modelLocalCallId: String(callId),
+              rawToolCallId: String(info?.toolCallId || ""),
+              toolCallId: qualifiedToolCallId,
+              source: "model_callback",
+              callId,
+            });
           });
         },
         onToolCallRequestNameReceived(callId: number, name: string) {
           deferAttemptCallback(() => {
             if (!callbackFsm.name(callId, name)) return;
+            const hostToolCallId = callbackHostToolCallIds.get(callId)
+              || callbackHostToolCallId(callId, "");
             markSerializationProgress();
-            recordEvent({ kind: "name", callId, name });
+            hostToolCallLifecycle.record({
+              stage: "name",
+              hostToolCallId,
+              outerGenerateRequestId,
+              predictionAttemptId,
+              modelLocalCallId: String(callId),
+              toolName: name,
+              name,
+              source: "model_callback",
+              callId,
+            });
           });
         },
         onToolCallRequestArgumentFragmentGenerated(callId: number, content: string) {
@@ -6102,15 +6669,28 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             if (String(content || "").length > 0) markSerializationProgress();
             else markInferenceActivity();
             toolJsonCharactersObserved += String(content || "").length;
-            recordEvent({ kind: "args", callId, content });
+            const hostToolCallId = callbackHostToolCallIds.get(callId)
+              || callbackHostToolCallId(callId, "");
+            hostToolCallLifecycle.record({
+              stage: "args",
+              hostToolCallId,
+              outerGenerateRequestId,
+              predictionAttemptId,
+              modelLocalCallId: String(callId),
+              toolCallId: attemptQualifiedToolCallId(callId, ""),
+              source: "model_callback",
+              callId,
+              content,
+            });
           });
         },
         onToolCallRequestEnd(callId: number, info: any) {
           deferAttemptCallback(() => {
             const rawRequest = info?.toolCallRequest || {};
+            const rawToolCallId = String(rawRequest?.id || "").trim();
             const hostRequest = {
               ...rawRequest,
-              id: attemptQualifiedToolCallId(callId, rawRequest?.id),
+              id: attemptQualifiedToolCallId(callId, rawToolCallId),
             };
             const request = enrichToolRequestControl(
               hostRequest,
@@ -6121,18 +6701,47 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             );
             if (!callbackFsm.end(callId, request)) return;
             markSerializationProgress();
+            const hostToolCallId = callbackHostToolCallIds.get(callId)
+              || callbackHostToolCallId(callId, rawToolCallId);
             if (request !== hostRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
               replaceBufferedArgumentFragments(events, callId, request.arguments);
+              hostToolCallLifecycle.replaceArguments(hostToolCallId, request.arguments);
             }
-            requests.push({ callId, request });
-            recordEvent({ kind: "end", callId, request });
+            hostToolCallLifecycle.record({
+              stage: "end",
+              hostToolCallId,
+              outerGenerateRequestId,
+              predictionAttemptId,
+              modelLocalCallId: String(callId),
+              rawToolCallId,
+              toolCallId: hostRequest.id,
+              toolName: request.name,
+              source: "model_callback",
+              callId,
+              request,
+            });
+            requests.push({ callId, request, hostToolCallId });
           });
         },
         onToolCallRequestFailure(callId: number, error: Error) {
           deferAttemptCallback(() => {
             if (!callbackFsm.failure(callId, error)) return;
             markSerializationProgress();
-            recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
+            const hostToolCallId = callbackHostToolCallIds.get(callId)
+              || callbackHostToolCallId(callId, "");
+            const qualifiedToolCallId = attemptQualifiedToolCallId(callId, "");
+            hostToolCallLifecycle.record({
+              stage: "failure",
+              hostToolCallId,
+              outerGenerateRequestId,
+              predictionAttemptId,
+              modelLocalCallId: String(callId),
+              toolCallId: qualifiedToolCallId,
+              source: "model_callback",
+              callId,
+              error: String(error?.message || error),
+              allowImplicitStart: true,
+            });
           });
         },
       });
@@ -6270,6 +6879,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       }
       throw error;
     } finally {
+      hostToolCallLifecycle.closePredictionAttempt(predictionAttemptId);
       if (heartbeat) clearInterval(heartbeat);
     }
   };
@@ -6304,11 +6914,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         modelFacingToolDefinitions,
       );
       const callId = requests.length;
-      requests.push({ callId, request });
-      recordEvent({ kind: "start", callId, toolCallId: rawRequest.id });
-      recordEvent({ kind: "name", callId, name: request.name });
-      recordEvent({ kind: "args", callId, content: JSON.stringify(request.arguments || {}) });
-      recordEvent({ kind: "end", callId, request });
+      const hostToolCallId = recordDirectToolCallLifecycle(
+        request,
+        callId,
+        "reasoning_floor_recovery",
+      );
+      requests.push({ callId, request, hostToolCallId });
       nextCheckpoint.reasoningFallback = {
         version: 1,
         status: "retrying",
@@ -6494,6 +7105,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       recoveryAttempt: Boolean(recoveryKind),
       recoveryKind,
       architectureFinalRecoveryAttempt: recoveryKind.startsWith("architecture_"),
+      hostToolCallLifecycle: hostToolCallLifecycle.snapshot(),
+      hostToolCallLifecycleDiagnostics: hostToolCallLifecycle.diagnostics().slice(-64),
     });
   };
 
@@ -6519,11 +7132,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       modelFacingToolDefinitions,
     );
     const callId = 0;
-    requests.push({ callId, request });
-    recordEvent({ kind: "start", callId, toolCallId: rawRequest.id });
-    recordEvent({ kind: "name", callId, name: request.name });
-    recordEvent({ kind: "args", callId, content: JSON.stringify(request.arguments || {}) });
-    recordEvent({ kind: "end", callId, request });
+    const phaseSource = toolNamesMatch(TASK_PLANNER_TOOL_NAME, phaseToolName)
+      || /planner|bootstrap/i.test(String(phaseControlKind || ""))
+      ? "planner/bootstrap_direct"
+      : "server_owned_required_tool";
+    const hostToolCallId = recordDirectToolCallLifecycle(request, callId, phaseSource);
+    requests.push({ callId, request, hostToolCallId });
     stopReason = `server_owned_${phaseControlKind}`;
     await appendEventBestEffort(sessionId, {
       type: "server_control_tool_direct_emitted",
@@ -6555,11 +7169,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       modelFacingToolDefinitions,
     );
     const callId = 0;
-    requests.push({ callId, request });
-    recordEvent({ kind: "start", callId, toolCallId: rawRequest.id });
-    recordEvent({ kind: "name", callId, name: request.name });
-    recordEvent({ kind: "args", callId, content: JSON.stringify(request.arguments || {}) });
-    recordEvent({ kind: "end", callId, request });
+    const hostToolCallId = recordDirectToolCallLifecycle(
+      request,
+      callId,
+      "server_owned_required_tool",
+    );
+    requests.push({ callId, request, hostToolCallId });
     stopReason = "server_owned_direct_tool";
     await appendEventBestEffort(sessionId, {
       type: "server_required_tool_direct_emitted",
@@ -7252,15 +7867,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       1_000_000,
       ...requests.map((entry: any) => Number(entry?.callId || 0) + 1),
     );
-    requests.push({ callId: synthesisCommitCallId, request, serverOwnedSynthesisCommit: true });
-    recordEvent({ kind: "start", callId: synthesisCommitCallId, toolCallId: request.id });
-    recordEvent({ kind: "name", callId: synthesisCommitCallId, name: request.name });
-    recordEvent({
-      kind: "args",
+    const hostToolCallId = recordDirectToolCallLifecycle(
+      request,
+      synthesisCommitCallId,
+      "synthesis_commit",
+    );
+    requests.push({
       callId: synthesisCommitCallId,
-      content: JSON.stringify(request.arguments || {}),
+      request,
+      hostToolCallId,
+      serverOwnedSynthesisCommit: true,
     });
-    recordEvent({ kind: "end", callId: synthesisCommitCallId, request });
     nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "prepared", {
       outputDigest,
       stopReason: "synthesis_commit_prepared",
@@ -7416,6 +8033,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     nextCheckpoint.pendingToolCalls = acceptedRequests.map((entry) => {
       const pending = {
         ...entry.request,
+        hostToolCallId: String(entry.hostToolCallId || entry.request?.id || "").slice(0, 240),
         observedToolResultCount,
         callbackCallId: entry.callId,
         dispatchState: "prepared",
@@ -7511,8 +8129,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
             "tool_call_dispatched",
           );
         }
+      } else {
+        const replaced = hostToolCallLifecycle.replaceTerminalWithFailure(
+          String(event.hostToolCallId || ""),
+          `Tool call rejected by control plane: ${verdict.reason}`,
+        );
+        if (replaced) emitEvent(event);
+        else ctl.toolCallGenerationFailed(new Error(`Tool call rejected by control plane: ${verdict.reason}`));
       }
-      else ctl.toolCallGenerationFailed(new Error(`Tool call rejected by control plane: ${verdict.reason}`));
   }
   const committedOutputDigest = predictionOutputDigest(events, acceptedRequests);
   const committedSynthesisDigest = synthesisCommitAccepted
@@ -7560,12 +8184,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     toolRequestCount: requests.length,
     outputCommitted: !synthesisCommitAccepted,
     synthesisCommitSent: synthesisCommitAccepted,
+    hostToolCallLifecycle: hostToolCallLifecycle.snapshot(),
+    hostToolCallLifecycleDiagnostics: hostToolCallLifecycle.diagnostics().slice(-64),
   });
 }
 
 export {
   architectureGateStatus,
   createToolCallCallbackFsm,
+  createHostToolCallTransactionManager,
   enrichToolRequestControl,
   captureModelFence,
   generate,

@@ -930,10 +930,29 @@ function compactEvidenceLedger(value, absent = false) {
         evidenceId: String(rawEntry.evidenceId || "").slice(0, 80),
         path: pathValue,
         contentHash: String(rawEntry.contentHash || "").slice(0, 80),
+        fileSignature: String(rawEntry.fileSignature || "").slice(0, 120),
+        mutationGeneration: Math.max(0, Number(rawEntry.mutationGeneration || 0)),
+        lineCount: Math.max(0, Number(rawEntry.lineCount || 0)),
+        wholeFileComplete: rawEntry.wholeFileComplete === true,
         sourceKind: String(rawEntry.sourceKind || "").slice(0, 40),
         coveredRanges: Array.isArray(rawEntry.coveredRanges)
           ? rawEntry.coveredRanges.slice(0, 16).map((range) => [Number(range?.[0]), Number(range?.[1])])
             .filter((range) => Number.isInteger(range[0]) && Number.isInteger(range[1]) && range[0] > 0 && range[1] >= range[0])
+          : [],
+        largestMaterialization: rawEntry.largestMaterialization && typeof rawEntry.largestMaterialization === "object"
+          ? {
+            detailLevel: String(rawEntry.largestMaterialization.detailLevel || "").slice(0, 24),
+            bytesReturned: Math.max(0, Number(rawEntry.largestMaterialization.bytesReturned || 0)),
+            lineCount: Math.max(0, Number(rawEntry.largestMaterialization.lineCount || 0)),
+          }
+          : null,
+        truncated: rawEntry.truncated === true,
+        nextUnreadLine: rawEntry.nextUnreadLine == null
+          ? null
+          : Math.max(1, Number(rawEntry.nextUnreadLine || 1)),
+        acceptedEvidenceId: String(rawEntry.acceptedEvidenceId || rawEntry.evidenceId || "").slice(0, 80),
+        semanticAnchors: Array.isArray(rawEntry.semanticAnchors)
+          ? rawEntry.semanticAnchors.map(String).slice(0, 16)
           : [],
         declarations: Array.isArray(rawEntry.declarations) ? rawEntry.declarations.map(String).slice(0, 32) : [],
         implementations: Array.isArray(rawEntry.implementations) ? rawEntry.implementations.map(String).slice(0, 32) : [],
@@ -1093,7 +1112,7 @@ function collectSemanticBlockerFields(value, state, sourceTool = "", sourceCall 
   const handoffBoundary = Boolean(requiredNextTool && explicitForbiddenTools.length > 0);
 
   // retryPolicy=forbidden is often derived from retryable=false and does not
-  // mean an entire tool family is forbidden. READ_REPEAT_DETECTED and corrected
+  // mean an entire tool family is forbidden. READ_REPEAT_BLOCKED and corrected
   // write retries must remain possible with different arguments.
   // A fail-closed workflow stop is authoritative even when the server does not
   // enumerate a tool deny-list.  Semantic recovery gates intentionally return
@@ -1704,7 +1723,11 @@ function compactToolEvidence(call, payload, resultContent = "") {
       entries: entryNames.slice(0, 32),
     };
   }
-  if (normalized.endsWith("read_file") || normalized.endsWith("read_file_range")) {
+  if (normalized.endsWith("read_file") || normalized.endsWith("read_file_range") || normalized.endsWith("read_symbol")) {
+    if (payload?.resultKind === "cache_hit" || payload?.resultKind === "repeat_blocked"
+      || payload?.evidenceProgressed === false) {
+      return null;
+    }
     const source = String(payload?.content || resultContent || "");
     const exact = exactReadBody(name, source);
     const suppliedAnchors = Array.isArray(payload?.semanticAnchors)
@@ -1718,6 +1741,11 @@ function compactToolEvidence(call, payload, resultContent = "") {
       lineCount: Number(payload?.cachedLineCount || (source ? source.split(/\r?\n/).length : 0)),
       contentHash: String(payload?.contentHash || "").slice(0, 80),
       evidenceHash: String(payload?.evidenceHash || payload?.contentHash || (source ? sha256(source) : "")).slice(0, 80),
+      mutationGeneration: Math.max(0, Number(payload?.mutationGeneration || 0)),
+      wholeFileComplete: payload?.wholeFileComplete === true || payload?.completeRead === true,
+      truncated: payload?.truncated === true,
+      nextUnreadLine: payload?.nextUnreadLine == null ? null : Math.max(1, Number(payload.nextUnreadLine || 1)),
+      acceptedEvidenceId: String(payload?.acceptedEvidenceId || payload?.evidenceId || "").slice(0, 80),
       coveredRanges: coveredRangeForRead(args, payload, exact.content),
       exactContent: exact.content,
       exactContentTruncated: exact.truncated,
@@ -1773,10 +1801,10 @@ function compactEditEvidence(call, payload, resultContent, selectedSlice) {
 function compactRepeatEvidence(call, payload) {
   const name = String(call?.name || "");
   if (!/^(?:read_file|read_file_range|read_symbol|search_files)$/i.test(name)) return null;
-  if (payload?.repeatDetected !== true || payload?.doNotRepeatRead !== true) return null;
+  const cacheHit = payload?.resultKind === "cache_hit";
+  if (!cacheHit && (payload?.repeatDetected !== true || payload?.doNotRepeatRead !== true)) return null;
   const args = call?.arguments && typeof call.arguments === "object" ? call.arguments : {};
   const source = String(payload?.content || "");
-  if (!source.trim()) return null;
   return {
     tool: name,
     path: normalizedProjectPath(args.path || payload?.path?.displayPath || payload?.path || ""),
@@ -1786,7 +1814,10 @@ function compactRepeatEvidence(call, payload) {
     content: source.slice(0, MAX_REPEAT_EVIDENCE_CHARS),
     truncated: source.length > MAX_REPEAT_EVIDENCE_CHARS,
     evidenceHash: String(payload?.evidenceHash || payload?.contentHash || sha256(source)).slice(0, 80),
-    errorCode: String(payload?.errorCode || "READ_REPEAT_DETECTED").slice(0, 120),
+    resultKind: String(payload?.resultKind || "cache_hit").slice(0, 40),
+    evidenceProgressed: payload?.evidenceProgressed === true,
+    workflowProgressed: payload?.workflowProgressed === true,
+    errorCode: String(payload?.errorCode || "").slice(0, 120),
   };
 }
 

@@ -903,8 +903,8 @@ test("ordinary same-path cache response does not globally forbid the read tool",
       name: "read_file",
       content: JSON.stringify({
         ok: true,
+        resultKind: "cache_hit",
         cached: true,
-        errorCode: "READ_REPEAT_DETECTED",
         retryable: false,
         stopCurrentWorkflow: false,
         control: { version: 1, status: "Completed", retryPolicy: "forbidden" },
@@ -2574,9 +2574,9 @@ test("cached search repeat cannot erase prior positive search evidence", () => {
       name: "search_files",
       content: JSON.stringify({
         ok: true,
+        resultKind: "cache_hit",
         cached: true,
         repeatDetected: true,
-        errorCode: "READ_REPEAT_DETECTED",
         cachedLineCount: 12,
       }),
     }] },
@@ -2798,10 +2798,10 @@ test("cached repeat reads keep semantic anchors and emit an explicit no-reread l
   const source = "AGomokuGameState::AGomokuGameState()\n{\n}\nvoid AGomokuGameState::OnRep_Board()\n{\n}\n";
   const repeatPayload = {
     ok: true,
+    resultKind: "cache_hit",
     cached: true,
     repeatDetected: true,
     doNotRepeatRead: true,
-    errorCode: "READ_REPEAT_DETECTED",
     content: source,
     readAttempts: 2,
   };
@@ -2830,12 +2830,14 @@ test("cached repeat reads keep semantic anchors and emit an explicit no-reread l
   const checkpoint = core.buildCheckpoint(messages);
   const reads = checkpoint.evidenceFacts.filter((fact) => fact.path === path);
   assert.equal(reads.length, 1);
-  assert.equal(reads[0].repeatDetected, true);
-  assert.equal(reads[0].readAttempts, 2);
+  assert.equal(reads[0].repeatDetected, false);
+  assert.equal(reads[0].readAttempts, 1);
   assert.ok(reads[0].semanticAnchors.some((line) => line.includes("OnRep_Board")));
   assert.equal(checkpoint.repeatEvidence.length, 1);
   assert.equal(checkpoint.repeatEvidence[0].path, path);
   assert.equal(checkpoint.repeatEvidence[0].content, source);
+  assert.equal(checkpoint.repeatEvidence[0].resultKind, "cache_hit");
+  assert.equal(checkpoint.repeatEvidence[0].evidenceProgressed, false);
   const summary = core.summarizeOldMessages(messages, checkpoint);
   assert.match(summary, /discoveryLedger=already-read unchanged files/);
   assert.match(summary, /Do not re-read these paths merely to remember them/);
@@ -2936,6 +2938,80 @@ test("checkpoint projection distinguishes discovery candidates from accepted dir
   assert.doesNotMatch(summary, /UNTRUSTED_DISCOVERY_SNIPPET_SHOULD_NOT_BECOME_SOURCE_PROOF/);
 });
 
+test("durable file coverage survives soft compaction, checkpoint reconstruction, and reconnect", () => {
+  const objective = "Analyze the cinematic C++ source structure.";
+  const sourcePath = "Source/Cine/Public/Director/X.h";
+  const payload = {
+    control: {
+      version: 2,
+      authoritative: true,
+      epoch: 3,
+      taskSessionId: "task_coverage_1234",
+      routeHash: "coverage-route",
+      phase: "planner",
+      disposition: "continue",
+      allowedTools: ["read_file", "read_file_range"],
+      retryPolicy: { sameSemanticInput: "allowed" },
+    },
+    taskAuthorization: { taskSessionId: "task_coverage_1234", ownerCapability: "owner" },
+    sourceEvidence: {
+      version: 2,
+      planRevision: "coverage-plan",
+      files: {
+        [sourcePath]: {
+          evidenceId: "coverage-evidence-id",
+          path: sourcePath,
+          contentHash: "a".repeat(64),
+          fileSignature: "120:10",
+          mutationGeneration: 0,
+          lineCount: 120,
+          wholeFileComplete: false,
+          coveredRanges: [[1, 40]],
+          truncated: true,
+          nextUnreadLine: 41,
+          acceptedEvidenceId: "coverage-evidence-id",
+          semanticAnchors: ["L12: UCLASS()"],
+          sourceKind: "declaration",
+        },
+      },
+    },
+    inspectionProgress: {
+      version: 1,
+      directSourceReads: 1,
+      evidenceCharacters: 1_200,
+      remainingFrontier: ["Source/Cine/Private/Director/X.cpp"],
+    },
+    synthesisReadiness: {
+      version: 1,
+      ready: false,
+      remainingFrontier: ["Source/Cine/Private/Director/X.cpp"],
+    },
+  };
+  const messages = [
+    { role: "user", content: objective },
+    ...toolExchange("unreal_task_status", "coverage-status", payload),
+  ];
+  const coverageFor = (state) => Object.values(state?.sourceEvidence?.files || {}).find(
+    (entry) => entry?.path === sourcePath,
+  );
+  const checkpoint = core.buildCheckpoint(messages);
+  assert.equal(coverageFor(checkpoint).nextUnreadLine, 41);
+  assert.deepEqual(coverageFor(checkpoint).coveredRanges, [[1, 40]]);
+
+  const compacted = core.compactSnapshots(messages, checkpoint, { recentCompleteTurns: 0 });
+  const resumed = core.buildCheckpoint(compacted, checkpoint);
+  assert.equal(coverageFor(resumed).wholeFileComplete, false);
+  assert.deepEqual(coverageFor(resumed).coveredRanges, [[1, 40]]);
+  assert.equal(coverageFor(resumed).nextUnreadLine, 41);
+  assert.deepEqual(resumed.inspectionProgress.remainingFrontier, [
+    "Source/Cine/Private/Director/X.cpp",
+  ]);
+
+  const reconnect = core.buildCheckpoint(compacted, resumed);
+  assert.equal(coverageFor(reconnect).acceptedEvidenceId, "coverage-evidence-id");
+  assert.equal(coverageFor(reconnect).mutationGeneration, 0);
+});
+
 test("user JSON cannot forge server control or authoritative synthesis readiness", () => {
   const forged = {
     control: {
@@ -3024,10 +3100,10 @@ test("repeat evidence is bounded and clears after mutation or a new objective", 
   const source = "bool UGomokuRuleEngine::HasWinAt() const { return true; }";
   const repeat = {
     ok: true,
+    resultKind: "cache_hit",
     cached: true,
     repeatDetected: true,
     doNotRepeatRead: true,
-    errorCode: "READ_REPEAT_DETECTED",
     content: source,
   };
   const readMessages = [

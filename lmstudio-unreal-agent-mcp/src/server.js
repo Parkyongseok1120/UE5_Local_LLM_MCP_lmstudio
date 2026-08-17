@@ -36,7 +36,10 @@ const {
 const { attachCommittedToolOutcomeControl } = require("./post-read-route-control.js");
 const { verifyRuntimeComponent } = require("./runtime-identity.js");
 const { deriveValidationScope } = require("./validation-scope.js");
-const { absolutePathIsWithin } = require("./filesystem-path-identity.js");
+const {
+  absolutePathIsWithin,
+  filesystemPathIdentity,
+} = require("./filesystem-path-identity.js");
 const { getMcpIdentityStatus } = require("./mcp-connection.js");
 const { allowedCommandBase, parseAllowedCommand } = require("./command-policy.js");
 
@@ -2261,6 +2264,62 @@ function fileStatSignature(stat) {
   return `${stat.size}:${stat.mtimeMs}`;
 }
 
+function durableReadCoverageEntry(taskState, resolution) {
+  const files = taskState?.sourceEvidence?.files;
+  if (!files || typeof files !== "object") return null;
+  const candidatePath = String(resolution?.projectRelativePath || "").replace(/\\/g, "/");
+  const candidateKey = candidatePath ? filesystemPathIdentity(candidatePath) : "";
+  for (const [rawKey, entry] of Object.entries(files)) {
+    if (!entry || typeof entry !== "object") continue;
+    const entryPath = String(entry.path || rawKey || "").replace(/\\/g, "/");
+    if (candidateKey && filesystemPathIdentity(entryPath) === candidateKey) return entry;
+  }
+  return null;
+}
+
+function readContinuationForTask(taskState, resolution, args, durableEntry) {
+  const currentPath = String(resolution?.projectRelativePath || args?.path || "")
+    .replace(/\\/g, "/");
+  const currentKey = currentPath ? filesystemPathIdentity(currentPath) : "";
+  const entryIsCurrent = durableEntry && (
+    !durableEntry.fileSignature
+    || String(durableEntry.fileSignature) === String(resolution?.fileSignature || "")
+  );
+  if (entryIsCurrent && durableEntry?.wholeFileComplete !== true && durableEntry?.nextUnreadLine) {
+    const startLine = Math.max(1, Number(durableEntry.nextUnreadLine || 1));
+    const lineCount = Math.max(0, Number(durableEntry.lineCount || 0));
+    return {
+      requiredNextTool: "read_file_range",
+      requiredNextToolArgs: {
+        path: String(args?.path || resolution?.projectRelativePath || ""),
+        startLine,
+        endLine: lineCount >= startLine ? lineCount : startLine + 199,
+      },
+      reason: "truncated_read_continuation",
+    };
+  }
+  const progress = taskState?.inspectionProgress && typeof taskState.inspectionProgress === "object"
+    ? taskState.inspectionProgress
+    : {};
+  const frontier = Array.isArray(progress.remainingFrontier)
+    ? progress.remainingFrontier.map((value) => String(value || "").replace(/\\/g, "/")).filter(Boolean)
+    : [];
+  const accepted = new Set(Object.values(taskState?.sourceEvidence?.files || {})
+    .map((entry) => filesystemPathIdentity(String(entry?.path || "")))
+    .filter(Boolean));
+  const next = frontier.find((candidate) => {
+    const key = filesystemPathIdentity(candidate);
+    return key && key !== currentKey && !accepted.has(key);
+  });
+  return next
+    ? {
+      requiredNextTool: "read_file",
+      requiredNextToolArgs: { path: next },
+      reason: "durable_frontier_continuation",
+    }
+    : null;
+}
+
 async function resolveMutationGenerationForRead(resolution, targetPath) {
   try {
     const activeProject = resolution.activeProject || getActiveProject(CONFIG_PATH);
@@ -2275,19 +2334,38 @@ async function resolveMutationGenerationForRead(resolution, targetPath) {
 }
 
 function buildReadEvidenceContext(target, stat, resolution, options = {}) {
+  const taskSessionId = String(options.taskSessionId || "");
+  const taskState = taskSessionId ? readTaskState(WORKSPACE_ROOT, taskSessionId) : null;
+  const localEvidence = target ? readEvidence.get(path.resolve(target)) : null;
+  const fileSignature = stat ? fileStatSignature(stat) : null;
+  const durableEntry = durableReadCoverageEntry(taskState, resolution);
+  const contentHash = String(
+    options.contentHash
+    || (localEvidence?.signature === fileSignature ? localEvidence.contentHash : "")
+    || (durableEntry?.fileSignature === fileSignature ? durableEntry.contentHash : "")
+    || ""
+  ).trim().toLowerCase() || null;
+  const resolved = {
+    ...resolution,
+    fileSignature,
+  };
   return {
     fileAbsPath: target ? path.resolve(target) : null,
-    fileSignature: stat ? fileStatSignature(stat) : null,
+    fileSignature,
+    contentHash,
     mutationGeneration: options.mutationGeneration ?? 0,
     scopeSignature: options.scopeSignature || null,
     evidenceHash: options.evidenceHash || null,
-    taskSessionId: String(options.taskSessionId || ""),
+    taskSessionId,
     evidenceSessionId: String(options.evidenceSessionId || ""),
     taskAuthorization: options.taskAuthorization && typeof options.taskAuthorization === "object"
       ? options.taskAuthorization
       : null,
     detachedReadOnlyObservation: options.detachedReadOnlyObservation === true,
     activeProject: resolution?.activeProject || getActiveProject(CONFIG_PATH) || null,
+    taskState,
+    durableCoverage: durableEntry,
+    coverageContinuation: readContinuationForTask(taskState, resolved, options, durableEntry),
   };
 }
 
@@ -2327,20 +2405,21 @@ function evidenceSessionSchemaProperty() {
 }
 
 function cachedReadSuccess(content, options = {}) {
-  const errorCode = options.errorCode || "READ_REPEAT_DETECTED";
   const source = String(content || "");
   const summary = summarizeCachedRead(source);
   const includeContent = options.includeContent === true && source.length <= 24_000;
-  const defaultInstruction = cachedReadInstruction(errorCode);
+  const defaultInstruction = cachedReadInstruction("READ_CACHE_HIT");
   const payload = {
     ok: true,
+    resultKind: "cache_hit",
     cached: true,
+    evidenceProgressed: false,
+    workflowProgressed: false,
     evidenceStatus: "cached",
     repeatDetected: true,
     doNotRepeatRead: true,
     // Same-path cache hit must not abort multi-file investigations.
     stopCurrentWorkflow: options.stopCurrentWorkflow === true,
-    errorCode,
     retryable: false,
     phase: "evidence_cached",
     userMessage: options.userMessage || defaultInstruction,
@@ -2358,7 +2437,176 @@ function cachedReadSuccess(content, options = {}) {
   if (options.readCount != null) payload.readCount = options.readCount;
   if (options.fullyCovered) payload.fullyCovered = true;
   if (options.coveredBy) payload.coveredBy = options.coveredBy;
+  if (options.coverage) payload.coverage = options.coverage;
+  if (options.continuation && typeof options.continuation === "object") {
+    const continuation = options.continuation;
+    if (continuation.requiredNextTool) {
+      payload.requiredNextTool = String(continuation.requiredNextTool);
+      payload.requiredNextToolArgs = continuation.requiredNextToolArgs
+        && typeof continuation.requiredNextToolArgs === "object"
+        ? { ...continuation.requiredNextToolArgs }
+        : {};
+      payload.nextAction = payload.requiredNextTool;
+      payload.nextActionArgs = { ...payload.requiredNextToolArgs };
+      payload.nextActionIsTool = true;
+    } else if (continuation.nextAction) {
+      payload.nextAction = String(continuation.nextAction);
+      payload.nextActionArgs = continuation.nextActionArgs || {};
+      payload.nextActionIsTool = continuation.nextActionIsTool === true;
+    }
+  }
+  const taskState = options.taskState && typeof options.taskState === "object"
+    ? options.taskState
+    : null;
+  if (taskState) {
+    payload.taskAuthorization = taskAuthorizationForState(taskState);
+    payload.taskSessionId = String(taskState.taskSessionId || "");
+    payload.controlEpoch = Math.max(0, Number(taskState.controlEpoch || 0));
+    payload.toolRoute = taskState.toolRoute && typeof taskState.toolRoute === "object"
+      ? taskState.toolRoute
+      : undefined;
+    payload.sourceEvidence = taskState.sourceEvidence;
+    payload.inspectionProgress = taskState.inspectionProgress;
+    payload.synthesisReadiness = taskState.synthesisReadiness;
+    const currentControl = taskState.controlState && typeof taskState.controlState === "object"
+      ? taskState.controlState
+      : {};
+    payload.control = {
+      ...currentControl,
+      authoritative: true,
+      version: 2,
+      epoch: payload.controlEpoch,
+      taskSessionId: payload.taskSessionId,
+      ...(payload.requiredNextTool ? {
+        disposition: "require_tool",
+        requiredTool: {
+          name: payload.requiredNextTool,
+          args: payload.requiredNextToolArgs || {},
+        },
+        allowedTools: [payload.requiredNextTool],
+      } : {}),
+    };
+  }
   return text(JSON.stringify(payload, null, 2));
+}
+
+function readRepeatBlocked(tool, guard, context = {}) {
+  const continuation = guard?.continuation
+    || context.coverageContinuation
+    || null;
+  const payload = {
+    ok: false,
+    resultKind: "repeat_blocked",
+    errorCode: "READ_REPEAT_BLOCKED",
+    cached: false,
+    evidenceProgressed: false,
+    workflowProgressed: false,
+    retryable: false,
+    stopCurrentWorkflow: false,
+    doNotRetry: [String(tool || "")],
+    agentInstruction: cachedReadInstruction("READ_REPEAT_BLOCKED"),
+    userMessage: cachedReadInstruction("READ_REPEAT_BLOCKED"),
+    readAttempts: Number(guard?.attempts || 1),
+  };
+  if (guard?.coverage) payload.coverage = guard.coverage;
+  if (continuation?.requiredNextTool) {
+    payload.requiredNextTool = String(continuation.requiredNextTool);
+    payload.requiredNextToolArgs = continuation.requiredNextToolArgs
+      && typeof continuation.requiredNextToolArgs === "object"
+      ? { ...continuation.requiredNextToolArgs }
+      : {};
+    payload.nextAction = payload.requiredNextTool;
+    payload.nextActionArgs = { ...payload.requiredNextToolArgs };
+    payload.nextActionIsTool = true;
+    payload.nextSteps = [`Call ${payload.requiredNextTool} exactly once with requiredNextToolArgs.`];
+  } else if (context.taskSessionId) {
+    payload.requiredNextTool = "unreal_agent_plan";
+    payload.requiredNextToolArgs = { request: "Continue the bounded source-evidence task from retained coverage." };
+    payload.nextAction = payload.requiredNextTool;
+    payload.nextActionArgs = { ...payload.requiredNextToolArgs };
+    payload.nextActionIsTool = true;
+    payload.nextSteps = ["Call unreal_agent_plan once to obtain the next bounded server-owned evidence action."];
+  } else {
+    payload.nextAction = "synthesize_current_evidence";
+    payload.nextActionIsTool = false;
+    payload.nextSteps = ["Use the retained evidence; no further read of this unchanged path is allowed."];
+  }
+  let taskState = context.taskState
+    || (context.taskSessionId ? readTaskState(WORKSPACE_ROOT, context.taskSessionId) : null);
+  let lifecycle = null;
+  if (taskState && String(taskState.status || "").toLowerCase() === "running"
+      && context.detachedReadOnlyObservation !== true
+      && context.taskAuthorization && typeof context.taskAuthorization === "object") {
+    const requiredTool = payload.nextActionIsTool
+      ? {
+        name: String(payload.requiredNextTool || ""),
+        args: payload.requiredNextToolArgs && typeof payload.requiredNextToolArgs === "object"
+          ? { ...payload.requiredNextToolArgs }
+          : {},
+      }
+      : {};
+    lifecycle = recordRecoveryObligationViaPython(
+      WORKSPACE_ROOT,
+      { taskAuthorization: taskAuthorizationForState(taskState) },
+      {
+        source: "evidence",
+        status: payload.nextActionIsTool
+          ? (requiredTool.name === "unreal_agent_plan"
+            ? "phase_budget_replan_required"
+            : "evidence_required")
+          : "evidence_complete",
+        scopeDisposition: "in_slice",
+        errorCode: "READ_REPEAT_BLOCKED",
+        mutationGeneration: Math.max(0, Number(
+          taskState.mutationGeneration ?? context.mutationGeneration ?? 0
+        )),
+        requiredTool,
+        targetFiles: evidenceStagnationTargetFiles(taskState, context),
+        message: payload.nextActionIsTool
+          ? `Semantic duplicate blocked; continue with the authoritative ${requiredTool.name} action exactly once.`
+          : "Semantic duplicate blocked; use retained evidence without another read.",
+      },
+    );
+    if (lifecycle?.ok !== true) {
+      const failurePayload = {
+        errorCode: String(lifecycle?.errorCode || "EVIDENCE_RECOVERY_RECORD_FAILED"),
+        retryable: false,
+        stopCurrentWorkflow: true,
+        doNotRetry: ["read_file", "read_file_range", "read_symbol", "search_files"],
+        agentInstruction: "Do not retry the evidence read. The authoritative task continuation could not be committed.",
+      };
+      bindAuthoritativeLifecycleControl(failurePayload, lifecycle || {});
+      return fail(
+        String(lifecycle?.error || "Could not commit the authoritative evidence continuation."),
+        failurePayload,
+      );
+    }
+    taskState = readTaskState(WORKSPACE_ROOT, String(taskState.taskSessionId || "")) || taskState;
+  }
+  if (taskState) {
+    payload.taskAuthorization = taskAuthorizationForState(taskState);
+    payload.toolRoute = taskState.toolRoute && typeof taskState.toolRoute === "object"
+      ? taskState.toolRoute
+      : undefined;
+    payload.controlEpoch = Math.max(0, Number(taskState.controlEpoch || 0));
+    const currentControl = taskState.controlState && typeof taskState.controlState === "object"
+      ? taskState.controlState
+      : {};
+    payload.control = {
+      ...currentControl,
+      authoritative: true,
+      version: 2,
+      epoch: payload.controlEpoch,
+      taskSessionId: String(taskState.taskSessionId || context.taskSessionId || ""),
+      disposition: payload.nextActionIsTool ? "require_tool" : "continue",
+      requiredTool: payload.nextActionIsTool
+        ? { name: payload.requiredNextTool, args: payload.requiredNextToolArgs }
+        : null,
+      allowedTools: payload.nextActionIsTool ? [payload.requiredNextTool] : [],
+    };
+    if (lifecycle?.ok === true) payload.taskRecoveryRecorded = true;
+  }
+  return fail(`Repeated ${tool} read is a semantic duplicate.`, payload);
 }
 
 function evidenceStagnationTargetFiles(taskState, context = {}) {
@@ -2678,6 +2926,9 @@ function commitBuildRecoveryEvidence(tool, context = {}, toolArgs = {}) {
 
 function applyReadGuard(tool, guard, context) {
   if (!guard || guard.action === "allow" || !guard.repeat) return null;
+  if (guard.action === "blocked" || guard.reason === "READ_REPEAT_BLOCKED") {
+    return readRepeatBlocked(tool, guard, context);
+  }
   if (
     guard.action === "stagnation"
     || guard.reason === "EVIDENCE_STAGNATION"
@@ -2685,31 +2936,17 @@ function applyReadGuard(tool, guard, context) {
   ) {
     return evidenceStagnationFail(tool, guard, { context });
   }
-  // Identical / fully-covered range: return cached success (no wrong-range body injection for uncovered misses).
-  if (guard.action === "cache" || guard.reason === "READ_REPEAT_DETECTED") {
-    if (guard.cachedContent == null && guard.fullyCovered) {
-      return fail("Requested line range is already covered by prior reads.", {
-        errorCode: "READ_REPEAT_DETECTED",
-        retryable: false,
-        doNotRetry: [tool],
-        fullyCovered: true,
-        coveredBy: guard.coveredBy || [],
-        agentInstruction:
-          "Those lines were already returned. Do not re-scan this range. "
-          + "Read other unread files/symbols if needed, or finish the requested deliverable "
-          + "(bug findings / analysis — not an unsolicited structure overview).",
-        nextSteps: [
-          "Use existing evidence, or call read_symbol / read_file on a different unread target.",
-        ],
-        stopCurrentWorkflow: false,
-      });
-    }
+  // Identical / fully-covered range: return a total cache-hit result without
+  // injecting a wider or wrong-range body.
+  if (guard.action === "cache" || guard.action === "materialize" || guard.reason === "READ_CACHE_HIT") {
     return cachedReadSuccess(guard.cachedContent, {
-      errorCode: "READ_REPEAT_DETECTED",
       readAttempts: guard.attempts,
       fullyCovered: guard.fullyCovered,
       coveredBy: guard.coveredBy,
       includeContent: tool === "read_file_range",
+      coverage: guard.coverage,
+      continuation: context.coverageContinuation,
+      taskState: context.taskState,
     });
   }
   return null;
@@ -4601,14 +4838,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const output = metadataHeader + out;
       // Finish all I/O (including full-file evidence hash) before committing budget.
       const contentHash = sha256Buffer(await fsp.readFile(target));
+      const directSourceEvidence = {
+        projectRelativePath: resolution.projectRelativePath,
+        contentHash,
+        fileSignature: fileStatSignature(s),
+        mutationGeneration,
+        lineRange: `1-${truncated.endLine}`,
+        lineCount: truncated.meta.truncated ? 0 : truncated.endLine,
+        characterCount: rawOut.length,
+        bytesReturned: buffer.length,
+        detailLevel: detail,
+        truncated: truncated.meta.truncated === true,
+        wholeFileComplete: truncated.meta.truncated !== true,
+        completeRead: truncated.meta.truncated !== true,
+        nextUnreadLine: truncated.meta.nextStartLine,
+        semanticAnchors: summarizeCachedRead(rawOut).semanticAnchors,
+      };
       const budgetFail = commitDeferredBudgetOrFail({
-        directSourceEvidence: {
-          projectRelativePath: resolution.projectRelativePath,
-          contentHash,
-          lineRange: `1-${truncated.endLine}`,
-          characterCount: rawOut.length,
-          completeRead: truncated.meta.truncated !== true,
-        },
+        directSourceEvidence,
       });
       if (budgetFail) return budgetFail;
       rememberReadEvidence(
@@ -4620,8 +4867,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       );
       recordReadSuccess("read_file", guard.normalizedArgs, {
         ...readContext,
+        contentHash,
         evidenceHash: sha256Text(out),
-      }, output, { lineRange: { start: 1, end: truncated.endLine } });
+      }, output, {
+        lineRange: { start: 1, end: truncated.endLine },
+        lineCount: directSourceEvidence.lineCount,
+        bytesReturned: buffer.length,
+        detailLevel: detail,
+        truncated: directSourceEvidence.truncated,
+        wholeFileComplete: directSourceEvidence.wholeFileComplete,
+        nextUnreadLine: directSourceEvidence.nextUnreadLine,
+        semanticAnchors: directSourceEvidence.semanticAnchors,
+      });
       commitBuildRecoveryEvidence("read_file", readContext, args);
       return attachCommittedToolOutcomeControl(
         text(output),
@@ -4711,14 +4968,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         + (rangeTruncated ? `\n[read-truncation: character budget ${charCap}; last line is not evidence-complete]` : "")
         + `\n\n${numbered}`;
       const contentHash = sha256Text(content);
+      const wholeFileComplete = startLine === 1
+        && completeEndLine >= lines.length
+        && rangeTruncated !== true;
+      const directSourceEvidence = {
+        projectRelativePath: resolution.projectRelativePath,
+        contentHash,
+        fileSignature: fileStatSignature(s),
+        mutationGeneration,
+        lineRange: completeEndLine >= startLine ? `${startLine}-${completeEndLine}` : "0-0",
+        lineCount: lines.length,
+        characterCount: numbered.length,
+        bytesReturned: Buffer.byteLength(numbered, "utf8"),
+        detailLevel: detail,
+        truncated: rangeTruncated,
+        wholeFileComplete,
+        completeRead: wholeFileComplete,
+        nextUnreadLine: completeEndLine >= startLine ? completeEndLine + 1 : startLine,
+      };
       const budgetFail = commitDeferredBudgetOrFail({
-        directSourceEvidence: {
-          projectRelativePath: resolution.projectRelativePath,
-          contentHash,
-          lineRange: completeEndLine >= startLine ? `${startLine}-${completeEndLine}` : "0-0",
-          characterCount: numbered.length,
-          completeRead: startLine === 1 && completeEndLine >= lines.length,
-        },
+        directSourceEvidence,
       });
       if (budgetFail) return budgetFail;
       rememberReadEvidence(
@@ -4730,8 +4999,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       );
       recordReadSuccess("read_file_range", normalizedArgs, {
         ...readContext,
+        contentHash,
         evidenceHash: sha256Text(content),
-      }, output);
+      }, output, {
+        lineRange: completeEndLine >= startLine
+          ? { start: startLine, end: completeEndLine }
+          : null,
+        lineCount: lines.length,
+        bytesReturned: Buffer.byteLength(numbered, "utf8"),
+        detailLevel: detail,
+        truncated: rangeTruncated,
+        wholeFileComplete,
+        nextUnreadLine: directSourceEvidence.nextUnreadLine,
+      });
       commitBuildRecoveryEvidence("read_file_range", readContext, args);
       return attachCommittedToolOutcomeControl(
         text(output),
@@ -4815,19 +5095,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const endLine = Math.min(lines.length, lineAt(braceEnd) + context);
       const numbered = lines.slice(startLine - 1, endLine).map((line, idx) => `${startLine + idx}|${line}`).join("\n");
       const output = `File: ${displayPath(resolution)}\nSymbol: ${symbol}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${endLine} of ${lines.length}\n\n${numbered}`;
-      const budgetFail = commitDeferredBudgetOrFail();
+      const contentHash = sha256Text(content);
+      const directSourceEvidence = {
+        projectRelativePath: resolution.projectRelativePath,
+        contentHash,
+        fileSignature: fileStatSignature(stat),
+        mutationGeneration,
+        lineRange: `${startLine}-${endLine}`,
+        lineCount: lines.length,
+        characterCount: numbered.length,
+        bytesReturned: Buffer.byteLength(numbered, "utf8"),
+        detailLevel: "symbol",
+        truncated: false,
+        wholeFileComplete: false,
+        completeRead: false,
+        nextUnreadLine: endLine + 1,
+      };
+      const budgetFail = commitDeferredBudgetOrFail({ directSourceEvidence });
       if (budgetFail) return budgetFail;
       rememberReadEvidence(
         target,
         stat,
         resolution,
         `${startLine}-${endLine}`,
-        sha256Text(content)
+        contentHash
       );
       recordReadSuccess("read_symbol", normalizedArgs, {
         ...readContext,
-        evidenceHash: sha256Text(content),
-      }, output);
+        contentHash,
+        evidenceHash: contentHash,
+      }, output, {
+        lineRange: { start: startLine, end: endLine },
+        lineCount: lines.length,
+        bytesReturned: Buffer.byteLength(numbered, "utf8"),
+        detailLevel: "symbol",
+        truncated: false,
+        wholeFileComplete: false,
+        nextUnreadLine: endLine + 1,
+      });
       commitBuildRecoveryEvidence("read_symbol", readContext, args);
       return attachCommittedToolOutcomeControl(
         text(output),

@@ -1,10 +1,11 @@
 "use strict";
 
-// Success read/search repeat guard.
+// Read/search evidence coverage and delivery guard.
 //
-// READ_REPEAT_DETECTED: identical (or fully covered) evidence — return cached content.
-// EVIDENCE_STAGNATION: no new line coverage / ping-pong — hard error, no code body.
-// New line ranges are always allowed regardless of call count.
+// A semantic evidence version is owned by canonical path + content/version
+// identity + task/evidence scope. Presentation choices such as detailLevel,
+// maxBytes, contextLines, and the exact materialized range are delivery
+// metadata; they must not create a second semantic file version.
 
 const crypto = require("crypto");
 const {
@@ -56,6 +57,11 @@ function evidenceContextKey(context = {}) {
   hash.update("\u0000");
   hash.update(String(context.fileSignature || context.scopeSignature || ""));
   hash.update("\u0000");
+  // A stable file signature can survive replacement of the file contents.
+  // Content identity is therefore part of the semantic evidence version, not
+  // merely a delivery/materialization detail.
+  hash.update(String(context.contentHash || context.fileContentHash || ""));
+  hash.update("\u0000");
   hash.update(String(context.mutationGeneration ?? 0));
   return hash.digest("hex").slice(0, 24);
 }
@@ -75,12 +81,40 @@ function buildEvidenceKey(tool, args, context = {}) {
 }
 
 function fileVersionKey(context = {}) {
-  if (!context.fileAbsPath || !context.fileSignature) return null;
+  const versionIdentity = String(
+    context.contentHash
+    || context.fileContentHash
+    || context.fileSignature
+    || ""
+  ).trim();
+  if (!context.fileAbsPath || !versionIdentity) return null;
   const fileIdentity = absolutePathIdentity(
     context.fileAbsPath,
     context.hostPlatform || process.platform
   );
-  return `${evidenceOwnerKey(context)}\u0000${fileIdentity}\u0000${context.fileSignature}\u0000${context.mutationGeneration ?? 0}`;
+  return `${evidenceOwnerKey(context)}\u0000${fileIdentity}\u0000${versionIdentity}\u0000${context.mutationGeneration ?? 0}`;
+}
+
+function canonicalCoverageIdentity(context = {}) {
+  if (!context.fileAbsPath) return null;
+  const versionIdentity = String(
+    context.contentHash
+    || context.fileContentHash
+    || context.fileSignature
+    || ""
+  ).trim();
+  if (!versionIdentity) return null;
+  return {
+    canonicalPath: absolutePathIdentity(
+      context.fileAbsPath,
+      context.hostPlatform || process.platform
+    ),
+    contentHash: String(context.contentHash || context.fileContentHash || "").trim().toLowerCase() || null,
+    versionIdentity,
+    mutationGeneration: Math.max(0, Number(context.mutationGeneration || 0)),
+    evidenceScope: evidenceOwnerKey(context),
+    key: fileVersionKey(context),
+  };
 }
 
 function prune(now, maxEntries, ttlMs) {
@@ -163,8 +197,9 @@ function detectPingPong(key) {
 }
 
 /**
- * Check whether this read should return cached evidence or hard-stop.
- * @returns {{ action: 'allow'|'cache'|'stagnation', ... }}
+ * Check whether this read is novel evidence, a materialization/cache hit, or
+ * a prohibited semantic duplicate.
+ * @returns {{ action: 'allow'|'materialize'|'cache'|'blocked'|'stagnation', ... }}
  */
 function checkReadRepeat(tool, args, context = {}, options = {}) {
   if (!READ_EVIDENCE_TOOLS.has(tool)) return { action: "allow", repeat: false };
@@ -176,16 +211,59 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
   const key = buildEvidenceKey(tool, args, context);
   const versionKey = fileVersionKey(context);
   const coverage = versionKey ? fileCoverage.get(versionKey) : null;
+  const coverageIdentity = canonicalCoverageIdentity(context);
   const requested = lineRangeFromArgs(tool, args);
 
-  // Escalating hard-stop: after a stagnation response was recorded, identical
-  // retries escalate to EVIDENCE_STAGNATION_REPEAT (never return a prior code body).
+  // A complete whole-file read owns the unchanged semantic version. A later
+  // detailLevel/default presentation is a cache hit and cannot read the file
+  // again. A truncated whole-file read must continue at the exact frontier;
+  // restarting read_file from line 1 is prohibited.
+  if (tool === "read_file" && coverage) {
+    if (coverage.wholeFileComplete === true) {
+      return {
+        action: "cache",
+        repeat: true,
+        reason: "READ_CACHE_HIT",
+        resultKind: "cache_hit",
+        cached: true,
+        evidenceProgressed: false,
+        workflowProgressed: false,
+        key,
+        coverageIdentity,
+        coverage: { ...coverage },
+        cachedContent: null,
+      };
+    }
+    return {
+      action: "blocked",
+      repeat: true,
+      reason: "READ_REPEAT_BLOCKED",
+      resultKind: "repeat_blocked",
+      errorCode: "READ_REPEAT_BLOCKED",
+      evidenceProgressed: false,
+      workflowProgressed: false,
+      key,
+      coverageIdentity,
+      coverage: { ...coverage },
+      ...(context.coverageContinuation && typeof context.coverageContinuation === "object"
+        ? { continuation: { ...context.coverageContinuation } }
+        : {}),
+    };
+  }
+
+  // A previously blocked semantic repeat remains blocked. This deliberately
+  // does not call recordReadStagnation and therefore cannot reset or consume a
+  // recovery allowance.
   const stagnant = stagnationEntries.get(key);
   if (stagnant && stagnant.count >= 1) {
     return {
-      action: "stagnation",
+      action: "blocked",
       repeat: true,
-      reason: "EVIDENCE_STAGNATION_REPEAT",
+      reason: "READ_REPEAT_BLOCKED",
+      resultKind: "repeat_blocked",
+      errorCode: "READ_REPEAT_BLOCKED",
+      evidenceProgressed: false,
+      workflowProgressed: false,
       key,
       attempts: stagnant.count + 1,
       escalated: true,
@@ -197,9 +275,13 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
     prior.attempts += 1;
     if (prior.attempts >= 3) {
       return {
-        action: "stagnation",
+        action: "blocked",
         repeat: true,
-        reason: "EVIDENCE_STAGNATION",
+        reason: "READ_REPEAT_BLOCKED",
+        resultKind: "repeat_blocked",
+        errorCode: "READ_REPEAT_BLOCKED",
+        evidenceProgressed: false,
+        workflowProgressed: false,
         key,
         attempts: prior.attempts,
         escalated: true,
@@ -209,18 +291,25 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
     return {
       action: "cache",
       repeat: true,
-      reason: "READ_REPEAT_DETECTED",
+      reason: "READ_CACHE_HIT",
+      resultKind: "cache_hit",
+      cached: true,
+      evidenceProgressed: false,
+      workflowProgressed: false,
       key,
       cachedContent: prior.content,
       attempts: prior.attempts,
       firstReadAt: prior.at,
+      coverageIdentity,
     };
   }
 
-  // New line coverage always allowed for read_file_range.
+  // New line coverage is always allowed. A fully covered range may still be
+  // materialized once for exact edit text, but it is not new evidence.
   if (tool === "read_file_range" && requested) {
     const priorRanges = coverage ? coverage.ranges : [];
-    if (isFullyCovered(requested, priorRanges)) {
+    const novelLines = novelLineCount(requested, priorRanges);
+    if (novelLines === 0) {
       const materializationBudget = Number.isFinite(options.coveredRangeMaterializationBudget)
         ? options.coveredRangeMaterializationBudget
         : DEFAULT_COVERED_RANGE_MATERIALIZATION_BUDGET;
@@ -234,24 +323,34 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
           attempts: materialized + 1,
           fullyCovered: true,
           coveredBy: priorRanges,
+          evidenceProgressed: false,
+          workflowProgressed: false,
         };
       }
-      // Coverage alone is not enough after context compaction. Read the exact
-      // requested range once so replace_in_file can use text that is actually
-      // present in the current model context. An identical range still takes
-      // the exact-key cache/stagnation path above.
       return {
-        action: "allow",
-        repeat: false,
+        action: "cache",
+        repeat: true,
+        resultKind: "cache_hit",
+        cached: true,
+        evidenceProgressed: false,
+        workflowProgressed: false,
         key,
         materializeCoveredRange: true,
         materializationCount: materialized + 1,
         fullyCovered: true,
         coveredBy: priorRanges,
+        coverageIdentity,
       };
     }
-    // Novel lines exist — never block on call count.
-    return { action: "allow", repeat: false, key, novelLines: novelLineCount(requested, priorRanges) };
+    return {
+      action: "allow",
+      repeat: false,
+      key,
+      coverageIdentity,
+      novelLines,
+      evidenceProgressed: true,
+      workflowProgressed: true,
+    };
   }
 
   // Ping-pong between already-seen keys with no new evidence.
@@ -263,6 +362,8 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
       key,
       attempts: 2,
       pingPong: true,
+      evidenceProgressed: false,
+      workflowProgressed: false,
     };
   }
 
@@ -279,11 +380,20 @@ function checkReadRepeat(tool, args, context = {}, options = {}) {
         key,
         attempts: coverage.nonRangeCount + 1,
         readCount: coverage.nonRangeCount,
+        evidenceProgressed: false,
+        workflowProgressed: false,
       };
     }
   }
 
-  return { action: "allow", repeat: false, key };
+  return {
+    action: "allow",
+    repeat: false,
+    key,
+    coverageIdentity,
+    evidenceProgressed: true,
+    workflowProgressed: true,
+  };
 }
 
 /**
@@ -331,8 +441,25 @@ function recordReadSuccess(tool, args, context = {}, content, options = {}) {
 
   const key = buildEvidenceKey(tool, args, context);
   const prior = successCache.get(key);
-  const lineRange = lineRangeFromArgs(tool, args) || options.lineRange || null;
+  const lineRange = options.lineRange || lineRangeFromArgs(tool, args) || null;
   const versionKey = fileVersionKey(context);
+  const priorCoverage = versionKey ? fileCoverage.get(versionKey) : null;
+  const priorRanges = priorCoverage?.ranges || [];
+  const novelLines = lineRange ? novelLineCount(lineRange, priorRanges) : null;
+  const wholeFileComplete = options.wholeFileComplete === true
+    || (tool === "read_file" && options.truncated !== true);
+  const evidenceProgressed = options.materializationOnly === true
+    || Boolean(prior)
+    ? false
+    : options.evidenceProgressed === false
+      ? false
+      : wholeFileComplete
+        ? priorCoverage?.wholeFileComplete !== true
+        : lineRange
+          ? novelLines > 0
+          : tool === "read_file"
+            ? !priorCoverage
+            : true;
   const entry = {
     content: String(content ?? ""),
     at: prior ? prior.at : now,
@@ -342,9 +469,11 @@ function recordReadSuccess(tool, args, context = {}, content, options = {}) {
     fileAbsPath: context.fileAbsPath || null,
     fileVersionKey: versionKey,
     lineRange,
+    resultKind: String(options.resultKind || (evidenceProgressed ? "source_read" : "cache_hit")),
+    evidenceProgressed,
   };
   successCache.set(key, entry);
-  stagnationEntries.delete(key);
+  if (evidenceProgressed) stagnationEntries.delete(key);
 
   if (versionKey) {
     const coverage = fileCoverage.get(versionKey) || {
@@ -358,21 +487,62 @@ function recordReadSuccess(tool, args, context = {}, content, options = {}) {
     if (lineRange) {
       const alreadyCovered = isFullyCovered(lineRange, coverage.ranges);
       coverage.ranges = mergeRanges([...coverage.ranges, lineRange]);
-      coverage.coveredRepeatCount = 0;
-      if (tool === "read_file_range" && alreadyCovered) {
+      if (evidenceProgressed) coverage.coveredRepeatCount = 0;
+      if (tool === "read_file_range" && alreadyCovered && !evidenceProgressed) {
         coverage.materializedCoveredRangeCount = Number(coverage.materializedCoveredRangeCount || 0) + 1;
       }
-    } else {
+    } else if (evidenceProgressed) {
       coverage.nonRangeCount += 1;
     }
+    const identity = canonicalCoverageIdentity(context);
+    coverage.canonicalPath = identity?.canonicalPath || coverage.canonicalPath || null;
+    coverage.contentHash = String(context.contentHash || context.fileContentHash || coverage.contentHash || "")
+      .trim().toLowerCase() || null;
+    coverage.mutationGeneration = Math.max(0, Number(context.mutationGeneration || coverage.mutationGeneration || 0));
+    coverage.lineCount = Math.max(0, Number(options.lineCount || coverage.lineCount || 0));
+    coverage.wholeFileComplete = Boolean(coverage.wholeFileComplete === true || wholeFileComplete);
+    if (
+      coverage.lineCount > 0
+      && coverage.ranges.some((range) => range.start <= 1 && range.end >= coverage.lineCount)
+    ) {
+      coverage.wholeFileComplete = true;
+    }
+    coverage.largestMaterialization = {
+      ...(coverage.largestMaterialization && typeof coverage.largestMaterialization === "object"
+        ? coverage.largestMaterialization
+        : {}),
+      ...(options.detailLevel != null ? { detailLevel: String(options.detailLevel) } : {}),
+      ...(options.bytesReturned != null ? { bytesReturned: Math.max(0, Number(options.bytesReturned || 0)) } : {}),
+      ...(options.lineCount != null ? { lineCount: Math.max(0, Number(options.lineCount || 0)) } : {}),
+    };
+    coverage.truncated = options.truncated === true && coverage.wholeFileComplete !== true;
+    coverage.nextUnreadLine = coverage.wholeFileComplete === true
+      ? null
+      : Math.max(1, Number(options.nextUnreadLine || coverage.nextUnreadLine || (lineRange ? lineRange["end"] + 1 : 1)));
+    if (Array.isArray(options.semanticAnchors) && options.semanticAnchors.length) {
+      coverage.semanticAnchors = [...new Set(options.semanticAnchors.map(String).filter(Boolean))].slice(0, 16);
+    }
+    if (options.acceptedEvidenceId) coverage.acceptedEvidenceId = String(options.acceptedEvidenceId).slice(0, 80);
+    coverage.lastEvidenceProgressed = evidenceProgressed;
     coverage.lastKey = key;
     fileCoverage.set(versionKey, coverage);
   }
 
-  recentKeys.push(key);
-  while (recentKeys.length > RECENT_KEY_WINDOW) recentKeys.shift();
+  if (evidenceProgressed) {
+    recentKeys.push(key);
+    while (recentKeys.length > RECENT_KEY_WINDOW) recentKeys.shift();
+  }
 
-  return { recorded: true, key, attempts: entry.attempts };
+  return {
+    recorded: true,
+    key,
+    attempts: entry.attempts,
+    resultKind: evidenceProgressed ? "source_read" : "cache_hit",
+    cached: !evidenceProgressed,
+    evidenceProgressed,
+    workflowProgressed: evidenceProgressed,
+    coverage: versionKey ? { ...(fileCoverage.get(versionKey) || {}) } : null,
+  };
 }
 
 function normalizeReadToolArgs(tool, args = {}, hostPlatform = process.platform) {
@@ -384,8 +554,8 @@ function normalizeReadToolArgs(tool, args = {}, hostPlatform = process.platform)
   );
   if (tool === "read_file") {
     normalized.path = normalizePath(args.path);
-    if (args.detailLevel != null) normalized.detailLevel = String(args.detailLevel);
-    if (args.maxBytes != null) normalized.maxBytes = Number(args.maxBytes);
+    // detailLevel and maxBytes are materialization options, not semantic
+    // evidence identity.
     return normalized;
   }
   if (tool === "read_file_range") {
@@ -394,13 +564,13 @@ function normalizeReadToolArgs(tool, args = {}, hostPlatform = process.platform)
     normalized.path = normalizePath(args.path);
     normalized.startLine = startLine;
     normalized.endLine = endLine;
-    if (args.detailLevel != null) normalized.detailLevel = String(args.detailLevel);
     return normalized;
   }
   if (tool === "read_symbol") {
     normalized.path = normalizePath(args.path);
     normalized.symbol = String(args.symbol || "").trim();
-    if (args.contextLines != null) normalized.contextLines = Number(args.contextLines);
+    // contextLines changes delivery only; the file/version remains the
+    // semantic evidence owner.
     return normalized;
   }
   if (tool === "search_files") {
@@ -427,11 +597,17 @@ function cachedReadInstruction(reason) {
       + "otherwise produce the final analysis."
     );
   }
+  if (reason === "READ_REPEAT_BLOCKED") {
+    return (
+      "This unchanged semantic evidence was already accepted and the repeated read is blocked. "
+      + "Follow the authoritative requiredNextTool/requiredNextToolArgs continuation exactly; "
+      + "do not restart the same file from line 1."
+    );
+  }
   return (
     "The same unchanged evidence was already returned. Do not re-read this same path. "
-    + "Continue with other unread files or symbols if more evidence is still needed; "
-    + "otherwise deliver what the user asked for from existing evidence "
-    + "(for bug hunts: findings with verdicts — not an unsolicited project-structure overview)."
+    + "Use the authoritative continuation if one is present; otherwise continue with other unread "
+    + "files or retained evidence without re-reading it."
   );
 }
 
@@ -455,6 +631,7 @@ function getFileCoverage(context) {
 module.exports = {
   READ_EVIDENCE_TOOLS,
   buildEvidenceKey,
+  canonicalCoverageIdentity,
   checkReadRepeat,
   recordReadSuccess,
   recordReadStagnation,

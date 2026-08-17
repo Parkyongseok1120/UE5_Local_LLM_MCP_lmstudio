@@ -133,6 +133,48 @@ function controllerFor(model, config, stateRoot, emitted, toolDefinitions, worki
   };
 }
 
+function hostLifecycleEvent(manager, hostToolCallId, stage, options = {}) {
+  const name = options.name || options.toolName || "read_file";
+  const request = options.request || {
+    id: options.toolCallId || hostToolCallId,
+    type: "function",
+    name,
+    arguments: options.arguments || {},
+  };
+  return manager.record({
+    stage,
+    hostToolCallId,
+    outerGenerateRequestId: options.outerGenerateRequestId || "outer-test",
+    predictionAttemptId: options.predictionAttemptId || "attempt-test-1",
+    modelLocalCallId: options.modelLocalCallId || "1",
+    rawToolCallId: options.rawToolCallId || hostToolCallId,
+    toolCallId: options.toolCallId || hostToolCallId,
+    toolName: name,
+    source: options.source || "model_callback",
+    callId: Number(options.callId || 1),
+    ...(stage === "name" ? { name } : {}),
+    ...(stage === "args" ? { content: options.content || "{}" } : {}),
+    ...(stage === "end" ? { request } : {}),
+    ...(stage === "failure" ? { error: options.error || "serialization failed" } : {}),
+    ...options,
+  });
+}
+
+function hostManagerForTest() {
+  const emitted = [];
+  const diagnostics = [];
+  const { createHostToolCallTransactionManager } = require("../dist/generator.js");
+  return {
+    emitted,
+    diagnostics,
+    manager: createHostToolCallTransactionManager({
+      outerGenerateRequestId: "outer-host-test",
+      emit(event) { emitted.push(event); },
+      onDiagnostic(event) { diagnostics.push(event); },
+    }),
+  };
+}
+
 test("prediction supervisor cancels and rejects a wall-clock overrun", async () => {
   const { predictionResultWithSupervision } = require("../dist/generator.js");
   let cancelCount = 0;
@@ -9134,6 +9176,17 @@ test("duplicate tool callbacks are exactly-once and use the tool-call output res
     assert.equal(checkpoint.pendingToolCalls[0].dispatchState, "emitted");
     assert.equal(checkpoint.pendingToolCalls[0].id, `attempt-1-${request.id}`);
     assert.equal(checkpoint.predictionState.status, "committed");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && entry.name !== "_base");
+    const lifecycleEvents = fs.readFileSync(
+      path.join(stateRoot, sessionDir.name, "events.jsonl"),
+      "utf8",
+    ).trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    const committed = lifecycleEvents.find((event) => event.type === "prediction_output_committed");
+    assert.equal(
+      committed.hostToolCallLifecycle.lmStudioNameEventCount,
+      committed.hostToolCallLifecycle.acceptedHostTransactionCount,
+    );
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -9205,6 +9258,268 @@ test("tool callback FSM rejects arguments and contradictory terminal events afte
   assert.throws(() => mismatchedName.end(4, {
     id: "call-4", name: "write_file", arguments: {},
   }), /different name/);
+});
+
+test("host transaction emits one contiguous lifecycle for an ordinary call", () => {
+  const { manager, emitted } = hostManagerForTest();
+  hostLifecycleEvent(manager, "host-ordinary", "start");
+  hostLifecycleEvent(manager, "host-ordinary", "name");
+  hostLifecycleEvent(manager, "host-ordinary", "args", { content: '{"path":"A.cpp"}' });
+  hostLifecycleEvent(manager, "host-ordinary", "end", { arguments: { path: "A.cpp" } });
+  assert.deepEqual(emitted.map((event) => event.kind), ["start", "name", "args", "end"]);
+  assert.deepEqual(manager.snapshot(), {
+    acceptedHostTransactionCount: 1,
+    hostStartCount: 1,
+    hostNameCount: 1,
+    hostTerminalCount: 1,
+    lmStudioNameEventCount: 1,
+    transactions: [{
+      hostToolCallId: "host-ordinary",
+      predictionAttemptId: "attempt-test-1",
+      modelLocalCallId: "1",
+      rawToolCallId: "host-ordinary",
+      toolCallId: "host-ordinary",
+      toolName: "read_file",
+      source: "model_callback",
+      started: true,
+      name: true,
+      argumentFragments: 1,
+      terminal: "end",
+      emitted: true,
+    }],
+  });
+});
+
+test("host transaction preserves two sequential calls", () => {
+  const { manager, emitted } = hostManagerForTest();
+  for (const id of ["host-seq-a", "host-seq-b"]) {
+    hostLifecycleEvent(manager, id, "start");
+    hostLifecycleEvent(manager, id, "name");
+    hostLifecycleEvent(manager, id, "end");
+  }
+  assert.deepEqual(emitted.map((event) => event.kind), [
+    "start", "name", "end", "start", "name", "end",
+  ]);
+  assert.equal(manager.snapshot().acceptedHostTransactionCount, 2);
+});
+
+test("interleaved model callbacks are flushed contiguously per host call", () => {
+  const { manager, emitted } = hostManagerForTest();
+  hostLifecycleEvent(manager, "host-interleave-a", "start", { callId: 1, modelLocalCallId: "1" });
+  hostLifecycleEvent(manager, "host-interleave-b", "start", { callId: 2, modelLocalCallId: "2" });
+  hostLifecycleEvent(manager, "host-interleave-a", "name", { callId: 1, modelLocalCallId: "1" });
+  hostLifecycleEvent(manager, "host-interleave-b", "name", { callId: 2, modelLocalCallId: "2" });
+  hostLifecycleEvent(manager, "host-interleave-a", "args", { callId: 1, modelLocalCallId: "1" });
+  hostLifecycleEvent(manager, "host-interleave-b", "args", { callId: 2, modelLocalCallId: "2" });
+  hostLifecycleEvent(manager, "host-interleave-b", "end", { callId: 2, modelLocalCallId: "2" });
+  assert.equal(emitted.length, 0, "later transaction cannot leapfrog an open earlier call");
+  hostLifecycleEvent(manager, "host-interleave-a", "end", { callId: 1, modelLocalCallId: "1" });
+  assert.deepEqual(emitted.map((event) => event.hostToolCallId), [
+    "host-interleave-a", "host-interleave-a", "host-interleave-a", "host-interleave-a",
+    "host-interleave-b", "host-interleave-b", "host-interleave-b", "host-interleave-b",
+  ]);
+});
+
+test("duplicate identical name is coalesced before host dispatch", () => {
+  const { manager, emitted, diagnostics } = hostManagerForTest();
+  hostLifecycleEvent(manager, "host-duplicate-name", "start");
+  hostLifecycleEvent(manager, "host-duplicate-name", "name");
+  assert.equal(hostLifecycleEvent(manager, "host-duplicate-name", "name"), false);
+  hostLifecycleEvent(manager, "host-duplicate-name", "end");
+  assert.equal(emitted.filter((event) => event.kind === "name").length, 1);
+  assert.ok(diagnostics.some((event) => event.outcome === "duplicate_name_coalesced"));
+});
+
+test("conflicting duplicate name invalidates the host transaction", () => {
+  const { manager, emitted } = hostManagerForTest();
+  hostLifecycleEvent(manager, "host-conflict-name", "start");
+  hostLifecycleEvent(manager, "host-conflict-name", "name", { name: "read_file" });
+  assert.throws(
+    () => hostLifecycleEvent(manager, "host-conflict-name", "name", { name: "search_files" }),
+    /Conflicting duplicate tool-call name/,
+  );
+  assert.deepEqual(emitted, []);
+});
+
+test("name before start is rejected without a durable identity", () => {
+  const { manager, emitted } = hostManagerForTest();
+  assert.throws(
+    () => hostLifecycleEvent(manager, "host-name-before-start", "name"),
+    /before a durable start/,
+  );
+  assert.deepEqual(emitted, []);
+});
+
+test("end before start is rejected", () => {
+  const { manager, emitted } = hostManagerForTest();
+  assert.throws(
+    () => hostLifecycleEvent(manager, "host-end-before-start", "end"),
+    /before a durable start/,
+  );
+  assert.deepEqual(emitted, []);
+});
+
+test("arguments after end are rejected", () => {
+  const { manager } = hostManagerForTest();
+  hostLifecycleEvent(manager, "host-args-after-end", "start");
+  hostLifecycleEvent(manager, "host-args-after-end", "name");
+  hostLifecycleEvent(manager, "host-args-after-end", "end");
+  assert.throws(
+    () => hostLifecycleEvent(manager, "host-args-after-end", "args", { content: "late" }),
+    /after terminal end/,
+  );
+});
+
+test("the same model local call id is isolated across prediction retries", () => {
+  const { manager, emitted } = hostManagerForTest();
+  manager.setActivePredictionAttempt("attempt-one");
+  const first = "outer-host-test:attempt-one:model-7-a";
+  for (const stage of ["start", "name", "end"]) {
+    hostLifecycleEvent(manager, first, stage, {
+      predictionAttemptId: "attempt-one",
+      modelLocalCallId: "7",
+      rawToolCallId: "reused-local-id",
+      toolCallId: "attempt-one-reused-local-id",
+    });
+  }
+  manager.closePredictionAttempt("attempt-one");
+  manager.setActivePredictionAttempt("attempt-two");
+  const second = "outer-host-test:attempt-two:model-7-b";
+  for (const stage of ["start", "name", "end"]) {
+    hostLifecycleEvent(manager, second, stage, {
+      predictionAttemptId: "attempt-two",
+      modelLocalCallId: "7",
+      rawToolCallId: "reused-local-id",
+      toolCallId: "attempt-two-reused-local-id",
+    });
+  }
+  assert.equal(manager.snapshot().acceptedHostTransactionCount, 2);
+  assert.equal(new Set(emitted.filter((event) => event.kind === "name").map((event) => event.hostToolCallId)).size, 2);
+});
+
+test("callback arriving after prediction settlement is discarded", () => {
+  const { manager, emitted, diagnostics } = hostManagerForTest();
+  manager.settle("prediction_result");
+  assert.equal(hostLifecycleEvent(manager, "host-after-result", "start"), false);
+  assert.deepEqual(emitted, []);
+  assert.ok(diagnostics.some((event) => event.outcome === "late_callback_discarded"));
+});
+
+test("callback arriving after cancellation is discarded", () => {
+  const { manager, emitted, diagnostics } = hostManagerForTest();
+  manager.settle("cancel");
+  assert.equal(hostLifecycleEvent(manager, "host-after-cancel", "start"), false);
+  assert.deepEqual(emitted, []);
+  assert.ok(diagnostics.some((event) => event.outcome === "late_callback_discarded"));
+});
+
+test("server-owned exact tool call is one host transaction", () => {
+  const { manager, emitted } = hostManagerForTest();
+  for (const stage of ["start", "name", "args", "end"]) {
+    hostLifecycleEvent(manager, "server-required-1", stage, {
+      source: "server_owned_required_tool",
+      durableIdentity: true,
+      name: "read_file_range",
+      toolName: "read_file_range",
+      arguments: { path: "Source/Foo.cpp", startLine: 41, endLine: 80 },
+    });
+  }
+  assert.equal(emitted.filter((event) => event.kind === "name").length, 1);
+  assert.equal(emitted.find((event) => event.kind === "name").source, "server_owned_required_tool");
+});
+
+test("planner direct dispatch is instrumented separately", () => {
+  const { manager } = hostManagerForTest();
+  for (const stage of ["start", "name", "args", "end"]) {
+    hostLifecycleEvent(manager, "planner-direct-1", stage, {
+      source: "planner/bootstrap_direct",
+      durableIdentity: true,
+      name: "unreal_agent_plan",
+      toolName: "unreal_agent_plan",
+    });
+  }
+  assert.equal(manager.snapshot().transactions[0].source, "planner/bootstrap_direct");
+});
+
+test("synthesis commit dispatch is instrumented separately", () => {
+  const { manager } = hostManagerForTest();
+  for (const stage of ["start", "name", "args", "end"]) {
+    hostLifecycleEvent(manager, "synthesis-commit-1", stage, {
+      source: "synthesis_commit",
+      durableIdentity: true,
+      name: "unreal_task_commit_synthesis",
+      toolName: "unreal_task_commit_synthesis",
+    });
+  }
+  assert.equal(manager.snapshot().transactions[0].source, "synthesis_commit");
+});
+
+test("prepared replay after reconnect preserves the durable host identity", () => {
+  const { manager, emitted } = hostManagerForTest();
+  for (const stage of ["start", "name", "args", "end"]) {
+    hostLifecycleEvent(manager, "prepared-durable-1", stage, {
+      source: "prepared_replay",
+      predictionAttemptId: "reconnect-replay",
+      durableIdentity: true,
+      name: "write_file",
+      toolName: "write_file",
+      arguments: { path: "Source/Foo.cpp", content: "new" },
+    });
+  }
+  assert.equal(emitted.find((event) => event.kind === "start").toolCallId, "prepared-durable-1");
+  assert.equal(manager.snapshot().transactions[0].hostToolCallId, "prepared-durable-1");
+});
+
+test("replay of an already-emitted prepared call is idempotent", () => {
+  const { manager, emitted } = hostManagerForTest();
+  const replayOptions = {
+    source: "prepared_replay",
+    durableIdentity: true,
+    name: "write_file",
+    toolName: "write_file",
+    arguments: { path: "Source/Foo.cpp", content: "new" },
+  };
+  for (let replay = 0; replay < 2; replay += 1) {
+    hostLifecycleEvent(manager, "prepared-emitted-1", "start", replayOptions);
+    hostLifecycleEvent(manager, "prepared-emitted-1", "name", replayOptions);
+    hostLifecycleEvent(manager, "prepared-emitted-1", "args", replayOptions);
+    hostLifecycleEvent(manager, "prepared-emitted-1", "end", replayOptions);
+  }
+  assert.equal(emitted.filter((event) => event.kind === "name").length, 1);
+  assert.equal(manager.snapshot().acceptedHostTransactionCount, 1);
+});
+
+test("output-recovery retry creates a new host identity for the new attempt", () => {
+  const { manager } = hostManagerForTest();
+  for (const [attempt, id] of [["output-recovery-1", "output-recovery-host-1"], ["output-recovery-2", "output-recovery-host-2"]]) {
+    for (const stage of ["start", "name", "end"]) {
+      hostLifecycleEvent(manager, id, stage, {
+        source: "output_recovery",
+        predictionAttemptId: attempt,
+        rawToolCallId: "same-local-output-id",
+        modelLocalCallId: "3",
+        toolCallId: `${attempt}-same-local-output-id`,
+      });
+    }
+  }
+  assert.equal(manager.snapshot().acceptedHostTransactionCount, 2);
+});
+
+test("callback FSM failure is terminal and a clean retry starts a fresh lifecycle", () => {
+  const { createToolCallCallbackFsm } = require("../dist/generator.js");
+  const failed = createToolCallCallbackFsm();
+  assert.equal(failed.failure(9, new Error("serialization failed")), true);
+  assert.throws(() => failed.end(9, {
+    id: "failed-call", name: "read_file", arguments: {},
+  }), /after terminal failure/);
+
+  const retry = createToolCallCallbackFsm();
+  assert.equal(retry.start(9, "retry-call"), true);
+  assert.equal(retry.name(9, "read_file"), true);
+  assert.equal(retry.args(9, "{}"), true);
+  assert.equal(retry.end(9, {
+    id: "retry-call", name: "read_file", arguments: {},
+  }), true);
 });
 
 test("emitting mutation dispatch is re-emitted with the same id after restart", async () => {

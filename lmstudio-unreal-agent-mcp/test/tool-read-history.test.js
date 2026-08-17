@@ -11,6 +11,7 @@ const {
   novelLineCount,
   mergeRanges,
   cachedReadInstruction,
+  getFileCoverage,
 } = require("../src/tool-read-history");
 
 const CONTEXT = {
@@ -114,12 +115,16 @@ test("identical successful read returns cached repeat on second call", () => {
 
   const second = checkReadRepeat(tool, args, CONTEXT);
   assert.strictEqual(second.action, "cache");
-  assert.strictEqual(second.reason, "READ_REPEAT_DETECTED");
+  assert.strictEqual(second.reason, "READ_CACHE_HIT");
+  assert.strictEqual(second.resultKind, "cache_hit");
+  assert.strictEqual(second.evidenceProgressed, false);
   assert.strictEqual(second.cachedContent, content);
 
   const third = checkReadRepeat(tool, args, CONTEXT);
-  assert.strictEqual(third.action, "stagnation");
-  assert.strictEqual(third.reason, "EVIDENCE_STAGNATION");
+  assert.strictEqual(third.action, "blocked");
+  assert.strictEqual(third.reason, "READ_REPEAT_BLOCKED");
+  assert.strictEqual(third.errorCode, "READ_REPEAT_BLOCKED");
+  assert.strictEqual(third.evidenceProgressed, false);
   assert.strictEqual(third.attempts, 3);
 });
 
@@ -166,7 +171,8 @@ test("fully covered sub-range is materialized once instead of returning a wider 
 
   const nested = normalizeReadToolArgs(tool, { path: "Source/Foo.cpp", startLine: 120, endLine: 150 });
   const decision = checkReadRepeat(tool, nested, CONTEXT);
-  assert.strictEqual(decision.action, "allow");
+  assert.strictEqual(decision.action, "cache");
+  assert.strictEqual(decision.resultKind, "cache_hit");
   assert.strictEqual(decision.materializeCoveredRange, true);
   assert.strictEqual(decision.fullyCovered, true);
   assert.strictEqual(decision.cachedContent, undefined);
@@ -188,7 +194,7 @@ test("covered sub-range materialization is bounded per file version", () => {
   );
 
   const first = checkReadRepeat(tool, firstNested, CONTEXT, { coveredRangeMaterializationBudget: 1 });
-  assert.strictEqual(first.action, "allow");
+  assert.strictEqual(first.action, "cache");
   recordReadSuccess(tool, firstNested, CONTEXT, "exact-20-80");
   const blocked = checkReadRepeat(
     tool,
@@ -231,8 +237,8 @@ test("stagnation records escalate on second identical blocked call", () => {
   recordReadStagnation(tool, args, CONTEXT);
 
   const second = checkReadRepeat(tool, args, CONTEXT);
-  assert.strictEqual(second.action, "stagnation");
-  assert.strictEqual(second.reason, "EVIDENCE_STAGNATION_REPEAT");
+  assert.strictEqual(second.action, "blocked");
+  assert.strictEqual(second.reason, "READ_REPEAT_BLOCKED");
 });
 
 test("search_files cache key distinguishes filename-aware discovery", () => {
@@ -270,7 +276,7 @@ test("covering cache does not leak content across files", () => {
   recordReadSuccess(tool, wideB, ctxB, "FILE-B-BODY");
   const nestedOnB = normalizeReadToolArgs(tool, { path: "Source/B.cpp", startLine: 20, endLine: 40 });
   const covered = checkReadRepeat(tool, nestedOnB, ctxB);
-  assert.strictEqual(covered.action, "allow");
+  assert.strictEqual(covered.action, "cache");
   assert.strictEqual(covered.cachedContent, undefined);
   assert.notStrictEqual(covered.cachedContent, "FILE-A-BODY");
 });
@@ -300,8 +306,8 @@ test("routed stagnation follows the task across evidence sessions but not into a
 
   const compactedTurn = { ...firstTurn, evidenceSessionId: "chat-b" };
   const sameTask = checkReadRepeat(tool, args, compactedTurn);
-  assert.strictEqual(sameTask.action, "stagnation");
-  assert.strictEqual(sameTask.reason, "EVIDENCE_STAGNATION_REPEAT");
+  assert.strictEqual(sameTask.action, "blocked");
+  assert.strictEqual(sameTask.reason, "READ_REPEAT_BLOCKED");
 
   const otherTask = { ...firstTurn, taskSessionId: "task-b" };
   assert.strictEqual(checkReadRepeat(tool, args, otherTask).action, "allow");
@@ -315,16 +321,157 @@ test("unbound stagnation is isolated by evidence session", () => {
   const chatB = { ...CONTEXT, evidenceSessionId: "chat-b" };
   recordReadStagnation(tool, args, chatA);
 
-  assert.strictEqual(checkReadRepeat(tool, args, chatA).reason, "EVIDENCE_STAGNATION_REPEAT");
+  assert.strictEqual(checkReadRepeat(tool, args, chatA).reason, "READ_REPEAT_BLOCKED");
   assert.strictEqual(checkReadRepeat(tool, args, chatB).action, "allow");
 });
 
 test("READ_REPEAT instruction does not force whole-workflow stop wording", () => {
-  const text = cachedReadInstruction("READ_REPEAT_DETECTED");
+  const text = cachedReadInstruction("READ_CACHE_HIT");
   assert.match(text, /Do not re-read this same path/i);
   assert.match(text, /Continue with other unread/i);
   assert.doesNotMatch(text, /Finish the analysis from existing evidence/);
   const stagnate = cachedReadInstruction("EVIDENCE_STAGNATION");
   assert.match(stagnate, /evidence phase is complete/i);
   assert.match(stagnate, /write\/validation step/i);
+});
+
+test("semantic coverage coalesces large, compact, and default whole-file materializations", () => {
+  clearReadSuccessHistory();
+  const context = {
+    ...CONTEXT,
+    contentHash: "a".repeat(64),
+  };
+  const large = normalizeReadToolArgs("read_file", {
+    path: "Source/Foo.cpp",
+    detailLevel: "large",
+    maxBytes: 100_000,
+  });
+  recordReadSuccess("read_file", large, context, "complete body", {
+    lineRange: { start: 1, end: 120 },
+    lineCount: 120,
+    wholeFileComplete: true,
+    truncated: false,
+    detailLevel: "large",
+  });
+
+  for (const detailLevel of ["compact", undefined]) {
+    const decision = checkReadRepeat("read_file", normalizeReadToolArgs("read_file", {
+      path: "Source/Foo.cpp",
+      ...(detailLevel ? { detailLevel } : {}),
+    }), context);
+    assert.equal(decision.action, "cache");
+    assert.equal(decision.resultKind, "cache_hit");
+    assert.equal(decision.evidenceProgressed, false);
+    assert.equal(Object.hasOwn(decision, "errorCode"), false);
+  }
+  assert.equal(getFileCoverage(context).wholeFileComplete, true);
+});
+
+test("truncated whole-file coverage returns an exact unread continuation", () => {
+  clearReadSuccessHistory();
+  const context = {
+    ...CONTEXT,
+    contentHash: "b".repeat(64),
+    coverageContinuation: {
+      requiredNextTool: "read_file_range",
+      requiredNextToolArgs: { path: "Source/Foo.cpp", startLine: 41, endLine: 120 },
+    },
+  };
+  recordReadSuccess("read_file", { path: "Source/Foo.cpp", detailLevel: "compact" }, context, "prefix", {
+    lineRange: { start: 1, end: 40 },
+    lineCount: 120,
+    wholeFileComplete: false,
+    truncated: true,
+    nextUnreadLine: 41,
+  });
+  const decision = checkReadRepeat("read_file", { path: "Source/Foo.cpp" }, context);
+  assert.equal(decision.action, "blocked");
+  assert.equal(decision.resultKind, "repeat_blocked");
+  assert.equal(decision.errorCode, "READ_REPEAT_BLOCKED");
+  assert.deepEqual(decision.continuation.requiredNextToolArgs, {
+    path: "Source/Foo.cpp", startLine: 41, endLine: 120,
+  });
+  assert.equal(decision.evidenceProgressed, false);
+});
+
+test("truncated coverage may require one exact read_symbol continuation", () => {
+  clearReadSuccessHistory();
+  const context = {
+    ...CONTEXT,
+    contentHash: "b2".repeat(32),
+    coverageContinuation: {
+      requiredNextTool: "read_symbol",
+      requiredNextToolArgs: {
+        path: "Source/Foo.cpp",
+        symbol: "FFoo::Build",
+        contextLines: 4,
+      },
+    },
+  };
+  recordReadSuccess("read_file", { path: "Source/Foo.cpp" }, context, "prefix", {
+    lineRange: { start: 1, end: 40 },
+    lineCount: 120,
+    wholeFileComplete: false,
+    truncated: true,
+    nextUnreadLine: 41,
+  });
+  const decision = checkReadRepeat("read_file", { path: "Source/Foo.cpp" }, context);
+  assert.equal(decision.action, "blocked");
+  assert.equal(decision.resultKind, "repeat_blocked");
+  assert.equal(decision.continuation.requiredNextTool, "read_symbol");
+  assert.deepEqual(decision.continuation.requiredNextToolArgs, {
+    path: "Source/Foo.cpp",
+    symbol: "FFoo::Build",
+    contextLines: 4,
+  });
+});
+
+test("unread range completes the same evidence version instead of creating a second file", () => {
+  clearReadSuccessHistory();
+  const context = { ...CONTEXT, contentHash: "c".repeat(64) };
+  recordReadSuccess("read_file", { path: "Source/Foo.cpp" }, context, "prefix", {
+    lineRange: { start: 1, end: 40 },
+    lineCount: 120,
+    truncated: true,
+    wholeFileComplete: false,
+    nextUnreadLine: 41,
+  });
+  const continuation = normalizeReadToolArgs("read_file_range", {
+    path: "Source/Foo.cpp", startLine: 41, endLine: 120,
+  });
+  recordReadSuccess("read_file_range", continuation, context, "suffix", {
+    lineRange: { start: 41, end: 120 },
+    lineCount: 120,
+    wholeFileComplete: false,
+    truncated: false,
+  });
+  const coverage = getFileCoverage(context);
+  assert.equal(coverage.wholeFileComplete, true);
+  assert.deepEqual(coverage.ranges, [{ start: 1, end: 120 }]);
+});
+
+test("content hash and mutation generation are semantic version boundaries", () => {
+  clearReadSuccessHistory();
+  const args = normalizeReadToolArgs("read_file", { path: "Source/Foo.cpp" });
+  const first = { ...CONTEXT, contentHash: "d".repeat(64), mutationGeneration: 4 };
+  recordReadSuccess("read_file", args, first, "v1", { wholeFileComplete: true });
+  assert.equal(checkReadRepeat("read_file", args, first).action, "cache");
+
+  const changedContent = { ...first, contentHash: "e".repeat(64) };
+  assert.equal(checkReadRepeat("read_file", args, changedContent).action, "allow");
+  const changedGeneration = { ...first, mutationGeneration: 5 };
+  assert.equal(checkReadRepeat("read_file", args, changedGeneration).action, "allow");
+});
+
+test("a non-progressing repeat does not clear a recorded stagnation", () => {
+  clearReadSuccessHistory();
+  const context = { ...CONTEXT, contentHash: "f".repeat(64) };
+  const args = normalizeReadToolArgs("search_files", { query: "Foo", path: "Source" });
+  recordReadSuccess("search_files", args, context, "one result");
+  recordReadStagnation("search_files", args, context);
+  recordReadSuccess("search_files", args, context, "same result");
+  const blocked = checkReadRepeat("search_files", args, context);
+  assert.equal(blocked.action, "blocked");
+  assert.equal(blocked.errorCode, "READ_REPEAT_BLOCKED");
+  assert.equal(blocked.evidenceProgressed, false);
 });

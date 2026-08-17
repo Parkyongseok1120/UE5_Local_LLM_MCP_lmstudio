@@ -137,6 +137,63 @@ test("byte-capped read_file does not complete a repository inventory entry befor
   assert.equal(state.repoAuditLedger.remainingCount, 1);
 });
 
+test("duplicate direct source evidence is non-progressing and preserves the unread frontier", () => {
+  const state = {
+    taskSessionId: "task_coverage_1",
+    planRevision: "1",
+    mode: "read_only",
+    writesAllowed: false,
+    taskKind: "source_analysis",
+    sourceEvidence: { version: 2, planRevision: "1", files: {} },
+    inspectionContract: {
+      evidenceBudget: {
+        representativePairs: 1,
+        maxDirectSourceReadsPerPhase: 4,
+        maxEvidenceCharsPerPhase: 10_000,
+      },
+    },
+    inspectionProgress: {
+      version: 1,
+      status: "collecting",
+      directSourceReads: 0,
+      evidenceCharacters: 0,
+      remainingFrontier: [
+        "Source/Cinematic/Public/Director/X.h",
+        "Source/Cinematic/Private/Director/X.cpp",
+      ],
+    },
+  };
+  const metadata = {
+    directSourceEvidence: {
+      projectRelativePath: "Source/Cinematic/Public/Director/X.h",
+      contentHash: "1".repeat(64),
+      mutationGeneration: 0,
+      fileSignature: "100:1",
+      lineRange: "1-80",
+      lineCount: 80,
+      characterCount: 800,
+      wholeFileComplete: true,
+      completeRead: true,
+    },
+  };
+  const first = recordDirectSourceEvidence(state, "read_file", metadata);
+  assert.equal(first.evidenceProgressed, true);
+  assert.equal(state.inspectionProgress.directSourceReads, 1);
+  assert.deepEqual(state.inspectionProgress.remainingFrontier, [
+    "Source/Cinematic/Private/Director/X.cpp",
+  ]);
+
+  const before = JSON.stringify(state.inspectionProgress);
+  const second = recordDirectSourceEvidence(state, "read_file", metadata);
+  assert.equal(second.evidenceProgressed, false);
+  assert.equal(second.semanticDuplicate, true);
+  assert.equal(JSON.stringify(state.inspectionProgress), before);
+  assert.deepEqual(state.inspectionProgress.remainingFrontier, [
+    "Source/Cinematic/Private/Director/X.cpp",
+  ]);
+  assert.equal(state.synthesisReadiness.ready, false);
+});
+
 test("concurrent directory budget overflow preserves an open audit frontier through bounded replan", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "directory-budget-workspace-"));
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "directory-budget-state-"));

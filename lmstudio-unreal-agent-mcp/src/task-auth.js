@@ -1017,12 +1017,35 @@ function mergeEvidenceRanges(values) {
   return merged.slice(-16);
 }
 
+function novelEvidenceLineCount(range, priorRanges = []) {
+  const parsed = parseEvidenceRange(range);
+  if (!parsed) return 0;
+  const [start, end] = parsed;
+  let covered = 0;
+  for (const prior of mergeEvidenceRanges(priorRanges)) {
+    const overlapStart = Math.max(start, prior[0]);
+    const overlapEnd = Math.min(end, prior[1]);
+    if (overlapEnd >= overlapStart) covered += overlapEnd - overlapStart + 1;
+  }
+  return Math.max(0, end - start + 1 - covered);
+}
+
+function evidenceRangesCoverFile(ranges, lineCount) {
+  const total = Math.max(0, Number(lineCount || 0));
+  return total > 0 && mergeEvidenceRanges(ranges)
+    .some((range) => range[0] <= 1 && range[1] >= total);
+}
+
 function recordDirectSourceEvidence(state, toolName, callMetadata) {
-  if (!["read_file", "read_file_range"].includes(String(toolName || ""))) return;
+  if (!["read_file", "read_file_range", "read_symbol"].includes(String(toolName || ""))) {
+    return { recorded: false, evidenceProgressed: false };
+  }
   const metadata = callMetadata && typeof callMetadata === "object"
     ? callMetadata.directSourceEvidence
     : null;
-  if (!metadata || typeof metadata !== "object") return;
+  if (!metadata || typeof metadata !== "object") {
+    return { recorded: false, evidenceProgressed: false };
+  }
   const relPath = normalizeEvidencePath(metadata.projectRelativePath);
   const contentHash = String(metadata.contentHash || "").trim().toLowerCase();
   if (
@@ -1032,7 +1055,7 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     || !DIRECT_SOURCE_EXTENSIONS.has(path.posix.extname(relPath).toLowerCase())
     || !/^[0-9a-f]{64}$/.test(contentHash)
   ) {
-    return;
+    return { recorded: false, evidenceProgressed: false };
   }
   const planRevision = String(state.planRevision || "");
   const key = filesystemPathIdentity(relPath);
@@ -1040,6 +1063,13 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     ? "declaration"
     : "implementation";
   const lineRange = String(metadata.lineRange || "").trim();
+  const mutationGeneration = Math.max(
+    0,
+    Number(metadata.mutationGeneration ?? state.mutationGeneration ?? 0),
+  );
+  const lineCount = Math.max(0, Number(metadata.lineCount || 0));
+  const wholeFileComplete = metadata.wholeFileComplete === true
+    || metadata.completeRead === true;
 
   let sourceLedger = state.sourceEvidence && typeof state.sourceEvidence === "object"
     ? { ...state.sourceEvidence }
@@ -1053,13 +1083,27 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
   const sourcePrior = sourceFiles[key] && typeof sourceFiles[key] === "object"
     ? sourceFiles[key]
     : {};
-  const sameRevision = String(sourcePrior.contentHash || "") === contentHash;
+  const priorMutationGeneration = sourcePrior.mutationGeneration == null
+    ? mutationGeneration
+    : Math.max(0, Number(sourcePrior.mutationGeneration || 0));
+  const sameVersion = String(sourcePrior.contentHash || "") === contentHash
+    && priorMutationGeneration === mutationGeneration;
+  const sameRevision = sameVersion;
+  const priorRanges = sameVersion && Array.isArray(sourcePrior.coveredRanges)
+    ? sourcePrior.coveredRanges
+    : [];
+  const novelLines = novelEvidenceLineCount(lineRange, priorRanges);
   const coveredRanges = mergeEvidenceRanges([
-    ...(sameRevision && Array.isArray(sourcePrior.coveredRanges)
-      ? sourcePrior.coveredRanges
-      : []),
+    ...priorRanges,
     lineRange,
   ]);
+  const wholeFileCompleteEffective = wholeFileComplete
+    || evidenceRangesCoverFile(coveredRanges, lineCount);
+  const evidenceProgressed = metadata.materializationOnly === true
+    || metadata.evidenceProgressed === false
+    ? false
+    : !sameVersion || novelLines > 0
+      || (wholeFileCompleteEffective && sourcePrior.wholeFileComplete !== true);
   const sourceTools = new Set(
     sameRevision && Array.isArray(sourcePrior.tools)
       ? sourcePrior.tools.map(String)
@@ -1071,13 +1115,32 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
   )).slice(0, 32);
   sourceFiles[key] = {
     evidenceId: crypto.createHash("sha256")
-      .update(`${key}\0${contentHash}`)
+      .update(`${key}\0${contentHash}\0${mutationGeneration}\0${state.taskSessionId || ""}`)
       .digest("hex")
       .slice(0, 24),
     path: relPath,
     contentHash,
+    fileSignature: String(metadata.fileSignature || "").slice(0, 120),
+    mutationGeneration,
+    lineCount,
+    wholeFileComplete: Boolean(sourcePrior.wholeFileComplete === true || wholeFileCompleteEffective),
     sourceKind,
     coveredRanges,
+    largestMaterialization: {
+      ...(sameVersion && sourcePrior.largestMaterialization && typeof sourcePrior.largestMaterialization === "object"
+        ? sourcePrior.largestMaterialization
+        : {}),
+      ...(metadata.detailLevel != null ? { detailLevel: String(metadata.detailLevel) } : {}),
+      ...(metadata.bytesReturned != null ? { bytesReturned: Math.max(0, Number(metadata.bytesReturned || 0)) } : {}),
+    },
+    truncated: metadata.truncated === true && !(sourcePrior.wholeFileComplete === true || wholeFileCompleteEffective),
+    nextUnreadLine: (sourcePrior.wholeFileComplete === true || wholeFileCompleteEffective)
+      ? null
+      : Math.max(1, Number(metadata.nextUnreadLine || sourcePrior.nextUnreadLine || 1)),
+    semanticAnchors: Array.from(new Set([
+      ...(sameVersion && Array.isArray(sourcePrior.semanticAnchors) ? sourcePrior.semanticAnchors : []),
+      ...(Array.isArray(metadata.semanticAnchors) ? metadata.semanticAnchors : []),
+    ].map(String).filter(Boolean))).slice(0, 16),
     declarations: boundedSymbols([
       ...(sameRevision && Array.isArray(sourcePrior.declarations)
         ? sourcePrior.declarations
@@ -1091,7 +1154,9 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
       ...(Array.isArray(metadata.implementations) ? metadata.implementations : []),
     ]),
     tools: Array.from(sourceTools).slice(-2),
-    recordedAt: new Date().toISOString(),
+    recordedAt: evidenceProgressed
+      ? new Date().toISOString()
+      : String(sourcePrior.recordedAt || new Date().toISOString()),
   };
   const boundedSourceEntries = Object.entries(sourceFiles)
     .sort((left, right) => String(right[1]?.recordedAt || "").localeCompare(String(left[1]?.recordedAt || "")))
@@ -1140,7 +1205,7 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     && typeof inspectionContract.evidenceBudget === "object"
     ? inspectionContract.evidenceBudget
     : null;
-  if (inspectionBudget) {
+  if (inspectionBudget && evidenceProgressed) {
     const priorProgress = state.inspectionProgress && typeof state.inspectionProgress === "object"
       ? state.inspectionProgress
       : {};
@@ -1160,13 +1225,13 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
       updatedAt: new Date().toISOString(),
     };
   }
-  updateInspectionFrontier(state, [], relPath);
+  if (evidenceProgressed) updateInspectionFrontier(state, [], relPath);
   state.synthesisReadiness = deriveSynthesisReadiness(state);
 
   const audit = state.repoAuditLedger && typeof state.repoAuditLedger === "object"
     ? { ...state.repoAuditLedger }
     : null;
-  if (audit?.required === true) {
+  if (audit?.required === true && evidenceProgressed) {
     const entries = audit.entries && typeof audit.entries === "object"
       ? { ...audit.entries }
       : {};
@@ -1226,6 +1291,16 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
       state.repoAuditLedger = audit;
     }
   }
+  return {
+    recorded: true,
+    evidenceProgressed,
+    workflowProgressed: evidenceProgressed,
+    semanticDuplicate: !evidenceProgressed,
+    contentHash,
+    mutationGeneration,
+    coveredRanges,
+    evidenceId: String(sourceFiles[key]?.evidenceId || ""),
+  };
 }
 
 function recordAbsentSourceEvidence(state, toolName, callMetadata) {
@@ -1642,6 +1717,11 @@ function mutateRouteBudget(
       const calls = Array.isArray(usage.calls) ? usage.calls.map(String) : [];
       usage.reservations = next;
       usage.reserved = next.length;
+      const directEvidenceResult = recordDirectSourceEvidence(current, toolName, callMetadata);
+      const semanticNoProgress = Boolean(
+        callMetadata?.evidenceProgressed === false
+        || directEvidenceResult?.evidenceProgressed === false && directEvidenceResult?.recorded === true
+      );
       const routeTransitioned = Boolean(
         reservedRouteHashForOperation
         && String(route.routeHash || "")
@@ -1660,13 +1740,18 @@ function mutateRouteBudget(
         usage.priorRouteCommits = priorRouteCommits;
         usage.count = count;
         usage.calls = calls.slice(-limit);
+      } else if (semanticNoProgress) {
+        // A cache/materialization hit releases its reservation without
+        // consuming the durable phase budget. It is not accepted evidence or
+        // workflow progress.
+        usage.count = count;
+        usage.calls = calls.slice(-limit);
       } else {
         calls.push(toolName);
         usage.count = count + 1;
         usage.calls = calls.slice(-limit);
       }
       current.toolRouteUsage = usage;
-      recordDirectSourceEvidence(current, toolName, callMetadata);
       recordInspectionDiscovery(current, callMetadata);
       if (
         String(toolName || "") === "list_directory"
