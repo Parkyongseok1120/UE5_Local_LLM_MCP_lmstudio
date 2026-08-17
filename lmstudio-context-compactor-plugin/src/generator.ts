@@ -1501,6 +1501,7 @@ const TASK_PLANNER_TOOL_NAME = "unreal_agent_plan";
 const TASK_ROUTE_OWNERSHIP_MARKER = "[UNREAL_TASK_ROUTE_OWNERSHIP_GATE]";
 const PRE_ROUTE_PLANNER_HANDOFF_MARKER = "[UNREAL_PRE_ROUTE_PLANNER_HANDOFF]";
 const INITIAL_ACTIVE_PROJECT_BOOTSTRAP_MARKER = "[UNREAL_INITIAL_ACTIVE_PROJECT_BOOTSTRAP]";
+const SOURCE_ANALYSIS_ADMISSION_MARKER = "[UNREAL_SOURCE_ANALYSIS_ADMISSION_GATE]";
 const TOOL_CATALOG_REFRESH_MARKER = "[UNREAL_TOOL_CATALOG_REFRESH]";
 const SERVER_REQUIRED_TOOL_MARKER = "[UNREAL_SERVER_REQUIRED_TOOL]";
 const SERVER_REQUIRED_TOOL_REPAIR_MARKER = "[UNREAL_SERVER_REQUIRED_TOOL_REPAIR]";
@@ -1725,29 +1726,8 @@ function requiresDurableInspectionPlanning(
   goal: string,
   context: RequestIntentContext = {},
 ): boolean {
-  const source = String(goal || "").trim();
-  if (!source || requiresTaskRoutePlanning(source, context)) return false;
-
-  // Durable inspection is for repository/project evidence work, not generic
-  // Unreal Engine questions. Requiring both a project/source anchor and a
-  // multi-evidence analysis verb avoids creating tasks for ordinary Q&A.
-  const projectEvidenceAnchor = Boolean(
-    /\b(?:this|current|our|the)\s+(?:project|repository|repo|codebase|workspace|implementation|source|plugin|module)\b/i.test(source)
-    || /\b(?:source|plugins?|config)\/[\w./\\-]+/i.test(source)
-    || /\b[\w.-]+\.(?:h|hpp|hh|cpp|cc|cxx|cs|uproject|uplugin|ini|json|py|js|ts)\b/i.test(source)
-    || /(?:이|현재|우리)\s*(?:프로젝트|저장소|리포지토리|코드베이스|워크스페이스|구현|소스|플러그인|모듈)/.test(source)
-    || /(?:프로젝트|저장소|코드베이스|소스|코드)\s*(?:전체|전반|내|안|에서|의)/.test(source)
-  );
-  const targetedSubsystemAnchor = Boolean(
-    /\b(?:[A-Za-z][\w-]*\s+){0,3}(?:system|subsystem|module|folder)\s+(?:c\+\+\s+)?(?:code|implementation|structure)\b/i.test(source)
-    || /\b(?:cinematic|vfx|combat|animation|ai|inventory|networking)\b.*\b(?:code|implementation|structure|folder|module)\b/i.test(source)
-    || /(?:시네마틱|전투|애니메이션|인벤토리|네트워크|[A-Za-z][\w-]*)\s*(?:시스템|서브시스템|모듈|폴더)?\s*(?:의\s*)?(?:C\+\+\s*)?(?:코드(?:들)?|소스|구조|구현)/i.test(source)
-  );
-  const multiEvidenceAnalysis = Boolean(
-    /\b(?:audit|analy[sz]e|review|inspect|trace|compare|cross-check|investigate|root\s+cause|end-to-end|all|every|multiple|across)\b/i.test(source)
-    || /(?:감사|분석|검토|점검|대조|추적|비교|조사|근본\s*원인|전체|전부|모든|여러|가로질러)/.test(source)
-  );
-  return (projectEvidenceAnchor || targetedSubsystemAnchor) && multiEvidenceAnalysis;
+  const intent = core.classifySourceWorkIntent(String(goal || ""), context);
+  return intent.requiresDurableTask === true && !requiresTaskRoutePlanning(String(goal || ""), context);
 }
 
 function requiresFeatureCompletionAudit(goal: string): boolean {
@@ -1773,6 +1753,19 @@ function injectInitialActiveProjectBootstrapRule(chat: Chat, toolName: string): 
     + "action when a project is selected."
   );
   return upsertLeadingSystemRule(chat, INITIAL_ACTIVE_PROJECT_BOOTSTRAP_MARKER, rule);
+}
+
+function injectSourceAnalysisAdmissionRule(chat: Chat, plannerAvailable: boolean): boolean {
+  const rule = (
+    `${SOURCE_ANALYSIS_ADMISSION_MARKER}\n`
+    + "This is a project source-work request. A durable server-owned task must admit it before any source evidence "
+    + "tool is callable. The only permitted transition is unreal_get_active_project when the project is unresolved, "
+    + "then unreal_agent_plan with the exact latest user request copied into request and latestUserMessage. "
+    + (plannerAvailable
+      ? "Do not call search_files, list_directory, read_file, read_file_range, or read_symbol before that planner result."
+      : "The planner provider is unavailable; stop and report the missing planner instead of inspecting source directly.")
+  );
+  return upsertLeadingSystemRule(chat, SOURCE_ANALYSIS_ADMISSION_MARKER, rule);
 }
 
 function injectToolCatalogRefreshRule(chat: Chat, toolName: string): boolean {
@@ -3942,6 +3935,32 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   if (workflowStopActive) {
     injectWorkflowStopRule(history, nextCheckpoint.semanticBlocker);
   }
+  const sourceWorkIntent = core.classifySourceWorkIntent(
+    authoritativeClassificationGoal,
+    authoritativeRequestIntentContext,
+  );
+  const sourceAdmissionInfrastructureAvailable = Boolean(
+    toolDefinitions.some((tool: any) => toolNamesMatch(
+      TASK_PLANNER_TOOL_NAME,
+      tool?.function?.name || tool?.name || "",
+    ))
+    && toolDefinitions.some((tool: any) => toolNamesMatch(
+      "unreal_get_active_project",
+      tool?.function?.name || tool?.name || "",
+    ))
+  );
+  const targetedSourceAdmissionCategory = new Set<string>([
+    core.SOURCE_WORK_CATEGORIES?.TARGETED_SOURCE_ANALYSIS,
+    core.SOURCE_WORK_CATEGORIES?.TARGETED_SOURCE_EDIT,
+  ]).has(String(sourceWorkIntent.category));
+  const sourceAnalysisAdmissionRequired = Boolean(
+    !detachedSideQueryActive
+    && !trailingMetaUser
+    && sourceWorkIntent.requiresDurableTask === true
+    && (sourceAdmissionInfrastructureAvailable || targetedSourceAdmissionCategory)
+    && !serverControlV2Active
+    && !nextCheckpoint?.taskRouteOwnership
+  );
   const persistedArchitectureRecovery = Boolean(
     nextCheckpoint?.architectureProposal?.validationOk === false
     && architectureRecoveryContinuationRequested(architectureGoal),
@@ -3954,8 +3973,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && !workflowStopActive
     && !serverControlV2Active
     && !serverOwnedArchitectureControl && !trailingMetaUser && (
-    requiresArchitectureValidation(authoritativeGoal, toolDefinitions)
+    !sourceAnalysisAdmissionRequired
+    && (
+      requiresArchitectureValidation(authoritativeGoal, toolDefinitions)
     || persistedArchitectureRecovery
+    )
   );
   if (architectureValidationRequired) {
     injectArchitectureValidationRule(history);
@@ -4048,6 +4070,25 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     requiresTaskRoutePlanning(authoritativeClassificationGoal, authoritativeRequestIntentContext)
     || durableInspectionPlanningRequired
   );
+  const activeProjectResolved = Boolean(
+    String(nextCheckpoint?.activeProject || nextCheckpoint?.activeProjectName || "").trim(),
+  );
+  const nonDurablePlannerSuppressionRequired = Boolean(
+    !serverControlV2Active
+    && !routeOwnershipAvailable
+    && !taskRoutePlanningRequired
+    && !durableInspectionPlanningRequired
+    && (
+      String(sourceWorkIntent.category) === String(core.SOURCE_WORK_CATEGORIES?.PROJECT_STATUS_ONLY)
+      || (
+        String(sourceWorkIntent.category) === String(core.SOURCE_WORK_CATEGORIES?.GENERIC_CONCEPT_ANSWER)
+        && sourceWorkIntent.conceptQuestion === true
+      )
+    )
+  );
+  if (sourceAnalysisAdmissionRequired) {
+    injectSourceAnalysisAdmissionRule(history, plannerAvailable);
+  }
   const featureCompletionAuditRequired = requiresFeatureCompletionAudit(authoritativeGoal);
   const effectiveFeatureIntentEvidenceReadThreshold = featureCompletionAuditRequired
     ? Math.max(featureIntentEvidenceReadThreshold, 6)
@@ -4567,8 +4608,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && plannerTool
     && !trailingMetaUser
     && taskRoutePlanningRequired
-    && architectureStatus.discoveryCallsSinceLastAttempt === 0
-    && !architectureStatus.attempted
+    && !activeProjectResolved
+    && (
+      sourceAnalysisAdmissionRequired
+      || (
+        architectureStatus.discoveryCallsSinceLastAttempt === 0
+        && !architectureStatus.attempted
+      )
+    )
   );
   if (initialActiveProjectBootstrapForced) {
     injectInitialActiveProjectBootstrapRule(
@@ -4585,18 +4632,41 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && taskRoutePlanningRequired
     && (
       architectureStatus.validated
+      || (sourceAnalysisAdmissionRequired && activeProjectResolved)
       || (
         !architectureValidationRequired
-        && architectureStatus.discoveryCallsSinceLastAttempt >= (
+        && (
           durableInspectionPlanningRequired
-            ? durableInspectionDiscoveryLimit
-            : preRouteDiscoveryLimit
+            ? activeProjectResolved
+            : architectureStatus.discoveryCallsSinceLastAttempt >= preRouteDiscoveryLimit
         )
       )
     )
     && !initialActiveProjectBootstrapForced
   );
   if (preRoutePlannerForced) injectPreRoutePlannerHandoffRule(history);
+  const sourceAnalysisAdmissionBlocked = Boolean(
+    sourceAnalysisAdmissionRequired
+    && !initialActiveProjectBootstrapForced
+    && !preRoutePlannerForced
+  );
+  if (sourceAnalysisAdmissionBlocked) {
+    await appendEventBestEffort(sessionId, {
+      type: "source_analysis_admission_blocked",
+      at: isoNow(),
+      category: sourceWorkIntent.category,
+      plannerAvailable,
+      activeProjectResolved,
+      requiredTransition: activeProjectResolved
+        ? TASK_PLANNER_TOOL_NAME
+        : "unreal_get_active_project",
+    });
+    throw new Error(
+      activeProjectResolved
+        ? "Durable source analysis is blocked because unreal_agent_plan is unavailable. Source tools remain hidden."
+        : "Durable source analysis is blocked because the server-owned active-project bootstrap and planner route are unavailable. Source tools remain hidden.",
+    );
+  }
   const catalogRefreshPhaseEligible = Boolean(
     !workflowStopActive
     && !architectureToolForced
@@ -4784,7 +4854,13 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     : routeOwnershipAvailable
     ? phaseToolDefinitions.filter((tool: any) => activeRouteBootstrapToolAllowed(tool, nextCheckpoint))
     : phaseToolDefinitions;
-  const contractAwareRouteSafePhaseToolDefinitions = routeSafePhaseToolDefinitions.map((tool: any) => (
+  const nonDurableSafePhaseToolDefinitions = nonDurablePlannerSuppressionRequired
+    ? routeSafePhaseToolDefinitions.filter((tool: any) => !toolNamesMatch(
+      TASK_PLANNER_TOOL_NAME,
+      tool?.function?.name || tool?.name || "",
+    ))
+    : routeSafePhaseToolDefinitions;
+  const contractAwareRouteSafePhaseToolDefinitions = nonDurableSafePhaseToolDefinitions.map((tool: any) => (
     !tool?.__serverOwnedInjectedArgs
     && toolNamesMatch(FEATURE_INTENT_TOOL_NAME, tool?.function?.name || tool?.name || "")
       ? featureIntentContractTool
@@ -5141,6 +5217,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     requireCompleteArchitectureProposal,
     preRoutePlannerForced,
     durableInspectionPlanningRequired,
+    sourceWorkCategory: sourceWorkIntent.category,
+    sourceWorkDomain: sourceWorkIntent.domain,
+    sourceWorkOperation: sourceWorkIntent.operation,
+    sourceWorkMutability: sourceWorkIntent.mutability,
+    sourceWorkRequiresProjectEvidence: sourceWorkIntent.requiresProjectEvidence,
+    sourceWorkRequiresDurableTask: sourceWorkIntent.requiresDurableTask,
+    sourceAdmissionInfrastructureAvailable,
+    sourceAnalysisAdmissionRequired,
+    activeProjectResolved,
     durableInspectionDiscoveryLimit,
     currentTurnCapConfig,
     initialActiveProjectBootstrapForced,
@@ -7212,6 +7297,11 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       && !toolNamesMatch("unreal_get_active_project", requestedName);
     const plannerToolRejected = preRoutePlannerForced
       && !toolNamesMatch(TASK_PLANNER_TOOL_NAME, requestedName);
+    const sourceAnalysisAdmissionRejected = sourceAnalysisAdmissionRequired
+      && !toolNamesMatch(TASK_PLANNER_TOOL_NAME, requestedName)
+      && !toolNamesMatch("unreal_get_active_project", requestedName);
+    const nonDurablePlannerRejected = nonDurablePlannerSuppressionRequired
+      && toolNamesMatch(TASK_PLANNER_TOOL_NAME, requestedName);
     const catalogRefreshToolRejected = catalogRefreshForced
       && !toolNamesMatch(String(nextCheckpoint?.catalogRefresh?.tool || ""), requestedName);
     const discoveryToolRejected = architectureEvidenceRefillActive
@@ -7225,49 +7315,60 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     const semanticCallRejected = semanticForbiddenCallFingerprints.includes(
       String(semanticCallFingerprint || "").toLowerCase(),
     );
-    const ordinaryVerdict = semanticCallRejected
-      ? {
+    let ordinaryVerdict: any = { ok: true };
+    if (semanticCallRejected) {
+      ordinaryVerdict = {
         ok: false,
         reason: `semantic blocker forbids this exact ${requestedName || "<unnamed>"} call fingerprint; corrected arguments remain allowed`,
-      }
-      : semanticToolRejected
-      ? {
+      };
+    } else if (semanticToolRejected) {
+      ordinaryVerdict = {
         ok: false,
         reason: `semantic blocker forbids ${requestedName || "<unnamed>"}; errorCode=${nextCheckpoint?.semanticBlocker?.errorCode || "BLOCKED"}`,
-      }
-      : (activeProjectBootstrapRejected
-      ? {
+      };
+    } else if (activeProjectBootstrapRejected) {
+      ordinaryVerdict = {
         ok: false,
         reason: `Initial bootstrap expected unreal_get_active_project, got ${requestedName || "<unnamed>"}.`,
-      }
-      : (catalogRefreshToolRejected
-      ? {
+      };
+    } else if (catalogRefreshToolRejected) {
+      ordinaryVerdict = {
         ok: false,
         reason: `Tool-catalog synchronization expected ${nextCheckpoint?.catalogRefresh?.tool}; got ${requestedName || "<unnamed>"}.`,
-      }
-      : (plannerToolRejected
-      ? {
+      };
+    } else if (plannerToolRejected) {
+      ordinaryVerdict = {
         ok: false,
         reason: `Pre-route discovery is complete; expected ${TASK_PLANNER_TOOL_NAME}, got ${requestedName || "<unnamed>"}.`,
-      }
-      : (architectureToolRejected
-      ? {
+      };
+    } else if (sourceAnalysisAdmissionRejected) {
+      ordinaryVerdict = {
+        ok: false,
+        reason: `Durable source-analysis admission only allows ${TASK_PLANNER_TOOL_NAME} or unreal_get_active_project before task ownership; got ${requestedName || "<unnamed>"}.`,
+      };
+    } else if (nonDurablePlannerRejected) {
+      ordinaryVerdict = {
+        ok: false,
+        reason: `${sourceWorkIntent.category} is non-durable and must not start ${TASK_PLANNER_TOOL_NAME}.`,
+      };
+    } else if (architectureToolRejected) {
+      ordinaryVerdict = {
         ok: false,
         reason: `Architecture submission is required; expected ${ARCHITECTURE_TOOL_NAME}, got ${requestedName || "<unnamed>"}.`,
-      }
-      : (discoveryToolRejected
-        ? {
-          ok: false,
-          reason: `Architecture evidence refill only allows direct-source discovery or ${ARCHITECTURE_TOOL_NAME}; received ${requestedName || "<unnamed>"}.`,
-        }
-      : (missingRequiredProposal
-        ? {
-          ok: false,
-          reason: "Architecture submission is required; the validator call must include one complete proposal object.",
-        }
-      : (toolControlPlaneEnforced
-        ? validateToolRequest(entry.request, nextCheckpoint)
-        : { ok: true })))))));
+      };
+    } else if (discoveryToolRejected) {
+      ordinaryVerdict = {
+        ok: false,
+        reason: `Architecture evidence refill only allows direct-source discovery or ${ARCHITECTURE_TOOL_NAME}; received ${requestedName || "<unnamed>"}.`,
+      };
+    } else if (missingRequiredProposal) {
+      ordinaryVerdict = {
+        ok: false,
+        reason: "Architecture submission is required; the validator call must include one complete proposal object.",
+      };
+    } else if (toolControlPlaneEnforced) {
+      ordinaryVerdict = validateToolRequest(entry.request, nextCheckpoint);
+    }
     const verdict = detachedSideQueryActive
       ? (detachedSideQueryToolAllowed(requestedName)
         ? { ok: true }

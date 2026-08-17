@@ -9985,6 +9985,162 @@ test("long objectives are injected intact into the durable planner handoff", asy
   }
 });
 
+test("targeted source analysis admits through active-project then planner without a legacy read path", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-source-admission-"));
+  const sessionId = "ef".repeat(16);
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = sessionId;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const objective = "시네마틱 C++ 시스템에 대해서 구조를 분석해서 알려줘";
+    const toolDefinitions = [
+      {
+        type: "function",
+        function: {
+          name: "unreal_get_active_project",
+          parameters: {
+            type: "object",
+            properties: { sessionId: { type: "string" }, conversationSessionId: { type: "string" } },
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "unreal_agent_plan",
+          parameters: {
+            type: "object",
+            properties: {
+              request: { type: "string" },
+              latestUserMessage: { type: "string" },
+            },
+          },
+        },
+      },
+      ...["search_files", "list_directory", "read_file", "read_file_range", "read_symbol"].map((name) => ({
+        type: "function",
+        function: { name, parameters: { type: "object", properties: { path: { type: "string" } } } },
+      })),
+    ];
+    const model = {
+      identifier: "source-admission-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        throw new Error("The server-owned admission transition must bypass model tool choice.");
+      },
+    };
+
+    const firstEmitted = [];
+    await generate(
+      controllerFor(model, {}, stateRoot, firstEmitted, toolDefinitions),
+      Chat.from({ messages: [
+        { role: "user", content: [{ type: "text", text: objective }] },
+      ] }),
+    );
+    const activeProjectEnd = firstEmitted.find((event) => event.kind === "end");
+    assert.equal(activeProjectEnd?.request?.name, "unreal_get_active_project");
+    assert.equal(firstEmitted.some((event) => ["search_files", "list_directory", "read_file"].includes(event.name)), false);
+
+    const secondEmitted = [];
+    await generate(
+      controllerFor(model, {}, stateRoot, secondEmitted, toolDefinitions),
+      Chat.from({ messages: [
+        { role: "user", content: [{ type: "text", text: objective }] },
+        { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+          id: activeProjectEnd.request.id,
+          type: "function",
+          name: "unreal_get_active_project",
+          arguments: {},
+        } }] },
+        { role: "tool", content: [{ type: "toolCallResult", toolCallId: activeProjectEnd.request.id, name: "unreal_get_active_project", content: JSON.stringify({
+          ok: true,
+          activeProject: "C:/Projects/Project_MJS/Project_MJS.uproject",
+          projectName: "Project_MJS",
+        }) }] },
+      ] }),
+    );
+    const plannerEnd = secondEmitted.find((event) => event.kind === "end");
+    assert.equal(plannerEnd?.request?.name, "unreal_agent_plan");
+    assert.equal(plannerEnd.request.arguments.request, objective);
+    assert.equal(plannerEnd.request.arguments.latestUserMessage, objective);
+    assert.equal(secondEmitted.some((event) => ["search_files", "list_directory", "read_file"].includes(event.name)), false);
+    assert.equal(activeCheckpoint(stateRoot).activeProjectName, "Project_MJS");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("non-durable questions suppress planner and missing source admission fails closed", async () => {
+  const toolDefinitions = [
+    { type: "function", function: { name: "unreal_get_active_project", parameters: { type: "object" } } },
+    { type: "function", function: { name: "unreal_agent_plan", parameters: { type: "object" } } },
+    { type: "function", function: { name: "read_file", parameters: { type: "object" } } },
+  ];
+  for (const objective of ["지금 프로젝트 어디야", "What is an Unreal subsystem?"]) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-nondurable-question-"));
+    process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+    try {
+      const { generate } = require("../dist/generator.js");
+      const emitted = [];
+      let exposedNames = [];
+      const model = {
+        identifier: `nondurable-${objective.length}`,
+        async applyPromptTemplate() { return "formatted"; },
+        async countTokens(value) { return String(value || "").length; },
+        async getContextLength() { return 100_000; },
+        respond(_history, opts) {
+          exposedNames = (opts.rawTools?.tools || []).map((tool) => tool.function.name);
+          return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+        },
+      };
+      await generate(
+        controllerFor(model, {}, stateRoot, emitted, toolDefinitions),
+        Chat.from({ messages: [{ role: "user", content: [{ type: "text", text: objective }] }] }),
+      );
+      assert.equal(exposedNames.includes("unreal_agent_plan"), false, objective);
+      assert.equal(emitted.some((event) => event.kind === "end"), false);
+    } finally {
+      delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }
+
+  const blockedStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-missing-admission-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = blockedStateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let modelCalled = false;
+    const model = {
+      identifier: "missing-admission-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        modelCalled = true;
+        throw new Error("source tools must not be offered without admission infrastructure");
+      },
+    };
+    await assert.rejects(
+      generate(
+        controllerFor(model, {}, blockedStateRoot, [], [
+          { type: "function", function: { name: "search_files", parameters: { type: "object" } } },
+          { type: "function", function: { name: "read_file", parameters: { type: "object" } } },
+        ]),
+        Chat.from({ messages: [{ role: "user", content: [{ type: "text", text: "시네마틱 C++ 시스템에 대해서 구조를 분석해서 알려줘" }] }] }),
+      ),
+      /Durable source analysis is blocked/i,
+    );
+    assert.equal(modelCalled, false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(blockedStateRoot, { recursive: true, force: true });
+  }
+});
+
 test("durable inspection planning distinguishes project audits from generic Unreal questions", () => {
   const { requiresDurableInspectionPlanning, resolveCurrentTurnCapConfig } = require("../dist/generator.js");
   assert.equal(
@@ -10004,6 +10160,7 @@ test("durable inspection planning distinguishes project audits from generic Unre
     false,
   );
   for (const request of [
+    "시네마틱 C++ 시스템에 대해서 구조를 분석해서 알려줘",
     "시네마틱 시스템의 C++ 코드 구조를 전체적으로 분석해줘",
     "VFX 모듈 구현을 전부 검토하고 문제를 분석해줘",
     "전투 시스템 소스 코드를 대조해서 구조와 근본 원인을 분석해줘",

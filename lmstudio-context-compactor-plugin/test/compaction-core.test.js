@@ -1349,6 +1349,53 @@ test("mutation intent classification is shared across Korean read and write goal
   assert.equal(core.classifyMutationIntent("수정은 하지 말고 분석만 해줘").isMutation, false);
 });
 
+test("source-work admission is word-order independent and keeps status/concept questions out", () => {
+  const targeted = [
+    "시네마틱 C++ 시스템에 대해서 구조를 분석해서 알려줘",
+    "시네마틱 시스템의 C++ 코드 구조를 전체적으로 분석해줘",
+    "C++ 시네마틱 모듈이 어떻게 구성돼 있는지 알려줘",
+    "시네마틱 쪽 소스를 읽고 구조를 설명해줘",
+    "VFX C++ 시스템 설계를 분석해줘",
+    "전투 쪽 구현 파일들을 훑고 구조를 알려줘",
+    "카메라 시스템 C++ 코드 검토해줘",
+    "세이브 모듈이 어떤 파일들로 구성됐는지 분석해줘",
+    "Analyze the C++ cinematic system architecture.",
+    "Explain how the cinematic C++ module is structured.",
+    "Review the implementation structure of the VFX subsystem.",
+    "Inspect the combat source files and explain the architecture.",
+  ];
+  for (const request of targeted) {
+    const intent = core.classifySourceWorkIntent(request);
+    assert.equal(intent.category, "TARGETED_SOURCE_ANALYSIS", request);
+    assert.equal(intent.requiresProjectEvidence, true, request);
+    assert.equal(intent.requiresDurableTask, true, request);
+  }
+
+  for (const request of [
+    "지금 프로젝트 어디야",
+    "현재 활성 프로젝트 이름만 알려줘",
+  ]) {
+    const intent = core.classifySourceWorkIntent(request);
+    assert.equal(intent.category, "PROJECT_STATUS_ONLY", request);
+    assert.equal(intent.requiresDurableTask, false, request);
+  }
+  for (const request of [
+    "TArray가 뭐야?",
+    "언리얼 서브시스템이 뭐야?",
+    "이 에러 메시지를 번역해줘",
+  ]) {
+    const intent = core.classifySourceWorkIntent(request);
+    assert.equal(intent.category, "GENERIC_CONCEPT_ANSWER", request);
+    assert.equal(intent.requiresDurableTask, false, request);
+  }
+
+  const permutation = core.classifySourceWorkIntent(
+    "구조를 알려줘: C++ 시네마틱 시스템에 대해서",
+  );
+  assert.equal(permutation.category, "TARGETED_SOURCE_ANALYSIS");
+  assert.equal(permutation.sourceLanguage, "cpp");
+});
+
 test("matching server requestIntent overrides heuristics while legacy classifier calls remain compatible", () => {
   const readLookingWrite = "현재 프로젝트 상태만 보여줘";
   const writeIntent = requestIntentFor(readLookingWrite, {

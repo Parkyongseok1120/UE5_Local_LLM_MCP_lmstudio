@@ -1814,6 +1814,170 @@ function classifyMutationIntent(text, context = {}) {
   };
 }
 
+const SOURCE_WORK_CATEGORIES = Object.freeze({
+  PROJECT_STATUS_ONLY: "PROJECT_STATUS_ONLY",
+  GENERIC_CONCEPT_ANSWER: "GENERIC_CONCEPT_ANSWER",
+  TARGETED_SOURCE_ANALYSIS: "TARGETED_SOURCE_ANALYSIS",
+  TARGETED_SOURCE_EDIT: "TARGETED_SOURCE_EDIT",
+  REPOSITORY_OVERVIEW: "REPOSITORY_OVERVIEW",
+  REPOSITORY_EXHAUSTIVE_AUDIT: "REPOSITORY_EXHAUSTIVE_AUDIT",
+  SIDE_QUERY: "SIDE_QUERY",
+});
+
+const SOURCE_LANGUAGE_PATTERNS = [
+  ["cpp", /c\s*\+\+|\bcpp\b|\.(?:h|hpp|hh|hxx|inl|c|cc|cpp|cxx)\b/i],
+  ["csharp", /c\s*#|\bcsharp\b|\.(?:cs)\b/i],
+  ["python", /\bpython\b|\.(?:py)\b/i],
+  ["javascript", /\b(?:javascript|typescript|node(?:\.js)?)\b|\.(?:js|jsx|ts|tsx)\b/i],
+  ["rust", /\brust\b|\.(?:rs)\b/i],
+];
+
+function uniqueSourceWords(values) {
+  return [...new Set(
+    values
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean),
+  )].slice(0, 8);
+}
+
+function classifySourceWorkIntent(text, context = {}) {
+  const source = String(text || "").trim();
+  const lower = source.toLowerCase();
+  const mutation = classifyMutationIntent(source, context).isMutation;
+  const hasProjectAnchor = Boolean(
+    /\b(?:this|current|our|the)\s+(?:project|repository|repo|codebase|workspace|implementation|source|plugin|module)\b/i.test(source)
+    || /\b(?:project|repository|repo|codebase|workspace|source|code)\b/i.test(source)
+    || /(?:이|현재|우리)\s*(?:프로젝트|저장소|리포지토리|코드베이스|워크스페이스|구현|소스|코드|플러그인|모듈)/.test(source)
+    || /(?:프로젝트|저장소|코드베이스|소스|코드)\s*(?:전체|전반|내|안|에서|의)/.test(source)
+  );
+  const hasFileAnchor = Boolean(
+    /\b[\w./\\-]+\.(?:h|hpp|hh|hxx|inl|c|cc|cpp|cxx|cs|uproject|uplugin|ini|json|py|js|jsx|ts|tsx|rs)\b/i.test(source)
+    || /(?:파일|헤더|소스\s*파일|구현\s*파일|파일들|경로)/.test(source)
+  );
+  const hasCodeAnchor = Boolean(
+    /c\s*\+\+|\bcpp\b|\b(?:code|source|implementation|header|files?|repository|repo|codebase)\b/i.test(source)
+    || /(?:코드|소스|구현|헤더|파일|모듈|서브시스템)/.test(source)
+  );
+  const hasStructureOperation = Boolean(
+    /\b(?:structure|structured|architecture|architectural|organization|organized|layout|overview|module|system|subsystem|folder|tree)\b/i.test(source)
+    || /(?:구조|구성|설계|아키텍처|폴더|목록|전체|전반|구성돼|구성되)/.test(source)
+  );
+  const hasAnalysisOperation = Boolean(
+    /\b(?:analy[sz]e|analysis|review|inspect|trace|audit|investigate|explain|describe|summari[sz]e|read|scan|look\s+through|cross-check|compare)\b/i.test(source)
+    || /(?:분석|검토|점검|조사|추적|설명|요약|읽고|읽어|훑고|살펴|확인|대조|비교|알려|파악|찾아)/.test(source)
+  );
+  const hasStatusOperation = Boolean(
+    /\b(?:where|which|name|status|current|active)\b/i.test(source)
+    || /(?:어디|이름|상태|현황|활성|현재|지금).*(?:알려|보여|확인|뭐|인가|인지|야|입니다)/.test(source)
+  );
+  const isConceptQuestion = Boolean(
+    /\bwhat\s+is\b|\bhow\s+does\b|\bdefine\b|\bconcept\b|\btranslate\b|\btranslation\b/i.test(source)
+    || /(?:번역|옮겨)/.test(source)
+    || /(?:뭐야|무엇|무슨|의미|개념|이란|인가요|인가|인지|입니까)/.test(source)
+  );
+  const isExhaustive = Boolean(
+    /\b(?:all|every|entire|whole|exhaustive|across|complete|comprehensive)\b/i.test(source)
+    || /(?:전체|전부|모든|여러|빠짐없이|종합|철저)/.test(source)
+  );
+  const hasSubsystemTerm = Boolean(
+    /\b(?:system|subsystem|module|component|plugin|folder|package)\b/i.test(source)
+    || /(?:시스템|서브시스템|모듈|컴포넌트|플러그인|폴더|패키지|쪽)/.test(source)
+  );
+
+  const knownDomains = [
+    "cinematic", "vfx", "combat", "camera", "save", "animation", "ai", "inventory",
+    "network", "networking", "particle", "rendering", "input", "gameplay", "physics",
+    "audio", "quest", "player", "enemy", "weapon", "ui", "시네마틱", "전투", "카메라",
+    "세이브", "저장", "애니메이션", "인벤토리", "네트워크", "파티클", "렌더링", "입력",
+    "게임플레이", "물리", "오디오", "퀘스트", "플레이어", "적", "무기", "vfx",
+  ];
+  const asciiWordTokens = lower.match(/[a-z][a-z0-9+#-]*/g) || [];
+  const isKnownDomainMentioned = (domain) => {
+    if (/[a-z]/i.test(domain)) return asciiWordTokens.includes(domain);
+    let offset = lower.indexOf(domain);
+    while (offset >= 0) {
+      const before = lower[offset - 1] || "";
+      const after = lower[offset + domain.length] || "";
+      if (!/[가-힣]/.test(before) && !/[가-힣]/.test(after)) return true;
+      offset = lower.indexOf(domain, offset + domain.length);
+    }
+    return false;
+  };
+  const targetSubsystems = uniqueSourceWords(
+    knownDomains.filter(isKnownDomainMentioned)
+      .concat(
+        [...source.matchAll(/(?:^|\s)([A-Za-z][\w-]{1,32}|[가-힣]{2,24})\s*(?:system|subsystem|module|component|plugin|시스템|서브시스템|모듈|컴포넌트|플러그인|쪽|폴더)/gi)]
+          .map((match) => match[1]),
+      ),
+  );
+  const hasTargetSubsystem = targetSubsystems.length > 0 && (
+    hasSubsystemTerm
+    || hasCodeAnchor
+    || hasFileAnchor
+  );
+  const sourceLanguage = SOURCE_LANGUAGE_PATTERNS.find(([, pattern]) => pattern.test(source))?.[0] || "unknown";
+  const sourceWorkOperation = mutation
+    ? "modify"
+    : hasAnalysisOperation
+      ? (hasStructureOperation ? "analyze_structure" : "analyze")
+      : hasStructureOperation
+        ? "describe_structure"
+        : "answer";
+  const statusOnly = Boolean(
+    hasStatusOperation
+    && !hasCodeAnchor
+    && !hasFileAnchor
+    && !hasTargetSubsystem
+    && !hasStructureOperation,
+  );
+  const targetedSourceWork = Boolean(
+    hasTargetSubsystem
+    && hasCodeAnchor
+    && (hasAnalysisOperation || hasStructureOperation)
+    && !statusOnly,
+  );
+  const repositorySourceWork = Boolean(
+    (hasProjectAnchor || hasFileAnchor)
+    && hasCodeAnchor
+    && (hasAnalysisOperation || hasStructureOperation)
+    && !statusOnly,
+  );
+  const requiresProjectEvidence = targetedSourceWork || repositorySourceWork;
+
+  let category = SOURCE_WORK_CATEGORIES.GENERIC_CONCEPT_ANSWER;
+  if (statusOnly) {
+    category = SOURCE_WORK_CATEGORIES.PROJECT_STATUS_ONLY;
+  } else if (targetedSourceWork && mutation) {
+    category = SOURCE_WORK_CATEGORIES.TARGETED_SOURCE_EDIT;
+  } else if (targetedSourceWork) {
+    category = SOURCE_WORK_CATEGORIES.TARGETED_SOURCE_ANALYSIS;
+  } else if (repositorySourceWork && isExhaustive) {
+    category = SOURCE_WORK_CATEGORIES.REPOSITORY_EXHAUSTIVE_AUDIT;
+  } else if (repositorySourceWork) {
+    category = SOURCE_WORK_CATEGORIES.REPOSITORY_OVERVIEW;
+  }
+
+  const requiresDurableTask = requiresProjectEvidence && (
+    category === SOURCE_WORK_CATEGORIES.TARGETED_SOURCE_ANALYSIS
+    || category === SOURCE_WORK_CATEGORIES.TARGETED_SOURCE_EDIT
+    || category === SOURCE_WORK_CATEGORIES.REPOSITORY_OVERVIEW
+    || category === SOURCE_WORK_CATEGORIES.REPOSITORY_EXHAUSTIVE_AUDIT
+  );
+  return {
+    category,
+    domain: targetSubsystems[0] || (hasProjectAnchor ? "project" : "generic"),
+    targetSubsystems,
+    sourceLanguage,
+    operation: sourceWorkOperation,
+    scope: targetedSourceWork ? "targeted" : (requiresProjectEvidence ? "repository" : "concept"),
+    mutability: mutation ? "source_files" : "none",
+    requiresProjectEvidence,
+    requiresDurableTask,
+    isSourceWork: requiresDurableTask,
+    conceptQuestion: isConceptQuestion,
+  };
+}
+
 function classifyUserIntent(text, context = {}) {
   const source = String(text || "");
   const requestIntent = matchingRequestIntent(source, context);
@@ -3641,6 +3805,8 @@ module.exports = {
   toolArgumentsSatisfy,
   collectControlFields,
   classifyMutationIntent,
+  SOURCE_WORK_CATEGORIES,
+  classifySourceWorkIntent,
   isReadOnlyUserGoal,
   classifyUserIntent,
   classifyUserTurnIntent,
