@@ -1402,16 +1402,23 @@ test("Unreal Public and Private evidence pair unlocks the completion-audit hando
         routeHash: "route-unreal-pair",
         phase: "planner",
         activeTools: ["read_file", "unreal_feature_intent_resolve"],
+        pendingGates: ["unreal_feature_intent_resolve"],
         selectedSlice: { sliceId: "task", files: [] },
       },
-      requiredNextTool: "unreal_feature_intent_resolve",
-      requiredNextToolArgs: { taskAuthorization: ownership },
       control: {
-        version: 1,
-        phase: "unreal_agent_plan",
-        status: "NeedsAction",
-        nextAction: "unreal_feature_intent_resolve",
-        nextActionIsTool: true,
+        version: 2,
+        authoritative: true,
+        epoch: 1,
+        taskSessionId: ownership.taskSessionId,
+        taskMode: "agent_edit",
+        phase: "planner",
+        disposition: "continue",
+        requiredTool: null,
+        allowedTools: ["read_file", "unreal_feature_intent_resolve"],
+        pendingGates: ["unreal_feature_intent_resolve"],
+        routeHash: "route-unreal-pair",
+        retryPolicy: { sameSemanticInput: "allowed" },
+        mutationGeneration: 0,
       },
     };
     const messages = [
@@ -1421,12 +1428,6 @@ test("Unreal Public and Private evidence pair unlocks the completion-audit hando
       } }] },
       { role: "tool", content: [{
         type: "toolCallResult", toolCallId: "plan-unreal-pair", name: "unreal_agent_plan", content: JSON.stringify(route),
-      }] },
-      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
-        id: "contract-unreal-pair", type: "function", name: "evidence_first_contract", arguments: { mode: "codegen" },
-      } }] },
-      { role: "tool", content: [{
-        type: "toolCallResult", toolCallId: "contract-unreal-pair", name: "evidence_first_contract", content: '{"ok":true}',
       }] },
     ];
     for (const [index, filePath] of [
@@ -1462,6 +1463,8 @@ test("Unreal Public and Private evidence pair unlocks the completion-audit hando
     assert.equal(measurement.directSourceFileEvidenceCount, 6);
     assert.equal(measurement.featureIntentTargetBoundEvidenceReady, true);
     assert.equal(measurement.featureIntentEvidenceReady, true);
+    assert.equal(measurement.serverV2FeatureIntentHandoffAllowed, true);
+    assert.equal(measurement.serverV2FeatureIntentToolForced, true);
     assert.equal(measurement.featureIntentDiscoveryHandoffForced, true);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -7654,6 +7657,36 @@ test("target-bound source pairs bridge Unreal Public and Private module roots on
     ["Source/Project_MJS/PRIVATE/System/ProjectGameInstance.cpp"],
     "win32",
   ), true);
+});
+
+test("v2 feature handoff requires the exact writable planner authority", () => {
+  const { serverV2AllowsFeatureIntentHandoff } = require("../dist/generator.js");
+  const allowed = {
+    taskMode: "agent_edit",
+    phase: "planner",
+    disposition: "continue",
+    requiredTool: null,
+    allowedTools: ["read_file", "unreal_feature_intent_resolve"],
+    pendingGates: ["unreal_feature_intent_resolve"],
+  };
+
+  assert.equal(serverV2AllowsFeatureIntentHandoff(allowed, true), true);
+  assert.equal(serverV2AllowsFeatureIntentHandoff(allowed, false), false);
+  assert.equal(serverV2AllowsFeatureIntentHandoff({ ...allowed, taskMode: "read_only" }), false);
+  assert.equal(serverV2AllowsFeatureIntentHandoff({ ...allowed, phase: "executor" }), false);
+  assert.equal(serverV2AllowsFeatureIntentHandoff({ ...allowed, disposition: "require_tool" }), false);
+  assert.equal(serverV2AllowsFeatureIntentHandoff({
+    ...allowed,
+    requiredTool: { name: "read_file", args: {} },
+  }), false);
+  assert.equal(serverV2AllowsFeatureIntentHandoff({
+    ...allowed,
+    allowedTools: ["read_file"],
+  }), false);
+  assert.equal(serverV2AllowsFeatureIntentHandoff({
+    ...allowed,
+    pendingGates: ["unreal_code_sketch_claim_validate"],
+  }), false);
 });
 
 test("major objective changes retain no prior verbatim turns", async () => {

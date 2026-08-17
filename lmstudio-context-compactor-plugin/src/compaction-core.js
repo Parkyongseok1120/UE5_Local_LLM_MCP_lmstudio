@@ -542,6 +542,7 @@ function compactServerControl(value) {
     };
   }
   const allowedTools = normalizeToolNames(value.allowedTools).slice(0, 32);
+  const pendingGates = normalizeToolNames(value.pendingGates).slice(0, 32);
   if (["require_tool", "checkpoint"].includes(disposition)) {
     if (!requiredTool) return null;
     if (allowedTools.length !== 1 || !toolNamesMatch(allowedTools[0], requiredTool.name)) return null;
@@ -569,6 +570,7 @@ function compactServerControl(value) {
     disposition,
     requiredTool,
     allowedTools,
+    ...(pendingGates.length ? { pendingGates } : {}),
     retryPolicy: { sameSemanticInput: retryValue },
     blocker,
   };

@@ -2240,6 +2240,24 @@ function hasTargetBoundDirectSourcePair(
   ));
 }
 
+function serverV2AllowsFeatureIntentHandoff(control: any, active: boolean = true): boolean {
+  return Boolean(
+    active
+    && String(control?.taskMode || "").toLowerCase() === "agent_edit"
+    && String(control?.phase || "").toLowerCase() === "planner"
+    && String(control?.disposition || "").toLowerCase() === "continue"
+    && !control?.requiredTool
+    && Array.isArray(control?.allowedTools)
+    && control.allowedTools.some((name: any) => (
+      toolNamesMatch(FEATURE_INTENT_TOOL_NAME, String(name || ""))
+    ))
+    && Array.isArray(control?.pendingGates)
+    && control.pendingGates.some((name: any) => (
+      toolNamesMatch(FEATURE_INTENT_TOOL_NAME, String(name || ""))
+    ))
+  );
+}
+
 function featureIntentRequestedTargetFiles(request: any): string[] {
   const args = request?.arguments && typeof request.arguments === "object"
     ? request.arguments
@@ -3886,13 +3904,17 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     !requiredBeforeFeatureHandoff
     || toolNamesMatch(FEATURE_INTENT_TOOL_NAME, requiredBeforeFeatureHandoff)
   );
+  const serverV2FeatureIntentHandoffAllowed = serverV2AllowsFeatureIntentHandoff(
+    serverControlV2,
+    serverControlV2Active,
+  );
   const featureIntentDiscoveryHandoffForced = Boolean(
     !detachedSideQueryActive
-    && !serverControlV2Active
+    && (!serverControlV2Active || serverV2FeatureIntentHandoffAllowed)
     && !workflowStopActive
     && !evidenceFirstContractForced
     && !featureIntentEvidenceRefillActive
-    && evidenceFirstContractReady
+    && (evidenceFirstContractReady || serverV2FeatureIntentHandoffAllowed)
     && routeOwnershipAvailable
     && featureIntentTool
     && featureIntentRouted
@@ -4104,6 +4126,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       nextCheckpoint?.requiredNextTool?.args,
     );
   }
+  const serverV2FeatureIntentToolForced = Boolean(
+    serverV2FeatureIntentHandoffAllowed
+    && featureIntentDiscoveryHandoffForced
+    && exactRequiredToolForced
+    && toolNamesMatch(FEATURE_INTENT_TOOL_NAME, exactRequiredToolName)
+  );
   const requireCompleteArchitectureProposal = Boolean(
     (architectureToolForced || architectureEvidenceRefillActive)
     && (!nextCheckpoint?.architectureProposal || architectureStatus.requiresFullProposal),
@@ -4151,7 +4179,9 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     ))
   )).filter(toolAllowedBySemanticBlocker);
   const phaseToolDefinitions = serverControlV2Active
-    ? serverProjectedToolDefinitions
+    ? (serverV2FeatureIntentToolForced
+      ? [exactRequiredToolDefinition].filter(Boolean).filter(toolAllowedBySemanticBlocker)
+      : serverProjectedToolDefinitions)
     : workflowStopActive
     ? []
     : detachedSideQueryActive
@@ -4444,6 +4474,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     serverControlReadSchemaRecovered,
     evidenceFirstContractForced,
     evidenceFirstContractSatisfied,
+    serverV2FeatureIntentHandoffAllowed,
+    serverV2FeatureIntentToolForced,
     featureIntentDiscoveryHandoffForced,
     featureIntentEvidenceReady,
     featureIntentTargetBoundEvidenceReady: targetBoundEvidencePairReady,
@@ -6276,6 +6308,7 @@ export {
   reconcilePendingToolCalls,
   compactionWorkflowProgressSignature,
   selectServerOwnedFloorRecovery,
+  serverV2AllowsFeatureIntentHandoff,
   resolveTargetModel,
   upsertLeadingSystemRule,
 };

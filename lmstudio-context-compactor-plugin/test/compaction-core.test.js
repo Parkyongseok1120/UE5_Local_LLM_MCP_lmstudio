@@ -160,6 +160,7 @@ test("control v2 projects the highest epoch and ignores nested legacy actions", 
         disposition: "require_tool",
         requiredTool: { name: "replace_in_file", args: { path: "Source/Demo.cpp" } },
         allowedTools: ["replace_in_file"],
+        pendingGates: ["unreal_feature_intent_resolve"],
         retryPolicy: { sameSemanticInput: "allowed" },
       },
       nested: {
@@ -186,6 +187,7 @@ test("control v2 projects the highest epoch and ignores nested legacy actions", 
 
   assert.equal(checkpoint.serverControl.epoch, 5);
   assert.equal(checkpoint.serverControl.routeHash, "route-5");
+  assert.deepEqual(checkpoint.serverControl.pendingGates, ["unreal_feature_intent_resolve"]);
   assert.equal(checkpoint.requiredNextTool.name, "replace_in_file");
   assert.deepEqual(checkpoint.requiredNextTool.args, { path: "Source/Demo.cpp" });
   assert.deepEqual(checkpoint.toolRoute.activeTools, ["replace_in_file"]);
