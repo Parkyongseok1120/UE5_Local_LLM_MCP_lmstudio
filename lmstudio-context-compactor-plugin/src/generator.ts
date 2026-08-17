@@ -2095,6 +2095,109 @@ function normalizeProjectSourcePath(
   return identity.slice((pluginMarker >= 0 ? pluginMarker : sourceMarker) + 1);
 }
 
+function selectServerOwnedFloorRecovery(
+  checkpoint: any,
+  toolDefinitions: any[],
+  hostPlatform: string = process.platform,
+): { toolName: string; path: string; transitionKind: string } | null {
+  const windowsHost = core.isWindowsHostPlatform(hostPlatform as any);
+  const pathMatches = (value: string, pattern: string): boolean => (
+    new RegExp(pattern, windowsHost ? "i" : "").test(value)
+  );
+  const definitionFor = (expected: string): any => toolDefinitions.find((tool: any) => (
+    toolNamesMatch(expected, String(tool?.function?.name || tool?.name || ""))
+  ));
+  const readDefinition = definitionFor("read_file");
+  const listDefinition = definitionFor("list_directory");
+  const workingSetEntries = Array.isArray(checkpoint?.workingSet)
+    ? checkpoint.workingSet
+    : [];
+  const evidenceFacts = Array.isArray(checkpoint?.evidenceFacts)
+    ? checkpoint.evidenceFacts
+    : [];
+  const directSourceEvidence = evidenceFacts.filter((entry: any) => (
+    DIRECT_SOURCE_FILE_TOOLS.some((tool) => toolNamesMatch(tool, String(entry?.tool || "")))
+  ));
+  const observedPaths = [...workingSetEntries, ...directSourceEvidence]
+    .map((entry: any) => String(entry?.path || "").replace(/\\/g, "/"))
+    .filter(Boolean);
+  const observedPathKeys = new Set(observedPaths.map((sourcePath: string) => (
+    normalizeProjectSourcePath(sourcePath, hostPlatform)
+  )));
+
+  if (readDefinition) {
+    for (const sourcePath of observedPaths) {
+      if (!pathMatches(sourcePath, "^project://Source/[^/]+/Public/.+\\.h$")) continue;
+      const candidate = (windowsHost
+        ? sourcePath.replace(/\/Public\//i, "/Private/")
+        : sourcePath.replace("/Public/", "/Private/")
+      ).replace(/\.h$/i, ".cpp");
+      if (observedPathKeys.has(normalizeProjectSourcePath(candidate, hostPlatform))) continue;
+      return {
+        toolName: String(readDefinition?.function?.name || readDefinition?.name || "read_file"),
+        path: candidate,
+        transitionKind: "mapped_implementation_read",
+      };
+    }
+  }
+
+  const listedDirectories = evidenceFacts.filter((entry: any) => (
+    toolNamesMatch("list_directory", String(entry?.tool || ""))
+    && pathMatches(
+      String(entry?.path || "").replace(/\\/g, "/").replace(/\/+$/, ""),
+      "^project://Source/[^/]+(?:/(?:Public|Private)(?:/.*)?)?$",
+    )
+  ));
+  const listedPathKeys = new Set(listedDirectories.map((entry: any) => (
+    normalizeProjectSourcePath(String(entry?.path || ""), hostPlatform)
+  )));
+  const safeEntries = (entry: any): string[] => (Array.isArray(entry?.entries)
+    ? entry.entries
+    : []
+  ).map((value: any) => String(value || "").trim()).filter((value: string) => (
+    value.length > 0
+    && value !== "."
+    && value !== ".."
+    && !value.includes("/")
+    && !value.includes("\\")
+    && /^[A-Za-z0-9_.-]+$/.test(value)
+  ));
+
+  if (readDefinition) {
+    for (const entry of listedDirectories) {
+      const parent = String(entry?.path || "").replace(/\\/g, "/").replace(/\/+$/, "");
+      if (!pathMatches(parent, "^project://Source/[^/]+/(?:Public|Private)(?:/.*)?$")) continue;
+      for (const name of safeEntries(entry)) {
+        if (!/\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|m|mm)$/i.test(name)) continue;
+        const candidate = `${parent}/${name}`;
+        if (observedPathKeys.has(normalizeProjectSourcePath(candidate, hostPlatform))) continue;
+        return {
+          toolName: String(readDefinition?.function?.name || readDefinition?.name || "read_file"),
+          path: candidate,
+          transitionKind: "listed_source_read",
+        };
+      }
+    }
+  }
+
+  if (listDefinition) {
+    for (const entry of listedDirectories) {
+      const parent = String(entry?.path || "").replace(/\\/g, "/").replace(/\/+$/, "");
+      for (const name of safeEntries(entry)) {
+        if (name.includes(".")) continue;
+        const candidate = `${parent}/${name}`;
+        if (listedPathKeys.has(normalizeProjectSourcePath(candidate, hostPlatform))) continue;
+        return {
+          toolName: String(listDefinition?.function?.name || listDefinition?.name || "list_directory"),
+          path: candidate,
+          transitionKind: "listed_source_frontier_expand",
+        };
+      }
+    }
+  }
+  return null;
+}
+
 function directSourcePairStem(value: any, hostPlatform: string = process.platform): string {
   return normalizeProjectSourcePath(value, hostPlatform)
     .replace(/\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|m|mm|cs)$/i, "");
@@ -4955,47 +5058,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     let effort = effortOrder.includes(persistedEffort) ? persistedEffort : configuredEffort;
     const floorRecoveryStrategy = "server_owned_implementation_evidence_transition";
     const emitServerOwnedFloorRecovery = async (): Promise<string | null> => {
-      const readDefinition = predictionTools.find((tool: any) => toolNamesMatch(
-        "read_file",
-        String(tool?.function?.name || tool?.name || ""),
-      ));
-      if (!readDefinition) return null;
-
-      const workingSetEntries = Array.isArray(nextCheckpoint?.workingSet)
-        ? nextCheckpoint.workingSet
-        : [];
-      const directSourceEvidence = (Array.isArray(nextCheckpoint?.evidenceFacts)
-        ? nextCheckpoint.evidenceFacts
-        : []
-      ).filter((entry: any) => DIRECT_SOURCE_FILE_TOOLS.some((tool) => toolNamesMatch(
-        tool,
-        String(entry?.tool || ""),
-      )));
-      const observedPaths = [...workingSetEntries, ...directSourceEvidence]
-        .map((entry: any) => String(entry?.path || "").replace(/\\/g, "/"))
-        .filter(Boolean);
-      const observedPathKeys = new Set(observedPaths.map((path: string) => (
-        normalizeProjectSourcePath(path)
-      )));
-      let implementationPath = "";
-      for (const sourcePath of observedPaths) {
-        if (!/^project:\/\/Source\/[^/]+\/Public\/.+\.h$/i.test(sourcePath)) continue;
-        const candidate = sourcePath
-          .replace(/\/Public\//i, "/Private/")
-          .replace(/\.h$/i, ".cpp");
-        if (observedPathKeys.has(normalizeProjectSourcePath(candidate))) continue;
-        implementationPath = candidate;
-        break;
-      }
-      if (!implementationPath) return null;
-
-      const toolName = String(readDefinition?.function?.name || readDefinition?.name || "read_file");
-      const implementationPathDigest = core.sha256(implementationPath).slice(0, 16);
+      const recovery = selectServerOwnedFloorRecovery(nextCheckpoint, predictionTools);
+      if (!recovery) return null;
+      const toolName = recovery.toolName;
+      const recoveryPathDigest = core.sha256(`${toolName}\0${recovery.path}`).slice(0, 16);
       const rawRequest = {
-        id: `server-owned-low-floor-${String(sessionId).slice(0, 16)}-${implementationPathDigest}`,
+        id: `server-owned-low-floor-${String(sessionId).slice(0, 16)}-${recoveryPathDigest}`,
         type: "function",
         name: toolName,
-        arguments: { path: implementationPath },
+        arguments: { path: recovery.path },
       };
       const request = enrichToolRequestControl(
         rawRequest,
@@ -5022,6 +5093,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         thinkingSuppressed: false,
         serverOwnedTransition: true,
         recoveryStrategy: floorRecoveryStrategy,
+        transitionKind: recovery.transitionKind,
         updatedAt: isoNow(),
       };
       await persistCheckpoint(
@@ -5036,7 +5108,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         effort,
         reason: "semantic_no_progress_at_effort_floor",
         tool: toolName,
-        path: implementationPath,
+        path: recovery.path,
+        transitionKind: recovery.transitionKind,
         taskSessionId: String(nextCheckpoint?.taskRouteOwnership?.taskSessionId || ""),
         modelSerializationBypassed: true,
         outputPrepared: false,
@@ -6178,6 +6251,7 @@ export {
   requiresDurableInspectionPlanning,
   reconcilePendingToolCalls,
   compactionWorkflowProgressSignature,
+  selectServerOwnedFloorRecovery,
   resolveTargetModel,
   upsertLeadingSystemRule,
 };

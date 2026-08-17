@@ -7408,6 +7408,77 @@ test("new durable direct-source evidence resets the compaction churn signature",
   );
 });
 
+test("low floor recovery walks a verified source directory after mapped implementations are exhausted", () => {
+  const { selectServerOwnedFloorRecovery } = require("../dist/generator.js");
+  const headerPath = "project://Source/Project_MJS/Public/Character/SharedComponent/HealthComponent.h";
+  const implementationPath = "project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp";
+  const tools = ["read_file", "list_directory"].map((name) => ({
+    type: "function",
+    function: { name, parameters: { type: "object", properties: {} } },
+  }));
+  const checkpoint = {
+    workingSet: [
+      { path: headerPath, contentHash: "a".repeat(64) },
+      { path: implementationPath, contentHash: "b".repeat(64) },
+    ],
+    evidenceFacts: [
+      {
+        tool: "list_directory",
+        path: "project://Source/Project_MJS",
+        entries: ["Private", "Public", "Project_MJS.cpp"],
+      },
+      {
+        tool: "list_directory",
+        path: "project://Source/Project_MJS/Private",
+        entries: ["../Escape", "Animation", "Character"],
+      },
+      {
+        tool: "list_directory",
+        path: "project://Source/Project_MJS/Public",
+        entries: ["Animation", "Character"],
+      },
+      { tool: "read_file", path: headerPath, evidenceHash: "a".repeat(64) },
+      { tool: "read_file", path: implementationPath, evidenceHash: "b".repeat(64) },
+    ],
+  };
+
+  assert.deepEqual(selectServerOwnedFloorRecovery(checkpoint, tools), {
+    toolName: "list_directory",
+    path: "project://Source/Project_MJS/Private/Animation",
+    transitionKind: "listed_source_frontier_expand",
+  });
+
+  checkpoint.evidenceFacts.push({
+    tool: "list_directory",
+    path: "project://Source/Project_MJS/Private/Animation",
+    entries: ["AnimationState.h"],
+  });
+  assert.deepEqual(selectServerOwnedFloorRecovery(checkpoint, tools), {
+    toolName: "read_file",
+    path: "project://Source/Project_MJS/Private/Animation/AnimationState.h",
+    transitionKind: "listed_source_read",
+  });
+
+  assert.deepEqual(selectServerOwnedFloorRecovery({
+    workingSet: [{
+      path: "project://Source/Project_MJS/public/Feature.h",
+      contentHash: "c".repeat(64),
+    }],
+    evidenceFacts: [],
+  }, tools.filter((tool) => tool.function.name === "read_file"), "win32"), {
+    toolName: "read_file",
+    path: "project://Source/Project_MJS/Private/Feature.cpp",
+    transitionKind: "mapped_implementation_read",
+  });
+  assert.equal(selectServerOwnedFloorRecovery({
+    workingSet: [{
+      path: "project://Source/Project_MJS/public/Feature.h",
+      contentHash: "c".repeat(64),
+    }],
+    evidenceFacts: [],
+  }, tools.filter((tool) => tool.function.name === "read_file"), "linux"), null);
+});
+
 test("major objective changes retain no prior verbatim turns", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-major-goal-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
