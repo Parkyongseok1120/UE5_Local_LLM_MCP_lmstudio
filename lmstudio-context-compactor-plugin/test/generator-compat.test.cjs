@@ -270,12 +270,18 @@ test("generator watchdog accepts tool serialization progress beyond the initial 
     const { generate } = require("../dist/generator.js");
     const emitted = [];
     let cancelCount = 0;
+    let modelInfoCalls = 0;
     const model = {
       identifier: "tool-progress-test-model",
       async getModelInfo() {
-        // The prediction fence is intentionally slower than the watchdog
-        // silence window. Supervision starts only after this setup completes.
-        await new Promise((resolve) => setTimeout(resolve, 60));
+        modelInfoCalls += 1;
+        // Only the per-attempt fence is intentionally slower than the
+        // watchdog silence window. The 4:1 silence/poll ratio makes the old
+        // pre-fence baseline fail before the first callback, while leaving
+        // enough scheduler headroom for loaded Windows CI runners.
+        if (modelInfoCalls === 2) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
         return { identifier: this.identifier, instanceReference: "tool-progress-instance" };
       },
       async applyPromptTemplate() { return "formatted"; },
@@ -284,13 +290,13 @@ test("generator watchdog accepts tool serialization progress beyond the initial 
       respond(_history, opts) {
         const timers = [];
         const later = (delay, callback) => timers.push(setTimeout(callback, delay));
-        later(20, () => opts.onToolCallRequestStart(1, { toolCallId: "call-progress" }));
-        later(40, () => opts.onToolCallRequestNameReceived(1, "read_file"));
-        later(60, () => opts.onToolCallRequestArgumentFragmentGenerated(
+        later(300, () => opts.onToolCallRequestStart(1, { toolCallId: "call-progress" }));
+        later(750, () => opts.onToolCallRequestNameReceived(1, "read_file"));
+        later(1200, () => opts.onToolCallRequestArgumentFragmentGenerated(
           1,
           '{"path":"project://Source/Project_MJS/Public/Test.h"}',
         ));
-        later(80, () => opts.onToolCallRequestEnd(1, {
+        later(1650, () => opts.onToolCallRequestEnd(1, {
           toolCallRequest: {
             id: "call-progress",
             type: "function",
@@ -304,7 +310,7 @@ test("generator watchdog accepts tool serialization progress beyond the initial 
             for (const timer of timers) clearTimeout(timer);
           },
           result() {
-            return new Promise((resolve) => later(90, () => resolve({
+            return new Promise((resolve) => later(1800, () => resolve({
               stats: { stopReason: "toolCalls" },
             })));
           },
@@ -326,11 +332,12 @@ test("generator watchdog accepts tool serialization progress beyond the initial 
     }];
 
     await generate(controllerFor(model, {
-      predictionNoProgressSeconds: 0.03,
-      predictionWallClockSeconds: 1,
+      predictionNoProgressSeconds: 1,
+      predictionWallClockSeconds: 5,
       streamReasoningProgress: false,
     }, stateRoot, emitted, tools), history);
 
+    assert.equal(modelInfoCalls, 3);
     assert.equal(cancelCount, 0);
     assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
     const activity = activeCheckpoint(stateRoot).predictionActivity;
