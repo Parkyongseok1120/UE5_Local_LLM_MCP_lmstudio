@@ -1671,6 +1671,39 @@ function mutateRouteBudget(
     }
     if (count + reserved >= limit) {
       const checkpointAuthorization = taskAuthorizationForState(current);
+      const checkpointArgs = {
+        action: "record",
+        phase: String(route.phase || "working"),
+        requiredNextAction: String(toolName || ""),
+        includeGitChanges: false,
+        taskAuthorization: {
+          taskSessionId: checkpointAuthorization.taskSessionId,
+          ownerCapability: checkpointAuthorization.ownerCapability,
+        },
+      };
+      // Exhausting a phase budget changes the authoritative next action.  It
+      // must therefore be committed before the error envelope is returned;
+      // otherwise clients correctly reject the checkpoint route as a
+      // same-epoch semantic fork and can count the failed work call as churn.
+      current.recoveryObligation = {
+        source: "phase_tool_budget",
+        status: "phase_budget_checkpoint_required",
+        errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+        fingerprint: [
+          String(route.routeHash || ""),
+          String(route.phase || ""),
+          String(count + reserved),
+          String(limit),
+          String(toolName || ""),
+        ].join(":"),
+        requiredTool: {
+          name: "unreal_task_checkpoint",
+          args: checkpointArgs,
+        },
+      };
+      commitControlTransition(current);
+      current.updatedAt = new Date().toISOString();
+      atomicWriteJson(statePath, current);
       return {
         ok: false,
         taskSessionId: String(current.taskSessionId || taskSessionId || ""),
@@ -1681,21 +1714,13 @@ function mutateRouteBudget(
         toolRouteUsage: usage,
         taskAuthorization: checkpointAuthorization,
         nextAction: "unreal_task_checkpoint",
-        nextActionArgs: {
-          action: "record",
-          phase: String(route.phase || "working"),
-          requiredNextAction: String(toolName || ""),
-          includeGitChanges: false,
-          taskAuthorization: {
-            taskSessionId: checkpointAuthorization.taskSessionId,
-            ownerCapability: checkpointAuthorization.ownerCapability,
-          },
-        },
+        nextActionArgs: checkpointArgs,
         nextActions: [
           "unreal_task_checkpoint",
           "unreal_task_status",
           "unreal_task_cancel",
         ],
+        control: { ...(current.controlState || {}) },
         agentInstruction:
           "Call unreal_task_checkpoint exactly once with nextActionArgs (action=record). "
           + "action=status only inspects state and does not renew the work-call budget. "

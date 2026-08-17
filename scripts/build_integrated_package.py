@@ -129,11 +129,13 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/resolve-project-name-cli.js",
     "lmstudio-unreal-agent-mcp/src/recovery-log-contract.js",
     "lmstudio-unreal-agent-mcp/src/route-watcher.js",
+    "lmstudio-unreal-agent-mcp/src/route-authorization-failure-options.js",
     "lmstudio-unreal-agent-mcp/src/mutation-semantic-guard.js",
     "lmstudio-unreal-agent-mcp/src/runtime-identity.js",
     "lmstudio-unreal-agent-mcp/src/control-protocol-spec.js",
     "lmstudio-unreal-agent-mcp/src/durable-guard-store.js",
     "lmstudio-unreal-agent-mcp/src/task-control-transition.js",
+    "lmstudio-unreal-agent-mcp/src/write-lock-reclaim-bridge.py",
     "lmstudio-context-compactor-plugin/src/runtime-identity.js",
     "lmstudio-context-compactor-plugin/src/control-protocol-spec.js",
 )

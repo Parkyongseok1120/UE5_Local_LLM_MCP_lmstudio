@@ -1823,7 +1823,7 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
       "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
     );
     assert.strictEqual(exhausted.taskSessionId, authorization.taskSessionId);
-    assert.strictEqual(exhausted.controlEpoch, 7);
+    assert.strictEqual(exhausted.controlEpoch, 8);
     assert.strictEqual(exhausted.nextAction, "unreal_task_checkpoint");
     assert.deepStrictEqual(exhausted.nextActions, [
       "unreal_task_checkpoint",
@@ -1833,6 +1833,27 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
     assert.strictEqual(exhausted.nextActionArgs.action, "record");
     assert.strictEqual(exhausted.nextActionArgs.requiredNextAction, "read_file");
     assert.strictEqual(exhausted.nextActionArgs.includeGitChanges, false);
+    assert.strictEqual(exhausted.control.epoch, 8);
+    assert.strictEqual(exhausted.control.disposition, "checkpoint");
+    assert.strictEqual(
+      exhausted.control.requiredTool.name,
+      "unreal_task_checkpoint"
+    );
+    assert.deepStrictEqual(
+      exhausted.control.requiredTool.args,
+      exhausted.nextActionArgs
+    );
+    const exhaustedState = JSON.parse(
+      fs.readFileSync(
+        path.join(stateRoot, "tasks", authorization.taskSessionId, "state.json"),
+        "utf8"
+      )
+    );
+    assert.strictEqual(exhaustedState.controlEpoch, 8);
+    assert.strictEqual(
+      exhaustedState.recoveryObligation.status,
+      "phase_budget_checkpoint_required"
+    );
 
     const corruptDir = path.join(stateRoot, "tasks", "corrupt_task");
     fs.mkdirSync(corruptDir, { recursive: true });
@@ -1885,6 +1906,11 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
     const primaryState = JSON.parse(fs.readFileSync(primaryStatePath, "utf8"));
     primaryState.toolRouteUsage.count = 0;
     primaryState.toolRouteUsage.calls = [];
+    // Isolate the later explicit-owner assertion from the budget-checkpoint
+    // transition verified above; a real client clears this obligation through
+    // unreal_task_checkpoint before resuming work.
+    delete primaryState.recoveryObligation;
+    delete primaryState.controlState;
     fs.writeFileSync(primaryStatePath, JSON.stringify(primaryState));
     const explicitAuthorization = {
       ...authorization,

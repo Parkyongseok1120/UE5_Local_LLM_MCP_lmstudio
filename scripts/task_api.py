@@ -8313,10 +8313,11 @@ def task_checkpoint(
             if isinstance(checkpoint_recovery.get("requiredTool"), dict)
             else {}
         )
+        checkpoint_recovery_status = str(checkpoint_recovery.get("status") or "")
         if (
             not trusted_rollback_checkpoint
-            and str(checkpoint_recovery.get("status") or "")
-            == "checkpoint_rebase_required"
+            and checkpoint_recovery_status
+            in {"checkpoint_rebase_required", "phase_budget_checkpoint_required"}
             and str(checkpoint_required.get("name") or "")
             == "unreal_task_checkpoint"
         ):
@@ -8325,12 +8326,40 @@ def task_checkpoint(
                 if isinstance(checkpoint_required.get("args"), dict)
                 else {}
             )
-            observed_args = {
-                "action": normalized_action,
-                "acceptCurrentFiles": bool(accept_current_files),
-                "includeGitChanges": bool(include_git_changes),
-            }
-            if not _control_args_match(expected_args, observed_args):
+            observed_args = (
+                {
+                    "action": normalized_action,
+                    "phase": str(phase or ""),
+                    "requiredNextAction": str(required_next_action or ""),
+                    "includeGitChanges": bool(include_git_changes),
+                }
+                if checkpoint_recovery_status
+                == "phase_budget_checkpoint_required"
+                else {
+                    "action": normalized_action,
+                    "acceptCurrentFiles": bool(accept_current_files),
+                    "includeGitChanges": bool(include_git_changes),
+                }
+            )
+            unexpected_phase_budget_semantics = bool(
+                checkpoint_recovery_status == "phase_budget_checkpoint_required"
+                and (
+                    lease_seconds is not None
+                    or completed_slices
+                    or pending_slices
+                    or modified_files
+                    or validation
+                    or str(note or "").strip()
+                    or accept_current_files
+                    or preserve_route_usage
+                    or advance_gate_snapshots
+                    or mutation_generation is not None
+                )
+            )
+            if (
+                unexpected_phase_budget_semantics
+                or not _control_args_match(expected_args, observed_args)
+            ):
                 current_authorization = task_authorization_for_state(state)
                 next_args = dict(expected_args)
                 next_args["taskAuthorization"] = compact_task_authorization(
@@ -8341,7 +8370,7 @@ def task_checkpoint(
                     "errorCode": "TASK_CONTROL_ARGUMENT_MISMATCH",
                     "error": (
                         "Checkpoint arguments do not match the authoritative "
-                        "rebase obligation."
+                        "recovery obligation."
                     ),
                     "taskAuthorization": current_authorization,
                     "requiredNextTool": "unreal_task_checkpoint",
@@ -8454,13 +8483,19 @@ def task_checkpoint(
                     if isinstance(continuity.get("checkpoint"), dict)
                     else {}
                 )
+                phase_budget_checkpoint = (
+                    checkpoint_recovery_status
+                    == "phase_budget_checkpoint_required"
+                )
                 candidate_continuity = record_checkpoint(
                     continuity,
                     phase=phase or "working",
                     active_slice_id=str(state.get("activeSliceId") or ""),
                     completed_slices=list(completed_slices or []),
                     pending_slices=(
-                        list(pending_slices)
+                        list(prior_checkpoint.get("pendingSlices") or [])
+                        if phase_budget_checkpoint
+                        else list(pending_slices)
                         if pending_slices is not None
                         else list(prior_checkpoint.get("pendingSlices") or [])
                     ),
@@ -8472,9 +8507,17 @@ def task_checkpoint(
                     git_discovery_enabled=include_git_changes,
                     discovery_warnings=list(discovered["warnings"]),
                     required_next_action=required_next_action,
-                    validation=validation,
+                    validation=(
+                        dict(prior_checkpoint.get("validation") or {})
+                        if phase_budget_checkpoint
+                        else validation
+                    ),
                     mutation_generation=int(state.get("mutationGeneration") or 0),
-                    note=note,
+                    note=(
+                        str(prior_checkpoint.get("note") or "")
+                        if phase_budget_checkpoint
+                        else note
+                    ),
                     objective_hash=str(state.get("objectiveHash") or ""),
                     request_intent=(
                         dict(state.get("requestIntent") or {})
@@ -8607,10 +8650,19 @@ def task_checkpoint(
             # requiredNextAction.  An arbitrary or repeated checkpoint must not
             # reset the work-call budget; otherwise the recovery control itself
             # becomes an infinite budget-renewal loop.
+            budget_recovery = (
+                state.get("recoveryObligation")
+                if isinstance(state.get("recoveryObligation"), dict)
+                else {}
+            )
             reset_route_usage = bool(
                 checkpoint_substantive
                 and str(required_next_action or "").strip()
                 and not preserve_route_usage
+                and str(budget_recovery.get("source") or "")
+                == "phase_tool_budget"
+                and str(budget_recovery.get("status") or "")
+                == "phase_budget_checkpoint_required"
             )
             if preserve_route_usage or not reset_route_usage:
                 state["toolRouteUsage"] = {

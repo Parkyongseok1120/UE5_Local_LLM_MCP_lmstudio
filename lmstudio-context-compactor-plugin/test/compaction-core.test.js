@@ -340,6 +340,74 @@ test("RC2 replay B/C: checkpoint precedence holds until a newer server epoch res
   assert.deepEqual(after.toolRoute.activeTools, ["unreal_feature_intent_resolve"]);
 });
 
+test("failed work result advances a newer checkpoint control without becoming source evidence", () => {
+  const checkpointArgs = {
+    action: "record",
+    phase: "planner",
+    requiredNextAction: "read_file",
+    includeGitChanges: false,
+  };
+  const checkpoint = core.buildCheckpoint([
+    { role: "user", content: "구현을 계속해줘" },
+    { role: "tool", content: JSON.stringify({
+      ok: true,
+      control: {
+        version: 2,
+        epoch: 7,
+        taskSessionId: "task-budget-transition",
+        routeHash: "route-planner",
+        phase: "planner",
+        disposition: "continue",
+        allowedTools: ["read_file"],
+        retryPolicy: { sameSemanticInput: "allowed" },
+      },
+    }) },
+    { role: "assistant", toolCalls: [{
+      id: "implementation-read",
+      name: "read_file",
+      arguments: { path: "project://Source/Demo/Private/Feature.cpp" },
+    }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "implementation-read",
+      name: "read_file",
+      isError: true,
+      content: JSON.stringify({
+        ok: false,
+        errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+        control: {
+          version: 2,
+          epoch: 8,
+          taskSessionId: "task-budget-transition",
+          routeHash: "route-planner",
+          phase: "planner",
+          disposition: "checkpoint",
+          requiredTool: {
+            name: "unreal_task_checkpoint",
+            args: checkpointArgs,
+          },
+          allowedTools: ["unreal_task_checkpoint"],
+          retryPolicy: { sameSemanticInput: "once" },
+          blocker: {
+            code: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+            fingerprint: "route-planner:planner:12:12:read_file",
+          },
+        },
+      }),
+    }] },
+  ]);
+
+  assert.equal(checkpoint.serverControl.epoch, 8);
+  assert.equal(checkpoint.serverControl.disposition, "checkpoint");
+  assert.equal(checkpoint.requiredNextTool.name, "unreal_task_checkpoint");
+  assert.deepEqual(checkpoint.requiredNextTool.args, checkpointArgs);
+  assert.deepEqual(checkpoint.toolRoute.activeTools, ["unreal_task_checkpoint"]);
+  assert.equal(
+    checkpoint.evidenceFacts.some((fact) => fact.path === "project://Source/Demo/Private/Feature.cpp"),
+    false,
+  );
+  assert.equal(checkpoint.failedToolResults.at(-1).errorCode, "TASK_PHASE_TOOL_BUDGET_EXHAUSTED");
+});
+
 test("RC2 replay G: hard-compacted repeated blocker cannot resurrect its old write route", () => {
   const messages = [
     { role: "user", content: "구현을 계속해줘" },

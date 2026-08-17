@@ -153,6 +153,7 @@ Check "context compactor source" {
     }
 }
 Check "agent write-locks.js" { if (-not (Test-Path (Join-Path $agentRoot "src\write-locks.js"))) { throw "missing write-locks.js (single-flight write guard)" } }
+Check "agent write-lock reclaim bridge" { if (-not (Test-Path (Join-Path $agentRoot "src\write-lock-reclaim-bridge.py"))) { throw "missing write-lock-reclaim-bridge.py (transactional stale-lock recovery)" } }
 Check "agent mutation-history.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-history.js"))) { throw "missing mutation-history.js (duplicate-call loop breaker)" } }
 Check "agent mutation-semantic-guard.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-semantic-guard.js"))) { throw "missing mutation-semantic-guard.js (write-path semantic denylist bridge)" } }
 Check "mutation_semantic_guard.py present" { if (-not (Test-Path (Join-Path $ragRoot "scripts\mutation_semantic_guard.py"))) { throw "missing scripts/mutation_semantic_guard.py" } }

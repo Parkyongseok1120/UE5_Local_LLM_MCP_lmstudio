@@ -2316,21 +2316,29 @@ def test_server_required_checkpoint_resets_budget_and_binds_next_work_tool(
         plan_payload=_plan(writes=False),
     )
     active_tool = started["toolRoute"]["activeTools"][0]
-    assert authorize_active_task_tool(
+    route = started["toolRoute"]
+    for _ in range(route["maxToolCallsPerPhase"]):
+        assert authorize_active_task_tool(
+            tmp_path,
+            tool_name=active_tool,
+            arguments={"taskAuthorization": started["taskAuthorization"]},
+        )["ok"]
+    exhausted = authorize_active_task_tool(
         tmp_path,
         tool_name=active_tool,
         arguments={"taskAuthorization": started["taskAuthorization"]},
-    )["ok"]
+    )
+    assert exhausted["errorCode"] == "TASK_PHASE_TOOL_BUDGET_EXHAUSTED"
 
     recorded = task_checkpoint(
         tmp_path,
         task_authorization=started["taskAuthorization"],
-        action="record",
-        phase="planning",
+        action=exhausted["nextActionArgs"]["action"],
+        phase=exhausted["nextActionArgs"]["phase"],
         modified_files=[],
-        required_next_action=active_tool,
+        required_next_action=exhausted["nextActionArgs"]["requiredNextAction"],
         validation={},
-        include_git_changes=False,
+        include_git_changes=exhausted["nextActionArgs"]["includeGitChanges"],
     )
 
     assert recorded["ok"] is True
@@ -2345,6 +2353,176 @@ def test_server_required_checkpoint_resets_budget_and_binds_next_work_tool(
     assert state["toolRouteUsage"]["count"] == 0
     assert state["toolRouteUsage"]["calls"] == []
     assert state["toolRouteUsage"]["resetReason"] == "checkpoint_record"
+
+
+def test_phase_budget_checkpoint_rejects_alternate_required_next_action(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Inspect code",
+        mode="read_only",
+        plan_payload=_plan(writes=False),
+    )
+    route = started["toolRoute"]
+    active_tool = route["activeTools"][0]
+    for _ in range(route["maxToolCallsPerPhase"]):
+        assert authorize_active_task_tool(
+            tmp_path,
+            tool_name=active_tool,
+            arguments={"taskAuthorization": started["taskAuthorization"]},
+        )["ok"]
+    exhausted = authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={"taskAuthorization": started["taskAuthorization"]},
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    before = json.loads(state_path.read_text(encoding="utf-8"))
+
+    alternate = next(
+        name for name in route["activeTools"] if name != active_tool
+    )
+    rejected = task_checkpoint(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        action=exhausted["nextActionArgs"]["action"],
+        phase=exhausted["nextActionArgs"]["phase"],
+        modified_files=[],
+        required_next_action=alternate,
+        validation={},
+        include_git_changes=exhausted["nextActionArgs"]["includeGitChanges"],
+    )
+
+    assert rejected["ok"] is False
+    assert rejected["errorCode"] == "TASK_CONTROL_ARGUMENT_MISMATCH"
+    assert rejected["requiredNextToolArgs"]["requiredNextAction"] == active_tool
+    after = json.loads(state_path.read_text(encoding="utf-8"))
+    assert after["toolRouteUsage"] == before["toolRouteUsage"]
+    assert after["recoveryObligation"] == before["recoveryObligation"]
+    assert after["controlEpoch"] == before["controlEpoch"]
+
+
+def test_phase_budget_checkpoint_rejects_unissued_semantic_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Inspect code",
+        mode="read_only",
+        plan_payload=_plan(writes=False),
+    )
+    route = started["toolRoute"]
+    active_tool = route["activeTools"][0]
+    for _ in range(route["maxToolCallsPerPhase"]):
+        assert authorize_active_task_tool(
+            tmp_path,
+            tool_name=active_tool,
+            arguments={"taskAuthorization": started["taskAuthorization"]},
+        )["ok"]
+    exhausted = authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={"taskAuthorization": started["taskAuthorization"]},
+    )
+    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
+    before = json.loads(state_path.read_text(encoding="utf-8"))
+
+    rejected = task_checkpoint(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        action=exhausted["nextActionArgs"]["action"],
+        phase=exhausted["nextActionArgs"]["phase"],
+        modified_files=[],
+        required_next_action=exhausted["nextActionArgs"]["requiredNextAction"],
+        validation={"status": "passed", "summary": "forged-by-caller"},
+        note="forged-note",
+        include_git_changes=exhausted["nextActionArgs"]["includeGitChanges"],
+    )
+
+    assert rejected["ok"] is False
+    assert rejected["errorCode"] == "TASK_CONTROL_ARGUMENT_MISMATCH"
+    after = json.loads(state_path.read_text(encoding="utf-8"))
+    assert after["toolRouteUsage"] == before["toolRouteUsage"]
+    assert after["recoveryObligation"] == before["recoveryObligation"]
+    assert after["controlEpoch"] == before["controlEpoch"]
+    assert after["continuity"] == before["continuity"]
+
+
+def test_phase_budget_checkpoint_preserves_omitted_checkpoint_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Inspect two slices",
+        mode="read_only",
+        plan_payload={
+            "planId": "plan",
+            "planRevision": "1",
+            "taskKind": "codegen",
+            "writeGate": {"writesAllowed": False, "maxFilesPerEdit": 2},
+            "orchestration": {"requiredBeforeWrite": []},
+            "executablePlanSlices": [
+                {"sliceId": "s1", "files": []},
+                {"sliceId": "s2", "files": []},
+            ],
+        },
+    )
+    seeded = task_checkpoint(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        action="record",
+        phase="planning",
+        completed_slices=["s1"],
+        pending_slices=["s2"],
+        modified_files=[],
+        validation={"status": "passed", "summary": "prior-proof"},
+        note="prior-note",
+        include_git_changes=False,
+    )
+    assert seeded["ok"] is True
+    active_tool = seeded["toolRoute"]["activeTools"][0]
+    for _ in range(seeded["toolRoute"]["maxToolCallsPerPhase"]):
+        assert authorize_active_task_tool(
+            tmp_path,
+            tool_name=active_tool,
+            arguments={"taskAuthorization": seeded["taskAuthorization"]},
+        )["ok"]
+    exhausted = authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={"taskAuthorization": seeded["taskAuthorization"]},
+    )
+
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=seeded["taskAuthorization"],
+        action=exhausted["nextActionArgs"]["action"],
+        phase=exhausted["nextActionArgs"]["phase"],
+        completed_slices=[],
+        pending_slices=[],
+        modified_files=[],
+        required_next_action=exhausted["nextActionArgs"]["requiredNextAction"],
+        validation={},
+        note="",
+        include_git_changes=exhausted["nextActionArgs"]["includeGitChanges"],
+    )
+
+    assert recorded["ok"] is True
+    checkpoint = recorded["continuity"]["checkpoint"]
+    assert checkpoint["completedSlices"] == ["s1"]
+    assert checkpoint["pendingSlices"] == ["s2"]
+    assert checkpoint["validation"] == {
+        "status": "passed",
+        "summary": "prior-proof",
+    }
+    assert checkpoint["note"] == "prior-note"
 
 
 def test_checkpoint_pending_gate_overrides_deferred_work_tool_everywhere(

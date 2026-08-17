@@ -2708,7 +2708,7 @@ test("terminal repeated frontier blocker does not force the rejected gate again"
   }
 });
 
-test("deferred Feature Intent resume does not override a newer checkpoint handoff", async () => {
+test("newer failed-result checkpoint control bypasses churn and deferred Feature Intent", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-feature-checkpoint-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
   try {
@@ -2717,7 +2717,9 @@ test("deferred Feature Intent resume does not override a newer checkpoint handof
     let predictionCount = 0;
     const model = {
       identifier: "feature-checkpoint-model",
-      async applyPromptTemplate() { return "formatted"; },
+      async applyPromptTemplate(chat) {
+        return JSON.stringify(core.snapshotMessages(chat.getMessagesArray()));
+      },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
       respond(_history, opts) {
@@ -2725,24 +2727,9 @@ test("deferred Feature Intent resume does not override a newer checkpoint handof
         if (predictionCount === 1) {
           opts.onPredictionFragment({ content: "seed" });
         } else {
-          assert.equal(opts.rawTools.force, true);
-          assert.deepEqual(
-            opts.rawTools.tools.map((tool) => tool.function.name),
-            ["unreal_task_checkpoint"],
-          );
-          opts.onToolCallRequestStart(1, { toolCallId: "budget-checkpoint" });
-          opts.onToolCallRequestNameReceived(1, "unreal_task_checkpoint");
-          opts.onToolCallRequestArgumentFragmentGenerated(1, JSON.stringify({ action: "record" }));
-          opts.onToolCallRequestEnd(1, {
-            toolCallRequest: {
-              id: "budget-checkpoint",
-              type: "function",
-              name: "unreal_task_checkpoint",
-              arguments: { action: "record" },
-            },
-          });
+          throw new Error("server-owned checkpoint must bypass model serialization");
         }
-        return { async result() { return { stats: { stopReason: predictionCount === 1 ? "stop" : "toolCalls" } }; } };
+        return { async result() { return { stats: { stopReason: "stop" } }; } };
       },
     };
     const initial = Chat.from({ messages: [
@@ -2763,24 +2750,44 @@ test("deferred Feature Intent resume does not override a newer checkpoint handof
       reference: "feature_intent_target_evidence_resume",
       args: { selectedIntentId: "deferred-feature" },
     };
+    const { compactionWorkflowProgressSignature } = require("../dist/generator.js");
+    seeded.compactionChurn = {
+      version: 1,
+      progressSignature: compactionWorkflowProgressSignature(seeded),
+      consecutiveWithoutProgress: 2,
+      lastAction: "soft_compact",
+      updatedAt: new Date().toISOString(),
+    };
     fs.writeFileSync(checkpointPath, `${JSON.stringify(seeded, null, 2)}\n`, "utf8");
 
     const ownership = { taskSessionId: "task-budget", ownerCapability: "owner-budget" };
+    const checkpointArgs = {
+      action: "record",
+      phase: "planner",
+      requiredNextAction: "read_file_range",
+      includeGitChanges: false,
+      taskAuthorization: ownership,
+    };
     const budgetBlock = {
       ok: false,
       errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
       nextAction: "unreal_task_checkpoint",
       nextActionIsTool: true,
-      nextActionArgs: { action: "record", taskAuthorization: ownership },
+      nextActionArgs: checkpointArgs,
       taskAuthorization: ownership,
       control: {
-        version: 1,
-        taskId: ownership.taskSessionId,
-        phase: "read_file_range",
-        status: "Blocked",
-        nextAction: "unreal_task_checkpoint",
-        nextActionIsTool: true,
-        retryPolicy: "once",
+        version: 2,
+        authoritative: true,
+        epoch: 8,
+        taskSessionId: ownership.taskSessionId,
+        taskMode: "agent_edit",
+        routeHash: "route-budget-checkpoint",
+        phase: "planner",
+        disposition: "checkpoint",
+        requiredTool: { name: "unreal_task_checkpoint", args: checkpointArgs },
+        allowedTools: ["unreal_task_checkpoint"],
+        retryPolicy: { sameSemanticInput: "once" },
+        blocker: null,
       },
     };
     const continued = Chat.from({ messages: [
@@ -2789,7 +2796,7 @@ test("deferred Feature Intent resume does not override a newer checkpoint handof
         id: "budgeted-read", type: "function", name: "read_file_range", arguments: { path: "Source/Demo/Rules.cpp" },
       } }] },
       { role: "tool", content: [{
-        type: "toolCallResult", toolCallId: "budgeted-read", name: "read_file_range", content: JSON.stringify(budgetBlock),
+        type: "toolCallResult", toolCallId: "budgeted-read", name: "read_file_range", isError: true, content: JSON.stringify(budgetBlock),
       }] },
     ] });
     const tools = [
@@ -2797,17 +2804,37 @@ test("deferred Feature Intent resume does not override a newer checkpoint handof
       { type: "function", function: { name: "unreal_feature_intent_resolve", parameters: { type: "object", properties: {} } } },
       { type: "function", function: {
         name: "unreal_task_checkpoint",
-        parameters: { type: "object", properties: { action: { type: "string" }, taskAuthorization: { type: "object" } } },
+        parameters: {
+          type: "object",
+          properties: {
+            action: { type: "string" },
+            phase: { type: "string" },
+            requiredNextAction: { type: "string" },
+            includeGitChanges: { type: "boolean" },
+            taskAuthorization: { type: "object" },
+          },
+          required: ["action", "phase", "requiredNextAction", "includeGitChanges", "taskAuthorization"],
+        },
       } },
     ];
     emitted.length = 0;
-    await generate(controllerFor(model, {}, stateRoot, emitted, tools), continued);
+    await generate(controllerFor(model, {
+      maxCurrentTurnMessages: 1,
+      softRemainingTokens: 14_000,
+      hardRemainingTokens: 8_000,
+      maxOutputReserve: 512,
+      normalToolResultReserve: 512,
+      targetRemainingTokensAfterCompaction: 24_000,
+    }, stateRoot, emitted, tools), continued);
 
-    assert.equal(predictionCount, 2);
+    assert.equal(predictionCount, 1);
     const end = emitted.find((event) => event.kind === "end");
     assert.equal(end.request.name, "unreal_task_checkpoint");
-    assert.equal(end.request.arguments.action, "record");
-    assert.deepEqual(end.request.arguments.taskAuthorization, ownership);
+    assert.deepEqual(end.request.arguments, checkpointArgs);
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.equal(events.some((event) => event.type === "compaction_churn_blocked"), false);
+    assert.equal(activeCheckpoint(stateRoot).compactionChurn.consecutiveWithoutProgress, 1);
     assert.deepEqual(activeCheckpoint(stateRoot).featureIntentResume.args, {
       selectedIntentId: "deferred-feature",
     });
