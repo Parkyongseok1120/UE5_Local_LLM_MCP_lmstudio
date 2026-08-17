@@ -106,6 +106,87 @@ test("prediction supervisor treats heartbeat-free semantic silence as no progres
   assert.equal(cancelCount, 1);
 });
 
+test("prediction supervisor does not classify opaque prompt prefill as a semantic stall", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  let cancelCount = 0;
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() {
+      return new Promise((resolve) => setTimeout(
+        () => resolve({ stats: { stopReason: "stop" } }),
+        60,
+      ));
+    },
+  };
+
+  const result = await predictionResultWithSupervision(prediction, {
+    abortSignal: new AbortController().signal,
+  }, {
+    wallClockMs: 200,
+    noProgressMs: 20,
+    initialNoProgressMs: 100,
+    getInferenceStartedAt: () => null,
+  });
+
+  assert.equal(result.stats.stopReason, "stop");
+  assert.equal(cancelCount, 0);
+});
+
+test("prediction supervisor arms semantic silence after inference becomes observable", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  let cancelCount = 0;
+  let inferenceStartedAt = null;
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() {
+      setTimeout(() => { inferenceStartedAt = performance.now(); }, 10);
+      return new Promise(() => {});
+    },
+  };
+
+  await assert.rejects(
+    predictionResultWithSupervision(prediction, {
+      abortSignal: new AbortController().signal,
+    }, {
+      wallClockMs: 200,
+      noProgressMs: 20,
+      initialNoProgressMs: 150,
+      getInferenceStartedAt: () => inferenceStartedAt,
+    }),
+    (error) => error?.code === "PREDICTION_NO_PROGRESS_EXCEEDED",
+  );
+  assert.equal(cancelCount, 1);
+});
+
+test("prediction supervisor classifies an opaque prefill timeout separately", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  let cancelCount = 0;
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() { return new Promise(() => {}); },
+  };
+
+  await assert.rejects(
+    predictionResultWithSupervision(prediction, {
+      abortSignal: new AbortController().signal,
+    }, {
+      wallClockMs: 200,
+      noProgressMs: 20,
+      initialNoProgressMs: 60,
+      getInferenceStartedAt: () => null,
+    }),
+    (error) => error?.code === "PREDICTION_PREFILL_NO_PROGRESS_EXCEEDED",
+  );
+  assert.equal(cancelCount, 1);
+});
+
+test("prediction prefill allowance is derived from total prompt size and wall bounded", () => {
+  const { initialPredictionNoProgressMs } = require("../dist/generator.js");
+  assert.equal(initialPredictionNoProgressMs(35_000, 45_000, 180_000), 180_000);
+  assert.equal(initialPredictionNoProgressMs(8_192, 45_000, 180_000), 64_000);
+  assert.equal(initialPredictionNoProgressMs(35_000, 30, 180_000), 30);
+});
+
 test("prediction supervisor rejects completion after a blocked event loop exceeds wall clock", async () => {
   const { predictionResultWithSupervision } = require("../dist/generator.js");
   let cancelCount = 0;
@@ -263,6 +344,289 @@ test("model fence wait has a hard timeout for a pending SDK lookup", async () =>
   );
 });
 
+test("configured model readiness does not start a loader after GUI abort", async () => {
+  const { resolveTargetModel } = require("../dist/generator.js");
+  const abortController = new AbortController();
+  const abortReason = Object.assign(new Error("READY_ABORT"), { code: "GUI_STOP" });
+  abortController.abort(abortReason);
+  let modelCalls = 0;
+  const controller = {
+    abortSignal: abortController.signal,
+    client: { llm: { model() { modelCalls += 1; return new Promise(() => {}); } } },
+    fragmentGenerated() {},
+  };
+
+  await assert.rejects(
+    resolveTargetModel(controller, "qwen/qwen3.8-27b", {
+      timeoutSeconds: 1,
+      pollIntervalSeconds: 0.01,
+    }),
+    (error) => error === abortReason,
+  );
+  assert.equal(modelCalls, 0);
+});
+
+test("configured model readiness rechecks abort in the deferred loader microtask", async () => {
+  const { resolveTargetModel } = require("../dist/generator.js");
+  const abortController = new AbortController();
+  const abortReason = Object.assign(new Error("READY_RACE_ABORT"), { code: "GUI_STOP" });
+  let modelCalls = 0;
+  const controller = {
+    abortSignal: abortController.signal,
+    client: { llm: { model() { modelCalls += 1; return new Promise(() => {}); } } },
+    fragmentGenerated() {},
+  };
+
+  const resolving = resolveTargetModel(controller, "qwen/qwen3.8-27b", {
+    timeoutSeconds: 1,
+    pollIntervalSeconds: 0.01,
+  });
+  abortController.abort(abortReason);
+  await assert.rejects(resolving, (error) => error === abortReason);
+  assert.equal(modelCalls, 0);
+});
+
+test("automatic model readiness timeout is immune to wall-clock jumps", async () => {
+  const { resolveTargetModel } = require("../dist/generator.js");
+  const realDateNow = Date.now;
+  const model = { identifier: "clock-jump-ready-model" };
+  let listCalls = 0;
+  const controller = {
+    abortSignal: new AbortController().signal,
+    client: { llm: { async listLoaded() {
+      listCalls += 1;
+      if (listCalls === 1) {
+        Date.now = () => realDateNow() + 10 * 60 * 1000;
+        return [];
+      }
+      return [model];
+    } } },
+    fragmentGenerated() {},
+  };
+  try {
+    const resolved = await resolveTargetModel(controller, "", {
+      timeoutSeconds: 0.2,
+      pollIntervalSeconds: 0.01,
+    });
+    assert.equal(resolved.model, model);
+    assert.equal(listCalls, 2);
+  } finally {
+    Date.now = realDateNow;
+  }
+});
+
+test("automatic model readiness rechecks abort in the deferred list microtask", async () => {
+  const { resolveTargetModel } = require("../dist/generator.js");
+  const abortController = new AbortController();
+  const abortReason = Object.assign(new Error("AUTO_READY_RACE_ABORT"), { code: "GUI_STOP" });
+  let listCalls = 0;
+  const controller = {
+    abortSignal: abortController.signal,
+    client: { llm: { listLoaded() { listCalls += 1; return new Promise(() => {}); } } },
+    fragmentGenerated() {},
+  };
+
+  const resolving = resolveTargetModel(controller, "", {
+    timeoutSeconds: 1,
+    pollIntervalSeconds: 0.01,
+  });
+  abortController.abort(abortReason);
+  await assert.rejects(resolving, (error) => error === abortReason);
+  assert.equal(listCalls, 0);
+});
+
+test("initial prompt measurement observes GUI abort and persists its setup phase", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-initial-setup-abort-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const abortController = new AbortController();
+    const abortReason = Object.assign(new Error("INITIAL_SETUP_ABORT"), { code: "GUI_STOP" });
+    const model = {
+      identifier: "initial-setup-abort-model",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "initial-setup-abort-instance" };
+      },
+      applyPromptTemplate() {
+        setTimeout(() => abortController.abort(abortReason), 20);
+        return new Promise(() => {});
+      },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() { throw new Error("respond must not run after setup abort"); },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect without changing files.");
+    const controller = controllerFor(model, {}, stateRoot, [], []);
+    controller.abortSignal = abortController.signal;
+    await assert.rejects(generate(controller, history), (error) => error === abortReason);
+
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.predictionState.stopReason, "gui_stop");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((event) => (
+      event.type === "prediction_setup_rejected"
+      && event.phase === "initial_prompt_measurement"
+      && event.errorCode === "GUI_STOP"
+      && event.signalAborted === true
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("attempt prompt measurement observes GUI abort and persists its setup phase", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-attempt-setup-abort-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const abortController = new AbortController();
+    const abortReason = Object.assign(new Error("ATTEMPT_SETUP_ABORT"), { code: "GUI_STOP" });
+    let templateCalls = 0;
+    let respondCalls = 0;
+    const model = {
+      identifier: "attempt-setup-abort-model",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "attempt-setup-abort-instance" };
+      },
+      applyPromptTemplate() {
+        templateCalls += 1;
+        if (templateCalls === 1) return Promise.resolve("formatted");
+        setTimeout(() => abortController.abort(abortReason), 20);
+        return new Promise(() => {});
+      },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() { respondCalls += 1; throw new Error("respond must not run after setup abort"); },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect without changing files.");
+    const controller = controllerFor(model, {}, stateRoot, [], []);
+    controller.abortSignal = abortController.signal;
+    await assert.rejects(generate(controller, history), (error) => error === abortReason);
+
+    assert.equal(templateCalls, 2);
+    assert.equal(respondCalls, 0);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.predictionState.stopReason, "gui_stop");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((event) => (
+      event.type === "prediction_setup_rejected"
+      && event.phase === "attempt_prompt_measurement"
+      && event.errorCode === "GUI_STOP"
+      && event.signalAborted === true
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("transaction model context lookup observes GUI abort and persists its setup phase", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-context-setup-abort-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const abortController = new AbortController();
+    const abortReason = Object.assign(new Error("CONTEXT_SETUP_ABORT"), { code: "GUI_STOP" });
+    const model = {
+      identifier: "context-setup-abort-model",
+      getContextLength() {
+        setTimeout(() => abortController.abort(abortReason), 20);
+        return new Promise(() => {});
+      },
+      applyPromptTemplate() { throw new Error("prompt setup must not run"); },
+      respond() { throw new Error("respond must not run"); },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect without changing files.");
+    const controller = controllerFor(model, {}, stateRoot, [], []);
+    controller.abortSignal = abortController.signal;
+
+    await assert.rejects(generate(controller, history), (error) => error === abortReason);
+
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.predictionState.stopReason, "gui_stop");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((event) => (
+      event.type === "prediction_setup_rejected"
+      && event.phase === "transaction_model_setup"
+      && event.errorCode === "GUI_STOP"
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("context compaction measurement observes GUI abort and persists its setup phase", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-loop-setup-abort-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const abortController = new AbortController();
+    const abortReason = Object.assign(new Error("COMPACTION_SETUP_ABORT"), { code: "GUI_STOP" });
+    let templateCalls = 0;
+    let respondCalls = 0;
+    const model = {
+      identifier: "compaction-setup-abort-model",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "compaction-setup-abort-instance" };
+      },
+      applyPromptTemplate() {
+        templateCalls += 1;
+        if (templateCalls === 1) return Promise.resolve("oversized-prompt");
+        setTimeout(() => abortController.abort(abortReason), 20);
+        return new Promise(() => {});
+      },
+      async countTokens() { return 95_000; },
+      async getContextLength() { return 100_000; },
+      respond() { respondCalls += 1; throw new Error("respond must not run"); },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect all project source and report the result.");
+    const controller = controllerFor(model, {
+      hardRemainingTokens: 8_000,
+      softRemainingTokens: 14_000,
+      targetRemainingTokensAfterCompaction: 18_000,
+    }, stateRoot, [], []);
+    controller.abortSignal = abortController.signal;
+
+    await assert.rejects(generate(controller, history), (error) => error === abortReason);
+
+    assert.equal(templateCalls, 2);
+    assert.equal(respondCalls, 0);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.predictionState.stopReason, "gui_stop");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((event) => (
+      event.type === "prediction_setup_rejected"
+      && event.phase === "context_compaction_measurement"
+      && event.errorCode === "GUI_STOP"
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("generator watchdog accepts tool serialization progress beyond the initial silence window", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-tool-progress-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -367,6 +731,11 @@ test("cancelled prediction callbacks cannot leak into a later effort retry", asy
       respond(_history, opts) {
         calls += 1;
         if (calls === 1) {
+          opts.onPredictionFragment({
+            content: "INITIAL_REASONING_ACTIVITY",
+            tokensCount: 1,
+            reasoningType: "reasoning",
+          });
           setTimeout(() => opts.onPredictionFragment({
             content: "OLD_CANCELLED_OUTPUT",
             tokensCount: 1,
@@ -789,6 +1158,57 @@ test("Qwen3.8 reasoning effort is bound on every proxied prediction", async () =
       delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
       fs.rmSync(stateRoot, { recursive: true, force: true });
     }
+  }
+});
+
+test("opaque prefill timeout never replays the prompt through reasoning fallback", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-prefill-no-replay-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let predictionCalls = 0;
+    let cancelCount = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "prefill-no-replay-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        predictionCalls += 1;
+        return {
+          cancel() { cancelCount += 1; },
+          result() { return new Promise(() => {}); },
+        };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "Inspect without changing files.");
+
+    await assert.rejects(
+      generate(controllerFor(model, {
+        reasoningEffort: "xhigh",
+        predictionNoProgressSeconds: 0.03,
+        predictionWallClockSeconds: 1,
+        streamReasoningProgress: false,
+      }, stateRoot, [], []), history),
+      (error) => error?.code === "PREDICTION_PREFILL_NO_PROGRESS_EXCEEDED",
+    );
+
+    assert.equal(predictionCalls, 1);
+    assert.equal(cancelCount, 1);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.reasoningFallback, null);
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(
+      checkpoint.predictionState.stopReason,
+      "prediction_prefill_no_progress_exceeded",
+    );
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
   }
 });
 
@@ -4684,8 +5104,13 @@ test("low floor recovery rejects header-shaped directory evidence", async () => 
       async applyPromptTemplate() { return "formatted"; },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
-      respond() {
+      respond(_history, opts) {
         modelCalls += 1;
+        opts.onPredictionFragment({
+          content: "INFERENCE_STARTED",
+          tokensCount: 1,
+          reasoningType: "reasoning",
+        });
         return { cancel() {}, async result() { return await new Promise(() => {}); } };
       },
     };
@@ -4839,8 +5264,13 @@ test("low floor recovery survives a crash before its prepared call checkpoint", 
       async applyPromptTemplate() { return "formatted"; },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
-      respond() {
+      respond(_history, opts) {
         modelCalls += 1;
+        opts.onPredictionFragment({
+          content: "INFERENCE_STARTED",
+          tokensCount: 1,
+          reasoningType: "reasoning",
+        });
         return { cancel() {}, async result() { return await new Promise(() => {}); } };
       },
     };
@@ -4899,8 +5329,13 @@ test("successive low floor recoveries use path-bound call ids", async () => {
       async applyPromptTemplate() { return "formatted"; },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
-      respond() {
+      respond(_history, opts) {
         modelCalls += 1;
+        opts.onPredictionFragment({
+          content: "INFERENCE_STARTED",
+          tokensCount: 1,
+          reasoningType: "reasoning",
+        });
         return { cancel() {}, async result() { return await new Promise(() => {}); } };
       },
     };
@@ -4990,6 +5425,11 @@ test("an already-forced low tool route recovers without a second model predictio
             (field) => field.key === "llm.prediction.reasoning.enableThinking",
           )?.value,
           toolChoiceForced: opts.rawTools?.force === true,
+        });
+        opts.onPredictionFragment({
+          content: "INFERENCE_STARTED",
+          tokensCount: 1,
+          reasoningType: "reasoning",
         });
         return {
           cancel() {},
@@ -7222,6 +7662,83 @@ test("wrong forced tool name gets one bounded required-tool serialization repair
   }
 });
 
+test("required-tool repair setup failure reopens pending lifecycle instead of retaining completed", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-tool-setup-abort-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const abortController = new AbortController();
+    const abortReason = Object.assign(new Error("REPAIR_SETUP_ABORT"), { code: "GUI_STOP" });
+    const emitted = [];
+    let templateCalls = 0;
+    let predictionCount = 0;
+    const ownership = { taskSessionId: "task-repair-abort-1", ownerCapability: "owner-repair-abort-1" };
+    const model = {
+      identifier: "required-tool-repair-abort-model",
+      applyPromptTemplate() {
+        templateCalls += 1;
+        if (templateCalls < 3) return Promise.resolve("formatted");
+        setTimeout(() => abortController.abort(abortReason), 20);
+        return new Promise(() => {});
+      },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        predictionCount += 1;
+        opts.onToolCallRequestStart(1, { toolCallId: "wrong-before-repair" });
+        opts.onToolCallRequestNameReceived(1, "read_file");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"Source/Wrong.cpp"}');
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "wrong-before-repair",
+            type: "function",
+            name: "read_file",
+            arguments: { path: "Source/Wrong.cpp" },
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "implement the first missing local-play feature");
+    history.append("assistant", JSON.stringify({
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+    }));
+    const controller = controllerFor(model, {}, stateRoot, emitted, [{
+      type: "function",
+      function: {
+        name: "unreal_feature_intent_resolve",
+        parameters: { type: "object", properties: { request: { type: "string" } } },
+      },
+    }]);
+    controller.abortSignal = abortController.signal;
+
+    await assert.rejects(generate(controller, history), (error) => error === abortReason);
+
+    assert.equal(templateCalls, 3);
+    assert.equal(predictionCount, 1);
+    assert.deepEqual(emitted, []);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.predictionState.stopReason, "gui_stop");
+    assert.equal(Boolean(checkpoint.predictionState.outputDigest), false);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    assert.equal(events.filter((event) => event.type === "prediction_attempt_started").length, 2);
+    assert.ok(events.some((event) => (
+      event.type === "prediction_setup_rejected"
+      && event.phase === "attempt_prompt_measurement"
+      && event.errorCode === "GUI_STOP"
+    )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("required-tool serialization repair fails closed after exactly one retry", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-required-tool-fail-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -7435,7 +7952,7 @@ test("pending tool checkpoint is durable before buffered tool output is committe
 });
 
 test("tool call stream is identical before and after forced context compaction", async () => {
-  const { generate } = require("../dist/generator.js");
+  const { generate, initialPredictionNoProgressMs } = require("../dist/generator.js");
   const requests = [
     { callId: 1, request: { id: "call-a", type: "function", name: "read_file", arguments: { path: "project://Source/A.cpp" } } },
     { callId: 2, request: { id: "call-b", type: "function", name: "read_file_range", arguments: { path: "project://Source/B.cpp", startLine: 10, endLine: 20 } } },
@@ -7464,7 +7981,12 @@ test("tool call stream is identical before and after forced context compaction",
     process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
     try {
       const emitted = [];
-      const captured = { chats: [], rawTools: null };
+      const captured = {
+        chats: [],
+        rawTools: null,
+        actualPromptTokens: 0,
+        actualToolSchemaTokens: 0,
+      };
       const model = {
         identifier: "equivalence-model",
         async applyPromptTemplate(chat) {
@@ -7473,8 +7995,11 @@ test("tool call stream is identical before and after forced context compaction",
         async countTokens(value) { return String(value || "").length; },
         async getContextLength() { return 24_000; },
         respond(chat, opts) {
-          captured.chats.push(core.snapshotMessages(chat.getMessagesArray()));
+          const promptSnapshot = core.snapshotMessages(chat.getMessagesArray());
+          captured.chats.push(promptSnapshot);
           captured.rawTools = opts.rawTools;
+          captured.actualPromptTokens = JSON.stringify(promptSnapshot).length;
+          captured.actualToolSchemaTokens = JSON.stringify(opts.rawTools?.tools || []).length;
           opts.onPredictionFragment({
             content: "calling tools",
             tokensCount: 3,
@@ -7528,7 +8053,13 @@ test("tool call stream is identical before and after forced context compaction",
         .find((entry) => entry.isDirectory());
       const telemetry = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
         .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
-      return { emitted, captured, originalLength, telemetry };
+      return {
+        emitted,
+        captured,
+        originalLength,
+        telemetry,
+        checkpoint: activeCheckpoint(stateRoot),
+      };
     } finally {
       delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
       fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -7585,6 +8116,19 @@ test("tool call stream is identical before and after forced context compaction",
     )),
   );
   assert.equal(beforeLimit.telemetry.some((event) => event.type === "compaction_decision" && event.applied === true), false);
+  for (const scenario of [beforeLimit, afterLimit]) {
+    const budgets = scenario.checkpoint.predictionPolicy.budgets;
+    const actualEstimatedTokens = (
+      scenario.captured.actualPromptTokens + scenario.captured.actualToolSchemaTokens
+    );
+    assert.equal(budgets.inputTokens, scenario.captured.actualPromptTokens);
+    assert.equal(budgets.toolSchemaTokens, scenario.captured.actualToolSchemaTokens);
+    assert.equal(budgets.estimatedPromptTokens, actualEstimatedTokens);
+    assert.equal(
+      budgets.configuredPrefillNoProgressCeilingSeconds,
+      initialPredictionNoProgressMs(actualEstimatedTokens, 45_000, 180_000) / 1000,
+    );
+  }
   const routedMeasurement = afterLimit.telemetry.find((event) => event.type === "context_measurement");
   assert.equal(routedMeasurement?.proxyActive, true);
   assert.equal(routedMeasurement?.targetModel, "equivalence-model");
@@ -8356,6 +8900,50 @@ test("model readiness timeout preserves a pending prediction and objective", asy
   }
 });
 
+test("pending automatic model discovery observes GUI abort without misclassifying readiness", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-model-list-abort-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const abortController = new AbortController();
+    const abortReason = Object.assign(new Error("MODEL_LIST_ABORT"), { code: "GUI_STOP" });
+    const model = {
+      identifier: "unused-model",
+      applyPromptTemplate() { throw new Error("model must not be invoked"); },
+      getContextLength() { throw new Error("model must not be invoked"); },
+    };
+    const controller = controllerFor(model, {
+      modelReadinessTimeoutSeconds: 5,
+      modelReadinessPollIntervalSeconds: 0.01,
+    }, stateRoot, [], []);
+    controller.abortSignal = abortController.signal;
+    controller.client.llm.listLoaded = () => {
+      setTimeout(() => abortController.abort(abortReason), 20);
+      return new Promise(() => {});
+    };
+    const history = Chat.empty();
+    history.append("user", "Audit this project without changing it.");
+
+    await assert.rejects(generate(controller, history), (error) => error === abortReason);
+
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.predictionState.stopReason, "gui_stop");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory());
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+    assert.ok(events.some((event) => (
+      event.type === "model_readiness_aborted"
+      && event.errorCode === "GUI_STOP"
+    )));
+    assert.equal(events.some((event) => event.type === "model_readiness_failed"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("switching the selected model does not fork one LM Studio conversation task", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-model-switch-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -8578,6 +9166,61 @@ test("resumed checkpoints preserve only validated model fence and prediction pol
   forged.predictionPolicy = resumed.predictionPolicy;
   forged.modelFence.observationLevel = "identifier";
   assert.equal(core.validateCheckpoint(forged), false);
+});
+
+test("a resumed attempt migrates the legacy prefill allowance out of the signed policy", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-policy-migration-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const store = require("../src/checkpoint-store.js");
+    let generation = 0;
+    const model = {
+      identifier: "policy-migration-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        generation += 1;
+        opts.onPredictionFragment({ content: `answer-${generation}`, reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const workingDirectory = path.join(stateRoot, "conversation");
+    const first = Chat.empty();
+    first.append("user", "Inspect the current project without changing it.");
+    await generate(controllerFor(model, {}, stateRoot, [], [], workingDirectory), first);
+
+    const sessionId = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && entry.name !== "conversation").name;
+    const persisted = await store.loadCheckpoint(sessionId, stateRoot);
+    const legacyPolicyBody = structuredClone(persisted.predictionPolicy);
+    delete legacyPolicyBody.fingerprint;
+    legacyPolicyBody.budgets.initialNoProgressSeconds = 999;
+    persisted.predictionPolicy = {
+      ...legacyPolicyBody,
+      fingerprint: core.sha256(core.stableStringify(legacyPolicyBody)),
+    };
+    await store.saveCheckpoint(sessionId, persisted, stateRoot);
+
+    const continued = Chat.empty();
+    continued.append("user", "Inspect the current project without changing it.");
+    continued.append("assistant", "answer-1");
+    continued.append("user", "continue");
+    await generate(controllerFor(model, {}, stateRoot, [], [], workingDirectory), continued);
+
+    const migrated = activeCheckpoint(stateRoot).predictionPolicy;
+    assert.equal(Object.hasOwn(migrated.budgets, "initialNoProgressSeconds"), false);
+    assert.equal(
+      typeof migrated.budgets.configuredPrefillNoProgressCeilingSeconds,
+      "number",
+    );
+    assert.deepEqual(core.compactPredictionPolicy(migrated), migrated);
+    assert.ok(Date.parse(migrated.attemptStartedAt) <= Date.parse(migrated.policyRecordedAt));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("checkpoint store CAS rejects a concurrent stale writer", async () => {

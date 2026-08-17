@@ -40,7 +40,7 @@ export const configSchematics = createConfigSchematics()
   .field(
     "predictionNoProgressSeconds",
     "numeric",
-    { displayName: "Prediction no-progress limit", subtitle: "Cancel after this many seconds without final text or tool-call progress (5-300 seconds). Reasoning tokens and heartbeats are activity only." },
+    { displayName: "Prediction no-progress limit", subtitle: "After inference begins, cancel after this many seconds without final text or tool-call progress (5-300 seconds). Opaque prompt prefill receives a prompt-size allowance bounded by the wall-clock limit; reasoning tokens and heartbeats are activity only." },
     45,
   )
   .field(

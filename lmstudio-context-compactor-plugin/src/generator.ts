@@ -307,22 +307,25 @@ async function resolveTargetModel(
   configuredTargetModel: string,
   options: { timeoutSeconds: number; pollIntervalSeconds: number },
 ): Promise<{ model: any; resolvedTargetModel: string; autoSelected: boolean }> {
+  guardGeneratorAbort(ctl);
   if (configuredTargetModel) {
-    const startedAt = Date.now();
+    const startedMonotonicAt = performance.now();
     const timeoutMs = Math.max(0, Number(options.timeoutSeconds) * 1000);
     const intervalMs = Math.max(10, Number(options.pollIntervalSeconds) * 1000);
     // model(modelKey) is LM Studio's load-or-get operation. Keep the request
     // handled even after a local timeout so a late loader rejection cannot
     // become an unhandled promise while the durable task waits for retry.
-    const loadingOutcome: Promise<{ model?: any; error?: any }> = Promise.resolve(
-      ctl.client.llm.model(configuredTargetModel),
-    ).then(
+    const loadingOutcome: Promise<{ model?: any; error?: any }> = Promise.resolve()
+      .then(() => {
+        guardGeneratorAbort(ctl);
+        return ctl.client.llm.model(configuredTargetModel);
+      }).then(
       (model: any) => ({ model }),
       (error: any) => ({ error }),
     );
     let lastHeartbeatAt = 0;
     while (true) {
-      const elapsedMs = Date.now() - startedAt;
+      const elapsedMs = performance.now() - startedMonotonicAt;
       if (elapsedMs >= timeoutMs) {
         throw new Error(
           `Configured targetModel did not become ready within modelReadinessTimeoutSeconds: ${configuredTargetModel}`,
@@ -353,18 +356,39 @@ async function resolveTargetModel(
     }
   }
 
-  const startedAt = Date.now();
+  const startedMonotonicAt = performance.now();
   const timeoutMs = Math.max(0, Number(options.timeoutSeconds) * 1000);
   const intervalMs = Math.max(10, Number(options.pollIntervalSeconds) * 1000);
   let lastHeartbeatAt = 0;
   let lastListError = "";
   while (true) {
     guardGeneratorAbort(ctl);
+    const elapsedBeforeListMs = performance.now() - startedMonotonicAt;
+    if (elapsedBeforeListMs >= timeoutMs) {
+      throw new Error(
+        "No loaded LLM became ready before modelReadinessTimeoutSeconds elapsed. "
+        + "Load exactly one model in LM Studio or configure targetModel, then continue the same task."
+        + (lastListError ? ` Last readiness error: ${lastListError}` : ""),
+      );
+    }
     let loaded: any[] = [];
     try {
-      loaded = await ctl.client.llm.listLoaded();
+      loaded = await boundedPredictionSetupValue(
+        ctl,
+        Math.max(1, timeoutMs - elapsedBeforeListMs),
+        startedMonotonicAt,
+        () => ctl.client.llm.listLoaded(),
+      );
       lastListError = "";
     } catch (error: any) {
+      if ((ctl as any)?.abortSignal?.aborted) throw error;
+      if (String(error?.code || "") === "PREDICTION_WALL_CLOCK_EXCEEDED") {
+        throw new Error(
+          "No loaded LLM became ready before modelReadinessTimeoutSeconds elapsed. "
+          + "Load exactly one model in LM Studio or configure targetModel, then continue the same task."
+          + (lastListError ? ` Last readiness error: ${lastListError}` : ""),
+        );
+      }
       lastListError = String(error?.message || error);
     }
     if (loaded.length === 1) {
@@ -381,7 +405,7 @@ async function resolveTargetModel(
         `Set targetModel because automatic selection requires exactly one loaded LLM. Loaded: ${names}`,
       );
     }
-    const elapsedMs = Date.now() - startedAt;
+    const elapsedMs = performance.now() - startedMonotonicAt;
     if (elapsedMs >= timeoutMs) {
       throw new Error(
         "No loaded LLM became ready before modelReadinessTimeoutSeconds elapsed. "
@@ -731,6 +755,7 @@ async function compactToTarget(
   options: {
     trailingMetaUser?: ChatMessage | null;
     maxCurrentTurnMessages?: number | null;
+    measure?: (operation: () => Promise<any> | any) => Promise<any>;
   } = {},
 ): Promise<{ chat: Chat; inputTokens: number; remainingTokens: number; retainedTurns: number; currentTurnCap: number | null }> {
   let retainedTurns = Math.max(0, Math.floor(Number(config.recentCompleteTurns || 0)));
@@ -759,8 +784,11 @@ async function compactToTarget(
     let formatted: string;
     let inputTokens: number;
     try {
-      formatted = await model.applyPromptTemplate(chat);
-      inputTokens = await model.countTokens(formatted);
+      const measure = options.measure || ((operation: () => Promise<any> | any) => (
+        Promise.resolve().then(operation)
+      ));
+      formatted = await measure(() => model.applyPromptTemplate(chat));
+      inputTokens = await measure(() => model.countTokens(formatted));
     } catch (error) {
       debugAgentLog("H14", "generator.ts:compactToTarget", "applyPromptTemplate failed", {
         retainedTurns,
@@ -937,22 +965,97 @@ function guardGeneratorAbort(ctl: GeneratorController): void {
 type PredictionSupervisionOptions = {
   wallClockMs?: number;
   noProgressMs?: number;
+  initialNoProgressMs?: number;
   getLastProgressAt?: () => number;
+  getInferenceStartedAt?: () => number | null;
   beforeCancel?: () => void;
   onResultSettled?: () => void;
   failurePromise?: Promise<never>;
   getFailure?: () => unknown;
 };
 
+function initialPredictionNoProgressMs(
+  promptTokens: number,
+  configuredNoProgressMs: number,
+  wallClockMs: number,
+): number {
+  const noProgressMs = Math.max(0, Number(configuredNoProgressMs || 0));
+  const wallMs = Math.max(0, Number(wallClockMs || 0));
+  // LM Studio cannot surface semantic callbacks while the backend is still
+  // evaluating the prompt. Treating that opaque prefill interval as a
+  // serialization stall produced false cancellations on real 30k+ token MCP
+  // prompts. Production values (the schema minimum is five seconds) receive
+  // a conservative prompt-size allowance; sub-five-second deterministic test
+  // overrides retain their exact historical timing.
+  if (noProgressMs < 5_000) return noProgressMs;
+  const tokens = Math.max(0, Math.floor(Number(promptTokens || 0)));
+  const estimatedPrefillMs = Math.ceil((tokens / 128) * 1_000);
+  const bounded = Math.max(noProgressMs, estimatedPrefillMs);
+  return wallMs > 0 ? Math.min(wallMs, bounded) : bounded;
+}
+
 function predictionSupervisorError(code: string, elapsedMs: number): Error {
   const error: any = new Error(
     code === "PREDICTION_NO_PROGRESS_EXCEEDED"
       ? `Model prediction made no semantic progress for ${Math.max(1, Math.floor(elapsedMs / 1000))} seconds.`
+      : code === "PREDICTION_PREFILL_NO_PROGRESS_EXCEEDED"
+      ? `Model prompt prefill produced no observable inference activity for ${Math.max(1, Math.floor(elapsedMs / 1000))} seconds.`
       : `Model prediction exceeded its ${Math.max(1, Math.floor(elapsedMs / 1000))}-second wall-clock budget.`,
   );
   error.code = code;
   error.elapsedMs = elapsedMs;
   return error;
+}
+
+async function boundedPredictionSetupValue<T>(
+  ctl: GeneratorController,
+  timeoutMs: number,
+  attemptStartedAt: number,
+  operation: () => Promise<T> | T,
+): Promise<T> {
+  const signal = (ctl as any)?.abortSignal;
+  const boundedMs = Math.max(0, Number(timeoutMs || 0));
+  const setupStartedAt = performance.now();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let abortListener: (() => void) | null = null;
+  const operationResult = Promise.resolve().then(() => {
+    guardGeneratorAbort(ctl);
+    return operation();
+  });
+  const boundary = new Promise<never>((_resolve, reject) => {
+    if (signal && typeof signal.addEventListener === "function") {
+      abortListener = () => reject(
+        signal.reason instanceof Error ? signal.reason : new Error("Generation aborted"),
+      );
+      if (signal.aborted) {
+        abortListener();
+        return;
+      }
+      signal.addEventListener("abort", abortListener, { once: true });
+    }
+    if (boundedMs > 0) {
+      timer = setTimeout(() => reject(predictionSupervisorError(
+        "PREDICTION_WALL_CLOCK_EXCEEDED",
+        performance.now() - attemptStartedAt,
+      )), boundedMs);
+    }
+  });
+  try {
+    const value = await Promise.race([operationResult, boundary]);
+    guardGeneratorAbort(ctl);
+    if (boundedMs > 0 && performance.now() - setupStartedAt >= boundedMs) {
+      throw predictionSupervisorError(
+        "PREDICTION_WALL_CLOCK_EXCEEDED",
+        performance.now() - attemptStartedAt,
+      );
+    }
+    return value;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (abortListener && signal && typeof signal.removeEventListener === "function") {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
 }
 
 function compactionWorkflowProgressSignature(checkpoint: any): string {
@@ -1039,7 +1142,15 @@ async function predictionResultWithSupervision(
   const startedAt = performance.now();
   const wallClockMs = Math.max(0, Number(options.wallClockMs || 0));
   const noProgressMs = Math.max(0, Number(options.noProgressMs || 0));
+  const initialNoProgressMs = Math.max(
+    noProgressMs,
+    Number(options.initialNoProgressMs || 0),
+  );
   const getLastProgressAt = options.getLastProgressAt || (() => startedAt);
+  // Direct helper callers historically supervise an already-created
+  // prediction handle. The generator supplies an explicit nullable callback
+  // so only its opaque prefill phase receives the extended allowance.
+  const getInferenceStartedAt = options.getInferenceStartedAt || (() => startedAt + 0.001);
   let abortListener: (() => void) | null = null;
   let wallClockTimer: ReturnType<typeof setTimeout> | null = null;
   let noProgressTimer: ReturnType<typeof setInterval> | null = null;
@@ -1082,9 +1193,25 @@ async function predictionResultWithSupervision(
     if (noProgressMs > 0) {
       const pollMs = Math.max(10, Math.min(1000, Math.floor(noProgressMs / 4)));
       noProgressTimer = setInterval(() => {
-        const stalledMs = performance.now() - Number(getLastProgressAt() || startedAt);
-        if (stalledMs >= noProgressMs) {
-          cancelAndReject(predictionSupervisorError("PREDICTION_NO_PROGRESS_EXCEEDED", stalledMs));
+        const semanticProgressAt = Number(getLastProgressAt() || startedAt);
+        const inferenceStartedAt = Number(getInferenceStartedAt() || 0);
+        const inferenceObservable = (
+          inferenceStartedAt > startedAt || semanticProgressAt > startedAt
+        );
+        const baselineAt = inferenceObservable
+          ? Math.max(startedAt, inferenceStartedAt, semanticProgressAt)
+          : startedAt;
+        const applicableLimitMs = inferenceObservable
+          ? noProgressMs
+          : initialNoProgressMs;
+        const stalledMs = performance.now() - baselineAt;
+        if (applicableLimitMs > 0 && stalledMs >= applicableLimitMs) {
+          cancelAndReject(predictionSupervisorError(
+            inferenceObservable
+              ? "PREDICTION_NO_PROGRESS_EXCEEDED"
+              : "PREDICTION_PREFILL_NO_PROGRESS_EXCEEDED",
+            stalledMs,
+          ));
         }
       }, pollMs);
     }
@@ -1141,10 +1268,26 @@ async function predictionResultWithSupervision(
       cancelPredictionOnce();
       throw predictionSupervisorError("PREDICTION_WALL_CLOCK_EXCEEDED", elapsedMs);
     }
-    const stalledMs = completedAt - Number(getLastProgressAt() || startedAt);
-    if (noProgressMs > 0 && stalledMs >= noProgressMs) {
+    const semanticProgressAt = Number(getLastProgressAt() || startedAt);
+    const inferenceStartedAt = Number(getInferenceStartedAt() || 0);
+    const inferenceObservable = (
+      inferenceStartedAt > startedAt || semanticProgressAt > startedAt
+    );
+    const baselineAt = inferenceObservable
+      ? Math.max(startedAt, inferenceStartedAt, semanticProgressAt)
+      : startedAt;
+    const applicableNoProgressMs = inferenceObservable
+      ? noProgressMs
+      : initialNoProgressMs;
+    const stalledMs = completedAt - baselineAt;
+    if (applicableNoProgressMs > 0 && stalledMs >= applicableNoProgressMs) {
       cancelPredictionOnce();
-      throw predictionSupervisorError("PREDICTION_NO_PROGRESS_EXCEEDED", stalledMs);
+      throw predictionSupervisorError(
+        inferenceObservable
+          ? "PREDICTION_NO_PROGRESS_EXCEEDED"
+          : "PREDICTION_PREFILL_NO_PROGRESS_EXCEEDED",
+        stalledMs,
+      );
     }
     return result;
   } finally {
@@ -3398,20 +3541,27 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     resolvedTargetModel = resolved.resolvedTargetModel;
     autoSelected = resolved.autoSelected;
   } catch (error: any) {
+    const readinessAborted = Boolean((ctl as any)?.abortSignal?.aborted);
+    const readinessErrorCode = String(
+      error?.code || (readinessAborted ? "GENERATION_ABORTED" : "MODEL_NOT_READY"),
+    ).slice(0, 120);
     preliminaryCheckpoint.predictionState = mergeLifecycleState(
       preliminaryCheckpoint.predictionState,
-      lifecycleState(preliminaryCheckpoint, "pending", { stopReason: "model_not_ready" }),
+      lifecycleState(preliminaryCheckpoint, "pending", {
+        stopReason: readinessAborted ? readinessErrorCode.toLowerCase() : "model_not_ready",
+      }),
     );
     await persistCheckpoint(
       sessionId,
       preliminaryCheckpoint,
       requireCheckpointPersistence,
-      "model_readiness_failed",
+      readinessAborted ? "model_readiness_aborted" : "model_readiness_failed",
     );
     await appendEventBestEffort(sessionId, {
-      type: "model_readiness_failed",
+      type: readinessAborted ? "model_readiness_aborted" : "model_readiness_failed",
       at: isoNow(),
       targetModel: configuredTargetModel,
+      errorCode: readinessErrorCode,
       error: String(error?.message || error).slice(0, 1000),
     });
     throw error;
@@ -3424,16 +3574,61 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     });
   }
 
-  const contextLength = await model.getContextLength();
+  const nextCheckpoint: any = preliminaryCheckpoint;
+  const persistPredictionSetupFailure = async (error: any, phase: string): Promise<void> => {
+    const signalAborted = Boolean((ctl as any)?.abortSignal?.aborted);
+    const errorCode = String(
+      error?.code || (signalAborted ? "GENERATION_ABORTED" : "PREDICTION_SETUP_FAILED"),
+    ).slice(0, 120);
+    const stopReason = errorCode.toLowerCase();
+    nextCheckpoint.predictionState = mergeLifecycleState(
+      nextCheckpoint.predictionState,
+      lifecycleState(nextCheckpoint, "pending", { stopReason }),
+    );
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "prediction_setup_rejected",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "prediction_setup_rejected",
+      at: isoNow(),
+      phase,
+      errorCode,
+      signalAborted,
+      taskSessionId: String(nextCheckpoint?.taskRouteOwnership?.taskSessionId || ""),
+    });
+  };
   const modelFenceTimeoutMs = finiteNumber(
     configValue(ctl, "predictionWallClockSeconds", 180), 180, 5, 1800,
   ) * 1000;
-  const transactionModelFence = await captureModelFence(
-    model,
-    resolvedTargetModel,
-    contextLength,
-    { signal: (ctl as any)?.abortSignal, timeoutMs: modelFenceTimeoutMs },
-  );
+  const transactionSetupStartedAt = performance.now();
+  let contextLength: number;
+  let transactionModelFence: any;
+  try {
+    contextLength = Number(await boundedPredictionSetupValue(
+      ctl,
+      modelFenceTimeoutMs,
+      transactionSetupStartedAt,
+      () => model.getContextLength(),
+    ));
+    transactionModelFence = await captureModelFence(
+      model,
+      resolvedTargetModel,
+      contextLength,
+      {
+        signal: (ctl as any)?.abortSignal,
+        timeoutMs: Math.max(
+          1,
+          modelFenceTimeoutMs - (performance.now() - transactionSetupStartedAt),
+        ),
+      },
+    );
+  } catch (error) {
+    await persistPredictionSetupFailure(error, "transaction_model_setup");
+    throw error;
+  }
   if (isQwen38_27b(resolvedTargetModel) && !transactionModelFence.instanceReference) {
     const error: any = new Error(
       "Qwen 3.8 27B reasoning policy requires an observable LM Studio instance reference; "
@@ -3443,7 +3638,6 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     throw error;
   }
   let toolDefinitions = ctl.getToolDefinitions();
-  const nextCheckpoint: any = preliminaryCheckpoint;
   nextCheckpoint.modelFence = transactionModelFence;
   const persistedFeatureResume = checkpointBeforeModelReadiness?.featureIntentResume;
   nextCheckpoint.featureIntentResume = null;
@@ -4420,9 +4614,48 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   const featureIntentModelFacingTool: any = modelFacingToolDefinitions.find((tool: any) => (
     toolNamesMatch(FEATURE_INTENT_TOOL_NAME, tool?.function?.name || tool?.name || "")
   )) || featureIntentContractTool;
-  const currentFormatted = await model.applyPromptTemplate(history);
-  const inputTokens = await model.countTokens(currentFormatted);
-  const toolSchemaTokens = await model.countTokens(JSON.stringify(modelFacingToolDefinitions));
+  const initialSetupStartedAt = performance.now();
+  const initialSetupWallClockMs = finiteNumber(
+    configValue(ctl, "predictionWallClockSeconds", 180), 180, 5, 1800,
+  ) * 1000;
+  const initialSetupDeadlineAt = initialSetupStartedAt + initialSetupWallClockMs;
+  const remainingInitialSetupMs = () => {
+    const now = performance.now();
+    const remainingMs = initialSetupDeadlineAt - now;
+    if (remainingMs <= 0) {
+      throw predictionSupervisorError(
+        "PREDICTION_WALL_CLOCK_EXCEEDED",
+        now - initialSetupStartedAt,
+      );
+    }
+    return remainingMs;
+  };
+  let currentFormatted: any;
+  let inputTokens: number;
+  let toolSchemaTokens: number;
+  try {
+    currentFormatted = await boundedPredictionSetupValue(
+      ctl,
+      remainingInitialSetupMs(),
+      initialSetupStartedAt,
+      () => model.applyPromptTemplate(history),
+    );
+    inputTokens = Math.max(0, Number(await boundedPredictionSetupValue(
+      ctl,
+      remainingInitialSetupMs(),
+      initialSetupStartedAt,
+      () => model.countTokens(currentFormatted),
+    )) || 0);
+    toolSchemaTokens = Math.max(0, Number(await boundedPredictionSetupValue(
+      ctl,
+      remainingInitialSetupMs(),
+      initialSetupStartedAt,
+      () => model.countTokens(JSON.stringify(modelFacingToolDefinitions)),
+    )) || 0);
+  } catch (error) {
+    await persistPredictionSetupFailure(error, "initial_prompt_measurement");
+    throw error;
+  }
   const persistedNextToolName = detachedSideQueryActive
     ? ""
     : (nextCheckpoint?.requiredNextTool?.name || "");
@@ -4713,20 +4946,31 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       const compactConfig = zeroRetainedTurns
         ? { ...config, recentCompleteTurns: 0 }
         : config;
-      compactedMetrics = await compactToTarget(
-        model,
-        history,
-        nextCheckpoint,
-        compactConfig,
-        contextLength,
-        decision.reservedTokens,
-        {
-          trailingMetaUser,
-          maxCurrentTurnMessages: currentTurnCapForced
-            ? config.maxCurrentTurnMessages
-            : null,
-        },
-      );
+      try {
+        compactedMetrics = await compactToTarget(
+          model,
+          history,
+          nextCheckpoint,
+          compactConfig,
+          contextLength,
+          decision.reservedTokens,
+          {
+            trailingMetaUser,
+            maxCurrentTurnMessages: currentTurnCapForced
+              ? config.maxCurrentTurnMessages
+              : null,
+            measure: (operation) => boundedPredictionSetupValue(
+              ctl,
+              remainingInitialSetupMs(),
+              initialSetupStartedAt,
+              operation,
+            ),
+          },
+        );
+      } catch (error) {
+        await persistPredictionSetupFailure(error, "context_compaction_measurement");
+        throw error;
+      }
       modelChat = compactedMetrics.chat;
       nextCheckpoint.lastCompactionSourceMessageCount = messages.length;
     }
@@ -4997,6 +5241,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   let reasoningTokensObserved = 0;
   let finalTokensObserved = 0;
   let toolJsonCharactersObserved = 0;
+  let predictionAttemptSequence = 0;
   const recordEvent = (event: any) => {
     // Tool stages are always prepared durably before frontend dispatch. Atomic
     // text remains configurable for backward compatibility, while call ids and
@@ -5029,16 +5274,110 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     thinkingOverride?: boolean,
   ): Promise<string> => {
     guardGeneratorAbort(ctl);
+    const predictionStartedAt = Date.now();
+    const predictionWallClockStartedAt = performance.now();
+    const predictionWallClockMs = Number(config.predictionWallClockSeconds) * 1000;
+    const predictionDeadlineAt = predictionWallClockStartedAt + predictionWallClockMs;
+    predictionAttemptSequence += 1;
+    // A bounded repair/reasoning retry is a new attempt within the same
+    // control identity. Open it explicitly instead of monotonic-merging with
+    // the prior attempt's completed state; otherwise a setup failure in the
+    // retry can leave an authoritative-looking completed checkpoint behind.
+    nextCheckpoint.predictionState = lifecycleState(
+      nextCheckpoint,
+      "pending",
+      { stopReason: "prediction_attempt" },
+    );
+    if (nextCheckpoint.synthesisState && predictionTools.length === 0) {
+      nextCheckpoint.synthesisState = lifecycleState(
+        nextCheckpoint,
+        "pending",
+        { stopReason: "prediction_attempt" },
+      );
+    }
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "before_prediction_attempt_setup",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "prediction_attempt_started",
+      at: isoNow(),
+      attempt: predictionAttemptSequence,
+    });
+    const remainingPredictionWallClockMs = () => {
+      const now = performance.now();
+      const remainingMs = predictionDeadlineAt - now;
+      if (remainingMs <= 0) {
+        throw predictionSupervisorError(
+          "PREDICTION_WALL_CLOCK_EXCEEDED",
+          now - predictionWallClockStartedAt,
+        );
+      }
+      return remainingMs;
+    };
+    let formattedAttemptPrompt: any;
+    let attemptInputTokens: number;
+    let attemptToolSchemaTokens: number;
+    try {
+      formattedAttemptPrompt = await boundedPredictionSetupValue(
+        ctl,
+        remainingPredictionWallClockMs(),
+        predictionWallClockStartedAt,
+        () => model.applyPromptTemplate(modelChat),
+      );
+      attemptInputTokens = Math.max(0, Number(await boundedPredictionSetupValue(
+        ctl,
+        remainingPredictionWallClockMs(),
+        predictionWallClockStartedAt,
+        () => model.countTokens(formattedAttemptPrompt),
+      )) || 0);
+      attemptToolSchemaTokens = predictionTools.length > 0
+        ? Math.max(0, Number(await boundedPredictionSetupValue(
+          ctl,
+          remainingPredictionWallClockMs(),
+          predictionWallClockStartedAt,
+          () => model.countTokens(JSON.stringify(predictionTools)),
+        )) || 0)
+        : 0;
+    } catch (error) {
+      await persistPredictionSetupFailure(error, "attempt_prompt_measurement");
+      throw error;
+    }
+    const attemptEstimatedPromptTokens = attemptInputTokens + attemptToolSchemaTokens;
+    const attemptInitialNoProgressMs = initialPredictionNoProgressMs(
+      attemptEstimatedPromptTokens,
+      Number(config.predictionNoProgressSeconds) * 1000,
+      predictionWallClockMs,
+    );
     const attemptEffort = effortOverride || config.reasoningEffort;
     const attemptThinkingEnabled = thinkingOverride ?? thinkingEnabled;
+    const attemptBudgets = {
+      ...(nextCheckpoint.predictionPolicy?.budgets || {}),
+      inputTokens: attemptInputTokens,
+      toolSchemaTokens: attemptToolSchemaTokens,
+      estimatedPromptTokens: attemptEstimatedPromptTokens,
+      // This is the configured prompt-size ceiling. The supervisor applies
+      // the smaller of this value and the hard wall time remaining after
+      // setup/model-fence work, so the checkpoint does not claim a larger
+      // allowance was actually applied.
+      configuredPrefillNoProgressCeilingSeconds: attemptInitialNoProgressMs / 1000,
+      setupElapsedSeconds: (performance.now() - predictionWallClockStartedAt) / 1000,
+    };
+    // Migration: do not retain the former ambiguous name in a newly signed
+    // policy fingerprint when resuming an older checkpoint.
+    delete (attemptBudgets as any).initialNoProgressSeconds;
     const attemptPolicy = {
       ...nextCheckpoint.predictionPolicy,
+      budgets: attemptBudgets,
       reasoningControl: {
         ...(nextCheckpoint.predictionPolicy?.reasoningControl || {}),
         effort: reasoningRawConfig && attemptThinkingEnabled ? attemptEffort : null,
         enableThinking: Boolean(reasoningRawConfig && attemptThinkingEnabled),
       },
-      attemptStartedAt: isoNow(),
+      attemptStartedAt: new Date(predictionStartedAt).toISOString(),
+      policyRecordedAt: isoNow(),
     };
     delete attemptPolicy.fingerprint;
     nextCheckpoint.predictionPolicy = {
@@ -5054,34 +5393,27 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     // LM Studio callback ids are scoped to one model prediction and can be
     // reused by a bounded repair prediction in the same generator turn.
     const callbackFsm = createToolCallCallbackFsm();
-    const predictionStartedAt = Date.now();
-    const predictionWallClockStartedAt = performance.now();
-    const predictionWallClockMs = Number(config.predictionWallClockSeconds) * 1000;
-    const predictionDeadlineAt = predictionWallClockStartedAt + predictionWallClockMs;
-    const remainingPredictionWallClockMs = () => {
-      const now = performance.now();
-      const remainingMs = predictionDeadlineAt - now;
-      if (remainingMs <= 0) {
-        throw predictionSupervisorError(
-          "PREDICTION_WALL_CLOCK_EXCEEDED",
-          now - predictionWallClockStartedAt,
-        );
-      }
-      return remainingMs;
-    };
     let lastSemanticProgressAt = predictionStartedAt;
     let lastSemanticProgressMonotonicAt = predictionWallClockStartedAt;
     let lastInferenceActivityAt = predictionStartedAt;
+    let inferenceStartedMonotonicAt: number | null = null;
     const eventStartIndex = events.length;
     const requestStartIndex = requests.length;
     const markInferenceActivity = () => {
       lastInferenceActivityAt = Date.now();
+      if (inferenceStartedMonotonicAt === null) {
+        inferenceStartedMonotonicAt = performance.now();
+      }
     };
     const markSemanticProgress = () => {
       const now = Date.now();
       lastInferenceActivityAt = now;
       lastSemanticProgressAt = now;
-      lastSemanticProgressMonotonicAt = performance.now();
+      const monotonicNow = performance.now();
+      if (inferenceStartedMonotonicAt === null) {
+        inferenceStartedMonotonicAt = monotonicNow;
+      }
+      lastSemanticProgressMonotonicAt = monotonicNow;
     };
     let lastVisibleProgressAt = predictionStartedAt;
     const heartbeatIntervalMs = Number(config.predictionHeartbeatSeconds) * 1000;
@@ -5270,6 +5602,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       const predictionResult: any = await predictionResultWithSupervision(prediction, ctl, {
         wallClockMs: supervisionWallClockMs,
         noProgressMs: Number(config.predictionNoProgressSeconds) * 1000,
+        initialNoProgressMs: Math.min(
+          supervisionWallClockMs,
+          attemptInitialNoProgressMs,
+        ),
         failurePromise: attemptCallbackFailurePromise,
         getFailure: () => attemptCallbackFailure,
         beforeCancel: () => {
@@ -5286,6 +5622,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           predictionSupervisionStartedAt,
           lastSemanticProgressMonotonicAt,
         ),
+        getInferenceStartedAt: () => inferenceStartedMonotonicAt,
       });
       // A backend may still invoke queued callbacks after result() settles or
       // cancel() returns. Close this attempt before any post-result awaits so
@@ -5326,6 +5663,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       if (
         code === "PREDICTION_WALL_CLOCK_EXCEEDED"
         || code === "PREDICTION_NO_PROGRESS_EXCEEDED"
+        || code === "PREDICTION_PREFILL_NO_PROGRESS_EXCEEDED"
         || code === "MODEL_INSTANCE_CHANGED"
         || code === "MODEL_FENCE_TIMEOUT"
       ) {
@@ -6573,6 +6911,7 @@ export {
   modelFencesMatch,
   normalizeProjectSourcePath,
   predictionResultWithSupervision,
+  initialPredictionNoProgressMs,
   requiresArchitectureValidation,
   requiresDurableInspectionPlanning,
   reconcilePendingToolCalls,
