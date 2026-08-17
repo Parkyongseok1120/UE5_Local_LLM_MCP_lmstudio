@@ -7340,6 +7340,74 @@ test("three identical applied compactions stop before a fourth discovery predict
   }
 });
 
+test("new durable direct-source evidence resets the compaction churn signature", () => {
+  const { compactionWorkflowProgressSignature } = require("../dist/generator.js");
+  const headerPath = "project://Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h";
+  const implementationPath = "project://Source/Project_MJS/Private/Character/Player/CPlayerCharacter.cpp";
+  const headerEvidence = {
+    tool: "read_file",
+    path: headerPath,
+    evidenceHash: "a".repeat(64),
+    coveredRanges: [[1, 120]],
+  };
+  const implementationEvidence = {
+    tool: "read_file",
+    path: implementationPath,
+    evidenceHash: "b".repeat(64),
+    coveredRanges: [[1, 240]],
+  };
+  const before = {
+    objectiveHash: "c".repeat(64),
+    workingSet: [{
+      path: headerPath,
+      contentHash: headerEvidence.evidenceHash,
+      coveredRanges: headerEvidence.coveredRanges,
+      content: "header bytes are deliberately excluded from the signature",
+    }],
+    evidenceFacts: [headerEvidence],
+  };
+  const after = {
+    ...before,
+    workingSet: [
+      ...before.workingSet,
+      {
+        path: implementationPath,
+        contentHash: implementationEvidence.evidenceHash,
+        coveredRanges: implementationEvidence.coveredRanges,
+        content: "implementation bytes are deliberately excluded from the signature",
+      },
+    ],
+    evidenceFacts: [...before.evidenceFacts, implementationEvidence],
+  };
+
+  const beforeSignature = compactionWorkflowProgressSignature(before);
+  const afterSignature = compactionWorkflowProgressSignature(after);
+  assert.notEqual(afterSignature, beforeSignature);
+  assert.equal(
+    compactionWorkflowProgressSignature({
+      ...after,
+      workingSet: after.workingSet.map((entry) => ({
+        ...entry,
+        content: `${entry.content}-changed-projection-only`,
+      })),
+    }),
+    afterSignature,
+  );
+  assert.equal(
+    compactionWorkflowProgressSignature({
+      ...after,
+      workingSet: [...after.workingSet].reverse(),
+      evidenceFacts: [
+        implementationEvidence,
+        headerEvidence,
+        implementationEvidence,
+        { tool: "list_directory", path: "project://Source/Project_MJS/Private" },
+      ],
+    }),
+    afterSignature,
+  );
+});
+
 test("major objective changes retain no prior verbatim turns", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-major-goal-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;

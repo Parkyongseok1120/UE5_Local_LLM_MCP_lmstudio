@@ -888,6 +888,38 @@ function predictionSupervisorError(code: string, elapsedMs: number): Error {
 }
 
 function compactionWorkflowProgressSignature(checkpoint: any): string {
+  const stableUniqueFrontier = (entries: any[]): any[] => {
+    const byIdentity = new Map<string, any>();
+    for (const entry of entries) {
+      const identity = core.stableStringify(entry);
+      byIdentity.set(identity, entry);
+    }
+    return [...byIdentity.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, entry]) => entry);
+  };
+  const workingSetFrontier = stableUniqueFrontier(Array.isArray(checkpoint?.workingSet)
+    ? checkpoint.workingSet.map((entry: any) => ({
+      path: String(entry?.path || ""),
+      contentHash: String(entry?.contentHash || ""),
+      coveredRanges: Array.isArray(entry?.coveredRanges) ? entry.coveredRanges : [],
+      truncated: Boolean(entry?.truncated),
+    }))
+    : []);
+  const evidenceFrontier = stableUniqueFrontier(Array.isArray(checkpoint?.evidenceFacts)
+    ? checkpoint.evidenceFacts.filter((entry: any) => (
+      String(entry?.evidenceHash || "").length > 0
+      || String(entry?.contentHash || "").length > 0
+    )).map((entry: any) => ({
+      tool: String(entry?.tool || ""),
+      path: String(entry?.path || ""),
+      evidenceHash: String(entry?.evidenceHash || ""),
+      contentHash: String(entry?.contentHash || ""),
+      coveredRanges: Array.isArray(entry?.coveredRanges) ? entry.coveredRanges : [],
+      exactContentTruncated: Boolean(entry?.exactContentTruncated),
+      repeatDetected: Boolean(entry?.repeatDetected),
+    }))
+    : []);
   return core.sha256(core.stableStringify({
     objectiveHash: String(checkpoint?.objectiveHash || ""),
     taskSessionId: String(
@@ -902,6 +934,8 @@ function compactionWorkflowProgressSignature(checkpoint: any): string {
     mutationGeneration: Number(checkpoint?.mutationGeneration || 0),
     sourceEvidence: checkpoint?.sourceEvidence || null,
     absentEvidence: checkpoint?.absentEvidence || null,
+    workingSetFrontier,
+    evidenceFrontier,
     buildState: checkpoint?.buildState || null,
     buildVerification: checkpoint?.buildVerification || null,
     synthesisStatus: String(checkpoint?.synthesisState?.status || ""),
