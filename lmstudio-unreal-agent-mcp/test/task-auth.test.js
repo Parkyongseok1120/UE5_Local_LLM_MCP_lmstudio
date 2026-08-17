@@ -39,6 +39,13 @@ test("direct source evidence advances the durable repository audit cursor", () =
     planRevision: "1",
     sourceEvidence: { version: 2, planRevision: "1", files: {} },
     directSourceEvidence: { version: 1, planRevision: "1", files: {} },
+    inspectionContract: {
+      evidenceBudget: {
+        maxDirectSourceReadsPerPhase: 2,
+        maxEvidenceCharsPerPhase: 100,
+      },
+    },
+    inspectionProgress: { version: 1, status: "collecting", directSourceReads: 0, evidenceCharacters: 0 },
     repoAuditLedger: {
       version: 1,
       required: true,
@@ -59,23 +66,31 @@ test("direct source evidence advances the durable repository audit cursor", () =
       projectRelativePath: "Source/Demo/A.cpp",
       contentHash: "a".repeat(64),
       lineRange: "1-2",
+      characterCount: 40,
     },
   });
   assert.equal(state.repoAuditLedger.cursor, 1);
   assert.equal(state.repoAuditLedger.analyzedCount, 1);
   assert.equal(state.repoAuditLedger.remainingCount, 1);
   assert.equal(state.repoAuditLedger.status, "active");
+  assert.equal(state.inspectionProgress.directSourceReads, 1);
+  assert.equal(state.inspectionProgress.evidenceCharacters, 40);
+  assert.equal(state.inspectionProgress.status, "collecting");
 
   recordDirectSourceEvidence(state, "read_file_range", {
     directSourceEvidence: {
       projectRelativePath: "Source/Demo/B.h",
       contentHash: "b".repeat(64),
       lineRange: "1-1",
+      characterCount: 45,
     },
   });
   assert.equal(state.repoAuditLedger.cursor, 2);
   assert.equal(state.repoAuditLedger.remainingCount, 0);
   assert.equal(state.repoAuditLedger.status, "complete");
+  assert.equal(state.inspectionProgress.directSourceReads, 2);
+  assert.equal(state.inspectionProgress.evidenceCharacters, 85);
+  assert.equal(state.inspectionProgress.status, "synthesis_required");
 
   recordDirectSourceEvidence(state, "read_file_range", {
     directSourceEvidence: {
@@ -89,6 +104,83 @@ test("direct source evidence advances the durable repository audit cursor", () =
   assert.equal(state.repoAuditLedger.remainingCount, 1);
   assert.equal(state.repoAuditLedger.entries["Source/Demo/A.cpp"].status, "partial");
   assert.equal(state.repoAuditLedger.status, "active");
+});
+
+test("byte-capped read_file does not complete a repository inventory entry before EOF", () => {
+  const hash = "d".repeat(64);
+  const state = {
+    planRevision: "1",
+    sourceEvidence: { version: 2, planRevision: "1", files: {} },
+    repoAuditLedger: {
+      required: true,
+      analysisVersion: 1,
+      overflow: false,
+      queuedTargets: ["Source/Demo/Large.cpp"],
+      entries: {
+        "Source/Demo/Large.cpp": {
+          path: "Source/Demo/Large.cpp", contentHash: hash, lineCount: 1000,
+          status: "queued", coveredRanges: [],
+        },
+      },
+    },
+  };
+  recordDirectSourceEvidence(state, "read_file", {
+    directSourceEvidence: {
+      projectRelativePath: "Source/Demo/Large.cpp",
+      contentHash: hash,
+      lineRange: "1-10",
+      characterCount: 8000,
+      completeRead: false,
+    },
+  });
+  assert.equal(state.repoAuditLedger.entries["Source/Demo/Large.cpp"].status, "partial");
+  assert.equal(state.repoAuditLedger.remainingCount, 1);
+});
+
+test("concurrent directory budget overflow preserves an open audit frontier through bounded replan", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "directory-budget-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "directory-budget-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    writeRouteState(stateRoot, routeState(projectFile, {
+      mode: "read_only",
+      writeGate: { writesAllowed: false },
+      repoAuditLedger: { required: true, remainingCount: 3, overflow: false },
+      inspectionContract: { evidenceBudget: { maxDirectoryLists: 1 } },
+      inspectionProgress: { listedDirectories: 0 },
+      toolRoute: {
+        routeHash: "route-1", phase: "planner", roleSession: "planner",
+        activeTools: ["list_directory"], maxToolCallsPerPhase: 4,
+      },
+      toolRouteUsage: { routeHash: "route-1", count: 0, reserved: 0, reservations: [], calls: [] },
+    }));
+    const fields = { routeHash: "route-1", routePhase: "planner" };
+    const first = reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "list_directory");
+    const second = reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "list_directory");
+    assert.equal(commitRouteReservation(
+      workspace, authorization.taskSessionId, fields, {}, "list_directory", first.reservationId,
+      { inspectionDirectoryList: { entryCount: 1 } },
+    ).ok, true);
+    const overflow = commitRouteReservation(
+      workspace, authorization.taskSessionId, fields, {}, "list_directory", second.reservationId,
+      { inspectionDirectoryList: { entryCount: 1 } },
+    );
+    assert.equal(overflow.errorCode, "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED");
+    assert.equal(overflow.nextActionArgs.requiredNextAction, "replan_after_phase_budget");
+    const persisted = JSON.parse(fs.readFileSync(
+      path.join(stateRoot, "tasks", authorization.taskSessionId, "state.json"), "utf8"
+    ));
+    assert.equal(persisted.recoveryObligation.recoveryStrategy, "bounded_replan_handoff");
+    assert.equal(persisted.controlState.requiredTool.name, "unreal_task_checkpoint");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
 });
 
 test("complete absent filename evidence is scoped to its project-relative search root", () => {
@@ -1831,7 +1923,7 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
       "unreal_task_cancel",
     ]);
     assert.strictEqual(exhausted.nextActionArgs.action, "record");
-    assert.strictEqual(exhausted.nextActionArgs.requiredNextAction, "read_file");
+    assert.strictEqual(exhausted.nextActionArgs.requiredNextAction, "replan_after_phase_budget");
     assert.strictEqual(exhausted.nextActionArgs.includeGitChanges, false);
     assert.strictEqual(exhausted.control.epoch, 8);
     assert.strictEqual(exhausted.control.disposition, "checkpoint");
@@ -1854,6 +1946,8 @@ test("active route discovery is tri-state and all-call budget is fail closed", (
       exhaustedState.recoveryObligation.status,
       "phase_budget_checkpoint_required"
     );
+    assert.strictEqual(exhaustedState.recoveryObligation.exhaustedTool, "read_file");
+    assert.strictEqual(exhaustedState.recoveryObligation.recoveryStrategy, "bounded_replan_handoff");
 
     const corruptDir = path.join(stateRoot, "tasks", "corrupt_task");
     fs.mkdirSync(corruptDir, { recursive: true });
@@ -2061,7 +2155,7 @@ test("route budget reservation blocks concurrent over-limit calls before commit"
     assert.strictEqual(blocked.errorCode, "TASK_PHASE_TOOL_BUDGET_EXHAUSTED");
     assert.strictEqual(blocked.nextAction, "unreal_task_checkpoint");
     assert.strictEqual(blocked.nextActionArgs.action, "record");
-    assert.strictEqual(blocked.nextActionArgs.requiredNextAction, "read_file");
+    assert.strictEqual(blocked.nextActionArgs.requiredNextAction, "replan_after_phase_budget");
     assert.strictEqual(blocked.nextActionArgs.includeGitChanges, false);
     assert.deepStrictEqual(blocked.nextActionArgs.taskAuthorization, {
       taskSessionId: authorization.taskSessionId,

@@ -5573,6 +5573,21 @@ def task_start(
         ),
         "taskKind": str(plan_payload.get("taskKind") or ""),
         "editStrategy": str(plan_payload.get("editStrategy") or ""),
+        "inspectionContract": dict(plan_payload.get("inspectionContract") or {}),
+        "inspectionProgress": {
+            "version": 1,
+            "status": (
+                "collecting"
+                if isinstance(plan_payload.get("inspectionContract"), dict)
+                and plan_payload.get("inspectionContract")
+                else "not_applicable"
+            ),
+            "directSourceReads": 0,
+            "fullSourceReads": 0,
+            "listedDirectories": 0,
+            "evidenceCharacters": 0,
+            "remainingFrontier": [],
+        },
         "planScope": plan_scope,
         "slicePlanningRequired": _requires_runtime_slice_plan(
             request,
@@ -7522,6 +7537,23 @@ def task_replan(
                 ),
                 "taskKind": task_kind,
                 "editStrategy": str(plan_payload.get("editStrategy") or ""),
+                "inspectionContract": dict(
+                    plan_payload.get("inspectionContract") or {}
+                ),
+                "inspectionProgress": {
+                    "version": 1,
+                    "status": (
+                        "collecting"
+                        if isinstance(plan_payload.get("inspectionContract"), dict)
+                        and plan_payload.get("inspectionContract")
+                        else "not_applicable"
+                    ),
+                    "directSourceReads": 0,
+                    "fullSourceReads": 0,
+                    "listedDirectories": 0,
+                    "evidenceCharacters": 0,
+                    "remainingFrontier": [],
+                },
                 "planScope": plan_scope,
                 "slicePlanningRequired": _requires_runtime_slice_plan(
                     request,
@@ -8672,11 +8704,43 @@ def task_checkpoint(
                     "checkpointSubstantive": checkpoint_substantive,
                 }
             else:
+                synthesis_handoff = (
+                    str(required_next_action or "")
+                    == "synthesize_current_evidence"
+                )
+                next_route = (
+                    dict(state.get("toolRoute") or {})
+                    if isinstance(state.get("toolRoute"), dict)
+                    else {}
+                )
+                next_route.update(
+                    {
+                        "phase": "synthesis" if synthesis_handoff else "replan",
+                        "roleSession": "synthesis" if synthesis_handoff else "planner",
+                        "activeTools": [] if synthesis_handoff else ["unreal_agent_plan"],
+                        "maxToolCallsPerPhase": 0 if synthesis_handoff else 1,
+                        "transitionReason": "phase_budget_exhausted",
+                    }
+                )
+                next_route.pop("routeHash", None)
+                next_route["routeHash"] = _canonical_hash(next_route)
+                state["toolRoute"] = next_route
+                state["postBudgetAction"] = {
+                    "name": (
+                        "synthesize_current_evidence"
+                        if synthesis_handoff
+                        else "unreal_agent_plan"
+                    ),
+                    "isTool": not synthesis_handoff,
+                    "exhaustedTool": str(budget_recovery.get("exhaustedTool") or ""),
+                    "remainingFrontierRequired": True,
+                    "updatedAt": _utc_now(),
+                }
                 state["toolRouteUsage"] = _reset_tool_route_usage(
                     prior_usage,
-                    route_hash=str(prior_usage.get("routeHash") or ""),
-                    phase=str(prior_usage.get("phase") or ""),
-                    role_session=str(prior_usage.get("roleSession") or ""),
+                    route_hash=str(next_route.get("routeHash") or ""),
+                    phase=str(next_route.get("phase") or ""),
+                    role_session=str(next_route.get("roleSession") or ""),
                     reset_reason="checkpoint_record",
                     checkpointHash=checkpoint_hash,
                 )
@@ -8686,7 +8750,25 @@ def task_checkpoint(
                     else {}
                 )
                 if str(recovery.get("source") or "") == "phase_tool_budget":
-                    state.pop("recoveryObligation", None)
+                    if synthesis_handoff:
+                        state.pop("recoveryObligation", None)
+                    else:
+                        state["recoveryObligation"] = {
+                            "source": "phase_tool_budget",
+                            "status": "phase_budget_replan_required",
+                            "errorCode": "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+                            "recoveryStrategy": "bounded_replan_handoff",
+                            "requiredTool": {
+                                "name": "unreal_agent_plan",
+                                "args": {
+                                    "request": str(
+                                        state.get("objective")
+                                        or state.get("request")
+                                        or "Continue the current bounded task"
+                                    )
+                                },
+                            },
+                        }
         else:
             conflicts, discovery_warnings, discovery_issues = _checkpoint_conflicts(
                 workspace,
@@ -9003,6 +9085,18 @@ def task_checkpoint(
             next_action, next_action_is_tool, next_action_args = (
                 _authoritative_control_action(current_state)
             )
+            post_budget_action = (
+                current_state.get("postBudgetAction")
+                if isinstance(current_state.get("postBudgetAction"), dict)
+                else {}
+            )
+            if (
+                not next_action_is_tool
+                and str(post_budget_action.get("name") or "")
+            ):
+                next_action = str(post_budget_action.get("name") or "")
+                next_action_is_tool = post_budget_action.get("isTool") is True
+                next_action_args = {}
             if next_action_is_tool:
                 next_action_args.setdefault(
                     "taskAuthorization",
@@ -10783,10 +10877,37 @@ def authorize_task_tool(
             limit = int(route.get("maxToolCallsPerPhase") or 2)
             if count >= limit:
                 checkpoint_authorization = task_authorization_for_state(state)
+                exhausted_tool = str(tool_name or "")
+                audit_ledger = (
+                    state.get("repoAuditLedger")
+                    if isinstance(state.get("repoAuditLedger"), dict)
+                    else {}
+                )
+                audit_frontier_open = bool(
+                    audit_ledger.get("required") is True
+                    and (
+                        int(audit_ledger.get("remainingCount") or 0) > 0
+                        or audit_ledger.get("overflow") is True
+                    )
+                )
+                inspection_only = (
+                    str(state.get("mode") or "").casefold() == "read_only"
+                    and not bool(
+                        (state.get("writeGate") or {}).get("writesAllowed")
+                        if isinstance(state.get("writeGate"), dict)
+                        else False
+                    )
+                    and not audit_frontier_open
+                )
+                required_next_phase_action = (
+                    "synthesize_current_evidence"
+                    if inspection_only
+                    else "replan_after_phase_budget"
+                )
                 checkpoint_args = {
                     "action": "record",
                     "phase": str(route.get("phase") or "working"),
-                    "requiredNextAction": tool_name,
+                    "requiredNextAction": required_next_phase_action,
                     "includeGitChanges": False,
                     "taskAuthorization": compact_task_authorization(
                         checkpoint_authorization
@@ -10799,9 +10920,15 @@ def authorize_task_tool(
                     "source": "phase_tool_budget",
                     "status": "phase_budget_checkpoint_required",
                     "errorCode": "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+                    "exhaustedTool": exhausted_tool,
+                    "recoveryStrategy": (
+                        "synthesis_handoff"
+                        if inspection_only
+                        else "bounded_replan_handoff"
+                    ),
                     "fingerprint": (
                         f"{str(route.get('routeHash') or '')}:"
-                        f"{str(route.get('phase') or '')}:{count}:{limit}:{tool_name}"
+                        f"{str(route.get('phase') or '')}:{count}:{limit}:{exhausted_tool}"
                     ),
                     "requiredTool": {
                         "name": "unreal_task_checkpoint",
@@ -10833,8 +10960,9 @@ def authorize_task_tool(
                     "agentInstruction": (
                         "Call unreal_task_checkpoint exactly once with nextActionArgs "
                         "(action=record). action=status only inspects state and does not "
-                        "renew the work-call budget. Then continue requiredNextAction with "
-                        "the returned taskAuthorization."
+                        "renew the work-call budget. Then synthesize the evidence already "
+                        "collected and record uninspected paths as remainingFrontier; do not "
+                        "repeat the exhausted discovery tool in this phase."
                     ),
                     "control": dict(state.get("controlState") or {}),
                 }

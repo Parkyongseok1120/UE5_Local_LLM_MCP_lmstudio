@@ -27,6 +27,10 @@ class ControlRuntimeMismatch(RuntimeError):
     error_code = "CONTROL_RUNTIME_VERSION_MISMATCH"
 
 
+class ControlRuntimeSourceHeadMismatch(ControlRuntimeMismatch):
+    error_code = "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH"
+
+
 def _repository_root(value: str | Path | None = None) -> Path:
     return Path(value).expanduser().resolve() if value else Path(__file__).resolve().parents[1]
 
@@ -93,6 +97,21 @@ def _git_commit(root: Path) -> str:
     if explicit:
         return explicit[:80]
     try:
+        git_root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        git_root = None
+    if (
+        git_root is not None
+        and git_root.returncode == 0
+        and Path(git_root.stdout.strip()).resolve() == root.resolve()
+    ):
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=root,
@@ -101,10 +120,8 @@ def _git_commit(root: Path) -> str:
             check=False,
             timeout=3,
         )
-    except (OSError, subprocess.SubprocessError):
-        completed = None
-    if completed is not None and completed.returncode == 0:
-        return completed.stdout.strip()[:80]
+        if completed.returncode == 0:
+            return completed.stdout.strip()[:80]
     # Relocatable production bundles intentionally exclude .git. The package
     # builder seals the source commit into its deterministic inventory manifest
     # so every installed component retains the release identity.
@@ -115,6 +132,82 @@ def _git_commit(root: Path) -> str:
     except (OSError, json.JSONDecodeError):
         return ""
     return str(packaged.get("sourceGitCommit") or "").strip()[:80]
+
+
+def assert_source_tree_matches_head(
+    repository_root: str | Path | None = None,
+) -> str:
+    """Return the sealed source commit, rejecting tracked checkout drift.
+
+    Untracked and ignored build products are deliberately outside this gate.
+    A relocatable package without .git inherits the commit sealed by its
+    package manifest.
+    """
+    root = _repository_root(repository_root)
+    try:
+        inside = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        inside = None
+    if (
+        inside is not None
+        and inside.returncode == 0
+        and Path(inside.stdout.strip()).resolve() == root.resolve()
+    ):
+        try:
+            diff = subprocess.run(
+                ["git", "diff", "--quiet", "HEAD", "--"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ControlRuntimeSourceHeadMismatch(
+                f"CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: unable to verify tracked source tree ({exc})"
+            ) from exc
+        if diff.returncode == 1:
+            raise ControlRuntimeSourceHeadMismatch(
+                "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: tracked source tree differs from HEAD"
+            )
+        if diff.returncode != 0:
+            detail = (diff.stderr or diff.stdout or "git diff failed").strip()
+            raise ControlRuntimeSourceHeadMismatch(
+                f"CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: unable to verify tracked source tree ({detail})"
+            )
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+        commit = completed.stdout.strip()[:80] if completed.returncode == 0 else ""
+        if commit:
+            return commit
+        raise ControlRuntimeSourceHeadMismatch(
+            "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: clean checkout HEAD is unavailable"
+        )
+    try:
+        packaged = json.loads(
+            (root / "package-manifest.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        packaged = {}
+    commit = str(packaged.get("sourceGitCommit") or "").strip()[:80]
+    if commit:
+        return commit
+    raise ControlRuntimeSourceHeadMismatch(
+        "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: source commit is not sealed in this package"
+    )
 
 
 def _package_version(path: Path, fallback: str) -> str:
@@ -129,6 +222,7 @@ def component_identity(
     component: str,
     *,
     repository_root: str | Path | None = None,
+    git_commit: str | None = None,
 ) -> dict[str, Any]:
     root = _repository_root(repository_root)
     versions = {
@@ -147,7 +241,7 @@ def component_identity(
     return {
         "component": component,
         "buildHash": _build_hash(root, component),
-        "gitCommit": _git_commit(root),
+        "gitCommit": str(git_commit or _git_commit(root)).strip()[:80],
         "componentVersion": versions[component],
         "protocolVersion": PROTOCOL_VERSION,
         **{field: protocol[field] for field in PROTOCOL_IDENTITY_FIELDS},
@@ -156,14 +250,29 @@ def component_identity(
 
 def build_runtime_manifest(
     repository_root: str | Path | None = None,
+    *,
+    require_clean_source: bool = False,
 ) -> dict[str, Any]:
     root = _repository_root(repository_root)
+    expected_source_commit = (
+        assert_source_tree_matches_head(root)
+        if require_clean_source
+        else _git_commit(root)
+    )
     return {
         "schemaVersion": 2,
         "protocolVersion": PROTOCOL_VERSION,
+        # One package-level source/evaluation identity owns the expected HEAD.
+        # Component gitCommit/buildHash fields below remain the independent
+        # relocatable self-integrity evidence for each installed runtime.
+        "expectedSourceGitCommit": expected_source_commit,
         "protocolSpec": load_control_protocol_spec(repository_root=root),
         "components": {
-            component: component_identity(component, repository_root=root)
+            component: component_identity(
+                component,
+                repository_root=root,
+                git_commit=expected_source_commit,
+            )
             for component in COMPONENTS
         },
     }
@@ -175,6 +284,7 @@ def verify_runtime_component(
     manifest_path: str | Path | None = None,
     repository_root: str | Path | None = None,
     required: bool | None = None,
+    expected_git_commit: str | None = None,
 ) -> dict[str, Any]:
     raw_path = str(manifest_path or os.environ.get("CONTROL_RUNTIME_MANIFEST") or "").strip()
     is_required = (
@@ -184,13 +294,45 @@ def verify_runtime_component(
         in {"1", "true", "yes", "on"}
     )
     running = component_identity(component, repository_root=repository_root)
+    expected_source_commit = str(
+        expected_git_commit
+        or os.environ.get("CONTROL_RUNTIME_EXPECTED_GIT_COMMIT")
+        or ""
+    ).strip()[:80]
+    def provenance(verified: bool, expected_identity: dict[str, Any] | None = None) -> dict[str, Any]:
+        installed_commit = str(
+            (expected_identity or {}).get("gitCommit") or running.get("gitCommit") or ""
+        )
+        source_matched: bool | None = (
+            installed_commit == expected_source_commit
+            if expected_source_commit
+            else None
+        )
+        return {
+            "bundleIntegrityVerified": bool(verified),
+            "installedGitCommit": installed_commit,
+            "expectedGitCommit": expected_source_commit,
+            "sourceHeadMatched": source_matched,
+            "runtimeStale": source_matched is False,
+            "runtimeVerified": bool(verified and source_matched is not False),
+        }
     if not raw_path:
         if is_required:
             raise ControlRuntimeMismatch("CONTROL_RUNTIME_VERSION_MISMATCH: manifest is required")
-        return {"ok": True, "verified": False, "reason": "manifest_not_configured", "running": running}
+        return {
+            "ok": True,
+            "verified": False,
+            "reason": "manifest_not_configured",
+            "running": running,
+            **provenance(False),
+        }
     path = Path(raw_path).expanduser().resolve()
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
+        if not expected_source_commit:
+            expected_source_commit = str(
+                manifest.get("expectedSourceGitCommit") or ""
+            ).strip()[:80]
         expected = (manifest.get("components") or {}).get(component)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ControlRuntimeMismatch(
@@ -216,12 +358,20 @@ def verify_runtime_component(
             "CONTROL_RUNTIME_VERSION_MISMATCH: "
             f"{component} differs in {', '.join(mismatches)}"
         )
+    status = provenance(True, expected)
+    if status["runtimeStale"]:
+        raise ControlRuntimeSourceHeadMismatch(
+            "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: "
+            f"installed {status['installedGitCommit'] or 'unknown'} does not match "
+            f"expected {status['expectedGitCommit']}"
+        )
     return {
         "ok": True,
         "verified": True,
         "manifestPath": str(path),
         "expected": expected,
         "running": running,
+        **status,
     }
 
 

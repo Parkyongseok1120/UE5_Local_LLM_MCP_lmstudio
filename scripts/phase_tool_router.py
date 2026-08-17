@@ -1043,6 +1043,14 @@ def _phase_and_role(
     if status != "running":
         return "verifier", "verifier"
 
+    post_budget_action = (
+        state.get("postBudgetAction")
+        if isinstance(state.get("postBudgetAction"), dict)
+        else {}
+    )
+    if str(post_budget_action.get("name") or "") == "synthesize_current_evidence":
+        return "synthesis", "synthesis"
+
     recovery = (
         state.get("recoveryObligation")
         if isinstance(state.get("recoveryObligation"), dict)
@@ -1446,6 +1454,21 @@ def derive_tool_route(
         "verifier": 3,
         "synthesis": 0,
     }[phase]
+    inspection_contract = (
+        dict(state.get("inspectionContract") or {})
+        if isinstance(state.get("inspectionContract"), dict)
+        else {}
+    )
+    inspection_budget = (
+        dict(inspection_contract.get("evidenceBudget") or {})
+        if isinstance(inspection_contract.get("evidenceBudget"), dict)
+        else {}
+    )
+    if phase == "planner" and inspection_budget:
+        max_calls = min(
+            max_calls,
+            max(1, int(inspection_budget.get("maxDirectSourceReadsPerPhase") or max_calls)),
+        )
     route: dict[str, Any] = {
         "version": ROUTE_VERSION,
         "serverOwned": True,
@@ -1458,6 +1481,18 @@ def derive_tool_route(
         "maxPrimaryErrors": MAX_PRIMARY_ERRORS,
         "maxHypotheses": MAX_HYPOTHESES,
         "maxPatchCandidates": MAX_PATCH_CANDIDATES,
+        "inspectionPolicy": {
+            "coverageMode": str(inspection_contract.get("coverageMode") or ""),
+            "maxDirectoryLists": int(inspection_budget.get("maxDirectoryLists") or 0),
+            "maxDirectSourceReadsPerPhase": int(
+                inspection_budget.get("maxDirectSourceReadsPerPhase") or 0
+            ),
+            "maxFullReadChars": int(inspection_budget.get("maxFullReadChars") or 0),
+            "maxFullReadLines": int(inspection_budget.get("maxFullReadLines") or 0),
+            "maxEvidenceCharsPerPhase": int(
+                inspection_budget.get("maxEvidenceCharsPerPhase") or 0
+            ),
+        } if inspection_budget else {},
         "selectedSlice": selected_slice,
         "pendingGates": pending_gates,
         "graphPolicy": {

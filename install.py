@@ -1198,6 +1198,8 @@ def _unreal_entries(
     if str(runtime_git_commit).strip():
         rag_entry["env"]["CONTROL_RUNTIME_GIT_COMMIT"] = str(runtime_git_commit).strip()
         agent_entry["env"]["CONTROL_RUNTIME_GIT_COMMIT"] = str(runtime_git_commit).strip()
+        rag_entry["env"]["CONTROL_RUNTIME_EXPECTED_GIT_COMMIT"] = str(runtime_git_commit).strip()
+        agent_entry["env"]["CONTROL_RUNTIME_EXPECTED_GIT_COMMIT"] = str(runtime_git_commit).strip()
     if context_compactor_advisory:
         # Compactor is required for LM Studio installs. Advisory telemetry stays on;
         # strict write-blocking remains opt-in via MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1.
@@ -1593,7 +1595,10 @@ def _install_context_compactor(
                 f"{installed_manifest}. Confirm LM Studio plugin install succeeded on this OS."
             )
         runtime_manifest_path = installed_manifest.parent / "control-runtime.json"
-        _atomic_write_bytes(runtime_manifest_path, _json_bytes(build_runtime_manifest(ROOT)))
+        _atomic_write_bytes(
+            runtime_manifest_path,
+            _json_bytes(build_runtime_manifest(ROOT, require_clean_source=True)),
+        )
     activation = _activate_context_compactor_in_settings(
         args.lmstudio_home,
         dry_run=args.dry_run,
@@ -1827,17 +1832,11 @@ def install(
                 "activeProject": shared.get("activeProject"),
             }
             tx.write_file(agent_path, _json_bytes(agent_payload))
-            runtime_manifest = build_runtime_manifest(ROOT)
+            runtime_manifest = build_runtime_manifest(ROOT, require_clean_source=True)
             tx.write_file(runtime_manifest_path, _json_bytes(runtime_manifest))
             report["controlRuntimeManifest"] = str(runtime_manifest_path)
-            runtime_components = runtime_manifest.get("components")
-            runtime_agent = (
-                runtime_components.get("agent")
-                if isinstance(runtime_components, dict)
-                else {}
-            )
             runtime_git_commit = str(
-                runtime_agent.get("gitCommit") if isinstance(runtime_agent, dict) else ""
+                runtime_manifest.get("expectedSourceGitCommit") or ""
             ).strip()
             assert mcp_config is not None
             for name, entry in _unreal_entries(

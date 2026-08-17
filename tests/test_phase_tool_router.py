@@ -2254,7 +2254,9 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
     assert "action=record" in exhausted["agentInstruction"]
     assert exhausted["nextAction"] == "unreal_task_checkpoint"
     assert exhausted["nextActionArgs"]["action"] == "record"
-    assert exhausted["nextActionArgs"]["requiredNextAction"] == active_tool
+    assert exhausted["nextActionArgs"]["requiredNextAction"] == "replan_after_phase_budget"
+    assert persisted["recoveryObligation"]["exhaustedTool"] == active_tool
+    assert persisted["recoveryObligation"]["recoveryStrategy"] == "bounded_replan_handoff"
     assert exhausted["nextActionArgs"]["includeGitChanges"] is False
     assert exhausted["nextActionArgs"]["taskAuthorization"] == {
         "taskSessionId": started["taskSessionId"],
@@ -2304,7 +2306,7 @@ def test_checkpoint_without_server_required_action_preserves_budget(
     assert state["toolRouteUsage"]["checkpointRecordedWithoutBudgetReset"] is True
 
 
-def test_server_required_checkpoint_resets_budget_and_binds_next_work_tool(
+def test_server_required_checkpoint_resets_budget_and_hands_off_to_synthesis(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2343,16 +2345,17 @@ def test_server_required_checkpoint_resets_budget_and_binds_next_work_tool(
 
     assert recorded["ok"] is True
     assert recorded["checkpointRecorded"] is True
-    assert recorded["nextAction"] == active_tool
-    assert recorded["nextActionIsTool"] is True
-    assert recorded["requiredNextTool"] == active_tool
-    assert recorded["requiredNextToolArgs"]["taskAuthorization"]["taskSessionId"] == started["taskSessionId"]
+    assert recorded["nextAction"] == "synthesize_current_evidence"
+    assert recorded["nextActionIsTool"] is False
+    assert recorded.get("requiredNextTool", "") == ""
     state = json.loads(
         (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(encoding="utf-8")
     )
     assert state["toolRouteUsage"]["count"] == 0
     assert state["toolRouteUsage"]["calls"] == []
-    assert state["toolRouteUsage"]["resetReason"] == "checkpoint_record"
+    assert state["toolRoute"]["phase"] == "synthesis"
+    assert state["toolRoute"]["activeTools"] == []
+    assert state["postBudgetAction"]["name"] == "synthesize_current_evidence"
 
 
 def test_phase_budget_checkpoint_rejects_alternate_required_next_action(
@@ -2398,11 +2401,56 @@ def test_phase_budget_checkpoint_rejects_alternate_required_next_action(
 
     assert rejected["ok"] is False
     assert rejected["errorCode"] == "TASK_CONTROL_ARGUMENT_MISMATCH"
-    assert rejected["requiredNextToolArgs"]["requiredNextAction"] == active_tool
+    assert rejected["requiredNextToolArgs"]["requiredNextAction"] == "synthesize_current_evidence"
     after = json.loads(state_path.read_text(encoding="utf-8"))
     assert after["toolRouteUsage"] == before["toolRouteUsage"]
     assert after["recoveryObligation"] == before["recoveryObligation"]
     assert after["controlEpoch"] == before["controlEpoch"]
+
+
+def test_write_phase_budget_enters_bounded_replan_instead_of_false_synthesis(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Implement the current repair",
+        mode="write",
+        plan_payload=_plan(writes=True, files=["Source/Demo/Foo.cpp"]),
+    )
+    route = started["toolRoute"]
+    active_tool = "read_file" if "read_file" in route["activeTools"] else route["activeTools"][0]
+    for _ in range(route["maxToolCallsPerPhase"]):
+        assert authorize_active_task_tool(
+            tmp_path,
+            tool_name=active_tool,
+            arguments={"taskAuthorization": started["taskAuthorization"]},
+        )["ok"]
+    exhausted = authorize_active_task_tool(
+        tmp_path,
+        tool_name=active_tool,
+        arguments={"taskAuthorization": started["taskAuthorization"]},
+    )
+    assert exhausted["nextActionArgs"]["requiredNextAction"] == "replan_after_phase_budget"
+    args = exhausted["nextActionArgs"]
+    recorded = task_checkpoint(
+        tmp_path,
+        task_authorization=started["taskAuthorization"],
+        action=args["action"],
+        phase=args["phase"],
+        modified_files=[],
+        required_next_action=args["requiredNextAction"],
+        validation={},
+        include_git_changes=args["includeGitChanges"],
+    )
+    assert recorded["nextAction"] == "unreal_agent_plan"
+    assert recorded["nextActionIsTool"] is True
+    state = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(encoding="utf-8")
+    )
+    assert state["postBudgetAction"]["name"] == "unreal_agent_plan"
+    assert state["postBudgetAction"]["isTool"] is True
 
 
 def test_phase_budget_checkpoint_rejects_unissued_semantic_evidence(

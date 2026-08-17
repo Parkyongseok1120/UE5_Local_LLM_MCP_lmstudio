@@ -10,7 +10,12 @@ export async function main(context: PluginContext) {
     event: "control_runtime_verified",
     server: "unreal-context-compactor",
     runtimeComponent: runtimeStatus.running,
-    runtimeVerified: runtimeStatus.verified === true,
+    bundleIntegrityVerified: runtimeStatus.bundleIntegrityVerified === true,
+    installedGitCommit: runtimeStatus.installedGitCommit || "",
+    expectedGitCommit: runtimeStatus.expectedGitCommit || "",
+    sourceHeadMatched: runtimeStatus.sourceHeadMatched ?? null,
+    runtimeStale: runtimeStatus.runtimeStale === true,
+    runtimeVerified: runtimeStatus.runtimeVerified === true,
   }));
   context.withConfigSchematics(configSchematics);
   context.withGenerator(generate);

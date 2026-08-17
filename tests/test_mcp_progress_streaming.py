@@ -129,6 +129,13 @@ def test_initialize_advertises_logging_for_tokenless_progress_fallback(
         }
     )
 
-    capabilities = sent[-1]["result"]["capabilities"]
+    initialize_response = next(item for item in sent if item.get("id") == 43)
+    capabilities = initialize_response["result"]["capabilities"]
+    startup_notification = next(
+        item for item in sent
+        if item.get("method") == "notifications/message"
+        and "mcp_catalog_initialized" in str((item.get("params") or {}).get("data") or "")
+    )
+    assert startup_notification["params"]["level"] == "info"
     assert capabilities["logging"] == {}
     assert capabilities["tools"]["listChanged"] is True

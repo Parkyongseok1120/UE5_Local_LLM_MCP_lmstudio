@@ -399,6 +399,21 @@ def _source_git_commit(source: Path) -> str:
     if explicit:
         return explicit[:80]
     try:
+        git_root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=source,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        git_root = None
+    if (
+        git_root is not None
+        and git_root.returncode == 0
+        and Path(git_root.stdout.strip()).resolve() == source.resolve()
+    ):
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=source,
@@ -407,15 +422,68 @@ def _source_git_commit(source: Path) -> str:
             check=False,
             timeout=3,
         )
-    except (OSError, subprocess.SubprocessError):
-        completed = None
-    if completed is not None and completed.returncode == 0:
-        return completed.stdout.strip()[:80]
+        if completed.returncode == 0:
+            return completed.stdout.strip()[:80]
     try:
         packaged = json.loads((source / "package-manifest.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return ""
     return str(packaged.get("sourceGitCommit") or "").strip()[:80]
+
+
+def _assert_source_tree_matches_head(source: Path) -> str:
+    try:
+        inside = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=source,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        inside = None
+    if (
+        inside is not None
+        and inside.returncode == 0
+        and Path(inside.stdout.strip()).resolve() == source.resolve()
+    ):
+        try:
+            diff = subprocess.run(
+                ["git", "diff", "--quiet", "HEAD", "--"],
+                cwd=source,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError(f"unable to verify tracked source tree: {exc}") from exc
+        if diff.returncode == 1:
+            raise ValueError("tracked source tree differs from HEAD; commit before packaging")
+        if diff.returncode != 0:
+            detail = (diff.stderr or diff.stdout or "git diff failed").strip()
+            raise ValueError(f"unable to verify tracked source tree: {detail}")
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+        commit = completed.stdout.strip()[:80] if completed.returncode == 0 else ""
+        if commit:
+            return commit
+        raise ValueError("clean checkout HEAD is unavailable")
+    try:
+        packaged = json.loads((source / "package-manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        packaged = {}
+    commit = str(packaged.get("sourceGitCommit") or "").strip()[:80]
+    if commit:
+        return commit
+    raise ValueError("source commit is not sealed in this package")
 
 
 def _manifest(
@@ -517,6 +585,7 @@ def build(source: Path, output: Path, zip_path: Path | None, *, include_index: b
         zip_path = _validate_destination(zip_path, source)
         if _within(zip_path, output):
             raise ValueError("zip path must not be inside the staging directory")
+    source_git_commit = _assert_source_tree_matches_head(source)
     if not (source / "install.py").is_file():
         raise FileNotFoundError(f"integrated installer not found under source: {source}")
     missing_required = [
@@ -549,7 +618,7 @@ def build(source: Path, output: Path, zip_path: Path | None, *, include_index: b
         manifest = _manifest(
             staging,
             include_index=include_index,
-            source_git_commit=_source_git_commit(source),
+            source_git_commit=source_git_commit,
         )
         inventory_paths = _assert_clean_inventory(manifest)
         (staging / "package-manifest.json").write_text(

@@ -466,6 +466,18 @@ def test_cinematic_analysis_plan_source_first():
     tools = [c["tool"] for c in payload["suggestedToolCalls"]]
     assert "search_files" in tools
     assert "read_file" in tools or any("read_file" in str(c) for c in payload["suggestedToolCalls"])
+    contract = payload["inspectionContract"]
+    assert contract["intent"] == "targeted_structural_analysis"
+    assert contract["coverageMode"] == "targeted_overview"
+    assert contract["readOnly"] is True
+    assert contract["evidenceBudget"] == {
+        "maxDirectoryLists": 2,
+        "maxDirectSourceReadsPerPhase": 8,
+        "maxFullReadChars": 12000,
+        "maxFullReadLines": 300,
+        "maxEvidenceCharsPerPhase": 64000,
+        "representativePairs": 4,
+    }
 
 
 def test_known_project_context_is_not_relooked_up_for_source_inspection():

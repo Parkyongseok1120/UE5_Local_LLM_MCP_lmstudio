@@ -24,10 +24,27 @@ test("agent runtime identity is deterministic and verifiable", () => {
     fs.writeFileSync(manifestPath, JSON.stringify({ components: { agent: identity } }));
     const result = verifyRuntimeComponent("agent", { componentRoot, manifestPath, required: true });
     assert.equal(result.verified, true);
+    assert.equal(result.bundleIntegrityVerified, true);
+    assert.equal(result.runtimeVerified, true);
+    assert.equal(result.runtimeStale, false);
     assert.equal(result.running.buildHash, identity.buildHash);
     assert.equal(identity.componentVersion, "0.3.16");
     assert.equal(identity.protocolVersion, 2);
     for (const field of protocolHashFields) assert.match(identity[field], /^[0-9a-f]{64}$/);
+    assert.throws(
+      () => {
+        fs.writeFileSync(manifestPath, JSON.stringify({
+          expectedSourceGitCommit: "newer-source-head",
+          components: { agent: identity },
+        }));
+        return verifyRuntimeComponent("agent", { componentRoot, manifestPath, required: true });
+      },
+      (error) => {
+        assert.match(error.message, /CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH/);
+        assert.equal(error.code, "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH");
+        return true;
+      },
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

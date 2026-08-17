@@ -54,10 +54,18 @@ function historyWithObservedUnrealHeader(userText = "Inspect the project without
 }
 
 function controllerFor(model, config, stateRoot, emitted, toolDefinitions, workingDirectory = stateRoot) {
+  const resolvedConfig = {
+    // Most compatibility fixtures predate the production cap and intentionally
+    // exercise unrelated routes. Make their legacy opt-out explicit; migration
+    // behavior has a dedicated regression below.
+    configVersion: 1,
+    maxCurrentTurnMessages: 0,
+    ...config,
+  };
   return {
     client: { llm: { async listLoaded() { return [model]; } } },
     abortSignal: new AbortController().signal,
-    getPluginConfig() { return { get(key) { return config[key]; } }; },
+    getPluginConfig() { return { get(key) { return resolvedConfig[key]; } }; },
     getWorkingDirectory() { return workingDirectory; },
     getToolDefinitions() { return toolDefinitions; },
     fragmentGenerated(content, opts) { emitted.push({ kind: "fragment", content, opts }); },
@@ -705,7 +713,10 @@ test("generator watchdog accepts tool serialization progress beyond the initial 
     assert.equal(cancelCount, 0);
     assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
     const activity = activeCheckpoint(stateRoot).predictionActivity;
-    assert.equal(activity.semanticProgressAt, activity.inferenceActivityAt);
+    assert.ok(
+      Date.parse(activity.inferenceActivityAt) > Date.parse(activity.semanticProgressAt),
+      "tool JSON is serialization activity, not authoritative semantic progress",
+    );
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -1053,7 +1064,7 @@ test("default mode preserves multiple tool calls and fragment metadata", async (
     const controller = {
       client: { llm: { async listLoaded() { return [model]; } } },
       abortSignal: new AbortController().signal,
-      getPluginConfig() { return { get(key) { return config[key]; } }; },
+      getPluginConfig() { return { get(key) { return ({ configVersion: 1, maxCurrentTurnMessages: 0, ...config })[key]; } }; },
       getWorkingDirectory() { return stateRoot; },
       getToolDefinitions() { return [{ type: "function", function: { name: "read_file" } }]; },
       fragmentGenerated(content, opts) { emitted.push({ kind: "fragment", content, opts }); },
@@ -1942,10 +1953,17 @@ test("control v2 emits an exact server-owned read without model serialization", 
     const { generate } = require("../dist/generator.js");
     const emitted = [];
     let predictionCount = 0;
+    let promptMeasurementCount = 0;
     const model = {
       identifier: "control-v2-read-recovery-model",
-      async applyPromptTemplate() { return "formatted"; },
-      async countTokens(value) { return String(value || "").length; },
+      async applyPromptTemplate() {
+        promptMeasurementCount += 1;
+        throw new Error("exact server-owned control must bypass prompt projection");
+      },
+      async countTokens() {
+        promptMeasurementCount += 1;
+        throw new Error("exact server-owned control must bypass token measurement");
+      },
       async getContextLength() { return 100_000; },
       respond(_history, opts) {
         predictionCount += 1;
@@ -1986,6 +2004,7 @@ test("control v2 emits an exact server-owned read without model serialization", 
     await generate(controllerFor(model, {}, stateRoot, emitted, staleChatTools), history);
 
     assert.equal(predictionCount, 0);
+    assert.equal(promptMeasurementCount, 0);
     const end = emitted.find((event) => event.kind === "end");
     assert.ok(end);
     assert.equal(end.request.name, "read_file");
@@ -2008,6 +2027,7 @@ test("control v2 emits an exact server-owned read without model serialization", 
       event.type === "context_measurement"
       && event.serverControlReadSchemaRecovered === true
       && event.requiredToolSchemaMissing === false
+      && event.promptMeasurementBypassedForExactServerControl === true
     )));
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -3626,7 +3646,9 @@ test("newer failed-result checkpoint control bypasses churn and deferred Feature
     const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
       .trim().split(/\r?\n/).map((line) => JSON.parse(line));
     assert.equal(events.some((event) => event.type === "compaction_churn_blocked"), false);
-    assert.equal(activeCheckpoint(stateRoot).compactionChurn.consecutiveWithoutProgress, 1);
+    // The exact server-owned checkpoint transition now precedes compaction, so
+    // it neither trips nor mutates the prior churn counter.
+    assert.equal(activeCheckpoint(stateRoot).compactionChurn.consecutiveWithoutProgress, 2);
     assert.deepEqual(activeCheckpoint(stateRoot).featureIntentResume.args, {
       selectedIntentId: "deferred-feature",
     });
@@ -7531,10 +7553,16 @@ test("routed required tool missing from the chat catalog stops before model invo
       },
     }));
 
-    await generate(controllerFor(model, {}, stateRoot, emitted, [{
+    const controller = controllerFor(model, {}, stateRoot, emitted, [{
       type: "function",
       function: { name: "read_file", parameters: { type: "object" } },
-    }]), history);
+    }]);
+    let statusAtEmission = null;
+    controller.fragmentGenerated = (content, opts) => {
+      statusAtEmission = activeCheckpoint(stateRoot).predictionState.status;
+      emitted.push({ kind: "fragment", content, opts });
+    };
+    await generate(controller, history);
 
     assert.equal(modelInvocations, 0);
     assert.equal(emitted.filter((event) => event.kind === "end").length, 0);
@@ -7543,6 +7571,8 @@ test("routed required tool missing from the chat catalog stops before model invo
     assert.ok(final);
     assert.match(final.content, /current chat catalog does not expose that tool schema/);
     const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(statusAtEmission, "prepared");
+    assert.equal(checkpoint.predictionState.status, "committed");
     assert.equal(checkpoint.requiredNextTool.name, "unreal_feature_intent_resolve");
     const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
       .find((entry) => entry.isDirectory());
@@ -7802,12 +7832,14 @@ for (const stopReason of ["contextLengthReached", "maxPredictedTokensReached"]) 
     try {
       const { generate } = require("../dist/generator.js");
       const emitted = [];
+      let predictionCount = 0;
       const model = {
         identifier: "stop-reason-model",
         async applyPromptTemplate() { return "formatted"; },
         async countTokens(value) { return String(value || "").length; },
         async getContextLength() { return 100_000; },
         respond(_history, opts) {
+          predictionCount += 1;
           opts.onPredictionFragment({ content: "partial output that must not escape" });
           opts.onToolCallRequestStart(1, { toolCallId: "partial-call" });
           opts.onToolCallRequestNameReceived(1, "write_file");
@@ -7818,8 +7850,16 @@ for (const stopReason of ["contextLengthReached", "maxPredictedTokensReached"]) 
       const history = Chat.empty();
       history.append("user", "continue safely");
 
-      await assert.rejects(generate(controller, history), new RegExp(stopReason));
-      assert.deepEqual(emitted, []);
+      if (stopReason === "maxPredictedTokensReached") {
+        await generate(controller, history);
+        assert.equal(predictionCount, 2);
+        assert.equal(emitted.some((event) => String(event.content || "").includes("partial output")), false);
+        assert.equal(emitted.filter((event) => event.kind === "fragment").length, 1);
+        assert.match(emitted[0].content, /출력 한도에 두 번 도달/);
+      } else {
+        await assert.rejects(generate(controller, history), new RegExp(stopReason));
+        assert.deepEqual(emitted, []);
+      }
       const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
         .find((entry) => entry.isDirectory());
       const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
@@ -7827,6 +7867,11 @@ for (const stopReason of ["contextLengthReached", "maxPredictedTokensReached"]) 
       const completion = events.find((event) => event.type === "prediction_completion");
       assert.equal(completion.stopReason, stopReason);
       assert.equal(completion.outputCommitted, false);
+      if (stopReason === "maxPredictedTokensReached") {
+        assert.equal(events.filter((event) => event.type === "max_output_recovery_started").length, 1);
+        assert.equal(events.filter((event) => event.type === "max_output_recovery_exhausted").length, 1);
+        assert.equal(activeCheckpoint(stateRoot).outputRecovery.status, "partial_report_emitted");
+      }
     } finally {
       delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
       fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -8188,7 +8233,11 @@ test("anonymous multi-tool checkpoints clear one tool result at a time", async (
     assert.equal(checkpoint.pendingToolCalls.length, 2);
     assert.deepEqual(
       checkpoint.pendingToolCalls.map((pending) => pending.observedAnonymousToolResultCount),
-      [0, 1],
+      [undefined, undefined],
+    );
+    assert.deepEqual(
+      checkpoint.pendingToolCalls.map((pending) => pending.id),
+      ["attempt-1-callback-1", "attempt-1-callback-2"],
     );
 
     function historyWithResults(resultCount) {
@@ -8199,14 +8248,15 @@ test("anonymous multi-tool checkpoints clear one tool result at a time", async (
           {
             role: "assistant",
             content: [
-              { type: "toolCallRequest", toolCallRequest: { type: "function", name: "read_file", arguments: {} } },
-              { type: "toolCallRequest", toolCallRequest: { type: "function", name: "read_file_range", arguments: {} } },
+              { type: "toolCallRequest", toolCallRequest: { id: "attempt-1-callback-1", type: "function", name: "read_file", arguments: {} } },
+              { type: "toolCallRequest", toolCallRequest: { id: "attempt-1-callback-2", type: "function", name: "read_file_range", arguments: {} } },
             ],
           },
           {
             role: "tool",
             content: Array.from({ length: resultCount }, (_value, index) => ({
               type: "toolCallResult",
+              toolCallId: `attempt-1-callback-${index + 1}`,
               content: `result-${index}`,
             })),
           },
@@ -9037,7 +9087,7 @@ test("duplicate tool callbacks are exactly-once and use the tool-call output res
     const checkpoint = activeCheckpoint(stateRoot);
     assert.equal(checkpoint.pendingToolCalls.length, 1);
     assert.equal(checkpoint.pendingToolCalls[0].dispatchState, "emitted");
-    assert.equal(checkpoint.pendingToolCalls[0].id, request.id);
+    assert.equal(checkpoint.pendingToolCalls[0].id, `attempt-1-${request.id}`);
     assert.equal(checkpoint.predictionState.status, "committed");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
@@ -9079,7 +9129,40 @@ test("conflicting duplicate callback names fail before frontend dispatch", async
   }
 });
 
-test("prepared mutation dispatch is re-emitted with the same id after restart", async () => {
+test("tool callback FSM rejects arguments and contradictory terminal events after settlement", () => {
+  const { createToolCallCallbackFsm } = require("../dist/generator.js");
+  const completed = createToolCallCallbackFsm();
+  completed.start(1, "call-1");
+  completed.name(1, "read_file");
+  completed.args(1, "{}");
+  assert.equal(completed.end(1, {
+    id: "call-1", name: "read_file", arguments: { path: "Source/A.cpp" },
+  }), true);
+  assert.throws(() => completed.args(1, "late"), /after terminal end/);
+  assert.throws(() => completed.failure(1, new Error("late failure")), /after terminal end/);
+
+  const failed = createToolCallCallbackFsm();
+  assert.equal(failed.failure(2, new Error("serialization failed")), true);
+  assert.throws(() => failed.end(2, {
+    id: "call-2", name: "read_file", arguments: {},
+  }), /after terminal failure/);
+
+  const mismatchedId = createToolCallCallbackFsm();
+  mismatchedId.start(3, "call-3");
+  mismatchedId.name(3, "read_file");
+  assert.throws(() => mismatchedId.end(3, {
+    id: "different-call", name: "read_file", arguments: {},
+  }), /different id/);
+
+  const mismatchedName = createToolCallCallbackFsm();
+  mismatchedName.start(4, "call-4");
+  mismatchedName.name(4, "read_file");
+  assert.throws(() => mismatchedName.end(4, {
+    id: "call-4", name: "write_file", arguments: {},
+  }), /different name/);
+});
+
+test("emitting mutation dispatch is re-emitted with the same id after restart", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-dispatch-restart-"));
   const sessionId = "ab".repeat(16);
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -9096,7 +9179,8 @@ test("prepared mutation dispatch is re-emitted with the same id after restart", 
       type: "function",
       name: "write_file",
       arguments: { path: "Source/Example.cpp", content: "// repaired" },
-      dispatchState: "prepared",
+      dispatchState: "emitting",
+      dispatchAttempt: 1,
       preparedAt: new Date().toISOString(),
       observedToolResultCount: 0,
     }];
@@ -9117,6 +9201,7 @@ test("prepared mutation dispatch is re-emitted with the same id after restart", 
     assert.equal(emitted.find((event) => event.kind === "start").info.toolCallId, "prepared-write-1");
     assert.equal(emitted.find((event) => event.kind === "end").request.id, "prepared-write-1");
     assert.equal(activeCheckpoint(stateRoot).pendingToolCalls[0].dispatchState, "emitted");
+    assert.equal(activeCheckpoint(stateRoot).pendingToolCalls[0].dispatchAttempt, 2);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
@@ -9588,7 +9673,7 @@ test("synthesis stays uncommitted when the server commit tool is absent", async 
   }
 });
 
-test("an emitted synthesis commit is replayed with the same id after result loss", async () => {
+test("an emitted synthesis commit is not replayed after result loss", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-replay-"));
   const sessionId = "cd".repeat(16);
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -9626,8 +9711,8 @@ test("an emitted synthesis commit is replayed with the same id after result loss
     await assert.rejects(generate(controller, history), /still lack a result/);
 
     assert.equal(readinessChecks, 0);
-    assert.equal(emitted.find((event) => event.kind === "end").request.id, "synthesis-commit-replay-1");
-    assert.equal(emitted.find((event) => event.kind === "fragment").content, "Recovered synthesis output.");
+    assert.deepEqual(emitted, []);
+    assert.equal(activeCheckpoint(stateRoot).pendingToolCalls[0].dispatchState, "emitted");
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
@@ -9691,7 +9776,7 @@ test("long objectives are injected intact into the durable planner handoff", asy
 });
 
 test("durable inspection planning distinguishes project audits from generic Unreal questions", () => {
-  const { requiresDurableInspectionPlanning } = require("../dist/generator.js");
+  const { requiresDurableInspectionPlanning, resolveCurrentTurnCapConfig } = require("../dist/generator.js");
   assert.equal(
     requiresDurableInspectionPlanning("Audit every implementation path in this project and cross-check the source files."),
     true,
@@ -9708,4 +9793,112 @@ test("durable inspection planning distinguishes project audits from generic Unre
     requiresDurableInspectionPlanning("Explain what TArray is."),
     false,
   );
+  for (const request of [
+    "시네마틱 시스템의 C++ 코드 구조를 전체적으로 분석해줘",
+    "VFX 모듈 구현을 전부 검토하고 문제를 분석해줘",
+    "전투 시스템 소스 코드를 대조해서 구조와 근본 원인을 분석해줘",
+  ]) {
+    assert.equal(requiresDurableInspectionPlanning(request), true, request);
+  }
+  const missingConfig = { getPluginConfig() { return { get() { return undefined; } }; } };
+  assert.deepEqual(resolveCurrentTurnCapConfig(missingConfig), {
+    configuredValue: null,
+    source: "migrated_default",
+    explicitnessObservable: false,
+    effectiveValue: 12,
+    configVersion: 2,
+  });
+  const explicitOptOut = {
+    getPluginConfig() {
+      return { get(key) { return ({ configVersion: 2, maxCurrentTurnMessages: 0 })[key]; } };
+    },
+  };
+  assert.deepEqual(resolveCurrentTurnCapConfig(explicitOptOut), {
+    configuredValue: 0,
+    source: "sdk_effective_value",
+    explicitnessObservable: false,
+    effectiveValue: 0,
+    configVersion: 2,
+  });
+});
+
+test("hard compaction uses at most three exact template measurements", async () => {
+  const { compactToTarget } = require("../dist/generator.js");
+  const history = Chat.empty();
+  history.append("user", "Audit the current project and retain pair integrity.");
+  for (let index = 0; index < 110; index += 1) {
+    history.append("assistant", `evidence-${index}-${"x".repeat(200)}`);
+    history.append("user", `continue-${index}`);
+  }
+  let templateMeasurements = 0;
+  const model = {
+    async applyPromptTemplate(chat) {
+      templateMeasurements += 1;
+      return JSON.stringify(core.snapshotMessages(chat.getMessagesArray()));
+    },
+    async countTokens(value) { return Math.ceil(String(value || "").length / 4); },
+  };
+  const checkpoint = core.buildCheckpoint(history.getMessagesArray());
+  const result = await compactToTarget(model, history, checkpoint, {
+    recentCompleteTurns: 4,
+    hardRemainingTokens: 8_000,
+    targetRemainingTokensAfterCompaction: 24_000,
+  }, 50_000, 4_096, { maxCurrentTurnMessages: null });
+  assert.ok(templateMeasurements <= 3);
+  assert.equal(result.exactTemplateMeasurements, templateMeasurements);
+  assert.equal(result.targetReached, true);
+  assert.equal(core.isCompleteToolPair(core.snapshotMessages(result.chat.getMessagesArray())), true);
+});
+
+test("unreachable hard compaction raises a typed bounded recovery error", async () => {
+  const { compactToTarget } = require("../dist/generator.js");
+  const history = Chat.from({ messages: [
+    { role: "user", content: [{ type: "text", text: "Continue the exact task without losing identity." }] },
+  ] });
+  let templateMeasurements = 0;
+  const model = {
+    async applyPromptTemplate(chat) {
+      templateMeasurements += 1;
+      return JSON.stringify(core.snapshotMessages(chat.getMessagesArray()));
+    },
+    async countTokens() { return 99_000; },
+  };
+  const checkpoint = core.buildCheckpoint(history.getMessagesArray());
+  await assert.rejects(
+    compactToTarget(model, history, checkpoint, {
+      recentCompleteTurns: 2,
+      hardRemainingTokens: 8_000,
+      targetRemainingTokensAfterCompaction: 24_000,
+    }, 100_000, 4_096, {
+      exhaustionContext: {
+        taskSessionId: "task-exhaustion",
+        controlEpoch: 7,
+        storeRevision: 3,
+        compactionGeneration: 2,
+        inputTokensBefore: 99_500,
+        systemPromptTokens: null,
+        checkpointProjectionTokens: 1_234,
+        toolSchemaTokens: 456,
+        outputReserveTokens: 4_096,
+        toolResultReserveTokens: 3_000,
+        safetyMarginTokens: 1_024,
+        retainedEvidenceCount: 12,
+        activeRequiredTool: "read_file",
+      },
+    }),
+    (error) => (
+      error?.code === "CONTEXT_COMPACTION_EXHAUSTED"
+      && error?.context?.remainingTokens < error?.context?.hardRemainingTokens
+      && error?.context?.objectiveHash === checkpoint.objectiveHash
+      && error?.context?.taskSessionId === "task-exhaustion"
+      && error?.context?.controlEpoch === 7
+      && error?.context?.inputTokensBefore === 99_500
+      && error?.context?.bestInputTokensAfter === 99_000
+      && error?.context?.systemPromptTokens === null
+      && error?.context?.checkpointProjectionTokens === 1_234
+      && error?.context?.measurements?.length <= 3
+      && error?.context?.recoveryStrategy === "bounded_partial_report_then_resume_frontier"
+    ),
+  );
+  assert.ok(templateMeasurements <= 3);
 });

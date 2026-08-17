@@ -2741,8 +2741,47 @@ test("cached repeat reads keep semantic anchors and emit an explicit no-reread l
   const summary = core.summarizeOldMessages(messages, checkpoint);
   assert.match(summary, /discoveryLedger=already-read unchanged files/);
   assert.match(summary, /Do not re-read these paths merely to remember them/);
-  assert.match(summary, /repeatEvidenceInstruction=The server returned this exact unchanged body/);
+  assert.match(summary, /repeatEvidenceInstruction=The durable store has an unchanged cached body/);
   assert.match(summary, /do not issue the same tool\/path\/query\/range again/);
+  assert.doesNotMatch(summary, new RegExp(source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("model-facing checkpoint projection keeps 32 large durable facts bounded without reinserting bodies", () => {
+  const exactBodies = Array.from({ length: 32 }, (_, index) => (
+    `UNIQUE_EXACT_BODY_${index}_` + String.fromCharCode(65 + (index % 26)).repeat(11_980)
+  ));
+  const checkpoint = {
+    schemaVersion: 8,
+    checkpointGeneration: 42,
+    objective: "Audit the repository without rereading durable source evidence.",
+    evidenceFacts: exactBodies.map((exactContent, index) => ({
+      tool: "read_file",
+      path: `Source/Audit/File${index}.cpp`,
+      exactContent,
+      exactContentTruncated: false,
+      contentHash: core.sha256(exactContent),
+      evidenceHash: core.sha256(`evidence-${index}`),
+      coveredRanges: [[1, 300]],
+      semanticAnchors: [`class FAudit${index}`, `void Run${index}()`],
+      bodyRef: `checkpoint://evidence/${index}`,
+    })),
+  };
+  const projection = core.buildModelFacingCheckpointProjection(checkpoint, "analysis", {
+    characterLimit: 24_000,
+    tokenEstimateLimit: 6_000,
+    evidenceItemLimit: 32,
+  });
+  const summary = core.summarizeOldMessages([], checkpoint);
+
+  assert.equal(checkpoint.evidenceFacts.length, 32);
+  assert.equal(checkpoint.evidenceFacts[0].exactContent, exactBodies[0]);
+  assert.ok(projection.metrics.characterCount <= 24_000);
+  assert.ok(projection.metrics.tokenEstimate <= 6_000);
+  assert.equal(projection.metrics.exactContentIncluded, false);
+  assert.equal(exactBodies.some((body) => summary.includes(body)), false);
+  assert.match(summary, /Source\/Audit\/File31\.cpp/);
+  assert.match(summary, /checkpoint:\/\/evidence\/31/);
+  assert.ok(summary.length <= 24_000);
 });
 
 test("repeat evidence is bounded and clears after mutation or a new objective", () => {
@@ -2775,6 +2814,91 @@ test("repeat evidence is bounded and clears after mutation or a new objective", 
     { role: "user", content: "inspect a different subsystem" },
   ], { priorCheckpoint: retained });
   assert.deepEqual(afterNewGoal.repeatEvidence, []);
+});
+
+test("typed recovery state survives only the matching objective and mutation generation", () => {
+  const baseMessages = [{ role: "user", content: "audit every implementation path" }];
+  const prior = core.buildCheckpoint(baseMessages);
+  const now = new Date().toISOString();
+  prior.coverageIncomplete = true;
+  prior.remainingFrontier = [
+    "Source/FeatureA.cpp",
+    { path: "Source/FeatureB.cpp", reason: "unverified" },
+  ];
+  prior.compactionRecovery = {
+    version: 1,
+    status: "partial_report_emitted",
+    errorCode: "CONTEXT_COMPACTION_EXHAUSTED",
+    details: { remainingTokens: 128, hardRemainingTokens: 8_000 },
+    objectiveHash: prior.objectiveHash,
+    taskSessionId: "",
+    controlEpoch: null,
+    checkpointGeneration: prior.checkpointGeneration,
+    mutationGeneration: prior.mutationGeneration,
+    recoveryStrategy: "resume_remaining_frontier",
+    updatedAt: now,
+  };
+  prior.outputRecovery = {
+    version: 1,
+    status: "partial_report_emitted",
+    attempt: 2,
+    reason: "max_predicted_tokens_reached",
+    bufferedOutputDiscarded: true,
+    discardedEventCount: 4,
+    discardedToolCount: 1,
+    objectiveHash: prior.objectiveHash,
+    taskSessionId: "",
+    controlEpoch: null,
+    mutationGeneration: prior.mutationGeneration,
+    recoveryStrategy: "bounded_low_effort_retry",
+    updatedAt: now,
+  };
+  assert.equal(core.validateCheckpoint(prior), true);
+
+  const resumed = core.buildCheckpoint([
+    ...baseMessages,
+    { role: "user", content: "계속해" },
+  ], prior);
+  assert.equal(resumed.coverageIncomplete, true);
+  assert.deepEqual(resumed.remainingFrontier, prior.remainingFrontier);
+  assert.equal(resumed.compactionRecovery.objectiveHash, prior.objectiveHash);
+  assert.equal(resumed.outputRecovery.status, "partial_report_emitted");
+  assert.equal(core.validateCheckpoint(resumed), true);
+
+  const afterMutation = core.buildCheckpoint([
+    ...baseMessages,
+    { role: "assistant", toolCalls: [{ id: "write-recovery", name: "replace_in_file", arguments: {
+      path: "Source/FeatureA.cpp", oldText: "a", newText: "b",
+    } }] },
+    { role: "tool", toolResults: [{
+      toolCallId: "write-recovery",
+      name: "replace_in_file",
+      content: JSON.stringify({ ok: true, mutationGeneration: 1 }),
+    }] },
+  ], prior);
+  assert.equal(afterMutation.coverageIncomplete, false);
+  assert.deepEqual(afterMutation.remainingFrontier, []);
+  assert.equal(afterMutation.compactionRecovery, null);
+  assert.equal(afterMutation.outputRecovery, null);
+
+  const newGoal = core.buildCheckpoint([
+    { role: "user", content: "build a completely different rendering feature" },
+  ], prior);
+  assert.equal(newGoal.compactionRecovery, null);
+  assert.deepEqual(newGoal.remainingFrontier, []);
+
+  const forged = {
+    ...resumed,
+    compactionRecovery: { ...resumed.compactionRecovery, mutationGeneration: -1 },
+  };
+  assert.equal(core.validateCheckpoint(forged), false);
+  assert.equal(core.validateCheckpoint({
+    ...resumed,
+    compactionRecovery: {
+      ...resumed.compactionRecovery,
+      details: { ...resumed.compactionRecovery.details, remainingTokens: Number.POSITIVE_INFINITY },
+    },
+  }), false);
 });
 
 test("hard compaction retains bounded exact text for the active edit slice only", () => {

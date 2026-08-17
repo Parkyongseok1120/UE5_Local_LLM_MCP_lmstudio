@@ -46,10 +46,26 @@ test("compactor runtime identity verifies and detects source drift", () => {
     const manifestPath = path.join(root, "control-runtime.json");
     fs.writeFileSync(manifestPath, JSON.stringify({ components: { compactor: expected } }));
 
-    assert.equal(
-      verifyRuntimeComponent({ componentRoot, manifestPath, required: true }).verified,
-      true
+    const verified = verifyRuntimeComponent({ componentRoot, manifestPath, required: true });
+    assert.equal(verified.verified, true);
+    assert.equal(verified.bundleIntegrityVerified, true);
+    assert.equal(verified.runtimeVerified, true);
+    assert.equal(verified.runtimeStale, false);
+    assert.throws(
+      () => {
+        fs.writeFileSync(manifestPath, JSON.stringify({
+          expectedSourceGitCommit: "newer-source-head",
+          components: { compactor: expected },
+        }));
+        return verifyRuntimeComponent({ componentRoot, manifestPath, required: true });
+      },
+      (error) => {
+        assert.match(error.message, /CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH/);
+        assert.equal(error.code, "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH");
+        return true;
+      },
     );
+    fs.writeFileSync(manifestPath, JSON.stringify({ components: { compactor: expected } }));
     fs.writeFileSync(path.join(componentRoot, "src", "generator.ts"), "// drift\n");
     assert.throws(
       () => verifyRuntimeComponent({ componentRoot, manifestPath, required: true }),

@@ -24,6 +24,13 @@ const MAX_EDIT_EVIDENCE_CHARS = 16000;
 const MAX_REPEAT_EVIDENCE_FILES = 1;
 const MAX_REPEAT_EVIDENCE_CHARS = 12000;
 const MAX_DURABLE_OBJECTIVE_CHARS = 65536;
+const DEFAULT_MODEL_PROJECTION_BUDGET = Object.freeze({
+  characterLimit: 24_000,
+  tokenEstimateLimit: 6_000,
+  perSectionCharacterLimit: 6_000,
+  evidenceItemLimit: 16,
+  semanticAnchorsPerEvidence: 6,
+});
 const CHECKPOINT_LIFECYCLE_VERSION = 1;
 const CHECKPOINT_LIFECYCLE_STATUSES = new Set([
   "pending",
@@ -83,6 +90,223 @@ function toolCallFingerprint(name, args = {}) {
     name: normalizedName,
     args: normalizedArgs,
   }));
+}
+
+function boundedProjectionValue(value, options = {}, depth = 0) {
+  const maxStringChars = Math.max(64, Number(options.maxStringChars || 1_200));
+  const maxArrayItems = Math.max(1, Number(options.maxArrayItems || 16));
+  const maxObjectKeys = Math.max(1, Number(options.maxObjectKeys || 32));
+  if (value === null || value === undefined) return value ?? null;
+  if (typeof value === "string") {
+    if (value.length <= maxStringChars) return value;
+    return `${value.slice(0, maxStringChars)}...[sha256:${sha256(value)};chars:${value.length}]`;
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "boolean") return value;
+  if (depth >= 6) return `[bounded:${sha256(stableStringify(value))}]`;
+  if (Array.isArray(value)) {
+    return value.slice(0, maxArrayItems).map((entry) => (
+      boundedProjectionValue(entry, options, depth + 1)
+    ));
+  }
+  if (typeof value === "object") {
+    const projected = {};
+    for (const key of Object.keys(value).sort().slice(0, maxObjectKeys)) {
+      if (["exactContent", "content", "body", "sourceBody", "rawContent"].includes(key)) continue;
+      projected[key] = boundedProjectionValue(value[key], options, depth + 1);
+    }
+    return projected;
+  }
+  return String(value).slice(0, maxStringChars);
+}
+
+function modelFacingEvidenceFact(fact, budget) {
+  if (!fact || typeof fact !== "object" || Array.isArray(fact)) return null;
+  const projected = boundedProjectionValue(fact, {
+    maxStringChars: Math.min(800, budget.perSectionCharacterLimit),
+    maxArrayItems: 16,
+    maxObjectKeys: 32,
+  });
+  delete projected.exactContent;
+  delete projected.exactContentTruncated;
+  if (Array.isArray(fact.semanticAnchors)) {
+    projected.semanticAnchors = fact.semanticAnchors
+      .filter((entry) => typeof entry === "string" && entry.trim())
+      .slice(0, budget.semanticAnchorsPerEvidence)
+      .map((entry) => entry.slice(0, 240));
+  }
+  if (fact.bodyRef) projected.bodyRef = String(fact.bodyRef).slice(0, 512);
+  return projected;
+}
+
+function projectionPhase(checkpoint, requestedPhase = "") {
+  if (
+    !requestedPhase
+    && checkpoint?.selectedSlice
+    && Array.isArray(checkpoint?.workingSet)
+    && checkpoint.workingSet.length > 0
+  ) return "active_write";
+  const source = String(
+    requestedPhase
+    || checkpoint?.serverControl?.phase
+    || checkpoint?.toolRoute?.phase
+    || "analysis",
+  ).trim().toLowerCase();
+  if (["execute", "executor", "mutation", "write"].includes(source)) return "active_write";
+  if (["synthesis", "critique", "final", "emergency"].includes(source)) return source;
+  return "analysis";
+}
+
+function buildModelFacingCheckpointProjection(checkpoint, phase = "", requestedBudget = {}) {
+  const budget = {
+    ...DEFAULT_MODEL_PROJECTION_BUDGET,
+    ...(requestedBudget && typeof requestedBudget === "object" ? requestedBudget : {}),
+  };
+  budget.characterLimit = Math.max(4_096, Math.floor(Number(budget.characterLimit) || 24_000));
+  budget.tokenEstimateLimit = Math.max(1_024, Math.floor(Number(budget.tokenEstimateLimit) || 6_000));
+  budget.perSectionCharacterLimit = Math.max(
+    1_024,
+    Math.min(budget.characterLimit, Math.floor(Number(budget.perSectionCharacterLimit) || 6_000)),
+  );
+  budget.evidenceItemLimit = Math.max(1, Math.min(64, Math.floor(Number(budget.evidenceItemLimit) || 16)));
+  budget.semanticAnchorsPerEvidence = Math.max(
+    1,
+    Math.min(16, Math.floor(Number(budget.semanticAnchorsPerEvidence) || 6)),
+  );
+  const effectiveCharacterLimit = Math.min(
+    budget.characterLimit,
+    budget.tokenEstimateLimit * 4,
+  );
+  const activePhase = projectionPhase(checkpoint, phase);
+  const projection = {};
+  const criticalKeys = [
+    "schemaVersion", "checkpointGeneration", "storeRevision", "objective", "objectiveHash",
+    "requestIntent", "activeProject", "activeProjectName", "mutationGeneration", "buildState",
+    "selectedSlice", "sliceProgress", "buildVerification", "toolRoute", "taskRouteOwnership",
+    "protocolControl", "architectureControl", "serverControl", "semanticBlocker", "sideQuery",
+    "requiredNextTool", "predictionState", "synthesisState", "compactionGeneration",
+    "repositoryAudit", "auditFrontier", "coverageIncomplete", "remainingFrontier",
+    "compactionRecovery", "outputRecovery",
+  ];
+  for (const key of criticalKeys) {
+    if (checkpoint?.[key] === undefined || checkpoint?.[key] === null) continue;
+    projection[key] = boundedProjectionValue(checkpoint[key], {
+      maxStringChars: key === "objective" ? 4_000 : 1_200,
+      maxArrayItems: 24,
+      maxObjectKeys: 48,
+    });
+  }
+  const boundedListKeys = [
+    "modifiedFiles", "constraints", "invariants", "coverageEvidence", "diagnostics",
+    "exactSignatureContracts", "facts", "failedToolResults", "absentEvidence", "repeatEvidence",
+  ];
+  for (const key of boundedListKeys) {
+    if (checkpoint?.[key] === undefined || checkpoint?.[key] === null) continue;
+    projection[key] = boundedProjectionValue(checkpoint[key], {
+      maxStringChars: 600,
+      maxArrayItems: 16,
+      maxObjectKeys: 24,
+    });
+  }
+  projection.evidenceFacts = (Array.isArray(checkpoint?.evidenceFacts)
+    ? checkpoint.evidenceFacts : [])
+    .slice(-budget.evidenceItemLimit)
+    .map((fact) => modelFacingEvidenceFact(fact, budget))
+    .filter(Boolean);
+  if (checkpoint?.sourceEvidence) {
+    projection.sourceEvidence = boundedProjectionValue(checkpoint.sourceEvidence, {
+      maxStringChars: 600,
+      maxArrayItems: 16,
+      maxObjectKeys: 48,
+    });
+  }
+  if (checkpoint?.architectureProposal) {
+    projection.architectureProposal = boundedProjectionValue(checkpoint.architectureProposal, {
+      maxStringChars: 800,
+      maxArrayItems: 16,
+      maxObjectKeys: 48,
+    });
+  }
+  if (activePhase === "active_write") {
+    projection.editEvidence = (Array.isArray(checkpoint?.editEvidence) ? checkpoint.editEvidence : [])
+      .slice(-MAX_EDIT_EVIDENCE_FILES)
+      .map((entry) => ({
+        ...boundedProjectionValue(entry, {
+          maxStringChars: 800,
+          maxArrayItems: 16,
+          maxObjectKeys: 32,
+        }),
+        content: String(entry?.content || "").slice(0, MAX_EDIT_EVIDENCE_CHARS / MAX_EDIT_EVIDENCE_FILES),
+      }));
+    projection.workingSet = (Array.isArray(checkpoint?.workingSet) ? checkpoint.workingSet : [])
+      .slice(-MAX_EDIT_EVIDENCE_FILES)
+      .map((entry) => ({
+        ...boundedProjectionValue(entry, {
+          maxStringChars: 800,
+          maxArrayItems: 16,
+          maxObjectKeys: 32,
+        }),
+        content: String(entry?.content || "").slice(0, MAX_EDIT_EVIDENCE_CHARS / MAX_EDIT_EVIDENCE_FILES),
+      }));
+  }
+  let serialized = stableStringify(projection);
+  if (serialized.length > effectiveCharacterLimit) {
+    // Preserve control/task identity first, then shrink optional evidence in a
+    // deterministic order. Durable checkpoint data is never mutated here.
+    projection.evidenceFacts = projection.evidenceFacts.slice(0, Math.min(6, projection.evidenceFacts.length));
+    projection.coverageEvidence = Array.isArray(projection.coverageEvidence)
+      ? projection.coverageEvidence.slice(0, 6) : projection.coverageEvidence;
+    projection.facts = Array.isArray(projection.facts) ? projection.facts.slice(0, 6) : projection.facts;
+    delete projection.architectureProposal;
+    delete projection.sourceEvidence;
+    serialized = stableStringify(projection);
+  }
+  if (serialized.length > effectiveCharacterLimit) {
+    projection.evidenceFacts = projection.evidenceFacts.map((fact) => ({
+      tool: fact.tool,
+      path: fact.path,
+      contentHash: fact.contentHash,
+      evidenceHash: fact.evidenceHash,
+      coveredRanges: fact.coveredRanges,
+      semanticAnchors: Array.isArray(fact.semanticAnchors) ? fact.semanticAnchors.slice(0, 2) : [],
+      bodyRef: fact.bodyRef,
+    }));
+    delete projection.coverageEvidence;
+    delete projection.facts;
+    delete projection.failedToolResults;
+    serialized = stableStringify(projection);
+  }
+  if (serialized.length > effectiveCharacterLimit) {
+    const emergency = {};
+    for (const key of [
+      "schemaVersion", "checkpointGeneration", "storeRevision", "objective", "objectiveHash",
+      "requestIntent", "activeProject", "mutationGeneration", "toolRoute", "taskRouteOwnership",
+      "protocolControl", "serverControl", "semanticBlocker", "requiredNextTool", "repositoryAudit",
+      "auditFrontier", "coverageIncomplete", "remainingFrontier", "compactionRecovery", "outputRecovery",
+    ]) {
+      if (projection[key] !== undefined) emergency[key] = projection[key];
+    }
+    emergency.evidenceFacts = projection.evidenceFacts.slice(0, 4);
+    serialized = stableStringify(emergency);
+    Object.keys(projection).forEach((key) => delete projection[key]);
+    Object.assign(projection, emergency);
+  }
+  const finalSerialized = stableStringify(projection);
+  return {
+    checkpoint: projection,
+    metrics: {
+      phase: activePhase,
+      characterLimit: effectiveCharacterLimit,
+      tokenEstimateLimit: budget.tokenEstimateLimit,
+      perSectionCharacterLimit: budget.perSectionCharacterLimit,
+      evidenceItemLimit: budget.evidenceItemLimit,
+      characterCount: finalSerialized.length,
+      tokenEstimate: Math.ceil(finalSerialized.length / 4),
+      durableEvidenceCount: Array.isArray(checkpoint?.evidenceFacts) ? checkpoint.evidenceFacts.length : 0,
+      projectedEvidenceCount: Array.isArray(projection.evidenceFacts) ? projection.evidenceFacts.length : 0,
+      exactContentIncluded: /exactContent|workingSetExactCode/.test(finalSerialized),
+    },
+  };
 }
 
 function compactModelFence(value) {
@@ -2258,6 +2482,20 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     options.synthesisState,
   );
   if (!lifecycleMatchesCurrentIdentity(synthesisState)) synthesisState = null;
+  const recoveryIdentity = {
+    objectiveHash: control.objectiveHash,
+    taskSessionId: checkpointTaskSessionId,
+    controlEpoch: activeServerControl ? activeServerControl.epoch : null,
+    mutationGeneration: Number(control.mutationGeneration || 0),
+  };
+  let compactionRecovery = canResume ? compactCompactionRecovery(prior.compactionRecovery) : null;
+  if (!recoveryIdentityMatches(compactionRecovery, recoveryIdentity)) compactionRecovery = null;
+  let outputRecovery = canResume ? compactOutputRecovery(prior.outputRecovery) : null;
+  if (!recoveryIdentityMatches(outputRecovery, recoveryIdentity)) outputRecovery = null;
+  const recoveryIncomplete = Boolean(
+    compactionRecovery
+    || outputRecovery?.status === "partial_report_emitted"
+  );
   if (
     activeServerControl
     && activeServerControl.phase.toLowerCase() === "synthesis"
@@ -2309,6 +2547,10 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     predictionState,
     synthesisState,
     sideQuery: control.sideQuery,
+    coverageIncomplete: recoveryIncomplete && prior.coverageIncomplete === true,
+    remainingFrontier: recoveryIncomplete ? compactRemainingFrontier(prior.remainingFrontier) : [],
+    compactionRecovery,
+    outputRecovery,
     failedToolResults: control.failedToolResults,
     requiredNextTool: control.requiredNextTool ? {
       name: control.requiredNextTool,
@@ -2639,10 +2881,13 @@ function completeTailStart(snapshots, startIndex) {
   return 0;
 }
 function summarizeOldMessages(messages, checkpoint) {
+  const projectionResult = buildModelFacingCheckpointProjection(checkpoint);
+  checkpoint = projectionResult.checkpoint;
   const lines = [
     "Conversation checkpoint (control state is authoritative; do not reinterpret it).",
     `checkpointGeneration=${checkpoint.checkpointGeneration}`,
     `objective=${checkpoint.objective || "(not captured)"}`,
+    `checkpointProjection=${JSON.stringify(projectionResult.metrics)}`,
   ];
   if (checkpoint.objectiveHash) lines.push(`objectiveHash=${checkpoint.objectiveHash}`);
   if (checkpoint.requestIntent) lines.push(`requestIntent=${JSON.stringify(checkpoint.requestIntent)}`);
@@ -2759,9 +3004,9 @@ function summarizeOldMessages(messages, checkpoint) {
   }
   if (checkpoint.repeatEvidence?.length) {
     lines.push(
-      "repeatEvidenceInstruction=The server returned this exact unchanged body from a cached repeat. "
-      + "Use it now; do not issue the same tool/path/query/range again. Other genuinely unread evidence "
-      + "remains available. This bounded cache clears on mutation or a new user goal.",
+      "repeatEvidenceInstruction=The durable store has an unchanged cached body for this read. "
+      + "Use the retained path/hash/anchors and do not issue the same tool/path/query/range again merely "
+      + "to recover context. Request one exact range only when an active edit requires text absent from anchors.",
     );
     lines.push(`repeatEvidence=${JSON.stringify(checkpoint.repeatEvidence)}`);
   }
@@ -2794,7 +3039,136 @@ function summarizeOldMessages(messages, checkpoint) {
   // deliberately ignores similarly named text embedded in every earlier,
   // potentially tool-derived summary field.
   lines.push(`checkpointRequestIntent=${JSON.stringify(checkpoint.requestIntent || null)}`);
-  return lines.join("\n");
+  const finalLine = lines.pop();
+  const limit = Number(projectionResult.metrics.characterLimit || 24_000);
+  const criticalPrefixes = [
+    "Conversation checkpoint", "checkpointGeneration=", "objective=", "objectiveHash=",
+    "requestIntent=", "checkpointProjection=", "activeProject=", "mutationGeneration=",
+    "toolRoute=", "taskAuthorization=", "protocolControl=", "serverControl=",
+    "semanticBlocker=", "requiredNextTool=", "requiredNextToolArgs=", "predictionState=",
+    "synthesisState=", "checkpointRequestIntent=",
+  ];
+  const selected = [];
+  let used = String(finalLine || "").length + 1;
+  const appendWithinLimit = (line) => {
+    const sectionLimit = Number(projectionResult.metrics.perSectionCharacterLimit || 6_000);
+    const boundedLine = line.length <= sectionLimit
+      ? line
+      : `${line.slice(0, sectionLimit - 96)}...[section-sha256:${sha256(line)}]`;
+    if (used + boundedLine.length + 1 > limit) return false;
+    selected.push(boundedLine);
+    used += boundedLine.length + 1;
+    return true;
+  };
+  for (const line of lines.filter((entry) => criticalPrefixes.some((prefix) => entry.startsWith(prefix)))) {
+    appendWithinLimit(line);
+  }
+  for (const line of lines.filter((entry) => !criticalPrefixes.some((prefix) => entry.startsWith(prefix)))) {
+    appendWithinLimit(line);
+  }
+  selected.push(finalLine);
+  return selected.join("\n");
+}
+
+function compactRemainingFrontier(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 32).map((entry) => boundedProjectionValue(entry, {
+    maxStringChars: 512,
+    maxArrayItems: 16,
+    maxObjectKeys: 24,
+  }));
+}
+
+function containsNonFiniteNumber(value, seen = new Set()) {
+  if (typeof value === "number") return !Number.isFinite(value);
+  if (!value || typeof value !== "object") return false;
+  if (seen.has(value)) return true;
+  seen.add(value);
+  const entries = Array.isArray(value) ? value : Object.values(value);
+  return entries.some((entry) => containsNonFiniteNumber(entry, seen));
+}
+
+function compactCompactionRecovery(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version) !== 1
+    || String(value.status || "") !== "partial_report_emitted"
+    || String(value.errorCode || "") !== "CONTEXT_COMPACTION_EXHAUSTED") return null;
+  const objectiveHash = String(value.objectiveHash || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(objectiveHash)) return null;
+  const taskSessionId = String(value.taskSessionId || "").trim().slice(0, 160);
+  const controlEpoch = value.controlEpoch === undefined || value.controlEpoch === null
+    ? null : Number(value.controlEpoch);
+  if (controlEpoch !== null && (!Number.isSafeInteger(controlEpoch) || controlEpoch < 0)) return null;
+  const checkpointGeneration = Number(value.checkpointGeneration);
+  const mutationGeneration = Number(value.mutationGeneration);
+  if (!Number.isSafeInteger(checkpointGeneration) || checkpointGeneration < 0
+    || !Number.isSafeInteger(mutationGeneration) || mutationGeneration < 0) return null;
+  const updatedAt = String(value.updatedAt || "").trim().slice(0, 64);
+  if (!Number.isFinite(Date.parse(updatedAt))) return null;
+  return {
+    version: 1,
+    status: "partial_report_emitted",
+    errorCode: "CONTEXT_COMPACTION_EXHAUSTED",
+    details: boundedProjectionValue(value.details || {}, {
+      maxStringChars: 512, maxArrayItems: 16, maxObjectKeys: 48,
+    }),
+    objectiveHash,
+    taskSessionId,
+    controlEpoch,
+    checkpointGeneration,
+    mutationGeneration,
+    recoveryStrategy: String(value.recoveryStrategy || "resume_remaining_frontier").slice(0, 96),
+    updatedAt,
+  };
+}
+
+function compactOutputRecovery(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version) !== 1) return null;
+  const status = String(value.status || "");
+  if (!["retrying", "partial_report_emitted", "completed"].includes(status)) return null;
+  const objectiveHash = String(value.objectiveHash || "").trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(objectiveHash)) return null;
+  const taskSessionId = String(value.taskSessionId || "").trim().slice(0, 160);
+  const controlEpoch = value.controlEpoch === undefined || value.controlEpoch === null
+    ? null : Number(value.controlEpoch);
+  const mutationGeneration = Number(value.mutationGeneration);
+  const attempt = Number(value.attempt);
+  if (controlEpoch !== null && (!Number.isSafeInteger(controlEpoch) || controlEpoch < 0)) return null;
+  if (!Number.isSafeInteger(mutationGeneration) || mutationGeneration < 0
+    || !Number.isInteger(attempt) || attempt < 1 || attempt > 2) return null;
+  const updatedAt = String(value.updatedAt || "").trim().slice(0, 64);
+  if (!Number.isFinite(Date.parse(updatedAt))) return null;
+  const compacted = {
+    version: 1,
+    status,
+    attempt,
+    reason: String(value.reason || "max_predicted_tokens_reached").slice(0, 96),
+    bufferedOutputDiscarded: value.bufferedOutputDiscarded === true,
+    discardedEventCount: Number.isSafeInteger(Number(value.discardedEventCount))
+      ? Math.max(0, Number(value.discardedEventCount)) : 0,
+    discardedToolCount: Number.isSafeInteger(Number(value.discardedToolCount))
+      ? Math.max(0, Number(value.discardedToolCount)) : 0,
+    objectiveHash,
+    taskSessionId,
+    controlEpoch,
+    mutationGeneration,
+    recoveryStrategy: String(value.recoveryStrategy || "bounded_low_effort_retry").slice(0, 96),
+    updatedAt,
+  };
+  const completedAt = String(value.completedAt || "").trim().slice(0, 64);
+  if (completedAt) {
+    if (!Number.isFinite(Date.parse(completedAt))) return null;
+    compacted.completedAt = completedAt;
+  }
+  return compacted;
+}
+
+function recoveryIdentityMatches(value, expected) {
+  if (!value || !expected || value.objectiveHash !== expected.objectiveHash) return false;
+  if (value.taskSessionId !== expected.taskSessionId) return false;
+  if (value.controlEpoch !== expected.controlEpoch) return false;
+  return value.mutationGeneration === expected.mutationGeneration;
 }
 
 function compactSnapshots(messages, checkpoint, options = {}) {
@@ -2973,6 +3347,23 @@ function validateCheckpoint(checkpoint) {
     if (!Number.isFinite(Date.parse(String(activity.inferenceActivityAt || "")))) return false;
     if (!Number.isFinite(Date.parse(String(activity.semanticProgressAt || "")))) return false;
   }
+  if (checkpoint.compactionRecovery !== undefined && checkpoint.compactionRecovery !== null) {
+    if (containsNonFiniteNumber(checkpoint.compactionRecovery)) return false;
+    const recovery = compactCompactionRecovery(checkpoint.compactionRecovery);
+    if (!recovery || stableStringify(recovery) !== stableStringify(checkpoint.compactionRecovery)) return false;
+  }
+  if (checkpoint.outputRecovery !== undefined && checkpoint.outputRecovery !== null) {
+    if (containsNonFiniteNumber(checkpoint.outputRecovery)) return false;
+    const recovery = compactOutputRecovery(checkpoint.outputRecovery);
+    if (!recovery || stableStringify(recovery) !== stableStringify(checkpoint.outputRecovery)) return false;
+  }
+  if (checkpoint.coverageIncomplete !== undefined && typeof checkpoint.coverageIncomplete !== "boolean") return false;
+  if (checkpoint.remainingFrontier !== undefined) {
+    if (!Array.isArray(checkpoint.remainingFrontier) || checkpoint.remainingFrontier.length > 32) return false;
+    if (containsNonFiniteNumber(checkpoint.remainingFrontier)) return false;
+    if (stableStringify(compactRemainingFrontier(checkpoint.remainingFrontier))
+      !== stableStringify(checkpoint.remainingFrontier)) return false;
+  }
   if (checkpoint.compactionChurn !== undefined && checkpoint.compactionChurn !== null) {
     const churn = checkpoint.compactionChurn;
     if (!churn || typeof churn !== "object" || Array.isArray(churn)) return false;
@@ -3150,6 +3541,7 @@ module.exports = {
   budgetDecision,
   isCompleteToolPair,
   completeTailStart,
+  buildModelFacingCheckpointProjection,
   summarizeOldMessages,
   compactSnapshots,
   validateCheckpoint,

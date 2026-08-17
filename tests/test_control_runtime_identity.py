@@ -9,6 +9,7 @@ import pytest
 
 from control_runtime_identity import (
     ControlRuntimeMismatch,
+    assert_source_tree_matches_head,
     build_runtime_manifest,
     component_identity,
     verify_runtime_component,
@@ -18,10 +19,58 @@ from control_runtime_identity import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_source_head_gate_ignores_untracked_files_but_rejects_tracked_drift(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init"], cwd=repository, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "runtime-test@example.invalid"],
+        cwd=repository,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Runtime Test"],
+        cwd=repository,
+        check=True,
+    )
+    tracked = repository / "tracked.txt"
+    tracked.write_text("committed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-m", "fixture"], cwd=repository, check=True, capture_output=True)
+    expected = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    (repository / "untracked.bin").write_bytes(b"build artifact")
+    assert assert_source_tree_matches_head(repository) == expected
+    packaged = repository / "extracted-package"
+    packaged.mkdir()
+    (packaged / "package-manifest.json").write_text(
+        json.dumps({"sourceGitCommit": "sealed-package-commit"}),
+        encoding="utf-8",
+    )
+    assert assert_source_tree_matches_head(packaged) == "sealed-package-commit"
+
+    tracked.write_text("dirty\n", encoding="utf-8")
+    with pytest.raises(
+        ControlRuntimeMismatch,
+        match="tracked source tree differs from HEAD",
+    ) as captured:
+        assert_source_tree_matches_head(repository)
+    assert captured.value.error_code == "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH"
+
+
 def test_runtime_manifest_covers_every_control_component() -> None:
     manifest = build_runtime_manifest(ROOT)
 
     assert manifest["protocolVersion"] == 2
+    assert manifest["expectedSourceGitCommit"] == manifest["components"]["agent"]["gitCommit"]
     assert set(manifest["components"]) == {"agent", "rag", "compactor"}
     assert manifest["components"]["agent"]["componentVersion"] == "0.3.16"
     for name, identity in manifest["components"].items():
@@ -55,6 +104,12 @@ def test_matching_runtime_manifest_verifies(component: str, tmp_path: Path) -> N
     )
 
     assert result["verified"] is True
+    assert result["bundleIntegrityVerified"] is True
+    assert result["installedGitCommit"] == result["expected"]["gitCommit"]
+    assert result["expectedGitCommit"] == result["expected"]["gitCommit"]
+    assert result["sourceHeadMatched"] is True
+    assert result["runtimeStale"] is False
+    assert result["runtimeVerified"] is True
     assert result["running"]["buildHash"] == result["expected"]["buildHash"]
 
 
@@ -103,6 +158,27 @@ def test_runtime_commit_mismatch_fails_closed(
             repository_root=ROOT,
             required=True,
         )
+
+
+def test_internally_consistent_stale_bundle_is_rejected_against_expected_source_head(
+    tmp_path: Path,
+) -> None:
+    manifest = build_runtime_manifest(ROOT)
+    manifest["expectedSourceGitCommit"] = "newer-source-head"
+    manifest_path = tmp_path / "control-runtime.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(
+        ControlRuntimeMismatch,
+        match="CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH",
+    ) as captured:
+        verify_runtime_component(
+            "rag",
+            manifest_path=manifest_path,
+            repository_root=ROOT,
+            required=True,
+        )
+    assert captured.value.error_code == "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")

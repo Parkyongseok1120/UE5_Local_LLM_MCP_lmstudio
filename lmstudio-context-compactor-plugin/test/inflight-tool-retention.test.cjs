@@ -37,6 +37,11 @@ test("soft compact retains many in-flight tool pairs after one user goal", async
     };
 
     const config = {
+      // This legacy retention regression intentionally exercises the explicit
+      // unbounded-current-turn opt-out. Omitted values now migrate to the
+      // safety default and are covered by the cap-specific compatibility tests.
+      configVersion: 1,
+      maxCurrentTurnMessages: 0,
       enabled: true,
       observeOnly: false,
       strictToolControlPlane: false,

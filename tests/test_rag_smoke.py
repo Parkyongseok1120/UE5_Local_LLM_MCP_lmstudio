@@ -208,12 +208,142 @@ def test_index_health_handles_missing_chunks_table(tmp_path):
     assert health["okForChat"] is False
     assert health["chatAction"] == "stop_and_report_rag_rebuild_required"
     assert "no such table" in health["indexError"].lower()
+    assert health["executionStatus"] == "succeeded"
+    assert health["indexStatus"] == "unavailable"
+    assert health["projectBindingStatus"] == "unknown"
+    assert health["errorCode"] == "RAG_INDEX_UNREADABLE"
+    assert health["nextRequiredAction"] == "run_rag_build_or_doctor"
 
     status = rebuild_status(index)
     assert status["needsRebuild"] is True
     assert status["reason"] == "index-unreadable"
     assert status["chatAction"] == "stop_and_report_rag_rebuild_required"
     assert status["recommendedDoctorCommand"] == ".\\rag.ps1 doctor"
+
+
+def test_index_health_is_total_when_index_path_is_a_directory(tmp_path):
+    health = index_health(tmp_path)
+    assert health["executionStatus"] == "succeeded"
+    assert health["indexStatus"] == "unavailable"
+    assert health["indexReadable"] is False
+    assert health["errorCode"] == "RAG_INDEX_UNREADABLE"
+    assert health["nextRequiredAction"] == "run_rag_build_or_doctor"
+    assert health["okForChat"] is False
+
+
+@pytest.mark.parametrize(
+    ("configured_project", "expected_status", "expected_code", "expected_action"),
+    [
+        ("", "unbound", "RAG_PROJECT_UNBOUND", "stop_and_select_active_project"),
+        ("missing.uproject", "stale", "RAG_PROJECT_BINDING_STALE", "stop_and_reselect_active_project"),
+    ],
+)
+def test_rag_health_fails_closed_for_unbound_or_stale_project(
+    tmp_path,
+    monkeypatch,
+    configured_project,
+    expected_status,
+    expected_code,
+    expected_action,
+):
+    import unreal_rag_mcp
+
+    index = tmp_path / "rag.sqlite"
+    import sqlite3
+    conn = sqlite3.connect(index)
+    conn.execute("create table chunks (source text, layer text)")
+    conn.execute("insert into chunks values ('project', 'source')")
+    conn.commit()
+    conn.close()
+    configured = str(tmp_path / configured_project) if configured_project else ""
+    monkeypatch.setattr(unreal_rag_mcp, "load_shared_config", lambda: {"activeProject": configured})
+    monkeypatch.setattr(unreal_rag_mcp, "active_project_names", lambda: [])
+    monkeypatch.setattr(unreal_rag_mcp, "embedding_status", lambda _index: {})
+    captured = {}
+
+    class FakeServer:
+        def __init__(self):
+            self.index = index
+
+        def tool_result(self, _message_id, text, **_kwargs):
+            captured.update(json.loads(text))
+
+    unreal_rag_mcp._handle_unreal_rag_health(FakeServer(), 1, {})
+
+    assert captured["executionStatus"] == "succeeded"
+    assert captured["indexStatus"] == "ready"
+    assert captured["projectBindingStatus"] == expected_status
+    assert captured["okForChat"] is False
+    assert captured["chatAction"] == expected_action
+    assert captured["errorCode"] == expected_code
+    assert captured["nextRequiredAction"] == "select_active_project"
+
+
+def test_rag_health_accepts_only_an_existing_uproject_binding(tmp_path, monkeypatch):
+    import sqlite3
+    import unreal_rag_mcp
+
+    index = tmp_path / "rag.sqlite"
+    conn = sqlite3.connect(index)
+    conn.execute("create table chunks (source text, layer text)")
+    conn.execute("insert into chunks values ('project', 'source')")
+    conn.commit()
+    conn.close()
+    project = tmp_path / "Demo.uproject"
+    project.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(unreal_rag_mcp, "load_shared_config", lambda: {"activeProject": str(project)})
+    monkeypatch.setattr(unreal_rag_mcp, "active_project_names", lambda: ["Demo"])
+    monkeypatch.setattr(unreal_rag_mcp, "embedding_status", lambda _index: {})
+    captured = {}
+
+    class FakeServer:
+        def __init__(self):
+            self.index = index
+
+        def tool_result(self, _message_id, text, **_kwargs):
+            captured.update(json.loads(text))
+
+    unreal_rag_mcp._handle_unreal_rag_health(FakeServer(), 1, {})
+
+    assert captured["indexStatus"] == "ready"
+    assert captured["projectBindingStatus"] == "bound"
+    assert captured["okForChat"] is True
+    assert captured["chatAction"] == "continue"
+    assert captured["errorCode"] == ""
+    assert captured["nextRequiredAction"] == "continue"
+
+
+def test_rag_health_is_total_when_embedding_sidecar_is_corrupt(tmp_path, monkeypatch):
+    import sqlite3
+    import unreal_rag_mcp
+
+    index = tmp_path / "rag.sqlite"
+    conn = sqlite3.connect(index)
+    conn.execute("create table chunks (source text, layer text)")
+    conn.execute("insert into chunks values ('project', 'source')")
+    conn.commit()
+    conn.close()
+    index.with_suffix(".embeddings.sqlite").write_text("not sqlite", encoding="utf-8")
+    project = tmp_path / "Demo.uproject"
+    project.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(unreal_rag_mcp, "load_shared_config", lambda: {"activeProject": str(project)})
+    monkeypatch.setattr(unreal_rag_mcp, "active_project_names", lambda: ["Demo"])
+    captured = {}
+
+    class FakeServer:
+        def __init__(self):
+            self.index = index
+
+        def tool_result(self, _message_id, text, **_kwargs):
+            captured.update(json.loads(text))
+
+    unreal_rag_mcp._handle_unreal_rag_health(FakeServer(), 1, {})
+
+    assert captured["indexStatus"] == "ready"
+    assert captured["projectBindingStatus"] == "bound"
+    assert captured["okForChat"] is True
+    assert captured["embeddings"]["status"] == "unavailable"
+    assert captured["embeddings"]["errorCode"] == "RAG_EMBEDDING_STATUS_UNAVAILABLE"
 
 
 def test_engine_root_has_no_hardcoded_unreal_install_fallback(tmp_path, monkeypatch):

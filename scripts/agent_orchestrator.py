@@ -615,6 +615,7 @@ class AgentPlan:
     project_control: dict[str, Any] = field(default_factory=dict)
     resolved_targets: list[dict[str, Any]] = field(default_factory=list)
     semantic_ambiguity: dict[str, Any] = field(default_factory=dict)
+    inspection_contract: dict[str, Any] = field(default_factory=dict)
     original_objective: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -637,6 +638,8 @@ class AgentPlan:
         }
         if self.domain_profile:
             payload["domainProfile"] = self.domain_profile
+        if self.inspection_contract:
+            payload["inspectionContract"] = self.inspection_contract
         if self.informational_plan_slices:
             payload["informationalPlanSlices"] = self.informational_plan_slices
         if self.executable_plan_slices:
@@ -2436,6 +2439,60 @@ def build_agent_plan(
             if source_required else "Do not label generic examples as project-specific."
         ),
     }
+    inspection_contract: dict[str, Any] = {}
+    if task_kind in {"inspect_only", "cpp_analysis"}:
+        inspection_text = authoritative_objective or request
+        repository_scope = bool(
+            re.search(
+                r"(?:repository[- ]wide|entire\s+(?:repository|project|codebase)|"
+                r"all\s+(?:repository|project|source|code)|whole\s+(?:repository|project)|"
+                r"저장소\s*전체|프로젝트\s*전체|전체\s*(?:코드|소스)|모든\s*(?:코드|소스)|소스\s*코드\s*구조)",
+                inspection_text,
+                flags=re.IGNORECASE,
+            )
+        )
+        exhaustive = bool(
+            re.search(
+                r"\b(?:every|all|exhaustive|complete)\b|(?:모든|전부|전체\s*파일|빠짐없이|완전\s*감사)",
+                inspection_text,
+                flags=re.IGNORECASE,
+            )
+        )
+        if repository_scope:
+            coverage_mode = "repository_exhaustive" if exhaustive else "repository_overview"
+        else:
+            coverage_mode = "exhaustive_targeted_audit" if exhaustive else "targeted_overview"
+        topic_match = re.search(
+            r"([A-Za-z][\w-]*(?:\s+[A-Za-z][\w-]*){0,2}|[가-힣]{2,24})\s*(?:시스템|서브시스템|모듈|폴더)",
+            inspection_text,
+            flags=re.IGNORECASE,
+        )
+        topic = (topic_match.group(1).strip() if topic_match else "repository")
+        direct_read_limit = 8 if coverage_mode == "targeted_overview" else 12
+        inspection_contract = {
+            "version": 1,
+            "intent": "targeted_structural_analysis" if not repository_scope else "repository_structural_analysis",
+            "topicTarget": topic,
+            "coverageMode": coverage_mode,
+            "candidateSourceRoots": ["project://Source", "project://Plugins/*/Source"],
+            "evidenceBudget": {
+                "maxDirectoryLists": 2,
+                "maxDirectSourceReadsPerPhase": direct_read_limit,
+                "maxFullReadChars": 12000,
+                "maxFullReadLines": 300,
+                "maxEvidenceCharsPerPhase": 64000,
+                "representativePairs": 4,
+            },
+            "selectionPolicy": (
+                "Select representative interface/types/coordinator/entrypoint Public/Private pairs before reading; "
+                "large files use outlines or exact ranges."
+            ),
+            "synthesisCompletionCondition": (
+                "Synthesize after representative coverage is satisfied or the direct-read limit is reached; "
+                "record every uninspected candidate in remainingFrontier and never imply exhaustive coverage."
+            ),
+            "readOnly": True,
+        }
 
     write_gate = build_write_gate(
         task_kind,
@@ -2505,6 +2562,7 @@ def build_agent_plan(
             ),
         ),
         semantic_ambiguity=semantic_ambiguity,
+        inspection_contract=inspection_contract,
         original_objective=authoritative_objective,
     )
     consistency_issues = validate_plan_consistency(plan)

@@ -893,6 +893,24 @@ function normalizeEvidencePath(value) {
   return relPath;
 }
 
+function phaseBudgetRecoveryDecision(state = {}) {
+  const auditFrontierOpen = state.repoAuditLedger?.required === true
+    && (Number(state.repoAuditLedger?.remainingCount || 0) > 0
+      || state.repoAuditLedger?.overflow === true);
+  const boundedSynthesis = String(state.mode || "").toLowerCase() === "read_only"
+    && state.writeGate?.writesAllowed !== true
+    && !auditFrontierOpen;
+  return {
+    requiredNextAction: boundedSynthesis
+      ? "synthesize_current_evidence"
+      : "replan_after_phase_budget",
+    recoveryStrategy: boundedSynthesis
+      ? "synthesis_handoff"
+      : "bounded_replan_handoff",
+    boundedSynthesis,
+  };
+}
+
 const CONTROL_TRANSPORT_ARG_KEYS = new Set([
   "taskAuthorization", "task_authorization", "sessionId",
   "taskSessionId", "task_session_id", "authToken", "auth_token",
@@ -1089,6 +1107,34 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     files: Object.fromEntries(boundedEntries),
   };
 
+  const inspectionContract = state.inspectionContract && typeof state.inspectionContract === "object"
+    ? state.inspectionContract
+    : null;
+  const inspectionBudget = inspectionContract?.evidenceBudget
+    && typeof inspectionContract.evidenceBudget === "object"
+    ? inspectionContract.evidenceBudget
+    : null;
+  if (inspectionBudget) {
+    const priorProgress = state.inspectionProgress && typeof state.inspectionProgress === "object"
+      ? state.inspectionProgress
+      : {};
+    const directSourceReads = Math.max(0, Number(priorProgress.directSourceReads || 0)) + 1;
+    const evidenceCharacters = Math.max(0, Number(priorProgress.evidenceCharacters || 0))
+      + Math.max(0, Number(metadata.characterCount || 0));
+    const maxReads = Math.max(1, Number(inspectionBudget.maxDirectSourceReadsPerPhase || 1));
+    const maxChars = Math.max(1, Number(inspectionBudget.maxEvidenceCharsPerPhase || 1));
+    state.inspectionProgress = {
+      ...priorProgress,
+      version: 1,
+      directSourceReads,
+      evidenceCharacters,
+      status: directSourceReads >= maxReads || evidenceCharacters >= maxChars
+        ? "synthesis_required"
+        : "collecting",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   const audit = state.repoAuditLedger && typeof state.repoAuditLedger === "object"
     ? { ...state.repoAuditLedger }
     : null;
@@ -1111,7 +1157,10 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
         lineRange,
       ]);
       const lineCount = Math.max(1, Number(priorAuditEntry.lineCount || 1));
-      const fullyCovered = String(toolName) === "read_file"
+      // Tool identity is not proof of full delivery: read_file is byte capped
+      // and can return only a prefix.  Complete the inventory entry only from
+      // an explicit EOF receipt or from ranges that cover the exact file.
+      const fullyCovered = metadata.completeRead === true
         || auditRanges.some((range) => Number(range[0]) <= 1 && Number(range[1]) >= lineCount);
       entries[inventoryPath] = {
         ...priorAuditEntry,
@@ -1590,6 +1639,57 @@ function mutateRouteBudget(
       }
       current.toolRouteUsage = usage;
       recordDirectSourceEvidence(current, toolName, callMetadata);
+      if (
+        String(toolName || "") === "list_directory"
+        && callMetadata?.inspectionDirectoryList
+        && typeof callMetadata.inspectionDirectoryList === "object"
+      ) {
+        const progress = current.inspectionProgress && typeof current.inspectionProgress === "object"
+          ? current.inspectionProgress
+          : {};
+        const directoryLimit = Math.max(1, Number(
+          current.inspectionContract?.evidenceBudget?.maxDirectoryLists || 1
+        ));
+        if (Math.max(0, Number(progress.listedDirectories || 0)) >= directoryLimit) {
+          const handoff = phaseBudgetRecoveryDecision(current);
+          current.recoveryObligation = {
+            source: "phase_tool_budget",
+            status: "phase_budget_checkpoint_required",
+            errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+            budgetErrorCode: "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED",
+            exhaustedTool: "list_directory",
+            recoveryStrategy: handoff.recoveryStrategy,
+            requiredTool: { name: "unreal_task_checkpoint", args: {
+              action: "record",
+              phase: String(route.phase || "planner"),
+              requiredNextAction: handoff.requiredNextAction,
+              includeGitChanges: false,
+              taskAuthorization: {
+                taskSessionId: String(current.taskSessionId || taskSessionId || ""),
+                ownerCapability: String(current.ownerCapability || ""),
+              },
+            } },
+          };
+          commitControlTransition(current);
+          current.updatedAt = new Date().toISOString();
+          atomicWriteJson(statePath, current);
+          return {
+            ok: false,
+            errorCode: "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED",
+            error: "The durable inspection directory-list budget is exhausted.",
+            control: { ...(current.controlState || {}) },
+            controlEpoch: Number(current.controlEpoch || 0),
+            nextAction: "unreal_task_checkpoint",
+            nextActionArgs: current.recoveryObligation.requiredTool.args,
+          };
+        }
+        current.inspectionProgress = {
+          ...progress,
+          version: 1,
+          listedDirectories: Math.max(0, Number(progress.listedDirectories || 0)) + 1,
+          updatedAt: new Date().toISOString(),
+        };
+      }
       recordAbsentSourceEvidence(current, toolName, callMetadata);
       const recoveryMetadata = callMetadata && typeof callMetadata === "object"
         ? (callMetadata.directSourceEvidence || callMetadata.absentEvidence || null)
@@ -1671,10 +1771,14 @@ function mutateRouteBudget(
     }
     if (count + reserved >= limit) {
       const checkpointAuthorization = taskAuthorizationForState(current);
+      const exhaustedTool = String(toolName || "");
+      const handoff = phaseBudgetRecoveryDecision(current);
+      const inspectionOnly = handoff.boundedSynthesis;
+      const requiredNextAction = handoff.requiredNextAction;
       const checkpointArgs = {
         action: "record",
         phase: String(route.phase || "working"),
-        requiredNextAction: String(toolName || ""),
+        requiredNextAction,
         includeGitChanges: false,
         taskAuthorization: {
           taskSessionId: checkpointAuthorization.taskSessionId,
@@ -1689,12 +1793,14 @@ function mutateRouteBudget(
         source: "phase_tool_budget",
         status: "phase_budget_checkpoint_required",
         errorCode: "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
+        exhaustedTool,
+        recoveryStrategy: handoff.recoveryStrategy,
         fingerprint: [
           String(route.routeHash || ""),
           String(route.phase || ""),
           String(count + reserved),
           String(limit),
-          String(toolName || ""),
+          exhaustedTool,
         ].join(":"),
         requiredTool: {
           name: "unreal_task_checkpoint",
@@ -1724,7 +1830,9 @@ function mutateRouteBudget(
         agentInstruction:
           "Call unreal_task_checkpoint exactly once with nextActionArgs (action=record). "
           + "action=status only inspects state and does not renew the work-call budget. "
-          + "Then continue requiredNextAction with the returned taskAuthorization.",
+          + (inspectionOnly
+            ? "Then synthesize the evidence already collected and record any uninspected paths as remainingFrontier; do not repeat the exhausted discovery tool in this phase."
+            : "Then enter the server-owned bounded replan route; do not claim the write task complete or repeat the exhausted executor phase."),
       };
     }
     if (mode === "reserve") {

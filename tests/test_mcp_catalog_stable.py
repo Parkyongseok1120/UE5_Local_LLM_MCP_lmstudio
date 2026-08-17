@@ -67,6 +67,7 @@ class _StdioJsonRpc:
         )
         assert self.proc.stdin is not None
         assert self.proc.stdout is not None
+        self.notifications: list[dict] = []
 
     def send(self, payload: dict) -> None:
         self.proc.stdin.write(json.dumps(payload) + "\n")
@@ -86,6 +87,8 @@ class _StdioJsonRpc:
             message = json.loads(line)
             if message.get("id") == req_id:
                 return message
+            if message.get("method"):
+                self.notifications.append(message)
         if self.proc.poll() is None:
             self.proc.terminate()
         raise format_subprocess_response_failure(self.proc, req_id)
@@ -208,8 +211,15 @@ def test_clean_startup_advertises_manifest_agent_essential(tmp_path: Path) -> No
     finally:
         client.close()
     stderr = stderr_path.read_text(encoding="utf-8")
-    assert "mcp_catalog_initialized" in stderr
-    assert "unreal-agent" in stderr
+    assert "mcp_catalog_initialized" not in stderr
+    startup_messages = [
+        item for item in client.notifications
+        if item.get("method") == "notifications/message"
+        and "mcp_catalog_initialized" in str((item.get("params") or {}).get("data") or "")
+    ]
+    assert len(startup_messages) == 1
+    assert startup_messages[0]["params"]["level"] == "info"
+    assert startup_messages[0]["params"]["logger"] == "unreal-agent"
 
 
 def test_active_route_keeps_transport_catalog_profile_stable(tmp_path: Path) -> None:

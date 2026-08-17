@@ -650,6 +650,38 @@ function mutationTaskSessionId(args = {}) {
   return String(requiredFields(args).taskSessionId || "").trim();
 }
 
+function inspectionReadPolicy(args = {}) {
+  const taskSessionId = mutationTaskSessionId(args);
+  if (!taskSessionId) return null;
+  const state = readTaskState(WORKSPACE_ROOT, taskSessionId);
+  const contract = state?.inspectionContract && typeof state.inspectionContract === "object"
+    ? state.inspectionContract
+    : null;
+  const budget = contract?.evidenceBudget && typeof contract.evidenceBudget === "object"
+    ? contract.evidenceBudget
+    : null;
+  if (!budget) return null;
+  const maxReads = Math.max(1, Number(budget.maxDirectSourceReadsPerPhase || 1));
+  const maxEvidenceChars = Math.max(1, Number(budget.maxEvidenceCharsPerPhase || 1));
+  const maxFullReadChars = Math.max(1, Number(budget.maxFullReadChars || maxEvidenceChars));
+  const evidenceCharacters = Math.max(0, Number(state?.inspectionProgress?.evidenceCharacters || 0));
+  const remainingEvidenceChars = Math.max(0, maxEvidenceChars - evidenceCharacters);
+  const perReadCharacters = Math.max(1, Math.min(
+    maxFullReadChars,
+    Math.floor(maxEvidenceChars / maxReads),
+    Math.max(1, remainingEvidenceChars),
+  ));
+  return {
+    maxBytesPerRead: perReadCharacters,
+    maxCharactersPerRead: perReadCharacters,
+    maxLinesPerRead: Math.max(1, Number(budget.maxFullReadLines || 300)),
+    maxDirectoryEntries: Math.max(1, Number(budget.maxDirectoryEntries || 200)),
+    maxDirectoryLists: Math.max(1, Number(budget.maxDirectoryLists || 1)),
+    listedDirectories: Math.max(0, Number(state?.inspectionProgress?.listedDirectories || 0)),
+    coverageMode: String(contract.coverageMode || ""),
+  };
+}
+
 function mutationJournalLocation(targetPath, args = {}) {
   const absoluteTarget = path.resolve(targetPath);
   const activeProject = getActiveProject(CONFIG_PATH);
@@ -2021,10 +2053,13 @@ function buildToolCatalogDiagnostics(tools, context = null) {
   };
 }
 
-function emitCatalogInitializedDiagnostic(context = null) {
+let catalogInitializedDiagnosticEmitted = false;
+async function emitCatalogInitializedDiagnostic(context = null) {
+  if (catalogInitializedDiagnosticEmitted) return;
+  catalogInitializedDiagnosticEmitted = true;
   const tools = allAgentTools();
   const catalog = buildToolCatalogDiagnostics(tools, context);
-  console.error(JSON.stringify({
+  await agentNotify(JSON.stringify({
     event: "mcp_catalog_initialized",
     server: "unreal-agent",
     profile: catalog.profile,
@@ -2036,8 +2071,13 @@ function emitCatalogInitializedDiagnostic(context = null) {
     activeProject: getActiveProject(CONFIG_PATH) || "",
     mcpIdentity: catalog.identity,
     runtimeComponent: runtimeComponentStatus?.running || null,
-    runtimeVerified: runtimeComponentStatus?.verified === true,
-  }));
+    bundleIntegrityVerified: runtimeComponentStatus?.bundleIntegrityVerified === true,
+    installedGitCommit: runtimeComponentStatus?.installedGitCommit || "",
+    expectedGitCommit: runtimeComponentStatus?.expectedGitCommit || "",
+    sourceHeadMatched: runtimeComponentStatus?.sourceHeadMatched ?? null,
+    runtimeStale: runtimeComponentStatus?.runtimeStale === true,
+    runtimeVerified: runtimeComponentStatus?.runtimeVerified === true,
+  }), "info");
 }
 function requiredArgumentCheck(tool, args) {
   const required = Array.isArray(tool?.inputSchema?.required) ? tool.inputSchema.required : [];
@@ -3331,6 +3371,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     getActiveProject(CONFIG_PATH) || ""
   );
   lastObservedRouteFingerprint = activeRouteFingerprint(context);
+  await emitCatalogInitializedDiagnostic(context);
   return {
     tools: filterAgentTools(tools, context)
   };
@@ -3952,7 +3993,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "list_directory") {
       const resolution = await resolveReadToolPath(args.path || ".");
       const target = resolution.absolutePath;
-      const maxEntries = Math.max(1, Math.min(Number(args.maxEntries || 200), 1000));
+      const inspectionPolicy = inspectionReadPolicy(args);
+      const maxEntries = Math.max(1, Math.min(
+        Number(args.maxEntries || 200),
+        inspectionPolicy?.maxDirectoryEntries || 1000,
+        1000,
+      ));
       const relative = String(
         resolution.projectRelativePath
         || resolution.workspaceRelativePath
@@ -4001,7 +4047,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
       }
       LIST_DIRECTORY_BUDGET.commit(budgetScope, relative || ".");
-      const budgetFail = commitDeferredBudgetOrFail();
+      const budgetFail = commitDeferredBudgetOrFail({
+        inspectionDirectoryList: { entryCount: rows.length },
+      });
       if (budgetFail) return budgetFail;
       return attachCommittedToolOutcomeControl(
         text(JSON.stringify({ path: pathMetadata(resolution), entries: rows }, null, 2)),
@@ -4536,9 +4584,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const detail = resolveCodeDetail(args.detailLevel);
       const tierCap = CODE_DETAIL_READ_BYTES[detail];
+      const inspectionPolicy = inspectionReadPolicy(args);
       const maxBytes = Math.max(
         1,
-        Math.min(Number(args.maxBytes || tierCap), tierCap, MAX_READ_BYTES)
+        Math.min(
+          Number(args.maxBytes || tierCap),
+          tierCap,
+          MAX_READ_BYTES,
+          inspectionPolicy?.maxBytesPerRead || MAX_READ_BYTES,
+        )
       );
       const buffer = await readLeadingFileBuffer(target, s, maxBytes);
       if (!isTextLikely(buffer)) return fail(`file appears binary: ${args.path}`);
@@ -4561,6 +4615,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           projectRelativePath: resolution.projectRelativePath,
           contentHash,
           lineRange: `1-${truncated.endLine}`,
+          characterCount: rawOut.length,
+          completeRead: truncated.meta.truncated !== true,
         },
       });
       if (budgetFail) return budgetFail;
@@ -4619,7 +4675,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const normalizedArgs = guard.normalizedArgs;
 
       const detail = resolveCodeDetail(args.detailLevel);
-      const lineCap = CODE_DETAIL_LINE_CAP[detail];
+      const inspectionPolicy = inspectionReadPolicy(args);
+      const lineCap = Math.min(
+        CODE_DETAIL_LINE_CAP[detail],
+        inspectionPolicy?.maxLinesPerRead || CODE_DETAIL_LINE_CAP[detail],
+      );
       const startLine = Math.max(1, Number(args.startLine || 1));
       let endLine = Math.max(startLine, Number(args.endLine || startLine));
       if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) {
@@ -4641,14 +4701,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       const lines = content.split(/\r?\n/);
       const slice = lines.slice(startLine - 1, endLine);
-      const numbered = slice.map((line, idx) => `${startLine + idx}|${line}`).join("\n");
-      const output = `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.min(endLine, lines.length)} of ${lines.length}\n\n${numbered}`;
+      const charCap = inspectionPolicy?.maxCharactersPerRead || Number.POSITIVE_INFINITY;
+      const delivered = [];
+      let deliveredCharacters = 0;
+      for (let idx = 0; idx < slice.length; idx += 1) {
+        const row = `${startLine + idx}|${slice[idx]}`;
+        const added = row.length + (delivered.length > 0 ? 1 : 0);
+        if (deliveredCharacters + added > charCap) break;
+        delivered.push(row);
+        deliveredCharacters += added;
+      }
+      const completeEndLine = delivered.length > 0 ? startLine + delivered.length - 1 : startLine - 1;
+      const rangeTruncated = delivered.length < slice.length;
+      const numbered = delivered.length > 0
+        ? delivered.join("\n")
+        : `${startLine}|${String(slice[0] || "").slice(0, Math.max(0, charCap - String(startLine).length - 1))}`;
+      const output = `File: ${displayPath(resolution)}\nPath-Metadata: ${JSON.stringify(pathMetadata(resolution))}\nLines: ${startLine}-${Math.max(startLine, completeEndLine)} of ${lines.length}`
+        + (rangeTruncated ? `\n[read-truncation: character budget ${charCap}; last line is not evidence-complete]` : "")
+        + `\n\n${numbered}`;
       const contentHash = sha256Text(content);
       const budgetFail = commitDeferredBudgetOrFail({
         directSourceEvidence: {
           projectRelativePath: resolution.projectRelativePath,
           contentHash,
-          lineRange: `${startLine}-${Math.min(endLine, lines.length)}`,
+          lineRange: completeEndLine >= startLine ? `${startLine}-${completeEndLine}` : "0-0",
+          characterCount: numbered.length,
+          completeRead: startLine === 1 && completeEndLine >= lines.length,
         },
       });
       if (budgetFail) return budgetFail;
@@ -4656,7 +4734,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         target,
         s,
         resolution,
-        `${startLine}-${Math.min(endLine, lines.length)}`,
+        completeEndLine >= startLine ? `${startLine}-${completeEndLine}` : "0-0",
         contentHash
       );
       recordReadSuccess("read_file_range", normalizedArgs, {
@@ -8534,11 +8612,6 @@ async function main() {
       + " (writes that need the guard will fail closed until mutation_semantic_guard.py and unreal_api_denylist.py are present and importable)"
     );
   }
-  const startupRouteContext = listToolsRouteContext(
-    WORKSPACE_ROOT,
-    getActiveProject(CONFIG_PATH) || ""
-  );
-  emitCatalogInitializedDiagnostic(startupRouteContext);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Catalog is profile-stable; list_changed remains advisory for clients that

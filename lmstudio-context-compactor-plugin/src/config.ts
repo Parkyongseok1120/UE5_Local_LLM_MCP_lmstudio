@@ -2,6 +2,12 @@ import { createConfigSchematics } from "@lmstudio/sdk";
 
 export const configSchematics = createConfigSchematics()
   .field(
+    "configVersion",
+    "numeric",
+    { displayName: "Configuration schema version", subtitle: "Internal migration marker for safety-critical defaults." },
+    2,
+  )
+  .field(
     "enabled",
     "boolean",
     { displayName: "Enable context compaction", subtitle: "Compact the model-facing history while retaining the visible LM Studio chat." },

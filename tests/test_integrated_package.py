@@ -10,6 +10,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_integrated_package.py"
 
@@ -95,6 +97,31 @@ def _load_builder_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_package_builder_rejects_tracked_source_drift_before_copying(tmp_path: Path) -> None:
+    source = tmp_path / "dirty-source"
+    source.mkdir()
+    subprocess.run(["git", "init"], cwd=source, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "package-test@example.invalid"],
+        cwd=source,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Package Test"],
+        cwd=source,
+        check=True,
+    )
+    installer = source / "install.py"
+    installer.write_text("# committed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "install.py"], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-m", "fixture"], cwd=source, check=True, capture_output=True)
+    installer.write_text("# dirty\n", encoding="utf-8")
+
+    builder = _load_builder_module()
+    with pytest.raises(ValueError, match="tracked source tree differs from HEAD"):
+        builder.build(source, tmp_path / "output", None, include_index=False)
 
 
 def test_include_index_uses_configured_index_path(tmp_path: Path) -> None:

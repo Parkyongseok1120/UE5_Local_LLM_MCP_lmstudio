@@ -36,6 +36,11 @@ def index_health(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
     data_dir = data_dir or index.parent
     chunks_jsonl = data_dir / "chunks.jsonl"
     info: dict[str, Any] = {
+        "executionStatus": "succeeded",
+        "indexStatus": "unknown",
+        "projectBindingStatus": "unknown",
+        "errorCode": "",
+        "nextRequiredAction": "inspect_index_health",
         "indexPath": str(index),
         "indexExists": index.exists(),
         "chunksJsonl": _file_info(chunks_jsonl),
@@ -48,8 +53,9 @@ def index_health(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
     if index.exists():
         info["indexFile"] = _file_info(index)
         info["lastBuiltAt"] = info["indexFile"]["modifiedAt"]
-        conn = sqlite3.connect(index)
+        conn: sqlite3.Connection | None = None
         try:
+            conn = sqlite3.connect(index)
             info["chunkCount"] = int(conn.execute("select count(*) from chunks").fetchone()[0])
             for row in conn.execute(
                 "select source, count(*) from chunks group by source order by count(*) desc"
@@ -59,16 +65,20 @@ def index_health(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
                 "select layer, count(*) from chunks where layer != '' group by layer order by count(*) desc limit 20"
             ):
                 info["layerBreakdown"][str(row[0])] = int(row[1])
-        except sqlite3.DatabaseError as exc:
+        except (sqlite3.Error, OSError) as exc:
             info["indexError"] = str(exc)
             info["indexReadable"] = False
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
     else:
         info["indexFile"] = _file_info(index)
 
     info.setdefault("indexReadable", bool(index.exists()))
     if info.get("indexError"):
+        info["indexStatus"] = "unavailable"
+        info["errorCode"] = "RAG_INDEX_UNREADABLE"
+        info["nextRequiredAction"] = "run_rag_build_or_doctor"
         info["okForChat"] = False
         info["chatAction"] = "stop_and_report_rag_rebuild_required"
         info["chatMessage"] = (
@@ -76,9 +86,14 @@ def index_health(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
             "tell the user to run .\\rag.ps1 build or .\\rag.ps1 doctor from the RAG workspace."
         )
     elif index.exists() and int(info.get("chunkCount") or 0) > 0:
+        info["indexStatus"] = "ready"
+        info["nextRequiredAction"] = "continue"
         info["okForChat"] = True
         info["chatAction"] = "continue"
     else:
+        info["indexStatus"] = "not_ready"
+        info["errorCode"] = "RAG_INDEX_EMPTY" if index.exists() else "RAG_INDEX_MISSING"
+        info["nextRequiredAction"] = "run_rag_build_or_doctor"
         info["okForChat"] = False
         info["chatAction"] = "stop_and_report_rag_rebuild_required"
         info["chatMessage"] = (

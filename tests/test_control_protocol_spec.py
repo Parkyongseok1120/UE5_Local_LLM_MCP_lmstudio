@@ -31,7 +31,9 @@ def test_every_emitted_literal_error_code_has_one_conservative_classification() 
     ) < len(catalog) // 10
     assert catalog["TASK_AUTH_INCOMPLETE"]["retry"] == "same_call_after_refresh"
     assert catalog["INVALID_TOOL_ARGUMENTS"]["retry"] == "changed_input"
+    assert catalog["CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH"]["terminal"] is True
     assert catalog["CONTROL_RUNTIME_VERSION_MISMATCH"]["terminal"] is True
+    assert "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH" in discover_emitted_error_codes()
 
 
 def test_unclassified_emitted_code_fails_the_gate() -> None:

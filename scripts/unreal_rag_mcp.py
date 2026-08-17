@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -5616,9 +5617,58 @@ def _handle_unreal_get_active_project(server: McpServer, message_id: Any, argume
 
 def _handle_unreal_rag_health(server: McpServer, message_id: Any, arguments: dict[str, Any]) -> None:
     health = index_health(server.index)
-    health["activeProject"] = load_shared_config().get("activeProject")
+    active_project = str(load_shared_config().get("activeProject") or "").strip()
+    if not active_project:
+        project_binding_status = "unbound"
+    else:
+        try:
+            project_path = Path(active_project).expanduser()
+            project_binding_status = (
+                "bound"
+                if project_path.is_file() and project_path.suffix.casefold() == ".uproject"
+                else "stale"
+            )
+        except OSError:
+            project_binding_status = "stale"
+    health["activeProject"] = active_project or None
     health["activeProjectNames"] = active_project_names()
-    health["embeddings"] = embedding_status(server.index)
+    health["projectBindingStatus"] = project_binding_status
+    if project_binding_status != "bound":
+        prior_index_error = str(health.get("errorCode") or "")
+        if prior_index_error:
+            health["indexErrorCode"] = prior_index_error
+        health["okForChat"] = False
+        health["chatAction"] = (
+            "stop_and_select_active_project"
+            if project_binding_status == "unbound"
+            else "stop_and_reselect_active_project"
+        )
+        health["errorCode"] = (
+            "RAG_PROJECT_UNBOUND"
+            if project_binding_status == "unbound"
+            else "RAG_PROJECT_BINDING_STALE"
+        )
+        health["nextRequiredAction"] = "select_active_project"
+        health["chatMessage"] = (
+            "No active Unreal project is bound. Select an existing .uproject before continuing."
+            if project_binding_status == "unbound"
+            else "The configured active Unreal project is missing or invalid. Select the current .uproject before continuing."
+        )
+    try:
+        health["embeddings"] = {
+            "status": "ready",
+            **embedding_status(server.index),
+        }
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        # Embeddings are an optional retrieval accelerator. Their health must
+        # never make the primary RAG health tool throw or erase the lexical
+        # index/project-binding contract above.
+        health["embeddings"] = {
+            "status": "unavailable",
+            "errorCode": "RAG_EMBEDDING_STATUS_UNAVAILABLE",
+            "error": str(exc),
+            "nextRequiredAction": "rebuild_embeddings_or_continue_lexical",
+        }
     server.tool_result(message_id, json.dumps(health, ensure_ascii=False, indent=2))
 
 
@@ -6731,6 +6781,7 @@ class McpServer:
                     },
                 },
             )
+            self.emit_catalog_initialized_diagnostic()
         elif method == "ping":
             self.result(message_id, {})
         elif method == "tools/list":
@@ -6850,8 +6901,11 @@ class McpServer:
         }
 
     def emit_catalog_initialized_diagnostic(self) -> None:
+        if getattr(self, "_catalog_initialized_diagnostic_emitted", False):
+            return
+        self._catalog_initialized_diagnostic_emitted = True
         catalog = self.tool_catalog_diagnostics()
-        self.log(
+        self.notify(
             json.dumps(
                 {
                     "event": "mcp_catalog_initialized",
@@ -6868,13 +6922,29 @@ class McpServer:
                     "runtimeComponent": getattr(
                         self, "runtime_component_status", {}
                     ).get("running"),
+                    "bundleIntegrityVerified": getattr(
+                        self, "runtime_component_status", {}
+                    ).get("bundleIntegrityVerified") is True,
+                    "installedGitCommit": getattr(
+                        self, "runtime_component_status", {}
+                    ).get("installedGitCommit", ""),
+                    "expectedGitCommit": getattr(
+                        self, "runtime_component_status", {}
+                    ).get("expectedGitCommit", ""),
+                    "sourceHeadMatched": getattr(
+                        self, "runtime_component_status", {}
+                    ).get("sourceHeadMatched"),
+                    "runtimeStale": getattr(
+                        self, "runtime_component_status", {}
+                    ).get("runtimeStale") is True,
                     "runtimeVerified": getattr(
                         self, "runtime_component_status", {}
-                    ).get("verified") is True,
+                    ).get("runtimeVerified") is True,
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
-            )
+            ),
+            level="info",
         )
 
     @staticmethod
@@ -11347,5 +11417,4 @@ if __name__ == "__main__":
     runtime_component_status = verify_runtime_component("rag")
     server = McpServer(index.resolve())
     server.runtime_component_status = runtime_component_status
-    server.emit_catalog_initialized_diagnostic()
     server.run()

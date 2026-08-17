@@ -850,6 +850,7 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
     runtime_manifest = json.loads(runtime_manifest_path.read_text(encoding="utf-8"))
     assert payload["controlRuntimeManifest"] == str(runtime_manifest_path)
     assert set(runtime_manifest["components"]) == {"agent", "rag", "compactor"}
+    assert runtime_manifest["expectedSourceGitCommit"] == runtime_manifest["components"]["agent"]["gitCommit"]
     assert env["CONTROL_RUNTIME_MANIFEST"] == str(runtime_manifest_path)
     assert env["CONTROL_RUNTIME_REQUIRED"] == "1"
     installed_runtime_manifest = (
@@ -862,6 +863,8 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
         / "control-runtime.json"
     )
     assert installed_runtime_manifest.is_file()
+    installed_compactor_runtime = json.loads(installed_runtime_manifest.read_text(encoding="utf-8"))
+    assert installed_compactor_runtime["expectedSourceGitCommit"] == runtime_manifest["expectedSourceGitCommit"]
 
 
 def test_full_agent_install_keeps_context_proxy_advisory(tmp_path: Path) -> None:
@@ -1153,6 +1156,8 @@ def test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded(
     )
     assert mcp["mcpServers"]["unreal-rag"]["env"]["CONTROL_RUNTIME_GIT_COMMIT"] == commit
     assert mcp["mcpServers"]["unreal-agent"]["env"]["CONTROL_RUNTIME_GIT_COMMIT"] == commit
+    assert mcp["mcpServers"]["unreal-rag"]["env"]["CONTROL_RUNTIME_EXPECTED_GIT_COMMIT"] == commit
+    assert mcp["mcpServers"]["unreal-agent"]["env"]["CONTROL_RUNTIME_EXPECTED_GIT_COMMIT"] == commit
 
 
 def test_custom_active_project_engine_fails_closed_without_an_exact_binding(tmp_path: Path) -> None:

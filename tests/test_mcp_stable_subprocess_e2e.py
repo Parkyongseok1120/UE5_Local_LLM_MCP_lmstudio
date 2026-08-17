@@ -674,7 +674,7 @@ def test_agent_write_then_read_then_replace_round_trip(tmp_path: Path) -> None:
                 3,
             )
             replace_gate_payload = _tool_payload(replace_gate)
-            assert replace_gate_payload["gateCompletion"]["ok"] is True, replace_gate_payload
+            assert replace_gate_payload.get("gateCompletion", {}).get("ok") is True, replace_gate_payload
             replace_create_auth = replace_gate_payload["gateCompletion"][
                 "taskAuthorization"
             ]

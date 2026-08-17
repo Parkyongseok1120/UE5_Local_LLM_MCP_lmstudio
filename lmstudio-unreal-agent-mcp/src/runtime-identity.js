@@ -7,6 +7,12 @@ const { spawnSync } = require("child_process");
 const { controlProtocolIdentity } = require("./control-protocol-spec");
 
 const PROTOCOL_VERSION = 2;
+
+function controlProtocolError(code, message) {
+  const error = new Error(`${code}: ${message}`);
+  error.code = code;
+  return error;
+}
 const PROTOCOL_IDENTITY_FIELDS = Object.freeze([
   "transitionPolicyHash",
   "errorCatalogHash",
@@ -119,13 +125,34 @@ function verifyRuntimeComponent(component, options = {}) {
   const required = options.required === true
     || /^(?:1|true|yes|on)$/i.test(String(process.env.CONTROL_RUNTIME_REQUIRED || ""));
   const running = componentIdentity(component, repositoryRoot, { manifestPath });
+  let expectedGitCommit = String(
+    options.expectedGitCommit || process.env.CONTROL_RUNTIME_EXPECTED_GIT_COMMIT || ""
+  ).trim().slice(0, 80);
+  const provenance = (verified, expected = null) => {
+    const installedGitCommit = String(expected?.gitCommit || running.gitCommit || "");
+    const sourceHeadMatched = expectedGitCommit
+      ? installedGitCommit === expectedGitCommit
+      : null;
+    return {
+      bundleIntegrityVerified: Boolean(verified),
+      installedGitCommit,
+      expectedGitCommit,
+      sourceHeadMatched,
+      runtimeStale: sourceHeadMatched === false,
+      runtimeVerified: Boolean(verified && sourceHeadMatched !== false),
+    };
+  };
   if (!manifestPath || !fs.existsSync(manifestPath)) {
     if (required) throw new Error("CONTROL_RUNTIME_VERSION_MISMATCH: manifest is required");
-    return { ok: true, verified: false, reason: "manifest_not_configured", running };
+    return { ok: true, verified: false, reason: "manifest_not_configured", running, ...provenance(false) };
   }
   let expected;
   try {
-    expected = JSON.parse(fs.readFileSync(manifestPath, "utf8"))?.components?.[component];
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (!expectedGitCommit) {
+      expectedGitCommit = String(manifest?.expectedSourceGitCommit || "").trim().slice(0, 80);
+    }
+    expected = manifest?.components?.[component];
   } catch (error) {
     throw new Error(`CONTROL_RUNTIME_VERSION_MISMATCH: manifest unavailable (${error.message || error})`);
   }
@@ -143,7 +170,14 @@ function verifyRuntimeComponent(component, options = {}) {
   if (mismatches.length) {
     throw new Error(`CONTROL_RUNTIME_VERSION_MISMATCH: ${component} differs in ${mismatches.join(", ")}`);
   }
-  return { ok: true, verified: true, manifestPath: path.resolve(manifestPath), expected, running };
+  const status = provenance(true, expected);
+  if (status.runtimeStale) {
+    throw controlProtocolError(
+      "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH",
+      `installed ${status.installedGitCommit || "unknown"} does not match expected ${status.expectedGitCommit}`
+    );
+  }
+  return { ok: true, verified: true, manifestPath: path.resolve(manifestPath), expected, running, ...status };
 }
 
 module.exports = {

@@ -321,6 +321,16 @@ function deriveNextObligation(state) {
         code: String(recoveryObligation.errorCode || "RECOVERY_EXTERNAL_BLOCKER"),
         fingerprint: recoveryFingerprint,
       };
+    } else if (recoveryStatus === "phase_budget_checkpoint_required") {
+      if (recoveryToolName) {
+        requiredName = recoveryToolName;
+        requiredArgs = recoveryToolArgs;
+        retryValue = "once";
+      } else {
+        disposition = "await_user";
+        retryValue = "forbidden";
+        blocker = { code: "RECOVERY_REQUIRED_TOOL_MISSING", fingerprint: recoveryFingerprint };
+      }
     } else if (repoAuditRequired && repoAuditStatus === "inventory_overflow") {
       disposition = "workflow_stop";
       retryValue = "forbidden";
@@ -375,7 +385,6 @@ function deriveNextObligation(state) {
       "repair_planning_required",
       "revalidate_required",
       "checkpoint_rebase_required",
-      "phase_budget_checkpoint_required",
     ].includes(recoveryStatus)) {
       if (recoveryToolName) {
         requiredName = recoveryToolName;
