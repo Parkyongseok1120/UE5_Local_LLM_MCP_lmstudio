@@ -585,9 +585,9 @@ def build(source: Path, output: Path, zip_path: Path | None, *, include_index: b
         zip_path = _validate_destination(zip_path, source)
         if _within(zip_path, output):
             raise ValueError("zip path must not be inside the staging directory")
-    source_git_commit = _assert_source_tree_matches_head(source)
     if not (source / "install.py").is_file():
         raise FileNotFoundError(f"integrated installer not found under source: {source}")
+    source_git_commit = _assert_source_tree_matches_head(source)
     missing_required = [
         relative for relative in REQUIRED_RUNTIME_FILES
         if not (source / relative).is_file()

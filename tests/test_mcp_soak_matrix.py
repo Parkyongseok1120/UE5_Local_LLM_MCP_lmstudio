@@ -138,7 +138,8 @@ def test_rag_repeated_health_calls(rag_env: dict[str, str], tmp_path: Path) -> N
             assert resp["result"].get("isError") is not True
             structured = resp["result"].get("structuredContent") or {}
             assert structured.get("okForChat") is False
-            assert structured.get("chatAction") == "stop_and_report_rag_rebuild_required"
+            assert structured.get("chatAction") == "stop_and_select_active_project"
+            assert structured.get("errorCode") == "RAG_PROJECT_UNBOUND"
             observed_health.append(
                 (
                     structured.get("okForChat"),
