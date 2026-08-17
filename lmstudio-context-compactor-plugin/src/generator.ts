@@ -93,18 +93,82 @@ type ModelFenceSnapshot = {
   loadConfigObservable: false;
 };
 
+type ModelFenceCaptureOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  timeoutCode?: string;
+};
+
+function modelFenceWaitError(code: string, elapsedMs: number): Error {
+  const error: any = new Error(`${code} after ${Math.max(0, Math.floor(elapsedMs))}ms`);
+  error.code = code;
+  error.elapsedMs = Math.max(0, Math.floor(elapsedMs));
+  return error;
+}
+
 async function captureModelFence(
   model: any,
   resolvedTargetModel: string,
   contextLength: number,
+  options: ModelFenceCaptureOptions = {},
 ): Promise<ModelFenceSnapshot> {
   let info: any = null;
   if (typeof model?.getModelInfo === "function") {
+    const startedAt = performance.now();
+    const timeoutMs = Math.max(0, Number(options.timeoutMs || 0));
+    const signal = options.signal;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let abortListener: (() => void) | null = null;
+    const modelInfoResult = Promise.resolve()
+      .then(() => model.getModelInfo())
+      .then(
+        (value) => ({ available: true, value }),
+        () => ({ available: false, value: null }),
+      );
+    const boundary = new Promise<never>((_resolve, reject) => {
+      if (signal && typeof signal.addEventListener === "function") {
+        abortListener = () => reject(
+          signal.reason instanceof Error
+            ? signal.reason
+            : modelFenceWaitError("MODEL_FENCE_ABORTED", performance.now() - startedAt),
+        );
+        if (signal.aborted) {
+          abortListener();
+          return;
+        }
+        signal.addEventListener("abort", abortListener, { once: true });
+      }
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => reject(
+          modelFenceWaitError(
+            String(options.timeoutCode || "MODEL_FENCE_TIMEOUT"),
+            performance.now() - startedAt,
+          ),
+        ), timeoutMs);
+      }
+    });
     try {
-      info = await model.getModelInfo();
-    } catch {
-      // The public SDK does not expose load config and a dynamic model handle
-      // can temporarily lose its instance. Identifier fencing remains active.
+      const observed = await Promise.race([modelInfoResult, boundary]);
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : modelFenceWaitError("MODEL_FENCE_ABORTED", performance.now() - startedAt);
+      }
+      const elapsedMs = performance.now() - startedAt;
+      if (timeoutMs > 0 && elapsedMs >= timeoutMs) {
+        throw modelFenceWaitError(
+          String(options.timeoutCode || "MODEL_FENCE_TIMEOUT"),
+          elapsedMs,
+        );
+      }
+      if (observed.available) info = observed.value;
+      // Only an actual SDK lookup failure falls back to identifier fencing.
+      // Abort and timeout are raised by the independent boundary promise.
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (abortListener && signal && typeof signal.removeEventListener === "function") {
+        signal.removeEventListener("abort", abortListener);
+      }
     }
   }
   const identifier = String(
@@ -874,6 +938,10 @@ type PredictionSupervisionOptions = {
   wallClockMs?: number;
   noProgressMs?: number;
   getLastProgressAt?: () => number;
+  beforeCancel?: () => void;
+  onResultSettled?: () => void;
+  failurePromise?: Promise<never>;
+  getFailure?: () => unknown;
 };
 
 function predictionSupervisorError(code: string, elapsedMs: number): Error {
@@ -968,25 +1036,37 @@ async function predictionResultWithSupervision(
 ): Promise<any> {
   guardGeneratorAbort(ctl);
   const signal = (ctl as any)?.abortSignal;
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const wallClockMs = Math.max(0, Number(options.wallClockMs || 0));
   const noProgressMs = Math.max(0, Number(options.noProgressMs || 0));
   const getLastProgressAt = options.getLastProgressAt || (() => startedAt);
   let abortListener: (() => void) | null = null;
   let wallClockTimer: ReturnType<typeof setTimeout> | null = null;
   let noProgressTimer: ReturnType<typeof setInterval> | null = null;
+  let cancellationStarted = false;
+  const cancelPredictionOnce = () => {
+    if (cancellationStarted) return;
+    cancellationStarted = true;
+    try {
+      options.beforeCancel?.();
+    } catch {
+      // Callback invalidation is best-effort here; backend cancellation and
+      // the supervisor error must still be delivered exactly once.
+    }
+    try {
+      Promise.resolve(prediction?.cancel?.()).catch(() => {});
+    } catch {
+      // The supervisor still rejects this generator even if the backend's
+      // cancellation hook is already closed or throws synchronously.
+    }
+  };
   const cancellationResult = new Promise<never>((_resolve, reject) => {
-    let cancellationStarted = false;
     const cancelAndReject = (error: Error) => {
       if (cancellationStarted) return;
-      cancellationStarted = true;
-      try {
-        Promise.resolve(prediction?.cancel?.()).catch(() => {});
-      } catch {
-        // The supervisor still rejects this generator even if the backend's
-        // cancellation hook is already closed or throws synchronously.
-      }
+      // Settle the supervisor failure before backend cancel can synchronously
+      // resolve prediction.result(). The rejection microtask must win the race.
       reject(error);
+      cancelPredictionOnce();
     };
     if (signal && typeof signal.addEventListener === "function") {
       abortListener = () => cancelAndReject(
@@ -996,13 +1076,13 @@ async function predictionResultWithSupervision(
     }
     if (wallClockMs > 0) {
       wallClockTimer = setTimeout(() => cancelAndReject(
-        predictionSupervisorError("PREDICTION_WALL_CLOCK_EXCEEDED", Date.now() - startedAt),
+        predictionSupervisorError("PREDICTION_WALL_CLOCK_EXCEEDED", performance.now() - startedAt),
       ), wallClockMs);
     }
     if (noProgressMs > 0) {
       const pollMs = Math.max(10, Math.min(1000, Math.floor(noProgressMs / 4)));
       noProgressTimer = setInterval(() => {
-        const stalledMs = Date.now() - Number(getLastProgressAt() || startedAt);
+        const stalledMs = performance.now() - Number(getLastProgressAt() || startedAt);
         if (stalledMs >= noProgressMs) {
           cancelAndReject(predictionSupervisorError("PREDICTION_NO_PROGRESS_EXCEEDED", stalledMs));
         }
@@ -1010,7 +1090,63 @@ async function predictionResultWithSupervision(
     }
   });
   try {
-    return await Promise.race([Promise.resolve(prediction.result()), cancellationResult]);
+    const callbackFailureResult = options.failurePromise
+      ? options.failurePromise.catch((error) => {
+        cancelPredictionOnce();
+        throw error;
+      })
+      : new Promise<never>(() => {});
+    let rawPredictionResult: unknown;
+    try {
+      rawPredictionResult = prediction.result();
+    } catch (error) {
+      options.onResultSettled?.();
+      throw error;
+    }
+    const predictionCompletion = Promise.resolve(rawPredictionResult).then(
+      (value) => {
+        options.onResultSettled?.();
+        return value;
+      },
+      (error) => {
+        options.onResultSettled?.();
+        throw error;
+      },
+    );
+    const result = await Promise.race([
+      predictionCompletion,
+      cancellationResult,
+      callbackFailureResult,
+    ]);
+    // A backend may register on the shared AbortSignal before the supervisor
+    // and resolve result() from that listener. Abort must still dominate even
+    // when its fulfillment reaction was queued before our rejection reaction.
+    if (signal?.aborted) {
+      cancelPredictionOnce();
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error("Generation aborted");
+    }
+    const callbackFailure = options.getFailure?.();
+    if (callbackFailure) {
+      cancelPredictionOnce();
+      throw callbackFailure;
+    }
+    // A resolved Promise microtask can run before overdue timer callbacks when
+    // the event loop was blocked. Recheck both hard deadlines synchronously
+    // before accepting output, then cancel exactly once on either violation.
+    const completedAt = performance.now();
+    const elapsedMs = completedAt - startedAt;
+    if (wallClockMs > 0 && elapsedMs >= wallClockMs) {
+      cancelPredictionOnce();
+      throw predictionSupervisorError("PREDICTION_WALL_CLOCK_EXCEEDED", elapsedMs);
+    }
+    const stalledMs = completedAt - Number(getLastProgressAt() || startedAt);
+    if (noProgressMs > 0 && stalledMs >= noProgressMs) {
+      cancelPredictionOnce();
+      throw predictionSupervisorError("PREDICTION_NO_PROGRESS_EXCEEDED", stalledMs);
+    }
+    return result;
   } finally {
     if (wallClockTimer) clearTimeout(wallClockTimer);
     if (noProgressTimer) clearInterval(noProgressTimer);
@@ -3289,10 +3425,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   }
 
   const contextLength = await model.getContextLength();
+  const modelFenceTimeoutMs = finiteNumber(
+    configValue(ctl, "predictionWallClockSeconds", 180), 180, 5, 1800,
+  ) * 1000;
   const transactionModelFence = await captureModelFence(
     model,
     resolvedTargetModel,
     contextLength,
+    { signal: (ctl as any)?.abortSignal, timeoutMs: modelFenceTimeoutMs },
   );
   if (isQwen38_27b(resolvedTargetModel) && !transactionModelFence.instanceReference) {
     const error: any = new Error(
@@ -4915,7 +5055,22 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     // reused by a bounded repair prediction in the same generator turn.
     const callbackFsm = createToolCallCallbackFsm();
     const predictionStartedAt = Date.now();
+    const predictionWallClockStartedAt = performance.now();
+    const predictionWallClockMs = Number(config.predictionWallClockSeconds) * 1000;
+    const predictionDeadlineAt = predictionWallClockStartedAt + predictionWallClockMs;
+    const remainingPredictionWallClockMs = () => {
+      const now = performance.now();
+      const remainingMs = predictionDeadlineAt - now;
+      if (remainingMs <= 0) {
+        throw predictionSupervisorError(
+          "PREDICTION_WALL_CLOCK_EXCEEDED",
+          now - predictionWallClockStartedAt,
+        );
+      }
+      return remainingMs;
+    };
     let lastSemanticProgressAt = predictionStartedAt;
+    let lastSemanticProgressMonotonicAt = predictionWallClockStartedAt;
     let lastInferenceActivityAt = predictionStartedAt;
     const eventStartIndex = events.length;
     const requestStartIndex = requests.length;
@@ -4926,6 +5081,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       const now = Date.now();
       lastInferenceActivityAt = now;
       lastSemanticProgressAt = now;
+      lastSemanticProgressMonotonicAt = performance.now();
     };
     let lastVisibleProgressAt = predictionStartedAt;
     const heartbeatIntervalMs = Number(config.predictionHeartbeatSeconds) * 1000;
@@ -4949,11 +5105,37 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     if (config.streamReasoningProgress && heartbeatIntervalMs > 0) {
       heartbeat = setInterval(emitHeartbeatIfDue, Math.min(1000, heartbeatIntervalMs));
     }
+    let attemptCallbacksActive = true;
+    const attemptCallbacksAreActive = () => Boolean(
+      attemptCallbacksActive && !(ctl as any)?.abortSignal?.aborted
+    );
+    let attemptCallbackFailure: unknown = null;
+    let rejectAttemptCallbackFailure: (error: unknown) => void = () => {};
+    const attemptCallbackFailurePromise = new Promise<never>((_resolve, reject) => {
+      rejectAttemptCallbackFailure = reject;
+    });
+    const deferAttemptCallback = (callback: () => void) => {
+      queueMicrotask(() => {
+        if (!attemptCallbacksAreActive()) return;
+        try {
+          callback();
+        } catch (error) {
+          attemptCallbackFailure = error;
+          attemptCallbacksActive = false;
+          rejectAttemptCallbackFailure(error);
+        }
+      });
+    };
     try {
       const predictionModelFence = await captureModelFence(
         model,
         resolvedTargetModel,
         contextLength,
+        {
+          signal: (ctl as any)?.abortSignal,
+          timeoutMs: remainingPredictionWallClockMs(),
+          timeoutCode: "PREDICTION_WALL_CLOCK_EXCEEDED",
+        },
       );
       if (!modelFencesMatch(transactionModelFence, predictionModelFence)) {
         throw modelFenceChangedError(transactionModelFence, predictionModelFence);
@@ -4980,82 +5162,135 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         contextOverflowPolicy: "stopAtLimit",
         signal: ctl.abortSignal,
         onPredictionFragment(fragment: any) {
-          const reasoningType = String(fragment?.reasoningType || "none");
-          // Private reasoning is inference activity only. Final text and tool
-          // JSON reset this prediction's serialization watchdog, but neither
-          // advances authoritative workflow state before the atomic commit.
-          const observedTokens = Math.max(0, Number(fragment?.tokensCount || 0));
-          if (reasoningType === "none") {
-            // Final-answer bytes are committed only after the prediction
-            // finishes, but their arrival is still real serialization
-            // progress for the prediction watchdog.  The wall-clock budget
-            // remains the hard bound on a backend that trickles output.
-            if (observedTokens > 0 || String(fragment?.content || "").length > 0) {
-              markSemanticProgress();
+          deferAttemptCallback(() => {
+            const reasoningType = String(fragment?.reasoningType || "none");
+            // Private reasoning is inference activity only. Final text and tool
+            // JSON reset this prediction's serialization watchdog, but neither
+            // advances authoritative workflow state before the atomic commit.
+            const observedTokens = Math.max(0, Number(fragment?.tokensCount || 0));
+            if (reasoningType === "none") {
+              // Final-answer bytes are committed only after the prediction
+              // finishes, but their arrival is still real serialization
+              // progress for the prediction watchdog.  The wall-clock budget
+              // remains the hard bound on a backend that trickles output.
+              if (observedTokens > 0 || String(fragment?.content || "").length > 0) {
+                markSemanticProgress();
+              } else {
+                markInferenceActivity();
+              }
+              finalTokensObserved += observedTokens;
             } else {
               markInferenceActivity();
+              reasoningTokensObserved += observedTokens;
             }
-            finalTokensObserved += observedTokens;
-          } else {
-            markInferenceActivity();
-            reasoningTokensObserved += observedTokens;
-          }
-          if (
-            config.streamReasoningProgress
-            && String(fragment?.reasoningType || "none") !== "none"
-          ) {
-            lastVisibleProgressAt = Date.now();
-          }
-          recordEvent({
-            kind: "fragment",
-            content: String(fragment.content || ""),
-            opts: fragmentOptions(fragment),
+            if (
+              config.streamReasoningProgress
+              && String(fragment?.reasoningType || "none") !== "none"
+            ) {
+              lastVisibleProgressAt = Date.now();
+            }
+            recordEvent({
+              kind: "fragment",
+              content: String(fragment.content || ""),
+              opts: fragmentOptions(fragment),
+            });
           });
         },
         onToolCallRequestStart(callId: number, info: any) {
-          if (!callbackFsm.start(callId, info?.toolCallId)) return;
-          markSemanticProgress();
-          recordEvent({ kind: "start", callId, toolCallId: info?.toolCallId });
+          deferAttemptCallback(() => {
+            if (!callbackFsm.start(callId, info?.toolCallId)) return;
+            markSemanticProgress();
+            recordEvent({ kind: "start", callId, toolCallId: info?.toolCallId });
+          });
         },
         onToolCallRequestNameReceived(callId: number, name: string) {
-          if (!callbackFsm.name(callId, name)) return;
-          markSemanticProgress();
-          recordEvent({ kind: "name", callId, name });
+          deferAttemptCallback(() => {
+            if (!callbackFsm.name(callId, name)) return;
+            markSemanticProgress();
+            recordEvent({ kind: "name", callId, name });
+          });
         },
         onToolCallRequestArgumentFragmentGenerated(callId: number, content: string) {
-          if (String(content || "").length > 0) markSemanticProgress();
-          else markInferenceActivity();
-          toolJsonCharactersObserved += String(content || "").length;
-          recordEvent({ kind: "args", callId, content });
+          deferAttemptCallback(() => {
+            if (String(content || "").length > 0) markSemanticProgress();
+            else markInferenceActivity();
+            toolJsonCharactersObserved += String(content || "").length;
+            recordEvent({ kind: "args", callId, content });
+          });
         },
         onToolCallRequestEnd(callId: number, info: any) {
-          const rawRequest = info?.toolCallRequest || {};
-          const request = enrichToolRequestControl(
-            rawRequest,
-            sessionId,
-            nextCheckpoint,
-            authoritativeGoal,
-            modelFacingToolDefinitions,
-          );
-          if (!callbackFsm.end(callId, request)) return;
-          markSemanticProgress();
-          if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
-            replaceBufferedArgumentFragments(events, callId, request.arguments);
-          }
-          requests.push({ callId, request });
-          recordEvent({ kind: "end", callId, request });
+          deferAttemptCallback(() => {
+            const rawRequest = info?.toolCallRequest || {};
+            const request = enrichToolRequestControl(
+              rawRequest,
+              sessionId,
+              nextCheckpoint,
+              authoritativeGoal,
+              modelFacingToolDefinitions,
+            );
+            if (!callbackFsm.end(callId, request)) return;
+            markSemanticProgress();
+            if (request !== rawRequest && (toolControlPlaneEnforced || bufferUntilPredictionComplete)) {
+              replaceBufferedArgumentFragments(events, callId, request.arguments);
+            }
+            requests.push({ callId, request });
+            recordEvent({ kind: "end", callId, request });
+          });
         },
         onToolCallRequestFailure(callId: number, error: Error) {
-          if (!callbackFsm.failure(callId, error)) return;
-          markSemanticProgress();
-          recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
+          deferAttemptCallback(() => {
+            if (!callbackFsm.failure(callId, error)) return;
+            markSemanticProgress();
+            recordEvent({ kind: "failure", callId, error: String(error?.message || error) });
+          });
         },
       });
+      // Model-fence verification happens after predictionStartedAt but before
+      // the backend prediction is supervised. A loaded runner can delay that
+      // verification longer than the semantic-silence budget. Anchor the
+      // watchdog at the moment supervision can actually observe callbacks so
+      // pre-response setup latency cannot cancel valid tool serialization.
+      const predictionSupervisionStartedAt = performance.now();
+      let supervisionWallClockMs: number;
+      try {
+        guardGeneratorAbort(ctl);
+        supervisionWallClockMs = remainingPredictionWallClockMs();
+      } catch (error) {
+        // respond() is normally synchronous and cheap, but a hostile or loaded
+        // backend can return its handle only after the attempt deadline. Once
+        // the handle exists, cancel it before propagating that boundary error.
+        attemptCallbacksActive = false;
+        try {
+          Promise.resolve(prediction?.cancel?.()).catch(() => {});
+        } catch {
+          // Preserve the original deadline/abort error.
+        }
+        throw error;
+      }
       const predictionResult: any = await predictionResultWithSupervision(prediction, ctl, {
-        wallClockMs: Number(config.predictionWallClockSeconds) * 1000,
+        wallClockMs: supervisionWallClockMs,
         noProgressMs: Number(config.predictionNoProgressSeconds) * 1000,
-        getLastProgressAt: () => lastSemanticProgressAt,
+        failurePromise: attemptCallbackFailurePromise,
+        getFailure: () => attemptCallbackFailure,
+        beforeCancel: () => {
+          // Some backends synchronously re-enter stream callbacks from their
+          // cancel hook. Close the attempt before invoking backend cancel.
+          attemptCallbacksActive = false;
+        },
+        onResultSettled: () => {
+          // The first fulfillment/rejection reaction closes the attempt before
+          // any callback queued later in that same backend task can execute.
+          attemptCallbacksActive = false;
+        },
+        getLastProgressAt: () => Math.max(
+          predictionSupervisionStartedAt,
+          lastSemanticProgressMonotonicAt,
+        ),
       });
+      // A backend may still invoke queued callbacks after result() settles or
+      // cancel() returns. Close this attempt before any post-result awaits so
+      // stale output can never enter a later retry's shared buffers.
+      attemptCallbacksActive = false;
       // setInterval may be delayed behind the prediction completion callback
       // on a loaded Windows runner. Enforce the absolute heartbeat deadline
       // once more before accepting completed output.
@@ -5070,22 +5305,32 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
         model,
         resolvedTargetModel,
         contextLength,
+        {
+          signal: (ctl as any)?.abortSignal,
+          timeoutMs: remainingPredictionWallClockMs(),
+          timeoutCode: "PREDICTION_WALL_CLOCK_EXCEEDED",
+        },
       );
       if (!modelFencesMatch(predictionModelFence, completedModelFence)) {
         throw modelFenceChangedError(predictionModelFence, completedModelFence);
       }
       return String(predictionResult?.stats?.stopReason || "");
     } catch (error: any) {
+      attemptCallbacksActive = false;
+      // Output is attempt-local until every boundary check succeeds. Discard
+      // it for supervisor errors, aborts, callback FSM failures, and any other
+      // exceptional exit so a retry can never inherit stale buffered output.
+      events.splice(eventStartIndex);
+      requests.splice(requestStartIndex);
       const code = String(error?.code || "");
       if (
         code === "PREDICTION_WALL_CLOCK_EXCEEDED"
         || code === "PREDICTION_NO_PROGRESS_EXCEEDED"
         || code === "MODEL_INSTANCE_CHANGED"
+        || code === "MODEL_FENCE_TIMEOUT"
       ) {
         // Every generated event from the cancelled prediction is uncommitted.
         // Retain only output prepared before this bounded prediction attempt.
-        events.splice(eventStartIndex);
-        requests.splice(requestStartIndex);
         nextCheckpoint.predictionActivity = {
           version: 1,
           inferenceActivityAt: new Date(lastInferenceActivityAt).toISOString(),
@@ -5099,12 +5344,12 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           sessionId,
           nextCheckpoint,
           requireCheckpointPersistence,
-          code === "MODEL_INSTANCE_CHANGED"
+          code === "MODEL_INSTANCE_CHANGED" || code === "MODEL_FENCE_TIMEOUT"
             ? "prediction_model_fence_rejected"
             : "prediction_supervisor_cancelled",
         );
         await appendEventBestEffort(sessionId, {
-          type: code === "MODEL_INSTANCE_CHANGED"
+          type: code === "MODEL_INSTANCE_CHANGED" || code === "MODEL_FENCE_TIMEOUT"
             ? "prediction_model_fence_rejected"
             : "prediction_supervisor_cancelled",
           at: new Date().toISOString(),
@@ -5117,7 +5362,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
           toolJsonCharactersObserved,
           inferenceActivityAt: nextCheckpoint.predictionActivity.inferenceActivityAt,
           semanticProgressAt: nextCheckpoint.predictionActivity.semanticProgressAt,
-          ...(code === "MODEL_INSTANCE_CHANGED" ? {
+          ...(code === "MODEL_INSTANCE_CHANGED" || code === "MODEL_FENCE_TIMEOUT" ? {
             expectedModelFence: error?.expectedModelFence || transactionModelFence,
             actualModelFence: error?.actualModelFence || null,
           } : {}),

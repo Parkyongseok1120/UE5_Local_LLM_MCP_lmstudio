@@ -93,7 +93,7 @@ test("prediction supervisor treats heartbeat-free semantic silence as no progres
     result() { return new Promise(() => {}); },
   };
   const ctl = { abortSignal: new AbortController().signal };
-  const lastProgressAt = Date.now();
+  const lastProgressAt = performance.now();
 
   await assert.rejects(
     predictionResultWithSupervision(prediction, ctl, {
@@ -106,6 +106,163 @@ test("prediction supervisor treats heartbeat-free semantic silence as no progres
   assert.equal(cancelCount, 1);
 });
 
+test("prediction supervisor rejects completion after a blocked event loop exceeds wall clock", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  let cancelCount = 0;
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() {
+      const blockedUntil = Date.now() + 60;
+      while (Date.now() < blockedUntil) { /* deterministic overdue completion */ }
+      return Promise.resolve({ stats: { stopReason: "stop" } });
+    },
+  };
+
+  await assert.rejects(
+    predictionResultWithSupervision(prediction, {
+      abortSignal: new AbortController().signal,
+    }, { wallClockMs: 20 }),
+    (error) => error?.code === "PREDICTION_WALL_CLOCK_EXCEEDED",
+  );
+  assert.equal(cancelCount, 1);
+});
+
+test("prediction supervisor rejects completion after a blocked event loop exceeds semantic silence", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  let cancelCount = 0;
+  const lastProgressAt = performance.now();
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() {
+      const blockedUntil = Date.now() + 60;
+      while (Date.now() < blockedUntil) { /* deterministic overdue completion */ }
+      return Promise.resolve({ stats: { stopReason: "stop" } });
+    },
+  };
+
+  await assert.rejects(
+    predictionResultWithSupervision(prediction, {
+      abortSignal: new AbortController().signal,
+    }, {
+      wallClockMs: 1000,
+      noProgressMs: 20,
+      getLastProgressAt: () => lastProgressAt,
+    }),
+    (error) => error?.code === "PREDICTION_NO_PROGRESS_EXCEEDED",
+  );
+  assert.equal(cancelCount, 1);
+});
+
+test("prediction supervisor duration is immune to wall-clock jumps", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  const originalDateNow = Date.now;
+  let cancelCount = 0;
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() {
+      return new Promise((resolve) => setTimeout(() => {
+        Date.now = () => originalDateNow() + 60_000;
+        resolve({ stats: { stopReason: "stop" } });
+      }, 5));
+    },
+  };
+  try {
+    const result = await predictionResultWithSupervision(prediction, {
+      abortSignal: new AbortController().signal,
+    }, { wallClockMs: 1000 });
+    assert.equal(result.stats.stopReason, "stop");
+    assert.equal(cancelCount, 0);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("prediction supervisor abort wins when a backend listener resolves result first", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  const controller = new AbortController();
+  const reason = Object.assign(new Error("GUI_STOP"), { code: "GUI_STOP" });
+  let cancelCount = 0;
+  let beforeCancelCount = 0;
+  let resolveResult;
+  const result = new Promise((resolve) => { resolveResult = resolve; });
+  // Simulate the backend listener registered before the supervisor sees the
+  // same signal. Its fulfillment reaction is queued first on abort.
+  controller.signal.addEventListener("abort", () => {
+    resolveResult({ stats: { stopReason: "userStoppedFromBackendSignal" } });
+  }, { once: true });
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() { return result; },
+  };
+  setTimeout(() => controller.abort(reason), 10);
+
+  await assert.rejects(
+    predictionResultWithSupervision(prediction, { abortSignal: controller.signal }, {
+      wallClockMs: 1000,
+      beforeCancel: () => { beforeCancelCount += 1; },
+    }),
+    (error) => error === reason,
+  );
+  assert.equal(beforeCancelCount, 1);
+  assert.equal(cancelCount, 1);
+});
+
+test("prediction supervisor cleans timers when result throws synchronously", async () => {
+  const { predictionResultWithSupervision } = require("../dist/generator.js");
+  const expected = new Error("SYNC_RESULT_THROW");
+  let cancelCount = 0;
+  let settledCount = 0;
+  const prediction = {
+    cancel() { cancelCount += 1; },
+    result() { throw expected; },
+  };
+
+  await assert.rejects(
+    predictionResultWithSupervision(prediction, {
+      abortSignal: new AbortController().signal,
+    }, {
+      wallClockMs: 20,
+      onResultSettled: () => { settledCount += 1; },
+    }),
+    (error) => error === expected,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(settledCount, 1);
+  assert.equal(cancelCount, 0);
+});
+
+test("model fence wait propagates abort instead of hanging or falling back", async () => {
+  const { captureModelFence } = require("../dist/generator.js");
+  const controller = new AbortController();
+  const reason = Object.assign(new Error("cancel model fence"), { code: "TEST_ABORT" });
+  const model = {
+    identifier: "pending-model",
+    getModelInfo() { return new Promise(() => {}); },
+  };
+  setTimeout(() => controller.abort(reason), 20);
+
+  await assert.rejects(
+    captureModelFence(model, model.identifier, 4096, {
+      signal: controller.signal,
+      timeoutMs: 1000,
+    }),
+    (error) => error === reason && error?.code === "TEST_ABORT",
+  );
+});
+
+test("model fence wait has a hard timeout for a pending SDK lookup", async () => {
+  const { captureModelFence } = require("../dist/generator.js");
+  const model = {
+    identifier: "pending-model",
+    getModelInfo() { return new Promise(() => {}); },
+  };
+
+  await assert.rejects(
+    captureModelFence(model, model.identifier, 4096, { timeoutMs: 20 }),
+    (error) => error?.code === "MODEL_FENCE_TIMEOUT",
+  );
+});
+
 test("generator watchdog accepts tool serialization progress beyond the initial silence window", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-tool-progress-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -116,6 +273,9 @@ test("generator watchdog accepts tool serialization progress beyond the initial 
     const model = {
       identifier: "tool-progress-test-model",
       async getModelInfo() {
+        // The prediction fence is intentionally slower than the watchdog
+        // silence window. Supervision starts only after this setup completes.
+        await new Promise((resolve) => setTimeout(resolve, 60));
         return { identifier: this.identifier, instanceReference: "tool-progress-instance" };
       },
       async applyPromptTemplate() { return "formatted"; },
@@ -175,6 +335,200 @@ test("generator watchdog accepts tool serialization progress beyond the initial 
     assert.equal(emitted.find((event) => event.kind === "end").request.name, "read_file");
     const activity = activeCheckpoint(stateRoot).predictionActivity;
     assert.equal(activity.semanticProgressAt, activity.inferenceActivityAt);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("cancelled prediction callbacks cannot leak into a later effort retry", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-late-callback-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    let calls = 0;
+    let cancelCount = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "late-callback-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        calls += 1;
+        if (calls === 1) {
+          setTimeout(() => opts.onPredictionFragment({
+            content: "OLD_CANCELLED_OUTPUT",
+            tokensCount: 1,
+            reasoningType: "none",
+          }), 65);
+          return {
+            cancel() {
+              cancelCount += 1;
+              opts.onPredictionFragment({
+                content: "SYNC_CANCEL_REASONING",
+                tokensCount: 1,
+                reasoningType: "reasoning",
+              });
+            },
+            result() { return new Promise(() => {}); },
+          };
+        }
+        let tick = 0;
+        let interval;
+        const result = new Promise((resolve) => {
+          interval = setInterval(() => {
+            tick += 1;
+            opts.onPredictionFragment({
+              content: `FRESH_${tick}`,
+              tokensCount: 1,
+              reasoningType: "none",
+            });
+            if (tick === 5) {
+              clearInterval(interval);
+              resolve({ stats: { stopReason: "stop" } });
+            }
+          }, 20);
+        });
+        return {
+          cancel() { cancelCount += 1; clearInterval(interval); },
+          result() { return result; },
+        };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "Summarize the current status.");
+
+    await generate(controllerFor(model, {
+      reasoningEffort: "xhigh",
+      predictionNoProgressSeconds: 0.03,
+      predictionWallClockSeconds: 1,
+      streamReasoningProgress: true,
+      bufferUntilPredictionComplete: true,
+      rejectTruncatedPredictions: true,
+    }, stateRoot, emitted, []), history);
+
+    assert.equal(calls, 2);
+    assert.equal(cancelCount, 1);
+    const committedText = emitted
+      .filter((event) => event.kind === "fragment")
+      .map((event) => String(event.content || ""))
+      .join("");
+    assert.doesNotMatch(committedText, /OLD_CANCELLED_OUTPUT/);
+    assert.doesNotMatch(committedText, /SYNC_CANCEL_REASONING/);
+    assert.match(committedText, /FRESH_1/);
+    assert.match(committedText, /FRESH_5/);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("callbacks invoked in the same task after result settlement are discarded", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-post-result-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const model = {
+      identifier: "post-result-callback-model",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "post-result-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        const result = new Promise((resolve) => setTimeout(() => {
+          resolve({ stats: { stopReason: "stop" } });
+          opts.onPredictionFragment({
+            content: "AFTER_RESULT_OUTPUT",
+            tokensCount: 1,
+            reasoningType: "none",
+          });
+          opts.onToolCallRequestStart(1, { toolCallId: "after-result-call" });
+          opts.onToolCallRequestNameReceived(1, "read_file");
+          opts.onToolCallRequestArgumentFragmentGenerated(1, '{"path":"project://AfterResult.h"}');
+          opts.onToolCallRequestEnd(1, { toolCallRequest: {
+            id: "after-result-call",
+            type: "function",
+            name: "read_file",
+            arguments: { path: "project://AfterResult.h" },
+          } });
+        }, 20));
+        return { cancel() {}, result() { return result; } };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "Explain the current status.");
+    const tools = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    }];
+
+    await generate(controllerFor(model, {
+      streamReasoningProgress: true,
+      predictionNoProgressSeconds: 1,
+      predictionWallClockSeconds: 5,
+    }, stateRoot, emitted, tools), history);
+
+    const serialized = JSON.stringify(emitted);
+    assert.doesNotMatch(serialized, /AFTER_RESULT_OUTPUT/);
+    assert.doesNotMatch(serialized, /after-result-call/);
+    assert.doesNotMatch(serialized, /AfterResult\.h/);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("prediction handle is cancelled when synchronous respond setup overruns the attempt deadline", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-respond-overrun-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let cancelCount = 0;
+    let resultCount = 0;
+    const model = {
+      identifier: "respond-overrun-model",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "respond-overrun-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        const blockedUntil = performance.now() + 5100;
+        while (performance.now() < blockedUntil) { /* synchronous backend setup */ }
+        return {
+          cancel() { cancelCount += 1; },
+          result() { resultCount += 1; return Promise.resolve({ stats: { stopReason: "stop" } }); },
+        };
+      },
+    };
+    const history = Chat.empty();
+    history.append("user", "Summarize the current status.");
+
+    await assert.rejects(
+      generate(controllerFor(model, {
+        predictionNoProgressSeconds: 1,
+        predictionWallClockSeconds: 5,
+        streamReasoningProgress: false,
+      }, stateRoot, [], []), history),
+      (error) => error?.code === "PREDICTION_WALL_CLOCK_EXCEEDED",
+    );
+    assert.equal(cancelCount, 1);
+    assert.equal(resultCount, 0);
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -475,7 +829,14 @@ test("GUI abort cancels an in-flight prediction without waiting for the backend 
       async applyPromptTemplate() { return "formatted"; },
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
-      respond() {
+      respond(_history, opts) {
+        opts.signal.addEventListener("abort", () => {
+          opts.onPredictionFragment({
+            content: "SIGNAL_ABORT_REASONING",
+            tokensCount: 1,
+            reasoningType: "reasoning",
+          });
+        }, { once: true });
         predictionStarted();
         return {
           cancel() { cancelCalled = true; },
@@ -485,7 +846,7 @@ test("GUI abort cancels an in-flight prediction without waiting for the backend 
     };
     const controller = controllerFor(
       model,
-      { requireCheckpointPersistence: false },
+      { requireCheckpointPersistence: false, streamReasoningProgress: true },
       stateRoot,
       emitted,
       [],
@@ -509,6 +870,10 @@ test("GUI abort cancels an in-flight prediction without waiting for the backend 
       /user stopped generation/,
     );
     assert.equal(cancelCalled, true);
+    assert.equal(
+      emitted.some((event) => String(event?.content || "").includes("SIGNAL_ABORT_REASONING")),
+      false,
+    );
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -4011,10 +4376,11 @@ test("stale Agent catalog fails closed after the single refresh instead of polli
 test("atomic output streams reasoning progress but withholds final text until completion", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-reasoning-progress-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  let releasePrediction;
+  let running;
   try {
     const { generate } = require("../dist/generator.js");
     const emitted = [];
-    let releasePrediction;
     let signalPredictionStarted;
     let reasoningWasImmediate = false;
     let finalWasBuffered = false;
@@ -4040,20 +4406,21 @@ test("atomic output streams reasoning progress but withholds final text until co
           reasoningType: "none",
           isStructural: false,
         });
-        reasoningWasImmediate = emitted.some(
-          (event) => event.kind === "fragment" && event.content.includes("Inspecting"),
-        );
-        finalWasBuffered = !emitted.some(
-          (event) => event.kind === "fragment" && event.content.includes("Complete"),
-        );
         signalPredictionStarted();
         return { async result() { await predictionBarrier; return { stats: { stopReason: "eosFound" } }; } };
       },
     };
     const history = Chat.empty();
     history.append("user", "inspect and explain");
-    const running = generate(controllerFor(model, {}, stateRoot, emitted, []), history);
+    running = generate(controllerFor(model, {}, stateRoot, emitted, []), history);
     await predictionStarted;
+    await Promise.resolve();
+    reasoningWasImmediate = emitted.some(
+      (event) => event.kind === "fragment" && event.content.includes("Inspecting"),
+    );
+    finalWasBuffered = !emitted.some(
+      (event) => event.kind === "fragment" && event.content.includes("Complete"),
+    );
 
     assert.equal(reasoningWasImmediate, true);
     assert.equal(finalWasBuffered, true);
@@ -4066,6 +4433,8 @@ test("atomic output streams reasoning progress but withholds final text until co
       ["Inspecting project structure...", "Complete."],
     );
   } finally {
+    releasePrediction?.();
+    await running?.catch(() => {});
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
