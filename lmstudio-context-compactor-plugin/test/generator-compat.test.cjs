@@ -1364,6 +1364,111 @@ test("empty symbol lookup cannot substitute for the sixth direct source read", a
   }
 });
 
+test("Unreal Public and Private evidence pair unlocks the completion-audit handoff", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-unreal-pair-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const ownership = { taskSessionId: "task-unreal-pair", ownerCapability: "owner-unreal-pair" };
+    const model = {
+      identifier: "unreal-pair-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_history, opts) {
+        assert.equal(opts.rawTools.force, true);
+        assert.deepEqual(opts.rawTools.tools.map((tool) => tool.function.name), [
+          "unreal_feature_intent_resolve",
+        ]);
+        opts.onToolCallRequestStart(1, { toolCallId: "feature-after-unreal-pair" });
+        opts.onToolCallRequestNameReceived(1, "unreal_feature_intent_resolve");
+        opts.onToolCallRequestArgumentFragmentGenerated(1, "{}");
+        opts.onToolCallRequestEnd(1, {
+          toolCallRequest: {
+            id: "feature-after-unreal-pair",
+            type: "function",
+            name: "unreal_feature_intent_resolve",
+            arguments: {},
+          },
+        });
+        return { async result() { return { stats: { stopReason: "toolCalls" } }; } };
+      },
+    };
+    const route = {
+      ok: true,
+      taskAuthorization: ownership,
+      toolRoute: {
+        routeHash: "route-unreal-pair",
+        phase: "planner",
+        activeTools: ["read_file", "unreal_feature_intent_resolve"],
+        selectedSlice: { sliceId: "task", files: [] },
+      },
+      requiredNextTool: "unreal_feature_intent_resolve",
+      requiredNextToolArgs: { taskAuthorization: ownership },
+      control: {
+        version: 1,
+        phase: "unreal_agent_plan",
+        status: "NeedsAction",
+        nextAction: "unreal_feature_intent_resolve",
+        nextActionIsTool: true,
+      },
+    };
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "Inspect the project and implement one incomplete feature." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "plan-unreal-pair", type: "function", name: "unreal_agent_plan", arguments: {},
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "plan-unreal-pair", name: "unreal_agent_plan", content: JSON.stringify(route),
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id: "contract-unreal-pair", type: "function", name: "evidence_first_contract", arguments: { mode: "codegen" },
+      } }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: "contract-unreal-pair", name: "evidence_first_contract", content: '{"ok":true}',
+      }] },
+    ];
+    for (const [index, filePath] of [
+      "Source/Demo/Public/RuleEngine.h",
+      "Source/Demo/Private/RuleEngine.cpp",
+      "Source/Demo/Public/GameState.h",
+      "Source/Demo/Private/GameState.cpp",
+      "Source/Demo/Public/GameMode.h",
+      "Source/Demo/Private/GameMode.cpp",
+    ].entries()) {
+      const id = `unreal-pair-read-${index}`;
+      messages.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        id, type: "function", name: "read_file", arguments: { path: filePath },
+      } }] });
+      messages.push({ role: "tool", content: [{
+        type: "toolCallResult", toolCallId: id, name: "read_file", content: '{"ok":true}',
+      }] });
+    }
+    const tools = [
+      { type: "function", function: { name: "read_file", parameters: { type: "object", properties: { path: { type: "string" } } } } },
+      { type: "function", function: { name: "unreal_feature_intent_resolve", parameters: { type: "object", properties: {} } } },
+      { type: "function", function: { name: "evidence_first_contract", parameters: { type: "object", properties: {} } } },
+    ];
+
+    await generate(controllerFor(model, {}, stateRoot, emitted, tools), Chat.from({ messages }));
+
+    assert.equal(emitted.find((event) => event.kind === "end").request.name, "unreal_feature_intent_resolve");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    const measurement = events.find((event) => event.type === "context_measurement");
+    assert.equal(measurement.directSourceFileEvidenceCount, 6);
+    assert.equal(measurement.featureIntentTargetBoundEvidenceReady, true);
+    assert.equal(measurement.featureIntentEvidenceReady, true);
+    assert.equal(measurement.featureIntentDiscoveryHandoffForced, true);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 for (const recoveryCase of [
   {
     label: "accepts an equivalent workspace-prefixed target",
@@ -7477,6 +7582,41 @@ test("low floor recovery walks a verified source directory after mapped implemen
     }],
     evidenceFacts: [],
   }, tools.filter((tool) => tool.function.name === "read_file"), "linux"), null);
+});
+
+test("target-bound source pairs bridge Unreal Public and Private module roots only", () => {
+  const { hasTargetBoundDirectSourcePair } = require("../dist/generator.js");
+
+  assert.equal(hasTargetBoundDirectSourcePair(
+    ["project://Source/Project_MJS/Public/System/ProjectGameInstance.h"],
+    ["project://Source/Project_MJS/Private/System/ProjectGameInstance.cpp"],
+    "win32",
+  ), true);
+  assert.equal(hasTargetBoundDirectSourcePair(
+    ["Plugins/Combat/Source/CombatRuntime/Public/State/CombatState.hpp"],
+    ["Plugins/Combat/Source/CombatRuntime/Private/State/CombatState.cpp"],
+    "linux",
+  ), true);
+  assert.equal(hasTargetBoundDirectSourcePair(
+    ["Source/Project_MJS/Public/System/ProjectGameInstance.h"],
+    ["Source/OtherModule/Private/System/ProjectGameInstance.cpp"],
+    "win32",
+  ), false);
+  assert.equal(hasTargetBoundDirectSourcePair(
+    ["Source/Project_MJS/Public/System/ProjectGameInstance.h"],
+    ["Source/Project_MJS/Private/System/OtherGameInstance.cpp"],
+    "win32",
+  ), false);
+  assert.equal(hasTargetBoundDirectSourcePair(
+    ["Source/Project_MJS/public/System/ProjectGameInstance.h"],
+    ["Source/Project_MJS/Private/System/ProjectGameInstance.cpp"],
+    "linux",
+  ), false);
+  assert.equal(hasTargetBoundDirectSourcePair(
+    ["Source/Project_MJS/public/System/ProjectGameInstance.h"],
+    ["Source/Project_MJS/PRIVATE/System/ProjectGameInstance.cpp"],
+    "win32",
+  ), true);
 });
 
 test("major objective changes retain no prior verbatim turns", async () => {

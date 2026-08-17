@@ -2199,7 +2199,12 @@ function selectServerOwnedFloorRecovery(
 }
 
 function directSourcePairStem(value: any, hostPlatform: string = process.platform): string {
-  return normalizeProjectSourcePath(value, hostPlatform)
+  const normalized = normalizeProjectSourcePath(value, hostPlatform);
+  const moduleVisibility = core.isWindowsHostPlatform(hostPlatform as any)
+    ? /(^|\/)(source\/[^/]+)\/(?:public|private)\//
+    : /(^|\/)(Source\/[^/]+)\/(?:Public|Private)\//;
+  return normalized
+    .replace(moduleVisibility, "$1$2/")
     .replace(/\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|m|mm|cs)$/i, "");
 }
 
