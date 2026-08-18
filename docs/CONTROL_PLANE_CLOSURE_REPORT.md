@@ -5,8 +5,8 @@
 - Baseline audited SHA: `d78e64a2be297c7b3a0fe1ecfa3cfe5939f9ddcd` on `Develop`.
 - Historical comparison SHAs: `d74bf63e0b4fbb0b317b7963df536e60e5825883` and `d16fc0519be0f217306780b466265be6ddd28cb0`.
 - The d16/d74 LM Studio transcripts and server logs supplied with the correction request were treated as primary reproduction evidence.
-- Runtime correction commit: the atomic commit containing this report; its exact SHA is recorded in the final handoff because a commit cannot embed its own hash.
-- Evidence-only documentation commit: none; implementation, tests, manifest, and report are committed atomically.
+- Runtime correction commit: `bc9836be5d89278f465be8f127d8bc8dc60def34`.
+- Evidence-only documentation commit: the final pushed HEAD records package/install and final-suite evidence; its exact SHA is reported in the final handoff because a commit cannot embed its own hash.
 - Release status: prerelease, `installer/manifest.json → portablePackage.releaseReady=false`.
 
 ## 2. Complete subsystem/file audit ledger
@@ -210,12 +210,12 @@ Final CI-equivalent results are filled only after the last runtime source change
 | Changed-boundary Python suite | 0 | 175 | 0 | 0 | 0 | 28.87s |
 | Agent `npm test` pre-final check | 0 | recorded in final run | 0 | platform skips reported separately | 0 | 15.53s |
 | Compactor `npm test` pre-final check | 0 | 308 | 0 | 0 | 0 | 19.15s |
-| `python -m pytest --tb=short -q` | Pending clean-tree rerun | Pending | Pending | Pending | 0 | Pending |
+| `python -m pytest --tb=short -q` | 0 | 2,212 | 0 | 13 | 0 | 226.33s runner / 226.88s wall |
 | Ruff E/F/W gate | 0 | All checks passed | 0 | 0 | 0 | 0.26s |
 | Protocol validator | 0 | 1 validation run | 0 | 0 | 0 | 3.04s including registry generation, TypeScript build, and diff check |
 | Agent final `npm test` | 0 | 473 | 0 | 5 | 0 | 15.25s |
 | Compactor final `npm test` | 0 | 308 | 0 | 0 | 0 | 22.51s wall / 18.90s test runner |
-| Package/installer CI-equivalent gates | Covered by full clean-tree pytest | Pending | Pending | Pending | 0 | Pending |
+| Package/installer CI-equivalent gates | 0 | Included in the 2,212-test clean-tree suite | 0 | 0 attributable | 0 | Included above |
 | `git diff --check` | 0 | n/a | 0 | 0 | 0 | <1s |
 
 ## 16. Package/install identities
@@ -228,7 +228,18 @@ Protocol identity after correction:
 - Authorization-schema hash: `02b26055411a289e57c0a2fea47acaf82f393e2b4b03ae1ccba262c1528f4430`
 - Error-catalog hash: `68f06e3d9fb738e0ef6f89b2b798739d4317e9779e16c71ae564934076cbc6b9`
 
-The physical integrated package build and installation are performed from the clean runtime commit before the final full-suite run. Their exact source SHA, archive SHA, installed manifest path, and installed component hashes are recorded in this section after that run.
+The clean runtime commit was packaged and installed manually before the final full-suite run:
+
+- Package source SHA: `bc9836be5d89278f465be8f127d8bc8dc60def34`.
+- Package inventory: 668 files, generated index excluded, forbidden inventory count 0.
+- ZIP: `%TEMP%\ue-evidence-bc9836b\Evidence-First-Integrated.zip`, 2,402,930 bytes.
+- ZIP SHA-256: `0eb3415d8db5277696ffa6adc518d98c224598b1c308b18a3d536a1580bafddc`.
+- Manual install command source: the generated package's `install.py`, FULL profile, dependency bootstrap skipped, Agent authority explicitly acknowledged, RAG rebuild omitted.
+- Install result: exit 0 in 15.57s; active project `%USERPROFILE%\Documents\Git\Project_MJS\Project_MJS.uproject`; selected Unreal Engine version 5.8 root; MCP smoke `ok:true`; Compactor installed and pinned; restart required.
+- Installed runtime manifest: `%USERPROFILE%\.lmstudio\config\control-runtime.json`, expected source commit `bc9836be5d89278f465be8f127d8bc8dc60def34`.
+- Installed Agent build hash: `64b5accccd566d2d9c8daf0aeea06fcadc976e7d4d00551b7feb7352238b8f8f` (`0.3.18`).
+- Installed RAG build hash: `3557d92c3298a671b7832bfc864a49c63e335a271cf45cf00dbaf09e9f7b583e` (`0.3.1`).
+- Installed Compactor build hash: `276d98c6dbe17452cf3f0e768b5e32891ee81ec24118e50b0e1bbc27343b5465` (`0.4.43`, installed plugin revision 89).
 
 ## 17. LM Studio E2E transcript
 
