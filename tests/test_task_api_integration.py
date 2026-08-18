@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import sys
 import time
+import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -177,6 +180,59 @@ def test_repository_audit_frontier_is_durable_and_blocks_early_synthesis(
     assert changed["analyzedCount"] == 2
     assert changed["remainingCount"] == 1
     assert changed["nextTargets"][0] == "Source/AuditProject/B.h"
+
+
+def _synthetic_audit_inventory(count: int) -> list[dict]:
+    return [
+        {
+            "path": f"Source/Audit/File{index:05d}.cpp",
+            "contentHash": hashlib.sha256(str(index).encode()).hexdigest(),
+            "lineCount": 1,
+            "status": "queued",
+            "analysisVersion": 0,
+            "coveredRanges": [],
+        }
+        for index in range(count)
+    ]
+
+
+@pytest.mark.parametrize("file_count", [0, 1, 16, 17, 32, 33, 4095, 4096, 4097])
+def test_repository_audit_inventory_is_deterministically_paginated(file_count: int) -> None:
+    ledger = task_api_module._repository_audit_ledger_from_inventory(
+        _synthetic_audit_inventory(file_count),
+        root=Path("C:/AuditProject"),
+    )
+    assert ledger["totalCount"] == file_count
+    assert ledger["overflow"] is False
+    assert len(ledger["queuedTargets"]) <= 128
+    assert len(ledger["entries"]) <= 128
+    assert ledger["pageCount"] == max(1, (file_count + 127) // 128)
+    assert ledger["status"] == ("complete" if file_count == 0 else "active")
+
+
+def test_repository_audit_advances_by_hash_bound_continuation_page() -> None:
+    inventory = _synthetic_audit_inventory(4097)
+    first = task_api_module._repository_audit_ledger_from_inventory(
+        inventory,
+        root=Path("C:/AuditProject"),
+    )
+    for entry in first["entries"].values():
+        entry.update({"status": "analyzed", "coveredRanges": [[1, 1]], "analysisVersion": 1})
+    first["status"] = "page_complete"
+    first["cursor"] = len(first["queuedTargets"])
+
+    second = task_api_module._repository_audit_ledger_from_inventory(
+        inventory,
+        root=Path("C:/AuditProject"),
+        prior=first,
+    )
+    assert second["pageIndex"] == 1
+    assert second["completedCount"] == 128
+    assert second["remainingCount"] == 4097 - 128
+    assert second["queuedTargets"][0] == "Source/Audit/File00128.cpp"
+    assert len(second["completedPages"]) == 1
+    assert len(second["completedPages"][0]["inventoryPageHash"]) == 64
+    assert len(second["completedPages"][0]["coverageHash"]) == 64
 
 
 def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(

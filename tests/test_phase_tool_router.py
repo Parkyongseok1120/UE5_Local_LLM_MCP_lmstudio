@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from phase_tool_router import (  # noqa: E402
     CONTROL_PLANE_TOOLS,
     MUTATION_TOOLS,
+    commit_control_transition,
     derive_next_obligation,
     derive_tool_route,
     selection_binding,
@@ -2411,12 +2412,17 @@ def test_consumed_last_reconstruction_candidate_does_not_loop_on_task_status() -
         "toolRoute": {"phase": "planner", "activeTools": []},
     }
 
+    before = json.loads(json.dumps(state))
     control = derive_next_obligation(state)
 
     assert control["disposition"] == "workflow_stop"
     assert control["requiredTool"] is None
     assert control["blocker"]["code"] == "EVIDENCE_FRONTIER_LOST"
-    assert state["inspectionProgress"]["frontierReconstruction"]["noBoundedSearchCandidates"] is True
+    assert state == before
+
+    committed = commit_control_transition(state)
+    assert committed["controlState"]["blocker"]["code"] == "EVIDENCE_FRONTIER_LOST"
+    assert committed["inspectionProgress"]["frontierReconstruction"]["noBoundedSearchCandidates"] is True
 
 
 def test_absent_last_reconstruction_candidate_is_consumed_without_status_loop() -> None:
@@ -2452,13 +2458,18 @@ def test_absent_last_reconstruction_candidate_is_consumed_without_status_loop() 
         "toolRoute": {"phase": "planner", "activeTools": []},
     }
 
+    before = json.loads(json.dumps(state))
     control = derive_next_obligation(state)
 
     assert control["disposition"] == "workflow_stop"
     assert control["requiredTool"] is None
     assert control["blocker"]["code"] == "EVIDENCE_FRONTIER_LOST"
-    assert state["inspectionProgress"]["remainingFrontier"] == []
-    assert state["inspectionProgress"]["frontierReconstruction"]["noBoundedSearchCandidates"] is True
+    assert state == before
+
+    committed = commit_control_transition(state)
+    assert committed["controlState"]["blocker"]["code"] == "EVIDENCE_FRONTIER_LOST"
+    assert committed["inspectionProgress"]["remainingFrontier"] == []
+    assert committed["inspectionProgress"]["frontierReconstruction"]["noBoundedSearchCandidates"] is True
 
 
 def test_new_recovery_obligation_invalidates_old_synthesis_latch(

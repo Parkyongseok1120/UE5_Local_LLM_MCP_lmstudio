@@ -18,6 +18,10 @@ test("list_directory budget blocks duplicates and window overuse, not path depth
   const dup = budget.check("proj", deep);
   assert.equal(dup.ok, false);
   assert.equal(dup.errorCode, "LIST_DIRECTORY_DUPLICATE");
+  assert.equal(dup.budgetOwner, "agent_process");
+  assert.equal(dup.budgetKind, "global_abuse_guard");
+  assert.equal(dup.persistence, "process_local");
+  assert.equal(dup.resumeAction, "search_files_or_known_file_read");
 
   assert.equal(budget.check("proj", "Source").ok, true);
   budget.commit("proj", "Source");
@@ -51,4 +55,29 @@ test("list_directory budget blocks duplicates and window overuse, not path depth
     /* ignore */
   }
   // #endregion
+});
+
+test("default directory guard has exact 23/24/25 boundaries and task isolation", () => {
+  const budget = createListDirectoryBudget();
+  for (let index = 0; index < 23; index += 1) {
+    const target = index === 0
+      ? "."
+      : index === 1
+        ? "Source/Demo/Private"
+        : index === 2
+          ? "Source/Demo/Public"
+          : `Source/Demo/Dir${index}`;
+    assert.equal(budget.check("task-a", target).ok, true);
+    budget.commit("task-a", target);
+  }
+  assert.equal(budget.check("task-a", "Source/Demo/Dir23").calls, 23);
+  budget.commit("task-a", "Source/Demo/Dir23");
+  const twentyFifth = budget.check("task-a", "Source/Demo/Dir24");
+  assert.equal(twentyFifth.ok, false);
+  assert.equal(twentyFifth.calls, 24);
+  assert.equal(twentyFifth.errorCode, "LIST_DIRECTORY_BUDGET_EXCEEDED");
+
+  const isolatedTask = budget.check("task-b", ".");
+  assert.equal(isolatedTask.ok, true);
+  assert.equal(isolatedTask.calls, 0);
 });

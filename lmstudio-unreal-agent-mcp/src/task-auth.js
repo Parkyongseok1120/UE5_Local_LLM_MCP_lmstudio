@@ -1440,23 +1440,28 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
       const analyzedCount = queuedTargets.filter(
         (candidate) => String(entries[candidate]?.status || "") === "analyzed",
       ).length;
+      const completedCount = Math.max(0, Number(audit.completedCount || 0));
+      const totalCount = Math.max(queuedTargets.length, Number(audit.totalCount || queuedTargets.length));
       let cursor = 0;
       while (
         cursor < queuedTargets.length
         && String(entries[queuedTargets[cursor]]?.status || "") === "analyzed"
       ) cursor += 1;
-      const remainingCount = Math.max(0, queuedTargets.length - analyzedCount);
+      const currentPageRemainingCount = Math.max(0, queuedTargets.length - analyzedCount);
+      const remainingCount = Math.max(0, totalCount - completedCount - analyzedCount);
       audit.entries = entries;
       audit.cursor = cursor;
-      audit.analyzedCount = analyzedCount;
+      audit.analyzedCount = completedCount + analyzedCount;
       audit.remainingCount = remainingCount;
-      audit.inventoryHash = canonicalHash(queuedTargets.map((candidate) => ({
+      audit.currentPageRemainingCount = currentPageRemainingCount;
+      audit.currentPageHash = canonicalHash(queuedTargets.map((candidate) => ({
         path: candidate,
         contentHash: String(entries[candidate]?.contentHash || ""),
       })));
-      audit.status = audit.overflow === true
-        ? "inventory_overflow"
-        : (remainingCount === 0 ? "complete" : "active");
+      audit.status = remainingCount === 0
+        ? "complete"
+        : (currentPageRemainingCount === 0 && audit.hasMorePages === true ? "page_complete" : "active");
+      audit.coverageIncomplete = audit.status !== "complete";
       audit.updatedAt = new Date().toISOString();
       state.repoAuditLedger = audit;
     }
@@ -1948,6 +1953,11 @@ function mutateRouteBudget(
             ok: false,
             errorCode: "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED",
             error: "The durable inspection directory-list budget is exhausted.",
+            budgetOwner: "python_task_state",
+            budgetKind: "durable_workflow_budget",
+            budgetPersistence: "task_state",
+            budgetResetRule: "checkpoint_then_compatible_replan",
+            budgetResumeAction: "unreal_task_checkpoint",
             control: { ...(current.controlState || {}) },
             controlEpoch: Number(current.controlEpoch || 0),
             nextAction: "unreal_task_checkpoint",
@@ -2073,6 +2083,11 @@ function mutateRouteBudget(
           ok: false,
           errorCode: "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED",
           error: "The durable inspection directory-list budget is exhausted before filesystem traversal.",
+          budgetOwner: "python_task_state",
+          budgetKind: "durable_workflow_budget",
+          budgetPersistence: "task_state",
+          budgetResetRule: "checkpoint_then_compatible_replan",
+          budgetResumeAction: "unreal_task_checkpoint",
           control: { ...(current.controlState || {}) },
           controlEpoch: Number(current.controlEpoch || 0),
           nextAction: "unreal_task_checkpoint",

@@ -118,6 +118,8 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/semantic_ambiguity.py",
     "scripts/target_resolver.py",
     "scripts/control_runtime_identity.py",
+    "scripts/control_state_registry.py",
+    "scripts/generate_control_state_registry.py",
     "scripts/control_protocol_spec.py",
     "scripts/validate_control_protocol.py",
     "scripts/phase_tool_router.py",
@@ -145,6 +147,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/write-lock-reclaim-bridge.py",
     "lmstudio-context-compactor-plugin/src/runtime-identity.js",
     "lmstudio-context-compactor-plugin/src/control-protocol-spec.js",
+    "lmstudio-context-compactor-plugin/src/control-state-registry.generated.js",
 )
 
 # The portable RAG entry points dot-source this cross-platform path/index

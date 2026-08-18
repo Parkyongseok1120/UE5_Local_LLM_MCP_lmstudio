@@ -4235,7 +4235,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ).replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
       const activeProject = getActiveProject(CONFIG_PATH);
       const conversationScope = String(args.sessionId || "").trim();
-      const budgetScope = `${conversationScope}\u0000${String(activeProject || WORKSPACE_ROOT || "workspace")}`;
+      const taskScope = String(requiredFields(args).taskSessionId || "").trim();
+      const budgetScope = `${taskScope || conversationScope || "unscoped"}\u0000${String(activeProject || WORKSPACE_ROOT || "workspace")}`;
       const budgetCheck = LIST_DIRECTORY_BUDGET.check(budgetScope, relative || ".");
       if (!budgetCheck.ok) {
         return fail(
@@ -4249,6 +4250,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             maxCallsPerWindow: budgetCheck.maxCallsPerWindow,
             pathCount: budgetCheck.pathCount,
             maxCallsPerPath: budgetCheck.maxCallsPerPath,
+            budgetOwner: budgetCheck.budgetOwner,
+            budgetKind: budgetCheck.budgetKind,
+            budgetPersistence: budgetCheck.persistence,
+            budgetResetRule: budgetCheck.resetRule,
+            budgetResumeAction: budgetCheck.resumeAction,
+            budgetScopeId: taskScope || conversationScope || "unscoped",
             agentInstruction: budgetCheck.agentInstruction,
             nextSteps: [
               "Call search_files with a focused query under this path.",

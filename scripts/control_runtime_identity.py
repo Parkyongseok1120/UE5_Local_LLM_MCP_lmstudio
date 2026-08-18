@@ -43,6 +43,7 @@ def _component_files(root: Path, component: str) -> list[Path]:
             root / "config" / "synthesis_readiness_policy.json",
             root / "config" / "control_state_machine.json",
             root / "scripts" / "control_transition_bridge.py",
+            root / "scripts" / "control_state_registry.py",
             root / "scripts" / "phase_tool_router.py",
             root / "scripts" / "synthesis_readiness.py",
             root / "scripts" / "task_api.py",
@@ -71,6 +72,7 @@ def _component_files(root: Path, component: str) -> list[Path]:
             "feature_intent_contract.py",
             "feature_intent_fast_path.py",
             "control_runtime_identity.py",
+            "control_state_registry.py",
             "control_protocol_spec.py",
             "synthesis_readiness.py",
         )

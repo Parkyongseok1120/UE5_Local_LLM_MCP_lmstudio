@@ -176,7 +176,28 @@
       "planRevision",
       "mutationGeneration",
       "records",
+      "serializedEvidence",
+      "serializedCharacterCount",
       "bundleHash"
+    ],
+    "synthesisEvidenceRecordFields": [
+      "claimId",
+      "sourcePath",
+      "contentHash",
+      "startLine",
+      "endLine",
+      "exactExcerpt",
+      "excerptDigest",
+      "coverageLevel",
+      "classification"
+    ],
+    "partialSynthesisReportFields": [
+      "Coverage: partial",
+      "Analyzed scope",
+      "Omitted scope",
+      "Stop reason",
+      "Confidence limits",
+      "Next audit slice"
     ],
     "preparedSynthesisIdentityFields": [
       "taskSessionId",
@@ -598,6 +619,7 @@
         "CONTROL_RUNTIME_VERSION_MISMATCH",
         "RECOVERY_ENVIRONMENT_BLOCKED",
         "SERVER_WORKFLOW_BLOCKED",
+        "SYNTHESIS_DELIVERY_STATE_UNCERTAIN",
         "TASK_CANCELLATION_UNCERTAIN",
         "TASK_CANCELLED",
         "TASK_FOREIGN_HEALTHY"

@@ -207,7 +207,7 @@ def _canonical_hash(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-_REPO_AUDIT_MAX_FILES = 4096
+_REPO_AUDIT_PAGE_SIZE = 128
 _REPO_AUDIT_EXTENSIONS = frozenset(
     {".h", ".hpp", ".hh", ".inl", ".c", ".cc", ".cpp", ".cxx", ".cs", ".ini"}
 )
@@ -239,12 +239,154 @@ def _repository_audit_requested(request: str, mode: str) -> bool:
     )
 
 
+def _repository_audit_ledger_from_inventory(
+    inventory: list[dict[str, Any]],
+    *,
+    root: Path,
+    prior: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project one deterministic audit page into durable task state.
+
+    The full inventory is hashed but never copied into every Node→Python
+    transition. Completed pages retain only inventory/coverage hashes and the
+    current page contains at most ``_REPO_AUDIT_PAGE_SIZE`` file records.
+    """
+
+    ordered = [dict(item) for item in inventory if isinstance(item, dict)]
+    inventory_hash = _canonical_hash(
+        [
+            {
+                "path": str(item.get("path") or ""),
+                "contentHash": str(item.get("contentHash") or ""),
+            }
+            for item in ordered
+        ]
+    )
+    previous = prior if isinstance(prior, dict) else {}
+    same_inventory = str(previous.get("inventoryHash") or "") == inventory_hash
+    page_count = max(1, (len(ordered) + _REPO_AUDIT_PAGE_SIZE - 1) // _REPO_AUDIT_PAGE_SIZE)
+    page_index = min(
+        page_count - 1,
+        max(0, int(previous.get("pageIndex") or 0)) if same_inventory else 0,
+    )
+    completed_pages = (
+        [dict(item) for item in (previous.get("completedPages") or []) if isinstance(item, dict)]
+        if same_inventory
+        else []
+    )
+    prior_entries = (
+        previous.get("entries")
+        if isinstance(previous.get("entries"), dict)
+        else {}
+    )
+
+    def page_rows(index: int) -> list[dict[str, Any]]:
+        start = index * _REPO_AUDIT_PAGE_SIZE
+        return ordered[start : start + _REPO_AUDIT_PAGE_SIZE]
+
+    def merge_page(index: int, saved: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for item in page_rows(index):
+            path_value = str(item.get("path") or "")
+            prior_item = saved.get(path_value) if isinstance(saved.get(path_value), dict) else {}
+            if (
+                str(prior_item.get("contentHash") or "") == str(item.get("contentHash") or "")
+                and str(prior_item.get("status") or "") == "analyzed"
+            ):
+                merged[path_value] = {
+                    **item,
+                    "status": "analyzed",
+                    "analysisVersion": max(1, int(previous.get("analysisVersion") or 1)),
+                    "coveredRanges": list(prior_item.get("coveredRanges") or []),
+                    "analyzedAt": str(prior_item.get("analyzedAt") or ""),
+                }
+            else:
+                merged[path_value] = dict(item)
+        return merged
+
+    entries = merge_page(page_index, prior_entries)
+    current_paths = [str(item.get("path") or "") for item in page_rows(page_index)]
+    current_analyzed = sum(
+        1 for path_value in current_paths
+        if str(entries.get(path_value, {}).get("status") or "") == "analyzed"
+    )
+    if current_paths and current_analyzed == len(current_paths) and page_index + 1 < page_count:
+        page_summary = {
+            "pageIndex": page_index,
+            "inventoryPageHash": _canonical_hash(
+                [{"path": path, "contentHash": entries[path].get("contentHash")} for path in current_paths]
+            ),
+            "coverageHash": _canonical_hash(
+                [{"path": path, "coveredRanges": entries[path].get("coveredRanges") or []} for path in current_paths]
+            ),
+            "analyzedCount": len(current_paths),
+        }
+        completed_pages = [
+            item for item in completed_pages
+            if int(item.get("pageIndex") if item.get("pageIndex") is not None else -1) != page_index
+        ]
+        completed_pages.append(page_summary)
+        completed_pages.sort(key=lambda item: int(item.get("pageIndex") or 0))
+        page_index += 1
+        entries = merge_page(page_index, {})
+        current_paths = [str(item.get("path") or "") for item in page_rows(page_index)]
+        current_analyzed = 0
+
+    completed_count = sum(int(item.get("analyzedCount") or 0) for item in completed_pages)
+    analyzed_count = min(len(ordered), completed_count + current_analyzed)
+    remaining_count = max(0, len(ordered) - analyzed_count)
+    cursor = 0
+    while cursor < len(current_paths) and str(entries.get(current_paths[cursor], {}).get("status") or "") == "analyzed":
+        cursor += 1
+    current_complete = bool(current_paths) and current_analyzed == len(current_paths)
+    status = (
+        "complete"
+        if not ordered or remaining_count == 0
+        else "page_complete"
+        if current_complete and page_index + 1 < page_count
+        else "active"
+    )
+    now = _utc_now()
+    return {
+        "version": 2,
+        "required": True,
+        "analysisVersion": max(1, int(previous.get("analysisVersion") or 1)),
+        "status": status,
+        "root": str(root),
+        "inventoryHash": inventory_hash,
+        "pageSize": _REPO_AUDIT_PAGE_SIZE,
+        "pageIndex": page_index,
+        "pageCount": page_count,
+        "hasMorePages": page_index + 1 < page_count,
+        "continuationToken": _canonical_hash({"inventoryHash": inventory_hash, "pageIndex": page_index}),
+        "queuedTargets": current_paths,
+        "entries": entries,
+        "cursor": cursor,
+        "totalCount": len(ordered),
+        "boundedCount": len(ordered),
+        "pageBoundedCount": len(current_paths),
+        "completedCount": completed_count,
+        "analyzedCount": analyzed_count,
+        "remainingCount": remaining_count,
+        "currentPageRemainingCount": max(0, len(current_paths) - current_analyzed),
+        "completedPages": completed_pages,
+        "findings": list(previous.get("findings") or [])[:1024],
+        "findingCount": int(previous.get("findingCount") or 0),
+        "overflow": False,
+        "coverageIncomplete": status != "complete",
+        "exclusions": list(previous.get("exclusions") or []),
+        "createdAt": str(previous.get("createdAt") or now),
+        "updatedAt": now,
+    }
+
+
 def _build_repository_audit_ledger(
     workspace: Path,
     *,
     request: str,
     mode: str,
     project_file: str,
+    prior: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not _repository_audit_requested(request, mode):
         return {"version": 1, "required": False, "status": "not_required"}
@@ -289,30 +431,8 @@ def _build_repository_audit_ledger(
             str(item["path"]).casefold(),
         )
     )
-    overflow = len(inventory) > _REPO_AUDIT_MAX_FILES
-    bounded = inventory[:_REPO_AUDIT_MAX_FILES]
-    entries = {str(item["path"]): item for item in bounded}
-    queued = [str(item["path"]) for item in bounded]
-    return {
-        "version": 1,
-        "required": True,
-        "analysisVersion": 1,
-        "status": "inventory_overflow" if overflow else ("active" if queued else "complete"),
-        "root": str(root),
-        "inventoryHash": _canonical_hash(
-            [{"path": item["path"], "contentHash": item["contentHash"]} for item in bounded]
-        ),
-        "queuedTargets": queued,
-        "entries": entries,
-        "cursor": 0,
-        "totalCount": len(inventory),
-        "boundedCount": len(bounded),
-        "analyzedCount": 0,
-        "remainingCount": len(bounded),
-        "findings": [],
-        "findingCount": 0,
-        "overflow": overflow,
-        "exclusions": [
+    ledger = _repository_audit_ledger_from_inventory(inventory, root=root, prior=prior)
+    ledger["exclusions"] = [
             {
                 "patterns": sorted(_REPO_AUDIT_EXCLUDED_PARTS),
                 "reason": "generated, cached, dependency, or VCS artifact",
@@ -321,10 +441,8 @@ def _build_repository_audit_ledger(
                 "patterns": ["non-source extensions outside Source/Plugins/Config"],
                 "reason": "outside correctness-relevant Unreal source/config audit scope",
             },
-        ],
-        "createdAt": _utc_now(),
-        "updatedAt": _utc_now(),
-    }
+        ]
+    return ledger
 
 
 def _refresh_repository_audit_ledger(
@@ -343,74 +461,7 @@ def _refresh_repository_audit_ledger(
         request=str(state.get("objective") or state.get("request") or ""),
         mode=str(state.get("mode") or ""),
         project_file=str(state.get("projectFile") or ""),
-    )
-    prior_entries = (
-        prior.get("entries") if isinstance(prior.get("entries"), dict) else {}
-    )
-    fresh_entries = (
-        fresh.get("entries") if isinstance(fresh.get("entries"), dict) else {}
-    )
-    analysis_version = max(1, int(prior.get("analysisVersion") or 1))
-    for path_value, entry in list(fresh_entries.items()):
-        previous = (
-            prior_entries.get(path_value)
-            if isinstance(prior_entries.get(path_value), dict)
-            else {}
-        )
-        if (
-            str(previous.get("contentHash") or "")
-            == str(entry.get("contentHash") or "")
-            and str(previous.get("status") or "") == "analyzed"
-            and int(previous.get("analysisVersion") or 0) == analysis_version
-        ):
-            fresh_entries[path_value] = {
-                **entry,
-                "status": "analyzed",
-                "analysisVersion": analysis_version,
-                "coveredRanges": list(previous.get("coveredRanges") or []),
-                "analyzedAt": str(previous.get("analyzedAt") or ""),
-            }
-    queued = [str(item) for item in (fresh.get("queuedTargets") or [])]
-    analyzed_count = sum(
-        1
-        for path_value in queued
-        if str(fresh_entries.get(path_value, {}).get("status") or "") == "analyzed"
-    )
-    cursor = 0
-    while (
-        cursor < len(queued)
-        and str(fresh_entries.get(queued[cursor], {}).get("status") or "")
-        == "analyzed"
-    ):
-        cursor += 1
-    remaining_count = max(0, len(queued) - analyzed_count)
-    removed = sorted(set(prior_entries) - set(fresh_entries))[:256]
-    exclusions = list(fresh.get("exclusions") or [])
-    if removed:
-        exclusions.append(
-            {
-                "paths": removed,
-                "reason": "removed from the current repository inventory",
-            }
-        )
-    fresh.update(
-        {
-            "analysisVersion": analysis_version,
-            "entries": fresh_entries,
-            "cursor": cursor,
-            "analyzedCount": analyzed_count,
-            "remainingCount": remaining_count,
-            "status": (
-                "inventory_overflow"
-                if fresh.get("overflow") is True
-                else ("complete" if remaining_count == 0 else "active")
-            ),
-            "findings": list(prior.get("findings") or [])[:1024],
-            "findingCount": int(prior.get("findingCount") or 0),
-            "exclusions": exclusions[:16],
-            "createdAt": str(prior.get("createdAt") or fresh.get("createdAt") or _utc_now()),
-            "updatedAt": _utc_now(),
-        }
+        prior=prior,
     )
     state["repoAuditLedger"] = fresh
     return state
@@ -1721,6 +1772,11 @@ def _public_state(state: dict[str, Any]) -> dict[str, Any]:
             "analysisVersion": int(audit.get("analysisVersion") or 1),
             "status": str(audit.get("status") or ""),
             "inventoryHash": str(audit.get("inventoryHash") or ""),
+            "pageIndex": int(audit.get("pageIndex") or 0),
+            "pageCount": int(audit.get("pageCount") or 1),
+            "pageSize": int(audit.get("pageSize") or _REPO_AUDIT_PAGE_SIZE),
+            "hasMorePages": audit.get("hasMorePages") is True,
+            "continuationToken": str(audit.get("continuationToken") or ""),
             "cursor": cursor,
             "totalCount": int(audit.get("totalCount") or 0),
             "analyzedCount": int(audit.get("analyzedCount") or 0),
@@ -9832,6 +9888,8 @@ def task_commit_synthesis(
             "version": 2,
             "status": "commit_acked",
             "deliveryStatus": "delivery_pending",
+            "deliveryGuarantee": "at_most_once_with_recovery_artifact",
+            "hostReceiptObservable": False,
             "entryMode": "explicit_evidence_complete",
             "taskSessionId": task_session_id,
             "objectiveHash": objective_identity,
@@ -9927,13 +9985,16 @@ def task_ack_synthesis_delivery(
             {
                 "status": "delivered",
                 "deliveryStatus": "delivered",
+                "deliveryGuarantee": "at_most_once_with_recovery_artifact",
+                "deliveryReceiptAuthority": "compactor_self_attestation",
+                "hostReceiptObservable": False,
                 "deliveryReceiptId": receipt,
                 "deliveredAt": delivered_at,
             }
         )
         state["synthesisLifecycle"] = lifecycle
         state["status"] = "completed"
-        state["completionNote"] = "read_only_synthesis_delivered"
+        state["completionNote"] = "read_only_synthesis_proxy_emission_acknowledged"
         continuity = dict(state.get("continuity") or {})
         lease = dict(continuity.get("lease") or {})
         if lease:

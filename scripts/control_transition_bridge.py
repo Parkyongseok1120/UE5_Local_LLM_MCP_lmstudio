@@ -10,6 +10,7 @@ reusing the production Python reducer directly.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sys
 from typing import Any
 
@@ -116,7 +117,33 @@ def main() -> int:
         raw = json.load(sys.stdin)
         if not isinstance(raw, dict):
             raise ValueError("bridge payload must be an object")
-        print(json.dumps(dispatch(raw), ensure_ascii=False, separators=(",", ":")))
+        result_file = raw.get("resultFile")
+        if raw.get("payloadFile"):
+            payload_path = Path(str(raw["payloadFile"])).resolve()
+            result_path = Path(str(result_file or "")).resolve()
+            if (
+                not payload_path.parent.name.startswith("unreal-control-bridge-")
+                or result_path.parent != payload_path.parent
+                or payload_path.name != "request.json"
+                or result_path.name != "response.json"
+            ):
+                raise ValueError("invalid canonical bridge file transport")
+            with payload_path.open("r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+            if not isinstance(raw, dict):
+                raise ValueError("bridge file payload must be an object")
+            rendered = json.dumps(dispatch(raw), ensure_ascii=False, separators=(",", ":"))
+            with result_path.open("x", encoding="utf-8") as handle:
+                handle.write(rendered)
+            print(
+                json.dumps(
+                    {"ok": True, "resultFile": str(result_path)},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(json.dumps(dispatch(raw), ensure_ascii=False, separators=(",", ":")))
         return 0
     except Exception as exc:  # fail closed at the adapter boundary
         print(

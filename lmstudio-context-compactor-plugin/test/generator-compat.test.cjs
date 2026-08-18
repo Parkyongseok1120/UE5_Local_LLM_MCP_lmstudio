@@ -125,41 +125,36 @@ function requestIntentFor(objective, overrides = {}) {
 }
 
 function materializedSynthesisBundle(taskSessionId, planRevision, mutationGeneration = 0) {
-  const excerpt = (text) => ({
+  const record = (claimId, sourcePath, contentHash, exactExcerpt) => ({
+    claimId,
+    sourcePath,
+    contentHash,
     startLine: 1,
     endLine: 2,
-    text,
-    excerptDigest: core.sha256(text),
+    exactExcerpt,
+    excerptDigest: core.sha256(exactExcerpt),
+    coverageLevel: "FILE_COMPLETE",
+    classification: "direct",
   });
   const records = [
-    {
-      claimId: "decl",
-      sourcePath: "Source/Demo/Public/Demo.h",
-      coveredLineRanges: [[1, 2]],
-      supportingExcerpts: [excerpt("class FDemo {};")],
-      classification: "direct",
-      contentHash: "a".repeat(64),
-      coverageLevel: "FILE_COMPLETE",
-    },
-    {
-      claimId: "impl",
-      sourcePath: "Source/Demo/Private/Demo.cpp",
-      coveredLineRanges: [[1, 2]],
-      supportingExcerpts: [excerpt("void FDemo::Run() {}")],
-      classification: "direct",
-      contentHash: "b".repeat(64),
-      coverageLevel: "FILE_COMPLETE",
-    },
+    record("decl", "Source/Demo/Public/Demo.h", "a".repeat(64), "class FDemo {};"),
+    record("impl", "Source/Demo/Private/Demo.cpp", "b".repeat(64), "void FDemo::Run() {}"),
   ];
   const binding = {
-    version: 1,
+    version: 2,
     taskSessionId,
     objectiveHash: "",
     planRevision: String(planRevision),
     mutationGeneration,
     records,
   };
-  return { ...binding, bundleHash: core.sha256(core.stableStringify(binding)) };
+  const serializedEvidence = core.stableStringify(binding);
+  return {
+    ...binding,
+    serializedEvidence,
+    serializedCharacterCount: serializedEvidence.length,
+    bundleHash: core.sha256(serializedEvidence),
+  };
 }
 
 function bindMaterializedSynthesis(control) {
@@ -10101,7 +10096,7 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
             value: false,
           },
         ] });
-        opts.onPredictionFragment({ content: "Evidence-backed final synthesis.", reasoningType: "none" });
+        opts.onPredictionFragment({ content: "- [claim:decl] Evidence-backed final synthesis.", reasoningType: "none" });
         return { async result() { return { stats: { stopReason: "eosFound" } }; } };
       },
     };
@@ -10193,9 +10188,39 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
         parameters: { type: "object", properties: {} },
       },
     };
+    const crashRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-delivery-crash-"));
+    fs.cpSync(stateRoot, crashRoot, { recursive: true });
+    process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = crashRoot;
+    const crashController = controllerFor(postAckModel, {}, crashRoot, [], [commitTool, ackTool]);
+    crashController.fragmentGenerated = () => {
+      throw new Error("INJECTED_CRASH_IMMEDIATELY_AFTER_FRAGMENT_CALL");
+    };
+    await assert.rejects(
+      generate(crashController, ackHistory),
+      /INJECTED_CRASH_IMMEDIATELY_AFTER_FRAGMENT_CALL/,
+    );
+    const crashedDelivery = activeCheckpoint(crashRoot).synthesisDelivery;
+    assert.equal(crashedDelivery.deliveryState, "emitting");
+    assert.equal(crashedDelivery.deliveryGuarantee, "at_most_once_with_recovery_artifact");
+    assert.match(crashedDelivery.deliveryId, /^[a-f0-9]{64}$/);
+    assert.equal(fs.existsSync(crashedDelivery.recoveryArtifactPath), true);
+    const recovered = JSON.parse(fs.readFileSync(crashedDelivery.recoveryArtifactPath, "utf8"));
+    assert.equal(core.sha256(recovered.output), recovered.outputDigest);
+    let replayedFragments = 0;
+    const restartController = controllerFor(postAckModel, {}, crashRoot, [], [commitTool, ackTool]);
+    restartController.fragmentGenerated = () => { replayedFragments += 1; };
+    await assert.rejects(
+      generate(restartController, ackHistory),
+      /SYNTHESIS_DELIVERY_STATE_UNCERTAIN/,
+    );
+    assert.equal(replayedFragments, 0);
+    assert.equal(activeCheckpoint(crashRoot).synthesisDelivery.deliveryState, "uncertain");
+    fs.rmSync(crashRoot, { recursive: true, force: true });
+
+    process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
     await generate(controllerFor(postAckModel, {}, stateRoot, delivered, [commitTool, ackTool]), ackHistory);
     assert.equal(modelCallsAfterAck, 0);
-    assert.equal(delivered.find((event) => event.kind === "fragment").content, "Evidence-backed final synthesis.");
+    assert.equal(delivered.find((event) => event.kind === "fragment").content, "- [claim:decl] Evidence-backed final synthesis.");
     const deliveryAck = delivered.find(
       (event) => event.kind === "end" && event.request?.name === "unreal_task_ack_synthesis_delivery",
     ).request;
@@ -10232,9 +10257,14 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
   }
 });
 
-test.todo(
-  "delivery_crash_matrix_has_no_loss_or_duplicate requires a host idempotency key or durable UI receipt",
-);
+test("LM Studio SDK delivery contract is explicitly not classified as exactly-once", () => {
+  const sdkTypes = fs.readFileSync(
+    path.join(__dirname, "../node_modules/@lmstudio/sdk/dist/index.d.ts"),
+    "utf8",
+  );
+  assert.match(sdkTypes, /fragmentGenerated\(content: string, opts\?: LLMPredictionFragmentInputOpts\): void;/);
+  assert.doesNotMatch(sdkTypes, /fragmentGenerated[^;]*(?:idempotency|receipt)/i);
+});
 
 test("aborted synthesis prediction preserves objective, evidence frontier, and resumable state", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-abort-"));

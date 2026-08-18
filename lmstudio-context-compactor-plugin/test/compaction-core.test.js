@@ -3773,3 +3773,146 @@ test("architecture full replan survives hard compaction without patch instructio
   assert.match(summary, /Do not use proposalPatch\/proposalRepairs/);
   assert.doesNotMatch(summary, /one \{jsonPath,value\} entry/);
 });
+
+test("hard compaction preserves the exact prompt-bound synthesis evidence string and sentinels", () => {
+  const record = (claimId, index, exactExcerpt) => ({
+    claimId,
+    sourcePath: `Source/Audit/File${index}.cpp`,
+    contentHash: core.sha256(`file-${index}`),
+    startLine: index + 1,
+    endLine: index + 1,
+    exactExcerpt,
+    excerptDigest: core.sha256(exactExcerpt),
+    coverageLevel: "CLAIM_VALIDATED",
+    classification: "direct",
+  });
+  const binding = {
+    version: 2,
+    taskSessionId: "task_prompt_materialization",
+    objectiveHash: "a".repeat(64),
+    planRevision: "plan-prompt",
+    mutationGeneration: 0,
+    records: [
+      record("first", 1, "PROMPT_SENTINEL_FIRST"),
+      record("middle", 2, "PROMPT_SENTINEL_MIDDLE"),
+      record("last", 3, "PROMPT_SENTINEL_LAST"),
+    ],
+  };
+  const serializedEvidence = core.stableStringify(binding);
+  const bundle = {
+    ...binding,
+    serializedEvidence,
+    serializedCharacterCount: serializedEvidence.length,
+    bundleHash: core.sha256(serializedEvidence),
+  };
+  const checkpoint = {
+    checkpointGeneration: 9,
+    objective: "Perform an evidence-backed audit.",
+    objectiveHash: binding.objectiveHash,
+    mutationGeneration: 0,
+    facts: Array.from({ length: 64 }, (_, index) => `NOISE_${index}_${"x".repeat(700)}`),
+    serverControl: {
+      synthesisReadiness: {
+        synthesisEvidenceBundle: bundle,
+      },
+    },
+  };
+
+  const summary = core.summarizeOldMessages([], checkpoint);
+  assert.match(summary, /PROMPT_SENTINEL_FIRST/);
+  assert.match(summary, /PROMPT_SENTINEL_MIDDLE/);
+  assert.match(summary, /PROMPT_SENTINEL_LAST/);
+  assert.ok(summary.includes(serializedEvidence));
+  assert.match(summary, new RegExp(`modelMaterializedSynthesisEvidenceSha256=${bundle.bundleHash}`));
+  assert.equal(core.sha256(serializedEvidence), bundle.bundleHash);
+  assert.ok(summary.length <= 24_000);
+});
+
+test("model-facing projection honors exact 6K section and 24K total boundaries", () => {
+  const checkpoint = {
+    checkpointGeneration: 1,
+    objective: "Audit projection boundaries.",
+    objectiveHash: "f".repeat(64),
+    diagnostics: Array.from({ length: 32 }, (_, index) => `${index}:${"x".repeat(900)}`),
+    facts: Array.from({ length: 32 }, (_, index) => `${index}:${"y".repeat(900)}`),
+    completedToolCallIds: [],
+  };
+  for (const perSectionCharacterLimit of [5_999, 6_000, 6_001]) {
+    const result = core.buildModelFacingCheckpointProjection(checkpoint, "analysis", {
+      characterLimit: 24_000,
+      tokenEstimateLimit: 20_000,
+      perSectionCharacterLimit,
+    });
+    assert.equal(result.metrics.perSectionCharacterLimit, perSectionCharacterLimit);
+    assert.ok(result.metrics.characterCount <= 24_000);
+  }
+  for (const characterLimit of [23_999, 24_000, 24_001]) {
+    const result = core.buildModelFacingCheckpointProjection(checkpoint, "analysis", {
+      characterLimit,
+      tokenEstimateLimit: 20_000,
+      perSectionCharacterLimit: 6_000,
+    });
+    assert.equal(result.metrics.characterLimit, characterLimit);
+    assert.ok(result.metrics.characterCount <= characterLimit);
+  }
+  const summary = core.summarizeOldMessages([], checkpoint);
+  assert.ok(summary.length <= 24_000);
+  assert.ok(summary.split("\n").every((line) => line.length <= 6_000));
+});
+
+test("partial synthesis report requires claim citations and truthful coverage disclosure", () => {
+  const exactExcerpt = "class FPartialAudit {};";
+  const binding = {
+    version: 2,
+    taskSessionId: "task_partial_report",
+    objectiveHash: "b".repeat(64),
+    planRevision: "plan-partial",
+    mutationGeneration: 0,
+    records: [{
+      claimId: "partial-claim",
+      sourcePath: "Source/Audit/Public/Partial.h",
+      contentHash: "c".repeat(64),
+      startLine: 1,
+      endLine: 1,
+      exactExcerpt,
+      excerptDigest: core.sha256(exactExcerpt),
+      coverageLevel: "CLAIM_VALIDATED",
+      classification: "direct",
+    }],
+  };
+  const serializedEvidence = core.stableStringify(binding);
+  const bundle = {
+    ...binding,
+    serializedEvidence,
+    serializedCharacterCount: serializedEvidence.length,
+    bundleHash: core.sha256(serializedEvidence),
+  };
+  const readiness = {
+    version: 1,
+    ready: true,
+    commitEligible: true,
+    pendingEvidenceObligation: false,
+    reason: "ready",
+    planRevision: binding.planRevision,
+    sourceEvidencePlanRevision: binding.planRevision,
+    controlEpoch: 1,
+    acceptedEvidenceHash: "d".repeat(64),
+    remainingFrontierHash: "e".repeat(64),
+    synthesisEvidenceBundleHash: bundle.bundleHash,
+    synthesisEvidenceBundle: bundle,
+    coverageIncomplete: true,
+  };
+  const valid = [
+    "Coverage: partial",
+    "Analyzed scope: selected C++ declarations",
+    "Omitted scope: remaining repository files",
+    "Stop reason: bounded evidence limit",
+    "Confidence limits: findings apply only to the selected scope",
+    "Next audit slice: continue with the next inventory page",
+    "- [claim:partial-claim] The selected declaration exists.",
+  ].join("\n");
+
+  assert.deepEqual(core.validateSynthesisReport(valid, readiness), { ok: true, reason: "valid" });
+  assert.equal(core.validateSynthesisReport("- The repository is fully analyzed.", readiness).ok, false);
+  assert.equal(core.validateSynthesisReport(valid.replace("[claim:partial-claim]", "[claim:unknown]"), readiness).ok, false);
+});

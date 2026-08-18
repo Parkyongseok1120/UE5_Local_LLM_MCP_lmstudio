@@ -72,7 +72,7 @@ def test_runtime_manifest_covers_every_control_component() -> None:
     assert manifest["protocolVersion"] == 2
     assert manifest["expectedSourceGitCommit"] == manifest["components"]["agent"]["gitCommit"]
     assert set(manifest["components"]) == {"agent", "rag", "compactor"}
-    assert manifest["components"]["agent"]["componentVersion"] == "0.3.17"
+    assert manifest["components"]["agent"]["componentVersion"] == "0.3.18"
     for name, identity in manifest["components"].items():
         assert identity["component"] == name
         assert len(identity["buildHash"]) == 64

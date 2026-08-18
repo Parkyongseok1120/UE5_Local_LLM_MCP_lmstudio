@@ -17,5 +17,8 @@
   "partialSynthesisRequiresBoundReached": true,
   "partialSynthesisRequiresDurableFrontier": false,
   "representativePairsBoundedByDiscoveredRelevantPairs": true,
-  "distinctSourceFilesOwnReadBudget": true
+  "distinctSourceFilesOwnReadBudget": true,
+  "maximumSelectedSynthesisClaims": 16,
+  "maximumPromptEvidenceCharacters": 12000,
+  "maximumExactExcerptCharacters": 4000
 }

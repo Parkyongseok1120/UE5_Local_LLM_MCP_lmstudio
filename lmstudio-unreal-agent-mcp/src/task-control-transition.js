@@ -7,6 +7,7 @@
 
 const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
@@ -49,29 +50,60 @@ function invokeCanonicalControl(operation, state = {}, args = {}) {
   const fallbackPython = process.platform === "win32" ? "python" : "python3";
   const python = String(process.env.PYTHON_EXE || process.env.PYTHON || fallbackPython).trim()
     || fallbackPython;
-  const result = spawnSync(
-    python,
-    [path.join(scriptsDir, "control_transition_bridge.py")],
-    {
-      cwd: path.resolve(scriptsDir, ".."),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PYTHONIOENCODING: "utf-8",
-        PYTHONUTF8: "1",
-      },
-      windowsHide: true,
-      timeout: 120000,
-      killSignal: "SIGKILL",
-      input: JSON.stringify({ operation, state, arguments: args }),
-      maxBuffer: 16 * 1024 * 1024,
-    },
-  );
+  const serialized = JSON.stringify({ operation, state, arguments: args });
+  const inlineLimit = 512 * 1024;
+  let transportDirectory = "";
+  let requestFile = "";
+  let responseFile = "";
+  let input = serialized;
+  if (Buffer.byteLength(serialized, "utf8") > inlineLimit) {
+    transportDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-control-bridge-"));
+    requestFile = path.join(transportDirectory, "request.json");
+    responseFile = path.join(transportDirectory, "response.json");
+    fs.writeFileSync(requestFile, serialized, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    input = JSON.stringify({ payloadFile: requestFile, resultFile: responseFile });
+  }
+  let result;
   let payload = null;
   try {
-    payload = JSON.parse(String(result.stdout || "").trim());
-  } catch {
-    payload = null;
+    result = spawnSync(
+      python,
+      [path.join(scriptsDir, "control_transition_bridge.py")],
+      {
+        cwd: path.resolve(scriptsDir, ".."),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1",
+        },
+        windowsHide: true,
+        timeout: 120000,
+        killSignal: "SIGKILL",
+        input,
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    try {
+      const envelope = JSON.parse(String(result.stdout || "").trim());
+      if (
+        responseFile
+        && envelope?.ok === true
+        && path.resolve(String(envelope.resultFile || "")) === path.resolve(responseFile)
+        && fs.existsSync(responseFile)
+      ) {
+        payload = JSON.parse(fs.readFileSync(responseFile, "utf8"));
+      } else {
+        payload = envelope;
+      }
+    } catch {
+      payload = null;
+    }
+  } finally {
+    for (const file of [responseFile, requestFile]) {
+      if (file && fs.existsSync(file)) fs.unlinkSync(file);
+    }
+    if (transportDirectory && fs.existsSync(transportDirectory)) fs.rmdirSync(transportDirectory);
   }
   if (result.error || result.status !== 0 || payload?.ok !== true) {
     const message = String(

@@ -11,10 +11,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from atomic_io import atomic_write_text
+from control_state_registry import CONTROL_STATE_REGISTRY
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "config" / "control_protocol_spec.json"
+GENERATED_STATE_REGISTRY_PATH = (
+    ROOT / "lmstudio-context-compactor-plugin" / "src" / "control-state-registry.generated.js"
+)
 PRODUCTION_TREES = (
     ROOT / "lmstudio-unreal-agent-mcp" / "src",
     ROOT / "lmstudio-context-compactor-plugin" / "src",
@@ -162,6 +166,27 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
     if unclassified:
         errors.append("unclassified emitted error codes: " + ", ".join(unclassified))
 
+    expected_registry = {
+        "source": "config/control_state_machine.json",
+        "version": CONTROL_STATE_REGISTRY.version,
+        "events": sorted(CONTROL_STATE_REGISTRY.events),
+        "synthesisLifecycle": sorted(CONTROL_STATE_REGISTRY.synthesis_lifecycle),
+        "proxyLifecycleStates": sorted(CONTROL_STATE_REGISTRY.proxy_lifecycle_states),
+    }
+    try:
+        generated_source = GENERATED_STATE_REGISTRY_PATH.read_text(encoding="utf-8-sig")
+        generated_registry = json.loads(
+            generated_source.split("module.exports =", 1)[1].strip().removesuffix(";")
+        )
+    except (OSError, IndexError, json.JSONDecodeError) as exc:
+        errors.append(f"generated state registry cannot be read: {exc}")
+    else:
+        if generated_registry != expected_registry:
+            errors.append(
+                "generated control-state registry is stale; run "
+                "python scripts/generate_control_state_registry.py"
+            )
+
     for code, policy in sorted(catalog.items()):
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", str(code)):
             errors.append(f"invalid error code key: {code}")
@@ -188,6 +213,8 @@ def validate_spec(spec: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "emittedErrorCodeCount": len(discovered),
         "catalogEntryCount": len(catalog),
+        "controlEventCount": len(CONTROL_STATE_REGISTRY.events),
+        "synthesisLifecycleStateCount": len(CONTROL_STATE_REGISTRY.synthesis_lifecycle),
         "hashes": protocol_hashes(spec),
     }
 

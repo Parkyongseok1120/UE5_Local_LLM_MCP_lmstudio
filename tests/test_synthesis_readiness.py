@@ -5,6 +5,8 @@ import hashlib
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 import sys
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -161,3 +163,49 @@ def test_materialized_bundle_is_bound_to_ready_control():
     assert result["ready"] is True
     assert len(result["synthesisEvidenceBundle"]["records"]) == 2
     assert result["synthesisEvidenceBundle"]["bundleHash"] == result["synthesisEvidenceBundleHash"]
+
+
+@pytest.mark.parametrize("accepted_count", [0, 1, 2, 15, 16, 17, 31, 32, 33])
+def test_selected_claim_materialization_does_not_require_every_accepted_file(
+    accepted_count: int,
+) -> None:
+    files = {}
+    for index in range(accepted_count):
+        pair = index // 2
+        declaration = index % 2 == 0
+        suffix = "h" if declaration else "cpp"
+        folder = "Public" if declaration else "Private"
+        kind = "declaration" if declaration else "implementation"
+        path = f"Source/Boundary/{folder}/Item{pair}.{suffix}"
+        files[path] = _complete(
+            path,
+            kind,
+            f"evidence-{index}",
+            hashlib.sha256(str(index).encode()).hexdigest(),
+            f"PROMPT_BOUNDARY_SENTINEL_{index}",
+        )
+
+    result = derive_synthesis_readiness(_state(files, taskSessionId="boundary-task", objectiveHash="f" * 64))
+    assert result["acceptedDirectEvidenceCount"] == accepted_count
+    assert result["synthesisEvidenceBundle"]["serializedCharacterCount"] <= 12_000
+    assert hashlib.sha256(
+        result["synthesisEvidenceBundle"]["serializedEvidence"].encode("utf-8")
+    ).hexdigest() == result["synthesisEvidenceBundleHash"]
+    if accepted_count < 2:
+        assert result["ready"] is False
+    else:
+        assert result["ready"] is True
+        assert result["synthesisEvidenceMaterialized"] is True
+        assert 2 <= result["selectedSynthesisEvidenceCount"] <= 16
+
+
+def test_oversized_claim_excerpt_is_not_silently_truncated() -> None:
+    oversized = dict(IMPL)
+    oversized["supportingExcerpts"] = [{
+        "startLine": 1,
+        "endLine": 3,
+        "text": "x" * 4001,
+    }]
+    result = derive_synthesis_readiness(_state({DECL["path"]: DECL, IMPL["path"]: oversized}))
+    assert result["ready"] is False
+    assert result["reason"] == "synthesis_evidence_not_materialized"

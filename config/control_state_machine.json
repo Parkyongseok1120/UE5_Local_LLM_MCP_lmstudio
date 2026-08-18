@@ -38,33 +38,19 @@
     "CANCELLED"
   ],
   "events": [
-    "TASK_CREATED",
-    "DISCOVERY_SUCCEEDED",
-    "DISCOVERY_EMPTY",
-    "FRONTIER_CREATED",
-    "FRONTIER_EXHAUSTED",
-    "SOURCE_EVIDENCE_ACCEPTED",
-    "SOURCE_EVIDENCE_ABSENT",
-    "SOURCE_EVIDENCE_INVALIDATED",
     "PHASE_BUDGET_EXHAUSTED",
-    "CHECKPOINT_RECORDED",
-    "PLAN_REVISED",
-    "GATE_SUCCEEDED",
-    "GATE_FAILED",
-    "MUTATION_COMMITTED",
-    "STATIC_VALIDATION_FAILED",
-    "STATIC_VALIDATION_PASSED",
-    "RECOVERY_EVIDENCE_ACCEPTED",
-    "BUILD_FAILED",
-    "BUILD_PASSED",
-    "AUTOMATION_FAILED",
-    "AUTOMATION_PASSED",
-    "SYNTHESIS_PREPARED",
-    "SYNTHESIS_COMMIT_ACKED",
-    "SYNTHESIS_COMMIT_REJECTED_STALE",
-    "OUTPUT_DELIVERED",
-    "TASK_CANCELLED"
+    "EVIDENCE_STAGNATION",
+    "GATE_VALIDATION_FAILED",
+    "HANDLER_RECOVERY_FACT",
+    "TOOL_RESULT_COMMITTED"
   ],
+  "eventHandlers": {
+    "PHASE_BUDGET_EXHAUSTED": "phase_budget_exhausted",
+    "EVIDENCE_STAGNATION": "evidence_stagnation",
+    "GATE_VALIDATION_FAILED": "gate_validation_failed",
+    "HANDLER_RECOVERY_FACT": "handler_recovery_fact",
+    "TOOL_RESULT_COMMITTED": "tool_result_committed"
+  },
   "runningLivenessAlternatives": [
     "exact_required_tool",
     "deterministic_internal_command",
@@ -110,6 +96,24 @@
     "sameApplicableMutationGeneration",
     "sameEvidenceSemantics"
   ],
+  "budgetPolicies": {
+    "global_abuse_guard": {
+      "owner": "agent_process",
+      "persistence": "process_local",
+      "limit": "24 calls per 5 minute sliding window and 2 calls per scoped path",
+      "scope": "task session when available, otherwise conversation plus project",
+      "resetRule": "sliding_window_or_process_restart",
+      "resumeAction": "search_files_or_known_file_read"
+    },
+    "durable_workflow_budget": {
+      "owner": "python_task_state",
+      "persistence": "task_state",
+      "limit": "inspectionContract.evidenceBudget.maxDirectoryLists per phase",
+      "scope": "taskSessionId plus plan revision and phase",
+      "resetRule": "checkpoint_then_compatible_replan",
+      "resumeAction": "unreal_task_checkpoint"
+    }
+  },
   "recoveryTransitions": {
     "evidence_required": {
       "satisfactionEvent": "RECOVERY_EVIDENCE_ACCEPTED",
@@ -165,8 +169,19 @@
     "delivery_pending",
     "delivered",
     "rejected_stale",
-    "evidence_recovery",
-    "failed_internal"
+    "evidence_recovery"
+  ],
+  "proxyLifecycleStates": [
+    "pending",
+    "prepared",
+    "completed",
+    "commit_sent",
+    "commit_acked",
+    "delivery_pending",
+    "committed",
+    "delivered",
+    "rejected_stale",
+    "evidence_recovery"
   ],
   "synthesisBindingFields": [
     "taskSessionId",

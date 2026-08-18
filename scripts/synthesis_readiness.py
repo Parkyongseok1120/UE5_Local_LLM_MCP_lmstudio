@@ -151,8 +151,13 @@ def _bounded_excerpts(row: dict[str, Any]) -> list[dict[str, Any]]:
     for raw in raw_values[:8]:
         if not isinstance(raw, dict):
             continue
-        text = str(raw.get("text") or "")[:4000]
-        if not text:
+        text = str(raw.get("text") or "")
+        maximum = max(1, int(POLICY.get("maximumExactExcerptCharacters") or 4000))
+        # An excerpt is an exact claim binding. Silently slicing it would make
+        # the declared line range/digest describe text that the model did not
+        # actually receive, so oversized excerpts are rejected and a narrower
+        # source range must be collected instead.
+        if not text or len(text) > maximum:
             continue
         ranges = _coverage_ranges([raw.get("range") or [raw.get("startLine"), raw.get("endLine")]])
         if not ranges:
@@ -173,7 +178,14 @@ def materialize_synthesis_evidence_bundle(
     state: dict[str, Any] | None,
     rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build the bounded source material that must survive hard compaction."""
+    """Select and serialize the exact source material sent to final synthesis.
+
+    The durable source ledger may be much larger than the final prompt.  This
+    function therefore selects a bounded claim-supporting subset and hashes the
+    exact canonical JSON string that the Compactor must inject byte-for-byte.
+    Unselected accepted files remain coverage evidence; they are not falsely
+    presented as materialized final-claim evidence.
+    """
 
     value = state if isinstance(state, dict) else {}
     plan_revision = str(value.get("planRevision") or "")
@@ -181,35 +193,99 @@ def materialize_synthesis_evidence_bundle(
         ledger = value.get("sourceEvidence") if isinstance(value.get("sourceEvidence"), dict) else {}
         files = ledger.get("files") if isinstance(ledger.get("files"), dict) else {}
         rows = list(files.values()) if str(ledger.get("planRevision") or "") == plan_revision else []
-    records: list[dict[str, Any]] = []
-    for row in sorted(
+    maximum_claims = max(1, int(POLICY.get("maximumSelectedSynthesisClaims") or 16))
+    maximum_characters = max(1024, int(POLICY.get("maximumPromptEvidenceCharacters") or 12000))
+    candidates = sorted(
         (item for item in (rows or []) if isinstance(item, dict)),
-        key=lambda item: str(item.get("path") or "").casefold(),
-    )[:16]:
+        key=lambda item: (
+            0 if _coverage_level(item) == "CLAIM_VALIDATED" else 1,
+            0 if str(item.get("sourceKind") or "") == "declaration" else 1,
+            str(item.get("path") or "").casefold(),
+        ),
+    )
+    candidate_declarations = {
+        _pairing_key(item.get("path")): item
+        for item in candidates
+        if Path(str(item.get("path") or "")).suffix.casefold() in {".h", ".hpp", ".inl"}
+        and _bounded_excerpts(item)
+    }
+    candidate_implementations = {
+        _pairing_key(item.get("path")): item
+        for item in candidates
+        if Path(str(item.get("path") or "")).suffix.casefold() in {".cpp", ".c", ".cc", ".cxx"}
+        and _bounded_excerpts(item)
+    }
+    paired_keys = sorted(
+        key for key in candidate_declarations if key and key in candidate_implementations
+    )
+    if paired_keys:
+        primary_pair = [
+            candidate_declarations[paired_keys[0]],
+            candidate_implementations[paired_keys[0]],
+        ]
+        primary_ids = {id(item) for item in primary_pair}
+        candidates = [*primary_pair, *(item for item in candidates if id(item) not in primary_ids)]
+    records: list[dict[str, Any]] = []
+    for row in candidates:
         excerpts = _bounded_excerpts(row)
         if not excerpts:
             continue
         identity = _evidence_identity(row)
-        records.append(
-            {
-                "claimId": str(row.get("claimId") or row.get("evidenceId") or _hash(identity)[:24]),
-                "sourcePath": identity["path"],
-                "coveredLineRanges": identity["coveredRanges"],
-                "supportingExcerpts": excerpts,
-                "classification": str(row.get("classification") or "direct"),
-                "contentHash": identity["contentHash"],
-                "coverageLevel": identity["coverageLevel"],
-            }
+        excerpt = excerpts[0]
+        claim_id = str(row.get("claimId") or row.get("evidenceId") or _hash(identity)[:24])[:80]
+        existing_claim_ids = {str(item.get("claimId") or "") for item in records}
+        if claim_id in existing_claim_ids:
+            suffix = _hash({"identity": identity, "excerpt": excerpt})[:12]
+            claim_id = f"{claim_id[:67]}-{suffix}"
+        record = {
+            "claimId": claim_id,
+            "sourcePath": identity["path"],
+            "contentHash": identity["contentHash"],
+            "startLine": excerpt["startLine"],
+            "endLine": excerpt["endLine"],
+            "exactExcerpt": excerpt["text"],
+            "excerptDigest": excerpt["excerptDigest"],
+            "coverageLevel": identity["coverageLevel"],
+            "classification": str(row.get("classification") or "direct"),
+        }
+        proposed = [*records, record]
+        proposed_binding = {
+            "version": 2,
+            "taskSessionId": str(value.get("taskSessionId") or ""),
+            "objectiveHash": str(value.get("objectiveHash") or ""),
+            "planRevision": plan_revision,
+            "mutationGeneration": _nonnegative_int(value.get("mutationGeneration")),
+            "records": proposed,
+        }
+        proposed_serialized = json.dumps(
+            proposed_binding,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
         )
+        if len(proposed) > maximum_claims or len(proposed_serialized) > maximum_characters:
+            continue
+        records = proposed
     binding = {
-        "version": 1,
+        "version": 2,
         "taskSessionId": str(value.get("taskSessionId") or ""),
         "objectiveHash": str(value.get("objectiveHash") or ""),
         "planRevision": plan_revision,
         "mutationGeneration": _nonnegative_int(value.get("mutationGeneration")),
         "records": records,
     }
-    return {**binding, "bundleHash": _hash(binding)}
+    serialized_evidence = json.dumps(
+        binding,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return {
+        **binding,
+        "serializedEvidence": serialized_evidence,
+        "serializedCharacterCount": len(serialized_evidence),
+        "bundleHash": hashlib.sha256(serialized_evidence.encode("utf-8")).hexdigest(),
+    }
 
 
 def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
@@ -295,10 +371,29 @@ def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
         and not (state.get("writeGate") or {}).get("writesAllowed")
     )
     bundle = materialize_synthesis_evidence_bundle(state, accepted_rows)
-    materialized_paths = {str(row.get("sourcePath") or "").casefold() for row in bundle["records"]}
-    accepted_paths = {str(row.get("path") or "").replace("\\", "/").casefold() for row in accepted_rows}
-    bundle_materialized = not direct_required or (
-        bool(accepted_paths) and accepted_paths.issubset(materialized_paths)
+    selected_paths = {
+        str(row.get("sourcePath") or "").replace("\\", "/").casefold()
+        for row in bundle["records"]
+    }
+    selected_declarations = {
+        _pairing_key(row.get("sourcePath"))
+        for row in bundle["records"]
+        if Path(str(row.get("sourcePath") or "")).suffix.casefold() in {".h", ".hpp", ".inl"}
+    }
+    selected_implementations = {
+        _pairing_key(row.get("sourcePath"))
+        for row in bundle["records"]
+        if Path(str(row.get("sourcePath") or "")).suffix.casefold() in {".cpp", ".c", ".cc", ".cxx"}
+    }
+    selected_pair_count = len(
+        {key for key in selected_declarations if key and key in selected_implementations}
+    )
+    bundle_materialized = not direct_required or bool(
+        selected_paths
+        and len(bundle["records"]) >= int(POLICY.get("minimumAcceptedDirectEvidence") or 2)
+        and selected_pair_count >= min(1, required_pairs)
+        and hashlib.sha256(bundle["serializedEvidence"].encode("utf-8")).hexdigest()
+        == bundle["bundleHash"]
     )
     ready = mode_eligible and direct_satisfied and coverage_satisfied and not pending and bundle_materialized
     reason = "ready"
@@ -318,7 +413,8 @@ def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
     frontier_hash = _hash(frontier)
     return {
         "version": 1, "ready": ready, "reason": reason,
-        "acceptedDirectEvidenceCount": len(accepted_ids), "acceptedEvidenceIds": accepted_ids,
+        "acceptedDirectEvidenceCount": len(accepted_rows), "acceptedEvidenceIds": accepted_ids,
+        "acceptedEvidenceIdsTruncated": len(accepted_rows) > len(accepted_ids),
         "acceptedEvidenceHash": accepted_hash, "evidenceStateHash": evidence_state_hash,
         "declarationCount": len(declarations),
         "implementationCount": len(implementations), "representativePairCount": pair_count,
@@ -330,6 +426,30 @@ def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
         "planRevision": plan_revision, "controlEpoch": _nonnegative_int(state.get("controlEpoch")),
         "commitEligible": ready, "boundReached": bound_reached,
         "synthesisEvidenceMaterialized": bundle_materialized,
+        "selectedSynthesisEvidenceCount": len(bundle["records"]),
+        "selectedSynthesisEvidencePaths": sorted(selected_paths),
+        "claimLedger": {
+            "version": 1,
+            "claims": [
+                {
+                    key: row[key]
+                    for key in (
+                        "claimId", "sourcePath", "contentHash", "startLine", "endLine",
+                        "exactExcerpt", "excerptDigest", "coverageLevel", "classification",
+                    )
+                }
+                for row in bundle["records"]
+            ],
+        },
+        "reportContract": {
+            "version": 1,
+            "coverageStatus": "partial" if coverage_incomplete else "complete",
+            "claimCitationFormat": "[claim:<claimId>]",
+            "partialRequiredSections": [
+                "Coverage: partial", "Analyzed scope", "Omitted scope",
+                "Stop reason", "Confidence limits", "Next audit slice",
+            ] if coverage_incomplete else [],
+        },
         "synthesisEvidenceBundle": bundle,
         "synthesisEvidenceBundleHash": bundle["bundleHash"],
     }

@@ -18,6 +18,7 @@ from synthesis_readiness import (
     is_source_evidence_task,
     synthesis_latch_matches,
 )
+from control_state_registry import require_control_event
 
 ROUTE_VERSION = 1
 CONTROL_TRANSITION_VERSION = 2
@@ -1296,7 +1297,7 @@ def reduce_committed_event(
 ) -> dict[str, Any]:
     """Reduce one host-committed fact into the sole semantic task state."""
 
-    kind = str(event.get("kind") or "").strip().upper()
+    kind = require_control_event(str(event.get("kind") or ""))
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     if kind == "PHASE_BUDGET_EXHAUSTED":
         readiness = derive_synthesis_readiness(state)
@@ -1322,6 +1323,11 @@ def reduce_committed_event(
             "status": "phase_budget_checkpoint_required",
             "errorCode": "TASK_PHASE_TOOL_BUDGET_EXHAUSTED",
             "budgetErrorCode": str(event.get("budgetErrorCode") or ""),
+            "budgetOwner": "python_task_state",
+            "budgetKind": "durable_workflow_budget",
+            "budgetPersistence": "task_state",
+            "budgetResetRule": "checkpoint_then_compatible_replan",
+            "budgetResumeAction": "unreal_task_checkpoint",
             "exhaustedTool": str(event.get("toolName") or ""),
             "recoveryStrategy": (
                 "synthesis_handoff"
@@ -1557,7 +1563,7 @@ def reduce_committed_event(
     return commit_control_transition(state)
 
 
-def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
+def _derive_next_obligation_mutating(state: dict[str, Any]) -> dict[str, Any]:
     synthesis_readiness = derive_synthesis_readiness(state)
     state["synthesisReadiness"] = synthesis_readiness
     """Derive the one authoritative next action for the complete task pipeline.
@@ -1735,11 +1741,11 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
                 retry_value = "forbidden"
                 blocker_code = "RECOVERY_REQUIRED_TOOL_MISSING"
                 blocker_fingerprint = recovery_fingerprint
-        elif repo_audit_required and repo_audit_status == "inventory_overflow":
-            disposition = "workflow_stop"
-            retry_value = "forbidden"
-            blocker_code = "REPO_AUDIT_INVENTORY_OVERFLOW"
-            blocker_fingerprint = str(repo_audit.get("inventoryHash") or "")
+        elif repo_audit_required and repo_audit_status == "page_complete":
+            required_name = "unreal_task_status"
+            required_args = {}
+            retry_value = "once"
+            transition_reason = "REPO_AUDIT_CONTINUATION_PAGE"
         elif repo_audit_required and repo_audit_status != "complete":
             if repo_audit_cursor < len(repo_audit_queue):
                 required_name = "read_file"
@@ -2193,6 +2199,18 @@ def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def derive_next_obligation(state: dict[str, Any]) -> dict[str, Any]:
+    """Pure public derivation API.
+
+    Recovery proof normalization is intentionally performed on a copy. Durable
+    callers that need those facts persisted must use ``commit_control_transition``
+    or ``reduce_committed_event``, both of which return the mutated state.
+    """
+
+    working = deepcopy(state if isinstance(state, dict) else {})
+    return _derive_next_obligation_mutating(working)
+
+
 def commit_control_transition(state: dict[str, Any]) -> dict[str, Any]:
     """Persist control and advance epoch iff its semantic fingerprint changed."""
 
@@ -2204,7 +2222,7 @@ def commit_control_transition(state: dict[str, Any]) -> dict[str, Any]:
     # synthesis latch without requiring a later task_status side effect.
     if is_source_evidence_task(state):
         state["toolRoute"] = derive_tool_route(state)
-    control = derive_next_obligation(state)
+    control = _derive_next_obligation_mutating(state)
     readiness = derive_synthesis_readiness(state)
     state["synthesisReadiness"] = readiness
     prior_route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}

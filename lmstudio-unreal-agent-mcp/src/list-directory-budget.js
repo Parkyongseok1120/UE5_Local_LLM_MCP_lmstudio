@@ -11,6 +11,14 @@ const DEFAULTS = Object.freeze({
   maxCallsPerPath: 2,
 });
 
+const GLOBAL_BUDGET_CONTRACT = Object.freeze({
+  budgetOwner: "agent_process",
+  budgetKind: "global_abuse_guard",
+  persistence: "process_local",
+  resetRule: "sliding_window_or_process_restart",
+  resumeAction: "search_files_or_known_file_read",
+});
+
 function normalizeListPath(input) {
   return String(input || ".")
     .replace(/\\/g, "/")
@@ -46,6 +54,7 @@ function createListDirectoryBudget(options = {}) {
     const pathCount = Number(bucket.paths.get(pathKey) || 0);
     if (bucket.calls >= maxCallsPerWindow) {
       return {
+        ...GLOBAL_BUDGET_CONTRACT,
         ok: false,
         errorCode: "LIST_DIRECTORY_BUDGET_EXCEEDED",
         path: pathKey,
@@ -59,6 +68,7 @@ function createListDirectoryBudget(options = {}) {
     }
     if (pathCount >= maxCallsPerPath) {
       return {
+        ...GLOBAL_BUDGET_CONTRACT,
         ok: false,
         errorCode: "LIST_DIRECTORY_DUPLICATE",
         path: pathKey,
@@ -71,6 +81,7 @@ function createListDirectoryBudget(options = {}) {
       };
     }
     return {
+      ...GLOBAL_BUDGET_CONTRACT,
       ok: true,
       path: pathKey,
       calls: bucket.calls,
@@ -87,6 +98,7 @@ function createListDirectoryBudget(options = {}) {
     bucket.calls += 1;
     bucket.paths.set(pathKey, Number(bucket.paths.get(pathKey) || 0) + 1);
     return {
+      ...GLOBAL_BUDGET_CONTRACT,
       ok: true,
       path: pathKey,
       calls: bucket.calls,
@@ -114,6 +126,7 @@ function createListDirectoryBudget(options = {}) {
 
 module.exports = {
   DEFAULTS,
+  GLOBAL_BUDGET_CONTRACT,
   normalizeListPath,
   createListDirectoryBudget,
 };

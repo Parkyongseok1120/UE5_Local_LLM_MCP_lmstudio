@@ -353,6 +353,38 @@ process.stdout.write(JSON.stringify(states.map(deriveNextObligation)));
     assert node_controls == python_controls
 
 
+def test_adversarial_running_state_corpus_has_one_bounded_liveness_exit() -> None:
+    for index, state in enumerate(_state_corpus()):
+        control = derive_next_obligation(state)
+        required = control.get("requiredTool")
+        alternatives = [
+            bool(isinstance(required, dict) and str(required.get("name") or "")),
+            bool(
+                control.get("disposition") in {"continue", "rediscover"}
+                and control.get("allowedTools")
+            ),
+            bool(
+                control.get("disposition") == "continue"
+                and control.get("phase") == "synthesis"
+                and control.get("synthesisLatch")
+            ),
+            bool(
+                control.get("disposition") == "await_user"
+                and control.get("requiredUserInput")
+            ),
+            bool(control.get("disposition") in {"complete", "workflow_stop"}),
+        ]
+        assert sum(alternatives) == 1, {
+            "corpusIndex": index,
+            "disposition": control.get("disposition"),
+            "phase": control.get("phase"),
+            "requiredTool": required,
+            "allowedTools": control.get("allowedTools"),
+            "requiredUserInput": control.get("requiredUserInput"),
+            "blocker": control.get("blocker"),
+        }
+
+
 def test_evidence_complete_is_a_no_tool_synthesis_transition() -> None:
     state = _recovery_obligation_state("evidence_complete")
     def complete(path: str, kind: str, evidence_id: str, content_hash: str, text: str) -> dict:

@@ -28,7 +28,7 @@ test("agent runtime identity is deterministic and verifiable", () => {
     assert.equal(result.runtimeVerified, true);
     assert.equal(result.runtimeStale, false);
     assert.equal(result.running.buildHash, identity.buildHash);
-    assert.equal(identity.componentVersion, "0.3.17");
+    assert.equal(identity.componentVersion, "0.3.18");
     assert.equal(identity.protocolVersion, 2);
     for (const field of protocolHashFields) assert.match(identity[field], /^[0-9a-f]{64}$/);
     assert.throws(

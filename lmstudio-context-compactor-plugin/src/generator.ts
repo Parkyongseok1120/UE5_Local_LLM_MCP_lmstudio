@@ -4073,7 +4073,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       || typeof delivery !== "object"
       || !String(delivery.output || "")
     ) return false;
-    if (["emitting", "emitted"].includes(String(delivery.deliveryState || ""))) {
+    if (["emitting", "emitted", "uncertain"].includes(String(delivery.deliveryState || ""))) {
       return false;
     }
     const ackTool: any = ctl.getToolDefinitions().find((tool: any) => toolNamesMatch(
@@ -4089,11 +4089,22 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       throw new Error("SYNTHESIS_DELIVERY_DIGEST_MISMATCH");
     }
     const transactionId = String(delivery.transactionId || "");
+    const deliveryId = core.sha256(core.stableStringify({
+      synthesisTransactionId: transactionId,
+      outputDigest,
+    }));
     const deliveryReceiptId = core.sha256(core.stableStringify({
       synthesisTransactionId: transactionId,
       outputDigest,
       uiDeliveryCompleted: true,
     }));
+    const recoveryArtifactPath = await store.saveSynthesisRecoveryArtifact(sessionId, {
+      deliveryId,
+      synthesisTransactionId: transactionId,
+      outputDigest,
+      output,
+      createdAt: isoNow(),
+    });
     const ackToolCallId = directToolCallRequestId(
       "synthesis-delivery-ack",
       deliveryReceiptId.slice(0, 32),
@@ -4101,7 +4112,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     checkpoint.synthesisDelivery = {
       ...delivery,
       deliveryState: "emitting",
+      deliveryGuarantee: "at_most_once_with_recovery_artifact",
+      deliveryId,
       deliveryReceiptId,
+      recoveryArtifactPath,
       ackToolCallId,
     };
     await persistCheckpoint(
@@ -4194,8 +4208,22 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   };
   if (
     String(checkpoint?.synthesisState?.status || "") === "commit_acked"
-    && String(checkpoint?.synthesisDelivery?.deliveryState || "") === "emitting"
+    && ["emitting", "uncertain"].includes(
+      String(checkpoint?.synthesisDelivery?.deliveryState || ""),
+    )
   ) {
+    checkpoint.synthesisDelivery = {
+      ...checkpoint.synthesisDelivery,
+      deliveryState: "uncertain",
+      deliveryGuarantee: "at_most_once_with_recovery_artifact",
+      uncertaintyDetectedAt: isoNow(),
+    };
+    await persistCheckpoint(
+      sessionId,
+      checkpoint,
+      requireCheckpointPersistence,
+      "synthesis_delivery_uncertain_recovery_artifact",
+    );
     await appendEventBestEffort(sessionId, {
       type: "synthesis_delivery_state_uncertain",
       at: isoNow(),
@@ -4204,9 +4232,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       reason: "durable_emit_intent_without_atomic_ui_receipt",
     });
     const error: any = new Error(
-      "SYNTHESIS_DELIVERY_STATE_UNCERTAIN: a durable UI-delivery intent exists without an atomic LM Studio receipt; automatic replay is disabled to prevent duplicate final output.",
+      `SYNTHESIS_DELIVERY_STATE_UNCERTAIN: automatic replay is disabled because LM Studio exposes no atomic UI receipt. Recover the prepared answer from ${String(checkpoint?.synthesisDelivery?.recoveryArtifactPath || "the session checkpoint")}.`,
     );
     error.code = "SYNTHESIS_DELIVERY_STATE_UNCERTAIN";
+    error.errorCode = "SYNTHESIS_DELIVERY_STATE_UNCERTAIN";
     throw error;
   }
   if (await deliverAcknowledgedSynthesis()) return;
@@ -8530,6 +8559,15 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       ))
       .map((event: any) => String(event?.content || ""))
       .join("");
+    const reportValidation = core.validateSynthesisReport(
+      preparedSynthesisOutput,
+      serverControlV2?.synthesisReadiness,
+    );
+    if (!reportValidation.ok) {
+      throw new Error(
+        `Synthesis output violated the server-owned evidence/report contract (${reportValidation.reason}); output was discarded before commit.`,
+      );
+    }
     if (preparedSynthesisOutput.length > 131_072) {
       throw new Error(
         "Synthesis output exceeds the durable exactly-once delivery bound; output was discarded before commit.",

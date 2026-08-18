@@ -299,6 +299,36 @@ async function loadCheckpoint(sessionId, root = defaultRoot()) {
   ) ? newest : active;
 }
 
+async function saveSynthesisRecoveryArtifact(sessionId, artifact, root = defaultRoot()) {
+  const output = String(artifact?.output || "");
+  const outputDigest = String(artifact?.outputDigest || "");
+  const deliveryId = String(artifact?.deliveryId || "");
+  if (!output || output.length > 131_072) {
+    throw new TypeError("synthesis recovery output is missing or too large");
+  }
+  if (!/^[a-f0-9]{64}$/u.test(outputDigest)) {
+    throw new TypeError("synthesis recovery output digest is invalid");
+  }
+  if (crypto.createHash("sha256").update(output, "utf8").digest("hex") !== outputDigest) {
+    throw new TypeError("synthesis recovery output digest does not match");
+  }
+  if (!/^[a-f0-9]{64}$/u.test(deliveryId)) {
+    throw new TypeError("synthesis recovery delivery id is invalid");
+  }
+  const dir = sessionDir(sessionId, root);
+  const artifactPath = path.join(dir, `synthesis-recovery-${deliveryId}.json`);
+  await atomicWrite(artifactPath, {
+    version: 1,
+    guarantee: "at_most_once_with_recovery_artifact",
+    deliveryId,
+    synthesisTransactionId: String(artifact?.synthesisTransactionId || ""),
+    outputDigest,
+    output,
+    createdAt: String(artifact?.createdAt || new Date().toISOString()),
+  });
+  return artifactPath;
+}
+
 async function withSessionWriteLock(dir, action) {
   const lockPath = path.join(dir, ".checkpoint-write.lock");
   const deadline = Date.now() + 5_000;
@@ -489,6 +519,7 @@ module.exports = {
   safeSessionId,
   sessionDir,
   appendEvent,
+  saveSynthesisRecoveryArtifact,
   cleanupSessions,
   loadCheckpoint,
   markSessionStatus,

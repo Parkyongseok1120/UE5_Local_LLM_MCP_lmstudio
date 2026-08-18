@@ -341,6 +341,7 @@ def compact_code_sketch_payload(
             "resultOmissions",
             "gateCompletion",
             "compilerEscalation",
+            "generationContract",
         )
         if key in compact
     }

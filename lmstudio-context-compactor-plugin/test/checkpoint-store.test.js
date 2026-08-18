@@ -8,6 +8,29 @@ const test = require("node:test");
 const store = require("../src/checkpoint-store.js");
 const core = require("../src/compaction-core.js");
 
+test("synthesis recovery artifact atomically preserves the exact prepared output", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-recovery-artifact-"));
+  try {
+    const output = "- [claim:decl] Recoverable final answer.";
+    const outputDigest = core.sha256(output);
+    const deliveryId = core.sha256("delivery-transaction");
+    const artifactPath = await store.saveSynthesisRecoveryArtifact("session", {
+      output,
+      outputDigest,
+      deliveryId,
+      synthesisTransactionId: "transaction-1",
+    }, root);
+    const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf8"));
+    assert.equal(artifact.guarantee, "at_most_once_with_recovery_artifact");
+    assert.equal(artifact.deliveryId, deliveryId);
+    assert.equal(artifact.outputDigest, outputDigest);
+    assert.equal(artifact.output, output);
+    assert.equal(core.sha256(artifact.output), artifact.outputDigest);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("checkpoint store keeps the newest 20 generations and active checkpoint", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-store-"));
   try {

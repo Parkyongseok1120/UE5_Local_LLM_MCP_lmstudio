@@ -9,9 +9,9 @@ The release tag is **`v1.3.0-rc3`**. Existing RC and historical Beta-alias tags 
 | Component | RC3 version |
 |---|---|
 | Product | 1.3.0 RC3 (`v1.3.0-rc3`) |
-| Portable manifest | 2.1.5 |
-| Node agent MCP | 0.3.16 |
-| Context compactor | 0.4.40 / revision 86 |
+| Portable manifest | 2.1.6 |
+| Node agent MCP | 0.3.18 |
+| Context compactor | 0.4.43 / revision 89 |
 
 ## What changed since the RC2 tag
 

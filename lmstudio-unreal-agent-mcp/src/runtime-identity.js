@@ -48,6 +48,7 @@ function componentLayout(root, component) {
       path.join(path.dirname(base), "config", "synthesis_readiness_policy.json"),
       path.join(path.dirname(base), "config", "control_state_machine.json"),
       path.join(path.dirname(base), "scripts", "control_transition_bridge.py"),
+      path.join(path.dirname(base), "scripts", "control_state_registry.py"),
       path.join(path.dirname(base), "scripts", "phase_tool_router.py"),
       path.join(path.dirname(base), "scripts", "synthesis_readiness.py"),
       path.join(path.dirname(base), "scripts", "task_api.py"),

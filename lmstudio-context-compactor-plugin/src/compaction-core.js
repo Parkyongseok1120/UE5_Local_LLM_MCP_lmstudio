@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const CONTROL_STATE_REGISTRY = require("./control-state-registry.generated.js");
 
 const COMPACTION_SCHEMA_VERSION = 2;
 const REQUEST_INTENT_VERSION = 1;
@@ -52,18 +53,8 @@ const DEFAULT_MODEL_PROJECTION_BUDGET = Object.freeze({
   semanticAnchorsPerEvidence: 6,
 });
 const CHECKPOINT_LIFECYCLE_VERSION = 1;
-const CHECKPOINT_LIFECYCLE_STATUSES = new Set([
-  "pending",
-  "prepared",
-  "completed",
-  "commit_sent",
-  "commit_acked",
-  "delivery_pending",
-  "committed",
-  "delivered",
-  "rejected_stale",
-  "evidence_recovery",
-]);
+const CHECKPOINT_LIFECYCLE_STATUSES = new Set(CONTROL_STATE_REGISTRY.proxyLifecycleStates);
+const SYNTHESIS_LIFECYCLE_STATUSES = new Set(CONTROL_STATE_REGISTRY.synthesisLifecycle);
 const CHECKPOINT_LIFECYCLE_STATUS_RANK = Object.freeze({
   pending: 0,
   evidence_recovery: 0,
@@ -216,7 +207,24 @@ function buildModelFacingCheckpointProjection(checkpoint, phase = "", requestedB
   ];
   for (const key of criticalKeys) {
     if (checkpoint?.[key] === undefined || checkpoint?.[key] === null) continue;
-    projection[key] = boundedProjectionValue(checkpoint[key], {
+    let sourceValue = checkpoint[key];
+    if (key === "serverControl" && sourceValue && typeof sourceValue === "object") {
+      sourceValue = { ...sourceValue };
+      if (sourceValue.synthesisReadiness && typeof sourceValue.synthesisReadiness === "object") {
+        sourceValue.synthesisReadiness = { ...sourceValue.synthesisReadiness };
+        // Exact claim text has a dedicated prompt block below. Keeping another
+        // recursively bounded copy inside serverControl risks truncating the
+        // evidence while making the control line look authoritative.
+        delete sourceValue.synthesisReadiness.synthesisEvidenceBundle;
+        delete sourceValue.synthesisReadiness.claimLedger;
+      }
+    }
+    if (key === "synthesisReadiness" && sourceValue && typeof sourceValue === "object") {
+      sourceValue = { ...sourceValue };
+      delete sourceValue.synthesisEvidenceBundle;
+      delete sourceValue.claimLedger;
+    }
+    projection[key] = boundedProjectionValue(sourceValue, {
       maxStringChars: key === "objective" ? 4_000 : 1_200,
       maxArrayItems: 24,
       maxObjectKeys: 48,
@@ -695,65 +703,73 @@ function parseJsonObjects(text) {
 
 function compactSynthesisEvidenceBundle(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version) !== 2) return null;
   const bundleHash = String(value.bundleHash || "").trim().toLowerCase();
-  const taskSessionId = String(value.taskSessionId || "").slice(0, 160);
+  const taskSessionId = String(value.taskSessionId || "");
   const objectiveHash = String(value.objectiveHash || "").trim().toLowerCase();
-  const planRevision = String(value.planRevision || "").slice(0, 160);
+  const planRevision = String(value.planRevision || "");
   const mutationGeneration = Math.max(0, Number(value.mutationGeneration || 0));
   const records = [];
   for (const raw of Array.isArray(value.records) ? value.records.slice(0, 16) : []) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-    const sourcePath = String(raw.sourcePath || "").replace(/\\/g, "/").slice(0, 500);
+    const claimId = String(raw.claimId || "");
+    const sourcePath = String(raw.sourcePath || "").replace(/\\/g, "/");
     const contentHash = String(raw.contentHash || "").trim().toLowerCase();
-    if (!sourcePath || !/^[a-f0-9]{64}$/.test(contentHash)) continue;
-    const supportingExcerpts = [];
-    for (const excerpt of Array.isArray(raw.supportingExcerpts) ? raw.supportingExcerpts.slice(0, 8) : []) {
-      const text = String(excerpt?.text || "").slice(0, 4000);
-      const startLine = Number(excerpt?.startLine);
-      const endLine = Number(excerpt?.endLine);
-      const excerptDigest = String(excerpt?.excerptDigest || "").trim().toLowerCase();
-      if (
-        !text
-        || !Number.isInteger(startLine)
-        || !Number.isInteger(endLine)
-        || startLine < 1
-        || endLine < startLine
-        || !/^[a-f0-9]{64}$/.test(excerptDigest)
-        || sha256(text) !== excerptDigest
-      ) continue;
-      supportingExcerpts.push({ startLine, endLine, text, excerptDigest });
-    }
-    if (!supportingExcerpts.length) continue;
-    const coveredLineRanges = Array.isArray(raw.coveredLineRanges)
-      ? raw.coveredLineRanges.slice(0, 32).map((range) => [Number(range?.[0]), Number(range?.[1])])
-        .filter((range) => Number.isInteger(range[0]) && Number.isInteger(range[1]) && range[0] > 0 && range[1] >= range[0])
-      : [];
+    const startLine = Number(raw.startLine);
+    const endLine = Number(raw.endLine);
+    const exactExcerpt = String(raw.exactExcerpt || "");
+    const excerptDigest = String(raw.excerptDigest || "").trim().toLowerCase();
+    const coverageLevel = String(raw.coverageLevel || "");
+    const classification = String(raw.classification || "direct");
+    if (
+      !claimId || claimId.length > 80
+      || !sourcePath || sourcePath.length > 500
+      || !/^[a-f0-9]{64}$/.test(contentHash)
+      || !Number.isInteger(startLine) || startLine < 1
+      || !Number.isInteger(endLine) || endLine < startLine
+      || !exactExcerpt || exactExcerpt.length > 4000
+      || !/^[a-f0-9]{64}$/.test(excerptDigest)
+      || sha256(exactExcerpt) !== excerptDigest
+      || coverageLevel.length > 40
+      || classification.length > 40
+    ) continue;
     records.push({
-      claimId: String(raw.claimId || "").slice(0, 80),
+      claimId,
       sourcePath,
-      coveredLineRanges,
-      supportingExcerpts,
-      classification: String(raw.classification || "direct").slice(0, 40),
       contentHash,
-      coverageLevel: String(raw.coverageLevel || "").slice(0, 40),
+      startLine,
+      endLine,
+      exactExcerpt,
+      excerptDigest,
+      coverageLevel,
+      classification,
     });
   }
+  if (new Set(records.map((record) => record.claimId)).size !== records.length) return null;
   const binding = {
-    version: 1,
+    version: 2,
     taskSessionId,
     objectiveHash,
     planRevision,
     mutationGeneration,
     records,
   };
+  const serializedEvidence = String(value.serializedEvidence || "");
   if (
-    !taskSessionId
-    || !planRevision
+    !taskSessionId || taskSessionId.length > 160
+    || !planRevision || planRevision.length > 160
     || !Number.isInteger(mutationGeneration)
+    || !serializedEvidence || serializedEvidence.length > 12000
+    || serializedEvidence !== stableStringify(binding)
     || !/^[a-f0-9]{64}$/.test(bundleHash)
-    || sha256(stableStringify(binding)) !== bundleHash
+    || sha256(serializedEvidence) !== bundleHash
   ) return null;
-  return { ...binding, bundleHash };
+  return {
+    ...binding,
+    serializedEvidence,
+    serializedCharacterCount: serializedEvidence.length,
+    bundleHash,
+  };
 }
 
 function compactSynthesisReadiness(value) {
@@ -794,15 +810,70 @@ function compactSynthesisReadiness(value) {
     synthesisEvidenceBundleHash,
     synthesisEvidenceBundle,
     acceptedDirectEvidenceCount: Math.max(0, Number(value.acceptedDirectEvidenceCount || 0)),
+    acceptedEvidenceIdsTruncated: value.acceptedEvidenceIdsTruncated === true,
     declarationCount: Math.max(0, Number(value.declarationCount || 0)),
     implementationCount: Math.max(0, Number(value.implementationCount || 0)),
     representativePairCount: Math.max(0, Number(value.representativePairCount || 0)),
     requiredRepresentativePairs: Math.max(1, Number(value.requiredRepresentativePairs || 1)),
     coverageIncomplete: value.coverageIncomplete === true,
+    selectedSynthesisEvidenceCount: synthesisEvidenceBundle?.records.length || 0,
+    selectedSynthesisEvidencePaths: synthesisEvidenceBundle
+      ? synthesisEvidenceBundle.records.map((record) => record.sourcePath)
+      : [],
+    claimLedger: synthesisEvidenceBundle ? {
+      version: 1,
+      claims: synthesisEvidenceBundle.records.map((record) => ({ ...record })),
+    } : { version: 1, claims: [] },
+    reportContract: {
+      version: 1,
+      coverageStatus: value.coverageIncomplete === true ? "partial" : "complete",
+      claimCitationFormat: "[claim:<claimId>]",
+      partialRequiredSections: value.coverageIncomplete === true
+        ? [
+          "Coverage: partial", "Analyzed scope", "Omitted scope",
+          "Stop reason", "Confidence limits", "Next audit slice",
+        ]
+        : [],
+    },
     remainingFrontier: Array.isArray(value.remainingFrontier)
       ? value.remainingFrontier.map((item) => String(item || "").replace(/\\/g, "/")).filter(Boolean).slice(0, 32)
       : [],
   };
+}
+
+function validateSynthesisReport(output, readiness) {
+  const text = String(output || "").trim();
+  const compacted = compactSynthesisReadiness(readiness);
+  if (!text || !compacted || compacted.ready !== true) {
+    return { ok: false, reason: "synthesis_report_not_ready" };
+  }
+  const claimIds = new Set(
+    (compacted.synthesisEvidenceBundle?.records || []).map((record) => String(record.claimId)),
+  );
+  const markers = [...text.matchAll(/\[claim:([^\]\r\n]+)\]/g)].map((match) => match[1].trim());
+  if (claimIds.size > 0 && markers.length === 0) {
+    return { ok: false, reason: "synthesis_claim_citation_missing" };
+  }
+  if (markers.some((claimId) => !claimIds.has(claimId))) {
+    return { ok: false, reason: "synthesis_claim_citation_unknown" };
+  }
+  const substantiveBullets = text.split(/\r?\n/).filter((line) => (
+    /^\s*(?:[-*]|\d+[.)])\s+/.test(line)
+    && !/^\s*(?:[-*]|\d+[.)])\s+(?:Coverage|Analyzed scope|Omitted scope|Stop reason|Confidence limits|Next audit slice)\s*:/i.test(line)
+  ));
+  if (substantiveBullets.some((line) => !/\[claim:[^\]\r\n]+\]/.test(line))) {
+    return { ok: false, reason: "synthesis_claim_line_unbound" };
+  }
+  if (compacted.coverageIncomplete) {
+    const requiredSections = compacted.reportContract.partialRequiredSections || [];
+    if (requiredSections.some((section) => !text.toLowerCase().includes(section.toLowerCase()))) {
+      return { ok: false, reason: "partial_coverage_disclosure_missing" };
+    }
+    if (/(?:repository|project|codebase)\s+(?:is\s+)?(?:fully|completely)\s+(?:analy[sz]ed|audited)|all\s+bugs\s+(?:were\s+)?found|(?:저장소|프로젝트|코드)\s*전체\s*(?:분석|감사)\s*완료/iu.test(text)) {
+      return { ok: false, reason: "partial_coverage_false_completeness_claim" };
+    }
+  }
+  return { ok: true, reason: "valid" };
 }
 
 function compactSynthesisLatch(value) {
@@ -839,7 +910,7 @@ function compactSynthesisLatch(value) {
 function compactPreparedSynthesis(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const status = String(value.status || "").trim().toLowerCase();
-  if (!["pending", "prepared", "commit_sent", "commit_acked", "delivery_pending", "delivered", "rejected_stale", "evidence_recovery"].includes(status)) return null;
+  if (!SYNTHESIS_LIFECYCLE_STATUSES.has(status)) return null;
   const output = String(value.output || "");
   const outputDigest = String(value.outputDigest || "").trim().toLowerCase();
   const taskSessionId = String(value.taskSessionId || "").trim().slice(0, 160);
@@ -3170,7 +3241,10 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
         transactionId: String(prior.synthesisDelivery.transactionId || "").slice(0, 160),
         acknowledgedAt: String(prior.synthesisDelivery.acknowledgedAt || "").slice(0, 64),
         deliveryState: String(prior.synthesisDelivery.deliveryState || "pending").slice(0, 32),
+        deliveryGuarantee: String(prior.synthesisDelivery.deliveryGuarantee || "").slice(0, 64),
+        deliveryId: String(prior.synthesisDelivery.deliveryId || "").slice(0, 64),
         deliveryReceiptId: String(prior.synthesisDelivery.deliveryReceiptId || "").slice(0, 64),
+        recoveryArtifactPath: String(prior.synthesisDelivery.recoveryArtifactPath || "").slice(0, 1024),
         ackToolCallId: String(prior.synthesisDelivery.ackToolCallId || "").slice(0, 240),
         emittedAt: String(prior.synthesisDelivery.emittedAt || "").slice(0, 64),
         taskAuthorization: prior.synthesisDelivery.taskAuthorization
@@ -3489,6 +3563,20 @@ function completeTailStart(snapshots, startIndex) {
   return 0;
 }
 function summarizeOldMessages(messages, checkpoint) {
+  const durableCheckpoint = checkpoint;
+  const durableReadiness = durableCheckpoint?.serverControl?.synthesisReadiness
+    || durableCheckpoint?.synthesisReadiness;
+  const exactBundle = compactSynthesisEvidenceBundle(durableReadiness?.synthesisEvidenceBundle);
+  const exactEvidenceBlock = exactBundle
+    ? [
+      `modelMaterializedSynthesisEvidenceSha256=${exactBundle.bundleHash}`,
+      "modelMaterializedSynthesisEvidenceBegin",
+      exactBundle.serializedEvidence,
+      "modelMaterializedSynthesisEvidenceEnd",
+      "synthesisClaimInstruction=Every substantive final claim must be a bullet containing "
+        + "[claim:<claimId>] from the exact bundle above. Never cite an unlisted claimId.",
+    ].join("\n")
+    : "";
   const projectionResult = buildModelFacingCheckpointProjection(checkpoint);
   checkpoint = projectionResult.checkpoint;
   const lines = [
@@ -3665,6 +3753,15 @@ function summarizeOldMessages(messages, checkpoint) {
   ];
   const selected = [];
   let used = String(finalLine || "").length + 1;
+  if (exactEvidenceBlock) {
+    if (used + exactEvidenceBlock.length + 1 > limit) {
+      throw new Error(
+        "Exact synthesis evidence exceeds the model-facing checkpoint budget; synthesis must select fewer claims.",
+      );
+    }
+    selected.push(exactEvidenceBlock);
+    used += exactEvidenceBlock.length + 1;
+  }
   const appendWithinLimit = (line) => {
     const sectionLimit = Number(projectionResult.metrics.perSectionCharacterLimit || 6_000);
     const boundedLine = line.length <= sectionLimit
@@ -3939,6 +4036,12 @@ function validateCheckpoint(checkpoint) {
     if (!/^[a-f0-9]{64}$/.test(String(delivery.outputDigest || ""))) return false;
     if (sha256(String(delivery.output || "")) !== String(delivery.outputDigest || "")) return false;
     if (!String(delivery.transactionId || "").trim()) return false;
+    if (
+      delivery.deliveryGuarantee !== undefined
+      && String(delivery.deliveryGuarantee) !== "at_most_once_with_recovery_artifact"
+    ) return false;
+    if (delivery.deliveryId !== undefined && !/^[a-f0-9]{64}$/.test(String(delivery.deliveryId))) return false;
+    if (delivery.recoveryArtifactPath !== undefined && !String(delivery.recoveryArtifactPath).trim()) return false;
   }
   if (checkpoint.preparedSynthesis !== undefined && checkpoint.preparedSynthesis !== null) {
     const prepared = compactPreparedSynthesis(checkpoint.preparedSynthesis);
@@ -4135,6 +4238,7 @@ module.exports = {
   compactPreparedSynthesis,
   compactSynthesisEvidenceBundle,
   compactSynthesisReadiness,
+  validateSynthesisReport,
   compactSynthesisLatch,
   mergeLifecycleState,
   hasUncommittedPrediction,

@@ -47,7 +47,7 @@ def test_installer_profiles_are_manifest_driven() -> None:
     sys.modules.pop("integrated_install", None)
     manifest = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.0 RC3"
-    assert manifest["version"] == "2.1.5"
+    assert manifest["version"] == "2.1.6"
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()

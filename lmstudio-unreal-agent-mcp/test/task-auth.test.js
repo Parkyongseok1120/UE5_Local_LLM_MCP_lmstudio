@@ -222,6 +222,10 @@ test("concurrent directory budget overflow preserves an open audit frontier thro
     const second = reserveRouteCall(workspace, authorization.taskSessionId, fields, {}, "list_directory");
     assert.equal(second.ok, false);
     assert.equal(second.errorCode, "INSPECTION_DIRECTORY_LIST_BUDGET_EXHAUSTED");
+    assert.equal(second.budgetOwner, "python_task_state");
+    assert.equal(second.budgetKind, "durable_workflow_budget");
+    assert.equal(second.budgetPersistence, "task_state");
+    assert.equal(second.budgetResumeAction, "unreal_task_checkpoint");
     assert.equal(second.nextActionArgs.requiredNextAction, "replan_after_phase_budget");
     assert.equal(commitRouteReservation(
       workspace, authorization.taskSessionId, fields, {}, "list_directory", first.reservationId,
