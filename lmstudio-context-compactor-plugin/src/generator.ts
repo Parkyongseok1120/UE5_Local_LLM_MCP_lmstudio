@@ -7,6 +7,8 @@ import core = require("./compaction-core.js");
 // @ts-ignore CommonJS store is shipped beside the plugin entrypoint.
 import store = require("./checkpoint-store.js");
 
+const activeGenerationFlights = new Map<string, Promise<void>>();
+
 function configValue(ctl: GeneratorController, key: any, fallback: unknown) {
   try {
     const value = ctl.getPluginConfig(configSchematics).get(key);
@@ -2247,6 +2249,75 @@ function latestUserGoalText(messages: ChatMessage[]): string {
   return "";
 }
 
+function latestUserMessageIdentity(messages: ChatMessage[]): string {
+  const snapshots = core.snapshotMessages(messages);
+  const index = core.findLatestRealUserIndex(snapshots);
+  if (index < 0) return core.sha256("missing-user-message");
+  return core.sha256(core.stableStringify({
+    index,
+    message: snapshots[index],
+  }));
+}
+
+function normalizedDirectProjectStatusGoal(goal: string): string {
+  return String(goal || "").normalize("NFKC").trim().replace(/\s+/gu, " ").toLowerCase();
+}
+
+function directProjectStatusResponse(result: any, goal: string): {
+  outcome: "success" | "failure";
+  errorCode: string;
+  responseText: string;
+  resultDigest: string;
+} {
+  const rawContent = String(result?.content || "");
+  const payloads = core.parseJsonObjects(rawContent);
+  const payload = [...payloads].reverse().find((value: any) => (
+    value && typeof value === "object" && !Array.isArray(value)
+  ));
+  const activeProject = String(
+    payload?.activeProject
+    || payload?.uprojectPath
+    || payload?.projectFile
+    || payload?.details?.projectFile
+    || "",
+  ).trim();
+  const inferredProjectName = activeProject
+    ? activeProject.replace(/\\/gu, "/").split("/").at(-1)?.replace(/\.uproject$/iu, "") || ""
+    : "";
+  const projectName = String(
+    payload?.projectName || payload?.details?.projectName || inferredProjectName,
+  ).trim();
+  const succeeded = result?.isError !== true
+    && core.toolResultSucceeded(result)
+    && payload?.ok !== false
+    && Boolean(activeProject);
+  const korean = /[가-힣]/u.test(String(goal || ""));
+  if (succeeded) {
+    return {
+      outcome: "success",
+      errorCode: "",
+      responseText: korean
+        ? `현재 활성 프로젝트:\n${projectName || "이름 미확인"}\n${activeProject}`
+        : `Current active project:\n${projectName || "Unknown project name"}\n${activeProject}`,
+      resultDigest: core.sha256(rawContent),
+    };
+  }
+  const explicitCode = String(payload?.errorCode || payload?.code || "")
+    .trim().replace(/[^A-Za-z0-9_.:-]/gu, "_").slice(0, 120);
+  let errorCode = "DIRECT_PROJECT_STATUS_INVALID_RESULT";
+  if (payload) errorCode = "DIRECT_PROJECT_STATUS_EMPTY";
+  if (result?.isError === true) errorCode = "DIRECT_PROJECT_STATUS_TOOL_ERROR";
+  if (explicitCode) errorCode = explicitCode;
+  return {
+    outcome: "failure",
+    errorCode,
+    responseText: korean
+      ? `현재 활성 프로젝트를 확인하지 못했습니다 (${errorCode}). 프로젝트 조회 도구의 결과가 비어 있거나 실패했습니다.`
+      : `Could not determine the active project (${errorCode}). The project-status tool returned an empty or failed result.`,
+    resultDigest: core.sha256(rawContent),
+  };
+}
+
 function injectTaskRouteOwnershipRule(chat: Chat, plannerAvailable: boolean): boolean {
   const rule = (
     `${TASK_ROUTE_OWNERSHIP_MARKER}\n`
@@ -3944,7 +4015,7 @@ function applyAuthoritativeControlFromSynthesisResult(
   return control;
 }
 
-async function generate(ctl: GeneratorController, history: Chat): Promise<void> {
+async function generateUnlocked(ctl: GeneratorController, history: Chat): Promise<void> {
   guardGeneratorAbort(ctl);
   const enabled = Boolean(configValue(ctl, "enabled", true));
   const observeOnly = Boolean(configValue(ctl, "observeOnly", false));
@@ -4064,6 +4135,77 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     lmStudioLifecycleEventCounts: { ...hostFacingLifecycleCounts },
     lmStudioNameEventCount: hostFacingLifecycleCounts.name,
   });
+
+  const deliverDirectProjectStatusResponse = async (
+    targetCheckpoint: any,
+    suppliedState: any,
+  ): Promise<void> => {
+    const state = core.compactDirectProjectStatus(suppliedState);
+    if (!state || !state.responseText || !state.responseDigest) {
+      const error: any = new Error("DIRECT_PROJECT_STATUS_INVALID_DURABLE_RESPONSE");
+      error.code = "DIRECT_PROJECT_STATUS_INVALID_DURABLE_RESPONSE";
+      throw error;
+    }
+    const responseEmitting = core.compactDirectProjectStatus({
+      ...state,
+      state: "response_emitting",
+      responseEmittingAt: isoNow(),
+    });
+    if (!responseEmitting) throw new Error("DIRECT_PROJECT_STATUS_INVALID_RESPONSE_INTENT");
+    targetCheckpoint.directProjectStatus = responseEmitting;
+    await persistCheckpoint(
+      sessionId,
+      targetCheckpoint,
+      requireCheckpointPersistence,
+      "direct_project_status_response_intent",
+    );
+    ctl.fragmentGenerated(state.responseText, { reasoningType: "none" });
+    const responseDelivered = core.compactDirectProjectStatus({
+      ...responseEmitting,
+      state: "response_delivered",
+      responseDelivered: true,
+      responseDeliveredAt: isoNow(),
+    });
+    if (!responseDelivered) throw new Error("DIRECT_PROJECT_STATUS_INVALID_DELIVERY_RECEIPT");
+    targetCheckpoint.directProjectStatus = responseDelivered;
+    await persistCheckpoint(
+      sessionId,
+      targetCheckpoint,
+      requireCheckpointPersistence,
+      "direct_project_status_response_delivered",
+    );
+    const terminalState = core.compactDirectProjectStatus({
+      ...responseDelivered,
+      state: state.outcome === "success" ? "complete" : "failed",
+      completedAt: state.outcome === "success" ? isoNow() : "",
+      failedAt: state.outcome === "success" ? "" : isoNow(),
+    });
+    if (!terminalState) throw new Error("DIRECT_PROJECT_STATUS_INVALID_TERMINAL_STATE");
+    targetCheckpoint.directProjectStatus = terminalState;
+    targetCheckpoint.predictionState = lifecycleState(
+      targetCheckpoint,
+      "completed",
+      { stopReason: state.outcome === "success"
+        ? "direct_project_status_complete"
+        : "direct_project_status_failed" },
+    );
+    await persistCheckpoint(
+      sessionId,
+      targetCheckpoint,
+      requireCheckpointPersistence,
+      "direct_project_status_terminal",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "direct_project_status_terminal",
+      at: isoNow(),
+      identity: state.identity,
+      toolCallId: state.toolCallId,
+      outcome: state.outcome,
+      errorCode: state.errorCode || null,
+      responseDigest: state.responseDigest,
+      retryCount: 0,
+    });
+  };
 
   const deliverAcknowledgedSynthesis = async (): Promise<boolean> => {
     const delivery = checkpoint?.synthesisDelivery;
@@ -4247,6 +4389,7 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
   let synthesisCommitRejected = false;
   let synthesisDeliveryAcknowledged = false;
   let synthesisNackControlApplied = false;
+  let resolvedDirectProjectStatus: any = null;
   if (checkpoint && unresolvedPendingCalls.length > 0) {
     const currentSnapshots = core.snapshotMessages(messages);
     const { remainingPending, matchedIds, matchedCalls, abandonedIds } = reconcilePendingToolCalls(
@@ -4255,6 +4398,39 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     );
     for (const match of matchedCalls) {
       const pendingName = String(match.pending?.name || "").trim();
+      if (match.pending?.directProjectStatus === true) {
+        const durableState = core.compactDirectProjectStatus(checkpoint?.directProjectStatus);
+        const pendingIdentity = String(match.pending?.directProjectStatusIdentity || "").trim();
+        if (
+          !durableState
+          || !pendingIdentity
+          || durableState.identity !== pendingIdentity
+          || durableState.toolCallId !== String(match.pending?.id || "").trim()
+        ) {
+          const error: any = new Error("DIRECT_PROJECT_STATUS_IDENTITY_MISMATCH");
+          error.code = "DIRECT_PROJECT_STATUS_IDENTITY_MISMATCH";
+          throw error;
+        }
+        const resolution = directProjectStatusResponse(
+          match.result,
+          latestUserGoalText(messages),
+        );
+        resolvedDirectProjectStatus = core.compactDirectProjectStatus({
+          ...durableState,
+          state: "result_received",
+          resultDigest: resolution.resultDigest,
+          responseText: resolution.responseText,
+          responseDigest: core.sha256(resolution.responseText),
+          outcome: resolution.outcome,
+          errorCode: resolution.errorCode,
+          resultReceivedAt: isoNow(),
+        });
+        if (!resolvedDirectProjectStatus) {
+          throw new Error("DIRECT_PROJECT_STATUS_RESULT_COULD_NOT_BE_COMMITTED");
+        }
+        checkpoint.directProjectStatus = resolvedDirectProjectStatus;
+        continue;
+      }
       if (toolNamesMatch("unreal_task_ack_synthesis_delivery", pendingName)) {
         const delivered = core.parseJsonObjects(match.result?.content || "").some((payload: any) => (
           payload?.ok === true
@@ -4457,6 +4633,10 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       }
     }
     unresolvedPendingCalls = remainingPending;
+    if (resolvedDirectProjectStatus) {
+      await deliverDirectProjectStatusResponse(checkpoint, resolvedDirectProjectStatus);
+      return;
+    }
     if (synthesisDeliveryAcknowledged) {
       await persistCheckpoint(
         sessionId,
@@ -4759,8 +4939,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     && directProjectStatusGoal
     && directProjectStatusGoal.length <= 160
     && (
-      /\b(?:current|active)\s+project\b|\b(?:what|which|show|report)\b[^.!?\n]{0,48}\bproject\b/iu.test(directProjectStatusGoal)
-      || /(?:현재|활성)\s*프로젝트|프로젝트[^.!?\n]{0,24}(?:뭐|어디|알려|확인)/u.test(directProjectStatusGoal)
+      /\b(?:(?:where\s+(?:is|was)\s+(?:the\s+)?(?:current|active)\s+project)|(?:(?:current|active)\s+project(?:\s+(?:path|location|directory|folder))?\s*(?:\?|$))|(?:(?:what|which|show|report)\b[^.!?\n]{0,48}\bproject(?:\s+(?:path|location|directory|folder))?\b))/iu.test(directProjectStatusGoal)
+      || /(?:현재|활성)\s*프로젝트(?:\s*(?:경로|위치))?\s*(?:뭐|어디|야|인가|인지|\?|$)|프로젝트[^.!?\n]{0,24}(?:뭐|어디|알려|확인)/u.test(directProjectStatusGoal)
     )
     && !/(?:set|switch|change|select|clear|설정|변경|전환|선택|해제)/iu.test(directProjectStatusGoal)
     && !/(?:status|state|source|code|implementation|feature|module|build|test|fix|create|write|complete|develop|상태|소스|코드|구현|기능|모듈|빌드|테스트|수정|생성|추가|삭제|완성|개발)/iu.test(directProjectStatusGoal)
@@ -4771,13 +4951,149 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       tool?.function?.name || tool?.name || "",
     ))
     : null;
-  if (directProjectStatusTool) {
-    const requestId = directToolCallRequestId("direct-project-status", "active-project");
+  if (directProjectStatusQuery) {
     const toolName = String(
       directProjectStatusTool?.function?.name
       || directProjectStatusTool?.name
       || "unreal_get_active_project"
     );
+    const normalizedGoalHash = core.sha256(
+      normalizedDirectProjectStatusGoal(directProjectStatusGoal),
+    );
+    const userMessageId = latestUserMessageIdentity(messages);
+    const directProjectStatusIdentity = core.sha256(core.stableStringify({
+      sessionId,
+      latestUserMessageId: userMessageId,
+      normalizedUserGoalHash: normalizedGoalHash,
+      toolName: "unreal_get_active_project",
+    }));
+    const requestId = `direct-project-status-${directProjectStatusIdentity.slice(0, 40)}`;
+    const priorDirectState = core.compactDirectProjectStatus(
+      preliminaryCheckpoint?.directProjectStatus,
+    );
+    const sameDirectQuery = priorDirectState?.identity === directProjectStatusIdentity;
+    if (sameDirectQuery && ["complete", "failed"].includes(priorDirectState.state)) {
+      await appendEventBestEffort(sessionId, {
+        type: "direct_project_status_duplicate_suppressed",
+        at: isoNow(),
+        identity: directProjectStatusIdentity,
+        terminalState: priorDirectState.state,
+      });
+      return;
+    }
+    if (sameDirectQuery && priorDirectState.state === "response_delivered") {
+      const terminalState = core.compactDirectProjectStatus({
+        ...priorDirectState,
+        state: priorDirectState.outcome === "success" ? "complete" : "failed",
+        completedAt: priorDirectState.outcome === "success" ? isoNow() : "",
+        failedAt: priorDirectState.outcome === "success" ? "" : isoNow(),
+      });
+      if (!terminalState) throw new Error("DIRECT_PROJECT_STATUS_INVALID_RECOVERED_TERMINAL");
+      preliminaryCheckpoint.directProjectStatus = terminalState;
+      await persistCheckpoint(
+        sessionId,
+        preliminaryCheckpoint,
+        requireCheckpointPersistence,
+        "direct_project_status_terminal_recovered",
+      );
+      return;
+    }
+    if (sameDirectQuery && priorDirectState.state === "result_received") {
+      await deliverDirectProjectStatusResponse(preliminaryCheckpoint, priorDirectState);
+      return;
+    }
+    if (sameDirectQuery && priorDirectState.state === "response_emitting") {
+      const uncertainState = core.compactDirectProjectStatus({
+        ...priorDirectState,
+        state: "failed",
+        outcome: "failure",
+        errorCode: "DIRECT_PROJECT_STATUS_DELIVERY_UNCERTAIN",
+        responseDelivered: false,
+        failedAt: isoNow(),
+      });
+      if (!uncertainState) throw new Error("DIRECT_PROJECT_STATUS_INVALID_UNCERTAIN_STATE");
+      preliminaryCheckpoint.directProjectStatus = uncertainState;
+      await persistCheckpoint(
+        sessionId,
+        preliminaryCheckpoint,
+        requireCheckpointPersistence,
+        "direct_project_status_delivery_uncertain",
+      );
+      await appendEventBestEffort(sessionId, {
+        type: "direct_project_status_delivery_uncertain",
+        at: isoNow(),
+        identity: directProjectStatusIdentity,
+        automaticReplay: false,
+      });
+      return;
+    }
+    if (sameDirectQuery && ["dispatch_pending", "emitted"].includes(priorDirectState.state)) {
+      const errorCode = "DIRECT_PROJECT_STATUS_RESULT_MISSING";
+      const korean = /[가-힣]/u.test(directProjectStatusGoal);
+      const responseText = korean
+        ? `현재 활성 프로젝트를 확인하지 못했습니다 (${errorCode}). 이전 프로젝트 조회 호출의 결과가 기록되지 않았습니다.`
+        : `Could not determine the active project (${errorCode}). The prior project-status call has no recorded result.`;
+      const failedReceipt = core.compactDirectProjectStatus({
+        ...priorDirectState,
+        state: "result_received",
+        outcome: "failure",
+        errorCode,
+        resultDigest: core.sha256("missing-result"),
+        responseText,
+        responseDigest: core.sha256(responseText),
+        resultReceivedAt: isoNow(),
+      });
+      if (!failedReceipt) throw new Error("DIRECT_PROJECT_STATUS_INVALID_MISSING_RESULT_STATE");
+      await deliverDirectProjectStatusResponse(preliminaryCheckpoint, failedReceipt);
+      return;
+    }
+    const createdAt = isoNow();
+    const initialDirectState = core.compactDirectProjectStatus({
+      version: 1,
+      identity: directProjectStatusIdentity,
+      sessionId,
+      latestUserMessageId: userMessageId,
+      normalizedUserGoalHash: normalizedGoalHash,
+      toolName,
+      toolCallId: requestId,
+      state: "dispatch_pending",
+      attemptCount: 1,
+      resultDigest: "",
+      responseText: "",
+      responseDigest: "",
+      responseDelivered: false,
+      outcome: "",
+      errorCode: "",
+      createdAt,
+      emittedAt: "",
+      resultReceivedAt: "",
+      responseEmittingAt: "",
+      responseDeliveredAt: "",
+      completedAt: "",
+      failedAt: "",
+    });
+    if (!initialDirectState) throw new Error("DIRECT_PROJECT_STATUS_INVALID_INITIAL_STATE");
+    preliminaryCheckpoint.directProjectStatus = initialDirectState;
+    if (!directProjectStatusTool) {
+      const errorCode = "DIRECT_PROJECT_STATUS_PROVIDER_UNAVAILABLE";
+      const korean = /[가-힣]/u.test(directProjectStatusGoal);
+      const responseText = korean
+        ? `현재 활성 프로젝트를 확인하지 못했습니다 (${errorCode}). unreal_get_active_project 도구 제공자가 준비되지 않았습니다.`
+        : `Could not determine the active project (${errorCode}). The unreal_get_active_project provider is unavailable.`;
+      const unavailableState = core.compactDirectProjectStatus({
+        ...initialDirectState,
+        state: "result_received",
+        outcome: "failure",
+        errorCode,
+        resultDigest: core.sha256("provider-unavailable"),
+        responseText,
+        responseDigest: core.sha256(responseText),
+        resultReceivedAt: isoNow(),
+      });
+      if (!unavailableState) throw new Error("DIRECT_PROJECT_STATUS_INVALID_PROVIDER_FAILURE");
+      await deliverDirectProjectStatusResponse(preliminaryCheckpoint, unavailableState);
+      return;
+    }
     const request = { id: requestId, type: "function", name: toolName, arguments: {} };
     const pending: any = {
       id: requestId,
@@ -4787,6 +5103,8 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
       dispatchIntentAt: isoNow(),
       dispatchAttempt: 1,
       hostToolCallId: requestId,
+      directProjectStatus: true,
+      directProjectStatusIdentity,
     };
     preliminaryCheckpoint.pendingToolCall = null;
     preliminaryCheckpoint.pendingToolCalls = [pending];
@@ -4818,6 +5136,14 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     hostToolCallLifecycle.record({ stage: "end", ...identity, request });
     pending.dispatchState = "emitted";
     pending.dispatchedAt = isoNow();
+    preliminaryCheckpoint.directProjectStatus = core.compactDirectProjectStatus({
+      ...initialDirectState,
+      state: "emitted",
+      emittedAt: isoNow(),
+    });
+    if (!preliminaryCheckpoint.directProjectStatus) {
+      throw new Error("DIRECT_PROJECT_STATUS_INVALID_EMITTED_STATE");
+    }
     await persistCheckpoint(
       sessionId,
       preliminaryCheckpoint,
@@ -8976,6 +9302,51 @@ async function generate(ctl: GeneratorController, history: Chat): Promise<void> 
     hostToolCallLifecycle: hostToolCallLifecycleSnapshot(),
     hostToolCallLifecycleDiagnostics: hostToolCallLifecycle.diagnostics().slice(-64),
   });
+}
+
+function generationSingleFlightKey(ctl: GeneratorController, history: Chat): string {
+  const messages = plainMessages(history);
+  let workingDirectory = "";
+  try {
+    workingDirectory = String(ctl.getWorkingDirectory() || "");
+  } catch {
+    workingDirectory = "";
+  }
+  const envSessionId = String(process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID || "").trim();
+  const marker = core.extractSessionMarker(messages) || envSessionId;
+  const conversationSessionId = core.lmStudioConversationSessionFingerprint(
+    workingDirectory,
+    "",
+  );
+  const primaryIdentity = conversationSessionId
+    || marker
+    || core.baseSessionKey(messages, workingDirectory);
+  const auxiliaryMetaRequest = trailingMetaUserMessage(messages);
+  return core.sha256(core.stableStringify({
+    primaryIdentity,
+    requestClass: auxiliaryMetaRequest ? "auxiliary" : "primary",
+  }));
+}
+
+async function generate(ctl: GeneratorController, history: Chat): Promise<void> {
+  const flightKey = generationSingleFlightKey(ctl, history);
+  if (activeGenerationFlights.has(flightKey)) {
+    const error: any = new Error(
+      "GENERATION_ALREADY_ACTIVE: another generator invocation is already active for this conversation.",
+    );
+    error.code = "GENERATION_ALREADY_ACTIVE";
+    error.errorCode = "GENERATION_ALREADY_ACTIVE";
+    throw error;
+  }
+  const flight = generateUnlocked(ctl, history);
+  activeGenerationFlights.set(flightKey, flight);
+  try {
+    await flight;
+  } finally {
+    if (activeGenerationFlights.get(flightKey) === flight) {
+      activeGenerationFlights.delete(flightKey);
+    }
+  }
 }
 
 export {

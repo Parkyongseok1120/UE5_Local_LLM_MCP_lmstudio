@@ -55,6 +55,15 @@ const DEFAULT_MODEL_PROJECTION_BUDGET = Object.freeze({
 const CHECKPOINT_LIFECYCLE_VERSION = 1;
 const CHECKPOINT_LIFECYCLE_STATUSES = new Set(CONTROL_STATE_REGISTRY.proxyLifecycleStates);
 const SYNTHESIS_LIFECYCLE_STATUSES = new Set(CONTROL_STATE_REGISTRY.synthesisLifecycle);
+const DIRECT_PROJECT_STATUS_STATES = new Set([
+  "dispatch_pending",
+  "emitted",
+  "result_received",
+  "response_emitting",
+  "response_delivered",
+  "complete",
+  "failed",
+]);
 const CHECKPOINT_LIFECYCLE_STATUS_RANK = Object.freeze({
   pending: 0,
   evidence_recovery: 0,
@@ -701,6 +710,58 @@ function parseJsonObjects(text) {
   return values;
 }
 
+function compactDirectProjectStatus(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version) !== 1) return null;
+  const identity = String(value.identity || "").trim().toLowerCase();
+  const latestUserMessageId = String(value.latestUserMessageId || "").trim().toLowerCase();
+  const normalizedUserGoalHash = String(value.normalizedUserGoalHash || "").trim().toLowerCase();
+  const state = String(value.state || "").trim().toLowerCase();
+  const sessionId = String(value.sessionId || "").trim().slice(0, 160);
+  const toolName = String(value.toolName || "").trim().slice(0, 240);
+  const toolCallId = String(value.toolCallId || "").trim().slice(0, 240);
+  const responseText = String(value.responseText || "").slice(0, 4096);
+  const responseDigest = String(value.responseDigest || "").trim().toLowerCase();
+  const resultDigest = String(value.resultDigest || "").trim().toLowerCase();
+  const attemptCount = Number(value.attemptCount);
+  if (!/^[a-f0-9]{64}$/.test(identity)) return null;
+  if (!/^[a-f0-9]{64}$/.test(latestUserMessageId)) return null;
+  if (!/^[a-f0-9]{64}$/.test(normalizedUserGoalHash)) return null;
+  if (!DIRECT_PROJECT_STATUS_STATES.has(state)) return null;
+  if (!sessionId || !toolName || !toolCallId) return null;
+  if (!Number.isInteger(attemptCount) || attemptCount < 1 || attemptCount > 1) return null;
+  if (responseDigest && (!responseText || !/^[a-f0-9]{64}$/.test(responseDigest)
+    || sha256(responseText) !== responseDigest)) return null;
+  if (resultDigest && !/^[a-f0-9]{64}$/.test(resultDigest)) return null;
+  const timestamps = {};
+  for (const key of [
+    "createdAt", "emittedAt", "resultReceivedAt", "responseEmittingAt",
+    "responseDeliveredAt", "completedAt", "failedAt",
+  ]) {
+    const timestamp = String(value[key] || "").trim().slice(0, 64);
+    if (timestamp && !Number.isFinite(Date.parse(timestamp))) return null;
+    timestamps[key] = timestamp;
+  }
+  return {
+    version: 1,
+    identity,
+    sessionId,
+    latestUserMessageId,
+    normalizedUserGoalHash,
+    toolName,
+    toolCallId,
+    state,
+    attemptCount,
+    resultDigest,
+    responseText,
+    responseDigest,
+    responseDelivered: value.responseDelivered === true,
+    outcome: String(value.outcome || "").trim().toLowerCase().slice(0, 32),
+    errorCode: String(value.errorCode || "").trim().slice(0, 120),
+    ...timestamps,
+  };
+}
+
 function compactSynthesisEvidenceBundle(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   if (Number(value.version) !== 2) return null;
@@ -1345,6 +1406,7 @@ function resetTaskScopedControl(state, reason = "new_user_objective") {
   state.requiredNextToolRef = null;
   state.requiredNextToolArgs = null;
   state.semanticBlocker = null;
+  state.directProjectStatus = null;
   state.selectedSlice = null;
   state.sliceProgress = null;
   state.buildState = {};
@@ -2582,6 +2644,7 @@ function extractControlState(messages, prior = {}, options = {}) {
     predictionState: canResume ? compactLifecycleState(prior.predictionState) : null,
     synthesisState: canResume ? compactLifecycleState(prior.synthesisState) : null,
     preparedSynthesis: canResume ? compactPreparedSynthesis(prior.preparedSynthesis) : null,
+    directProjectStatus: canResume ? compactDirectProjectStatus(prior.directProjectStatus) : null,
     failedToolResults: canResume && Array.isArray(prior.failedToolResults) ? [...prior.failedToolResults] : [],
     facts: canResume && Array.isArray(prior.facts) ? [...prior.facts] : [],
     evidenceFacts: canResume && Array.isArray(prior.evidenceFacts) ? [...prior.evidenceFacts] : [],
@@ -3213,6 +3276,7 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
     predictionState,
     synthesisState,
     preparedSynthesis: compactPreparedSynthesis(control.preparedSynthesis),
+    directProjectStatus: compactDirectProjectStatus(control.directProjectStatus),
     sideQuery: control.sideQuery,
     coverageIncomplete: recoveryIncomplete && prior.coverageIncomplete === true,
     remainingFrontier: recoveryIncomplete ? compactRemainingFrontier(prior.remainingFrontier) : [],
@@ -4047,6 +4111,13 @@ function validateCheckpoint(checkpoint) {
     const prepared = compactPreparedSynthesis(checkpoint.preparedSynthesis);
     if (!prepared || stableStringify(prepared) !== stableStringify(checkpoint.preparedSynthesis)) return false;
   }
+  if (checkpoint.directProjectStatus !== undefined && checkpoint.directProjectStatus !== null) {
+    const directProjectStatus = compactDirectProjectStatus(checkpoint.directProjectStatus);
+    if (!directProjectStatus
+      || stableStringify(directProjectStatus) !== stableStringify(checkpoint.directProjectStatus)) {
+      return false;
+    }
+  }
   if (checkpoint.reasoningFallback !== undefined && checkpoint.reasoningFallback !== null) {
     const fallback = checkpoint.reasoningFallback;
     if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) return false;
@@ -4235,6 +4306,7 @@ module.exports = {
   compactModelFence,
   compactPredictionPolicy,
   compactLifecycleState,
+  compactDirectProjectStatus,
   compactPreparedSynthesis,
   compactSynthesisEvidenceBundle,
   compactSynthesisReadiness,

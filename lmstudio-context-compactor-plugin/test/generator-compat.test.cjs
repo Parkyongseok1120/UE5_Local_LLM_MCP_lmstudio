@@ -11020,6 +11020,226 @@ test("non-durable questions suppress planner and missing source admission fails 
   }
 });
 
+test("direct project status is one-shot and turns its tool result into one final response", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-direct-project-fsm-"));
+  const sessionId = "d1".repeat(16);
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = sessionId;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let modelCalled = false;
+    const model = {
+      identifier: "direct-project-fsm-model",
+      respond() { modelCalled = true; throw new Error("direct project status must bypass the model"); },
+    };
+    const toolDefinitions = [{
+      type: "function",
+      function: { name: "unreal_get_active_project", parameters: { type: "object" } },
+    }];
+    const userMessage = { role: "user", content: [{ type: "text", text: "지금 프로젝트 어디지?" }] };
+    const firstEmitted = [];
+    await generate(
+      controllerFor(model, {}, stateRoot, firstEmitted, toolDefinitions),
+      Chat.from({ messages: [userMessage] }),
+    );
+    const toolCall = firstEmitted.find((event) => event.kind === "end")?.request;
+    assert.equal(toolCall?.name, "unreal_get_active_project");
+    assert.match(toolCall.id, /^direct-project-status-[a-f0-9]{40}$/u);
+    assert.equal(firstEmitted.filter((event) => event.kind === "end").length, 1);
+    assert.equal(activeCheckpoint(stateRoot).directProjectStatus.state, "emitted");
+    assert.equal(activeCheckpoint(stateRoot).directProjectStatus.attemptCount, 1);
+
+    const completedHistory = Chat.from({ messages: [
+      userMessage,
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: toolCall }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        content: JSON.stringify({
+          ok: true,
+          activeProject: "C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject",
+          projectName: "Project_MJS",
+        }),
+      }] },
+    ] });
+    const secondEmitted = [];
+    await generate(
+      controllerFor(model, {}, stateRoot, secondEmitted, toolDefinitions),
+      completedHistory,
+    );
+    assert.deepEqual(
+      secondEmitted.filter((event) => event.kind === "fragment").map((event) => event.content),
+      ["현재 활성 프로젝트:\nProject_MJS\nC:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject"],
+    );
+    assert.equal(secondEmitted.some((event) => event.kind === "end"), false);
+    assert.equal(activeCheckpoint(stateRoot).directProjectStatus.state, "complete");
+    assert.equal(activeCheckpoint(stateRoot).directProjectStatus.responseDelivered, true);
+
+    const thirdEmitted = [];
+    await generate(
+      controllerFor(model, {}, stateRoot, thirdEmitted, toolDefinitions),
+      completedHistory,
+    );
+    assert.deepEqual(thirdEmitted, []);
+    assert.equal(modelCalled, false);
+    assert.equal(
+      [...firstEmitted, ...secondEmitted, ...thirdEmitted]
+        .filter((event) => event.kind === "end" && event.request.name === "unreal_get_active_project")
+        .length,
+      1,
+    );
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("direct project status terminates invalid results and unavailable providers without retry", async () => {
+  const cases = [
+    { label: "invalid-result", tools: true, expectedCode: "DIRECT_PROJECT_STATUS_INVALID_RESULT" },
+    { label: "provider-unavailable", tools: false, expectedCode: "DIRECT_PROJECT_STATUS_PROVIDER_UNAVAILABLE" },
+  ];
+  for (const fixture of cases) {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), `context-compactor-direct-${fixture.label}-`));
+    process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+    process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = core.sha256(fixture.label).slice(0, 32);
+    try {
+      const { generate } = require("../dist/generator.js");
+      const model = { identifier: fixture.label, respond() { throw new Error("model must not run"); } };
+      const toolDefinitions = fixture.tools ? [{
+        type: "function",
+        function: { name: "unreal_get_active_project", parameters: { type: "object" } },
+      }] : [];
+      const userMessage = { role: "user", content: [{ type: "text", text: "지금 프로젝트 어디지?" }] };
+      const firstEmitted = [];
+      await generate(
+        controllerFor(model, {}, stateRoot, firstEmitted, toolDefinitions),
+        Chat.from({ messages: [userMessage] }),
+      );
+      let terminalHistory = Chat.from({ messages: [userMessage] });
+      if (fixture.tools) {
+        const request = firstEmitted.find((event) => event.kind === "end").request;
+        terminalHistory = Chat.from({ messages: [
+          userMessage,
+          { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] },
+          { role: "tool", content: [{
+            type: "toolCallResult",
+            toolCallId: request.id,
+            name: request.name,
+            content: "not-json",
+          }] },
+        ] });
+        firstEmitted.length = 0;
+        await generate(
+          controllerFor(model, {}, stateRoot, firstEmitted, toolDefinitions),
+          terminalHistory,
+        );
+      }
+      assert.equal(firstEmitted.filter((event) => event.kind === "fragment").length, 1, fixture.label);
+      assert.match(firstEmitted.find((event) => event.kind === "fragment").content, new RegExp(fixture.expectedCode));
+      const terminal = activeCheckpoint(stateRoot).directProjectStatus;
+      assert.equal(terminal.state, "failed", fixture.label);
+      assert.equal(terminal.attemptCount, 1, fixture.label);
+      assert.equal(terminal.errorCode, fixture.expectedCode, fixture.label);
+      const repeated = [];
+      await generate(
+        controllerFor(model, {}, stateRoot, repeated, toolDefinitions),
+        terminalHistory,
+      );
+      assert.deepEqual(repeated, [], fixture.label);
+    } finally {
+      delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+      delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("same-session generator invocations are single-flight", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-single-flight-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = "f1".repeat(16);
+  let releasePrediction;
+  let firstGeneration;
+  try {
+    const { generate } = require("../dist/generator.js");
+    let signalPredictionStarted;
+    const predictionStarted = new Promise((resolve) => { signalPredictionStarted = resolve; });
+    const predictionBarrier = new Promise((resolve) => { releasePrediction = resolve; });
+    let respondCount = 0;
+    const model = {
+      identifier: "single-flight-model",
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond() {
+        respondCount += 1;
+        signalPredictionStarted();
+        return { async result() { await predictionBarrier; return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const history = Chat.from({ messages: [{
+      role: "user",
+      content: [{ type: "text", text: "Explain what an Unreal subsystem is." }],
+    }] });
+    firstGeneration = generate(controllerFor(model, {}, stateRoot, [], []), history);
+    await predictionStarted;
+    await assert.rejects(
+      generate(controllerFor(model, {}, stateRoot, [], []), history),
+      (error) => error?.code === "GENERATION_ALREADY_ACTIVE",
+    );
+    assert.equal(respondCount, 1);
+    releasePrediction();
+    await firstGeneration;
+  } finally {
+    releasePrediction?.();
+    await firstGeneration?.catch(() => {});
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("concurrent direct project status requests emit exactly one tool call", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-direct-single-flight-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = "f2".repeat(16);
+  try {
+    const { generate } = require("../dist/generator.js");
+    const emitted = [];
+    const controller = controllerFor(
+      { identifier: "direct-single-flight-model", respond() { throw new Error("model must not run"); } },
+      {},
+      stateRoot,
+      emitted,
+      [{ type: "function", function: { name: "unreal_get_active_project", parameters: { type: "object" } } }],
+    );
+    const history = Chat.from({ messages: [{
+      role: "user",
+      content: [{ type: "text", text: "지금 프로젝트 어디지?" }],
+    }] });
+    const firstGeneration = generate(controller, history);
+    await assert.rejects(
+      generate(controller, history),
+      (error) => error?.code === "GENERATION_ALREADY_ACTIVE",
+    );
+    await firstGeneration;
+    assert.equal(
+      emitted.filter((event) => (
+        event.kind === "end" && event.request.name === "unreal_get_active_project"
+      )).length,
+      1,
+    );
+    assert.equal(activeCheckpoint(stateRoot).directProjectStatus.state, "emitted");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("durable inspection planning distinguishes project audits from generic Unreal questions", () => {
   const { requiresDurableInspectionPlanning, resolveCurrentTurnCapConfig } = require("../dist/generator.js");
   assert.equal(
