@@ -273,7 +273,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.3.0 RC3"
-    assert packaged_installer_manifest["version"] == "2.1.6"
+    assert packaged_installer_manifest["version"] == "2.1.7"
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
     source_launcher = (ROOT / "install.sh").read_bytes()
     expected_launcher = source_launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
@@ -340,6 +340,45 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     )
     assert installed.returncode == 0, installed.stderr or installed.stdout
     assert json.loads(installed.stdout)["mcpSmoke"]["ok"] is True
+
+
+def test_packaged_unreal_skip_deps_fails_before_writing_mcp_config(tmp_path: Path) -> None:
+    output, _archive = _build(tmp_path, "missing-agent-dependency")
+    lmstudio_home = tmp_path / "isolated-lmstudio"
+    state_home = tmp_path / "isolated-state"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(output / "install.py"),
+            "--profile",
+            "standard",
+            "--yes",
+            "--skip-deps",
+            "--skip-runtime-bootstrap",
+            "--codex-home",
+            str(tmp_path / "isolated-codex"),
+            "--lmstudio-home",
+            str(lmstudio_home),
+            "--state-home",
+            str(state_home),
+            "--workspace-root",
+            str(tmp_path / "projects"),
+        ],
+        cwd=str(output),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert "UNREAL_AGENT_DEPENDENCY_MISSING" in payload["error"]
+    assert "without --skip-deps" in payload["error"]
+    assert not (lmstudio_home / "mcp.json").exists()
+    assert not state_home.exists()
 
 
 def test_manifest_inventory_and_zip_are_reproducible(tmp_path: Path) -> None:

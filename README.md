@@ -83,6 +83,12 @@ RC3's deterministic control plane removes ambiguous server handoffs, but it cann
 
 See [`docs/VERSIONING.md`](docs/VERSIONING.md) for product vs component version numbers.
 
+Extract a Portable ZIP to a stable directory and retain it after installation:
+the LM Studio RAG/Agent MCP entries execute from that extracted runtime tree.
+Portable packages exclude `node_modules`, so do not use `--skip-deps` on the
+first Unreal install. The installer now fails before writing `mcp.json` if the
+pinned Agent SDK is not already resolvable.
+
 ## Quick Install
 
 ```text

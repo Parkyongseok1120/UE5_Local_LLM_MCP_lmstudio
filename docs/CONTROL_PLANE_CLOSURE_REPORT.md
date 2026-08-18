@@ -5,7 +5,7 @@
 - Baseline audited SHA: `d78e64a2be297c7b3a0fe1ecfa3cfe5939f9ddcd` on `Develop`.
 - Historical comparison SHAs: `d74bf63e0b4fbb0b317b7963df536e60e5825883` and `d16fc0519be0f217306780b466265be6ddd28cb0`.
 - The d16/d74 LM Studio transcripts and server logs supplied with the correction request were treated as primary reproduction evidence.
-- Runtime correction commit: `bc9836be5d89278f465be8f127d8bc8dc60def34`.
+- Runtime correction commit: `791ae0cac88fce47122646e2f7a8cbd456e1b6a5` (control-plane base correction: `bc9836be5d89278f465be8f127d8bc8dc60def34`).
 - Evidence-only documentation commit: the final pushed HEAD records package/install and final-suite evidence; its exact SHA is reported in the final handoff because a commit cannot embed its own hash.
 - Release status: prerelease, `installer/manifest.json → portablePackage.releaseReady=false`.
 
@@ -199,7 +199,7 @@ UI guarantee:
 
 The correction changes the synthesis policy/reducer/task API, Compactor core/generator/store, Agent bridge/auth/server/budgets, canonical/proxy state registries, protocol/identity/package closure, versions, documentation, and their tests. Exact paths and categories are in the machine-readable file manifest; the implementation commit's `git show --stat` is the authoritative changed-file list.
 
-Component versions are now Agent `0.3.18`, Compactor `0.4.43` revision `89`, and portable manifest `2.1.6`. Product remains `1.3.0 RC3` prerelease with `releaseReady=false`.
+Component versions are now Agent `0.3.18`, Compactor `0.4.43` revision `89`, and portable manifest `2.1.7`. Product remains `1.3.0 RC3` prerelease with `releaseReady=false`.
 
 ## 15. Exact validation results
 
@@ -210,12 +210,12 @@ Final CI-equivalent results are filled only after the last runtime source change
 | Changed-boundary Python suite | 0 | 175 | 0 | 0 | 0 | 28.87s |
 | Agent `npm test` pre-final check | 0 | recorded in final run | 0 | platform skips reported separately | 0 | 15.53s |
 | Compactor `npm test` pre-final check | 0 | 308 | 0 | 0 | 0 | 19.15s |
-| `python -m pytest --tb=short -q` | 0 | 2,212 | 0 | 13 | 0 | 226.33s runner / 226.88s wall |
+| `python -m pytest --tb=short -q` | 0 | 2,214 | 0 | 13 | 0 | 228.79s runner / 229.35s wall |
 | Ruff E/F/W gate | 0 | All checks passed | 0 | 0 | 0 | 0.26s |
 | Protocol validator | 0 | 1 validation run | 0 | 0 | 0 | 3.04s including registry generation, TypeScript build, and diff check |
 | Agent final `npm test` | 0 | 473 | 0 | 5 | 0 | 15.25s |
 | Compactor final `npm test` | 0 | 308 | 0 | 0 | 0 | 22.51s wall / 18.90s test runner |
-| Package/installer CI-equivalent gates | 0 | Included in the 2,212-test clean-tree suite | 0 | 0 attributable | 0 | Included above |
+| Package/installer CI-equivalent gates | 0 | Included in the 2,214-test clean-tree suite; focused installer/package run 76 passed | 0 | 0 attributable | 0 | 74.13s focused run |
 | `git diff --check` | 0 | n/a | 0 | 0 | 0 | <1s |
 
 ## 16. Package/install identities
@@ -230,13 +230,13 @@ Protocol identity after correction:
 
 The clean runtime commit was packaged and installed manually before the final full-suite run:
 
-- Package source SHA: `bc9836be5d89278f465be8f127d8bc8dc60def34`.
+- Package source SHA: `791ae0cac88fce47122646e2f7a8cbd456e1b6a5`.
 - Package inventory: 668 files, generated index excluded, forbidden inventory count 0.
-- ZIP: `%TEMP%\ue-evidence-bc9836b\Evidence-First-Integrated.zip`, 2,402,930 bytes.
-- ZIP SHA-256: `0eb3415d8db5277696ffa6adc518d98c224598b1c308b18a3d536a1580bafddc`.
-- Manual install command source: the generated package's `install.py`, FULL profile, dependency bootstrap skipped, Agent authority explicitly acknowledged, RAG rebuild omitted.
-- Install result: exit 0 in 15.57s; active project `%USERPROFILE%\Documents\Git\Project_MJS\Project_MJS.uproject`; selected Unreal Engine version 5.8 root; MCP smoke `ok:true`; Compactor installed and pinned; restart required.
-- Installed runtime manifest: `%USERPROFILE%\.lmstudio\config\control-runtime.json`, expected source commit `bc9836be5d89278f465be8f127d8bc8dc60def34`.
+- ZIP: `%USERPROFILE%\.evidence-first\packages\Evidence-First-Integrated-791ae0c.zip`, 2,405,099 bytes.
+- ZIP SHA-256: `02389ce43ba9c4fc073e2750966ac2cd8b1d372e6f247b5427d0d6125ef50953`.
+- Manual install command source: the generated package's `install.py`, FULL profile, runtime bootstrap skipped, pinned npm dependencies installed, Agent authority explicitly acknowledged, RAG rebuild omitted.
+- Install result: exit 0 in 30.66s; Agent SDK runtime probe `ok:true` with source `npm_ci`; active project `%USERPROFILE%\Documents\Git\Project_MJS\Project_MJS.uproject`; selected Unreal Engine version 5.8 root; MCP smoke `ok:true`; Compactor installed and pinned; restart required.
+- Installed runtime manifest: `%USERPROFILE%\.lmstudio\config\control-runtime.json`, expected source commit `791ae0cac88fce47122646e2f7a8cbd456e1b6a5`.
 - Installed Agent build hash: `64b5accccd566d2d9c8daf0aeea06fcadc976e7d4d00551b7feb7352238b8f8f` (`0.3.18`).
 - Installed RAG build hash: `3557d92c3298a671b7832bfc864a49c63e335a271cf45cf00dbaf09e9f7b583e` (`0.3.1`).
 - Installed Compactor build hash: `276d98c6dbe17452cf3f0e768b5e32891ee81ec24118e50b0e1bbc27343b5465` (`0.4.43`, installed plugin revision 89).

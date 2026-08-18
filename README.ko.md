@@ -77,6 +77,13 @@ RC2의 deterministic control plane은 모호한 서버 handoff를 없애지만 �
 
 > **BYOI** = Bring Your Own Index. 이 저장소는 **tooling만** 제공합니다. Epic source, 사전 빌드된 `rag.sqlite`는 포함하지 않습니다.
 
+Portable ZIP은 운영체제 임시 폴더가 아닌 안정적인 디렉터리에 압축을 풀고,
+설치 후에도 해당 디렉터리를 유지해야 합니다. LM Studio의 RAG/Agent MCP는
+그 압축 해제 트리의 런타임을 직접 실행합니다. Portable ZIP에는
+`node_modules`가 포함되지 않으므로 최초 Unreal 설치에서 `--skip-deps`를
+사용하지 마세요. Agent SDK가 이미 resolve되지 않으면 installer는 이제
+`mcp.json`을 기록하기 전에 실패하고 정상 dependency 설치 방법을 안내합니다.
+
 ## 빠른 설치
 
 ```powershell

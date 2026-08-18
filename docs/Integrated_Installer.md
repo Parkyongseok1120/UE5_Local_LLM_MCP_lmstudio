@@ -2,7 +2,7 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release label: **1.3.0 RC3** (GitHub prerelease; `portablePackage.releaseReady` is `false` until Windows physical install validation and remaining release gates complete). The installer reports the same value with `python3 install.py --version`; the current RC3 portable manifest is `2.1.6` (the immutable `v1.3.0-rc2` snapshot remains `2.1.3`).
+Product release label: **1.3.0 RC3** (GitHub prerelease; `portablePackage.releaseReady` is `false` until Windows physical install validation and remaining release gates complete). The installer reports the same value with `python3 install.py --version`; the current RC3 portable manifest is `2.1.7` (the immutable `v1.3.0-rc2` snapshot remains `2.1.3`).
 
 ## Requirements
 
@@ -119,6 +119,19 @@ python3 install.py --profile standard --yes --skip-deps --workspace-root /path/t
 python3 install.py --profile full --yes
 python3 install.py --rollback
 ```
+
+`--skip-deps` only reuses dependencies that are already resolvable from each
+component directory. It does not make dependencies optional. An Unreal install
+fails before writing LM Studio MCP configuration when
+`@modelcontextprotocol/sdk/server/index.js` cannot be resolved; rerun without
+`--skip-deps` to execute the pinned `npm ci` installation. Portable ZIPs
+intentionally exclude `node_modules`.
+
+For a Portable ZIP, the extracted package directory is also the installed RAG
+and Unreal Agent runtime location referenced by `mcp.json`. Extract it to a
+stable directory, run the installer there, and retain that directory after
+installation. Do not install from an operating-system temporary directory that
+may be cleaned automatically.
 
 Managed skill/config files are journaled and can be restored by `--rollback`. External package-manager/plugin actions and generated indexes are reported separately and are not claimed as transactionally reversible.
 

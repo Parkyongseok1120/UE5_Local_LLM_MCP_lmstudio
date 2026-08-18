@@ -43,6 +43,10 @@ jobs:
           scripts/chat_history_trim.test.js
           scripts/stage_campaign_verify.test.js
 
+      - name: Install agent MCP dependencies for installer runtime probe
+        run: npm ci --no-fund --no-audit
+        working-directory: lmstudio-unreal-agent-mcp
+
       - name: Cross-platform installer and package tests
         run: >
           python -m pytest
@@ -53,10 +57,6 @@ jobs:
           tests/test_evidence_first_mcp.py
           tests/test_evidence_first_benchmark.py
           -q --tb=short
-
-      - name: Install agent MCP dependencies
-        run: npm ci --no-fund --no-audit
-        working-directory: lmstudio-unreal-agent-mcp
 
       - name: Agent MCP syntax gate (all source JavaScript)
         shell: pwsh

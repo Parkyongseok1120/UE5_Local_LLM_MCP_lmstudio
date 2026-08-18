@@ -9,12 +9,16 @@ The release tag is **`v1.3.0-rc3`**. Existing RC and historical Beta-alias tags 
 | Component | RC3 version |
 |---|---|
 | Product | 1.3.0 RC3 (`v1.3.0-rc3`) |
-| Portable manifest | 2.1.6 |
+| Portable manifest | 2.1.7 |
 | Node agent MCP | 0.3.18 |
 | Context compactor | 0.4.43 / revision 89 |
 
 ## What changed since the RC2 tag
 
+- Portable manifest 2.1.7 makes `--skip-deps` fail closed for Unreal installs:
+  the installer resolves the pinned MCP SDK from the exact Agent runtime before
+  writing `mcp.json`, and verifies it again after `npm ci`. Portable ZIP users
+  must retain the stable extracted runtime directory after installation.
 - Static, Build, Automation, and failed-gate recovery now use one persisted `recoveryObligation` lifecycle instead of handler-local next-step advice.
 - The server-owned transition table publishes phase, disposition, allowed tools, exact required arguments, retry policy, and semantic epoch from the latest task facts.
 - Successful gates are idempotent within their task scope and redirect replays to the current authoritative obligation.

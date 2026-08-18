@@ -47,7 +47,7 @@ def test_installer_profiles_are_manifest_driven() -> None:
     sys.modules.pop("integrated_install", None)
     manifest = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.0 RC3"
-    assert manifest["version"] == "2.1.6"
+    assert manifest["version"] == "2.1.7"
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
@@ -813,6 +813,26 @@ def test_noninteractive_agent_mode_requires_explicit_risk_acceptance(tmp_path: P
     assert "--accept-agent-risk" in result.stdout
 
 
+def test_unreal_agent_dependency_probe_rejects_missing_sdk(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is unavailable")
+    empty_agent = tmp_path / "lmstudio-unreal-agent-mcp"
+    (empty_agent / "src").mkdir(parents=True)
+    (empty_agent / "src" / "server.js").write_text("// fixture\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="UNREAL_AGENT_DEPENDENCY_MISSING") as raised:
+        module._verify_unreal_agent_dependency(
+            Path(node).resolve(),
+            empty_agent,
+            dependency_source="preinstalled_skip_deps",
+        )
+
+    assert "without --skip-deps" in str(raised.value)
+    sys.modules.pop("integrated_install", None)
+
+
 def test_rag_build_rejects_profiles_without_unreal_component(tmp_path: Path) -> None:
     result = _run(tmp_path, "--profile", "safe", "--build-rag")
     assert result.returncode == 1
@@ -834,6 +854,11 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
     payload = json.loads(result.stdout)
     assert payload["agentMode"] is True
     assert payload["safeMode"] is False
+    assert payload["unrealAgentDependency"]["ok"] is True
+    assert payload["unrealAgentDependency"]["entrypoint"] == (
+        "@modelcontextprotocol/sdk/server/index.js"
+    )
+    assert payload["unrealAgentDependency"]["source"] == "preinstalled_skip_deps"
     mcp = json.loads((tmp_path / "lmstudio" / "mcp.json").read_text(encoding="utf-8"))
     env = mcp["mcpServers"]["unreal-agent"]["env"]
     assert Path(env["PYTHON_EXE"]).resolve() == Path(sys.executable).resolve()

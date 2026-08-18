@@ -1262,6 +1262,56 @@ def _run(
         ) from exc
 
 
+UNREAL_AGENT_SDK_ENTRYPOINT = "@modelcontextprotocol/sdk/server/index.js"
+
+
+def _verify_unreal_agent_dependency(
+    node_exe: Path,
+    agent_root: Path,
+    *,
+    dependency_source: str,
+) -> dict[str, Any]:
+    """Prove the packaged Agent can resolve its production MCP SDK entrypoint."""
+
+    try:
+        probe = subprocess.run(
+            [
+                str(node_exe),
+                "-e",
+                f"process.stdout.write(require.resolve({UNREAL_AGENT_SDK_ENTRYPOINT!r}))",
+            ],
+            cwd=str(agent_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(
+            "UNREAL_AGENT_DEPENDENCY_PROBE_FAILED: could not execute Node.js to "
+            f"resolve {UNREAL_AGENT_SDK_ENTRYPOINT}: {exc}"
+        ) from exc
+    resolved = probe.stdout.strip()
+    if probe.returncode != 0 or not resolved:
+        detail = probe.stderr.strip().splitlines()
+        suffix = f" ({detail[-1]})" if detail else ""
+        raise RuntimeError(
+            "UNREAL_AGENT_DEPENDENCY_MISSING: "
+            f"{UNREAL_AGENT_SDK_ENTRYPOINT} is not resolvable from {agent_root}{suffix}. "
+            "The portable package intentionally excludes node_modules. Re-run the "
+            "installer without --skip-deps so npm ci installs the pinned production "
+            "dependencies before LM Studio MCP configuration is committed."
+        )
+    return {
+        "ok": True,
+        "entrypoint": UNREAL_AGENT_SDK_ENTRYPOINT,
+        "resolvedPath": resolved,
+        "source": dependency_source,
+    }
+
+
 def _powershell_file_command(
     executable: str,
     script: Path,
@@ -1660,6 +1710,40 @@ def install(
     if args.cline_settings:
         args.cline_settings = args.cline_settings.expanduser().resolve()
 
+    unreal_node_exe: Path | None = None
+    unreal_agent_root: Path | None = None
+    unreal_agent_dependency: dict[str, Any] | None = None
+    if "unreal" in components:
+        node = str(getattr(args, "runtime_node", None) or "") or shutil.which("node")
+        if not node:
+            raise FileNotFoundError("Node.js 20+ is required for the Unreal adapter")
+        unreal_node_exe = Path(node).resolve()
+        version = subprocess.run(
+            [str(unreal_node_exe), "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip().lstrip("v")
+        if int(version.split(".")[0]) < 20:
+            raise RuntimeError(f"Node.js 20+ required, found {version}")
+        unreal_agent_root = ROOT / "lmstudio-unreal-agent-mcp"
+        if not (unreal_agent_root / "src" / "server.js").is_file():
+            raise FileNotFoundError("Unreal agent MCP source is missing")
+        if args.skip_deps:
+            unreal_agent_dependency = (
+                {
+                    "ok": None,
+                    "entrypoint": UNREAL_AGENT_SDK_ENTRYPOINT,
+                    "source": "dry_run_not_checked",
+                }
+                if args.dry_run
+                else _verify_unreal_agent_dependency(
+                    unreal_node_exe,
+                    unreal_agent_root,
+                    dependency_source="preinstalled_skip_deps",
+                )
+            )
+
     allowed_roots = [args.codex_home, args.lmstudio_home, args.state_home, ROOT]
     allowed_roots.extend(path.parent for path in args.rule_path)
     if args.cline_settings:
@@ -1684,6 +1768,8 @@ def install(
         "projectSearchRoots": [str(path) for path in args.workspace_root],
         "engineRoot": str(args.engine_root) if args.engine_root else None,
     }
+    if unreal_agent_dependency is not None:
+        report["unrealAgentDependency"] = unreal_agent_dependency
     external_actions_started: list[str] = []
     lock.acquire()
     try:
@@ -1715,18 +1801,10 @@ def install(
             _merge_mcp_entry(mcp_config, "evidence-first", evidence_entry)
 
         if "unreal" in components:
-            node = str(getattr(args, "runtime_node", None) or "") or shutil.which("node")
-            if not node:
-                raise FileNotFoundError("Node.js 20+ is required for the Unreal adapter")
-            node_exe = Path(node).resolve()
-            version = subprocess.run(
-                [str(node_exe), "--version"], capture_output=True, text=True, check=True
-            ).stdout.strip().lstrip("v")
-            if int(version.split(".")[0]) < 20:
-                raise RuntimeError(f"Node.js 20+ required, found {version}")
-            agent_root = ROOT / "lmstudio-unreal-agent-mcp"
-            if not (agent_root / "src" / "server.js").is_file():
-                raise FileNotFoundError("Unreal agent MCP source is missing")
+            assert unreal_node_exe is not None
+            assert unreal_agent_root is not None
+            node_exe = unreal_node_exe
+            agent_root = unreal_agent_root
             if not args.skip_deps:
                 npm = str(getattr(args, "runtime_npm", None) or "") or shutil.which("npm")
                 if not npm:
@@ -1738,6 +1816,19 @@ def install(
                     cwd=agent_root,
                     dry_run=args.dry_run,
                     timeout=600,
+                )
+                report["unrealAgentDependency"] = (
+                    {
+                        "ok": None,
+                        "entrypoint": UNREAL_AGENT_SDK_ENTRYPOINT,
+                        "source": "dry_run_planned_npm_ci",
+                    }
+                    if args.dry_run
+                    else _verify_unreal_agent_dependency(
+                        node_exe,
+                        agent_root,
+                        dependency_source="npm_ci",
+                    )
                 )
 
             shared_path = args.lmstudio_home / "config" / "unreal-workspace.json"
