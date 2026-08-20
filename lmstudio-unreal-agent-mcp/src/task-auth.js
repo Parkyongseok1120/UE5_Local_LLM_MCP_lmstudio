@@ -795,7 +795,7 @@ function validateToolRoute(state, fields, args, toolName) {
       error: `${toolName} is not active in route phase ${String(activeRoute.phase || "")}.`,
       toolRoute: activeRoute,
       taskAuthorization: taskAuthorizationForState(state),
-      nextAction: pending[0] || "use_active_route_tool",
+      nextAction: [...activeTools][0] || pending[0] || "use_active_route_tool",
     };
   }
   const matchesCurrentRoute = Boolean(
@@ -951,8 +951,13 @@ function purgeExpiredReservations(usage, nowMs = Date.now()) {
 }
 
 const DIRECT_SOURCE_EXTENSIONS = new Set([
-  ".h", ".hpp", ".inl", ".cpp", ".c", ".cc", ".cxx", ".cs",
+  ".h", ".hpp", ".hh", ".inl", ".cpp", ".c", ".cc", ".cxx", ".cs", ".ini",
 ]);
+const DIRECT_SOURCE_DECLARATION_EXTENSIONS = new Set([".h", ".hpp", ".hh", ".inl"]);
+const DIRECT_SOURCE_IMPLEMENTATION_EXTENSIONS = new Set([".cpp", ".c", ".cc", ".cxx", ".cs"]);
+const MAX_DURABLE_FRONTIER_ENTRIES = 4096;
+const MAX_DURABLE_SOURCE_EVIDENCE_ENTRIES = 4096;
+const MAX_DURABLE_ABSENT_EVIDENCE_ENTRIES = 4096;
 const INSPECTION_DISCOVERY_TOOLS = new Set([
   "unreal_rag_search", "unreal_symbol_lookup", "list_directory", "search_files",
   "read_file", "read_file_range", "read_symbol", "read_unreal_logs",
@@ -997,10 +1002,52 @@ function updateInspectionFrontier(state, candidates = [], consumedPath = "") {
   const rows = [...current, ...(Array.isArray(candidates) ? candidates : [])]
     .map(normalizeEvidencePath)
     .filter((value) => value && value !== consumed && DIRECT_SOURCE_EXTENSIONS.has(path.posix.extname(value).toLowerCase()));
+  const uniqueRows = [...new Set(rows)].sort();
+  const retainedRows = uniqueRows.slice(0, MAX_DURABLE_FRONTIER_ENTRIES);
   state.inspectionProgress = {
     ...progress,
-    remainingFrontier: [...new Set(rows)].sort().slice(0, 32),
+    remainingFrontier: retainedRows,
+    remainingFrontierTotalCount: uniqueRows.length,
+    remainingFrontierHash: canonicalHash(uniqueRows),
+    frontierOverflow: uniqueRows.length > MAX_DURABLE_FRONTIER_ENTRIES,
+    ...(uniqueRows.length > MAX_DURABLE_FRONTIER_ENTRIES
+      ? { frontierOverflowCode: "EVIDENCE_FRONTIER_CAPACITY_EXCEEDED" }
+      : { frontierOverflowCode: "" }),
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function inspectionReadPolicyForState(state = {}) {
+  const contract = state?.inspectionContract && typeof state.inspectionContract === "object"
+    ? state.inspectionContract
+    : null;
+  const budget = contract?.evidenceBudget && typeof contract.evidenceBudget === "object"
+    ? contract.evidenceBudget
+    : null;
+  if (!budget) return null;
+  const maxReads = Math.max(1, Number(budget.maxDirectSourceReadsPerPhase || 1));
+  const maxEvidenceChars = Math.max(1, Number(budget.maxEvidenceCharsPerPhase || 1));
+  const maxFullReadChars = Math.max(1, Number(budget.maxFullReadChars || maxEvidenceChars));
+  const progress = state?.inspectionProgress && typeof state.inspectionProgress === "object"
+    ? state.inspectionProgress
+    : {};
+  const phaseEvidenceCharacters = Math.max(0, Number(
+    progress.phaseEvidenceCharacters ?? progress.evidenceCharacters ?? 0,
+  ));
+  const remainingEvidenceChars = Math.max(0, maxEvidenceChars - phaseEvidenceCharacters);
+  const perReadCharacters = Math.max(1, Math.min(
+    maxFullReadChars,
+    Math.floor(maxEvidenceChars / maxReads),
+    Math.max(1, remainingEvidenceChars),
+  ));
+  return {
+    maxBytesPerRead: perReadCharacters,
+    maxCharactersPerRead: perReadCharacters,
+    maxLinesPerRead: Math.max(1, Number(budget.maxFullReadLines || 300)),
+    maxDirectoryEntries: Math.max(1, Number(budget.maxDirectoryEntries || 200)),
+    maxDirectoryLists: Math.max(1, Number(budget.maxDirectoryLists || 1)),
+    listedDirectories: Math.max(0, Number(progress.listedDirectories || 0)),
+    coverageMode: String(contract.coverageMode || ""),
   };
 }
 
@@ -1163,9 +1210,12 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
   }
   const planRevision = String(state.planRevision || "");
   const key = filesystemPathIdentity(relPath);
-  const sourceKind = [".h", ".hpp", ".inl"].includes(path.posix.extname(relPath).toLowerCase())
+  const sourceExtension = path.posix.extname(relPath).toLowerCase();
+  const sourceKind = DIRECT_SOURCE_DECLARATION_EXTENSIONS.has(sourceExtension)
     ? "declaration"
-    : "implementation";
+    : DIRECT_SOURCE_IMPLEMENTATION_EXTENSIONS.has(sourceExtension)
+      ? "implementation"
+      : "configuration";
   const lineRange = String(metadata.lineRange || "").trim();
   const mutationGeneration = Math.max(0, Number(state.mutationGeneration || 0));
   const evidenceSnapshotGeneration = Math.max(
@@ -1318,7 +1368,7 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
   };
   const boundedSourceEntries = Object.entries(sourceFiles)
     .sort((left, right) => String(right[1]?.recordedAt || "").localeCompare(String(left[1]?.recordedAt || "")))
-    .slice(0, 32);
+    .slice(0, MAX_DURABLE_SOURCE_EVIDENCE_ENTRIES);
   state.sourceEvidence = {
     version: 2,
     planRevision,
@@ -1374,14 +1424,23 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
     const completeDirectSourceFiles = currentRows.filter((row) => row.wholeFileComplete === true).length;
     const distinctDeclarationFiles = currentRows.filter((row) => row.sourceKind === "declaration").length;
     const distinctImplementationFiles = currentRows.filter((row) => row.sourceKind === "implementation").length;
+    const newEvidenceCharacters = evidenceProgressed ? Math.max(0, Number(metadata.characterCount || 0)) : 0;
     const evidenceCharacters = Math.max(0, Number(priorProgress.evidenceCharacters || 0))
-      + (evidenceProgressed ? Math.max(0, Number(metadata.characterCount || 0)) : 0);
+      + newEvidenceCharacters;
+    const phaseEvidenceCharacters = Math.max(0, Number(
+      priorProgress.phaseEvidenceCharacters ?? priorProgress.evidenceCharacters ?? 0,
+    ))
+      + newEvidenceCharacters;
+    const phaseDirectSourceReadCalls = Math.max(0, Number(
+      priorProgress.phaseDirectSourceReadCalls ?? priorProgress.directSourceReadCalls ?? 0,
+    )) + 1;
     const maxReads = Math.max(1, Number(inspectionBudget.maxDirectSourceReadsPerPhase || 1));
     const maxChars = Math.max(1, Number(inspectionBudget.maxEvidenceCharsPerPhase || 1));
     state.inspectionProgress = {
       ...priorProgress,
       version: 2,
       directSourceReadCalls,
+      phaseDirectSourceReadCalls,
       distinctDirectSourceFiles,
       completeDirectSourceFiles,
       distinctDeclarationFiles,
@@ -1389,7 +1448,8 @@ function recordDirectSourceEvidence(state, toolName, callMetadata) {
       directSourceReads: distinctDirectSourceFiles,
       fullSourceReads: completeDirectSourceFiles,
       evidenceCharacters,
-      status: distinctDirectSourceFiles >= maxReads || evidenceCharacters >= maxChars
+      phaseEvidenceCharacters,
+      status: phaseDirectSourceReadCalls >= maxReads || phaseEvidenceCharacters >= maxChars
         ? "synthesis_required"
         : "collecting",
       updatedAt: new Date().toISOString(),
@@ -1528,7 +1588,7 @@ function recordAbsentSourceEvidence(state, toolName, callMetadata) {
   };
   const boundedEntries = Object.entries(files)
     .sort((left, right) => String(right[1]?.recordedAt || "").localeCompare(String(left[1]?.recordedAt || "")))
-    .slice(0, 32);
+    .slice(0, MAX_DURABLE_ABSENT_EVIDENCE_ENTRIES);
   state.absentEvidence = {
     version: 1,
     planRevision,
@@ -4335,4 +4395,6 @@ module.exports = {
   pendingRepeatedGateRediscovery,
   phaseBudgetRecoveryDecision,
   recordDirectSourceEvidence,
+  updateInspectionFrontier,
+  inspectionReadPolicyForState,
 };

@@ -122,6 +122,44 @@ def test_task_control_v2_survives_a_second_transport_pass() -> None:
     assert second["control"]["allowedTools"] == ["build_project"]
 
 
+def test_extreme_lmstudio_projection_preserves_authoritative_v2_identity() -> None:
+    control = {
+        "version": 2,
+        "authoritative": True,
+        "epoch": 8,
+        "taskSessionId": "task-v2-extreme",
+        "taskMode": "agent",
+        "planRevision": "plan-8",
+        "activeSliceId": "slice-8",
+        "mutationGeneration": 3,
+        "fingerprint": "f" * 64,
+        "routeHash": "r" * 64,
+        "phase": "verifier",
+        "disposition": "require_tool",
+        "requiredTool": {"name": "unreal_task_checkpoint", "args": {"taskSessionId": "task-v2-extreme"}},
+        "allowedTools": ["unreal_task_checkpoint"],
+        "retryPolicy": {"sameSemanticInput": "once"},
+    }
+    text = model_visible_control_text(
+        {
+            "ok": True,
+            "control": control,
+            "taskAuthorization": {"opaque": "x" * 100_000},
+            "results": [{"body": "y" * 10_000} for _ in range(20)],
+        },
+        frontend="lmstudio",
+        max_chars=2_000,
+    )
+    projected = json.loads(text)["control"]
+    for key in (
+        "version", "authoritative", "epoch", "taskSessionId", "taskMode",
+        "planRevision", "activeSliceId", "mutationGeneration", "fingerprint",
+        "routeHash", "phase", "disposition", "requiredTool", "allowedTools",
+        "retryPolicy",
+    ):
+        assert projected[key] == control[key]
+
+
 def test_repeated_gate_legacy_fields_cannot_shadow_the_canonical_reducer() -> None:
     payload = attach_control_envelope(
         {

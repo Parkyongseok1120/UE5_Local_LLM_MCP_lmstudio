@@ -30,7 +30,8 @@ const SERVER_STATE_TOOL_NAMES = new Set([
   "unreal_code_sketch_claim_validate", "unreal_semantic_refactor_guard",
   "unreal_review_claim_validate", "unreal_diagram_validate", "unreal_project_status",
   "unreal_task_list_active", "unreal_task_cancel_active", "unreal_task_quarantine_corrupt",
-  "unreal_task_retry_job_cancel", "unreal_task_commit_synthesis", "unreal_task_ack_synthesis_delivery", "unreal_task_define_slices",
+  "unreal_task_retry_job_cancel", "unreal_task_commit_synthesis", "unreal_task_ack_synthesis_delivery",
+  "unreal_task_recover_synthesis_delivery", "unreal_task_define_slices",
   "unreal_task_resume", "unreal_task_cancel", "unreal_task_approve", "unreal_project_prepare",
   "unreal_job_log_read", "unreal_architecture_decision_status",
   "unreal_architecture_decision_approve", "unreal_architecture_decision_revoke",
@@ -1188,7 +1189,13 @@ function compactServerControl(value) {
   const inputValue = value.requiredUserInput;
   const inputKind = String(inputValue?.kind || "").trim().toLowerCase();
   const requiredUserInput = inputValue && typeof inputValue === "object" && !Array.isArray(inputValue)
-    && ["select_project", "provide_path", "approve_scope", "choose_option"].includes(inputKind)
+    && [
+      "select_project",
+      "provide_path",
+      "approve_scope",
+      "choose_option",
+      "synthesis_delivery_recovery",
+    ].includes(inputKind)
     && String(inputValue.prompt || "").trim()
     && inputValue.schema && typeof inputValue.schema === "object" && !Array.isArray(inputValue.schema)
     && String(inputValue.resumeToken || "").trim()
@@ -3310,6 +3317,9 @@ function buildCheckpoint(messages, prior = {}, options = {}) {
         deliveryReceiptId: String(prior.synthesisDelivery.deliveryReceiptId || "").slice(0, 64),
         recoveryArtifactPath: String(prior.synthesisDelivery.recoveryArtifactPath || "").slice(0, 1024),
         ackToolCallId: String(prior.synthesisDelivery.ackToolCallId || "").slice(0, 240),
+        recoveryToolCallId: String(prior.synthesisDelivery.recoveryToolCallId || "").slice(0, 240),
+        uncertaintyDetectedAt: String(prior.synthesisDelivery.uncertaintyDetectedAt || "").slice(0, 64),
+        deliveryAttempt: Math.max(0, Number(prior.synthesisDelivery.deliveryAttempt || 0)),
         emittedAt: String(prior.synthesisDelivery.emittedAt || "").slice(0, 64),
         taskAuthorization: prior.synthesisDelivery.taskAuthorization
           && typeof prior.synthesisDelivery.taskAuthorization === "object"
@@ -3628,6 +3638,21 @@ function completeTailStart(snapshots, startIndex) {
 }
 function summarizeOldMessages(messages, checkpoint) {
   const durableCheckpoint = checkpoint;
+  const durableObjectiveFull = typeof durableCheckpoint?.objectiveFull === "string"
+    ? durableCheckpoint.objectiveFull
+    : "";
+  const durableObjectiveHash = String(durableCheckpoint?.objectiveHash || "");
+  const exactObjectiveBlock = durableObjectiveFull
+    && durableObjectiveFull !== String(durableCheckpoint?.objective || "")
+    && objectiveHashOf(durableObjectiveFull) === durableObjectiveHash
+    ? [
+      `modelMaterializedObjectiveSha256=${durableObjectiveHash}`,
+      "modelMaterializedObjectiveBegin",
+      durableObjectiveFull,
+      "modelMaterializedObjectiveEnd",
+      "objectiveInstruction=Preserve every requirement in the exact objective above across continuation and compaction.",
+    ].join("\n")
+    : "";
   const durableReadiness = durableCheckpoint?.serverControl?.synthesisReadiness
     || durableCheckpoint?.synthesisReadiness;
   const exactBundle = compactSynthesisEvidenceBundle(durableReadiness?.synthesisEvidenceBundle);
@@ -3817,6 +3842,15 @@ function summarizeOldMessages(messages, checkpoint) {
   ];
   const selected = [];
   let used = String(finalLine || "").length + 1;
+  if (exactObjectiveBlock) {
+    if (used + exactObjectiveBlock.length + 1 > limit) {
+      throw new Error(
+        "Exact objective exceeds the model-facing checkpoint budget; split or narrow the task before continuing.",
+      );
+    }
+    selected.push(exactObjectiveBlock);
+    used += exactObjectiveBlock.length + 1;
+  }
   if (exactEvidenceBlock) {
     if (used + exactEvidenceBlock.length + 1 > limit) {
       throw new Error(
@@ -4102,7 +4136,11 @@ function validateCheckpoint(checkpoint) {
     if (!String(delivery.transactionId || "").trim()) return false;
     if (
       delivery.deliveryGuarantee !== undefined
-      && String(delivery.deliveryGuarantee) !== "at_most_once_with_recovery_artifact"
+      && ![
+        "at_most_once_with_recovery_artifact",
+        "at_most_once_with_explicit_operator_recovery",
+        "operator_authorized_duplicate_risk",
+      ].includes(String(delivery.deliveryGuarantee))
     ) return false;
     if (delivery.deliveryId !== undefined && !/^[a-f0-9]{64}$/.test(String(delivery.deliveryId))) return false;
     if (delivery.recoveryArtifactPath !== undefined && !String(delivery.recoveryArtifactPath).trim()) return false;

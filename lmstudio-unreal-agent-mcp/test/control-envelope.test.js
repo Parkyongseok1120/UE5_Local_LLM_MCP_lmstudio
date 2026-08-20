@@ -139,6 +139,38 @@ test("transaction-committed authoritative control v2 is forwarded verbatim", () 
   assert.deepStrictEqual(payload.control, control);
 });
 
+test("extreme LM Studio projection preserves authoritative v2 identity", () => {
+  const control = {
+    version: 2,
+    authoritative: true,
+    epoch: 8,
+    taskSessionId: "task-v2-extreme",
+    taskMode: "agent",
+    planRevision: "plan-8",
+    activeSliceId: "slice-8",
+    mutationGeneration: 3,
+    fingerprint: "f".repeat(64),
+    routeHash: "r".repeat(64),
+    phase: "verifier",
+    disposition: "require_tool",
+    requiredTool: { name: "unreal_task_checkpoint", args: { taskSessionId: "task-v2-extreme" } },
+    allowedTools: ["unreal_task_checkpoint"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
+  const projected = JSON.parse(modelVisibleControlText({
+    ok: true,
+    control,
+    taskAuthorization: { opaque: "x".repeat(100_000) },
+    results: Array.from({ length: 20 }, () => ({ body: "y".repeat(10_000) })),
+  }, "lmstudio", 2_000)).control;
+  for (const key of [
+    "version", "authoritative", "epoch", "taskSessionId", "taskMode",
+    "planRevision", "activeSliceId", "mutationGeneration", "fingerprint",
+    "routeHash", "phase", "disposition", "requiredTool", "allowedTools",
+    "retryPolicy",
+  ]) assert.deepEqual(projected[key], control[key], key);
+});
+
 test("concise text points to structured content instead of duplicating payload", () => {
   const payload = attachControlEnvelope({
     ok: false,

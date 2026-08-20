@@ -3,6 +3,27 @@
 const crypto = require("crypto");
 
 const CONTROL_VERSION = 2;
+const AUTHORITATIVE_CONTROL_HEADER_FIELDS = Object.freeze([
+  "version", "authoritative", "epoch", "taskSessionId", "taskMode",
+  "planRevision", "activeSliceId", "mutationGeneration", "controlFingerprint",
+  "fingerprint", "routeHash", "phase", "disposition", "requiredTool",
+  "allowedTools", "pendingGates", "retryPolicy", "blocker", "requiredUserInput",
+  "transitionReason", "synthesisReadiness", "synthesisLatch",
+]);
+
+function authoritativeControlHeader(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  if (Number(value.version || 0) < CONTROL_VERSION || value.authoritative !== true) {
+    return value;
+  }
+  const header = Object.fromEntries(
+    AUTHORITATIVE_CONTROL_HEADER_FIELDS
+      .filter((key) => Object.prototype.hasOwnProperty.call(value, key))
+      .map((key) => [key, value[key]]),
+  );
+  header.controlPayloadTruncated = true;
+  return header;
+}
 
 function actionName(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -205,8 +226,11 @@ function modelVisibleControlText(
   compact = JSON.stringify(cleaned, null, 2);
   if (compact.length <= budget) return compact;
 
-  const minimalControl = boundedControl && typeof boundedControl === "object"
-    ? Object.fromEntries([
+  const authoritativeHeader = authoritativeControlHeader(payload.control);
+  const minimalControl = authoritativeHeader?.authoritative === true
+    ? authoritativeHeader
+    : boundedControl && typeof boundedControl === "object"
+      ? Object.fromEntries([
       "version", "epoch", "taskSessionId", "routeHash", "phase", "disposition",
       "requiredTool", "allowedTools", "retryPolicy", "blocker", "taskId", "status",
       "nextAction", "nextActionIsTool", "blockerFingerprint", "continuationToken",
@@ -217,7 +241,7 @@ function modelVisibleControlText(
           ? boundedControl[key].slice(0, 200)
           : boundedControl[key],
       ]))
-    : boundedControl;
+      : boundedControl;
   return JSON.stringify({
     ok: payload.ok,
     errorCode: String(payload.errorCode || "").slice(0, 200) || undefined,
@@ -234,6 +258,7 @@ function modelVisibleControlText(
 }
 
 module.exports = {
+  authoritativeControlHeader,
   attachControlEnvelope,
   conciseControlText,
   looksLikeToolAction,

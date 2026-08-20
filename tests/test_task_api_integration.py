@@ -20,6 +20,7 @@ from task_api import (  # noqa: E402
     task_ack_synthesis_delivery,
     task_checkpoint,
     task_commit_synthesis,
+    task_recover_synthesis_delivery,
     task_complete_after_successful_build,
     task_define_slices,
     task_continue_active,
@@ -29,6 +30,7 @@ from task_api import (  # noqa: E402
     task_record_gate,
     task_record_gate_failure,
     task_root,
+    task_resume,
     task_start,
     task_status,
 )
@@ -203,15 +205,21 @@ def test_repository_audit_inventory_is_deterministically_paginated(file_count: i
         root=Path("C:/AuditProject"),
     )
     assert ledger["totalCount"] == file_count
-    assert ledger["overflow"] is False
+    assert ledger["overflow"] is (file_count > 4096)
     assert len(ledger["queuedTargets"]) <= 128
     assert len(ledger["entries"]) <= 128
     assert ledger["pageCount"] == max(1, (file_count + 127) // 128)
-    assert ledger["status"] == ("complete" if file_count == 0 else "active")
+    assert ledger["status"] == (
+        "inventory_overflow"
+        if file_count > 4096
+        else "complete"
+        if file_count == 0
+        else "active"
+    )
 
 
 def test_repository_audit_advances_by_hash_bound_continuation_page() -> None:
-    inventory = _synthetic_audit_inventory(4097)
+    inventory = _synthetic_audit_inventory(4096)
     first = task_api_module._repository_audit_ledger_from_inventory(
         inventory,
         root=Path("C:/AuditProject"),
@@ -228,7 +236,7 @@ def test_repository_audit_advances_by_hash_bound_continuation_page() -> None:
     )
     assert second["pageIndex"] == 1
     assert second["completedCount"] == 128
-    assert second["remainingCount"] == 4097 - 128
+    assert second["remainingCount"] == 4096 - 128
     assert second["queuedTargets"][0] == "Source/Audit/File00128.cpp"
     assert len(second["completedPages"]) == 1
     assert len(second["completedPages"][0]["inventoryPageHash"]) == 64
@@ -320,6 +328,35 @@ def test_read_only_synthesis_commit_is_digest_bound_and_idempotent(
     )
     assert replay["ok"] is True
     assert replay["idempotentReplay"] is True
+    uncertain = task_recover_synthesis_delivery(
+        tmp_path,
+        task_authorization=ready["taskAuthorization"],
+        synthesis_transaction_id=committed_state["synthesisLifecycle"]["synthesisTransactionId"],
+        output_digest=digest,
+        action="mark_uncertain",
+    )
+    assert uncertain["ok"] is True
+    assert uncertain["synthesisLifecycle"]["status"] == "delivery_uncertain"
+    assert uncertain["control"]["disposition"] == "await_user"
+    required_input = uncertain["control"]["requiredUserInput"]
+    rejected_reemit = task_resume(
+        tmp_path,
+        started["taskSessionId"],
+        task_authorization=ready["taskAuthorization"],
+        user_response={"action": "authorize_reemit"},
+        resume_token=required_input["resumeToken"],
+    )
+    assert rejected_reemit["ok"] is False
+    assert rejected_reemit["errorCode"] == "SYNTHESIS_DELIVERY_DUPLICATE_RISK_ACK_REQUIRED"
+    authorized_reemit = task_resume(
+        tmp_path,
+        started["taskSessionId"],
+        task_authorization=ready["taskAuthorization"],
+        user_response={"action": "authorize_reemit", "acknowledgeDuplicateRisk": True},
+        resume_token=required_input["resumeToken"],
+    )
+    assert authorized_reemit["ok"] is True
+    assert authorized_reemit["state"]["synthesisLifecycle"]["status"] == "delivery_reemit_authorized"
     receipt = task_api_module._canonical_hash({
         "synthesisTransactionId": committed_state["synthesisLifecycle"]["synthesisTransactionId"],
         "outputDigest": digest,
@@ -1248,6 +1285,24 @@ def test_broad_feature_task_requires_and_registers_runtime_slices(tmp_path: Path
         "Source/Demo/Lobby.cpp",
         "Source/Demo/Match.cpp",
     ]
+
+
+def test_slice_plan_rejects_more_than_checkpoint_capacity(tmp_path: Path) -> None:
+    source = tmp_path / "Source" / "Demo" / "Shared.cpp"
+    source.parent.mkdir(parents=True)
+    source.write_text("// shared\n", encoding="utf-8")
+    slices = [
+        {"sliceId": f"slice-{index}", "files": ["Source/Demo/Shared.cpp"]}
+        for index in range(1025)
+    ]
+    validated, error = task_api_module._validate_task_slice_plan(
+        tmp_path,
+        {"sliceProgress": {}, "buildProofHistory": []},
+        slices,
+    )
+    assert validated is None
+    assert error is not None
+    assert error["errorCode"] == "PLAN_SLICE_COUNT_OVERFLOW"
 
 
 def test_short_ambiguous_feature_requires_concrete_runtime_slice(tmp_path: Path) -> None:

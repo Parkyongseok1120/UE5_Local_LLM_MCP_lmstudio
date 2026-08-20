@@ -208,6 +208,9 @@ def _canonical_hash(value: Any) -> str:
 
 
 _REPO_AUDIT_PAGE_SIZE = 128
+_MAX_REPO_AUDIT_FILES = 4096
+_MAX_DURABLE_FRONTIER_ENTRIES = 4096
+_MAX_TASK_SLICES = 1024
 _REPO_AUDIT_EXTENSIONS = frozenset(
     {".h", ".hpp", ".hh", ".inl", ".c", ".cc", ".cpp", ".cxx", ".cs", ".ini"}
 )
@@ -262,6 +265,41 @@ def _repository_audit_ledger_from_inventory(
             for item in ordered
         ]
     )
+    if len(ordered) > _MAX_REPO_AUDIT_FILES:
+        now = _utc_now()
+        return {
+            "version": 2,
+            "required": True,
+            "analysisVersion": 1,
+            "status": "inventory_overflow",
+            "root": str(root),
+            "inventoryHash": inventory_hash,
+            "pageSize": _REPO_AUDIT_PAGE_SIZE,
+            "pageIndex": 0,
+            "pageCount": max(1, (len(ordered) + _REPO_AUDIT_PAGE_SIZE - 1) // _REPO_AUDIT_PAGE_SIZE),
+            "hasMorePages": True,
+            "continuationToken": "",
+            "queuedTargets": [],
+            "entries": {},
+            "cursor": 0,
+            "totalCount": len(ordered),
+            "boundedCount": _MAX_REPO_AUDIT_FILES,
+            "pageBoundedCount": 0,
+            "completedCount": 0,
+            "analyzedCount": 0,
+            "remainingCount": len(ordered),
+            "currentPageRemainingCount": 0,
+            "completedPages": [],
+            "findings": [],
+            "findingCount": 0,
+            "overflow": True,
+            "overflowCode": "REPO_AUDIT_INVENTORY_OVERFLOW",
+            "errorCode": "REPO_AUDIT_INVENTORY_OVERFLOW",
+            "coverageIncomplete": True,
+            "exclusions": [],
+            "createdAt": now,
+            "updatedAt": now,
+        }
     previous = prior if isinstance(prior, dict) else {}
     same_inventory = str(previous.get("inventoryHash") or "") == inventory_hash
     page_count = max(1, (len(ordered) + _REPO_AUDIT_PAGE_SIZE - 1) // _REPO_AUDIT_PAGE_SIZE)
@@ -5787,6 +5825,8 @@ def task_start(
             "distinctImplementationFiles": 0,
             "listedDirectories": 0,
             "evidenceCharacters": 0,
+            "phaseEvidenceCharacters": 0,
+            "phaseDirectSourceReadCalls": 0,
             "remainingFrontier": [],
             "discoveryStarted": False,
             "everHadFrontier": False,
@@ -7788,6 +7828,8 @@ def task_replan(
                     "distinctImplementationFiles": 0,
                     "listedDirectories": 0,
                     "evidenceCharacters": 0,
+                    "phaseEvidenceCharacters": 0,
+                    "phaseDirectSourceReadCalls": 0,
                     "remainingFrontier": [],
                     "discoveryStarted": False,
                     "everHadFrontier": False,
@@ -7994,7 +8036,9 @@ def task_replan(
         if compatible_evidence_replan:
             prior_progress = prior_evidence["inspectionProgress"]
             current_progress = state.get("inspectionProgress") if isinstance(state.get("inspectionProgress"), dict) else {}
-            remaining_frontier = list(prior_progress.get("remainingFrontier") or [])[:64]
+            remaining_frontier = list(
+                prior_progress.get("remainingFrontier") or []
+            )[:_MAX_DURABLE_FRONTIER_ENTRIES]
             state["inspectionProgress"] = {
                 **current_progress,
                 **prior_progress,
@@ -8004,6 +8048,7 @@ def task_replan(
                     prior_progress.get("everHadFrontier") is True or bool(remaining_frontier)
                 ),
                 "phaseDirectSourceReadCalls": 0,
+                "phaseEvidenceCharacters": 0,
                 "planRevision": next_revision,
                 "updatedAt": _utc_now(),
             }
@@ -8108,6 +8153,12 @@ def _validate_task_slice_plan(
     """Validate a concrete slice plan without mutating persisted task state."""
 
     progress = state.get("sliceProgress") if isinstance(state.get("sliceProgress"), dict) else {}
+    if len(slices) > _MAX_TASK_SLICES:
+        return None, {
+            "ok": False,
+            "errorCode": "PLAN_SLICE_COUNT_OVERFLOW",
+            "error": f"Slice plan exceeds {_MAX_TASK_SLICES} slices.",
+        }
     if progress.get("completedSlices") or state.get("buildProofHistory"):
         return None, {
             "ok": False,
@@ -9977,35 +10028,197 @@ def task_ack_synthesis_delivery(
                 mismatched_fields=mismatches,
             )
             return None
-        if str(lifecycle.get("status") or "").casefold() != "commit_acked" or not matches:
+        if str(lifecycle.get("status") or "").casefold() not in {
+            "commit_acked",
+            "delivery_reemit_authorized",
+        } or not matches:
             outcome = {"ok": False, "errorCode": "SYNTHESIS_DELIVERY_NOT_COMMITTED", "error": "Delivery cannot complete before the exact synthesis commit ACK."}
             return None
-        delivered_at = _utc_now()
-        lifecycle.update(
-            {
-                "status": "delivered",
-                "deliveryStatus": "delivered",
-                "deliveryGuarantee": "at_most_once_with_recovery_artifact",
-                "deliveryReceiptAuthority": "compactor_self_attestation",
-                "hostReceiptObservable": False,
-                "deliveryReceiptId": receipt,
-                "deliveredAt": delivered_at,
-            }
+        delivered_at = _complete_synthesis_delivery_state(
+            state,
+            lifecycle=lifecycle,
+            receipt=receipt,
+            receipt_authority="compactor_self_attestation",
+            completion_note="read_only_synthesis_proxy_emission_acknowledged",
         )
-        state["synthesisLifecycle"] = lifecycle
-        state["status"] = "completed"
-        state["completionNote"] = "read_only_synthesis_proxy_emission_acknowledged"
-        continuity = dict(state.get("continuity") or {})
-        lease = dict(continuity.get("lease") or {})
-        if lease:
-            lease["status"] = "released"
-            continuity["lease"] = lease
-            state["continuity"] = continuity
-        state["updatedAt"] = delivered_at
         _append_log(workspace, task_session_id, f"Read-only synthesis delivered: {digest[:16]}")
         outcome = {
             "ok": True,
             "active": False,
+            "taskSessionId": task_session_id,
+            "synthesisLifecycle": lifecycle,
+        }
+        return state
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    return _task_outcome_with_control(outcome, result) if outcome else result
+
+
+def _complete_synthesis_delivery_state(
+    state: dict[str, Any],
+    *,
+    lifecycle: dict[str, Any],
+    receipt: str,
+    receipt_authority: str,
+    completion_note: str,
+) -> str:
+    """Apply the single terminal delivery transition to a locked task state."""
+
+    delivered_at = _utc_now()
+    lifecycle.update(
+        {
+            "status": "delivered",
+            "deliveryStatus": "delivered",
+            "deliveryGuarantee": "at_most_once_with_explicit_operator_recovery",
+            "deliveryReceiptAuthority": receipt_authority,
+            "hostReceiptObservable": False,
+            "deliveryReceiptId": receipt,
+            "deliveredAt": delivered_at,
+        }
+    )
+    state["synthesisLifecycle"] = lifecycle
+    state["status"] = "completed"
+    state["completionNote"] = completion_note
+    state.pop("requiredUserInput", None)
+    state.pop("recoveryObligation", None)
+    continuity = dict(state.get("continuity") or {})
+    lease = dict(continuity.get("lease") or {})
+    if lease:
+        lease["status"] = "released"
+        continuity["lease"] = lease
+        state["continuity"] = continuity
+    state["updatedAt"] = delivered_at
+    return delivered_at
+
+
+def task_recover_synthesis_delivery(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    synthesis_transaction_id: str,
+    output_digest: str,
+    action: str = "mark_uncertain",
+) -> dict[str, Any]:
+    """Persist an ambiguous UI-emission fact and require an explicit operator choice.
+
+    LM Studio's ``fragmentGenerated`` callback has no durable receipt or
+    idempotency key.  A crash after the emit intent therefore cannot be
+    classified as delivered or not delivered.  This transition never replays
+    output.  It moves the authoritative task to ``await_user`` so a human can
+    either attest that the answer is visible or explicitly accept duplicate
+    risk and authorize one re-emission through ``task_resume``.
+    """
+
+    authorization = dict(task_authorization) if isinstance(task_authorization, dict) else {}
+    task_session_id = str(authorization.get("taskSessionId") or "").strip()
+    transaction_id = str(synthesis_transaction_id or "").strip().casefold()
+    digest = str(output_digest or "").strip().casefold()
+    normalized_action = str(action or "").strip().casefold()
+    if not task_session_id:
+        return {"ok": False, "errorCode": "TASK_SESSION_REQUIRED", "error": "taskSessionId is required"}
+    if normalized_action != "mark_uncertain":
+        return {
+            "ok": False,
+            "errorCode": "SYNTHESIS_DELIVERY_RECOVERY_ACTION_INVALID",
+            "error": "Only mark_uncertain is accepted at the internal recovery boundary.",
+        }
+    if not all(re.fullmatch(r"[a-f0-9]{64}", value) for value in (transaction_id, digest)):
+        return {
+            "ok": False,
+            "errorCode": "SYNTHESIS_DELIVERY_IDENTITY_INVALID",
+            "error": "Delivery identities must be SHA-256 values.",
+        }
+    outcome: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        lifecycle = dict(state.get("synthesisLifecycle") or {})
+        matches = bool(
+            str(lifecycle.get("synthesisTransactionId") or "").casefold() == transaction_id
+            and str(lifecycle.get("outputDigest") or "").casefold() == digest
+        )
+        mismatches = _task_authorization_mismatches(state, authorization)
+        if mismatches:
+            outcome = _auth_refresh_failure(
+                {"ok": False, "errorCode": "TASK_AUTH_MISMATCH", "error": f"Task authorization mismatch: {', '.join(mismatches)}"},
+                state,
+                mismatched_fields=mismatches,
+            )
+            return None
+        lifecycle_status = str(lifecycle.get("status") or "").casefold()
+        if lifecycle_status == "delivery_uncertain" and matches:
+            outcome = {
+                "ok": True,
+                "active": True,
+                "idempotentReplay": True,
+                "taskSessionId": task_session_id,
+                "synthesisLifecycle": lifecycle,
+            }
+            return state
+        if lifecycle_status != "commit_acked" or not matches:
+            outcome = {
+                "ok": False,
+                "errorCode": "SYNTHESIS_DELIVERY_NOT_COMMITTED",
+                "error": "Only the exact commit-ACKed synthesis can enter delivery recovery.",
+            }
+            return None
+        now = _utc_now()
+        lifecycle.update(
+            {
+                "status": "delivery_uncertain",
+                "deliveryStatus": "delivery_uncertain",
+                "deliveryGuarantee": "at_most_once_with_explicit_operator_recovery",
+                "hostReceiptObservable": False,
+                "uncertaintyDetectedAt": now,
+            }
+        )
+        state["synthesisLifecycle"] = lifecycle
+        prompt = (
+            "LM Studio stopped after final-output delivery began, but the host exposes no durable UI receipt. "
+            "Reply exactly {\"action\":\"confirm_visible\"} only if the complete answer is already visible. "
+            "Otherwise, to accept duplicate-display risk and authorize one re-emission, reply exactly "
+            "{\"action\":\"authorize_reemit\",\"acknowledgeDuplicateRisk\":true}."
+        )
+        state["requiredUserInput"] = {
+            "kind": "synthesis_delivery_recovery",
+            "prompt": prompt,
+            "schema": {
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                    "action": {"enum": ["confirm_visible", "authorize_reemit"]},
+                    "acknowledgeDuplicateRisk": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            "resumeToken": _canonical_hash(
+                {
+                    "taskSessionId": task_session_id,
+                    "synthesisTransactionId": transaction_id,
+                    "outputDigest": digest,
+                    "kind": "synthesis_delivery_recovery",
+                }
+            ),
+        }
+        state["recoveryObligation"] = {
+            "source": "synthesis_delivery",
+            "status": "await_user",
+            "errorCode": "SYNTHESIS_DELIVERY_STATE_UNCERTAIN",
+            "userPrompt": prompt,
+            "requiredTool": {},
+            "fingerprint": _canonical_hash(
+                {
+                    "status": "delivery_uncertain",
+                    "synthesisTransactionId": transaction_id,
+                    "outputDigest": digest,
+                }
+            ),
+        }
+        state["updatedAt"] = now
+        _append_log(workspace, task_session_id, f"Synthesis delivery uncertain: {digest[:16]}", level="warning")
+        outcome = {
+            "ok": True,
+            "active": True,
             "taskSessionId": task_session_id,
             "synthesisLifecycle": lifecycle,
         }
@@ -12347,6 +12560,96 @@ def task_resume(
                     "ok": False,
                     "errorCode": "TASK_RESUME_TOKEN_MISMATCH",
                     "error": "resumeToken is missing or stale for the pending user-input contract.",
+                    "taskSessionId": task_session_id,
+                }
+                return None
+            if str(required_input.get("kind") or "").casefold() == "synthesis_delivery_recovery":
+                response_object: dict[str, Any] = {}
+                if isinstance(user_response, dict):
+                    response_object = dict(user_response)
+                elif isinstance(user_response, str):
+                    try:
+                        parsed_response = json.loads(user_response)
+                    except json.JSONDecodeError:
+                        parsed_response = {}
+                    if isinstance(parsed_response, dict):
+                        response_object = dict(parsed_response)
+                recovery_action = str(response_object.get("action") or "").strip().casefold()
+                lifecycle = dict(state.get("synthesisLifecycle") or {})
+                if str(lifecycle.get("status") or "").casefold() != "delivery_uncertain":
+                    resume_error = {
+                        "ok": False,
+                        "errorCode": "SYNTHESIS_DELIVERY_RECOVERY_NOT_PENDING",
+                        "error": "The exact synthesis delivery is not awaiting operator recovery.",
+                        "taskSessionId": task_session_id,
+                    }
+                    return None
+                transaction_id = str(lifecycle.get("synthesisTransactionId") or "").casefold()
+                digest = str(lifecycle.get("outputDigest") or "").casefold()
+                if recovery_action == "confirm_visible":
+                    receipt = _canonical_hash(
+                        {
+                            "synthesisTransactionId": transaction_id,
+                            "outputDigest": digest,
+                            "uiDeliveryCompleted": True,
+                        }
+                    )
+                    _complete_synthesis_delivery_state(
+                        state,
+                        lifecycle=lifecycle,
+                        receipt=receipt,
+                        receipt_authority="explicit_operator_visible_attestation",
+                        completion_note="read_only_synthesis_operator_confirmed_visible",
+                    )
+                    _append_log(
+                        workspace,
+                        task_session_id,
+                        f"Operator confirmed uncertain synthesis delivery visible: {digest[:16]}",
+                    )
+                    return state
+                if recovery_action == "authorize_reemit":
+                    if response_object.get("acknowledgeDuplicateRisk") is not True:
+                        resume_error = {
+                            "ok": False,
+                            "errorCode": "SYNTHESIS_DELIVERY_DUPLICATE_RISK_ACK_REQUIRED",
+                            "error": "authorize_reemit requires acknowledgeDuplicateRisk=true.",
+                            "taskSessionId": task_session_id,
+                        }
+                        return None
+                    now = _utc_now()
+                    lifecycle.update(
+                        {
+                            "status": "delivery_reemit_authorized",
+                            "deliveryStatus": "delivery_reemit_authorized",
+                            "deliveryGuarantee": "operator_authorized_duplicate_risk",
+                            "reemitAuthorizedAt": now,
+                            "deliveryAttempt": max(1, int(lifecycle.get("deliveryAttempt") or 1)) + 1,
+                        }
+                    )
+                    state["synthesisLifecycle"] = lifecycle
+                    state.pop("requiredUserInput", None)
+                    state.pop("recoveryObligation", None)
+                    history = state.get("userInputHistory") if isinstance(state.get("userInputHistory"), list) else []
+                    history.append(
+                        {
+                            "kind": "synthesis_delivery_recovery",
+                            "response": json.dumps(response_object, ensure_ascii=False, sort_keys=True)[:4000],
+                            "resumedAt": now,
+                        }
+                    )
+                    state["userInputHistory"] = history[-8:]
+                    state["updatedAt"] = now
+                    _append_log(
+                        workspace,
+                        task_session_id,
+                        f"Operator authorized one synthesis re-emission with duplicate risk: {digest[:16]}",
+                        level="warning",
+                    )
+                    return state
+                resume_error = {
+                    "ok": False,
+                    "errorCode": "SYNTHESIS_DELIVERY_RECOVERY_ACTION_INVALID",
+                    "error": "action must be confirm_visible or authorize_reemit.",
                     "taskSessionId": task_session_id,
                 }
                 return None

@@ -67,3 +67,18 @@ test("budget failure adapter preserves the transaction-committed authoritative c
   assert.equal(emitted.control.retryPolicy.sameSemanticInput, "once");
   assert.equal(emitted.control.blocker, null);
 });
+
+test("inactive-tool fallback selects the executable active route before a future pending gate", () => {
+  const options = routeAuthorizationFailureOptions({
+    ok: false,
+    errorCode: "TASK_TOOL_NOT_ACTIVE",
+    toolRoute: {
+      phase: "continuity",
+      activeTools: ["unreal_task_checkpoint"],
+      pendingGates: ["unreal_feature_intent_resolve"],
+    },
+  }, "read_file");
+
+  assert.equal(options.nextAction, "unreal_task_checkpoint");
+  assert.equal(options.nextActionIsTool, true);
+});

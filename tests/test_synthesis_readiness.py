@@ -165,6 +165,48 @@ def test_materialized_bundle_is_bound_to_ready_control():
     assert result["synthesisEvidenceBundle"]["bundleHash"] == result["synthesisEvidenceBundleHash"]
 
 
+def test_four_required_pairs_are_all_materialized_within_prompt_capacity() -> None:
+    files = {}
+    for index in range(4):
+        declaration_path = f"Source/Boundary/Public/Item{index}.h"
+        implementation_path = f"Source/Boundary/Private/Item{index}.cpp"
+        files[declaration_path] = _complete(
+            declaration_path,
+            "declaration",
+            f"decl-{index}",
+            hashlib.sha256(f"decl-{index}".encode()).hexdigest(),
+            f"DECL_{index}_" + "D" * 3900,
+        )
+        files[implementation_path] = _complete(
+            implementation_path,
+            "implementation",
+            f"impl-{index}",
+            hashlib.sha256(f"impl-{index}".encode()).hexdigest(),
+            f"IMPL_{index}_" + "I" * 3900,
+        )
+    result = derive_synthesis_readiness(_state(
+        files,
+        taskSessionId="four-pair-task",
+        objectiveHash="e" * 64,
+        inspectionContract={
+            "intent": "cpp_analysis",
+            "coverageMode": "representative",
+            "evidenceBudget": {"representativePairs": 4},
+        },
+        inspectionProgress={
+            "discoveryStarted": True,
+            "discoveredRelevantPairs": 4,
+            "remainingFrontier": [],
+        },
+    ))
+    assert result["ready"] is True
+    assert result["coverageIncomplete"] is False
+    assert result["requiredRepresentativePairs"] == 4
+    assert result["selectedSynthesisRepresentativePairCount"] == 4
+    assert len(result["synthesisEvidenceBundle"]["records"]) == 8
+    assert result["synthesisEvidenceBundle"]["serializedCharacterCount"] <= 12_000
+
+
 @pytest.mark.parametrize("accepted_count", [0, 1, 2, 15, 16, 17, 31, 32, 33])
 def test_selected_claim_materialization_does_not_require_every_accepted_file(
     accepted_count: int,

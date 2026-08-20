@@ -3,6 +3,9 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const core = require("../src/compaction-core");
+const {
+  modelVisibleControlText,
+} = require("../../lmstudio-unreal-agent-mcp/src/control-envelope");
 
 // Older unit fixtures represented trusted server replies as bare role=tool
 // JSON. Production LM Studio history always carries a paired tool call/result;
@@ -1856,6 +1859,13 @@ test("a long objective keeps an exact durable tool-binding copy and full hash", 
   const resumed = core.buildCheckpoint(messages, checkpoint);
   assert.equal(resumed.objectiveFull, objective);
   assert.equal(resumed.objectiveHash, core.objectiveHashOf(objective));
+  const summary = core.summarizeOldMessages(
+    [{ role: "user", content: "continue" }],
+    resumed,
+  );
+  assert.ok(summary.includes(objective));
+  assert.match(summary, /modelMaterializedObjectiveBegin/);
+  assert.match(summary, new RegExp(`modelMaterializedObjectiveSha256=${core.objectiveHashOf(objective)}`));
 });
 
 test("zero-tail compaction preserves bounded UTF-8 requestIntent through checkpoint round-trip", () => {
@@ -3826,6 +3836,47 @@ test("hard compaction preserves the exact prompt-bound synthesis evidence string
   assert.match(summary, new RegExp(`modelMaterializedSynthesisEvidenceSha256=${bundle.bundleHash}`));
   assert.equal(core.sha256(serializedEvidence), bundle.bundleHash);
   assert.ok(summary.length <= 24_000);
+});
+
+test("extreme LM Studio text projection preserves authoritative v2 through Compactor acceptance", () => {
+  const fingerprint = "f".repeat(64);
+  const control = {
+    version: 2,
+    authoritative: true,
+    epoch: 14,
+    taskSessionId: "task-extreme-roundtrip",
+    taskMode: "agent_edit",
+    planRevision: "9",
+    mutationGeneration: 3,
+    fingerprint,
+    controlFingerprint: fingerprint,
+    routeHash: "e".repeat(64),
+    phase: "continuity",
+    disposition: "checkpoint",
+    requiredTool: {
+      name: "unreal_task_checkpoint",
+      args: { action: "record", taskAuthorization: { taskSessionId: "task-extreme-roundtrip" } },
+    },
+    allowedTools: ["unreal_task_checkpoint"],
+    pendingGates: ["unreal_task_checkpoint"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
+  const rendered = modelVisibleControlText({
+    ok: true,
+    control,
+    entries: Array.from({ length: 200 }, (_, index) => ({
+      path: `Source/Large/File${index}.cpp`,
+      body: "x".repeat(2000),
+    })),
+  }, "lmstudio", 2000);
+  const parsed = JSON.parse(rendered);
+  assert.equal(parsed._textFallbackTruncated, true);
+  assert.equal(parsed.control.authoritative, true);
+  assert.equal(parsed.control.fingerprint, fingerprint);
+  const accepted = core.compactServerControl(parsed.control);
+  assert.ok(accepted);
+  assert.equal(accepted.taskSessionId, control.taskSessionId);
+  assert.equal(accepted.requiredTool.name, "unreal_task_checkpoint");
 });
 
 test("model-facing projection honors exact 6K section and 24K total boundaries", () => {

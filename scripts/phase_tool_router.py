@@ -49,6 +49,7 @@ CONTROL_PLANE_TOOLS = frozenset(
         "unreal_task_checkpoint",
         "unreal_task_commit_synthesis",
         "unreal_task_ack_synthesis_delivery",
+        "unreal_task_recover_synthesis_delivery",
         "unreal_task_define_slices",
         "unreal_task_approve",
         "unreal_task_cancel",
@@ -66,6 +67,7 @@ ALWAYS_DISCOVERABLE_CONTROL_TOOLS = frozenset(
         "unreal_task_checkpoint",
         "unreal_task_commit_synthesis",
         "unreal_task_ack_synthesis_delivery",
+        "unreal_task_recover_synthesis_delivery",
         "unreal_task_define_slices",
         "unreal_task_resume",
         "unreal_task_cancel",
@@ -560,7 +562,7 @@ def _pre_gate_source_read_path(
     return ""
 
 
-_SOURCE_DECLARATION_EXTENSIONS = frozenset({".h", ".hpp", ".inl"})
+_SOURCE_DECLARATION_EXTENSIONS = frozenset({".h", ".hpp", ".hh", ".inl"})
 _SOURCE_IMPLEMENTATION_EXTENSIONS = frozenset({".cpp", ".c", ".cc", ".cxx"})
 
 
@@ -615,11 +617,11 @@ def _source_pair_header_candidates(source_path: Any) -> list[str]:
         if relative:
             for directory in ("Public", "Classes", ""):
                 prefix = [*module_root, directory] if directory else module_root
-                for declaration_suffix in (".h", ".hpp", ".inl"):
+                for declaration_suffix in (".h", ".hpp", ".hh", ".inl"):
                     add("/".join([*prefix, *relative]) + declaration_suffix)
     parent = source_path.rsplit("/", 1)[0] if "/" in source_path else ""
     basename = os.path.basename(stem)
-    for declaration_suffix in (".h", ".hpp", ".inl"):
+    for declaration_suffix in (".h", ".hpp", ".hh", ".inl"):
         add(
             f"{parent}/{basename}{declaration_suffix}"
             if parent
@@ -1484,7 +1486,10 @@ def reduce_committed_event(
                     "source": "evidence",
                     "status": "evidence_required",
                     "errorCode": "EVIDENCE_FRONTIER_RECONSTRUCTED",
-                    "requiredTool": {},
+                    "requiredTool": {
+                        "name": "read_file",
+                        "args": {"path": frontier[0]},
+                    },
                     "targetFiles": frontier,
                     "fingerprint": canonical_hash(frontier),
                 }
@@ -1702,7 +1707,55 @@ def _derive_next_obligation_mutating(state: dict[str, Any]) -> dict[str, Any]:
             )
         )
         first_evidence_action = pending_initial_discovery if needs_initial_discovery else None
-        if first_evidence_action:
+        if recovery_status in {"external_blocker", "await_user"}:
+            # A committed human-decision boundary dominates all speculative
+            # discovery and recovery work.  Otherwise an old initial discovery
+            # action can hide an operator decision forever (notably ambiguous
+            # synthesis delivery after a host crash).
+            disposition = "await_user"
+            retry_value = "forbidden"
+            blocker_code = str(recovery_obligation.get("errorCode") or "RECOVERY_EXTERNAL_BLOCKER")
+            blocker_fingerprint = recovery_fingerprint
+            required_input = _required_user_input(
+                state,
+                "choose_option",
+                str(recovery_obligation.get("userPrompt") or "Choose how to resolve the external blocker."),
+                {"type": "object", "minProperties": 1},
+            )
+        elif repo_audit.get("overflow") is True:
+            disposition = "workflow_stop"
+            retry_value = "forbidden"
+            blocker_code = str(
+                repo_audit.get("overflowCode")
+                or "REPO_AUDIT_INVENTORY_OVERFLOW"
+            )
+            blocker_fingerprint = canonical_hash(
+                {
+                    "inventoryHash": str(repo_audit.get("inventoryHash") or ""),
+                    "totalCount": _non_negative_int(repo_audit.get("totalCount")),
+                    "boundedCount": _non_negative_int(repo_audit.get("boundedCount")),
+                }
+            )
+            transition_reason = "REPOSITORY_AUDIT_INVENTORY_OVERFLOW"
+        elif progress.get("frontierOverflow") is True:
+            disposition = "workflow_stop"
+            retry_value = "forbidden"
+            blocker_code = str(
+                progress.get("frontierOverflowCode")
+                or "EVIDENCE_FRONTIER_CAPACITY_EXCEEDED"
+            )
+            blocker_fingerprint = canonical_hash(
+                {
+                    "remainingFrontierHash": str(
+                        progress.get("remainingFrontierHash") or ""
+                    ),
+                    "remainingFrontierTotalCount": _non_negative_int(
+                        progress.get("remainingFrontierTotalCount")
+                    ),
+                }
+            )
+            transition_reason = "EVIDENCE_FRONTIER_OVERFLOW"
+        elif first_evidence_action:
             required_name, required_args = first_evidence_action
             retry_value = "once"
             transition_reason = "INITIAL_EVIDENCE_DISCOVERY"
@@ -1716,17 +1769,6 @@ def _derive_next_obligation_mutating(state: dict[str, Any]) -> dict[str, Any]:
             blocker_code = "REPEATED_GATE_BLOCKER"
             blocker_fingerprint = str(
                 failed_gate_attempt.get("fingerprint") or ""
-            )
-        elif recovery_status in {"external_blocker", "await_user"}:
-            disposition = "await_user"
-            retry_value = "forbidden"
-            blocker_code = str(recovery_obligation.get("errorCode") or "RECOVERY_EXTERNAL_BLOCKER")
-            blocker_fingerprint = recovery_fingerprint
-            required_input = _required_user_input(
-                state,
-                "choose_option",
-                str(recovery_obligation.get("userPrompt") or "Choose how to resolve the external blocker."),
-                {"type": "object", "minProperties": 1},
             )
         elif recovery_status in {
             "phase_budget_checkpoint_required",

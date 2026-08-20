@@ -156,9 +156,12 @@ def _git_commit(root: Path) -> str:
 def assert_source_tree_matches_head(
     repository_root: str | Path | None = None,
 ) -> str:
-    """Return the sealed source commit, rejecting tracked checkout drift.
+    """Return the sealed source commit, rejecting runtime-source drift.
 
-    Untracked and ignored build products are deliberately outside this gate.
+    Untracked build products outside production code/config roots remain
+    outside this gate. Untracked files under a packaged runtime root are
+    rejected because they would otherwise be shipped under the identity of a
+    commit that never contained them.
     A relocatable package without .git inherits the commit sealed by its
     package manifest.
     """
@@ -200,6 +203,46 @@ def assert_source_tree_matches_head(
             detail = (diff.stderr or diff.stdout or "git diff failed").strip()
             raise ControlRuntimeSourceHeadMismatch(
                 f"CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: unable to verify tracked source tree ({detail})"
+            )
+        try:
+            untracked = subprocess.run(
+                ["git", "ls-files", "--others", "--exclude-standard"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ControlRuntimeSourceHeadMismatch(
+                f"CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: unable to verify untracked runtime sources ({exc})"
+            ) from exc
+        if untracked.returncode != 0:
+            detail = (untracked.stderr or untracked.stdout or "git ls-files failed").strip()
+            raise ControlRuntimeSourceHeadMismatch(
+                f"CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: unable to verify untracked runtime sources ({detail})"
+            )
+        runtime_prefixes = (
+            "config/",
+            "scripts/",
+            "lmstudio-unreal-agent-mcp/src/",
+            "lmstudio-context-compactor-plugin/src/",
+        )
+        runtime_root_files = {
+            "lmstudio-unreal-agent-mcp/package.json",
+            "lmstudio-context-compactor-plugin/package.json",
+            "lmstudio-context-compactor-plugin/manifest.json",
+        }
+        untracked_runtime = sorted(
+            relative.replace("\\", "/")
+            for relative in untracked.stdout.splitlines()
+            if relative.replace("\\", "/") in runtime_root_files
+            or relative.replace("\\", "/").startswith(runtime_prefixes)
+        )
+        if untracked_runtime:
+            raise ControlRuntimeSourceHeadMismatch(
+                "CONTROL_RUNTIME_SOURCE_HEAD_MISMATCH: untracked runtime source files exist: "
+                + ", ".join(untracked_runtime[:8])
             )
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],

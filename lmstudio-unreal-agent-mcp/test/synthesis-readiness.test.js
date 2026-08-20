@@ -100,6 +100,44 @@ test("a directly-read representative header and implementation authorize synthes
   assert.equal(result.representativePairCount, 1);
 });
 
+test("four required pairs are all materialized within prompt capacity", () => {
+  const files = {};
+  for (let index = 0; index < 4; index += 1) {
+    const declarationPath = `Source/Boundary/Public/Item${index}.h`;
+    const implementationPath = `Source/Boundary/Private/Item${index}.cpp`;
+    files[declarationPath] = completeEvidence(
+      declarationPath, "declaration", `decl-${index}`,
+      crypto.createHash("sha256").update(`decl-${index}`).digest("hex"),
+      `DECL_${index}_${"D".repeat(3900)}`,
+    );
+    files[implementationPath] = completeEvidence(
+      implementationPath, "implementation", `impl-${index}`,
+      crypto.createHash("sha256").update(`impl-${index}`).digest("hex"),
+      `IMPL_${index}_${"I".repeat(3900)}`,
+    );
+  }
+  const result = deriveSynthesisReadiness(state(files, {
+    taskSessionId: "four-pair-task",
+    objectiveHash: "e".repeat(64),
+    inspectionContract: {
+      intent: "cpp_analysis",
+      coverageMode: "representative",
+      evidenceBudget: { representativePairs: 4 },
+    },
+    inspectionProgress: {
+      discoveryStarted: true,
+      discoveredRelevantPairs: 4,
+      remainingFrontier: [],
+    },
+  }));
+  assert.equal(result.ready, true);
+  assert.equal(result.coverageIncomplete, false);
+  assert.equal(result.requiredRepresentativePairs, 4);
+  assert.equal(result.selectedSynthesisRepresentativePairCount, 4);
+  assert.equal(result.synthesisEvidenceBundle.records.length, 8);
+  assert.ok(result.synthesisEvidenceBundle.serializedCharacterCount <= 12_000);
+});
+
 test("same basenames in different Unreal modules are not representative pairs", () => {
   const foreignImplementation = {
     path: "Plugins/Other/Source/OtherRuntime/Private/CinematicSystem.cpp",

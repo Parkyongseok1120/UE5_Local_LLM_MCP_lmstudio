@@ -9,6 +9,52 @@ from typing import Any
 
 
 CONTROL_VERSION = 2
+AUTHORITATIVE_CONTROL_HEADER_FIELDS = (
+    "version",
+    "authoritative",
+    "epoch",
+    "taskSessionId",
+    "taskMode",
+    "planRevision",
+    "activeSliceId",
+    "mutationGeneration",
+    "controlFingerprint",
+    "fingerprint",
+    "routeHash",
+    "phase",
+    "disposition",
+    "requiredTool",
+    "allowedTools",
+    "pendingGates",
+    "retryPolicy",
+    "blocker",
+    "requiredUserInput",
+    "transitionReason",
+    "synthesisReadiness",
+    "synthesisLatch",
+)
+
+
+def authoritative_control_header(value: Any) -> Any:
+    """Project a canonical v2 header without dropping semantic identity.
+
+    LM Studio may discard structuredContent when replaying a tool result to the
+    model.  The text fallback is therefore a protocol surface, not a cosmetic
+    summary: every field that can affect routing or synthesis finality remains
+    present here.  Bulky response siblings are discarded separately.
+    """
+
+    if not isinstance(value, dict):
+        return value
+    if int(value.get("version") or 0) < CONTROL_VERSION or value.get("authoritative") is not True:
+        return value
+    header = {
+        key: value[key]
+        for key in AUTHORITATIVE_CONTROL_HEADER_FIELDS
+        if key in value
+    }
+    header["controlPayloadTruncated"] = True
+    return header
 
 
 def _action_name(value: Any) -> str:
@@ -260,7 +306,11 @@ def model_visible_control_text(
         return fallback_text
 
     control = fallback.get("control") if isinstance(fallback.get("control"), dict) else {}
-    minimal_control = {
+    authoritative_header = authoritative_control_header(payload.get("control"))
+    minimal_control = authoritative_header if (
+        isinstance(authoritative_header, dict)
+        and authoritative_header.get("authoritative") is True
+    ) else {
         key: (
             value[:200]
             if isinstance(value, str)

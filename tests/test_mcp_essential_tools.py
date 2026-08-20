@@ -44,6 +44,7 @@ RAG_ESSENTIAL = {
     "unreal_task_checkpoint",
     "unreal_task_commit_synthesis",
     "unreal_task_ack_synthesis_delivery",
+    "unreal_task_recover_synthesis_delivery",
     "unreal_task_define_slices",
     "unreal_task_resume",
     "unreal_task_cancel",

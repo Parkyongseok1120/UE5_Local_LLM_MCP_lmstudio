@@ -53,3 +53,44 @@ def test_each_recovery_transition_has_an_explicit_exit() -> None:
         assert transition.get("satisfactionEvent"), status
         assert transition.get("nextStatus"), status
         assert transition.get("nextLifecycle"), status
+
+
+def test_every_recoverable_lifecycle_state_has_a_path_to_complete() -> None:
+    for state in (
+        CONTROL_STATE_REGISTRY.lifecycle_states
+        - {"TERMINAL_BLOCKED", "CANCELLED"}
+    ):
+        path = CONTROL_STATE_REGISTRY.lifecycle_path_to_complete(state)
+        assert path, state
+        assert path[0] == state
+        assert path[-1] == "COMPLETE"
+
+
+def test_delivery_recovery_and_general_user_input_are_distinct_states() -> None:
+    general_events = {
+        transition["event"]
+        for transition in CONTROL_STATE_REGISTRY.lifecycle_transitions[
+            "AWAITING_USER_INPUT"
+        ]
+    }
+    delivery_events = {
+        transition["event"]
+        for transition in CONTROL_STATE_REGISTRY.lifecycle_transitions[
+            "DELIVERY_RECOVERY_AWAITING_USER"
+        ]
+    }
+    assert "OPERATOR_CONFIRMED_VISIBLE" not in general_events
+    assert "OPERATOR_AUTHORIZED_REEMIT" not in general_events
+    assert "USER_INPUT_COMMITTED" not in delivery_events
+
+
+def test_lifecycle_graph_uses_only_declared_events_and_states() -> None:
+    assert set(CONTROL_STATE_REGISTRY.lifecycle_transitions) == set(
+        CONTROL_STATE_REGISTRY.lifecycle_states
+    )
+    for state, transitions in CONTROL_STATE_REGISTRY.lifecycle_transitions.items():
+        if state in CONTROL_STATE_REGISTRY.terminal_lifecycle_states:
+            assert transitions == ()
+        for transition in transitions:
+            assert transition["event"] in CONTROL_STATE_REGISTRY.lifecycle_events
+            assert transition["next"] in CONTROL_STATE_REGISTRY.lifecycle_states

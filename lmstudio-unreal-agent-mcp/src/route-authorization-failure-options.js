@@ -22,7 +22,10 @@ function routeAuthorizationFailureOptions(result = {}, toolName = "") {
     const active = Array.isArray(route.activeTools)
       ? route.activeTools.map(String).filter(Boolean)
       : [];
-    nextAction = pending[0] || active[0] || "unreal_task_checkpoint";
+    // A pending gate is a future obligation, not necessarily executable in
+    // the current route. Prefer the current active command so a continuity
+    // checkpoint cannot be hidden behind its own downstream feature gate.
+    nextAction = active[0] || pending[0] || "unreal_task_checkpoint";
   }
   const policyRecovery = recoveryAction(errorCode);
   if (!nextAction) nextAction = policyRecovery.action;

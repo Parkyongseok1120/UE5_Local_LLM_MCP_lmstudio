@@ -125,6 +125,7 @@ const {
   bindBuildContractViaPython,
   markRecoveryEvidenceViaPython,
   scopedAbsentEvidencePath,
+  inspectionReadPolicyForState,
 } = require("./task-auth");
 const {
   MAX_AUTOMATION_FILTERS,
@@ -659,32 +660,7 @@ function inspectionReadPolicy(args = {}) {
   const taskSessionId = mutationTaskSessionId(args);
   if (!taskSessionId) return null;
   const state = readTaskState(WORKSPACE_ROOT, taskSessionId);
-  const contract = state?.inspectionContract && typeof state.inspectionContract === "object"
-    ? state.inspectionContract
-    : null;
-  const budget = contract?.evidenceBudget && typeof contract.evidenceBudget === "object"
-    ? contract.evidenceBudget
-    : null;
-  if (!budget) return null;
-  const maxReads = Math.max(1, Number(budget.maxDirectSourceReadsPerPhase || 1));
-  const maxEvidenceChars = Math.max(1, Number(budget.maxEvidenceCharsPerPhase || 1));
-  const maxFullReadChars = Math.max(1, Number(budget.maxFullReadChars || maxEvidenceChars));
-  const evidenceCharacters = Math.max(0, Number(state?.inspectionProgress?.evidenceCharacters || 0));
-  const remainingEvidenceChars = Math.max(0, maxEvidenceChars - evidenceCharacters);
-  const perReadCharacters = Math.max(1, Math.min(
-    maxFullReadChars,
-    Math.floor(maxEvidenceChars / maxReads),
-    Math.max(1, remainingEvidenceChars),
-  ));
-  return {
-    maxBytesPerRead: perReadCharacters,
-    maxCharactersPerRead: perReadCharacters,
-    maxLinesPerRead: Math.max(1, Number(budget.maxFullReadLines || 300)),
-    maxDirectoryEntries: Math.max(1, Number(budget.maxDirectoryEntries || 200)),
-    maxDirectoryLists: Math.max(1, Number(budget.maxDirectoryLists || 1)),
-    listedDirectories: Math.max(0, Number(state?.inspectionProgress?.listedDirectories || 0)),
-    coverageMode: String(contract.coverageMode || ""),
-  };
+  return inspectionReadPolicyForState(state);
 }
 
 function mutationJournalLocation(targetPath, args = {}) {

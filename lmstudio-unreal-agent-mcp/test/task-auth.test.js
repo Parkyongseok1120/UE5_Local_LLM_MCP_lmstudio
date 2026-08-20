@@ -27,12 +27,122 @@ const {
   commitRouteReservation,
   rollbackRouteReservation,
   recordDirectSourceEvidence,
+  updateInspectionFrontier,
+  inspectionReadPolicyForState,
   scopedAbsentEvidencePath,
   selectionBindingForState,
   validateMutationAuth,
   validateResolvedTaskProject,
   validateTaskRouteScope,
 } = require("../src/task-auth");
+
+test("repository inventory extensions .hh and .ini advance the audit cursor", () => {
+  for (const [projectRelativePath, expectedKind] of [
+    ["Source/Demo/Legacy.hh", "declaration"],
+    ["Config/DefaultGame.ini", "configuration"],
+  ]) {
+    const state = {
+      planRevision: "1",
+      sourceEvidence: { version: 2, planRevision: "1", files: {} },
+      repoAuditLedger: {
+        required: true,
+        status: "active",
+        queuedTargets: [projectRelativePath],
+        entries: {
+          [projectRelativePath]: {
+            path: projectRelativePath,
+            contentHash: "a".repeat(64),
+            lineCount: 1,
+            status: "queued",
+            coveredRanges: [],
+          },
+        },
+        totalCount: 1,
+        completedCount: 0,
+        remainingCount: 1,
+      },
+    };
+    const result = recordDirectSourceEvidence(state, "read_file", {
+      directSourceEvidence: {
+        projectRelativePath,
+        contentHash: "b".repeat(64),
+        lineRange: "1-1",
+        lineCount: 1,
+        characterCount: 10,
+        completeRead: true,
+        wholeFileComplete: true,
+      },
+    });
+    assert.equal(result.recorded, true, projectRelativePath);
+    assert.equal(state.repoAuditLedger.remainingCount, 0, projectRelativePath);
+    assert.equal(state.repoAuditLedger.status, "complete", projectRelativePath);
+    assert.equal(Object.values(state.sourceEvidence.files)[0].sourceKind, expectedKind);
+  }
+});
+
+test("frontier capacity retains producer batches above 32 and fails closed above the durable cap", () => {
+  const state = { inspectionProgress: {} };
+  const firstBatch = Array.from({ length: 1000 }, (_, index) => `Source/Demo/F${index}.cpp`);
+  updateInspectionFrontier(state, firstBatch);
+  assert.equal(state.inspectionProgress.remainingFrontier.length, 1000);
+  assert.equal(state.inspectionProgress.remainingFrontierTotalCount, 1000);
+  assert.equal(state.inspectionProgress.frontierOverflow, false);
+  updateInspectionFrontier(
+    state,
+    Array.from({ length: 4097 }, (_, index) => `Source/Large/F${index}.cpp`),
+  );
+  assert.equal(state.inspectionProgress.remainingFrontier.length, 4096);
+  assert.equal(state.inspectionProgress.frontierOverflow, true);
+  assert.equal(state.inspectionProgress.frontierOverflowCode, "EVIDENCE_FRONTIER_CAPACITY_EXCEEDED");
+  assert.match(state.inspectionProgress.remainingFrontierHash, /^[a-f0-9]{64}$/);
+});
+
+test("source evidence retains prior repository pages instead of evicting early files", () => {
+  const state = {
+    planRevision: "1",
+    mutationGeneration: 0,
+    sourceEvidence: { version: 2, planRevision: "1", files: {} },
+  };
+  for (let index = 0; index < 129; index += 1) {
+    const projectRelativePath = `Source/Audit/File${String(index).padStart(3, "0")}.cpp`;
+    const recorded = recordDirectSourceEvidence(state, "read_file", {
+      directSourceEvidence: {
+        projectRelativePath,
+        contentHash: `${"a".repeat(60)}${index.toString(16).padStart(4, "0")}`,
+        lineRange: "1-1",
+        lineCount: 1,
+        completeRead: true,
+        wholeFileComplete: true,
+        characterCount: 1,
+        body: "x",
+      },
+    });
+    assert.equal(recorded.recorded, true);
+  }
+  assert.equal(Object.keys(state.sourceEvidence.files).length, 129);
+  assert.ok(state.sourceEvidence.files["source/audit/file000.cpp"]);
+  assert.ok(state.sourceEvidence.files["source/audit/file128.cpp"]);
+});
+
+test("inspection read policy consumes the phase counter instead of the lifetime ledger", () => {
+  const state = {
+    inspectionContract: {
+      coverageMode: "representative",
+      evidenceBudget: {
+        maxDirectSourceReadsPerPhase: 12,
+        maxEvidenceCharsPerPhase: 64_000,
+        maxFullReadChars: 8_000,
+      },
+    },
+    inspectionProgress: {
+      evidenceCharacters: 64_000,
+      phaseEvidenceCharacters: 0,
+    },
+  };
+  assert.equal(inspectionReadPolicyForState(state).maxCharactersPerRead, 5333);
+  state.inspectionProgress.phaseEvidenceCharacters = 63_999;
+  assert.equal(inspectionReadPolicyForState(state).maxCharactersPerRead, 1);
+});
 
 test("direct source evidence advances the durable repository audit cursor", () => {
   const state = {

@@ -206,7 +206,7 @@ def materialize_synthesis_evidence_bundle(
     candidate_declarations = {
         _pairing_key(item.get("path")): item
         for item in candidates
-        if Path(str(item.get("path") or "")).suffix.casefold() in {".h", ".hpp", ".inl"}
+        if Path(str(item.get("path") or "")).suffix.casefold() in {".h", ".hpp", ".hh", ".inl"}
         and _bounded_excerpts(item)
     }
     candidate_implementations = {
@@ -218,26 +218,45 @@ def materialize_synthesis_evidence_bundle(
     paired_keys = sorted(
         key for key in candidate_declarations if key and key in candidate_implementations
     )
-    if paired_keys:
-        primary_pair = [
-            candidate_declarations[paired_keys[0]],
-            candidate_implementations[paired_keys[0]],
-        ]
-        primary_ids = {id(item) for item in primary_pair}
-        candidates = [*primary_pair, *(item for item in candidates if id(item) not in primary_ids)]
+    paired_rows = [
+        (candidate_declarations[key], candidate_implementations[key])
+        for key in paired_keys[: max(1, maximum_claims // 2)]
+    ]
+    paired_ids = {id(item) for pair in paired_rows for item in pair}
+    unpaired_candidates = [item for item in candidates if id(item) not in paired_ids]
+    pair_record_target = max(1, len(paired_rows) * 2)
+    # Reserve deterministic JSON metadata space, then distribute the remaining
+    # exact-source budget fairly across every representative pair.  Selecting
+    # one 4K declaration first used to starve later implementation records and
+    # let a four-pair readiness claim bind only one pair to the final prompt.
+    per_record_excerpt_limit = min(
+        max(1, int(POLICY.get("maximumExactExcerptCharacters") or 4000)),
+        max(64, (maximum_characters - min(4000, maximum_characters // 3)) // pair_record_target),
+    )
     records: list[dict[str, Any]] = []
-    for row in candidates:
+
+    def record_for(row: dict[str, Any], excerpt_limit: int) -> dict[str, Any] | None:
         excerpts = _bounded_excerpts(row)
         if not excerpts:
-            continue
+            return None
         identity = _evidence_identity(row)
-        excerpt = excerpts[0]
+        excerpt = dict(excerpts[0])
+        if len(excerpt["text"]) > excerpt_limit:
+            exact_text = excerpt["text"][:excerpt_limit]
+            excerpt["text"] = exact_text
+            excerpt["endLine"] = min(
+                int(excerpt["endLine"]),
+                int(excerpt["startLine"]) + exact_text.count("\n"),
+            )
+            excerpt["excerptDigest"] = hashlib.sha256(
+                exact_text.encode("utf-8")
+            ).hexdigest()
         claim_id = str(row.get("claimId") or row.get("evidenceId") or _hash(identity)[:24])[:80]
         existing_claim_ids = {str(item.get("claimId") or "") for item in records}
         if claim_id in existing_claim_ids:
             suffix = _hash({"identity": identity, "excerpt": excerpt})[:12]
             claim_id = f"{claim_id[:67]}-{suffix}"
-        record = {
+        return {
             "claimId": claim_id,
             "sourcePath": identity["path"],
             "contentHash": identity["contentHash"],
@@ -248,7 +267,8 @@ def materialize_synthesis_evidence_bundle(
             "coverageLevel": identity["coverageLevel"],
             "classification": str(row.get("classification") or "direct"),
         }
-        proposed = [*records, record]
+
+    def serialized_with(proposed: list[dict[str, Any]]) -> str:
         proposed_binding = {
             "version": 2,
             "taskSessionId": str(value.get("taskSessionId") or ""),
@@ -257,13 +277,31 @@ def materialize_synthesis_evidence_bundle(
             "mutationGeneration": _nonnegative_int(value.get("mutationGeneration")),
             "records": proposed,
         }
-        proposed_serialized = json.dumps(
+        return json.dumps(
             proposed_binding,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         )
-        if len(proposed) > maximum_claims or len(proposed_serialized) > maximum_characters:
+
+    for declaration, implementation in paired_rows:
+        pair_records = [
+            record
+            for row in (declaration, implementation)
+            if (record := record_for(row, per_record_excerpt_limit)) is not None
+        ]
+        if len(pair_records) != 2:
+            continue
+        proposed = [*records, *pair_records]
+        if len(proposed) <= maximum_claims and len(serialized_with(proposed)) <= maximum_characters:
+            records = proposed
+
+    for row in unpaired_candidates:
+        record = record_for(row, per_record_excerpt_limit)
+        if record is None:
+            continue
+        proposed = [*records, record]
+        if len(proposed) > maximum_claims or len(serialized_with(proposed)) > maximum_characters:
             continue
         records = proposed
     binding = {
@@ -325,7 +363,7 @@ def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
     discovered_decl = {
         _pairing_key(value)
         for value in discovered_paths
-        if Path(value).suffix.casefold() in {".h", ".hpp", ".inl"}
+        if Path(value).suffix.casefold() in {".h", ".hpp", ".hh", ".inl"}
     }
     discovered_impl = {
         _pairing_key(value)
@@ -343,7 +381,14 @@ def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
     )
     max_reads = max(1, int(budget.get("maxDirectSourceReadsPerPhase") or 2**31 - 1))
     max_chars = max(1, int(budget.get("maxEvidenceCharsPerPhase") or 2**31 - 1))
-    bound_reached = int(progress.get("distinctDirectSourceFiles", progress.get("directSourceReads") or 0)) >= max_reads or int(progress.get("evidenceCharacters") or 0) >= max_chars
+    phase_read_calls = int(
+        progress.get(
+            "phaseDirectSourceReadCalls",
+            progress.get("directSourceReadCalls", progress.get("directSourceReads") or 0),
+        )
+    )
+    phase_evidence_characters = int(progress.get("phaseEvidenceCharacters", progress.get("evidenceCharacters") or 0))
+    bound_reached = phase_read_calls >= max_reads or phase_evidence_characters >= max_chars
     task_kind = str(state.get("taskKind") or "").casefold()
     direct_required = task_kind not in POLICY.get("evidenceFreeTaskKinds", [])
     direct_satisfied = not direct_required or (
@@ -378,7 +423,7 @@ def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
     selected_declarations = {
         _pairing_key(row.get("sourcePath"))
         for row in bundle["records"]
-        if Path(str(row.get("sourcePath") or "")).suffix.casefold() in {".h", ".hpp", ".inl"}
+        if Path(str(row.get("sourcePath") or "")).suffix.casefold() in {".h", ".hpp", ".hh", ".inl"}
     }
     selected_implementations = {
         _pairing_key(row.get("sourcePath"))
@@ -388,10 +433,13 @@ def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
     selected_pair_count = len(
         {key for key in selected_declarations if key and key in selected_implementations}
     )
+    materialized_required_pairs = (
+        required_pairs if representative_satisfied else min(1, pair_count)
+    )
     bundle_materialized = not direct_required or bool(
         selected_paths
         and len(bundle["records"]) >= int(POLICY.get("minimumAcceptedDirectEvidence") or 2)
-        and selected_pair_count >= min(1, required_pairs)
+        and selected_pair_count >= materialized_required_pairs
         and hashlib.sha256(bundle["serializedEvidence"].encode("utf-8")).hexdigest()
         == bundle["bundleHash"]
     )
@@ -427,6 +475,7 @@ def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
         "commitEligible": ready, "boundReached": bound_reached,
         "synthesisEvidenceMaterialized": bundle_materialized,
         "selectedSynthesisEvidenceCount": len(bundle["records"]),
+        "selectedSynthesisRepresentativePairCount": selected_pair_count,
         "selectedSynthesisEvidencePaths": sorted(selected_paths),
         "claimLedger": {
             "version": 1,

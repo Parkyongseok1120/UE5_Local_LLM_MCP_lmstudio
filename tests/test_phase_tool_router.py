@@ -19,6 +19,7 @@ from phase_tool_router import (  # noqa: E402
     commit_control_transition,
     derive_next_obligation,
     derive_tool_route,
+    reduce_committed_event,
     selection_binding,
 )
 from plan_consistency import validate_phase_tool_route  # noqa: E402
@@ -2470,6 +2471,99 @@ def test_absent_last_reconstruction_candidate_is_consumed_without_status_loop() 
     assert committed["controlState"]["blocker"]["code"] == "EVIDENCE_FRONTIER_LOST"
     assert committed["inspectionProgress"]["remainingFrontier"] == []
     assert committed["inspectionProgress"]["frontierReconstruction"]["noBoundedSearchCandidates"] is True
+
+
+def test_reconstruction_search_success_requires_exact_recovered_path() -> None:
+    recovered = "Source/Demo/Foo.cpp"
+    state = {
+        "taskSessionId": "frontier-reconstruction-success",
+        "status": "running",
+        "mode": "read_only",
+        "writesAllowed": False,
+        "writeGate": {"writesAllowed": False},
+        "taskKind": "cpp_analysis",
+        "planRevision": "2",
+        "mutationGeneration": 0,
+        "inspectionProgress": {"remainingFrontier": [recovered]},
+        "sourceEvidence": {"planRevision": "2", "files": {}},
+        "recoveryObligation": {
+            "source": "evidence",
+            "status": "frontier_reconstruction_search_required",
+            "requiredTool": {
+                "name": "search_files",
+                "args": {"query": "Foo.cpp", "path": "Source"},
+            },
+        },
+    }
+    reduce_committed_event(
+        state,
+        {
+            "kind": "TOOL_RESULT_COMMITTED",
+            "toolName": "search_files",
+            "arguments": {"query": "Foo.cpp", "path": "Source"},
+            "metadata": {},
+        },
+    )
+    assert state["recoveryObligation"]["status"] == "evidence_required"
+    assert state["recoveryObligation"]["requiredTool"] == {
+        "name": "read_file",
+        "args": {"path": recovered},
+    }
+
+
+def test_frontier_overflow_is_a_truthful_terminal_control() -> None:
+    state = {
+        "taskSessionId": "frontier-overflow-control",
+        "status": "running",
+        "mode": "read_only",
+        "writesAllowed": False,
+        "writeGate": {"writesAllowed": False},
+        "taskKind": "cpp_analysis",
+        "planRevision": "1",
+        "mutationGeneration": 0,
+        "inspectionProgress": {
+            "frontierOverflow": True,
+            "frontierOverflowCode": "EVIDENCE_FRONTIER_CAPACITY_EXCEEDED",
+            "remainingFrontierTotalCount": 4097,
+            "remainingFrontierHash": "a" * 64,
+        },
+        "sourceEvidence": {"planRevision": "1", "files": {}},
+        "toolRoute": {"phase": "planner", "activeTools": []},
+    }
+    control = derive_next_obligation(state)
+    assert control["disposition"] == "workflow_stop"
+    assert control["requiredTool"] is None
+    assert control["allowedTools"] == []
+    assert control["blocker"]["code"] == "EVIDENCE_FRONTIER_CAPACITY_EXCEEDED"
+
+
+def test_repository_audit_inventory_overflow_is_a_truthful_terminal_control() -> None:
+    state = {
+        "taskSessionId": "repo-audit-overflow-control",
+        "status": "running",
+        "mode": "read_only",
+        "writesAllowed": False,
+        "writeGate": {"writesAllowed": False},
+        "taskKind": "cpp_analysis",
+        "planRevision": "1",
+        "mutationGeneration": 0,
+        "repoAuditLedger": {
+            "required": True,
+            "status": "inventory_overflow",
+            "overflow": True,
+            "overflowCode": "REPO_AUDIT_INVENTORY_OVERFLOW",
+            "inventoryHash": "b" * 64,
+            "totalCount": 4097,
+            "boundedCount": 4096,
+        },
+        "sourceEvidence": {"planRevision": "1", "files": {}},
+        "toolRoute": {"phase": "planner", "activeTools": []},
+    }
+    control = derive_next_obligation(state)
+    assert control["disposition"] == "workflow_stop"
+    assert control["requiredTool"] is None
+    assert control["allowedTools"] == []
+    assert control["blocker"]["code"] == "REPO_AUDIT_INVENTORY_OVERFLOW"
 
 
 def test_new_recovery_obligation_invalidates_old_synthesis_latch(

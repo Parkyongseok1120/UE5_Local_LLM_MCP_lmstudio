@@ -291,7 +291,7 @@ function checkpointLifecycleIdentity(checkpoint: any): {
 
 function lifecycleState(
   checkpoint: any,
-  status: "pending" | "prepared" | "completed" | "commit_sent" | "commit_acked" | "delivery_pending" | "committed" | "delivered" | "rejected_stale" | "evidence_recovery",
+  status: "pending" | "prepared" | "completed" | "commit_sent" | "commit_acked" | "delivery_pending" | "delivery_uncertain" | "delivery_reemit_authorized" | "committed" | "delivered" | "rejected_stale" | "evidence_recovery",
   options: { outputDigest?: string; stopReason?: string } = {},
 ): any {
   return {
@@ -3987,14 +3987,29 @@ function applyAuthoritativeControlFromSynthesisResult(
   result: any,
 ): any | null {
   const payloads = core.parseJsonObjects(result?.content || "");
-  if (!payloads.some((payload: any) => core.compactServerControl(payload?.control))) return null;
+  const directControls = payloads
+    .map((payload: any) => core.compactServerControl(payload?.control))
+    .filter(Boolean)
+    .sort((left: any, right: any) => Number(right.epoch || 0) - Number(left.epoch || 0));
+  if (directControls.length === 0) return null;
   let projection: any;
   try {
     projection = core.buildCheckpoint(messages, checkpoint || {}, { maxCheckpointFacts: 32 });
   } catch {
     return null;
   }
-  const control = core.compactServerControl(projection?.serverControl);
+  const projectedControl = core.compactServerControl(projection?.serverControl);
+  const directControl: any = directControls[0];
+  // The matched internal handshake result is itself a trusted paired
+  // transport record. Prefer its newest exact envelope when an older control
+  // elsewhere in retained history wins projection tie-breaking.
+  const control = !projectedControl
+    || (
+      directControl.taskSessionId === projectedControl.taskSessionId
+      && Number(directControl.epoch || 0) >= Number(projectedControl.epoch || 0)
+    )
+    ? directControl
+    : projectedControl;
   if (!control) return null;
   checkpoint.serverControl = control;
   checkpoint.protocolControl = projection.protocolControl || null;
@@ -4251,10 +4266,13 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       "synthesis-delivery-ack",
       deliveryReceiptId.slice(0, 32),
     );
+    const operatorAuthorizedReemit = String(delivery.deliveryState || "") === "reemit_authorized";
     checkpoint.synthesisDelivery = {
       ...delivery,
       deliveryState: "emitting",
-      deliveryGuarantee: "at_most_once_with_recovery_artifact",
+      deliveryGuarantee: operatorAuthorizedReemit
+        ? "operator_authorized_duplicate_risk"
+        : "at_most_once_with_recovery_artifact",
       deliveryId,
       deliveryReceiptId,
       recoveryArtifactPath,
@@ -4348,16 +4366,24 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     });
     return true;
   };
-  if (
+  const ambiguousSynthesisDelivery = Boolean(
     String(checkpoint?.synthesisState?.status || "") === "commit_acked"
     && ["emitting", "uncertain"].includes(
       String(checkpoint?.synthesisDelivery?.deliveryState || ""),
     )
-  ) {
+  );
+  const existingDeliveryRecoveryPending = [
+    ...(Array.isArray(checkpoint?.pendingToolCalls) ? checkpoint.pendingToolCalls : []),
+    ...(checkpoint?.pendingToolCall ? [checkpoint.pendingToolCall] : []),
+  ].find((pending: any) => toolNamesMatch(
+    "unreal_task_recover_synthesis_delivery",
+    String(pending?.name || ""),
+  ));
+  if (ambiguousSynthesisDelivery && !existingDeliveryRecoveryPending) {
     checkpoint.synthesisDelivery = {
       ...checkpoint.synthesisDelivery,
       deliveryState: "uncertain",
-      deliveryGuarantee: "at_most_once_with_recovery_artifact",
+      deliveryGuarantee: "at_most_once_with_explicit_operator_recovery",
       uncertaintyDetectedAt: isoNow(),
     };
     await persistCheckpoint(
@@ -4373,12 +4399,100 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       transactionId: String(checkpoint?.synthesisDelivery?.transactionId || ""),
       reason: "durable_emit_intent_without_atomic_ui_receipt",
     });
-    const error: any = new Error(
-      `SYNTHESIS_DELIVERY_STATE_UNCERTAIN: automatic replay is disabled because LM Studio exposes no atomic UI receipt. Recover the prepared answer from ${String(checkpoint?.synthesisDelivery?.recoveryArtifactPath || "the session checkpoint")}.`,
+    const recoveryTool: any = ctl.getToolDefinitions().find((tool: any) => toolNamesMatch(
+      "unreal_task_recover_synthesis_delivery",
+      tool?.function?.name || tool?.name || "",
+    ));
+    if (!recoveryTool) {
+      const error: any = new Error(
+        "SYNTHESIS_DELIVERY_RECOVERY_TOOL_UNAVAILABLE: install or refresh the unreal-rag tool catalog.",
+      );
+      error.code = "SYNTHESIS_DELIVERY_RECOVERY_TOOL_UNAVAILABLE";
+      throw error;
+    }
+    const recoveryName = String(
+      recoveryTool?.function?.name
+      || recoveryTool?.name
+      || "unreal_task_recover_synthesis_delivery",
     );
-    error.code = "SYNTHESIS_DELIVERY_STATE_UNCERTAIN";
-    error.errorCode = "SYNTHESIS_DELIVERY_STATE_UNCERTAIN";
-    throw error;
+    const transactionId = String(checkpoint?.synthesisDelivery?.transactionId || "");
+    const outputDigest = String(checkpoint?.synthesisDelivery?.outputDigest || "");
+    const recoveryToolCallId = directToolCallRequestId(
+      "synthesis-delivery-recovery",
+      transactionId.slice(0, 32),
+    );
+    const recoveryArguments = {
+      taskAuthorization: checkpoint?.synthesisDelivery?.taskAuthorization || {
+        taskSessionId: String(checkpoint?.serverControl?.taskSessionId || ""),
+        ownerCapability: String(checkpoint?.taskRouteOwnership?.ownerCapability || ""),
+      },
+      synthesisTransactionId: transactionId,
+      outputDigest,
+      action: "mark_uncertain",
+    };
+    const recoveryPending = {
+      id: recoveryToolCallId,
+      name: recoveryName,
+      arguments: recoveryArguments,
+      dispatchState: "emitting",
+      dispatchIntentAt: isoNow(),
+      dispatchAttempt: 1,
+      dispatchedAt: "",
+      hostToolCallId: recoveryToolCallId,
+      synthesisDeliveryRecovery: true,
+    };
+    checkpoint.pendingToolCall = null;
+    checkpoint.pendingToolCalls = [
+      ...(Array.isArray(checkpoint.pendingToolCalls) ? checkpoint.pendingToolCalls : []),
+      recoveryPending,
+    ];
+    checkpoint.synthesisDelivery = {
+      ...checkpoint.synthesisDelivery,
+      recoveryToolCallId,
+    };
+    await persistCheckpoint(
+      sessionId,
+      checkpoint,
+      requireCheckpointPersistence,
+      "synthesis_delivery_recovery_dispatch_intent",
+    );
+    const recoveryIdentity = {
+      hostToolCallId: recoveryToolCallId,
+      predictionAttemptId: `${outerGenerateRequestId}:synthesis-delivery-recovery`,
+      modelLocalCallId: "delivery-recovery",
+      rawToolCallId: recoveryToolCallId,
+      toolCallId: recoveryToolCallId,
+      toolName: recoveryName,
+      source: "synthesis_delivery_recovery",
+      callId: 1_000_002,
+      durableIdentity: true,
+    };
+    hostToolCallLifecycle.record({ stage: "start", ...recoveryIdentity });
+    hostToolCallLifecycle.record({ stage: "name", ...recoveryIdentity, name: recoveryName });
+    hostToolCallLifecycle.record({
+      stage: "args",
+      ...recoveryIdentity,
+      content: JSON.stringify(recoveryArguments),
+    });
+    hostToolCallLifecycle.record({
+      stage: "end",
+      ...recoveryIdentity,
+      request: {
+        id: recoveryToolCallId,
+        type: "function",
+        name: recoveryName,
+        arguments: recoveryArguments,
+      },
+    });
+    recoveryPending.dispatchState = "emitted";
+    recoveryPending.dispatchedAt = isoNow();
+    await persistCheckpoint(
+      sessionId,
+      checkpoint,
+      requireCheckpointPersistence,
+      "synthesis_delivery_recovery_dispatched",
+    );
+    return;
   }
   if (await deliverAcknowledgedSynthesis()) return;
 
@@ -4388,6 +4502,7 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
   ];
   let synthesisCommitRejected = false;
   let synthesisDeliveryAcknowledged = false;
+  let synthesisDeliveryRecoveryRegistered = false;
   let synthesisNackControlApplied = false;
   let resolvedDirectProjectStatus: any = null;
   if (checkpoint && unresolvedPendingCalls.length > 0) {
@@ -4398,6 +4513,76 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     );
     for (const match of matchedCalls) {
       const pendingName = String(match.pending?.name || "").trim();
+      const synthesisLifecyclePayload = core.parseJsonObjects(match.result?.content || "")
+        .map((payload: any) => ({
+          payload,
+          lifecycle: payload?.synthesisLifecycle && typeof payload.synthesisLifecycle === "object"
+            ? payload.synthesisLifecycle
+            : payload?.state?.synthesisLifecycle,
+        }))
+        .find(({ payload, lifecycle }: any) => payload?.ok === true && lifecycle);
+      const resultLifecycle = synthesisLifecyclePayload?.lifecycle;
+      const resultLifecycleStatus = String(resultLifecycle?.status || "").trim().toLowerCase();
+      const localTransactionId = String(checkpoint?.synthesisDelivery?.transactionId || "").trim().toLowerCase();
+      const localOutputDigest = String(checkpoint?.synthesisDelivery?.outputDigest || "").trim().toLowerCase();
+      const exactDeliveryIdentity = Boolean(
+        resultLifecycle
+        && localTransactionId
+        && localOutputDigest
+        && String(resultLifecycle.synthesisTransactionId || "").trim().toLowerCase() === localTransactionId
+        && String(resultLifecycle.outputDigest || "").trim().toLowerCase() === localOutputDigest
+      );
+      if (resultLifecycleStatus === "delivered" && exactDeliveryIdentity) {
+        applyAuthoritativeControlFromSynthesisResult(messages, checkpoint, match.result);
+        synthesisDeliveryAcknowledged = true;
+        checkpoint.synthesisState = lifecycleState(checkpoint, "delivered", {
+          outputDigest: localOutputDigest,
+          stopReason: "operator_confirmed_delivery_visible",
+        });
+        if (checkpoint?.preparedSynthesis && typeof checkpoint.preparedSynthesis === "object") {
+          checkpoint.preparedSynthesis = { ...checkpoint.preparedSynthesis, status: "delivered" };
+        }
+        checkpoint.synthesisDelivery = null;
+        continue;
+      }
+      if (resultLifecycleStatus === "delivery_reemit_authorized" && exactDeliveryIdentity) {
+        applyAuthoritativeControlFromSynthesisResult(messages, checkpoint, match.result);
+        checkpoint.synthesisState = lifecycleState(checkpoint, "commit_acked", {
+          outputDigest: localOutputDigest,
+          stopReason: "operator_authorized_delivery_reemit",
+        });
+        checkpoint.synthesisDelivery = {
+          ...checkpoint.synthesisDelivery,
+          deliveryState: "reemit_authorized",
+          deliveryGuarantee: "operator_authorized_duplicate_risk",
+          deliveryAttempt: Math.max(1, Number(resultLifecycle.deliveryAttempt || 2)),
+        };
+        continue;
+      }
+      if (toolNamesMatch("unreal_task_recover_synthesis_delivery", pendingName)) {
+        if (resultLifecycleStatus !== "delivery_uncertain" || !exactDeliveryIdentity) {
+          throw new Error("SYNTHESIS_DELIVERY_RECOVERY_REJECTED");
+        }
+        const authoritativeControl = applyAuthoritativeControlFromSynthesisResult(
+          messages,
+          checkpoint,
+          match.result,
+        );
+        if (!authoritativeControl || authoritativeControl.disposition !== "await_user") {
+          throw new Error("SYNTHESIS_DELIVERY_RECOVERY_CONTROL_INVALID");
+        }
+        checkpoint.synthesisState = lifecycleState(checkpoint, "delivery_uncertain", {
+          outputDigest: localOutputDigest,
+          stopReason: "explicit_operator_recovery_required",
+        });
+        checkpoint.synthesisDelivery = {
+          ...checkpoint.synthesisDelivery,
+          deliveryState: "uncertain",
+          deliveryGuarantee: "at_most_once_with_explicit_operator_recovery",
+        };
+        synthesisDeliveryRecoveryRegistered = true;
+        continue;
+      }
       if (match.pending?.directProjectStatus === true) {
         const durableState = core.compactDirectProjectStatus(checkpoint?.directProjectStatus);
         const pendingIdentity = String(match.pending?.directProjectStatusIdentity || "").trim();
@@ -4646,6 +4831,15 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       );
       return;
     }
+    if (synthesisDeliveryRecoveryRegistered) {
+      await persistCheckpoint(
+        sessionId,
+        checkpoint,
+        requireCheckpointPersistence,
+        "synthesis_delivery_operator_recovery_required",
+      );
+      return;
+    }
     if (await deliverAcknowledgedSynthesis()) return;
     if (synthesisCommitRejected) {
       if (!synthesisNackControlApplied) {
@@ -4788,7 +4982,8 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       const dispatchState = String(pending?.dispatchState || "emitted");
       const pendingName = String(pending?.name || "").trim();
       const replayableSynthesisHandshake = toolNamesMatch("unreal_task_commit_synthesis", pendingName)
-        || toolNamesMatch("unreal_task_ack_synthesis_delivery", pendingName);
+        || toolNamesMatch("unreal_task_ack_synthesis_delivery", pendingName)
+        || toolNamesMatch("unreal_task_recover_synthesis_delivery", pendingName);
       if (
         !["prepared", "emitting"].includes(dispatchState)
         && !(replayableSynthesisHandshake && dispatchState === "emitted")
@@ -4803,6 +4998,7 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
         !core.mutationToolName(name)
         && !toolNamesMatch("unreal_task_commit_synthesis", name)
         && !toolNamesMatch("unreal_task_ack_synthesis_delivery", name)
+        && !toolNamesMatch("unreal_task_recover_synthesis_delivery", name)
       ) {
         if (id) abandonedPreparedIds.push(id);
         continue;
@@ -4919,6 +5115,37 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     checkpoint || {},
     { maxCheckpointFacts: 32 },
   );
+  const preliminaryServerControl = core.compactServerControl(preliminaryCheckpoint?.serverControl);
+  const priorDelivery = checkpoint?.synthesisDelivery;
+  const priorDeliveryTask = String(
+    priorDelivery?.taskAuthorization?.taskSessionId
+    || checkpoint?.serverControl?.taskSessionId
+    || "",
+  ).trim();
+  const priorDeliveryOutput = String(priorDelivery?.output || "");
+  const priorDeliveryDigest = String(priorDelivery?.outputDigest || "").trim().toLowerCase();
+  if (
+    !preliminaryCheckpoint?.synthesisDelivery
+    && priorDelivery
+    && typeof priorDelivery === "object"
+    && priorDeliveryTask
+    && preliminaryServerControl?.taskSessionId === priorDeliveryTask
+    && priorDeliveryOutput
+    && core.sha256(priorDeliveryOutput) === priorDeliveryDigest
+    && String(preliminaryCheckpoint?.objectiveHash || "") === String(checkpoint?.objectiveHash || "")
+  ) {
+    // A structured await_user response can force a conservative full history
+    // rebuild. The paired authoritative control is recoverable from history,
+    // but the exact UI-delivery bytes intentionally are not. Rebind those
+    // durable local bytes only to the same task and objective identity.
+    preliminaryCheckpoint.synthesisDelivery = { ...priorDelivery };
+    preliminaryCheckpoint.synthesisState = checkpoint?.synthesisState
+      ? { ...checkpoint.synthesisState }
+      : preliminaryCheckpoint.synthesisState;
+    preliminaryCheckpoint.preparedSynthesis = checkpoint?.preparedSynthesis
+      ? { ...checkpoint.preparedSynthesis }
+      : preliminaryCheckpoint.preparedSynthesis;
+  }
   if (auxiliaryMetaRequest) {
     preliminaryCheckpoint.serverControl = null;
     preliminaryCheckpoint.protocolControl = null;
@@ -6377,6 +6604,7 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     return ![
       "unreal_task_commit_synthesis",
       "unreal_task_ack_synthesis_delivery",
+      "unreal_task_recover_synthesis_delivery",
     ].some((internalName) => toolNamesMatch(internalName, name));
   }).map((tool: any) => {
     if (!tool?.__serverOwnedInjectedArgs) return tool;

@@ -5986,6 +5986,7 @@ ESSENTIAL_TOOL_NAMES = frozenset(
         "unreal_task_checkpoint",
         "unreal_task_commit_synthesis",
         "unreal_task_ack_synthesis_delivery",
+        "unreal_task_recover_synthesis_delivery",
         "unreal_task_define_slices",
         "unreal_task_resume",
         "unreal_task_cancel",
@@ -8600,6 +8601,24 @@ class McpServer:
                 ),
             },
             {
+                "name": "unreal_task_recover_synthesis_delivery",
+                "title": "Register uncertain read-only synthesis delivery",
+                "description": (
+                    "Internal idempotent context-compactor handshake. Records that final-output "
+                    "delivery crossed a host boundary without an atomic UI receipt. It never "
+                    "re-emits output; the task waits for an explicit operator recovery choice."
+                ),
+                "inputSchema": self._schema(
+                    {
+                        "taskAuthorization": _checkpoint_authorization_schema(),
+                        "synthesisTransactionId": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                        "outputDigest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                        "action": {"type": "string", "enum": ["mark_uncertain"]},
+                    },
+                    ["taskAuthorization", "synthesisTransactionId", "outputDigest", "action"],
+                ),
+            },
+            {
                 "name": "unreal_task_define_slices",
                 "title": "Define executable task slices",
                 "description": (
@@ -9751,6 +9770,46 @@ class McpServer:
                     synthesis_transaction_id=str(arguments.get("synthesisTransactionId") or ""),
                     output_digest=str(arguments.get("outputDigest") or ""),
                     delivery_receipt_id=str(arguments.get("deliveryReceiptId") or ""),
+                )
+                if payload.get("ok"):
+                    self.notify_tools_list_changed()
+                self.structured_tool_result(message_id, payload)
+            elif name == "unreal_task_recover_synthesis_delivery":
+                from task_api import (
+                    task_authorization_for_state,
+                    task_recover_synthesis_delivery,
+                    task_root,
+                )
+
+                compact = dict(arguments.get("taskAuthorization") or {})
+                task_session_id = str(compact.get("taskSessionId") or "").strip()
+                owner_capability = str(compact.get("ownerCapability") or "").strip()
+                try:
+                    delivery_state = json.loads(
+                        (task_root(self.workspace, task_session_id) / "state.json").read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError, TypeError):
+                    delivery_state = {}
+                if (
+                    not task_session_id
+                    or not owner_capability
+                    or str(delivery_state.get("ownerCapability") or "") != owner_capability
+                ):
+                    self.structured_tool_result(
+                        message_id,
+                        {
+                            "ok": False,
+                            "errorCode": "TASK_ROUTE_CAPABILITY_MISMATCH",
+                            "error": "Delivery recovery does not own the active task.",
+                        },
+                    )
+                    return
+                payload = task_recover_synthesis_delivery(
+                    self.workspace,
+                    task_authorization=task_authorization_for_state(delivery_state),
+                    synthesis_transaction_id=str(arguments.get("synthesisTransactionId") or ""),
+                    output_digest=str(arguments.get("outputDigest") or ""),
+                    action=str(arguments.get("action") or ""),
                 )
                 if payload.get("ok"):
                     self.notify_tools_list_changed()

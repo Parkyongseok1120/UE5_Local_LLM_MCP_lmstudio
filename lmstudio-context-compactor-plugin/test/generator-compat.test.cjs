@@ -89,7 +89,7 @@ Chat.from = (input) => {
         content: message.content.map((block) => {
           const result = block?.toolCallResult || (block?.type === "toolCallResult" ? block : null);
           const name = String(result?.name || "");
-          const trusted = /(?:^|[/:_])(unreal_task_(?:status|start|recover_active|checkpoint|commit_synthesis|ack_synthesis_delivery)|unreal_agent_plan|unreal_feature_intent_resolve|unreal_code_sketch_claim_validate|read_file(?:_range)?|read_symbol|search_files|list_directory)$/u.test(name);
+          const trusted = /(?:^|[/:_])(unreal_task_(?:status|start|recover_active|checkpoint|commit_synthesis|ack_synthesis_delivery|recover_synthesis_delivery)|unreal_agent_plan|unreal_feature_intent_resolve|unreal_code_sketch_claim_validate|read_file(?:_range)?|read_symbol|search_files|list_directory)$/u.test(name);
           if (!trusted) return block;
           try {
             const payload = canonicalizeTrustedFixturePayload(JSON.parse(String(result?.content || "")));
@@ -10188,6 +10188,13 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
         parameters: { type: "object", properties: {} },
       },
     };
+    const recoveryTool = {
+      type: "function",
+      function: {
+        name: "unreal_task_recover_synthesis_delivery",
+        parameters: { type: "object", properties: {} },
+      },
+    };
     const crashRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-delivery-crash-"));
     fs.cpSync(stateRoot, crashRoot, { recursive: true });
     process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = crashRoot;
@@ -10207,14 +10214,173 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
     const recovered = JSON.parse(fs.readFileSync(crashedDelivery.recoveryArtifactPath, "utf8"));
     assert.equal(core.sha256(recovered.output), recovered.outputDigest);
     let replayedFragments = 0;
-    const restartController = controllerFor(postAckModel, {}, crashRoot, [], [commitTool, ackTool]);
-    restartController.fragmentGenerated = () => { replayedFragments += 1; };
-    await assert.rejects(
-      generate(restartController, ackHistory),
-      /SYNTHESIS_DELIVERY_STATE_UNCERTAIN/,
+    const recoveryEvents = [];
+    const restartController = controllerFor(
+      postAckModel,
+      {},
+      crashRoot,
+      recoveryEvents,
+      [commitTool, ackTool, recoveryTool],
     );
+    restartController.fragmentGenerated = () => { replayedFragments += 1; };
+    await generate(restartController, ackHistory);
     assert.equal(replayedFragments, 0);
     assert.equal(activeCheckpoint(crashRoot).synthesisDelivery.deliveryState, "uncertain");
+    assert.equal(
+      activeCheckpoint(crashRoot).synthesisDelivery.deliveryGuarantee,
+      "at_most_once_with_explicit_operator_recovery",
+    );
+    const recoveryRequest = recoveryEvents.find(
+      (event) => event.kind === "end"
+        && event.request?.name === "unreal_task_recover_synthesis_delivery",
+    ).request;
+    assert.equal(recoveryRequest.arguments.action, "mark_uncertain");
+    assert.equal(recoveryRequest.arguments.outputDigest, crashedDelivery.outputDigest);
+    assert.equal(recoveryRequest.arguments.synthesisTransactionId, crashedDelivery.transactionId);
+    const recoveryResumeToken = "9".repeat(64);
+    const uncertainControl = {
+      ...payload.control,
+      epoch: 22,
+      fingerprint: "2".repeat(64),
+      controlFingerprint: "2".repeat(64),
+      phase: "synthesis",
+      disposition: "await_user",
+      requiredTool: null,
+      allowedTools: [],
+      blocker: { code: "SYNTHESIS_DELIVERY_STATE_UNCERTAIN", fingerprint: "3".repeat(64) },
+      requiredUserInput: {
+        kind: "synthesis_delivery_recovery",
+        prompt: "Confirm visible or authorize one risk-acknowledged re-emission.",
+        schema: { type: "object", required: ["action"] },
+        resumeToken: recoveryResumeToken,
+      },
+    };
+    assert.ok(core.compactServerControl({ ...uncertainControl, authoritative: true }));
+    const uncertainResult = JSON.stringify({
+      ok: true,
+      taskSessionId: ownership.taskSessionId,
+      taskAuthorization: ownership,
+      control: uncertainControl,
+      synthesisLifecycle: {
+        status: "delivery_uncertain",
+        taskSessionId: ownership.taskSessionId,
+        outputDigest: crashedDelivery.outputDigest,
+        synthesisTransactionId: crashedDelivery.transactionId,
+      },
+    });
+    const recoveryMessages = [
+      { role: "user", content: [{ type: "text", text: "Audit the current project and report every verified issue." }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: commit }] },
+      { role: "tool", content: [{
+        type: "toolCallResult", toolCallId: commit.id, name: commit.name, content: commitAckResult,
+      }] },
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: recoveryRequest }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: recoveryRequest.id,
+        name: recoveryRequest.name,
+        content: uncertainResult,
+      }] },
+    ];
+    const recoveryHistory = Chat.from({ messages: recoveryMessages });
+    await generate(
+      controllerFor(postAckModel, {}, crashRoot, [], [commitTool, ackTool, recoveryTool]),
+      recoveryHistory,
+    );
+    assert.equal(activeCheckpoint(crashRoot).pendingToolCalls.length, 0);
+    assert.equal(activeCheckpoint(crashRoot).synthesisState.status, "delivery_uncertain");
+    assert.equal(activeCheckpoint(crashRoot).serverControl.disposition, "await_user");
+
+    const resumeTool = {
+      type: "function",
+      function: {
+        name: "unreal_task_resume",
+        parameters: { type: "object", properties: {} },
+      },
+    };
+    const operatorResponse = JSON.stringify({
+      action: "authorize_reemit",
+      acknowledgeDuplicateRisk: true,
+    });
+    const resumeEvents = [];
+    const resumeMessages = [
+      ...recoveryMessages,
+      { role: "user", content: [{ type: "text", text: operatorResponse }] },
+    ];
+    const resumeHistory = Chat.from({ messages: resumeMessages });
+    await generate(
+      controllerFor(
+        postAckModel,
+        {},
+        crashRoot,
+        resumeEvents,
+        [commitTool, ackTool, recoveryTool, resumeTool],
+      ),
+      resumeHistory,
+    );
+    const resumeEnd = resumeEvents.find(
+      (event) => event.kind === "end" && event.request?.name === "unreal_task_resume",
+    );
+    assert.ok(resumeEnd, JSON.stringify(resumeEvents));
+    const resumeRequest = resumeEnd.request;
+    assert.equal(resumeRequest.arguments.userResponse, operatorResponse);
+    assert.equal(resumeRequest.arguments.resumeToken, recoveryResumeToken);
+    const authorizedControl = {
+      ...payload.control,
+      epoch: 23,
+      fingerprint: "4".repeat(64),
+      controlFingerprint: "4".repeat(64),
+    };
+    const authorizedHistory = Chat.from({ messages: [
+      ...resumeMessages,
+      { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: resumeRequest }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: resumeRequest.id,
+        name: resumeRequest.name,
+        content: JSON.stringify({
+          ok: true,
+          taskSessionId: ownership.taskSessionId,
+          taskAuthorization: ownership,
+          control: authorizedControl,
+          state: {
+            synthesisLifecycle: {
+              status: "delivery_reemit_authorized",
+              taskSessionId: ownership.taskSessionId,
+              outputDigest: crashedDelivery.outputDigest,
+              synthesisTransactionId: crashedDelivery.transactionId,
+              deliveryAttempt: 2,
+            },
+          },
+        }),
+      }] },
+    ] });
+    const reemitEvents = [];
+    await generate(
+      controllerFor(
+        postAckModel,
+        {},
+        crashRoot,
+        reemitEvents,
+        [commitTool, ackTool, recoveryTool, resumeTool],
+      ),
+      authorizedHistory,
+    );
+    assert.equal(
+      reemitEvents.filter((event) => event.kind === "fragment").length,
+      1,
+    );
+    assert.equal(
+      reemitEvents.find((event) => event.kind === "fragment").content,
+      "- [claim:decl] Evidence-backed final synthesis.",
+    );
+    assert.equal(
+      reemitEvents.some(
+        (event) => event.kind === "end"
+          && event.request?.name === "unreal_task_ack_synthesis_delivery",
+      ),
+      true,
+    );
     fs.rmSync(crashRoot, { recursive: true, force: true });
 
     process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;

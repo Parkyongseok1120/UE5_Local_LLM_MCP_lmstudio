@@ -49,6 +49,15 @@ def test_source_head_gate_ignores_untracked_files_but_rejects_tracked_drift(
 
     (repository / "untracked.bin").write_bytes(b"build artifact")
     assert assert_source_tree_matches_head(repository) == expected
+    runtime_source = repository / "scripts" / "untracked_runtime.py"
+    runtime_source.parent.mkdir()
+    runtime_source.write_text("print('runtime')\n", encoding="utf-8")
+    with pytest.raises(
+        ControlRuntimeMismatch,
+        match="untracked runtime source files exist",
+    ):
+        assert_source_tree_matches_head(repository)
+    runtime_source.unlink()
     packaged = repository / "extracted-package"
     packaged.mkdir()
     (packaged / "package-manifest.json").write_text(

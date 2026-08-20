@@ -33,10 +33,135 @@
     "SYNTHESIS_COMMIT_REQUIRED",
     "DELIVERY_REQUIRED",
     "AWAITING_USER_INPUT",
+    "DELIVERY_RECOVERY_AWAITING_USER",
     "COMPLETE",
     "TERMINAL_BLOCKED",
     "CANCELLED"
   ],
+  "terminalLifecycleStates": [
+    "COMPLETE",
+    "TERMINAL_BLOCKED",
+    "CANCELLED"
+  ],
+  "lifecycleEvents": [
+    "TASK_STARTED",
+    "INITIAL_DISCOVERY_REQUESTED",
+    "DISCOVERY_RESULT_COMMITTED",
+    "EVIDENCE_READ_COMMITTED",
+    "EVIDENCE_BUDGET_EXHAUSTED",
+    "EVIDENCE_READY_COMMITTED",
+    "SCOPE_APPROVAL_REQUESTED",
+    "USER_INPUT_COMMITTED",
+    "MUTATION_COMMITTED",
+    "STATIC_VALIDATION_PASSED",
+    "STATIC_VALIDATION_FAILED",
+    "BUILD_PASSED",
+    "BUILD_FAILED",
+    "AUTOMATION_PASSED",
+    "AUTOMATION_FAILED",
+    "SYNTHESIS_PREPARED",
+    "SYNTHESIS_COMMIT_ACKED",
+    "SYNTHESIS_COMMIT_REJECTED",
+    "DELIVERY_ACKED",
+    "DELIVERY_UNCERTAIN",
+    "OPERATOR_CONFIRMED_VISIBLE",
+    "OPERATOR_AUTHORIZED_REEMIT",
+    "TASK_CANCELLED",
+    "TERMINAL_BLOCKER_COMMITTED"
+  ],
+  "lifecycleTransitions": {
+    "BOOTSTRAP": [
+      {"event": "TASK_STARTED", "next": "INITIAL_DISCOVERY_REQUIRED"},
+      {"event": "TASK_STARTED", "next": "EVIDENCE_REQUIRED"},
+      {"event": "SCOPE_APPROVAL_REQUESTED", "next": "AWAITING_USER_INPUT"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "INITIAL_DISCOVERY_REQUIRED": [
+      {"event": "INITIAL_DISCOVERY_REQUESTED", "next": "DISCOVERY_IN_PROGRESS"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"},
+      {"event": "TERMINAL_BLOCKER_COMMITTED", "next": "TERMINAL_BLOCKED"}
+    ],
+    "DISCOVERY_IN_PROGRESS": [
+      {"event": "DISCOVERY_RESULT_COMMITTED", "next": "EVIDENCE_REQUIRED"},
+      {"event": "DISCOVERY_RESULT_COMMITTED", "next": "EVIDENCE_COLLECTING"},
+      {"event": "TERMINAL_BLOCKER_COMMITTED", "next": "TERMINAL_BLOCKED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "EVIDENCE_REQUIRED": [
+      {"event": "EVIDENCE_READ_COMMITTED", "next": "EVIDENCE_COLLECTING"},
+      {"event": "SCOPE_APPROVAL_REQUESTED", "next": "AWAITING_USER_INPUT"},
+      {"event": "TERMINAL_BLOCKER_COMMITTED", "next": "TERMINAL_BLOCKED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "EVIDENCE_COLLECTING": [
+      {"event": "EVIDENCE_READY_COMMITTED", "next": "EVIDENCE_READY"},
+      {"event": "EVIDENCE_BUDGET_EXHAUSTED", "next": "EVIDENCE_REQUIRED"},
+      {"event": "TERMINAL_BLOCKER_COMMITTED", "next": "TERMINAL_BLOCKED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "EVIDENCE_READY": [
+      {"event": "SYNTHESIS_PREPARED", "next": "SYNTHESIS_REQUIRED"},
+      {"event": "USER_INPUT_COMMITTED", "next": "MUTATION_REQUIRED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "MUTATION_REQUIRED": [
+      {"event": "MUTATION_COMMITTED", "next": "STATIC_VALIDATION_REQUIRED"},
+      {"event": "SCOPE_APPROVAL_REQUESTED", "next": "AWAITING_USER_INPUT"},
+      {"event": "TERMINAL_BLOCKER_COMMITTED", "next": "TERMINAL_BLOCKED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "STATIC_VALIDATION_REQUIRED": [
+      {"event": "STATIC_VALIDATION_PASSED", "next": "BUILD_REQUIRED"},
+      {"event": "STATIC_VALIDATION_FAILED", "next": "MUTATION_REQUIRED"},
+      {"event": "TERMINAL_BLOCKER_COMMITTED", "next": "TERMINAL_BLOCKED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "BUILD_REQUIRED": [
+      {"event": "BUILD_PASSED", "next": "AUTOMATION_REQUIRED"},
+      {"event": "BUILD_PASSED", "next": "COMPLETE"},
+      {"event": "BUILD_FAILED", "next": "EVIDENCE_REQUIRED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "AUTOMATION_REQUIRED": [
+      {"event": "AUTOMATION_PASSED", "next": "COMPLETE"},
+      {"event": "AUTOMATION_FAILED", "next": "EVIDENCE_REQUIRED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "SYNTHESIS_REQUIRED": [
+      {"event": "SYNTHESIS_PREPARED", "next": "SYNTHESIS_PREPARED"},
+      {"event": "EVIDENCE_BUDGET_EXHAUSTED", "next": "EVIDENCE_REQUIRED"},
+      {"event": "TERMINAL_BLOCKER_COMMITTED", "next": "TERMINAL_BLOCKED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "SYNTHESIS_PREPARED": [
+      {"event": "SYNTHESIS_PREPARED", "next": "SYNTHESIS_COMMIT_REQUIRED"},
+      {"event": "SYNTHESIS_COMMIT_REJECTED", "next": "EVIDENCE_REQUIRED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "SYNTHESIS_COMMIT_REQUIRED": [
+      {"event": "SYNTHESIS_COMMIT_ACKED", "next": "DELIVERY_REQUIRED"},
+      {"event": "SYNTHESIS_COMMIT_REJECTED", "next": "EVIDENCE_REQUIRED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "DELIVERY_REQUIRED": [
+      {"event": "DELIVERY_ACKED", "next": "COMPLETE"},
+      {"event": "DELIVERY_UNCERTAIN", "next": "DELIVERY_RECOVERY_AWAITING_USER"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "AWAITING_USER_INPUT": [
+      {"event": "USER_INPUT_COMMITTED", "next": "EVIDENCE_REQUIRED"},
+      {"event": "USER_INPUT_COMMITTED", "next": "MUTATION_REQUIRED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "DELIVERY_RECOVERY_AWAITING_USER": [
+      {"event": "OPERATOR_CONFIRMED_VISIBLE", "next": "COMPLETE"},
+      {"event": "OPERATOR_AUTHORIZED_REEMIT", "next": "DELIVERY_REQUIRED"},
+      {"event": "TASK_CANCELLED", "next": "CANCELLED"}
+    ],
+    "COMPLETE": [],
+    "TERMINAL_BLOCKED": [],
+    "CANCELLED": []
+  },
   "events": [
     "PHASE_BUDGET_EXHAUSTED",
     "EVIDENCE_STAGNATION",
@@ -114,6 +239,49 @@
       "resumeAction": "unreal_task_checkpoint"
     }
   },
+  "capacityPolicies": {
+    "inspectionFrontier": {
+      "producerMaximumPerResult": 1000,
+      "durableMaximum": 4096,
+      "overflowDisposition": "workflow_stop",
+      "overflowCode": "EVIDENCE_FRONTIER_CAPACITY_EXCEEDED",
+      "requiredProofFields": [
+        "remainingFrontierTotalCount",
+        "remainingFrontierHash",
+        "frontierOverflow"
+      ]
+    },
+    "repositoryAuditPage": {
+      "pageSize": 128,
+      "sourceEvidenceRetention": 4096,
+      "maximumInventoryFiles": 4096,
+      "retentionRule": "all bounded inventory files remain citation-eligible until terminal synthesis",
+      "overflowDisposition": "workflow_stop",
+      "overflowCode": "REPO_AUDIT_INVENTORY_OVERFLOW"
+    },
+    "slicePlan": {
+      "maximumSlices": 1024,
+      "checkpointCompletedSliceCapacity": 1024
+    },
+    "controlProjection": {
+      "maximumModelVisibleCharacters": 32000,
+      "requiredHeaderFields": [
+        "version",
+        "authoritative",
+        "epoch",
+        "taskSessionId",
+        "planRevision",
+        "mutationGeneration",
+        "fingerprint",
+        "routeHash",
+        "phase",
+        "disposition",
+        "requiredTool",
+        "allowedTools",
+        "retryPolicy"
+      ]
+    }
+  },
   "recoveryTransitions": {
     "evidence_required": {
       "satisfactionEvent": "RECOVERY_EVIDENCE_ACCEPTED",
@@ -167,6 +335,8 @@
     "commit_sent",
     "commit_acked",
     "delivery_pending",
+    "delivery_uncertain",
+    "delivery_reemit_authorized",
     "delivered",
     "rejected_stale",
     "evidence_recovery"
@@ -178,6 +348,8 @@
     "commit_sent",
     "commit_acked",
     "delivery_pending",
+    "delivery_uncertain",
+    "delivery_reemit_authorized",
     "committed",
     "delivered",
     "rejected_stale",
