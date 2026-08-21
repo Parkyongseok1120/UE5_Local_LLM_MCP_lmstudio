@@ -63,7 +63,7 @@ AGENT requires a second confirmation. Declining that confirmation continues safe
 | FULL | Same required components as STANDARD (kept for compatibility) | Read-only |
 | CUSTOM | Explicit components; LM Studio/Unreal selections still force context compactor | Read-only by default |
 
-Install profile and RAG indexing depth are independent. Use `--index-tier lite|standard|full`; selecting FULL does not select full indexing and never builds an index unless `--build-rag` is also supplied.
+Install profile and RAG indexing depth are independent. Use `--index-tier lite|standard|full`; selecting FULL does not select full indexing and never builds an index unless `--build-rag` is also supplied. Installed RAG data is owned by the stable `<state-home>/indexes/<namespace>/` directory (default `~/.evidence-first/indexes/`), never by a versioned package directory. An upgrade reuses a ready managed index or migrates the newest query-ready prior package index with hard links when possible and copies otherwise.
 
 FULL installs the LM Studio context proxy in advisory mode. Direct Qwen/GPT selection remains write-capable after AGENT authority is explicitly enabled. Strict proxy evidence is an administrator opt-in and applies only when `MCP_FRONTEND=lmstudio` matches `MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS`; Cline, CLI, Ollama, custom, and remote frontends require their own continuity policy.
 
@@ -127,11 +127,19 @@ fails before writing LM Studio MCP configuration when
 `--skip-deps` to execute the pinned `npm ci` installation. Portable ZIPs
 intentionally exclude `node_modules`.
 
-For a Portable ZIP, the extracted package directory is also the installed RAG
-and Unreal Agent runtime location referenced by `mcp.json`. Extract it to a
-stable directory, run the installer there, and retain that directory after
-installation. Do not install from an operating-system temporary directory that
-may be cleaned automatically.
+For a Portable ZIP, the extracted package directory remains the installed RAG
+server and Unreal Agent **code** location referenced by `mcp.json`; it does not
+own the installed index. Extract it to a stable directory and retain it while
+that release is active. Index data survives package upgrades under
+`<state-home>/indexes/`. Do not install runtime code from an operating-system
+temporary directory that may be cleaned automatically.
+
+Every Unreal install reports `ragReadiness` separately from component install
+success. The readiness probe opens the selected SQLite database read-only and
+executes bounded queries against both `chunks` and `chunks_fts`. `--build-rag`
+is fail-closed: the install fails if the resulting index is not query-ready.
+Without `--build-rag`, a missing index is reported explicitly as degraded so a
+configured adapter is never confused with a usable query data plane.
 
 Managed skill/config files are journaled and can be restored by `--rollback`. External package-manager/plugin actions and generated indexes are reported separately and are not claimed as transactionally reversible.
 

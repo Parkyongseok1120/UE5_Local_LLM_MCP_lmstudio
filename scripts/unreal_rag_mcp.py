@@ -5359,6 +5359,29 @@ def _commit_routed_analysis_result(
 ) -> dict[str, Any] | None:
     """Commit one successful RAG read and project its authoritative control."""
 
+    return _commit_routed_analysis_outcome(
+        server,
+        tool_name=tool_name,
+        arguments=arguments,
+        structured=structured,
+        outcome="succeeded",
+        evidence_text=evidence_text,
+    )
+
+
+def _commit_routed_analysis_outcome(
+    server: McpServer,
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+    structured: dict[str, Any],
+    outcome: str,
+    evidence_text: str = "",
+    error_code: str = "",
+    error_message: str = "",
+) -> dict[str, Any] | None:
+    """Commit a RAG success/failure and attach the new canonical control."""
+
     authorization = (
         arguments.get("taskAuthorization")
         if isinstance(arguments.get("taskAuthorization"), dict)
@@ -5369,9 +5392,9 @@ def _commit_routed_analysis_result(
     if not authorization.get("taskSessionId"):
         return None
 
-    from task_api import task_commit_routed_analysis_result
+    from task_api import task_commit_routed_analysis_outcome
 
-    committed = task_commit_routed_analysis_result(
+    committed = task_commit_routed_analysis_outcome(
         server.workspace,
         task_authorization=authorization,
         tool_name=tool_name,
@@ -5380,13 +5403,22 @@ def _commit_routed_analysis_result(
             for key, value in arguments.items()
             if key not in {"taskAuthorization", "task_authorization"}
         },
-        evidence_hash=hashlib.sha256(evidence_text.encode("utf-8")).hexdigest(),
+        outcome=outcome,
+        evidence_hash=(
+            hashlib.sha256(evidence_text.encode("utf-8")).hexdigest()
+            if evidence_text
+            else ""
+        ),
+        error_code=error_code,
+        error_message=error_message,
     )
     structured["taskResultCommit"] = {
         "ok": committed.get("ok") is True,
         "active": committed.get("active") is True,
         "errorCode": str(committed.get("errorCode") or ""),
         "committedTool": str(committed.get("committedTool") or ""),
+        "analysisOutcome": str(committed.get("analysisOutcome") or outcome),
+        "committedErrorCode": str(committed.get("committedErrorCode") or ""),
         "discoveryActionCursor": committed.get("discoveryActionCursor"),
     }
     for key in (
@@ -5418,9 +5450,43 @@ def _commit_routed_analysis_result(
                 "retryable": bool(committed.get("retryable", False)),
             }
         )
-    else:
+    elif outcome == "succeeded":
         structured["ok"] = True
     return committed
+
+
+def _routed_analysis_failure_payload(
+    server: McpServer,
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+    error_code: str,
+    error_message: str,
+) -> dict[str, Any]:
+    """Create one typed failure and commit it before returning to the host."""
+
+    structured: dict[str, Any] = {
+        "ok": False,
+        "errorCode": str(error_code or "ANALYSIS_TOOL_FAILED"),
+        "error": str(error_message or "The routed analysis tool failed."),
+        "tool": tool_name,
+        "retryable": False,
+        "doNotRetry": True,
+        "doNotRetryTools": [tool_name],
+    }
+    committed = _commit_routed_analysis_outcome(
+        server,
+        tool_name=tool_name,
+        arguments=arguments,
+        structured=structured,
+        outcome="failed",
+        error_code=structured["errorCode"],
+        error_message=structured["error"],
+    )
+    if committed is not None and committed.get("ok") is True:
+        structured["retryable"] = bool(structured.get("nextActionIsTool"))
+        structured["doNotRetryTools"] = [tool_name]
+    return structured
 
 
 def _project_control_response(
@@ -9438,8 +9504,6 @@ class McpServer:
                 from agent_capabilities import resolve_agent_write_enabled
                 from mcp_tool_compact import envelope_fields
                 from project_controller import active_project_readiness
-                from workspace_paths import resolve_index_path
-
                 payload = active_project_readiness(self.workspace)
                 from unreal_capability_detection import detect_unreal_capabilities
                 from workspace_paths import (
@@ -9487,7 +9551,7 @@ class McpServer:
                     blocking.append("agent_write_mode_disabled")
                 if capability_engine_error:
                     blocking.append(capability_engine_error)
-                index_path = resolve_index_path(self.workspace)
+                index_path = self.index
                 if not index_path.is_file():
                     blocking.append("rag_index_missing")
                 else:
@@ -10974,6 +11038,18 @@ class McpServer:
                 self.error(message_id, -32602, f"Unknown tool: {name}")
         except Exception as exc:
             self.log(f"tool {name} failed: {type(exc).__name__}: {exc}")
+            if str(name or "") in {"unreal_rag_search", "unreal_symbol_lookup"}:
+                self.structured_tool_result(
+                    message_id,
+                    _routed_analysis_failure_payload(
+                        self,
+                        tool_name=str(name),
+                        arguments=arguments,
+                        error_code="INTERNAL_TOOL_ERROR",
+                        error_message=f"{type(exc).__name__}: {exc}",
+                    ),
+                )
+                return
             self.structured_tool_result(
                 message_id,
                 {
@@ -11196,10 +11272,28 @@ class McpServer:
             use_hybrid = True
 
         if not query:
-            self.tool_result(message_id, "Missing required argument: query", is_error=True)
+            self.structured_tool_result(
+                message_id,
+                _routed_analysis_failure_payload(
+                    self,
+                    tool_name="unreal_rag_search",
+                    arguments=arguments,
+                    error_code="INVALID_ARGUMENT",
+                    error_message="Missing required argument: query",
+                ),
+            )
             return
         if not self.index.exists():
-            self.tool_result(message_id, f"RAG index does not exist: {self.index}", is_error=True)
+            self.structured_tool_result(
+                message_id,
+                _routed_analysis_failure_payload(
+                    self,
+                    tool_name="unreal_rag_search",
+                    arguments=arguments,
+                    error_code="RAG_INDEX_MISSING",
+                    error_message=f"RAG index does not exist: {self.index}",
+                ),
+            )
             return
 
         from index_staleness import project_source_stale_status
@@ -11438,10 +11532,28 @@ class McpServer:
         query = str(arguments.get("query") or "").strip()
         top_k = max(1, min(16, int(arguments.get("top_k") or 8)))
         if not query:
-            self.tool_result(message_id, "Missing required argument: query", is_error=True)
+            self.structured_tool_result(
+                message_id,
+                _routed_analysis_failure_payload(
+                    self,
+                    tool_name="unreal_symbol_lookup",
+                    arguments=arguments,
+                    error_code="INVALID_ARGUMENT",
+                    error_message="Missing required argument: query",
+                ),
+            )
             return
         if not self.index.exists():
-            self.tool_result(message_id, f"RAG index does not exist: {self.index}", is_error=True)
+            self.structured_tool_result(
+                message_id,
+                _routed_analysis_failure_payload(
+                    self,
+                    tool_name="unreal_symbol_lookup",
+                    arguments=arguments,
+                    error_code="RAG_INDEX_MISSING",
+                    error_message=f"RAG index does not exist: {self.index}",
+                ),
+            )
             return
 
         from index_staleness import project_source_stale_status

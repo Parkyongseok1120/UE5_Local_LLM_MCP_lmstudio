@@ -1127,6 +1127,26 @@ def derive_handler_recovery_obligation(
         if isinstance(obligation, dict) and obligation:
             return dict(obligation)
 
+    if source == "analysis" and error_code in {
+        "RAG_INDEX_MISSING",
+        "RAG_INDEX_UNREADABLE",
+        "RAG_INDEX_EMPTY",
+    }:
+        query = str(observed_args.get("query") or state.get("objective") or "Source").strip()[:160]
+        return result(
+            "analysis_dependency_recovery",
+            {
+                "name": "search_files",
+                "args": {
+                    "query": query or "Source",
+                    "path": "Source",
+                    "regex": False,
+                    "maxResults": 32,
+                },
+            },
+            scope="infrastructure",
+        )
+
     if source == "transaction_journal" or error_code in {
         "TRANSACTION_RECONCILIATION_REQUIRED",
         "STATIC_PROJECT_UNAVAILABLE",
@@ -1453,8 +1473,32 @@ def reduce_committed_event(
         tool_name = str(event.get("toolName") or "")
         args = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
         metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        result_outcome = str(event.get("outcome") or "succeeded").strip().casefold()
+        if result_outcome == "failed":
+            if event.get("fallbackScheduled") is not True:
+                state["recoveryObligation"] = derive_handler_recovery_obligation(
+                    state,
+                    {
+                        "source": "analysis",
+                        "errorCode": str(event.get("errorCode") or "ANALYSIS_TOOL_FAILED"),
+                        "observedArgs": args,
+                        "message": str(event.get("message") or ""),
+                        "mutationGeneration": _non_negative_int(
+                            state.get("mutationGeneration")
+                        ),
+                    },
+                )
+            return commit_control_transition(state)
         obligation = dict(state.get("recoveryObligation") or {})
         required = obligation.get("requiredTool") if isinstance(obligation.get("requiredTool"), dict) else {}
+        if (
+            str(obligation.get("status") or "") == "analysis_dependency_recovery"
+            and str(required.get("name") or "") == tool_name
+            and _committed_event_args_match(required.get("args") or {}, args)
+        ):
+            state.pop("recoveryObligation", None)
+            obligation = {}
+            required = {}
         if (
             str(obligation.get("status") or "") == "frontier_reconstruction_search_required"
             and str(required.get("name") or "") == tool_name
@@ -1825,6 +1869,29 @@ def _derive_next_obligation_mutating(state: dict[str, Any]) -> dict[str, Any]:
                     required_name = "unreal_agent_plan"
                     required_args = {"request": str(state.get("objective") or state.get("request") or "Continue bounded source analysis")}
                 retry_value = "once"
+        elif recovery_status == "analysis_dependency_recovery":
+            if recovery_tool_name:
+                required_name = recovery_tool_name
+                required_args = recovery_tool_args
+                retry_value = "once"
+                transition_reason = "ANALYSIS_DEPENDENCY_FALLBACK"
+            else:
+                disposition = "await_user"
+                retry_value = "forbidden"
+                blocker_code = str(
+                    recovery_obligation.get("errorCode")
+                    or "ANALYSIS_DEPENDENCY_RECOVERY_MISSING"
+                )
+                blocker_fingerprint = recovery_fingerprint
+                required_input = _required_user_input(
+                    state,
+                    "provide_path",
+                    "Provide a readable source tree or restore the managed RAG index.",
+                    {
+                        "type": "object",
+                        "properties": {"path": {"type": "string", "minLength": 1}},
+                    },
+                )
         elif recovery_status == "environment_recovery":
             attempt_count = _non_negative_int(
                 recovery_obligation.get("attemptCount")

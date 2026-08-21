@@ -1,6 +1,7 @@
 param(
     [string]$WorkspaceRoot = "",
     [string]$PythonExe = "",
+    [string]$IndexPath = "",
     [ValidateSet("lite", "standard", "full", "")]
     [string]$Tier = "",
     [switch]$SkipEditorIngest,
@@ -97,8 +98,29 @@ if ([string]::IsNullOrWhiteSpace($resolvedTier)) { $resolvedTier = "standard" }
 if ($resolvedTier -notin @("lite", "standard", "full")) { $resolvedTier = "standard" }
 
 $ragPaths = Get-RagDataPaths -RagRoot $workspace
-$namespace = [string]$ragPaths.Namespace
-$dataDir = [string]$ragPaths.DataDir
+$resolvedIndexPath = ""
+if (-not [string]::IsNullOrWhiteSpace($IndexPath)) {
+    if (-not [System.IO.Path]::IsPathRooted($IndexPath)) {
+        throw "IndexPath must be absolute: $IndexPath"
+    }
+    $resolvedIndexPath = [System.IO.Path]::GetFullPath($IndexPath)
+    if ([System.IO.Path]::GetFileName($resolvedIndexPath) -ne "rag.sqlite") {
+        throw "IndexPath must end in rag.sqlite: $resolvedIndexPath"
+    }
+}
+$dataDir = if ($resolvedIndexPath) {
+    Split-Path -Parent $resolvedIndexPath
+}
+else {
+    [string]$ragPaths.DataDir
+}
+$namespace = if ($resolvedIndexPath) {
+    Split-Path -Leaf $dataDir
+}
+else {
+    [string]$ragPaths.Namespace
+}
+New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 $engineVersion = [string]$ragPaths.EngineVersion
 if ($engineVersion -match '^\d+\.\d+$') {
     $env:UNREAL_ENGINE_VERSION = $engineVersion

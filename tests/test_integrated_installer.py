@@ -4,6 +4,7 @@ import json
 import importlib.util
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -1233,10 +1234,22 @@ def test_selected_engine_writes_dynamic_index_config_for_unpinned_rag_mcp(tmp_pa
     mcp = json.loads((tmp_path / "lmstudio" / "mcp.json").read_text(encoding="utf-8"))
     assert shared["engineVersion"] == "5.10"
     assert shared["indexNamespace"] == "unreal510"
-    assert shared["indexPath"] == "data/unreal510/rag.sqlite"
+    managed_index = (
+        tmp_path / "state" / "indexes" / "unreal510" / "rag.sqlite"
+    ).resolve()
+    assert Path(shared["indexPath"]).resolve() == managed_index
     assert mcp["mcpServers"]["unreal-rag"]["args"] == [
-        str(ROOT / "scripts" / "unreal_rag_mcp.py")
+        str(ROOT / "scripts" / "unreal_rag_mcp.py"),
+        "--index",
+        str(managed_index),
     ]
+    assert mcp["mcpServers"]["unreal-rag"]["env"]["UNREAL_RAG_INDEX_PATH"] == str(
+        managed_index
+    )
+    assert mcp["mcpServers"]["unreal-agent"]["env"]["UNREAL_RAG_INDEX_PATH"] == str(
+        managed_index
+    )
+    assert json.loads(result.stdout)["ragReadiness"]["status"] == "missing"
 
 
 def test_installer_keeps_nonstandard_shared_index_path(tmp_path: Path) -> None:
@@ -1249,6 +1262,56 @@ def test_installer_keeps_nonstandard_shared_index_path(tmp_path: Path) -> None:
     sys.modules.pop("integrated_install", None)
 
     assert shared == {"indexNamespace": "custom", "indexPath": "indexes/project-rag.sqlite"}
+
+
+def test_installer_managed_index_is_stable_across_versioned_package_roots(
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    shared = {"indexNamespace": "unreal58", "indexPath": "data/unreal58/rag.sqlite"}
+    engine = tmp_path / "UE_5.8"
+    (engine / "Engine" / "Source").mkdir(parents=True)
+
+    module._sync_installer_index_settings(
+        shared,
+        engine,
+        state_home=tmp_path / "state",
+    )
+    sys.modules.pop("integrated_install", None)
+
+    assert Path(shared["indexPath"]).resolve() == (
+        tmp_path / "state" / "indexes" / "unreal58" / "rag.sqlite"
+    ).resolve()
+    assert "Evidence-First-Integrated" not in shared["indexPath"]
+
+
+def test_managed_index_migration_requires_query_level_readiness(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    source = tmp_path / "packages" / "old" / "data" / "unreal58" / "rag.sqlite"
+    source.parent.mkdir(parents=True)
+    with sqlite3.connect(source) as connection:
+        connection.execute("create table chunks(chunk_id text primary key, text text)")
+        connection.execute("insert into chunks values ('one', 'cinematic')")
+        connection.execute("create virtual table chunks_fts using fts5(text)")
+        connection.execute("insert into chunks_fts values ('cinematic')")
+    (source.parent / "build_manifest.json").write_text(
+        json.dumps({"engineVersion": "5.8"}),
+        encoding="utf-8",
+    )
+    target = tmp_path / "state" / "indexes" / "unreal58" / "rag.sqlite"
+
+    migrated = module._migrate_managed_rag_index(
+        target,
+        [source],
+        dry_run=False,
+    )
+    sys.modules.pop("integrated_install", None)
+
+    assert migrated["ready"] is True
+    assert migrated["action"] == "migrated"
+    assert migrated["querySmoke"] == {"chunks": True, "chunksFts": True}
+    assert migrated["hardLinkedFiles"] + migrated["copiedFiles"] == 2
+    assert target.is_file()
 
 
 def test_invalid_unreal_engine_environment_fails_instead_of_silently_falling_back(

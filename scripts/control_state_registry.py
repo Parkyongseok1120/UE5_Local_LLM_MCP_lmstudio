@@ -24,6 +24,7 @@ class ControlStateRegistry:
     terminal_lifecycle_states: frozenset[str]
     lifecycle_events: frozenset[str]
     lifecycle_transitions: dict[str, tuple[dict[str, str], ...]]
+    capacity_policies: dict[str, dict[str, Any]]
 
     def lifecycle_path_to_complete(self, start: str) -> tuple[str, ...]:
         """Return a shortest declared path to successful completion."""
@@ -122,7 +123,57 @@ def load_control_state_registry(path: Path = REGISTRY_PATH) -> ControlStateRegis
         terminal_lifecycle_states=terminal_lifecycle_states,
         lifecycle_events=lifecycle_events,
         lifecycle_transitions=lifecycle_transitions,
+        capacity_policies={
+            str(key): dict(value)
+            for key, value in (raw.get("capacityPolicies") or {}).items()
+            if isinstance(value, dict)
+        },
     )
+    capacities = registry.capacity_policies
+    required_capacity_policies = {
+        "inspectionFrontier",
+        "repositoryAuditPage",
+        "slicePlan",
+        "controlProjection",
+        "routedAnalysisOutcomeLedger",
+    }
+    if not required_capacity_policies.issubset(capacities):
+        raise RuntimeError(
+            "missing capacity policies: "
+            f"{sorted(required_capacity_policies - set(capacities))}"
+        )
+    frontier_max = int(capacities["inspectionFrontier"].get("durableMaximum") or 0)
+    audit_retention = int(
+        capacities["repositoryAuditPage"].get("sourceEvidenceRetention") or 0
+    )
+    audit_inventory = int(
+        capacities["repositoryAuditPage"].get("maximumInventoryFiles") or 0
+    )
+    if frontier_max <= 0 or audit_retention <= 0 or audit_inventory <= 0:
+        raise RuntimeError("frontier/audit capacities must be positive")
+    if audit_retention > frontier_max or audit_inventory > frontier_max:
+        raise RuntimeError(
+            "repository audit retention/inventory cannot exceed durable frontier capacity"
+        )
+    slice_max = int(capacities["slicePlan"].get("maximumSlices") or 0)
+    checkpoint_slice_max = int(
+        capacities["slicePlan"].get("checkpointCompletedSliceCapacity") or 0
+    )
+    if slice_max <= 0 or slice_max != checkpoint_slice_max:
+        raise RuntimeError("slice plan and checkpoint slice capacities must match")
+    projection_max = int(
+        capacities["controlProjection"].get("maximumModelVisibleCharacters") or 0
+    )
+    outcome_max = int(
+        capacities["routedAnalysisOutcomeLedger"].get("maximumEntries") or 0
+    )
+    if projection_max <= 0 or outcome_max <= 0:
+        raise RuntimeError("projection and routed outcome capacities must be positive")
+    if (
+        capacities["routedAnalysisOutcomeLedger"].get("overflowDisposition")
+        != "evict_oldest"
+    ):
+        raise RuntimeError("routed analysis outcome ledger must use bounded oldest eviction")
     terminal_unreachable = sorted(
         state_name
         for state_name in lifecycle_states - terminal_lifecycle_states

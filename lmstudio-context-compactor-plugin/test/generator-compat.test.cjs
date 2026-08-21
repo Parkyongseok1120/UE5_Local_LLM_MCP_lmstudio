@@ -76,6 +76,46 @@ test("successful server-owned exact tool cannot replay without control advance",
     ),
     false,
   );
+
+  const persistedPlainTextFailure = {
+    content: "RAG index does not exist: C:/managed/indexes/unreal58/rag.sqlite",
+  };
+  assert.equal(core.toolResultOutcome(persistedPlainTextFailure), "unknown");
+  assert.equal(
+    successfulServerOwnedRequiredToolDidNotAdvance(
+      control,
+      control,
+      pending,
+      persistedPlainTextFailure,
+    ),
+    false,
+  );
+  assert.equal(
+    successfulServerOwnedRequiredToolDidNotAdvance(
+      control,
+      control,
+      pending,
+      { content: JSON.stringify({ ok: false, errorCode: "RAG_INDEX_MISSING" }) },
+    ),
+    false,
+  );
+});
+
+test("tool result snapshots preserve unknown instead of manufacturing success", () => {
+  const [snapshot] = core.snapshotMessages([
+    {
+      role: "tool",
+      toolResults: [
+        {
+          toolCallId: "missing-error-bit",
+          name: "unreal_symbol_lookup",
+          content: "RAG index does not exist",
+        },
+      ],
+    },
+  ]);
+  assert.equal(Object.hasOwn(snapshot.toolResults[0], "isError"), false);
+  assert.equal(core.toolResultOutcome(snapshot.toolResults[0]), "unknown");
 });
 
 // Normalize old synthetic tool-result-only fixtures to LM Studio's real paired

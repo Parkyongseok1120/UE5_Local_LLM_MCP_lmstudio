@@ -12,6 +12,7 @@ import platform
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -254,7 +255,10 @@ def _engine_version_from_root(engine_root: Path | None) -> str:
     return _engine_minor_version(engine_root.name)
 
 
-def _shared_index_selection_is_managed(shared: dict[str, Any]) -> bool:
+def _shared_index_selection_is_managed(
+    shared: dict[str, Any],
+    managed_index_root: Path | None = None,
+) -> bool:
     """Keep nonstandard user-selected index paths intact across reinstalls."""
 
     namespace = str(shared.get("indexNamespace") or "").strip()
@@ -262,21 +266,232 @@ def _shared_index_selection_is_managed(shared: dict[str, Any]) -> bool:
     if not namespace and not index_path:
         return True
     if namespace and re.fullmatch(r"unreal\d+", namespace):
+        if managed_index_root and index_path:
+            candidate = Path(index_path).expanduser()
+            if candidate.is_absolute() and _is_within(
+                candidate,
+                managed_index_root,
+            ):
+                return True
         return not index_path or index_path == f"data/{namespace}/rag.sqlite"
     return bool(re.fullmatch(r"data/unreal\d+/rag\.sqlite", index_path))
 
 
-def _sync_installer_index_settings(shared: dict[str, Any], engine_root: Path | None) -> None:
+def _sync_installer_index_settings(
+    shared: dict[str, Any],
+    engine_root: Path | None,
+    *,
+    state_home: Path | None = None,
+) -> None:
     """Write a standard index selection for the engine already selected by install()."""
 
-    version = _engine_version_from_root(engine_root)
-    if not version or not _shared_index_selection_is_managed(shared):
+    managed_root = (
+        state_home.expanduser().resolve() / "indexes"
+        if state_home is not None
+        else None
+    )
+    if not _shared_index_selection_is_managed(shared, managed_root):
         return
+    version = (
+        _engine_version_from_root(engine_root)
+        or _engine_minor_version(str(shared.get("engineVersion") or ""))
+        or "5.8"
+    )
     namespace = f"unreal{''.join(char for char in version if char.isdigit())}"
     shared["engineVersion"] = version
     shared["indexNamespace"] = namespace
-    shared["indexPath"] = f"data/{namespace}/rag.sqlite"
-    shared["embeddingsPath"] = f"data/{namespace}/embeddings"
+    if managed_root is None:
+        shared["indexPath"] = f"data/{namespace}/rag.sqlite"
+        shared["embeddingsPath"] = f"data/{namespace}/embeddings"
+    else:
+        data_dir = managed_root / namespace
+        shared["indexPath"] = str((data_dir / "rag.sqlite").resolve())
+        shared["embeddingsPath"] = str((data_dir / "embeddings").resolve())
+
+
+def _rag_index_readiness(index_path: Path) -> dict[str, Any]:
+    """Run a bounded, query-level readiness check without mutating the index."""
+
+    index = index_path.expanduser().resolve()
+    base = {
+        "indexPath": str(index),
+        "owner": "state_home_managed_index",
+    }
+    if not index.is_file():
+        return {**base, "ready": False, "status": "missing", "errorCode": "RAG_INDEX_MISSING"}
+    try:
+        uri = f"{index.as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=5) as connection:
+            tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "select name from sqlite_master where type in ('table', 'view')"
+                )
+            }
+            required = {"chunks", "chunks_fts"}
+            missing = sorted(required - tables)
+            if missing:
+                return {
+                    **base,
+                    "ready": False,
+                    "status": "schema_incomplete",
+                    "errorCode": "RAG_INDEX_UNREADABLE",
+                    "missingTables": missing,
+                }
+            chunk_row = connection.execute("select chunk_id from chunks limit 1").fetchone()
+            fts_row = connection.execute("select rowid from chunks_fts limit 1").fetchone()
+            if chunk_row is None or fts_row is None:
+                return {
+                    **base,
+                    "ready": False,
+                    "status": "empty",
+                    "errorCode": "RAG_INDEX_EMPTY",
+                }
+    except (OSError, sqlite3.DatabaseError) as exc:
+        return {
+            **base,
+            "ready": False,
+            "status": "unreadable",
+            "errorCode": "RAG_INDEX_UNREADABLE",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        **base,
+        "ready": True,
+        "status": "ready",
+        "errorCode": "",
+        "querySmoke": {"chunks": True, "chunksFts": True},
+        "sizeBytes": index.stat().st_size,
+        "modifiedAt": index.stat().st_mtime,
+    }
+
+
+def _prior_rag_index_candidates(
+    *,
+    previous_shared: dict[str, Any],
+    existing_mcp: dict[str, Any] | None,
+    state_home: Path,
+    namespace: str,
+) -> list[Path]:
+    """Discover prior versioned/runtime indexes without accepting arbitrary roots."""
+
+    candidates: list[Path] = []
+
+    def add(value: Path | str | None, *, base: Path | None = None) -> None:
+        raw = str(value or "").strip()
+        if not raw:
+            return
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = (base or ROOT) / candidate
+        resolved = candidate.resolve()
+        if resolved not in candidates:
+            candidates.append(resolved)
+
+    previous_index = str(previous_shared.get("indexPath") or "").strip()
+    servers = (
+        existing_mcp.get("mcpServers")
+        if isinstance(existing_mcp, dict)
+        and isinstance(existing_mcp.get("mcpServers"), dict)
+        else {}
+    )
+    prior_rag = servers.get("unreal-rag") if isinstance(servers, dict) else {}
+    prior_env = prior_rag.get("env") if isinstance(prior_rag, dict) else {}
+    prior_args = prior_rag.get("args") if isinstance(prior_rag, dict) else []
+    prior_root = Path(str((prior_env or {}).get("UNREAL58_ROOT") or ROOT)).expanduser()
+    add((prior_env or {}).get("UNREAL_RAG_INDEX_PATH"))
+    if previous_index:
+        add(previous_index, base=prior_root)
+    if isinstance(prior_args, list):
+        for index, value in enumerate(prior_args[:-1]):
+            if str(value) == "--index":
+                add(prior_args[index + 1], base=prior_root)
+    add(ROOT / "data" / namespace / "rag.sqlite")
+    packages_root = state_home / "packages"
+    if packages_root.is_dir():
+        for package in packages_root.iterdir():
+            if package.is_dir() and package.name.startswith("Evidence-First-Integrated-"):
+                add(package / "data" / namespace / "rag.sqlite")
+    return candidates
+
+
+def _migrate_managed_rag_index(
+    target_index: Path,
+    candidates: list[Path],
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Seed stable index ownership with hard links, falling back to copies."""
+
+    target = target_index.expanduser().resolve()
+    current = _rag_index_readiness(target)
+    if current.get("ready") is True:
+        return {**current, "action": "reused"}
+    ready_sources = [
+        (candidate, _rag_index_readiness(candidate))
+        for candidate in candidates
+        if candidate.resolve() != target
+    ]
+    ready_sources = [item for item in ready_sources if item[1].get("ready") is True]
+    ready_sources.sort(
+        key=lambda item: (float(item[1].get("modifiedAt") or 0), str(item[0])),
+        reverse=True,
+    )
+    if not ready_sources:
+        return {**current, "action": "none", "candidateCount": len(candidates)}
+    source, source_readiness = ready_sources[0]
+    if dry_run:
+        return {
+            **source_readiness,
+            "indexPath": str(target),
+            "action": "planned_migration",
+            "migratedFrom": str(source),
+        }
+
+    target_parent = target.parent
+    if target_parent.exists():
+        # Never replace an unknown or partially built managed directory. A
+        # requested --build-rag may repair it in place; otherwise readiness is
+        # reported as degraded with the exact error above.
+        return {
+            **current,
+            "action": "blocked_existing_target",
+            "migratedFrom": str(source),
+        }
+    target_parent.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target_parent.parent / f".{target_parent.name}.migration-{uuid.uuid4().hex}"
+    link_count = 0
+    copy_count = 0
+
+    def link_or_copy(source_file: str, target_file: str) -> str:
+        nonlocal link_count, copy_count
+        try:
+            os.link(source_file, target_file)
+            link_count += 1
+            return target_file
+        except OSError:
+            copy_count += 1
+            return shutil.copy2(source_file, target_file)
+
+    try:
+        shutil.copytree(source.parent, temporary, copy_function=link_or_copy)
+        os.replace(temporary, target_parent)
+    finally:
+        if temporary.exists() and _is_within(temporary, target_parent.parent):
+            shutil.rmtree(temporary)
+    migrated = _rag_index_readiness(target)
+    if migrated.get("ready") is not True:
+        raise RuntimeError(
+            "managed RAG index migration failed query-level readiness: "
+            f"{migrated.get('errorCode') or migrated.get('status')}"
+        )
+    return {
+        **migrated,
+        "action": "migrated",
+        "migratedFrom": str(source),
+        "hardLinkedFiles": link_count,
+        "copiedFiles": copy_count,
+    }
 
 
 def _default_editor_export_path(project: Path) -> Path:
@@ -1142,16 +1357,18 @@ def _unreal_entries(
     context_compactor_advisory: bool = False,
     runtime_git_commit: str = "",
     engine_association: str = "",
+    index_path: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     allow = "1" if args.enable_agent_mode else "0"
     state_root = args.lmstudio_home / "state" / "unreal-agent"
     runtime_manifest = args.lmstudio_home / "config" / "control-runtime.json"
+    managed_index = index_path.expanduser().resolve() if index_path else None
     rag_entry = {
         "command": str(python_exe),
-        # Do not pin an engine namespace here. unreal_rag_mcp resolves the
-        # workspace/shared index configuration unless a user explicitly starts
-        # it with --index.
-        "args": [str(ROOT / "scripts" / "unreal_rag_mcp.py")],
+        "args": [
+            str(ROOT / "scripts" / "unreal_rag_mcp.py"),
+            *(["--index", str(managed_index)] if managed_index else []),
+        ],
         "timeout": 420000,
         "env": {
             "SHARED_UNREAL_CONFIG": str(shared_config),
@@ -1164,6 +1381,11 @@ def _unreal_entries(
             "CONTROL_RUNTIME_MANIFEST": str(runtime_manifest),
             "CONTROL_RUNTIME_COMPONENT": "rag",
             "CONTROL_RUNTIME_REQUIRED": "1",
+            **(
+                {"UNREAL_RAG_INDEX_PATH": str(managed_index)}
+                if managed_index
+                else {}
+            ),
         },
     }
     agent_entry = {
@@ -1190,6 +1412,11 @@ def _unreal_entries(
             "CONTROL_RUNTIME_MANIFEST": str(runtime_manifest),
             "CONTROL_RUNTIME_COMPONENT": "agent",
             "CONTROL_RUNTIME_REQUIRED": "1",
+            **(
+                {"UNREAL_RAG_INDEX_PATH": str(managed_index)}
+                if managed_index
+                else {}
+            ),
         },
     }
     # Installed MCP components may not retain the repository's .git directory.
@@ -1837,6 +2064,7 @@ def install(
             shared = _load_json(shared_path, {})
             if not isinstance(shared, dict):
                 raise ValueError("unreal-workspace.json must contain a JSON object")
+            previous_shared = copy.deepcopy(shared)
             if args.active_project:
                 shared["activeProject"] = str(args.active_project)
                 if _editor_export_path_is_default_like(shared.get("editorExportDir")):
@@ -1907,7 +2135,34 @@ def install(
                     detected_engine = _detect_engine_root("")
             args.engine_root = detected_engine
             shared["defaultEngineRoot"] = str(detected_engine) if detected_engine else ""
-            _sync_installer_index_settings(shared, detected_engine)
+            _sync_installer_index_settings(
+                shared,
+                detected_engine,
+                state_home=args.state_home,
+            )
+            configured_index = Path(str(shared.get("indexPath") or "")).expanduser()
+            if not configured_index.is_absolute():
+                configured_index = ROOT / configured_index
+            configured_index = configured_index.resolve()
+            managed_index_root = (args.state_home / "indexes").resolve()
+            if _is_within(configured_index, managed_index_root):
+                candidates = _prior_rag_index_candidates(
+                    previous_shared=previous_shared,
+                    existing_mcp=mcp_config,
+                    state_home=args.state_home,
+                    namespace=str(shared.get("indexNamespace") or "unreal58"),
+                )
+                report["ragIndexMigration"] = _migrate_managed_rag_index(
+                    configured_index,
+                    candidates,
+                    dry_run=args.dry_run,
+                )
+            else:
+                report["ragIndexMigration"] = {
+                    **_rag_index_readiness(configured_index),
+                    "action": "user_selected_index",
+                    "owner": "user_selected_index",
+                }
             shared["defaultPlatform"] = _default_platform()
             shared.setdefault("defaultConfiguration", "Development")
             shared["indexingTier"] = args.index_tier
@@ -1939,6 +2194,7 @@ def install(
                 context_compactor_advisory=("context_compactor" in components),
                 runtime_git_commit=runtime_git_commit,
                 engine_association=association,
+                index_path=configured_index,
             ).items():
                 _merge_mcp_entry(mcp_config, name, entry)
 
@@ -2016,12 +2272,36 @@ def install(
                         args.index_tier,
                         "-PythonExe",
                         str(python_exe),
+                        "-IndexPath",
+                        str(configured_index),
                         "-NonInteractive",
                     ],
                 ),
                 cwd=ROOT,
                 dry_run=args.dry_run,
             )
+
+        if "unreal" in components:
+            readiness = (
+                {
+                    "ready": None,
+                    "status": "dry_run",
+                    "indexPath": str(configured_index),
+                    "owner": "state_home_managed_index",
+                }
+                if args.dry_run
+                else _rag_index_readiness(configured_index)
+            )
+            readiness["buildRequested"] = bool(args.build_rag)
+            readiness["degraded"] = readiness.get("ready") is not True
+            report["ragReadiness"] = readiness
+            # A dry run proves command construction only; it deliberately does
+            # not create an index that can satisfy the query-level probe.
+            if args.build_rag and not args.dry_run and readiness.get("ready") is not True:
+                raise RuntimeError(
+                    "RAG index build completed without query-level readiness: "
+                    f"{readiness.get('errorCode') or readiness.get('status')}"
+                )
 
         if not args.dry_run and "lmstudio" in components:
             smoke = SKILL_SOURCE / "scripts" / "smoke_evidence_first_mcp.py"

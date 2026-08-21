@@ -342,7 +342,7 @@ def test_symbol_result_commit_failure_is_authoritative_error(
     }
     monkeypatch.setattr(
         task_api,
-        "task_commit_routed_analysis_result",
+        "task_commit_routed_analysis_outcome",
         lambda *_args, **_kwargs: {
             "ok": False,
             "active": True,
@@ -386,6 +386,70 @@ def test_symbol_result_commit_failure_is_authoritative_error(
     assert structured["requiredNextTool"] == "unreal_symbol_lookup"
     assert structured["requiredNextToolArgs"] == {"query": "ExpectedSymbol"}
     assert "symbol evidence" not in result["content"][0]["text"]
+
+
+def test_missing_rag_index_is_structured_and_advances_to_direct_source(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("MCP_FRONTEND", "lmstudio")
+    mod = _load_rag_mcp_module()
+    server = mod.McpServer(tmp_path / "managed" / "unreal58" / "rag.sqlite")
+    server.workspace = tmp_path
+
+    from task_api import task_start
+
+    started = task_start(
+        tmp_path,
+        request="Analyze cinematic C++",
+        mode="read_only",
+        plan_payload={
+            "taskKind": "cpp_analysis",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+            "inspectionContract": {
+                "intent": "cpp_analysis",
+                "coverageMode": "targeted_overview",
+                "evidenceBudget": {"representativePairs": 1},
+            },
+            "suggestedToolCalls": [
+                {
+                    "tool": "unreal_symbol_lookup",
+                    "args": {"query": "cinematic", "top_k": 8},
+                },
+            ],
+        },
+    )
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_symbol_lookup(
+        400,
+        {
+            "query": "cinematic",
+            "top_k": 8,
+            "taskAuthorization": started["taskAuthorization"],
+        },
+    )
+
+    result = sent[-1]["result"]
+    structured = result["structuredContent"]
+    assert result["isError"] is True
+    assert structured["ok"] is False
+    assert structured["errorCode"] == "RAG_INDEX_MISSING"
+    assert structured["taskResultCommit"]["ok"] is True
+    assert structured["taskResultCommit"]["analysisOutcome"] == "failed"
+    assert structured["controlEpoch"] == started["controlEpoch"] + 1
+    assert structured["control"]["requiredTool"] == {
+        "name": "search_files",
+        "args": {
+            "query": "cinematic",
+            "path": "Source",
+            "regex": False,
+            "maxResults": 32,
+        },
+    }
+    assert "RAG_INDEX_MISSING" in result["content"][0]["text"]
 
 
 def test_symbol_success_commits_and_advances_authoritative_discovery_route(

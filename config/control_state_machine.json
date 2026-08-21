@@ -280,9 +280,24 @@
         "allowedTools",
         "retryPolicy"
       ]
+    },
+    "routedAnalysisOutcomeLedger": {
+      "maximumEntries": 32,
+      "retentionRule": "newest outcomes retained with monotonic total and eviction counts",
+      "overflowDisposition": "evict_oldest",
+      "requiredProofFields": [
+        "totalCount",
+        "evictedCount",
+        "ledgerHash"
+      ]
     }
   },
   "recoveryTransitions": {
+    "analysis_dependency_recovery": {
+      "satisfactionEvent": "DISCOVERY_RESULT_COMMITTED",
+      "nextStatus": "evidence_required",
+      "nextLifecycle": "EVIDENCE_COLLECTING"
+    },
     "evidence_required": {
       "satisfactionEvent": "RECOVERY_EVIDENCE_ACCEPTED",
       "nextStatus": "repair_planning_required",

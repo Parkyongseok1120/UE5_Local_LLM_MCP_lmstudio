@@ -1,0 +1,225 @@
+{
+  "mode": "codegen",
+  "claims": [
+    {
+      "claim": "A routed RAG dependency failure is committed to canonical task state, advances control, and selects a non-index direct-source continuation instead of replaying the same exact tool.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P0",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/task_api.py:task_commit_routed_analysis_outcome",
+          "observation": "One authorized transaction handles succeeded and failed routed-analysis outcomes, records a bounded receipt, and returns committed control."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/phase_tool_router.py:reduce_committed_event",
+          "observation": "TOOL_RESULT_COMMITTED reduces outcome=failed into a scheduled fallback or analysis_dependency_recovery before committing control."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_phase_tool_router.py:test_routed_rag_dependency_failure_commits_and_switches_to_direct_source",
+          "observation": "The deterministic test observes RAG_INDEX_MISSING, an epoch increment, skipped index-dependent actions, and exact search_files control."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_mcp_essential_tools.py:test_missing_rag_index_is_structured_and_advances_to_direct_source",
+          "observation": "The MCP response is typed ok=false/isError=true while taskResultCommit is true and its projected control requires direct-source search."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/unreal_rag_mcp.py:handle_symbol_lookup",
+          "symbol": "exact routed unreal_symbol_lookup call"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/unreal_rag_mcp.py:_routed_analysis_failure_payload",
+          "symbol": "typed RAG_INDEX_MISSING outcome"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "scripts/task_api.py:task_commit_routed_analysis_outcome",
+          "symbol": "atomic task state and control epoch commit"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_mcp_essential_tools.py:test_missing_rag_index_is_structured_and_advances_to_direct_source",
+          "symbol": "structured failure plus newer search_files control"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/task_api.py:task_commit_routed_analysis_result",
+          "observation": "The prior success API still exists, but it is now only a compatibility wrapper over the symmetric outcome transaction."
+        }
+      ],
+      "unknowns": [
+        "GUI/model E2E is intentionally excluded; runtime re-observation requires a fresh LM Studio chat after reinstall."
+      ]
+    },
+    {
+      "claim": "A persisted plain-text tool result with no error bit cannot be classified as affirmative success by the exact-tool replay-suppression guard.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-core.js:toolResultOutcome",
+          "observation": "The classifier returns success, failure, or unknown and message snapshots no longer manufacture isError=false."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/generator.ts:successfulServerOwnedRequiredToolDidNotAdvance",
+          "observation": "Replay suppression requires toolResultOutcome(result) to be exactly success."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/generator-compat.test.cjs:successful server-owned exact tool cannot replay without control advance",
+          "observation": "A plain missing-index string is unknown and does not trip the successful-stall guard; explicit success still does."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-core.js:messageSnapshot",
+          "symbol": "LM Studio tool result projection"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-core.js:toolResultOutcome",
+          "symbol": "tri-state result classification"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/generator.ts:successfulServerOwnedRequiredToolDidNotAdvance",
+          "symbol": "affirmative-success-only replay suppression"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/generator-compat.test.cjs",
+          "observation": "Legacy human-readable evidence transitions remain non-failing through toolResultSucceeded compatibility semantics; full Compactor tests check they are not blocked."
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "claim": "Installed RAG data has stable ownership outside versioned packages and installation reports query readiness independently from adapter configuration.",
+      "claimType": "architecture",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "install.py:_sync_installer_index_settings",
+          "observation": "Managed selection resolves to state-home/indexes/<namespace>/rag.sqlite."
+        },
+        {
+          "kind": "project_source",
+          "location": "install.py:_migrate_managed_rag_index",
+          "observation": "Upgrade chooses a query-ready prior index and hard-links or copies its data directory into stable ownership."
+        },
+        {
+          "kind": "project_source",
+          "location": "install.py:_rag_index_readiness",
+          "observation": "The readiness probe opens SQLite read-only and executes bounded chunks and chunks_fts queries."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_installer.py:test_managed_index_migration_requires_query_level_readiness",
+          "observation": "A fixture index migrates and passes both query probes."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_rag_smoke.py:test_installer_owned_runtime_index_overrides_versioned_workspace_config",
+          "observation": "The runtime override wins over a package-local workspace index selection."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/workspace_paths.py:resolve_index_path_in_workspace",
+          "observation": "Packaging an explicit source workspace still ignores runtime override state, preserving deterministic package inclusion boundaries."
+        }
+      ],
+      "unknowns": [
+        "Cross-filesystem migration uses copying and is slower than same-filesystem hard linking."
+      ]
+    }
+  ],
+  "invariants": [
+    "Python task state and phase_tool_router remain the sole semantic control owner.",
+    "Every authorized routed-analysis invocation commits either succeeded or failed; no early dependency failure returns before canonical state handling.",
+    "A failed exact tool cannot retain the same epoch, fingerprint, and once-only obligation without a typed recovery boundary.",
+    "Only affirmative transport/structured evidence may activate exact-tool successful-stall replay suppression.",
+    "Unknown legacy plain-text results remain non-failing for evidence compatibility but are not affirmative success.",
+    "Routed outcome receipts are capped at 32 and never contain task authorization or owner capability.",
+    "Repository audit retention/inventory do not exceed the 4096 durable frontier; slice and checkpoint capacities remain equal at 1024; required control survives the 32000-character projection.",
+    "Installed managed RAG data is independent of versioned runtime code and a requested build cannot report success without query readiness.",
+    "Mutation journals, mutation generations, validation checkpoints, build proof, Automation queue, rollback, synthesis ACK, and delivery recovery are unchanged.",
+    "No GUI/model/Unreal E2E is executed."
+  ],
+  "impactedSurfaces": [
+    "config/control_state_machine.json capacity and recovery registry",
+    "config/control_protocol_spec.json typed error catalog",
+    "scripts/task_api.py routed analysis outcome transaction and ledger",
+    "scripts/phase_tool_router.py canonical failure reduction and direct-source recovery",
+    "scripts/unreal_rag_mcp.py typed early failures and outcome projection",
+    "lmstudio-context-compactor-plugin/src/compaction-core.js tri-state transport classification",
+    "lmstudio-context-compactor-plugin/src/generator.ts affirmative-success replay guard",
+    "scripts/workspace_paths.py installed runtime index override",
+    "install.py stable index ownership, migration, and query readiness",
+    "scripts/run_index_pipeline.ps1 explicit managed index destination",
+    "Python and Compactor deterministic tests, package/install configuration, and documentation"
+  ],
+  "validationPlan": [
+    "Validate the canonical control registry, protocol catalog, generated registry parity, and capacity relations.",
+    "Run routed RAG success/failure, stale replay, structured MCP failure, ledger eviction, replan, and direct-source transition tests.",
+    "Build TypeScript and run the full Compactor suite to prove legacy plain-text transitions remain unblocked.",
+    "Run the full non-E2E Python and Agent Node suites.",
+    "Build an index-free portable package, install FULL Agent Mode, migrate or build the stable RAG index, and require query-level readiness.",
+    "Verify installed Agent/RAG/Compactor runtime identities, MCP initialize/tools-list, Agent authority flags, and Compactor activation without E2E."
+  ],
+  "rollbackBehavior": [
+    "Task-state outcome commits are atomic; authorization/route mismatch returns unchanged current control.",
+    "Index migration never deletes or moves the prior package data; it hard-links or copies into a new stable directory.",
+    "An existing unreadable managed target is not overwritten by migration; explicit build or operator repair is required.",
+    "Installer-managed configuration remains journaled; generated indexes and external plugin/npm actions remain explicitly outside transactional rollback."
+  ],
+  "existing": [
+    "Canonical Python reducer and atomic task state",
+    "Agent direct-source and proven mutation/build data plane",
+    "Compactor exact-command serialization and delivery recovery",
+    "Integrated installer and runtime identity manifest"
+  ],
+  "proposed": [
+    "Symmetric routed-analysis outcome transaction",
+    "Tri-state result observation at replay suppression",
+    "Stable managed index ownership with query readiness",
+    "Bounded routed-analysis receipt ledger and executable capacity relations"
+  ],
+  "doNotDuplicate": [
+    "Semantic transition reducer",
+    "Mutation/build/rollback owners",
+    "Task authorization and route CAS",
+    "Installer or package runtime path",
+    "RAG index data under versioned package roots"
+  ]
+}

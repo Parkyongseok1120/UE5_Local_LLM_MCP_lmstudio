@@ -14,6 +14,7 @@ DEFAULT_LMSTUDIO_ROOT = Path.home() / ".lmstudio"
 DEFAULT_ENGINE_VERSION = "5.8"
 DEFAULT_INDEX_NAMESPACE = "unreal58"
 FALLBACK_INDEX_REL = Path("data/unreal58/rag.sqlite")
+RUNTIME_INDEX_PATH_ENV = "UNREAL_RAG_INDEX_PATH"
 DEFAULT_SHARED_CONFIG: dict = {
     "activeProject": None,
     "projectSearchRoots": [],
@@ -302,6 +303,18 @@ def _resolve_configured_index_path(root: Path, value: str) -> Path:
     if candidate.is_absolute():
         return candidate.resolve()
     return (root / candidate).resolve()
+
+
+def _runtime_index_path_override() -> Path | None:
+    """Return the installer-owned absolute runtime index, when explicitly set."""
+
+    raw = str(os.environ.get(RUNTIME_INDEX_PATH_ENV) or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError(f"{RUNTIME_INDEX_PATH_ENV} must be an absolute path")
+    return candidate.resolve()
 
 
 def resolve_index_path_in_workspace(workspace: Path | str) -> Path:
@@ -1097,6 +1110,9 @@ def resolve_engine_root_for_association(
 
 
 def resolve_index_namespace(start: Path | None = None) -> str:
+    runtime_index = _runtime_index_path_override()
+    if runtime_index is not None and runtime_index.parent.name:
+        return runtime_index.parent.name
     settings = _index_settings(start)
     namespace = settings.get("indexNamespace", "")
     if namespace:
@@ -1111,6 +1127,9 @@ def resolve_index_namespace(start: Path | None = None) -> str:
 
 
 def resolve_index_dir(start: Path | None = None) -> Path:
+    runtime_index = _runtime_index_path_override()
+    if runtime_index is not None:
+        return runtime_index.parent
     root = canonical_workspace_root(start)
     index_path = _index_settings(start).get("indexPath", "")
     if index_path:
@@ -1120,6 +1139,9 @@ def resolve_index_dir(start: Path | None = None) -> Path:
 
 
 def resolve_index_path(start: Path | None = None) -> Path:
+    runtime_index = _runtime_index_path_override()
+    if runtime_index is not None:
+        return runtime_index
     root = canonical_workspace_root(start)
     index_path = _index_settings(start).get("indexPath", "")
     if index_path:

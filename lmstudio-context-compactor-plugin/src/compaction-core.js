@@ -662,12 +662,20 @@ function messageSnapshot(message) {
       name: call.name || "",
       arguments: call.arguments || {},
     })),
-    toolResults: toolResultsOf(message).map((result) => ({
-      toolCallId: result.toolCallId || null,
-      name: result.name || "",
-      content: toolResultContent(result),
-      isError: result.isError === true,
-    })),
+    toolResults: toolResultsOf(message).map((result) => {
+      const snapshot = {
+        toolCallId: result.toolCallId || null,
+        name: result.name || "",
+        content: toolResultContent(result),
+      };
+      // LM Studio may omit MCP's isError bit when it persists a tool result.
+      // Do not manufacture `false`: absence is an authoritative "unknown",
+      // not proof that the server-side tool succeeded.
+      if (typeof result?.isError === "boolean") snapshot.isError = result.isError;
+      const status = String(result?.status || result?.toolCallStatus || "").trim();
+      if (status) snapshot.status = status.slice(0, 80);
+      return snapshot;
+    }),
   };
 }
 
@@ -1060,8 +1068,15 @@ function parseTransportJsonObjects(text) {
   return values;
 }
 
-function toolResultSucceeded(result) {
-  if (result?.isError === true) return false;
+function toolResultOutcome(result) {
+  if (result?.isError === true) return "failure";
+  let affirmativeSuccess = result?.isError === false;
+  const hostStatus = String(result?.status || result?.toolCallStatus || "")
+    .trim().toLowerCase();
+  if (["failed", "toolcallfailed", "error"].includes(hostStatus)) return "failure";
+  if (["succeeded", "toolcallsucceeded", "completed"].includes(hostStatus)) {
+    affirmativeSuccess = true;
+  }
   const payloads = parseJsonObjects(result?.content);
   for (const payload of payloads) {
     if (
@@ -1073,20 +1088,40 @@ function toolResultSucceeded(result) {
       || payload.validationPassed === false
       || payload.buildAllowedForValidatedGeneration === false
     ) {
-      return false;
+      return "failure";
     }
     const validationSummary = payload.validationSummary;
     if (validationSummary && (validationSummary.ok === false || validationSummary.skipped === true)) {
-      return false;
+      return "failure";
     }
     if (typeof payload.buildOutcome === "string" && /fail|error/i.test(payload.buildOutcome)) {
-      return false;
+      return "failure";
+    }
+    if (
+      payload.ok === true
+      || payload.toolExecutionSucceeded === true
+      || payload.validationProofPassed === true
+      || payload.validationPassed === true
+      || payload.deliveryAcknowledged === true
+      || payload.commitAcknowledged === true
+      || (validationSummary && validationSummary.ok === true)
+      || (typeof payload.buildOutcome === "string" && /pass|success/i.test(payload.buildOutcome))
+    ) {
+      affirmativeSuccess = true;
     }
   }
-  // Plain-text tool results are successful unless the transport or structured
-  // payload explicitly marks them as failed. This preserves compatibility with
-  // MCP tools that return human-readable output instead of JSON.
-  return true;
+  return affirmativeSuccess ? "success" : "unknown";
+}
+
+function toolResultSucceeded(result) {
+  // Compatibility predicate for evidence extraction and legacy human-readable
+  // tools: unknown is non-failing, but it is not affirmative success. Safety
+  // boundaries that suppress replay must call toolResultOutcome directly.
+  return toolResultOutcome(result) !== "failure";
+}
+
+function toolResultFailed(result) {
+  return toolResultOutcome(result) === "failure";
 }
 
 function isNonToolNextAction(_value) {
@@ -2858,7 +2893,7 @@ function extractControlState(messages, prior = {}, options = {}) {
           state.repeatEvidence = [repeatEvidence].slice(-MAX_REPEAT_EVIDENCE_FILES);
         }
       }
-      if (!toolResultSucceeded(result)) {
+      if (toolResultFailed(result)) {
         const failurePayload = parseJsonObjects(result.content).slice(-1)[0] || {};
         state.failedToolResults.push({
           tool: String(matchedCallName || result.name || ""),
@@ -4364,7 +4399,9 @@ module.exports = {
   messageSnapshot,
   snapshotMessages,
   parseJsonObjects,
+  toolResultOutcome,
   toolResultSucceeded,
+  toolResultFailed,
   isNonToolNextAction,
   compactTaskRouteOwnership,
   compactServerControl,

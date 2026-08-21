@@ -28,6 +28,7 @@ from task_phase import task_phase_from_state  # noqa: E402
 from task_api import (  # noqa: E402
     _refresh_server_owned_state,
     _reset_tool_route_usage,
+    _append_routed_analysis_outcome,
     active_task_route_context,
     authorize_active_task_tool,
     authorize_task_tool,
@@ -37,6 +38,7 @@ from task_api import (  # noqa: E402
     task_complete_after_successful_build,
     task_mark_build_recovery_evidence,
     task_mark_recovery_evidence,
+    task_commit_routed_analysis_outcome,
     task_commit_routed_analysis_result,
     task_record_build_recovery,
     task_record_gate,
@@ -2474,6 +2476,111 @@ def test_routed_rag_results_advance_once_and_reject_stale_replay(
     )
     assert persisted["inspectionProgress"]["discoveryActionCursor"] == 1
     assert persisted["lastToolOutcome"]["tool"] == "unreal_symbol_lookup"
+
+
+def test_routed_rag_dependency_failure_commits_and_switches_to_direct_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Analyze the cinematic C++ system",
+        mode="read_only",
+        plan_payload={
+            **_plan(writes=False),
+            "taskKind": "cpp_analysis",
+            "inspectionContract": {
+                "intent": "cpp_analysis",
+                "coverageMode": "targeted_overview",
+                "evidenceBudget": {"representativePairs": 1},
+            },
+            "suggestedToolCalls": [
+                {
+                    "tool": "unreal_symbol_lookup",
+                    "args": {"query": "cinematic", "top_k": 8},
+                },
+                {
+                    "tool": "unreal_rag_search",
+                    "args": {"query": "cinematic", "top_k": 4},
+                },
+            ],
+        },
+    )
+    authorization = dict(started["taskAuthorization"])
+    preflight = authorize_task_tool(
+        tmp_path,
+        tool_name="unreal_symbol_lookup",
+        task_authorization=authorization,
+        arguments={
+            "query": "cinematic",
+            "top_k": 8,
+            "taskAuthorization": authorization,
+        },
+    )
+    assert preflight["ok"] is True
+
+    committed = task_commit_routed_analysis_outcome(
+        tmp_path,
+        task_authorization=authorization,
+        tool_name="unreal_symbol_lookup",
+        tool_args={"query": "cinematic", "top_k": 8},
+        outcome="failed",
+        error_code="RAG_INDEX_MISSING",
+        error_message="managed index is missing",
+    )
+
+    assert committed["ok"] is True
+    assert committed["analysisOutcome"] == "failed"
+    assert committed["committedErrorCode"] == "RAG_INDEX_MISSING"
+    assert committed["controlEpoch"] == started["controlEpoch"] + 1
+    assert committed["control"]["requiredTool"] == {
+        "name": "search_files",
+        "args": {
+            "query": "cinematic",
+            "path": "Source",
+            "regex": False,
+            "maxResults": 32,
+        },
+    }
+    assert committed["discoveryActionCursor"] == 2
+
+    persisted = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["analysisCapabilities"]["ragIndex"]["available"] is False
+    assert persisted["lastToolOutcome"]["status"] == "failed"
+    assert persisted["routedAnalysisOutcomeLedger"]["totalCount"] == 1
+    assert persisted["routedAnalysisOutcomeLedger"]["entries"][0]["outcome"] == "failed"
+    assert "ownerCapability" not in json.dumps(
+        persisted["routedAnalysisOutcomeLedger"], ensure_ascii=False
+    )
+
+
+def test_routed_analysis_outcome_ledger_is_bounded_with_monotonic_receipts() -> None:
+    state = {
+        "planRevision": "3",
+        "controlEpoch": 9,
+        "toolRoute": {"routeHash": "route-9"},
+    }
+    for index in range(40):
+        _append_routed_analysis_outcome(
+            state,
+            tool_name="unreal_symbol_lookup",
+            outcome="failed" if index % 2 else "succeeded",
+            arguments={"query": f"symbol-{index}"},
+            error_code="RAG_INDEX_MISSING" if index % 2 else "",
+        )
+
+    ledger = state["routedAnalysisOutcomeLedger"]
+    assert ledger["capacity"] == 32
+    assert ledger["totalCount"] == 40
+    assert ledger["evictedCount"] == 8
+    assert len(ledger["entries"]) == 32
+    assert ledger["entries"][0]["argumentsHash"] != ledger["entries"][-1]["argumentsHash"]
+    assert len(ledger["ledgerHash"]) == 64
 
 
 def test_consumed_last_reconstruction_candidate_does_not_loop_on_task_status() -> None:

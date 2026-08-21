@@ -94,3 +94,21 @@ def test_lifecycle_graph_uses_only_declared_events_and_states() -> None:
         for transition in transitions:
             assert transition["event"] in CONTROL_STATE_REGISTRY.lifecycle_events
             assert transition["next"] in CONTROL_STATE_REGISTRY.lifecycle_states
+
+
+def test_capacity_invariants_align_producers_ledgers_and_projections() -> None:
+    capacities = CONTROL_STATE_REGISTRY.capacity_policies
+    frontier = capacities["inspectionFrontier"]
+    audit = capacities["repositoryAuditPage"]
+    slices = capacities["slicePlan"]
+    outcomes = capacities["routedAnalysisOutcomeLedger"]
+    projection = capacities["controlProjection"]
+
+    assert frontier["producerMaximumPerResult"] <= frontier["durableMaximum"]
+    assert audit["sourceEvidenceRetention"] <= frontier["durableMaximum"]
+    assert audit["maximumInventoryFiles"] <= frontier["durableMaximum"]
+    assert slices["maximumSlices"] == slices["checkpointCompletedSliceCapacity"]
+    assert outcomes["maximumEntries"] == 32
+    assert outcomes["overflowDisposition"] == "evict_oldest"
+    assert projection["maximumModelVisibleCharacters"] == 32000
+    assert "requiredTool" in projection["requiredHeaderFields"]

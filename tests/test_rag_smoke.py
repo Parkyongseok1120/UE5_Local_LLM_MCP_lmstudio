@@ -138,6 +138,30 @@ def test_index_path_normalizes_foreign_relative_separators(tmp_path):
     ).resolve()
 
 
+def test_installer_owned_runtime_index_overrides_versioned_workspace_config(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "Evidence-First-Integrated-release-a"
+    config_dir = workspace / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.json").write_text(
+        json.dumps({"indexPath": "data/unreal58/rag.sqlite"}),
+        encoding="utf-8",
+    )
+    managed = (tmp_path / "state" / "indexes" / "unreal58" / "rag.sqlite").resolve()
+    monkeypatch.setenv("UNREAL_RAG_INDEX_PATH", str(managed))
+
+    assert resolve_index_path(workspace) == managed
+    assert resolve_index_dir(workspace) == managed.parent
+
+
+def test_runtime_index_override_requires_absolute_path(monkeypatch):
+    monkeypatch.setenv("UNREAL_RAG_INDEX_PATH", "indexes/unreal58/rag.sqlite")
+    with pytest.raises(ValueError, match="must be an absolute path"):
+        resolve_index_path()
+
+
 def test_shared_index_config_drives_unconfigured_workspace(tmp_path, monkeypatch):
     workspace = tmp_path / "UE5_Local_LLM_MCP_lmstudio"
     workspace.mkdir()

@@ -824,6 +824,7 @@ def _reset_plan_execution_state_for_replan(
         "sliceProvenance",
         "routeFacts",
         "approvalNote",
+        "analysisCapabilities",
     ):
         state.pop(key, None)
     state["runtimeDebugSession"] = {}
@@ -3399,23 +3400,88 @@ _ROUTED_ANALYSIS_RESULT_TOOLS = frozenset(
         "unreal_symbol_lookup",
     }
 )
+_RAG_INDEX_DEPENDENCY_ERRORS = frozenset(
+    {
+        "RAG_INDEX_MISSING",
+        "RAG_INDEX_UNREADABLE",
+        "RAG_INDEX_EMPTY",
+    }
+)
+_ROUTED_ANALYSIS_OUTCOME_CAPACITY = 32
 
 
-def task_commit_routed_analysis_result(
+def _append_routed_analysis_outcome(
+    state: dict[str, Any],
+    *,
+    tool_name: str,
+    outcome: str,
+    arguments: dict[str, Any],
+    evidence_hash: str = "",
+    error_code: str = "",
+) -> None:
+    """Append one bounded, authorization-free outcome receipt."""
+
+    prior = (
+        dict(state.get("routedAnalysisOutcomeLedger") or {})
+        if isinstance(state.get("routedAnalysisOutcomeLedger"), dict)
+        else {}
+    )
+    entries = [
+        dict(item)
+        for item in prior.get("entries") or []
+        if isinstance(item, dict)
+    ]
+    total_count = max(len(entries), int(prior.get("totalCount") or 0)) + 1
+    entries.append(
+        {
+            "tool": str(tool_name or ""),
+            "outcome": str(outcome or "unknown"),
+            "errorCode": str(error_code or "")[:120],
+            "argumentsHash": _canonical_hash(arguments),
+            "evidenceHash": str(evidence_hash or "")[:128],
+            "planRevision": str(state.get("planRevision") or ""),
+            "controlEpoch": _control_epoch(state.get("controlEpoch")),
+            "routeHash": str((state.get("toolRoute") or {}).get("routeHash") or ""),
+            "committedAt": _utc_now(),
+        }
+    )
+    retained = entries[-_ROUTED_ANALYSIS_OUTCOME_CAPACITY:]
+    evicted_count = max(
+        int(prior.get("evictedCount") or 0),
+        total_count - len(retained),
+    )
+    ledger_proof = {
+        "totalCount": total_count,
+        "evictedCount": evicted_count,
+        "entries": retained,
+    }
+    state["routedAnalysisOutcomeLedger"] = {
+        "version": 1,
+        "capacity": _ROUTED_ANALYSIS_OUTCOME_CAPACITY,
+        **ledger_proof,
+        "ledgerHash": _canonical_hash(ledger_proof),
+    }
+
+
+def task_commit_routed_analysis_outcome(
     workspace: Path,
     *,
     task_authorization: dict[str, Any],
     tool_name: str,
     tool_args: dict[str, Any] | None = None,
+    outcome: str = "succeeded",
     evidence_hash: str = "",
+    error_code: str = "",
+    error_message: str = "",
 ) -> dict[str, Any]:
-    """Commit a successful Python/RAG read to the canonical task state.
+    """Commit one Python/RAG success or failure to canonical task state.
 
     Unreal Agent filesystem reads use a reserve/execute/commit transaction in
     ``task-auth.js``.  RAG reads are executed by this Python process and consume
     their route budget during authorization, so they need the matching
-    post-result commit here.  Without it, an initial-evidence cursor never
-    advances and the same server-owned exact tool remains authoritative forever.
+    post-result transaction here.  Both outcomes advance semantic control: a
+    success records evidence, while a failure records a bounded receipt and
+    selects a different recoverable obligation.
 
     This function owns only read-only analysis results.  Mutation, build, and
     Automation commits remain on their existing proven data-plane paths.
@@ -3438,6 +3504,18 @@ def task_commit_routed_analysis_result(
             "errorCode": "TASK_ANALYSIS_RESULT_TOOL_UNSUPPORTED",
             "error": f"{observed_tool or '<missing>'} is not a routed analysis result tool.",
         }
+
+    normalized_outcome = str(outcome or "").strip().casefold()
+    if normalized_outcome not in {"succeeded", "failed"}:
+        return {
+            "ok": False,
+            "active": True,
+            "errorCode": "TASK_ANALYSIS_OUTCOME_INVALID",
+            "error": "Routed analysis outcome must be 'succeeded' or 'failed'.",
+        }
+    normalized_error_code = str(error_code or "").strip()[:120]
+    if normalized_outcome == "failed" and not normalized_error_code:
+        normalized_error_code = "ANALYSIS_TOOL_FAILED"
 
     observed_args = {
         key: value
@@ -3580,6 +3658,132 @@ def task_commit_routed_analysis_result(
             if str(item)
         ]
         readiness = derive_synthesis_readiness(state)
+        if normalized_outcome == "failed":
+            next_cursor = cursor + 1 if cursor_advanced else cursor
+            dependency_unavailable = bool(
+                observed_tool in _ROUTED_ANALYSIS_RESULT_TOOLS
+                and normalized_error_code in _RAG_INDEX_DEPENDENCY_ERRORS
+            )
+            if dependency_unavailable:
+                while next_cursor < len(actions):
+                    candidate = actions[next_cursor]
+                    candidate_name = str(
+                        candidate.get("name")
+                        if isinstance(candidate, dict)
+                        else ""
+                    ).strip()
+                    if candidate_name not in _ROUTED_ANALYSIS_RESULT_TOOLS:
+                        break
+                    next_cursor += 1
+                capabilities = (
+                    dict(state.get("analysisCapabilities") or {})
+                    if isinstance(state.get("analysisCapabilities"), dict)
+                    else {}
+                )
+                capabilities["ragIndex"] = {
+                    "available": False,
+                    "errorCode": normalized_error_code,
+                    "failedTool": observed_tool,
+                    "observedAt": _utc_now(),
+                    "recovery": "restore_managed_index_or_use_direct_source",
+                }
+                state["analysisCapabilities"] = capabilities
+
+            next_action = (
+                actions[next_cursor]
+                if next_cursor < len(actions)
+                and isinstance(actions[next_cursor], dict)
+                else {}
+            )
+            fallback_scheduled = bool(
+                str(next_action.get("name") or "").strip()
+                in {
+                    "list_directory",
+                    "search_files",
+                    "read_file",
+                    "read_file_range",
+                    "read_symbol",
+                    "read_unreal_logs",
+                    "unreal_rag_search",
+                    "unreal_symbol_lookup",
+                }
+            )
+            state["inspectionProgress"] = {
+                **progress,
+                "version": 2,
+                "status": "collecting",
+                "discoveryStarted": True,
+                "everHadFrontier": progress.get("everHadFrontier") is True
+                or bool(frontier),
+                "discoveredRelevantPairs": max(
+                    0,
+                    int(progress.get("discoveredRelevantPairs") or 0),
+                    int(readiness.get("discoveredRelevantPairs") or 0),
+                ),
+                "discoveryGeneration": max(
+                    0, int(progress.get("discoveryGeneration") or 0)
+                )
+                + 1,
+                "discoveryAttempts": max(
+                    0, int(progress.get("discoveryAttempts") or 0)
+                )
+                + 1,
+                "discoveryActionCursor": min(len(actions), next_cursor),
+                "lastFailure": {
+                    "tool": observed_tool,
+                    "errorCode": normalized_error_code,
+                    "dependencyUnavailable": dependency_unavailable,
+                    "at": _utc_now(),
+                },
+                "updatedAt": _utc_now(),
+            }
+            _append_routed_analysis_outcome(
+                state,
+                tool_name=observed_tool,
+                outcome="failed",
+                arguments=observed_args,
+                error_code=normalized_error_code,
+            )
+            reduced = reduce_committed_event(
+                state,
+                {
+                    "kind": "TOOL_RESULT_COMMITTED",
+                    "outcome": "failed",
+                    "toolName": observed_tool,
+                    "arguments": observed_args,
+                    "errorCode": normalized_error_code,
+                    "message": str(error_message or "")[:1000],
+                    "fallbackScheduled": fallback_scheduled,
+                },
+            )
+            reduced["lastToolOutcome"] = {
+                "tool": observed_tool,
+                "status": "failed",
+                "errorCode": normalized_error_code,
+                "planRevision": str(reduced.get("planRevision") or ""),
+                "activeSliceId": str(reduced.get("activeSliceId") or ""),
+                "mutationGeneration": max(
+                    0, int(reduced.get("mutationGeneration") or 0)
+                ),
+                "committedAt": _utc_now(),
+            }
+            reduced["updatedAt"] = _utc_now()
+            outcome = {
+                "ok": True,
+                "active": True,
+                "taskSessionId": task_session_id,
+                "committedTool": observed_tool,
+                "analysisOutcome": "failed",
+                "committedErrorCode": normalized_error_code,
+                "discoveryActionCursor": int(
+                    reduced.get("inspectionProgress", {}).get(
+                        "discoveryActionCursor"
+                    )
+                    or 0
+                ),
+            }
+            return reduced
+
         state["inspectionProgress"] = {
             **progress,
             "version": 2,
@@ -3599,10 +3803,30 @@ def task_commit_routed_analysis_result(
             "updatedAt": _utc_now(),
         }
 
+        _append_routed_analysis_outcome(
+            state,
+            tool_name=observed_tool,
+            outcome="succeeded",
+            arguments=observed_args,
+            evidence_hash=evidence_hash,
+        )
+        capabilities = (
+            dict(state.get("analysisCapabilities") or {})
+            if isinstance(state.get("analysisCapabilities"), dict)
+            else {}
+        )
+        capabilities["ragIndex"] = {
+            "available": True,
+            "errorCode": "",
+            "observedAt": _utc_now(),
+        }
+        state["analysisCapabilities"] = capabilities
+
         reduced = reduce_committed_event(
             state,
             {
                 "kind": "TOOL_RESULT_COMMITTED",
+                "outcome": "succeeded",
                 "toolName": observed_tool,
                 "arguments": observed_args,
                 "metadata": {
@@ -3644,6 +3868,26 @@ def task_commit_routed_analysis_result(
             conversation_id=authorization_identity["conversationId"],
         )
     return _task_outcome_with_control(outcome, result) if outcome else result
+
+
+def task_commit_routed_analysis_result(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    tool_name: str,
+    tool_args: dict[str, Any] | None = None,
+    evidence_hash: str = "",
+) -> dict[str, Any]:
+    """Compatibility wrapper for callers that can only emit successful reads."""
+
+    return task_commit_routed_analysis_outcome(
+        workspace,
+        task_authorization=task_authorization,
+        tool_name=tool_name,
+        tool_args=tool_args,
+        outcome="succeeded",
+        evidence_hash=evidence_hash,
+    )
 
 
 def task_record_build_recovery(

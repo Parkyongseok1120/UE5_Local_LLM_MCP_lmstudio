@@ -3963,7 +3963,7 @@ function successfulServerOwnedRequiredToolDidNotAdvance(
   pending: any,
   result: any,
 ): boolean {
-  if (!core.toolResultSucceeded(result)) return false;
+  if (core.toolResultOutcome(result) !== "success") return false;
   const hostToolCallId = String(pending?.hostToolCallId || "");
   const pendingId = String(pending?.id || "");
   if (
@@ -4564,7 +4564,7 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       const hostToolCallId = String(match.pending?.hostToolCallId || "");
       const pendingId = String(match.pending?.id || "");
       if (
-        core.toolResultSucceeded(match.result)
+        core.toolResultOutcome(match.result) === "success"
         && (
           hostToolCallId.includes(":server_owned_required_tool:")
           || pendingId.startsWith("server-owned-")
