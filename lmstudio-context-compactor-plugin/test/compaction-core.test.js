@@ -3901,6 +3901,9 @@ test("hard compaction preserves the exact prompt-bound synthesis evidence string
   assert.match(summary, /PROMPT_SENTINEL_LAST/);
   assert.ok(summary.includes(serializedEvidence));
   assert.match(summary, new RegExp(`modelMaterializedSynthesisEvidenceSha256=${bundle.bundleHash}`));
+  assert.match(summary, /single-line bullets/);
+  assert.match(summary, /Do not emit headings, standalone prose, tables, code fences/);
+  assert.match(summary, /not semantic entailment/);
   assert.equal(core.sha256(serializedEvidence), bundle.bundleHash);
   assert.ok(summary.length <= 24_000);
 });
@@ -3978,6 +3981,51 @@ test("model-facing projection honors exact 6K section and 24K total boundaries",
   assert.ok(summary.split("\n").every((line) => line.length <= 6_000));
 });
 
+function synthesisReportReadinessFixture(coverageIncomplete = false) {
+  const exactExcerpt = "class FReportFixture {};";
+  const binding = {
+    version: 2,
+    taskSessionId: "task_report_fixture",
+    objectiveHash: "b".repeat(64),
+    planRevision: "plan-report",
+    mutationGeneration: 0,
+    records: [{
+      claimId: "report-claim",
+      sourcePath: "Source/Audit/Public/Report.h",
+      contentHash: "c".repeat(64),
+      startLine: 1,
+      endLine: 1,
+      exactExcerpt,
+      excerptDigest: core.sha256(exactExcerpt),
+      coverageLevel: "CLAIM_VALIDATED",
+      classification: "direct",
+    }],
+  };
+  const serializedEvidence = core.stableStringify(binding);
+  const bundle = {
+    ...binding,
+    serializedEvidence,
+    serializedCharacterCount: serializedEvidence.length,
+    bundleHash: core.sha256(serializedEvidence),
+  };
+  return {
+    version: 1,
+    ready: true,
+    commitEligible: true,
+    pendingEvidenceObligation: false,
+    reason: "ready",
+    planRevision: binding.planRevision,
+    sourceEvidencePlanRevision: binding.planRevision,
+    controlEpoch: 1,
+    acceptedEvidenceHash: "d".repeat(64),
+    remainingFrontierHash: "e".repeat(64),
+    synthesisEvidenceBundleHash: bundle.bundleHash,
+    synthesisEvidenceBundle: bundle,
+    coverageIncomplete,
+    reportContract: core.canonicalSynthesisReportContract(coverageIncomplete),
+  };
+}
+
 test("partial synthesis report requires claim citations and truthful coverage disclosure", () => {
   const exactExcerpt = "class FPartialAudit {};";
   const binding = {
@@ -4021,16 +4069,168 @@ test("partial synthesis report requires claim citations and truthful coverage di
     coverageIncomplete: true,
   };
   const valid = [
-    "Coverage: partial",
-    "Analyzed scope: selected C++ declarations",
-    "Omitted scope: remaining repository files",
-    "Stop reason: bounded evidence limit",
-    "Confidence limits: findings apply only to the selected scope",
-    "Next audit slice: continue with the next inventory page",
+    "- Coverage: partial",
+    "- Analyzed scope: only the evidence cited below",
+    "- Omitted scope: remaining frontier not analyzed",
+    "- Stop reason: bounded inspection left unresolved scope",
+    "- Confidence limits: findings are limited to cited excerpts",
+    "- Next audit slice: continue the remaining frontier",
     "- [claim:partial-claim] The selected declaration exists.",
   ].join("\n");
 
   assert.deepEqual(core.validateSynthesisReport(valid, readiness), { ok: true, reason: "valid" });
   assert.equal(core.validateSynthesisReport("- The repository is fully analyzed.", readiness).ok, false);
   assert.equal(core.validateSynthesisReport(valid.replace("[claim:partial-claim]", "[claim:unknown]"), readiness).ok, false);
+});
+
+test("complete Korean synthesis report accepts only cited single-line bullets", () => {
+  const readiness = synthesisReportReadinessFixture(false);
+  const output = [
+    "- 선언이 직접 확인됩니다. [claim:report-claim]",
+  ].join("\n");
+  assert.deepEqual(core.validateSynthesisReport(output, readiness), { ok: true, reason: "valid" });
+});
+
+test("synthesis report rejects prose, tables, headings, non-dash lists, and uncited bullets", () => {
+  const readiness = synthesisReportReadinessFixture(false);
+  const cases = [
+    ["- 근거가 확인됩니다. [claim:report-claim]", "독립 사실 문단입니다."],
+    ["- 근거가 확인됩니다. [claim:report-claim]", "| 구분 | 사실 |", "|---|---|"],
+    ["## 제목", "- 근거가 확인됩니다. [claim:report-claim]"],
+    ["* 근거가 확인됩니다. [claim:report-claim]"],
+    ["1. 근거가 확인됩니다. [claim:report-claim]"],
+    ["- 인용 없는 구조 bullet"],
+  ];
+  for (const lines of cases) {
+    const validation = core.validateSynthesisReport(lines.join("\n"), readiness);
+    assert.equal(validation.ok, false);
+    assert.equal(validation.reason, "synthesis_claim_line_unbound");
+    assert.ok(validation.lineNumbers.length >= 1);
+  }
+});
+
+test("synthesis report treats every supported Unicode line separator as a claim boundary", () => {
+  const readiness = synthesisReportReadinessFixture(false);
+  for (const separator of ["\r", "\u2028", "\u2029"]) {
+    const validation = core.validateSynthesisReport(
+      `- 직접 근거입니다. [claim:report-claim]${separator}인용 없는 독립 문장`,
+      readiness,
+    );
+    assert.equal(validation.ok, false, JSON.stringify({ separator, validation }));
+    assert.equal(validation.reason, "synthesis_claim_line_unbound");
+    assert.deepEqual(validation.lineNumbers, [2]);
+  }
+});
+
+test("partial Korean synthesis report accepts localized metadata aliases only as metadata", () => {
+  const readiness = synthesisReportReadinessFixture(true);
+  const output = [
+    "- 분석 범위 상태: 부분",
+    "- 분석한 범위: 아래에 인용된 근거만",
+    "- 제외한 범위: 아직 분석하지 않은 남은 조사 범위",
+    "- 중단 이유: 제한된 조사 범위에 미확인 영역이 남음",
+    "- 신뢰 한계: 인용한 발췌문이 직접 뒷받침하는 사실로 제한",
+    "- 다음 감사 범위: 남은 조사 범위를 계속 확인",
+    "- 선언이 직접 확인됩니다. [claim:report-claim]",
+  ].join("\n");
+  assert.deepEqual(core.validateSynthesisReport(output, readiness), { ok: true, reason: "valid" });
+  const missing = output.split("\n").filter((line) => !line.includes("다음 감사 범위")).join("\n");
+  const validation = core.validateSynthesisReport(missing, readiness);
+  assert.equal(validation.ok, false);
+  assert.equal(validation.reason, "partial_coverage_disclosure_missing");
+  assert.deepEqual(validation.missingSections, ["next_audit_slice"]);
+});
+
+test("partial metadata must be exact canonical dash bullets with cardinality one", () => {
+  const readiness = synthesisReportReadinessFixture(true);
+  const validMetadata = [
+    "- Coverage: partial",
+    "- Analyzed scope: only the evidence cited below",
+    "- Omitted scope: remaining frontier not analyzed",
+    "- Stop reason: bounded inspection left unresolved scope",
+    "- Confidence limits: findings are limited to cited excerpts",
+    "- Next audit slice: continue the remaining frontier",
+  ];
+  const cases = [
+    validMetadata.map((line) => line.replace(/^- /, "")),
+    validMetadata.map((line, index) => index === 0 ? "- COVERAGE: PARTIAL" : line),
+    validMetadata.map((line, index) => index === 0 ? "-  Coverage: partial" : line),
+    validMetadata.map((line, index) => index === 0 ? " - Coverage: partial" : line),
+    validMetadata.map((line, index) => index === 0 ? "- Coverage: partial " : line),
+    validMetadata.map((line, index) => index === 0 ? "- Coverage: partially complete" : line),
+    [...validMetadata, "- Analyzed scope: only the evidence cited below"],
+    validMetadata.map((line, index) => index === 1 ? "- Analyzed scope:" : line),
+    validMetadata.map((line, index) => index === 1
+      ? "- Analyzed scope: only the evidence cited below and the entire project is safe"
+      : line),
+  ];
+  for (const metadata of cases) {
+    const validation = core.validateSynthesisReport([
+      ...metadata,
+      "- The declaration exists. [claim:report-claim]",
+    ].join("\n"), readiness);
+    assert.equal(validation.ok, false, JSON.stringify({ metadata, validation }));
+  }
+});
+
+test("synthesis report contract rejects unknown claim ids without auto-binding", () => {
+  const readiness = synthesisReportReadinessFixture(false);
+  const validation = core.validateSynthesisReport(
+    "- 근거가 있다고 주장합니다. [claim:unknown]",
+    readiness,
+  );
+  assert.equal(validation.ok, false);
+  assert.equal(validation.reason, "synthesis_claim_citation_unknown");
+  assert.deepEqual(validation.unknownClaimIds, ["unknown"]);
+});
+
+test("authoritative v2 synthesis report grammar is preserved and tampering fails closed", () => {
+  const readiness = synthesisReportReadinessFixture(false);
+  const compacted = core.compactSynthesisReadiness(readiness);
+  assert.deepEqual(
+    compacted.reportContract,
+    core.canonicalSynthesisReportContract(false),
+  );
+  const tampered = structuredClone(readiness);
+  tampered.reportContract.tablesAllowed = true;
+  assert.equal(core.compactSynthesisReadiness(tampered), null);
+});
+
+test("legacy v1 synthesis report contracts migrate to canonical v2 and malformed shapes fail", () => {
+  const complete = synthesisReportReadinessFixture(false);
+  complete.reportContract = {
+    version: 1,
+    coverageStatus: "complete",
+    claimCitationFormat: "[claim:<claimId>]",
+    partialRequiredSections: [],
+  };
+  assert.deepEqual(
+    core.compactSynthesisReadiness(complete).reportContract,
+    core.canonicalSynthesisReportContract(false),
+  );
+
+  const partial = synthesisReportReadinessFixture(true);
+  partial.reportContract = {
+    version: 1,
+    coverageStatus: "partial",
+    claimCitationFormat: "[claim:<claimId>]",
+    partialRequiredSections: [
+      "Coverage: partial", "Analyzed scope", "Omitted scope",
+      "Stop reason", "Confidence limits", "Next audit slice",
+    ],
+  };
+  assert.deepEqual(
+    core.compactSynthesisReadiness(partial).reportContract,
+    core.canonicalSynthesisReportContract(true),
+  );
+
+  const wrongCoverage = structuredClone(partial);
+  wrongCoverage.reportContract.coverageStatus = "complete";
+  assert.equal(core.compactSynthesisReadiness(wrongCoverage), null);
+  const missingSection = structuredClone(partial);
+  missingSection.reportContract.partialRequiredSections.pop();
+  assert.equal(core.compactSynthesisReadiness(missingSection), null);
+  const renamedSection = structuredClone(partial);
+  renamedSection.reportContract.partialRequiredSections[1] = "Arbitrary section";
+  assert.equal(core.compactSynthesisReadiness(renamedSection), null);
 });

@@ -12,6 +12,88 @@ POLICY = json.loads(
     .read_text(encoding="utf-8")
 )
 
+_PARTIAL_REPORT_SECTION_ALIASES = [
+    {
+        "key": "coverage",
+        "aliases": ["Coverage: partial", "분석 범위 상태: 부분"],
+    },
+    {
+        "key": "analyzed_scope",
+        "aliases": [
+            "Analyzed scope: only the evidence cited below",
+            "분석한 범위: 아래에 인용된 근거만",
+        ],
+    },
+    {
+        "key": "omitted_scope",
+        "aliases": [
+            "Omitted scope: remaining frontier not analyzed",
+            "제외한 범위: 아직 분석하지 않은 남은 조사 범위",
+        ],
+    },
+    {
+        "key": "stop_reason",
+        "aliases": [
+            "Stop reason: bounded inspection left unresolved scope",
+            "중단 이유: 제한된 조사 범위에 미확인 영역이 남음",
+        ],
+    },
+    {
+        "key": "confidence_limits",
+        "aliases": [
+            "Confidence limits: findings are limited to cited excerpts",
+            "신뢰 한계: 인용한 발췌문이 직접 뒷받침하는 사실로 제한",
+        ],
+    },
+    {
+        "key": "next_audit_slice",
+        "aliases": [
+            "Next audit slice: continue the remaining frontier",
+            "다음 감사 범위: 남은 조사 범위를 계속 확인",
+        ],
+    },
+]
+
+
+def synthesis_report_contract(coverage_incomplete: bool) -> dict[str, Any]:
+    """Return the server-owned, machine-validated final-report grammar.
+
+    A claim id binds a report line to an exact evidence record.  It is not a
+    semantic-entailment proof, so the model must still omit statements that the
+    cited excerpt does not directly support.
+    """
+
+    return {
+        "version": 2,
+        "coverageStatus": "partial" if coverage_incomplete else "complete",
+        "lineGrammar": "cited_single_line_bullets_with_partial_metadata",
+        "claimBulletFormat": "- <claim> [claim:<claimId>]",
+        "claimCitationFormat": "[claim:<claimId>]",
+        "claimMarkerSameLine": True,
+        "markdownHeadingsAllowed": False,
+        "standaloneProseAllowed": False,
+        "tablesAllowed": False,
+        "citationBinding": "evidence_record_identity_not_semantic_entailment",
+        "partialRequiredSections": [
+            "Coverage: partial",
+            "Analyzed scope: only the evidence cited below",
+            "Omitted scope: remaining frontier not analyzed",
+            "Stop reason: bounded inspection left unresolved scope",
+            "Confidence limits: findings are limited to cited excerpts",
+            "Next audit slice: continue the remaining frontier",
+        ] if coverage_incomplete else [],
+        "partialRequiredSectionAliases": (
+            [
+                {
+                    "key": str(section["key"]),
+                    "aliases": [str(alias) for alias in section["aliases"]],
+                }
+                for section in _PARTIAL_REPORT_SECTION_ALIASES
+            ]
+            if coverage_incomplete else []
+        ),
+    }
+
 SOURCE_EVIDENCE_TASK_KINDS = frozenset(
     {
         *(str(item).casefold() for item in POLICY.get("directEvidenceTaskKinds", [])),
@@ -490,15 +572,7 @@ def derive_synthesis_readiness(state: dict[str, Any] | None) -> dict[str, Any]:
                 for row in bundle["records"]
             ],
         },
-        "reportContract": {
-            "version": 1,
-            "coverageStatus": "partial" if coverage_incomplete else "complete",
-            "claimCitationFormat": "[claim:<claimId>]",
-            "partialRequiredSections": [
-                "Coverage: partial", "Analyzed scope", "Omitted scope",
-                "Stop reason", "Confidence limits", "Next audit slice",
-            ] if coverage_incomplete else [],
-        },
+        "reportContract": synthesis_report_contract(coverage_incomplete),
         "synthesisEvidenceBundle": bundle,
         "synthesisEvidenceBundleHash": bundle["bundleHash"],
     }

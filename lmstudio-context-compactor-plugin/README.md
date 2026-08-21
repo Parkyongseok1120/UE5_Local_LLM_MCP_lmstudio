@@ -8,7 +8,7 @@ compacted `Chat` to the configured underlying local model when the remaining bud
 With zero or multiple loaded LLMs, the plugin fails with a list of candidates and asks for an
 exact model key. The existing `mcp/unreal-agent` and `mcp/unreal-rag` plugins remain tool providers.
 
-Version 0.4.45 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
+Version 0.4.46 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
 before every prediction and buffers model text/tool calls until LM Studio confirms a safe stop.
 Context-limit and max-output truncations are discarded instead of being presented as completed work.
 Every proxied prediction pins temperature/top-p/top-k/min-p, has independent wall-clock and semantic
@@ -41,6 +41,15 @@ Write requests without a server-owned route also have a bounded discovery phase:
 new-system design requests enter architecture validation, and ordinary source discovery is handed
 off to `unreal_agent_plan` after six successful discovery calls instead of reading files indefinitely.
 Strict tool-call rejection remains off by default, so multiple valid tool calls are preserved.
+
+Final synthesis now uses a server-owned report grammar before the commit handshake. Every nonblank
+line must be a single `-` bullet with a same-line claim ID from the exact evidence bundle; headings,
+standalone prose, tables, wrapped bullets, unknown IDs, and uncited structural bullets fail closed.
+Partial coverage uses six fixed bilingual disclosure bullets. One bounded low-effort format repair is
+allowed, but all synthesis prediction recovery paths share a two-attempt ceiling. A failed repair is
+bound to the real user-turn identity, so automatic re-entry cannot invoke the model again; a new user
+continuation can start a fresh bounded attempt. Claim IDs prove evidence-record identity, not semantic
+entailment, so unsupported statements must still be omitted.
 
 > **Important — you must select this plugin as the chat model**  
 > 1. Load the underlying LLM (e.g. Qwen) once; leave it loaded.  

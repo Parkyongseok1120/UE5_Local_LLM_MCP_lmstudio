@@ -165,6 +165,53 @@ def test_materialized_bundle_is_bound_to_ready_control():
     assert result["synthesisEvidenceBundle"]["bundleHash"] == result["synthesisEvidenceBundleHash"]
 
 
+def test_server_owned_report_contract_declares_strict_bilingual_line_grammar():
+    complete = derive_synthesis_readiness(_state({DECL["path"]: DECL, IMPL["path"]: IMPL}))
+    contract = complete["reportContract"]
+    assert contract["version"] == 2
+    assert contract["lineGrammar"] == "cited_single_line_bullets_with_partial_metadata"
+    assert contract["claimMarkerSameLine"] is True
+    assert contract["markdownHeadingsAllowed"] is False
+    assert contract["standaloneProseAllowed"] is False
+    assert contract["tablesAllowed"] is False
+    assert contract["citationBinding"] == "evidence_record_identity_not_semantic_entailment"
+    assert contract["partialRequiredSectionAliases"] == []
+
+    partial_state = _state(
+        {DECL["path"]: DECL, IMPL["path"]: IMPL},
+        inspectionContract={
+            "intent": "cpp_analysis",
+            "coverageMode": "bounded",
+            "evidenceBudget": {
+                "representativePairs": 2,
+                "maxDirectSourceReadsPerPhase": 2,
+            },
+        },
+        inspectionProgress={
+            "discoveryStarted": True,
+            "discoveredRelevantPairs": 2,
+            "phaseDirectSourceReadCalls": 2,
+            "remainingFrontier": [
+                "Source/Next/Public/Next.h",
+                "Source/Next/Private/Next.cpp",
+            ],
+        },
+    )
+    partial = derive_synthesis_readiness(partial_state)
+    aliases = partial["reportContract"]["partialRequiredSectionAliases"]
+    assert partial["coverageIncomplete"] is True
+    assert len(aliases) == 6
+    assert aliases[0] == {
+        "key": "coverage",
+        "aliases": ["Coverage: partial", "분석 범위 상태: 부분"],
+    }
+    aliases[0]["aliases"][0] = "MUTATED"
+    fresh = derive_synthesis_readiness(partial_state)
+    assert fresh["reportContract"]["partialRequiredSectionAliases"][0]["aliases"][0] == (
+        "Coverage: partial"
+    )
+
+
 def test_four_required_pairs_are_all_materialized_within_prompt_capacity() -> None:
     files = {}
     for index in range(4):

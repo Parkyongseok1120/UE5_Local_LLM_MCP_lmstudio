@@ -842,6 +842,104 @@ function compactSynthesisEvidenceBundle(value) {
   };
 }
 
+const PARTIAL_REPORT_SECTION_ALIASES = Object.freeze([
+  Object.freeze({ key: "coverage", aliases: Object.freeze(["Coverage: partial", "분석 범위 상태: 부분"]) }),
+  Object.freeze({
+    key: "analyzed_scope",
+    aliases: Object.freeze([
+      "Analyzed scope: only the evidence cited below",
+      "분석한 범위: 아래에 인용된 근거만",
+    ]),
+  }),
+  Object.freeze({
+    key: "omitted_scope",
+    aliases: Object.freeze([
+      "Omitted scope: remaining frontier not analyzed",
+      "제외한 범위: 아직 분석하지 않은 남은 조사 범위",
+    ]),
+  }),
+  Object.freeze({
+    key: "stop_reason",
+    aliases: Object.freeze([
+      "Stop reason: bounded inspection left unresolved scope",
+      "중단 이유: 제한된 조사 범위에 미확인 영역이 남음",
+    ]),
+  }),
+  Object.freeze({
+    key: "confidence_limits",
+    aliases: Object.freeze([
+      "Confidence limits: findings are limited to cited excerpts",
+      "신뢰 한계: 인용한 발췌문이 직접 뒷받침하는 사실로 제한",
+    ]),
+  }),
+  Object.freeze({
+    key: "next_audit_slice",
+    aliases: Object.freeze([
+      "Next audit slice: continue the remaining frontier",
+      "다음 감사 범위: 남은 조사 범위를 계속 확인",
+    ]),
+  }),
+]);
+
+function canonicalSynthesisReportContract(coverageIncomplete) {
+  const partial = coverageIncomplete === true;
+  return {
+    version: 2,
+    coverageStatus: partial ? "partial" : "complete",
+    lineGrammar: "cited_single_line_bullets_with_partial_metadata",
+    claimBulletFormat: "- <claim> [claim:<claimId>]",
+    claimCitationFormat: "[claim:<claimId>]",
+    claimMarkerSameLine: true,
+    markdownHeadingsAllowed: false,
+    standaloneProseAllowed: false,
+    tablesAllowed: false,
+    citationBinding: "evidence_record_identity_not_semantic_entailment",
+    partialRequiredSections: partial
+      ? [
+        "Coverage: partial",
+        "Analyzed scope: only the evidence cited below",
+        "Omitted scope: remaining frontier not analyzed",
+        "Stop reason: bounded inspection left unresolved scope",
+        "Confidence limits: findings are limited to cited excerpts",
+        "Next audit slice: continue the remaining frontier",
+      ]
+      : [],
+    partialRequiredSectionAliases: partial
+      ? PARTIAL_REPORT_SECTION_ALIASES.map((section) => ({
+        key: section.key,
+        aliases: [...section.aliases],
+      }))
+      : [],
+  };
+}
+
+function compactSynthesisReportContract(value, coverageIncomplete) {
+  const canonical = canonicalSynthesisReportContract(coverageIncomplete);
+  // Older stored controls did not carry the explicit grammar. They can be
+  // normalized during upgrade, but any current server-owned contract must be
+  // byte-for-byte semantically identical to the canonical projection.
+  if (value === undefined || value === null) return canonical;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (Number(value.version) === 1) {
+    const expectedCoverage = coverageIncomplete === true ? "partial" : "complete";
+    const legacySections = Array.isArray(value.partialRequiredSections)
+      ? value.partialRequiredSections.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    const expectedLegacySections = coverageIncomplete === true
+      ? [
+        "Coverage: partial", "Analyzed scope", "Omitted scope",
+        "Stop reason", "Confidence limits", "Next audit slice",
+      ]
+      : [];
+    const legacyCompatible = String(value.coverageStatus || "") === expectedCoverage
+      && String(value.claimCitationFormat || "") === "[claim:<claimId>]"
+      && stableStringify(legacySections) === stableStringify(expectedLegacySections);
+    return legacyCompatible ? canonical : null;
+  }
+  if (stableStringify(value) !== stableStringify(canonical)) return null;
+  return canonical;
+}
+
 function compactSynthesisReadiness(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const planRevision = String(value.planRevision || "").slice(0, 160);
@@ -851,6 +949,10 @@ function compactSynthesisReadiness(value) {
   const synthesisEvidenceBundleHash = String(value.synthesisEvidenceBundleHash || "").trim().toLowerCase();
   const synthesisEvidenceBundle = compactSynthesisEvidenceBundle(value.synthesisEvidenceBundle);
   const controlEpoch = Number(value.controlEpoch);
+  const reportContract = compactSynthesisReportContract(
+    value.reportContract,
+    value.coverageIncomplete === true,
+  );
   if (
     typeof value.ready !== "boolean"
     || typeof value.commitEligible !== "boolean"
@@ -864,6 +966,7 @@ function compactSynthesisReadiness(value) {
       !synthesisEvidenceBundle
       || synthesisEvidenceBundle.bundleHash !== synthesisEvidenceBundleHash
     ))
+    || !reportContract
     || !planRevision
   ) return null;
   return {
@@ -894,17 +997,7 @@ function compactSynthesisReadiness(value) {
       version: 1,
       claims: synthesisEvidenceBundle.records.map((record) => ({ ...record })),
     } : { version: 1, claims: [] },
-    reportContract: {
-      version: 1,
-      coverageStatus: value.coverageIncomplete === true ? "partial" : "complete",
-      claimCitationFormat: "[claim:<claimId>]",
-      partialRequiredSections: value.coverageIncomplete === true
-        ? [
-          "Coverage: partial", "Analyzed scope", "Omitted scope",
-          "Stop reason", "Confidence limits", "Next audit slice",
-        ]
-        : [],
-    },
+    reportContract,
     remainingFrontier: Array.isArray(value.remainingFrontier)
       ? value.remainingFrontier.map((item) => String(item || "").replace(/\\/g, "/")).filter(Boolean).slice(0, 32)
       : [],
@@ -912,32 +1005,102 @@ function compactSynthesisReadiness(value) {
 }
 
 function validateSynthesisReport(output, readiness) {
-  const text = String(output || "").trim();
+  const text = String(output || "");
   const compacted = compactSynthesisReadiness(readiness);
-  if (!text || !compacted || compacted.ready !== true) {
+  if (!text.trim() || !compacted || compacted.ready !== true) {
     return { ok: false, reason: "synthesis_report_not_ready" };
   }
   const claimIds = new Set(
     (compacted.synthesisEvidenceBundle?.records || []).map((record) => String(record.claimId)),
   );
-  const markers = [...text.matchAll(/\[claim:([^\]\r\n]+)\]/g)].map((match) => match[1].trim());
-  if (claimIds.size > 0 && markers.length === 0) {
+  const lines = text.split(/\r\n|[\n\r\u2028\u2029]/u);
+  const markerPattern = /\[claim:([^\]\r\n\u2028\u2029]+)\]/g;
+  const markers = [...text.matchAll(markerPattern)].map((match) => match[1].trim());
+  const unknownMarkers = markers.filter((claimId) => !claimIds.has(claimId));
+  if (unknownMarkers.length > 0) {
+    return {
+      ok: false,
+      reason: "synthesis_claim_citation_unknown",
+      unknownClaimIds: [...new Set(unknownMarkers)].slice(0, 16),
+    };
+  }
+  const partialAliases = compacted.reportContract.partialRequiredSectionAliases || [];
+  const normalizedContent = (line) => String(line || "")
+    .trim()
+    .replace(/^-\s+/u, "")
+    .trim();
+  const matchingPartialSection = (line) => {
+    if (!compacted.coverageIncomplete) return "";
+    const content = String(line || "");
+    const section = partialAliases.find((entry) => entry.aliases.some((alias) => (
+      content === `- ${String(alias)}`
+    )));
+    return String(section?.key || "");
+  };
+  const violations = [];
+  const partialSectionCounts = new Map();
+  let citedClaimLineCount = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = String(line || "").trim();
+    if (!trimmed) continue;
+    const lineNumber = index + 1;
+    const lineMarkers = [...trimmed.matchAll(markerPattern)].map((match) => match[1].trim());
+    const dashBullet = /^-\s+\S/u.test(String(line || ""));
+    const partialSection = matchingPartialSection(line);
+    if (partialSection) {
+      if (!dashBullet) {
+        violations.push({ lineNumber, kind: "coverage_metadata_not_bullet" });
+        continue;
+      }
+      if (lineMarkers.length > 0) {
+        violations.push({ lineNumber, kind: "citation_on_coverage_metadata" });
+        continue;
+      }
+      const count = Number(partialSectionCounts.get(partialSection) || 0) + 1;
+      partialSectionCounts.set(partialSection, count);
+      if (count > 1) violations.push({ lineNumber, kind: "duplicate_coverage_metadata" });
+      continue;
+    }
+    if (!dashBullet) {
+      violations.push({ lineNumber, kind: "non_bullet_content" });
+      continue;
+    }
+    if (lineMarkers.length === 0) {
+      violations.push({ lineNumber, kind: "citation_missing" });
+      continue;
+    }
+    const claimText = normalizedContent(trimmed)
+      .replace(/\[claim:[^\]\r\n]+\]/gu, "")
+      .replace(/[*_`~]/gu, "")
+      .trim();
+    if (!claimText) {
+      violations.push({ lineNumber, kind: "claim_text_missing" });
+      continue;
+    }
+    citedClaimLineCount += 1;
+  }
+  if (violations.length > 0) {
+    return {
+      ok: false,
+      reason: "synthesis_claim_line_unbound",
+      lineNumbers: violations.map((entry) => entry.lineNumber).slice(0, 64),
+      violations: violations.slice(0, 64),
+    };
+  }
+  if (claimIds.size > 0 && citedClaimLineCount === 0) {
     return { ok: false, reason: "synthesis_claim_citation_missing" };
   }
-  if (markers.some((claimId) => !claimIds.has(claimId))) {
-    return { ok: false, reason: "synthesis_claim_citation_unknown" };
-  }
-  const substantiveBullets = text.split(/\r?\n/).filter((line) => (
-    /^\s*(?:[-*]|\d+[.)])\s+/.test(line)
-    && !/^\s*(?:[-*]|\d+[.)])\s+(?:Coverage|Analyzed scope|Omitted scope|Stop reason|Confidence limits|Next audit slice)\s*:/i.test(line)
-  ));
-  if (substantiveBullets.some((line) => !/\[claim:[^\]\r\n]+\]/.test(line))) {
-    return { ok: false, reason: "synthesis_claim_line_unbound" };
-  }
   if (compacted.coverageIncomplete) {
-    const requiredSections = compacted.reportContract.partialRequiredSections || [];
-    if (requiredSections.some((section) => !text.toLowerCase().includes(section.toLowerCase()))) {
-      return { ok: false, reason: "partial_coverage_disclosure_missing" };
+    const missingSections = partialAliases
+      .map((entry) => String(entry.key || ""))
+      .filter((key) => key && Number(partialSectionCounts.get(key) || 0) !== 1);
+    if (missingSections.length > 0) {
+      return {
+        ok: false,
+        reason: "partial_coverage_disclosure_missing",
+        missingSections,
+      };
     }
     if (/(?:repository|project|codebase)\s+(?:is\s+)?(?:fully|completely)\s+(?:analy[sz]ed|audited)|all\s+bugs\s+(?:were\s+)?found|(?:저장소|프로젝트|코드)\s*전체\s*(?:분석|감사)\s*완료/iu.test(text)) {
       return { ok: false, reason: "partial_coverage_false_completeness_claim" };
@@ -3697,8 +3860,11 @@ function summarizeOldMessages(messages, checkpoint) {
       "modelMaterializedSynthesisEvidenceBegin",
       exactBundle.serializedEvidence,
       "modelMaterializedSynthesisEvidenceEnd",
-      "synthesisClaimInstruction=Every substantive final claim must be a bullet containing "
-        + "[claim:<claimId>] from the exact bundle above. Never cite an unlisted claimId.",
+      "synthesisClaimInstruction=The final report grammar allows only blank lines and single-line bullets "
+        + "of the form '- <supported claim> [claim:<claimId>]'. "
+        + "Do not emit headings, standalone prose, tables, code fences, wrapped bullet continuations, uncited bullets, "
+        + "or unlisted claimIds. A known claimId proves evidence-record identity, not semantic entailment; "
+        + "omit every statement the cited exact excerpt does not directly support.",
     ].join("\n")
     : "";
   const projectionResult = buildModelFacingCheckpointProjection(checkpoint);
@@ -3990,7 +4156,7 @@ function compactOutputRecovery(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   if (Number(value.version) !== 1) return null;
   const status = String(value.status || "");
-  if (!["retrying", "partial_report_emitted", "completed"].includes(status)) return null;
+  if (!["retrying", "partial_report_emitted", "completed", "exhausted"].includes(status)) return null;
   const objectiveHash = String(value.objectiveHash || "").trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(objectiveHash)) return null;
   const taskSessionId = String(value.taskSessionId || "").trim().slice(0, 160);
@@ -4020,6 +4186,13 @@ function compactOutputRecovery(value) {
     recoveryStrategy: String(value.recoveryStrategy || "bounded_low_effort_retry").slice(0, 96),
     updatedAt,
   };
+  const recoveryKind = String(value.recoveryKind || "").trim().slice(0, 64);
+  if (recoveryKind) compacted.recoveryKind = recoveryKind;
+  const userTurnHash = String(value.userTurnHash || "").trim().toLowerCase();
+  if (userTurnHash) {
+    if (!/^[a-f0-9]{64}$/.test(userTurnHash)) return null;
+    compacted.userTurnHash = userTurnHash;
+  }
   const completedAt = String(value.completedAt || "").trim().slice(0, 64);
   if (completedAt) {
     if (!Number.isFinite(Date.parse(completedAt))) return null;
@@ -4382,6 +4555,8 @@ module.exports = {
   compactDirectProjectStatus,
   compactPreparedSynthesis,
   compactSynthesisEvidenceBundle,
+  canonicalSynthesisReportContract,
+  compactSynthesisReportContract,
   compactSynthesisReadiness,
   validateSynthesisReport,
   compactSynthesisLatch,

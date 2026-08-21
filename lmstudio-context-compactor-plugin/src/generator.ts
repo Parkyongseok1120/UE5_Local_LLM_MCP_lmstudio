@@ -2109,6 +2109,7 @@ const SERVER_REQUIRED_TOOL_MARKER = "[UNREAL_SERVER_REQUIRED_TOOL]";
 const SERVER_REQUIRED_TOOL_REPAIR_MARKER = "[UNREAL_SERVER_REQUIRED_TOOL_REPAIR]";
 const DETACHED_SIDE_QUERY_MARKER = "[UNREAL_DETACHED_SIDE_QUERY]";
 const WORKFLOW_STOP_MARKER = "[UNREAL_SERVER_WORKFLOW_STOP]";
+const SYNTHESIS_REPORT_CONTRACT_MARKER = "[UNREAL_SYNTHESIS_REPORT_CONTRACT]";
 const ARCHITECTURE_EVIDENCE_TOOLS = [
   "read_file",
   "read_file_range",
@@ -2218,6 +2219,70 @@ function injectWorkflowStopRule(chat: Chat, blocker: any): boolean {
     + (instruction ? ` Server instruction: ${instruction}` : "")
   );
   return upsertLeadingSystemRule(chat, WORKFLOW_STOP_MARKER, rule);
+}
+
+function injectSynthesisReportContractRule(
+  chat: Chat,
+  readiness: any,
+  objective: string,
+  repair: { reason?: string; lineNumbers?: number[] } = {},
+): boolean {
+  const compacted = core.compactSynthesisReadiness(readiness);
+  const records = compacted?.synthesisEvidenceBundle?.records || [];
+  if (!compacted || compacted.ready !== true || records.length === 0) return false;
+  const korean = /[가-힣]/u.test(String(objective || ""));
+  const allowedEvidence = records.map((record: any) => (
+    `${String(record.claimId)}=${String(record.sourcePath)}:${Number(record.startLine)}-${Number(record.endLine)}`
+  ));
+  const repairReason = String(repair.reason || "").slice(0, 120);
+  const repairLines = [...new Set((repair.lineNumbers || [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0))]
+    .slice(0, 64);
+  const repairPrefix = repairReason
+    ? (korean
+      ? `이전 최종 출력은 로컬 검증에서 폐기되었습니다. 이유=${repairReason}; 위반 줄=${repairLines.join(",") || "미상"}. `
+      : `The prior final output was discarded by local validation. reason=${repairReason}; violatingLines=${repairLines.join(",") || "unknown"}. `)
+    : "";
+  const partialRule = compacted.coverageIncomplete
+    ? (korean
+      ? "다음 여섯 canonical 메타데이터 bullet을 claim 인용 없이 정확히 한 번씩 그대로 포함하십시오: "
+        + "'- 분석 범위 상태: 부분', '- 분석한 범위: 아래에 인용된 근거만', "
+        + "'- 제외한 범위: 아직 분석하지 않은 남은 조사 범위', "
+        + "'- 중단 이유: 제한된 조사 범위에 미확인 영역이 남음', "
+        + "'- 신뢰 한계: 인용한 발췌문이 직접 뒷받침하는 사실로 제한', "
+        + "'- 다음 감사 범위: 남은 조사 범위를 계속 확인'. 문구를 덧붙이거나 변경하지 마십시오. "
+      : "Include these six canonical metadata bullets exactly once and verbatim without claim citations: "
+        + "'- Coverage: partial', '- Analyzed scope: only the evidence cited below', "
+        + "'- Omitted scope: remaining frontier not analyzed', "
+        + "'- Stop reason: bounded inspection left unresolved scope', "
+        + "'- Confidence limits: findings are limited to cited excerpts', "
+        + "'- Next audit slice: continue the remaining frontier'. Do not append to or alter them. ")
+    : "";
+  const rule = korean
+    ? (
+      `${SYNTHESIS_REPORT_CONTRACT_MARKER}\n`
+      + repairPrefix
+      + "이 최종 보고서는 commit 전에 기계적으로 검증됩니다. 빈 줄만 인용 없이 허용됩니다. 제목도 출력하지 마십시오. "
+      + "그 밖의 모든 물리적 줄은 반드시 '- <근거가 직접 뒷받침하는 단일 사실> [claim:<claimId>]' 형식의 한 줄 bullet이어야 합니다. "
+      + "Markdown 제목, 독립 문단, 표, 코드 펜스, 다음 줄로 이어지는 bullet, 인용 없는 구조 bullet을 출력하지 마십시오. "
+      + "각 bullet의 같은 줄에 아래 허용 ID 중 하나 이상을 넣고, 정확한 excerpt가 직접 뒷받침하지 않는 내용은 생략하십시오. "
+      + "허용 ID는 evidence record 식별만 증명하며 의미적 함의를 자동으로 증명하지 않습니다. "
+      + partialRule
+      + `허용 claimId와 source locator: ${JSON.stringify(allowedEvidence)}`
+    )
+    : (
+      `${SYNTHESIS_REPORT_CONTRACT_MARKER}\n`
+      + repairPrefix
+      + "This final report is machine-validated before commit. Only blank lines may appear without citations; do not emit headings. "
+      + "Every other physical line must be one single-line bullet in the form '- <one directly supported fact> [claim:<claimId>]'. "
+      + "Do not emit Markdown headings, standalone prose, tables, code fences, wrapped bullet continuations, or uncited structural bullets. "
+      + "Put one or more allowed IDs on the same bullet line and omit anything the exact excerpt does not directly support. "
+      + "An allowed ID proves evidence-record identity, not semantic entailment. "
+      + partialRule
+      + `Allowed claimIds and source locators: ${JSON.stringify(allowedEvidence)}`
+    );
+  return upsertLeadingSystemRule(chat, SYNTHESIS_REPORT_CONTRACT_MARKER, rule);
 }
 
 function workflowStopFinalResponse(blocker: any, objective: string): string {
@@ -6871,6 +6936,158 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
   const serverOwnedDirectControlPending = Boolean(
     exactServerOwnedDirectCall || phaseServerOwnedDirectCall,
   );
+  const synthesisFinal = String(
+    nextCheckpoint?.serverControl?.phase || "",
+  ).trim().toLowerCase() === "synthesis";
+  const synthesisReportReadiness = synthesisFinal
+    ? core.compactSynthesisReadiness(nextCheckpoint?.serverControl?.synthesisReadiness)
+    : null;
+  const retainedReportRecovery = nextCheckpoint?.outputRecovery;
+  const currentUserTurnHash = latestUserMessageIdentity(messages);
+  const retainedReportRecoveryStrategy = String(
+    retainedReportRecovery?.recoveryStrategy || "",
+  );
+  const retainedSynthesisReportRecovery = Boolean(
+    retainedReportRecovery?.recoveryKind === "synthesis_report_contract"
+    || [
+      "bounded_synthesis_report_contract_repair",
+      "explicit_retry_after_report_contract_repair",
+      "new_control_identity_required_after_synthesis_report_repair",
+    ].includes(retainedReportRecoveryStrategy)
+  );
+  const retainedUserTurnHash = String(retainedReportRecovery?.userTurnHash || "");
+  const sameRecoveryUserTurn = Boolean(
+    !retainedUserTurnHash || retainedUserTurnHash === currentUserTurnHash,
+  );
+  if (
+    synthesisFinal
+    && ["retrying", "exhausted"].includes(String(retainedReportRecovery?.status || ""))
+    && retainedSynthesisReportRecovery
+    && sameRecoveryUserTurn
+  ) {
+    nextCheckpoint.outputRecovery = {
+      ...retainedReportRecovery,
+      status: "exhausted",
+      attempt: 2,
+      reason: String(retainedReportRecovery?.reason || "synthesis_report_repair_interrupted"),
+      recoveryKind: "synthesis_report_contract",
+      userTurnHash: currentUserTurnHash,
+      recoveryStrategy: "new_control_identity_required_after_synthesis_report_repair",
+      updatedAt: isoNow(),
+    };
+    nextCheckpoint.predictionState = lifecycleState(nextCheckpoint, "pending", {
+      stopReason: "synthesis_report_reentry_blocked",
+    });
+    nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "pending", {
+      stopReason: "synthesis_report_reentry_blocked",
+    });
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "synthesis_report_reentry_blocked",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "synthesis_report_reentry_blocked",
+      at: isoNow(),
+      priorStatus: String(retainedReportRecovery?.status || ""),
+      taskSessionId: String(nextCheckpoint?.serverControl?.taskSessionId || ""),
+      controlEpoch: Number(nextCheckpoint?.serverControl?.epoch || 0),
+      targetModelInvoked: false,
+    });
+    const error: any = new Error(
+      "SYNTHESIS_REPORT_REPAIR_EXHAUSTED: the report repair budget for this objective and control epoch is closed. Start an explicit new user turn or advance the authoritative control identity before retrying.",
+    );
+    error.code = "SYNTHESIS_REPORT_REPAIR_EXHAUSTED";
+    error.errorCode = "SYNTHESIS_REPORT_REPAIR_EXHAUSTED";
+    error.details = {
+      recoveryStatus: String(nextCheckpoint.outputRecovery.status),
+      reentryBlocked: true,
+      targetModelInvoked: false,
+    };
+    throw error;
+  }
+  if (
+    synthesisFinal
+    && ["retrying", "exhausted"].includes(String(retainedReportRecovery?.status || ""))
+    && retainedSynthesisReportRecovery
+    && !sameRecoveryUserTurn
+  ) {
+    nextCheckpoint.outputRecovery = null;
+    await appendEventBestEffort(sessionId, {
+      type: "synthesis_report_explicit_retry_authorized",
+      at: isoNow(),
+      priorStatus: String(retainedReportRecovery?.status || ""),
+      priorUserTurnHash: retainedUserTurnHash,
+      currentUserTurnHash,
+      taskSessionId: String(nextCheckpoint?.serverControl?.taskSessionId || ""),
+      controlEpoch: Number(nextCheckpoint?.serverControl?.epoch || 0),
+    });
+  }
+  const prePredictionSynthesisFinality = authoritativeSynthesisFinality(
+    serverControlV2,
+    nextCheckpoint,
+  );
+  const synthesisCommitToolAvailable = toolDefinitions.some((tool: any) => toolNamesMatch(
+    "unreal_task_commit_synthesis",
+    tool?.function?.name || tool?.name || "",
+  ));
+  if (
+    !detachedSideQueryActive
+    && serverControlV2Active
+    && synthesisFinal
+    && prePredictionSynthesisFinality.eligible
+    && !synthesisCommitToolAvailable
+  ) {
+    nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "pending", {
+      stopReason: "synthesis_commit_tool_unavailable",
+    });
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "synthesis_commit_tool_unavailable_pre_prediction",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "synthesis_commit_blocked",
+      at: isoNow(),
+      reason: "commit_tool_unavailable",
+      finality: prePredictionSynthesisFinality.reason,
+      targetModelInvoked: false,
+    });
+    throw new Error(
+      "Read-only synthesis generation did not start because unreal_task_commit_synthesis is missing from the active tool catalog. Refresh the MCP tool catalog and retry the same task.",
+    );
+  }
+  const ensureSynthesisReportContract = async (chat: Chat): Promise<void> => {
+    if (synthesisReportReadiness?.ready !== true) return;
+    if (injectSynthesisReportContractRule(
+      chat,
+      synthesisReportReadiness,
+      authoritativeGoal,
+    )) return;
+    nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "pending", {
+      stopReason: "report_contract_injection_failed",
+    });
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "synthesis_report_contract_injection_failed",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "synthesis_report_contract_injection_failed",
+      at: isoNow(),
+      taskSessionId: String(nextCheckpoint?.serverControl?.taskSessionId || ""),
+      controlEpoch: Number(nextCheckpoint?.serverControl?.epoch || 0),
+    });
+    const error: any = new Error(
+      "SYNTHESIS_REPORT_CONTRACT_INJECTION_FAILED: the machine-validated report grammar could not be installed in the leading system prompt.",
+    );
+    error.code = "SYNTHESIS_REPORT_CONTRACT_INJECTION_FAILED";
+    error.errorCode = "SYNTHESIS_REPORT_CONTRACT_INJECTION_FAILED";
+    throw error;
+  };
   const initialSetupStartedAt = performance.now();
   const initialSetupWallClockMs = finiteNumber(
     configValue(ctl, "predictionWallClockSeconds", 180), 180, 5, 1800,
@@ -6890,23 +7107,56 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
   let currentFormatted: any;
   let inputTokens: number;
   let toolSchemaTokens: number;
+  let historyPromptTokens = 0;
+  let systemContractTokens = 0;
+  let initialModelChat = history;
   if (serverOwnedDirectControlPending) {
     currentFormatted = null;
     inputTokens = 0;
     toolSchemaTokens = 0;
   } else try {
-    currentFormatted = await boundedPredictionSetupValue(
+    const historyFormatted = await boundedPredictionSetupValue(
       ctl,
       remainingInitialSetupMs(),
       initialSetupStartedAt,
       () => model.applyPromptTemplate(history),
     );
-    inputTokens = Math.max(0, Number(await boundedPredictionSetupValue(
+    historyPromptTokens = Math.max(0, Number(await boundedPredictionSetupValue(
       ctl,
       remainingInitialSetupMs(),
       initialSetupStartedAt,
-      () => model.countTokens(currentFormatted),
+      () => model.countTokens(historyFormatted),
     )) || 0);
+    inputTokens = historyPromptTokens;
+    currentFormatted = historyFormatted;
+    if (synthesisReportReadiness?.ready === true) {
+      const mutableHistory = typeof (history as any).asMutableCopy === "function"
+        ? (history as any).asMutableCopy() as Chat
+        : null;
+      if (!mutableHistory) {
+        const error: any = new Error(
+          "SYNTHESIS_REPORT_CONTRACT_INJECTION_FAILED: the LM Studio chat does not expose a mutable copy for capacity-safe contract injection.",
+        );
+        error.code = "SYNTHESIS_REPORT_CONTRACT_INJECTION_FAILED";
+        error.errorCode = "SYNTHESIS_REPORT_CONTRACT_INJECTION_FAILED";
+        throw error;
+      }
+      await ensureSynthesisReportContract(mutableHistory);
+      initialModelChat = mutableHistory;
+      currentFormatted = await boundedPredictionSetupValue(
+        ctl,
+        remainingInitialSetupMs(),
+        initialSetupStartedAt,
+        () => model.applyPromptTemplate(initialModelChat),
+      );
+      inputTokens = Math.max(0, Number(await boundedPredictionSetupValue(
+        ctl,
+        remainingInitialSetupMs(),
+        initialSetupStartedAt,
+        () => model.countTokens(currentFormatted),
+      )) || 0);
+      systemContractTokens = Math.max(0, inputTokens - historyPromptTokens);
+    }
     toolSchemaTokens = Math.max(0, Number(await boundedPredictionSetupValue(
       ctl,
       remainingInitialSetupMs(),
@@ -6937,7 +7187,6 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     configValue(ctl, "toolCallMaxOutputReserve", 6144), 6144,
     Math.max(6144, configuredOutputReserve),
   );
-  const synthesisFinal = String(nextCheckpoint?.serverControl?.phase || "").trim().toLowerCase() === "synthesis";
   const dynamicOutputReserve = architectureValidationRequired
     ? Math.max(architectureOutputReserve, toolCallOutputReserve)
     : synthesisFinal
@@ -7106,7 +7355,8 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
 
   console.info(
     `[unreal-context-compactor] Proxy active: target=${resolvedTargetModel} `
-    + `historyPromptTokens=${inputTokens} toolSchemaTokens=${toolSchemaTokens} `
+    + `historyPromptTokens=${historyPromptTokens} systemContractTokens=${systemContractTokens} `
+    + `toolSchemaTokens=${toolSchemaTokens} `
     + `totalEstimatedPromptTokens=${inputTokens + toolSchemaTokens} `
     + `actualBackendPromptTokens=unknown context=${contextLength} action=${decision.action}`,
   );
@@ -7123,10 +7373,10 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     modelFence: transactionModelFence,
     predictionPolicy: nextCheckpoint.predictionPolicy,
     inputTokens,
-    historyPromptTokens: inputTokens,
+    historyPromptTokens,
     toolSchemaTokens,
     checkpointProjectionTokens,
-    systemContractTokens: null,
+    systemContractTokens,
     totalEstimatedPromptTokens: inputTokens + toolSchemaTokens,
     actualBackendPromptTokens: null,
     contextLength,
@@ -7212,7 +7462,7 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       : "",
   });
 
-  let modelChat = history;
+  let modelChat = initialModelChat;
   const lastCompactionCount = Number(checkpoint?.lastCompactionSourceMessageCount || 0);
   const messagesSinceLastCompaction = Math.max(0, messages.length - lastCompactionCount);
   let effectiveAction = decision.action;
@@ -7297,7 +7547,7 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       try {
         compactedMetrics = await compactToTarget(
           model,
-          history,
+          initialModelChat,
           nextCheckpoint,
           compactConfig,
           contextLength,
@@ -7490,6 +7740,7 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       objectivePreview: String(nextCheckpoint.objective || "").slice(0, 160),
     });
   }
+  await ensureSynthesisReportContract(modelChat);
   nextCheckpoint.predictionState = mergeLifecycleState(
     nextCheckpoint.predictionState,
     lifecycleState(nextCheckpoint, "pending", { stopReason: "prediction" }),
@@ -7634,7 +7885,10 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
         "[unreal-context-compactor] Compacted/model chat lost the user query; "
         + "falling back to inbound history to avoid Jinja 400.",
       );
-      modelChat = history;
+      modelChat = typeof (history as any).asMutableCopy === "function"
+        ? (history as any).asMutableCopy() as Chat
+        : history;
+      await ensureSynthesisReportContract(modelChat);
       debugAgentLog("H-userless", "generator.ts:before_respond", "fallback inbound history", {
         compactedLostUser: true,
       });
@@ -7835,6 +8089,32 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       throw error;
     }
     const attemptEstimatedPromptTokens = attemptInputTokens + attemptToolSchemaTokens;
+    const attemptCapacityDecision = core.budgetDecision({
+      contextLength,
+      inputTokens: attemptInputTokens,
+      nextToolName,
+      config,
+      toolSchemaTokens: attemptToolSchemaTokens,
+    });
+    if (
+      predictionPhase === "synthesis_final"
+      && attemptCapacityDecision.action === "hard_compact"
+    ) {
+      const error: any = new Error(
+        "Synthesis prediction policy cannot preserve the post-injection context safety reserve.",
+      );
+      error.errorCode = "SYNTHESIS_BUDGET_INCOMPATIBLE";
+      error.code = error.errorCode;
+      error.details = {
+        stage: "post_contract_prompt_capacity",
+        attemptInputTokens,
+        attemptToolSchemaTokens,
+        contextLength,
+        decision: attemptCapacityDecision,
+      };
+      await persistPredictionSetupFailure(error, "synthesis_prompt_capacity");
+      throw error;
+    }
     let attemptMaxOutputTokens = Number(config.maxOutputReserve);
     let attemptSynthesisCompatibility = nextCheckpoint.predictionPolicy?.budgets?.synthesisCompatibility || null;
     if (predictionPhase === "synthesis_final") {
@@ -8555,14 +8835,25 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       ),
     );
     if (nextCheckpoint.synthesisState && requests.length === 0) {
-      nextCheckpoint.synthesisState = mergeLifecycleState(
-        nextCheckpoint.synthesisState,
-        lifecycleState(
-          nextCheckpoint,
-          truncatedPrediction ? "pending" : "completed",
-          { outputDigest, stopReason: reason || "unspecified" },
-        ),
+      const reportValidationPending = Boolean(
+        !truncatedPrediction && predictionPhase === "synthesis_final",
       );
+      const state = lifecycleState(
+        nextCheckpoint,
+        truncatedPrediction || reportValidationPending ? "pending" : "completed",
+        {
+          outputDigest,
+          stopReason: reportValidationPending
+            ? "synthesis_report_validation_pending"
+            : (reason || "unspecified"),
+        },
+      );
+      // A completed model prediction is not a completed synthesis until its
+      // report grammar and evidence bindings validate. Assign pending directly
+      // so a stale completed checkpoint cannot outrank the validation gate.
+      nextCheckpoint.synthesisState = reportValidationPending
+        ? state
+        : mergeLifecycleState(nextCheckpoint.synthesisState, state);
     }
     await persistCheckpoint(
       sessionId,
@@ -8583,12 +8874,86 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       toolRequestCount: requests.length,
       outputCommitted: false,
       outputCommitPending: !truncatedPrediction,
+      outputValidationPending: Boolean(
+        !truncatedPrediction && predictionPhase === "synthesis_final" && requests.length === 0,
+      ),
       recoveryAttempt: Boolean(recoveryKind),
       recoveryKind,
       architectureFinalRecoveryAttempt: recoveryKind.startsWith("architecture_"),
       hostToolCallLifecycle: hostToolCallLifecycleSnapshot(),
       hostToolCallLifecycleDiagnostics: hostToolCallLifecycle.diagnostics().slice(-64),
     });
+  };
+
+  const persistSynthesisPredictionExhaustion = async (
+    failedReason: string,
+    failureMessage: string,
+  ): Promise<never> => {
+    const priorRecovery = nextCheckpoint?.outputRecovery || {};
+    const failedOutputDigest = predictionOutputDigest(events, requests);
+    const failedEventCount = events.length;
+    const failedToolCount = requests.length;
+    events.length = 0;
+    requests.length = 0;
+    nextCheckpoint.outputRecovery = {
+      version: 1,
+      status: "exhausted",
+      attempt: 2,
+      reason: String(failedReason || "synthesis_prediction_retry_failed"),
+      bufferedOutputDiscarded: true,
+      discardedEventCount: Math.max(0, Number(priorRecovery.discardedEventCount || 0))
+        + failedEventCount,
+      discardedToolCount: Math.max(0, Number(priorRecovery.discardedToolCount || 0))
+        + failedToolCount,
+      objectiveHash: String(nextCheckpoint?.objectiveHash || ""),
+      taskSessionId: String(
+        nextCheckpoint?.serverControl?.taskSessionId
+        || nextCheckpoint?.taskRouteOwnership?.taskSessionId
+        || "",
+      ),
+      controlEpoch: nextCheckpoint?.serverControl?.epoch ?? null,
+      mutationGeneration: Number(nextCheckpoint?.mutationGeneration || 0),
+      recoveryKind: "synthesis_report_contract",
+      userTurnHash: currentUserTurnHash,
+      recoveryStrategy: "new_user_turn_required_after_synthesis_prediction_recovery",
+      updatedAt: isoNow(),
+    };
+    nextCheckpoint.predictionState = lifecycleState(nextCheckpoint, "pending", {
+      outputDigest: failedOutputDigest,
+      stopReason: "synthesis_prediction_attempt_budget_exhausted",
+    });
+    nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "pending", {
+      outputDigest: failedOutputDigest,
+      stopReason: "synthesis_prediction_attempt_budget_exhausted",
+    });
+    await persistCheckpoint(
+      sessionId,
+      nextCheckpoint,
+      requireCheckpointPersistence,
+      "synthesis_prediction_attempt_budget_exhausted",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "synthesis_prediction_attempt_budget_exhausted",
+      at: isoNow(),
+      attempts: 2,
+      finalReason: String(failedReason || "synthesis_prediction_retry_failed"),
+      failureMessage: String(failureMessage || "").slice(0, 1000),
+      failedOutputDigest,
+      bufferedOutputDiscarded: true,
+      taskSessionId: String(nextCheckpoint.outputRecovery.taskSessionId || ""),
+      controlEpoch: nextCheckpoint.outputRecovery.controlEpoch,
+    });
+    const error: any = new Error(
+      `SYNTHESIS_REPORT_REPAIR_EXHAUSTED: the global two-attempt synthesis prediction budget was exhausted (${String(failedReason || "synthesis_prediction_retry_failed")}). Output was discarded before commit.`,
+    );
+    error.code = "SYNTHESIS_REPORT_REPAIR_EXHAUSTED";
+    error.errorCode = "SYNTHESIS_REPORT_REPAIR_EXHAUSTED";
+    error.details = {
+      finalReason: String(failedReason || "synthesis_prediction_retry_failed"),
+      attempts: 2,
+      targetModelInvoked: true,
+    };
+    throw error;
   };
 
   let stopReason = "";
@@ -8707,7 +9072,13 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       ),
       controlEpoch: nextCheckpoint?.serverControl?.epoch ?? null,
       mutationGeneration: Number(nextCheckpoint?.mutationGeneration || 0),
-      recoveryStrategy: "bounded_low_effort_retry",
+      ...(synthesisFinal ? {
+        recoveryKind: "synthesis_report_contract",
+        userTurnHash: currentUserTurnHash,
+        recoveryStrategy: "bounded_synthesis_prediction_retry_inflight",
+      } : {
+        recoveryStrategy: "bounded_low_effort_retry",
+      }),
       updatedAt: isoNow(),
     };
     nextCheckpoint.predictionState = lifecycleState(nextCheckpoint, "pending", {
@@ -8737,13 +9108,29 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     const recoveryTools = exactRequiredToolForced && exactRequiredToolDefinition
       ? [exactRequiredToolDefinition]
       : [];
-    stopReason = await runPrediction(
-      recoveryTools,
-      Boolean(exactRequiredToolForced),
-      "Output completion recovery",
-      { effort: "low", thinkingEnabled: false },
-    );
-    await recordPredictionCompletion(stopReason, "max_output_once");
+    try {
+      stopReason = await runPrediction(
+        recoveryTools,
+        Boolean(exactRequiredToolForced),
+        "Output completion recovery",
+        { effort: "low", thinkingEnabled: false },
+      );
+      await recordPredictionCompletion(stopReason, "max_output_once");
+    } catch (error: any) {
+      if (synthesisFinal) {
+        await persistSynthesisPredictionExhaustion(
+          String(error?.code || error?.errorCode || "synthesis_prediction_retry_failed"),
+          String(error?.message || "synthesis_prediction_retry_failed"),
+        );
+      }
+      throw error;
+    }
+    if (synthesisFinal && predictionTruncated(stopReason)) {
+      await persistSynthesisPredictionExhaustion(
+        stopReason || "synthesis_prediction_retry_incomplete",
+        `The second synthesis prediction stopped unsafely (${stopReason || "unspecified"}).`,
+      );
+    }
     if (stopReason === "maxPredictedTokensReached") {
       events.length = 0;
       requests.length = 0;
@@ -9264,13 +9651,10 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
   );
   const synthesisCommitEligible = Boolean(synthesisCommitRequired && synthesisCommitTool);
   if (synthesisCommitRequired && !synthesisCommitTool) {
-    nextCheckpoint.synthesisState = mergeLifecycleState(
-      nextCheckpoint.synthesisState,
-      lifecycleState(nextCheckpoint, "completed", {
-        outputDigest: predictionOutputDigest(events, requests),
-        stopReason: "synthesis_commit_tool_unavailable",
-      }),
-    );
+    nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "pending", {
+      outputDigest: predictionOutputDigest(events, requests),
+      stopReason: "synthesis_commit_tool_unavailable",
+    });
     await persistCheckpoint(
       sessionId,
       nextCheckpoint,
@@ -9333,14 +9717,210 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
       ))
       .map((event: any) => String(event?.content || ""))
       .join("");
-    const reportValidation = core.validateSynthesisReport(
+    let reportValidation = core.validateSynthesisReport(
       preparedSynthesisOutput,
       serverControlV2?.synthesisReadiness,
     );
     if (!reportValidation.ok) {
-      throw new Error(
-        `Synthesis output violated the server-owned evidence/report contract (${reportValidation.reason}); output was discarded before commit.`,
+      const initialReportValidation = { ...reportValidation };
+      const initialOutputDigest = core.sha256(preparedSynthesisOutput);
+      const discardedEventCount = events.length;
+      const discardedToolCount = requests.length;
+      const recoveryIdentity = {
+        objectiveHash: String(nextCheckpoint?.objectiveHash || ""),
+        taskSessionId: String(serverControlV2?.taskSessionId || ""),
+        controlEpoch: Number(serverControlV2?.epoch),
+        mutationGeneration: Math.max(0, Number(nextCheckpoint?.mutationGeneration || 0)),
+      };
+      nextCheckpoint.outputRecovery = {
+        version: 1,
+        status: "retrying",
+        attempt: 2,
+        reason: String(reportValidation.reason || "synthesis_report_invalid"),
+        bufferedOutputDiscarded: true,
+        discardedEventCount,
+        discardedToolCount,
+        ...recoveryIdentity,
+        recoveryKind: "synthesis_report_contract",
+        userTurnHash: currentUserTurnHash,
+        recoveryStrategy: "bounded_synthesis_report_contract_repair_inflight",
+        updatedAt: isoNow(),
+      };
+      nextCheckpoint.predictionState = lifecycleState(nextCheckpoint, "pending", {
+        outputDigest: initialOutputDigest,
+        stopReason: "synthesis_report_repair",
+      });
+      nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "pending", {
+        outputDigest: initialOutputDigest,
+        stopReason: "synthesis_report_repair",
+      });
+      await persistCheckpoint(
+        sessionId,
+        nextCheckpoint,
+        requireCheckpointPersistence,
+        "synthesis_report_repair_prepared",
       );
+      events.length = 0;
+      requests.length = 0;
+
+      const persistRepairExhaustion = async (
+        failedValidation: any,
+        repairStopReason: string,
+      ): Promise<never> => {
+        const failedDigest = predictionOutputDigest(events, requests);
+        const failedEventCount = events.length;
+        const failedToolCount = requests.length;
+        events.length = 0;
+        requests.length = 0;
+        nextCheckpoint.outputRecovery = {
+          version: 1,
+          status: "exhausted",
+          attempt: 2,
+          reason: String(failedValidation?.reason || repairStopReason || "synthesis_report_invalid"),
+          bufferedOutputDiscarded: true,
+          discardedEventCount: discardedEventCount + failedEventCount,
+          discardedToolCount: discardedToolCount + failedToolCount,
+          ...recoveryIdentity,
+          recoveryKind: "synthesis_report_contract",
+          userTurnHash: currentUserTurnHash,
+          recoveryStrategy: "new_user_turn_required_after_synthesis_report_repair",
+          updatedAt: isoNow(),
+        };
+        nextCheckpoint.predictionState = lifecycleState(nextCheckpoint, "pending", {
+          outputDigest: failedDigest,
+          stopReason: "report_repair_exhausted",
+        });
+        nextCheckpoint.synthesisState = lifecycleState(nextCheckpoint, "pending", {
+          outputDigest: failedDigest,
+          stopReason: "report_repair_exhausted",
+        });
+        await persistCheckpoint(
+          sessionId,
+          nextCheckpoint,
+          requireCheckpointPersistence,
+          "synthesis_report_repair_exhausted",
+        );
+        await appendEventBestEffort(sessionId, {
+          type: "synthesis_report_repair_exhausted",
+          at: isoNow(),
+          initialReason: String(initialReportValidation.reason || ""),
+          finalReason: String(failedValidation?.reason || repairStopReason || ""),
+          lineNumbers: Array.isArray(failedValidation?.lineNumbers)
+            ? failedValidation.lineNumbers.slice(0, 64) : [],
+          initialOutputDigest,
+          failedOutputDigest: failedDigest,
+          bufferedOutputDiscarded: true,
+          taskSessionId: recoveryIdentity.taskSessionId,
+          controlEpoch: recoveryIdentity.controlEpoch,
+        });
+        const error: any = new Error(
+          `SYNTHESIS_REPORT_REPAIR_EXHAUSTED: the bounded report-format repair did not satisfy the server-owned evidence contract (${String(failedValidation?.reason || repairStopReason || "unknown")}). Output was discarded before commit.`,
+        );
+        error.code = "SYNTHESIS_REPORT_REPAIR_EXHAUSTED";
+        error.errorCode = "SYNTHESIS_REPORT_REPAIR_EXHAUSTED";
+        error.details = {
+          initialReason: String(initialReportValidation.reason || ""),
+          finalReason: String(failedValidation?.reason || repairStopReason || ""),
+          lineNumbers: Array.isArray(failedValidation?.lineNumbers)
+            ? failedValidation.lineNumbers.slice(0, 64) : [],
+        };
+        throw error;
+      };
+
+      if (predictionAttemptSequence >= 2) {
+        await persistRepairExhaustion(
+          { reason: "synthesis_prediction_attempt_budget_exhausted" },
+          "The one bounded synthesis retry was already consumed before report validation.",
+        );
+      }
+      await appendEventBestEffort(sessionId, {
+        type: "synthesis_report_repair_started",
+        at: isoNow(),
+        reason: String(reportValidation.reason || "synthesis_report_invalid"),
+        lineNumbers: Array.isArray(reportValidation.lineNumbers)
+          ? reportValidation.lineNumbers.slice(0, 64) : [],
+        initialOutputDigest,
+        bufferedOutputDiscarded: true,
+        discardedEventCount,
+        discardedToolCount,
+        taskSessionId: recoveryIdentity.taskSessionId,
+        controlEpoch: recoveryIdentity.controlEpoch,
+      });
+      if (!injectSynthesisReportContractRule(
+        modelChat,
+        serverControlV2?.synthesisReadiness,
+        authoritativeGoal,
+        {
+          reason: String(reportValidation.reason || "synthesis_report_invalid"),
+          lineNumbers: Array.isArray(reportValidation.lineNumbers)
+            ? reportValidation.lineNumbers : [],
+        },
+      )) {
+        await persistRepairExhaustion(
+          { reason: "synthesis_report_contract_injection_failed" },
+          "synthesis_report_contract_injection_failed",
+        );
+      }
+      try {
+        stopReason = await runPrediction(
+          [],
+          false,
+          "Synthesis report contract repair",
+          { effort: "low", thinkingEnabled: false },
+        );
+        await recordPredictionCompletion(stopReason, "synthesis_report_contract");
+      } catch (error: any) {
+        await persistRepairExhaustion(
+          {
+            reason: String(
+              error?.code || error?.errorCode || "synthesis_report_repair_prediction_failed",
+            ),
+          },
+          String(error?.message || "synthesis_report_repair_prediction_failed"),
+        );
+      }
+      if (predictionTruncated(stopReason)) {
+        await persistRepairExhaustion(
+          { reason: "synthesis_report_repair_incomplete" },
+          stopReason,
+        );
+      }
+      if (requests.length > 0) {
+        await persistRepairExhaustion(
+          { reason: "synthesis_report_repair_tool_request" },
+          stopReason,
+        );
+      }
+      preparedSynthesisOutput = events
+        .filter((event: any) => (
+          event?.kind === "fragment"
+          && String(event?.opts?.reasoningType || "none") === "none"
+        ))
+        .map((event: any) => String(event?.content || ""))
+        .join("");
+      reportValidation = core.validateSynthesisReport(
+        preparedSynthesisOutput,
+        serverControlV2?.synthesisReadiness,
+      );
+      if (!reportValidation.ok) {
+        await persistRepairExhaustion(reportValidation, stopReason);
+      }
+      nextCheckpoint.outputRecovery = {
+        ...nextCheckpoint.outputRecovery,
+        status: "completed",
+        attempt: 2,
+        reason: String(initialReportValidation.reason || "synthesis_report_invalid"),
+        completedAt: isoNow(),
+        updatedAt: isoNow(),
+      };
+      await appendEventBestEffort(sessionId, {
+        type: "synthesis_report_repair_completed",
+        at: isoNow(),
+        initialReason: String(initialReportValidation.reason || ""),
+        repairedOutputDigest: core.sha256(preparedSynthesisOutput),
+        taskSessionId: recoveryIdentity.taskSessionId,
+        controlEpoch: recoveryIdentity.controlEpoch,
+      });
     }
     if (preparedSynthesisOutput.length > 131_072) {
       throw new Error(

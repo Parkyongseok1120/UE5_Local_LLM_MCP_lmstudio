@@ -10284,6 +10284,192 @@ test("checkpoint store CAS rejects a concurrent stale writer", async () => {
   }
 });
 
+function synthesisRepairPayload(taskSessionId, epoch = 31) {
+  const ownership = {
+    taskSessionId,
+    ownerCapability: `owner-${taskSessionId}`,
+  };
+  const payload = {
+    ok: true,
+    taskAuthorization: ownership,
+    control: {
+      version: 2,
+      epoch,
+      fingerprint: String(epoch).slice(-1).repeat(64),
+      taskSessionId,
+      taskMode: "read_only",
+      planRevision: String(epoch),
+      mutationGeneration: 0,
+      routeHash: `route-${taskSessionId}`,
+      phase: "synthesis",
+      disposition: "continue",
+      allowedTools: [],
+      retryPolicy: { sameSemanticInput: "allowed" },
+      synthesisReadiness: {
+        version: 1,
+        ready: true,
+        commitEligible: true,
+        pendingEvidenceObligation: false,
+        planRevision: String(epoch),
+        sourceEvidencePlanRevision: String(epoch),
+        controlEpoch: epoch,
+        acceptedEvidenceHash: "a".repeat(64),
+        remainingFrontierHash: "b".repeat(64),
+        acceptedDirectEvidenceCount: 2,
+        declarationCount: 1,
+        implementationCount: 1,
+        representativePairCount: 1,
+        requiredRepresentativePairs: 1,
+        coverageIncomplete: false,
+        remainingFrontier: [],
+        reportContract: core.canonicalSynthesisReportContract(false),
+      },
+      synthesisLatch: {
+        version: 1,
+        name: "synthesize_current_evidence",
+        controlEpoch: epoch,
+        planRevision: String(epoch),
+        acceptedEvidenceHash: "a".repeat(64),
+        remainingFrontierHash: "b".repeat(64),
+        commitEligible: true,
+        pendingEvidenceObligation: false,
+      },
+    },
+  };
+  bindMaterializedSynthesis(payload.control);
+  return { ownership, payload };
+}
+
+function synthesisCommitToolDefinition() {
+  return {
+    type: "function",
+    function: {
+      name: "unreal_task_commit_synthesis",
+      parameters: {
+        type: "object",
+        properties: {
+          taskAuthorization: { type: "object" },
+          objectiveHash: { type: "string" },
+          controlEpoch: { type: "integer" },
+          outputDigest: { type: "string" },
+        },
+      },
+    },
+  };
+}
+
+test("synthesis contract tokens participate in the initial hard-capacity decision", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-contract-budget-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = "ac".repeat(16);
+  try {
+    const { generate } = require("../dist/generator.js");
+    const { payload } = synthesisRepairPayload("task-synthesis-contract-budget", 30);
+    const longPaths = Array.from({ length: 16 }, (_, index) => (
+      `Source/Audit/${String(index).padStart(2, "0")}-${"p".repeat(250)}.cpp`
+    ));
+    const records = longPaths.map((sourcePath, index) => {
+      const exactExcerpt = `void Audit${index}() {}`;
+      return {
+        claimId: `claim-${String(index).padStart(2, "0")}`,
+        sourcePath,
+        contentHash: core.sha256(`content-${index}`),
+        startLine: index + 1,
+        endLine: index + 1,
+        exactExcerpt,
+        excerptDigest: core.sha256(exactExcerpt),
+        coverageLevel: "CLAIM_VALIDATED",
+        classification: "direct",
+      };
+    });
+    const binding = {
+      version: 2,
+      taskSessionId: payload.control.taskSessionId,
+      objectiveHash: "",
+      planRevision: payload.control.planRevision,
+      mutationGeneration: 0,
+      records,
+    };
+    const serializedEvidence = core.stableStringify(binding);
+    const bundle = {
+      ...binding,
+      serializedEvidence,
+      serializedCharacterCount: serializedEvidence.length,
+      bundleHash: core.sha256(serializedEvidence),
+    };
+    payload.control.synthesisReadiness.synthesisEvidenceBundle = bundle;
+    payload.control.synthesisReadiness.synthesisEvidenceBundleHash = bundle.bundleHash;
+    payload.control.synthesisLatch.synthesisEvidenceBundleHash = bundle.bundleHash;
+    assert.ok(core.compactSynthesisReadiness(payload.control.synthesisReadiness));
+
+    let respondCalls = 0;
+    let injectedSystemPrompt = "";
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "contract-budget-instance" };
+      },
+      async applyPromptTemplate(chat) {
+        const systemPrompt = String(chat.getSystemPrompt() || "");
+        const latestUserText = [...chat.getMessagesArray()].reverse()
+          .find((message) => message.getRole() === "user")?.getText() || "";
+        if (systemPrompt.includes("UNREAL_SYNTHESIS_REPORT_CONTRACT")) {
+          injectedSystemPrompt = systemPrompt;
+          return `contract-template ${latestUserText}`;
+        }
+        return `history-template ${latestUserText}`;
+      },
+      async countTokens(value) {
+        if (String(value).startsWith("history-template")) return 1_000;
+        if (String(value).startsWith("contract-template")) return 10_000;
+        return String(value || "").length;
+      },
+      async getContextLength() { return 24_000; },
+      respond() {
+        respondCalls += 1;
+        throw new Error("capacity gate must stop before target prediction");
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "현재 프로젝트 구조를 수정 없이 분석해줘." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "synthesis-route-contract-budget",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await generate(
+      controllerFor(
+        model,
+        {},
+        stateRoot,
+        [],
+        [synthesisCommitToolDefinition()],
+      ),
+      history,
+    );
+
+    assert.equal(respondCalls, 0);
+    assert.match(injectedSystemPrompt, /UNREAL_SYNTHESIS_REPORT_CONTRACT/);
+    assert.ok(injectedSystemPrompt.includes(longPaths.at(-1)));
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith("."));
+    const telemetry = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const measurement = telemetry.find((event) => event.type === "context_measurement");
+    assert.equal(measurement.historyPromptTokens, 1_000);
+    assert.equal(measurement.systemContractTokens, 9_000);
+    assert.equal(measurement.inputTokens, 10_000);
+    assert.equal(measurement.decision.action, "hard_compact");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("tool-free synthesis emits a durable server-owned commit handshake", async () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-commit-"));
   process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
@@ -10688,6 +10874,492 @@ test("tool-free synthesis emits a durable server-owned commit handshake", async 
   }
 });
 
+test("invalid synthesis report receives one bounded grammar repair before commit", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-report-repair-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = "cd".repeat(16);
+  try {
+    const { generate } = require("../dist/generator.js");
+    const { payload } = synthesisRepairPayload("task-synthesis-repair", 31);
+    const emitted = [];
+    const systemPrompts = [];
+    let modelCalls = 0;
+    const invalidOutput = [
+      "- 선언이 확인됩니다. [claim:decl]",
+      "- 인용 없는 구조 설명",
+    ].join("\n");
+    const repairedOutput = [
+      "- 선언이 확인됩니다. [claim:decl]",
+      "- 구현이 확인됩니다. [claim:impl]",
+    ].join("\n");
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "synthesis-repair-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(modelChat, opts) {
+        modelCalls += 1;
+        systemPrompts.push(String(modelChat.getSystemPrompt() || ""));
+        const output = modelCalls === 1
+          ? invalidOutput
+          : repairedOutput;
+        opts.onPredictionFragment({ content: output, reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "현재 프로젝트 구조를 수정 없이 분석해줘." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "synthesis-route-repair",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await generate(
+      controllerFor(model, {}, stateRoot, emitted, [synthesisCommitToolDefinition()]),
+      history,
+    );
+
+    assert.equal(modelCalls, 2);
+    assert.match(systemPrompts[0], /UNREAL_SYNTHESIS_REPORT_CONTRACT/);
+    assert.match(systemPrompts[1], /synthesis_claim_line_unbound/);
+    assert.match(systemPrompts[1], /위반 줄=2/);
+    const commit = emitted.find(
+      (event) => event.kind === "end" && event.request?.name === "unreal_task_commit_synthesis",
+    );
+    assert.ok(commit, JSON.stringify(emitted));
+    assert.equal(emitted.some((event) => event.kind === "fragment"), false);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.preparedSynthesis.output, repairedOutput);
+    assert.equal(commit.request.arguments.outputDigest, core.sha256(repairedOutput));
+    assert.notEqual(commit.request.arguments.outputDigest, core.sha256(invalidOutput));
+    assert.equal(
+      commit.request.arguments.synthesisEvidenceBundleHash,
+      payload.control.synthesisReadiness.synthesisEvidenceBundleHash,
+    );
+    assert.equal(checkpoint.outputRecovery.status, "completed");
+    assert.equal(checkpoint.outputRecovery.attempt, 2);
+    assert.equal(checkpoint.synthesisState.status, "commit_sent");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith("."));
+    const telemetry = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(telemetry.filter((event) => event.type === "synthesis_report_repair_started").length, 1);
+    assert.equal(telemetry.filter((event) => event.type === "synthesis_report_repair_completed").length, 1);
+    assert.equal(telemetry.some((event) => event.type === "synthesis_report_repair_exhausted"), false);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("two invalid synthesis reports stop with durable pending state and no commit", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-report-exhausted-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = "de".repeat(16);
+  try {
+    const { generate } = require("../dist/generator.js");
+    const { payload } = synthesisRepairPayload("task-synthesis-exhausted", 32);
+    const emitted = [];
+    let modelCalls = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "synthesis-exhausted-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_modelChat, opts) {
+        modelCalls += 1;
+        const output = modelCalls === 1
+          ? "- 인용 없는 첫 출력"
+          : modelCalls === 2
+            ? "| 구분 | 근거 없는 사실 |\n|---|---|"
+            : "- 선언이 확인됩니다. [claim:decl]\n- 구현이 확인됩니다. [claim:impl]";
+        opts.onPredictionFragment({ content: output, reasoningType: "none" });
+        return { async result() { return { stats: { stopReason: "eosFound" } }; } };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "현재 프로젝트 구조를 수정 없이 분석해줘." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "synthesis-route-exhausted",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await assert.rejects(
+      generate(
+        controllerFor(model, {}, stateRoot, emitted, [synthesisCommitToolDefinition()]),
+        history,
+      ),
+      (error) => error?.errorCode === "SYNTHESIS_REPORT_REPAIR_EXHAUSTED",
+    );
+
+    assert.equal(modelCalls, 2);
+    assert.equal(emitted.some(
+      (event) => event.kind === "end" && event.request?.name === "unreal_task_commit_synthesis",
+    ), false);
+    assert.equal(emitted.some((event) => event.kind === "fragment"), false);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.outputRecovery.status, "exhausted");
+    assert.equal(checkpoint.outputRecovery.attempt, 2);
+    assert.equal(checkpoint.synthesisState.status, "pending");
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.pendingToolCalls.length, 0);
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith("."));
+    const telemetry = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(telemetry.filter((event) => event.type === "synthesis_report_repair_started").length, 1);
+    assert.equal(telemetry.filter((event) => event.type === "synthesis_report_repair_exhausted").length, 1);
+    assert.equal(telemetry.some((event) => event.type === "synthesis_report_repair_completed"), false);
+
+    await assert.rejects(
+      generate(
+        controllerFor(model, {}, stateRoot, [], [synthesisCommitToolDefinition()]),
+        history,
+      ),
+      (error) => error?.errorCode === "SYNTHESIS_REPORT_REPAIR_EXHAUSTED"
+        && error?.details?.reentryBlocked === true,
+    );
+    assert.equal(modelCalls, 2, "same-history re-entry must not invoke the target model");
+
+    const explicitRetryHistory = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "현재 프로젝트 구조를 수정 없이 분석해줘." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "synthesis-route-exhausted",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+      { role: "user", content: [{ type: "text", text: "다시 시도해." }] },
+    ] });
+    const retryEmitted = [];
+    await generate(
+      controllerFor(
+        model,
+        {},
+        stateRoot,
+        retryEmitted,
+        [synthesisCommitToolDefinition()],
+      ),
+      explicitRetryHistory,
+    );
+    assert.equal(modelCalls, 3, "an explicit new user turn receives a fresh bounded budget");
+    assert.ok(retryEmitted.some(
+      (event) => event.kind === "end" && event.request?.name === "unreal_task_commit_synthesis",
+    ));
+    assert.equal(activeCheckpoint(stateRoot).outputRecovery, null);
+    assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "commit_sent");
+    assert.equal(activeCheckpoint(stateRoot).serverControl.taskSessionId, payload.control.taskSessionId);
+    assert.equal(activeCheckpoint(stateRoot).serverControl.epoch, payload.control.epoch);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("a repair prediction backend failure exhausts the turn budget and blocks re-entry", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-repair-error-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = "ef".repeat(16);
+  try {
+    const { generate } = require("../dist/generator.js");
+    const { payload } = synthesisRepairPayload("task-synthesis-repair-error", 33);
+    const emitted = [];
+    let modelCalls = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "synthesis-repair-error-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_modelChat, opts) {
+        modelCalls += 1;
+        const attempt = modelCalls;
+        opts.onPredictionFragment({
+          content: attempt === 1
+            ? "- 인용 없는 첫 출력"
+            : "- 선언이 확인됩니다. [claim:decl]",
+          reasoningType: "none",
+        });
+        return {
+          async result() {
+            if (attempt === 2) {
+              throw Object.assign(new Error("backend disconnected during repair"), {
+                code: "MODEL_BACKEND_FAILED",
+              });
+            }
+            return { stats: { stopReason: "eosFound" } };
+          },
+        };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "현재 프로젝트 구조를 수정 없이 분석해줘." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "synthesis-route-repair-error",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await assert.rejects(
+      generate(
+        controllerFor(model, {}, stateRoot, emitted, [synthesisCommitToolDefinition()]),
+        history,
+      ),
+      (error) => error?.errorCode === "SYNTHESIS_REPORT_REPAIR_EXHAUSTED"
+        && error?.details?.finalReason === "MODEL_BACKEND_FAILED",
+    );
+    assert.equal(modelCalls, 2);
+    assert.equal(emitted.some((event) => event.kind === "fragment"), false);
+    assert.equal(emitted.some(
+      (event) => event.kind === "end" && event.request?.name === "unreal_task_commit_synthesis",
+    ), false);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.outputRecovery.status, "exhausted");
+    assert.equal(checkpoint.outputRecovery.attempt, 2);
+    assert.equal(checkpoint.outputRecovery.recoveryKind, "synthesis_report_contract");
+    assert.match(checkpoint.outputRecovery.userTurnHash, /^[a-f0-9]{64}$/);
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.synthesisState.status, "pending");
+
+    await assert.rejects(
+      generate(
+        controllerFor(model, {}, stateRoot, [], [synthesisCommitToolDefinition()]),
+        history,
+      ),
+      (error) => error?.errorCode === "SYNTHESIS_REPORT_REPAIR_EXHAUSTED"
+        && error?.details?.targetModelInvoked === false,
+    );
+    assert.equal(modelCalls, 2, "same-history re-entry must remain prediction-free");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("synthesis max-output recovery and report repair share one global two-attempt ceiling", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-synthesis-global-attempts-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = "fa".repeat(16);
+  try {
+    const { generate } = require("../dist/generator.js");
+    const { payload } = synthesisRepairPayload("task-synthesis-global-attempts", 34);
+    let modelCalls = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return { identifier: this.identifier, instanceReference: "synthesis-global-attempts-instance" };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_modelChat, opts) {
+        modelCalls += 1;
+        if (modelCalls > 2) throw new Error("global synthesis attempt ceiling was violated");
+        opts.onPredictionFragment({ content: "- 인용 없는 출력", reasoningType: "none" });
+        const attempt = modelCalls;
+        return {
+          async result() {
+            return {
+              stats: {
+                stopReason: attempt === 1 ? "maxPredictedTokensReached" : "eosFound",
+              },
+            };
+          },
+        };
+      },
+    };
+    const history = Chat.from({ messages: [
+      { role: "user", content: [{ type: "text", text: "현재 프로젝트 구조를 수정 없이 분석해줘." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "synthesis-route-global-attempts",
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ] });
+
+    await assert.rejects(
+      generate(
+        controllerFor(model, {}, stateRoot, [], [synthesisCommitToolDefinition()]),
+        history,
+      ),
+      (error) => error?.errorCode === "SYNTHESIS_REPORT_REPAIR_EXHAUSTED"
+        && error?.details?.finalReason === "synthesis_prediction_attempt_budget_exhausted",
+    );
+    assert.equal(modelCalls, 2);
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.outputRecovery.status, "exhausted");
+    assert.equal(checkpoint.outputRecovery.recoveryKind, "synthesis_report_contract");
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.synthesisState.status, "pending");
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith("."));
+    const telemetry = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(telemetry.filter((event) => event.type === "prediction_attempt_started").length, 2);
+    assert.equal(telemetry.filter((event) => event.type === "synthesis_report_repair_started").length, 0);
+    assert.equal(telemetry.filter((event) => event.type === "synthesis_report_repair_exhausted").length, 1);
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+for (const secondAttemptFailure of [
+  "backend_exception",
+  "contextLengthReached",
+  "failed",
+  "modelUnloaded",
+  "maxPredictedTokensReached",
+]) test(`synthesis max-output retry ${secondAttemptFailure} durably exhausts the user-turn budget`, async () => {
+  const stateRoot = fs.mkdtempSync(path.join(
+    os.tmpdir(),
+    "context-compactor-synthesis-max-output-failure-",
+  ));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID = "fb".repeat(16);
+  try {
+    const { generate } = require("../dist/generator.js");
+    const { payload } = synthesisRepairPayload(
+      `task-synthesis-max-output-${secondAttemptFailure}`,
+      35,
+    );
+    const emitted = [];
+    let modelCalls = 0;
+    const model = {
+      identifier: "qwen/qwen3.8-27b",
+      async getModelInfo() {
+        return {
+          identifier: this.identifier,
+          instanceReference: `synthesis-max-output-${secondAttemptFailure}`,
+        };
+      },
+      async applyPromptTemplate() { return "formatted"; },
+      async countTokens(value) { return String(value || "").length; },
+      async getContextLength() { return 100_000; },
+      respond(_modelChat, opts) {
+        modelCalls += 1;
+        const attempt = modelCalls;
+        opts.onPredictionFragment({
+          content: attempt === 3
+            ? [
+              "- 선언이 확인됩니다. [claim:decl]",
+              "- 구현이 확인됩니다. [claim:impl]",
+            ].join("\n")
+            : `- discarded synthesis attempt ${attempt}`,
+          reasoningType: "none",
+        });
+        return {
+          async result() {
+            if (attempt === 1) {
+              return { stats: { stopReason: "maxPredictedTokensReached" } };
+            }
+            if (attempt === 2 && secondAttemptFailure === "backend_exception") {
+              throw Object.assign(new Error("backend disconnected after max-output retry"), {
+                code: "MODEL_BACKEND_FAILED",
+              });
+            }
+            return {
+              stats: {
+                stopReason: attempt === 2 ? secondAttemptFailure : "eosFound",
+              },
+            };
+          },
+        };
+      },
+    };
+    const historyMessages = [
+      { role: "user", content: [{ type: "text", text: "현재 프로젝트 구조를 수정 없이 분석해줘." }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: `synthesis-route-${secondAttemptFailure}`,
+        name: "unreal_task_status",
+        content: JSON.stringify(payload),
+      }] },
+    ];
+    const history = Chat.from({ messages: historyMessages });
+
+    const expectedReason = secondAttemptFailure === "backend_exception"
+      ? "MODEL_BACKEND_FAILED"
+      : secondAttemptFailure;
+    await assert.rejects(
+      generate(
+        controllerFor(model, {}, stateRoot, emitted, [synthesisCommitToolDefinition()]),
+        history,
+      ),
+      (error) => error?.errorCode === "SYNTHESIS_REPORT_REPAIR_EXHAUSTED"
+        && error?.details?.finalReason === expectedReason,
+    );
+    assert.equal(modelCalls, 2);
+    assert.equal(emitted.length, 0, "no failed synthesis output or tool request may escape");
+    const checkpoint = activeCheckpoint(stateRoot);
+    assert.equal(checkpoint.outputRecovery.status, "exhausted");
+    assert.equal(checkpoint.outputRecovery.attempt, 2);
+    assert.equal(checkpoint.outputRecovery.recoveryKind, "synthesis_report_contract");
+    assert.match(checkpoint.outputRecovery.userTurnHash, /^[a-f0-9]{64}$/);
+    assert.equal(checkpoint.predictionState.status, "pending");
+    assert.equal(checkpoint.synthesisState.status, "pending");
+
+    await assert.rejects(
+      generate(
+        controllerFor(model, {}, stateRoot, [], [synthesisCommitToolDefinition()]),
+        history,
+      ),
+      (error) => error?.errorCode === "SYNTHESIS_REPORT_REPAIR_EXHAUSTED"
+        && error?.details?.reentryBlocked === true
+        && error?.details?.targetModelInvoked === false,
+    );
+    assert.equal(modelCalls, 2, "same-history re-entry must not reopen the prediction budget");
+
+    const explicitRetryHistory = Chat.from({ messages: [
+      ...historyMessages,
+      { role: "user", content: [{ type: "text", text: "다시 시도해." }] },
+    ] });
+    const retryEmitted = [];
+    await generate(
+      controllerFor(
+        model,
+        {},
+        stateRoot,
+        retryEmitted,
+        [synthesisCommitToolDefinition()],
+      ),
+      explicitRetryHistory,
+    );
+    assert.equal(modelCalls, 3, "an explicit new user turn must open one fresh bounded cycle");
+    assert.ok(retryEmitted.some(
+      (event) => event.kind === "end"
+        && event.request?.name === "unreal_task_commit_synthesis",
+    ));
+    assert.equal(activeCheckpoint(stateRoot).outputRecovery, null);
+    assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "commit_sent");
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    delete process.env.LMS_CONTEXT_COMPACTOR_SESSION_ID;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("LM Studio SDK delivery contract is explicitly not classified as exactly-once", () => {
   const sdkTypes = fs.readFileSync(
     path.join(__dirname, "../node_modules/@lmstudio/sdk/dist/index.d.ts"),
@@ -11083,6 +11755,7 @@ test("synthesis stays uncommitted when the server commit tool is absent", async 
   try {
     const { generate } = require("../dist/generator.js");
     const emitted = [];
+    let modelCalls = 0;
     const payload = {
       ok: true,
       taskAuthorization: {
@@ -11139,6 +11812,7 @@ test("synthesis stays uncommitted when the server commit tool is absent", async 
       async countTokens(value) { return String(value || "").length; },
       async getContextLength() { return 100_000; },
       respond(_history, opts) {
+        modelCalls += 1;
         opts.onPredictionFragment({ content: "Final evidence synthesis.", reasoningType: "none" });
         return { async result() { return { stats: { stopReason: "eosFound" } }; } };
       },
@@ -11157,8 +11831,13 @@ test("synthesis stays uncommitted when the server commit tool is absent", async 
       generate(controllerFor(model, {}, stateRoot, emitted, []), history),
       /unreal_task_commit_synthesis is missing/,
     );
+    assert.equal(modelCalls, 0, "missing commit capability must block before prediction");
     assert.equal(emitted.some((event) => event.kind === "fragment"), false);
-    assert.notEqual(activeCheckpoint(stateRoot).synthesisState.status, "committed");
+    assert.equal(activeCheckpoint(stateRoot).synthesisState.status, "pending");
+    assert.equal(
+      activeCheckpoint(stateRoot).synthesisState.stopReason,
+      "synthesis_commit_tool_unavailable",
+    );
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });
