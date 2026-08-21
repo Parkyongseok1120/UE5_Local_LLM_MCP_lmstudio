@@ -8,6 +8,76 @@ const test = require("node:test");
 const { Chat } = require("@lmstudio/sdk");
 const core = require("../src/compaction-core");
 
+test("successful server-owned exact tool cannot replay without control advance", () => {
+  const {
+    serverControlReplayGuardMarker,
+    successfulServerOwnedRequiredToolDidNotAdvance,
+  } = require("../dist/generator.js");
+  const control = {
+    version: 2,
+    authoritative: true,
+    epoch: 2,
+    taskSessionId: "task-cinematic",
+    controlFingerprint: "a".repeat(64),
+    routeHash: "b".repeat(64),
+    phase: "planner",
+    disposition: "require_tool",
+    requiredTool: {
+      name: "unreal_symbol_lookup",
+      args: { query: "cinematic", top_k: 8 },
+    },
+    allowedTools: ["unreal_symbol_lookup"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
+  const pending = {
+    id: "server-owned-control-2",
+    name: "unreal_symbol_lookup",
+    arguments: {
+      query: "cinematic",
+      top_k: 8,
+      taskAuthorization: {
+        taskSessionId: "task-cinematic",
+        ownerCapability: "secret",
+      },
+    },
+    hostToolCallId: "generate:test:server_owned_required_tool:1",
+  };
+  const result = {
+    isError: false,
+    content: JSON.stringify({
+      ok: true,
+      control: { version: 1, phase: "unreal_symbol_lookup", status: "Completed" },
+    }),
+  };
+
+  assert.equal(
+    successfulServerOwnedRequiredToolDidNotAdvance(control, control, pending, result),
+    true,
+  );
+  assert.match(
+    serverControlReplayGuardMarker(control),
+    /^serverRequiredToolSucceededWithoutAdvance:[a-f0-9]{64}$/,
+  );
+  assert.equal(
+    successfulServerOwnedRequiredToolDidNotAdvance(
+      control,
+      { ...control, epoch: 3, controlFingerprint: "c".repeat(64) },
+      pending,
+      result,
+    ),
+    false,
+  );
+  assert.equal(
+    successfulServerOwnedRequiredToolDidNotAdvance(
+      { ...control, retryPolicy: { sameSemanticInput: "allowed" } },
+      { ...control, retryPolicy: { sameSemanticInput: "allowed" } },
+      pending,
+      result,
+    ),
+    false,
+  );
+});
+
 // Normalize old synthetic tool-result-only fixtures to LM Studio's real paired
 // assistant-call/tool-result transport. Product code intentionally rejects
 // unmatched tool JSON as an authoritative control source.

@@ -5349,6 +5349,80 @@ def _handle_unreal_symbol_lookup(server: McpServer, message_id: Any, arguments: 
     server.handle_symbol_lookup(message_id, arguments)
 
 
+def _commit_routed_analysis_result(
+    server: McpServer,
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+    structured: dict[str, Any],
+    evidence_text: str,
+) -> dict[str, Any] | None:
+    """Commit one successful RAG read and project its authoritative control."""
+
+    authorization = (
+        arguments.get("taskAuthorization")
+        if isinstance(arguments.get("taskAuthorization"), dict)
+        else arguments.get("task_authorization")
+        if isinstance(arguments.get("task_authorization"), dict)
+        else {}
+    )
+    if not authorization.get("taskSessionId"):
+        return None
+
+    from task_api import task_commit_routed_analysis_result
+
+    committed = task_commit_routed_analysis_result(
+        server.workspace,
+        task_authorization=authorization,
+        tool_name=tool_name,
+        tool_args={
+            key: value
+            for key, value in arguments.items()
+            if key not in {"taskAuthorization", "task_authorization"}
+        },
+        evidence_hash=hashlib.sha256(evidence_text.encode("utf-8")).hexdigest(),
+    )
+    structured["taskResultCommit"] = {
+        "ok": committed.get("ok") is True,
+        "active": committed.get("active") is True,
+        "errorCode": str(committed.get("errorCode") or ""),
+        "committedTool": str(committed.get("committedTool") or ""),
+        "discoveryActionCursor": committed.get("discoveryActionCursor"),
+    }
+    for key in (
+        "taskSessionId",
+        "taskAuthorization",
+        "toolRoute",
+        "controlEpoch",
+        "control",
+        "nextAction",
+        "nextActionIsTool",
+        "nextActionArgs",
+        "requiredNextTool",
+        "requiredNextToolArgs",
+    ):
+        if key in committed:
+            structured[key] = committed[key]
+    if committed.get("ok") is False:
+        structured.update(
+            {
+                "ok": False,
+                "errorCode": str(
+                    committed.get("errorCode")
+                    or "TASK_ANALYSIS_RESULT_COMMIT_FAILED"
+                ),
+                "error": str(
+                    committed.get("error")
+                    or "The successful analysis result was not committed to task state."
+                ),
+                "retryable": bool(committed.get("retryable", False)),
+            }
+        )
+    else:
+        structured["ok"] = True
+    return committed
+
+
 def _project_control_response(
     request: str,
     workspace: Path | None = None,
@@ -11289,6 +11363,34 @@ class McpServer:
         structured["semanticQueryKey"] = delivery.get("semanticQueryKey")
         structured["deliveryVariantKey"] = delivery.get("deliveryVariantKey")
         structured["continuationToken"] = delivery.get("continuationToken")
+        committed = _commit_routed_analysis_result(
+            self,
+            tool_name="unreal_rag_search",
+            arguments=arguments,
+            structured=structured,
+            evidence_text=context,
+        )
+        if committed is not None and committed.get("ok") is False:
+            self.tool_result(
+                message_id,
+                json.dumps(
+                    {
+                        "ok": False,
+                        "errorCode": structured["errorCode"],
+                        "error": structured["error"],
+                        "nextAction": structured.get("nextAction"),
+                        "nextActionIsTool": structured.get("nextActionIsTool"),
+                        "nextActionArgs": structured.get("nextActionArgs"),
+                        "requiredNextTool": structured.get("requiredNextTool"),
+                        "requiredNextToolArgs": structured.get("requiredNextToolArgs"),
+                    },
+                    ensure_ascii=False,
+                ),
+                structured=structured,
+                char_limit=char_limit,
+                is_error=True,
+            )
+            return
         result_text = context
         if project_miss or (zero_result and bool(active_project)):
             result_text = json.dumps(
@@ -11422,90 +11524,44 @@ class McpServer:
         }
         if semantic_ambiguity:
             structured["semanticAmbiguity"] = semantic_ambiguity
-        authorization = (
-            arguments.get("taskAuthorization")
-            if isinstance(arguments.get("taskAuthorization"), dict)
-            else {}
+        committed = _commit_routed_analysis_result(
+            self,
+            tool_name="unreal_symbol_lookup",
+            arguments=arguments,
+            structured=structured,
+            evidence_text=context,
         )
-        if authorization.get("taskSessionId"):
-            from task_api import task_mark_recovery_evidence
-
-            evidence = task_mark_recovery_evidence(
-                self.workspace,
-                task_authorization=authorization,
-                tool_name="unreal_symbol_lookup",
-                tool_args={
-                    key: value
-                    for key, value in arguments.items()
-                    if key not in {"taskAuthorization", "task_authorization"}
-                },
-                evidence_hash=hashlib.sha256(context.encode("utf-8")).hexdigest(),
-            )
-            if evidence.get("active") is True or evidence.get("ok") is False:
-                structured["recoveryEvidence"] = {
-                    "ok": evidence.get("ok") is True,
-                    "active": evidence.get("active") is True,
-                    "errorCode": str(evidence.get("errorCode") or ""),
-                }
-                for key in (
-                    "taskSessionId",
-                    "taskAuthorization",
-                    "toolRoute",
-                    "controlEpoch",
-                    "control",
-                    "nextAction",
-                    "nextActionIsTool",
-                    "nextActionArgs",
-                    "requiredNextTool",
-                    "requiredNextToolArgs",
-                ):
-                    if key in evidence:
-                        structured[key] = evidence[key]
-                if evidence.get("ok") is False:
-                    structured.update(
-                        {
-                            "ok": False,
-                            "errorCode": str(
-                                evidence.get("errorCode")
-                                or "RECOVERY_EVIDENCE_PERSISTENCE_FAILED"
-                            ),
-                            "error": str(
-                                evidence.get("error")
-                                or "Symbol recovery evidence was not committed to task state."
-                            ),
-                            "retryable": bool(evidence.get("retryable", True)),
-                        }
-                    )
-                    self.tool_result(
-                        message_id,
-                        json.dumps(
-                            {
-                                "ok": False,
-                                "errorCode": structured["errorCode"],
-                                "error": structured["error"],
-                                "nextAction": structured.get("nextAction"),
-                                "nextActionIsTool": structured.get("nextActionIsTool"),
-                                "nextActionArgs": structured.get("nextActionArgs"),
-                                "requiredNextTool": structured.get("requiredNextTool"),
-                                "requiredNextToolArgs": structured.get(
-                                    "requiredNextToolArgs"
-                                ),
-                            },
-                            ensure_ascii=False,
+        if committed is not None and committed.get("ok") is False:
+            self.tool_result(
+                message_id,
+                json.dumps(
+                    {
+                        "ok": False,
+                        "errorCode": structured["errorCode"],
+                        "error": structured["error"],
+                        "nextAction": structured.get("nextAction"),
+                        "nextActionIsTool": structured.get("nextActionIsTool"),
+                        "nextActionArgs": structured.get("nextActionArgs"),
+                        "requiredNextTool": structured.get("requiredNextTool"),
+                        "requiredNextToolArgs": structured.get(
+                            "requiredNextToolArgs"
                         ),
-                        structured=structured,
-                        char_limit=int(limits["max_tool_chars"]),
-                        is_error=True,
-                    )
-                    return
-                if evidence.get("control"):
-                    context = json.dumps(
-                        {
-                            "symbolEvidence": context,
-                            **structured,
-                        },
-                        ensure_ascii=False,
-                    )
+                    },
+                    ensure_ascii=False,
+                ),
+                structured=structured,
+                char_limit=int(limits["max_tool_chars"]),
+                is_error=True,
+            )
+            return
+        if committed is not None and committed.get("control"):
+            context = json.dumps(
+                {
+                    "symbolEvidence": context,
+                    **structured,
+                },
+                ensure_ascii=False,
+            )
         self.tool_result(
             message_id,
             context,

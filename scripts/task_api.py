@@ -3393,6 +3393,259 @@ def task_mark_recovery_evidence(
     return _task_outcome_with_control(outcome, result) if outcome else result
 
 
+_ROUTED_ANALYSIS_RESULT_TOOLS = frozenset(
+    {
+        "unreal_rag_search",
+        "unreal_symbol_lookup",
+    }
+)
+
+
+def task_commit_routed_analysis_result(
+    workspace: Path,
+    *,
+    task_authorization: dict[str, Any],
+    tool_name: str,
+    tool_args: dict[str, Any] | None = None,
+    evidence_hash: str = "",
+) -> dict[str, Any]:
+    """Commit a successful Python/RAG read to the canonical task state.
+
+    Unreal Agent filesystem reads use a reserve/execute/commit transaction in
+    ``task-auth.js``.  RAG reads are executed by this Python process and consume
+    their route budget during authorization, so they need the matching
+    post-result commit here.  Without it, an initial-evidence cursor never
+    advances and the same server-owned exact tool remains authoritative forever.
+
+    This function owns only read-only analysis results.  Mutation, build, and
+    Automation commits remain on their existing proven data-plane paths.
+    """
+
+    authorization = task_authorization if isinstance(task_authorization, dict) else {}
+    task_session_id = str(
+        authorization.get("taskSessionId")
+        or authorization.get("task_session_id")
+        or ""
+    ).strip()
+    if not task_session_id:
+        return {"ok": True, "active": False}
+
+    observed_tool = str(tool_name or "").strip()
+    if observed_tool not in _ROUTED_ANALYSIS_RESULT_TOOLS:
+        return {
+            "ok": False,
+            "active": True,
+            "errorCode": "TASK_ANALYSIS_RESULT_TOOL_UNSUPPORTED",
+            "error": f"{observed_tool or '<missing>'} is not a routed analysis result tool.",
+        }
+
+    observed_args = {
+        key: value
+        for key, value in dict(tool_args or {}).items()
+        if key not in _CONTROL_TRANSPORT_ARG_KEYS
+    }
+    outcome: dict[str, Any] = {}
+    authorization_identity = {
+        "ownerCapability": str(
+            authorization.get("ownerCapability")
+            or authorization.get("owner_capability")
+            or ""
+        ),
+        "conversationId": str(
+            authorization.get("conversationId")
+            or authorization.get("conversation_id")
+            or ""
+        ),
+    }
+
+    def reject(
+        state: dict[str, Any],
+        error_code: str,
+        message: str,
+    ) -> dict[str, Any]:
+        nonlocal outcome
+        outcome = {
+            "ok": False,
+            "active": True,
+            "errorCode": error_code,
+            "error": message,
+            "retryable": False,
+            "taskSessionId": task_session_id,
+        }
+        # Return the unchanged state instead of ``None`` so the caller receives
+        # the current authoritative v2 control and cannot infer a legacy retry.
+        return state
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any] | None:
+        nonlocal outcome
+        if str(state.get("status") or "") != "running":
+            return reject(
+                state,
+                "TASK_ANALYSIS_RESULT_NOT_RUNNING",
+                "Routed analysis results can only commit to a running task.",
+            )
+
+        mismatches = _task_authorization_mismatches(state, authorization)
+        route = state.get("toolRoute") if isinstance(state.get("toolRoute"), dict) else {}
+        supplied_route_hash = str(
+            authorization.get("routeHash")
+            or authorization.get("route_hash")
+            or ""
+        ).strip()
+        supplied_route_phase = str(
+            authorization.get("routePhase")
+            or authorization.get("route_phase")
+            or ""
+        ).strip()
+        current_route_hash = str(route.get("routeHash") or "").strip()
+        current_route_phase = str(route.get("phase") or "").strip()
+        if supplied_route_hash != current_route_hash:
+            mismatches.append("routeHash")
+        if supplied_route_phase != current_route_phase:
+            mismatches.append("routePhase")
+        if mismatches:
+            return reject(
+                state,
+                "TASK_ANALYSIS_RESULT_ROUTE_STALE",
+                "The analysis result belongs to a stale task route: "
+                + ", ".join(dict.fromkeys(mismatches)),
+            )
+
+        control = (
+            state.get("controlState")
+            if isinstance(state.get("controlState"), dict)
+            else {}
+        )
+        required = (
+            control.get("requiredTool")
+            if isinstance(control.get("requiredTool"), dict)
+            else {}
+        )
+        required_name = str(required.get("name") or "").strip()
+        required_args = (
+            dict(required.get("args") or {})
+            if isinstance(required.get("args"), dict)
+            else {}
+        )
+        allowed_tools = {
+            str(item).strip()
+            for item in control.get("allowedTools") or []
+            if str(item).strip()
+        }
+        if required_name and required_name != observed_tool:
+            return reject(
+                state,
+                "TASK_ANALYSIS_RESULT_CONTROL_STALE",
+                f"{observed_tool} completed after the authoritative obligation changed to "
+                f"{required_name}.",
+            )
+        if required_name and not _control_args_match(required_args, observed_args):
+            return reject(
+                state,
+                "TASK_ANALYSIS_RESULT_ARGUMENT_MISMATCH",
+                f"{observed_tool} result arguments do not match the authoritative obligation.",
+            )
+        if not required_name and allowed_tools and observed_tool not in allowed_tools:
+            return reject(
+                state,
+                "TASK_ANALYSIS_RESULT_NOT_ALLOWED",
+                f"{observed_tool} is not allowed by the current authoritative control.",
+            )
+
+        progress = (
+            dict(state.get("inspectionProgress") or {})
+            if isinstance(state.get("inspectionProgress"), dict)
+            else {}
+        )
+        actions = (
+            list(state.get("initialEvidenceActions") or [])
+            if isinstance(state.get("initialEvidenceActions"), list)
+            else []
+        )
+        cursor = min(len(actions), max(0, int(progress.get("discoveryActionCursor") or 0)))
+        expected = actions[cursor] if cursor < len(actions) and isinstance(actions[cursor], dict) else {}
+        expected_name = str(expected.get("name") or "").strip()
+        expected_args = (
+            dict(expected.get("args") or {})
+            if isinstance(expected.get("args"), dict)
+            else {}
+        )
+        cursor_advanced = bool(
+            expected_name == observed_tool
+            and _control_args_match(expected_args, observed_args)
+        )
+        frontier = [
+            str(item)
+            for item in progress.get("remainingFrontier") or []
+            if str(item)
+        ]
+        readiness = derive_synthesis_readiness(state)
+        state["inspectionProgress"] = {
+            **progress,
+            "version": 2,
+            "status": "collecting",
+            "discoveryStarted": True,
+            "everHadFrontier": progress.get("everHadFrontier") is True or bool(frontier),
+            "discoveredRelevantPairs": max(
+                0,
+                int(progress.get("discoveredRelevantPairs") or 0),
+                int(readiness.get("discoveredRelevantPairs") or 0),
+            ),
+            "discoveryGeneration": max(0, int(progress.get("discoveryGeneration") or 0)) + 1,
+            "discoveryAttempts": max(0, int(progress.get("discoveryAttempts") or 0)) + 1,
+            "discoveryActionCursor": min(len(actions), cursor + 1)
+            if cursor_advanced
+            else cursor,
+            "updatedAt": _utc_now(),
+        }
+
+        reduced = reduce_committed_event(
+            state,
+            {
+                "kind": "TOOL_RESULT_COMMITTED",
+                "toolName": observed_tool,
+                "arguments": observed_args,
+                "metadata": {
+                    "contentHash": str(evidence_hash or "")[:128],
+                    "evidenceProgressed": True,
+                },
+                "evidenceProgressed": True,
+            },
+        )
+        reduced["lastToolOutcome"] = {
+            "tool": observed_tool,
+            "status": "succeeded",
+            "planRevision": str(reduced.get("planRevision") or ""),
+            "activeSliceId": str(reduced.get("activeSliceId") or ""),
+            "mutationGeneration": max(0, int(reduced.get("mutationGeneration") or 0)),
+            "committedAt": _utc_now(),
+        }
+        reduced["updatedAt"] = _utc_now()
+        outcome = {
+            "ok": True,
+            "active": True,
+            "taskSessionId": task_session_id,
+            "committedTool": observed_tool,
+            "discoveryActionCursor": int(
+                reduced.get("inspectionProgress", {}).get("discoveryActionCursor") or 0
+            ),
+            "evidenceHash": str(evidence_hash or "")[:128],
+        }
+        return reduced
+
+    result = _mutate_task_state(workspace, task_session_id, mutate)
+    if result.get("ok"):
+        current_state = result.get("state") or {}
+        outcome["toolRoute"] = result.get("toolRoute") or {}
+        outcome["taskAuthorization"] = _task_authorization_for_mutation_response(
+            current_state,
+            authorization,
+            owner_capability=authorization_identity["ownerCapability"],
+            conversation_id=authorization_identity["conversationId"],
+        )
+    return _task_outcome_with_control(outcome, result) if outcome else result
+
+
 def task_record_build_recovery(
     workspace: Path,
     *,

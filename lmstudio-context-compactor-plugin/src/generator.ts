@@ -3943,6 +3943,53 @@ function reconcilePendingToolCalls(pendingCalls: any[], currentSnapshots: any[])
   return { remainingPending, matchedIds, matchedCalls, abandonedIds };
 }
 
+function serverControlReplayGuardMarker(control: any): string {
+  const compact = core.compactServerControl(control);
+  const requiredName = String(compact?.requiredTool?.name || "").trim();
+  const retryBoundary = String(compact?.retryPolicy?.sameSemanticInput || "allowed");
+  if (!compact || !requiredName || !["once", "forbidden"].includes(retryBoundary)) return "";
+  return `serverRequiredToolSucceededWithoutAdvance:${core.sha256(core.stableStringify({
+    taskSessionId: String(compact.taskSessionId || ""),
+    epoch: Number(compact.epoch),
+    controlFingerprint: String(compact.controlFingerprint || ""),
+    requiredTool: requiredName.toLowerCase(),
+    requiredArgs: compact.requiredTool?.args || {},
+  }))}`;
+}
+
+function successfulServerOwnedRequiredToolDidNotAdvance(
+  priorControl: any,
+  nextControl: any,
+  pending: any,
+  result: any,
+): boolean {
+  if (!core.toolResultSucceeded(result)) return false;
+  const hostToolCallId = String(pending?.hostToolCallId || "");
+  const pendingId = String(pending?.id || "");
+  if (
+    !hostToolCallId.includes(":server_owned_required_tool:")
+    && !pendingId.startsWith("server-owned-")
+  ) return false;
+  const prior = core.compactServerControl(priorControl);
+  const next = core.compactServerControl(nextControl);
+  if (!prior || !next || !prior.requiredTool || !next.requiredTool) return false;
+  if (!["once", "forbidden"].includes(
+    String(prior.retryPolicy?.sameSemanticInput || "allowed"),
+  )) return false;
+  if (
+    String(prior.taskSessionId || "") !== String(next.taskSessionId || "")
+    || Number(prior.epoch) !== Number(next.epoch)
+    || String(prior.controlFingerprint || "") !== String(next.controlFingerprint || "")
+  ) return false;
+  const pendingName = String(pending?.name || "").trim();
+  return Boolean(
+    toolNamesMatch(prior.requiredTool.name, pendingName)
+    && toolNamesMatch(next.requiredTool.name, pendingName)
+    && core.toolArgumentsSatisfy(prior.requiredTool.args, pending?.arguments)
+    && core.toolArgumentsSatisfy(next.requiredTool.args, pending?.arguments)
+  );
+}
+
 function synthesisCommitAcknowledged(result: any, pending: any, prepared: any = null): boolean {
   if (!core.toolResultSucceeded(result)) return false;
   const args = pending?.arguments && typeof pending.arguments === "object"
@@ -4505,6 +4552,7 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
   let synthesisDeliveryRecoveryRegistered = false;
   let synthesisNackControlApplied = false;
   let resolvedDirectProjectStatus: any = null;
+  const successfulServerOwnedRequiredResults: Array<{ pending: any; result: any }> = [];
   if (checkpoint && unresolvedPendingCalls.length > 0) {
     const currentSnapshots = core.snapshotMessages(messages);
     const { remainingPending, matchedIds, matchedCalls, abandonedIds } = reconcilePendingToolCalls(
@@ -4513,6 +4561,17 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     );
     for (const match of matchedCalls) {
       const pendingName = String(match.pending?.name || "").trim();
+      const hostToolCallId = String(match.pending?.hostToolCallId || "");
+      const pendingId = String(match.pending?.id || "");
+      if (
+        core.toolResultSucceeded(match.result)
+        && (
+          hostToolCallId.includes(":server_owned_required_tool:")
+          || pendingId.startsWith("server-owned-")
+        )
+      ) {
+        successfulServerOwnedRequiredResults.push(match);
+      }
       const synthesisLifecyclePayload = core.parseJsonObjects(match.result?.content || "")
         .map((payload: any) => ({
           payload,
@@ -5157,6 +5216,54 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     preliminaryCheckpoint.taskRouteTerminal = false;
     preliminaryCheckpoint.recoveryObligation = null;
     preliminaryCheckpoint.postBudgetAction = null;
+  }
+  const replayGuardControl = core.compactServerControl(preliminaryCheckpoint?.serverControl);
+  const replayGuardMarker = serverControlReplayGuardMarker(replayGuardControl);
+  const replayGuardAlreadyDurable = Boolean(
+    replayGuardMarker
+    && Array.isArray(preliminaryCheckpoint?.diagnostics)
+    && preliminaryCheckpoint.diagnostics.includes(replayGuardMarker)
+  );
+  const successfulRequiredToolWithoutAdvance = successfulServerOwnedRequiredResults.some(
+    (match) => successfulServerOwnedRequiredToolDidNotAdvance(
+      checkpoint?.serverControl,
+      replayGuardControl,
+      match.pending,
+      match.result,
+    ),
+  );
+  if (!auxiliaryMetaRequest && replayGuardMarker && (
+    replayGuardAlreadyDurable || successfulRequiredToolWithoutAdvance
+  )) {
+    preliminaryCheckpoint.diagnostics = [
+      ...(Array.isArray(preliminaryCheckpoint.diagnostics)
+        ? preliminaryCheckpoint.diagnostics
+        : []),
+      replayGuardMarker,
+    ].filter((value: string, index: number, values: string[]) => (
+      values.indexOf(value) === index
+    )).slice(-64);
+    await persistCheckpoint(
+      sessionId,
+      preliminaryCheckpoint,
+      requireCheckpointPersistence,
+      "server_required_tool_succeeded_without_control_advance",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "server_required_tool_replay_blocked",
+      at: isoNow(),
+      taskSessionId: String(replayGuardControl?.taskSessionId || ""),
+      controlEpoch: Number(replayGuardControl?.epoch || 0),
+      requiredTool: String(replayGuardControl?.requiredTool?.name || ""),
+      successfulResultObserved: successfulRequiredToolWithoutAdvance,
+      durableGuardReapplied: replayGuardAlreadyDurable,
+    });
+    const error: any = new Error(
+      "SERVER_CONTROL_STALLED_AFTER_SUCCESSFUL_REQUIRED_TOOL: the exact server-owned tool succeeded, but the authoritative control epoch and obligation did not advance. Replay was blocked.",
+    );
+    error.code = "SERVER_CONTROL_STALLED_AFTER_SUCCESSFUL_REQUIRED_TOOL";
+    error.errorCode = "SERVER_CONTROL_STALLED_AFTER_SUCCESSFUL_REQUIRED_TOOL";
+    throw error;
   }
   const directProjectStatusGoal = latestUserGoalText(messages).trim();
   const directProjectStatusQuery = Boolean(
@@ -9598,6 +9705,8 @@ export {
   requiresDurableInspectionPlanning,
   resolveCurrentTurnCapConfig,
   reconcilePendingToolCalls,
+  serverControlReplayGuardMarker,
+  successfulServerOwnedRequiredToolDidNotAdvance,
   compactionWorkflowProgressSignature,
   compactToTarget,
   resolveTargetModel,

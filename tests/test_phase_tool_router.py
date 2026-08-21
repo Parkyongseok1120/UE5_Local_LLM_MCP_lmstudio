@@ -37,6 +37,7 @@ from task_api import (  # noqa: E402
     task_complete_after_successful_build,
     task_mark_build_recovery_evidence,
     task_mark_recovery_evidence,
+    task_commit_routed_analysis_result,
     task_record_build_recovery,
     task_record_gate,
     task_record_recovery_obligation,
@@ -2378,6 +2379,101 @@ def test_initial_discovery_queue_advances_after_an_empty_first_action() -> None:
     }
     assert control["allowedTools"] == ["search_files"]
     assert control["transitionReason"] == "INITIAL_EVIDENCE_DISCOVERY"
+
+
+def test_routed_rag_results_advance_once_and_reject_stale_replay(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    started = task_start(
+        tmp_path,
+        request="Analyze the cinematic C++ system",
+        mode="read_only",
+        plan_payload={
+            **_plan(writes=False),
+            "taskKind": "cpp_analysis",
+            "inspectionContract": {
+                "intent": "cpp_analysis",
+                "coverageMode": "targeted_overview",
+                "evidenceBudget": {"representativePairs": 1},
+            },
+            "suggestedToolCalls": [
+                {
+                    "tool": "unreal_symbol_lookup",
+                    "args": {"query": "cinematic", "top_k": 8},
+                },
+                {
+                    "tool": "unreal_rag_search",
+                    "args": {
+                        "query": "cinematic",
+                        "mode": "review",
+                        "hybrid": False,
+                        "top_k": 4,
+                    },
+                },
+            ],
+        },
+    )
+    assert started["control"]["requiredTool"] == {
+        "name": "unreal_symbol_lookup",
+        "args": {"query": "cinematic", "top_k": 8},
+    }
+    original_authorization = dict(started["taskAuthorization"])
+
+    # Mirror the RAG provider's preflight budget authorization before its
+    # post-result commit.
+    preflight = authorize_task_tool(
+        tmp_path,
+        tool_name="unreal_symbol_lookup",
+        task_authorization=original_authorization,
+        arguments={
+            "query": "cinematic",
+            "top_k": 8,
+            "taskAuthorization": original_authorization,
+        },
+    )
+    assert preflight["ok"] is True
+
+    committed = task_commit_routed_analysis_result(
+        tmp_path,
+        task_authorization=original_authorization,
+        tool_name="unreal_symbol_lookup",
+        tool_args={"query": "cinematic", "top_k": 8},
+        evidence_hash="symbol-evidence",
+    )
+    assert committed["ok"] is True
+    assert committed["controlEpoch"] == started["controlEpoch"] + 1
+    assert committed["control"]["requiredTool"] == {
+        "name": "unreal_rag_search",
+        "args": {
+            "query": "cinematic",
+            "mode": "review",
+            "hybrid": False,
+            "top_k": 4,
+        },
+    }
+    assert committed["discoveryActionCursor"] == 1
+
+    replay = task_commit_routed_analysis_result(
+        tmp_path,
+        task_authorization=original_authorization,
+        tool_name="unreal_symbol_lookup",
+        tool_args={"query": "cinematic", "top_k": 8},
+        evidence_hash="symbol-evidence",
+    )
+    assert replay["ok"] is False
+    assert replay["errorCode"] == "TASK_ANALYSIS_RESULT_ROUTE_STALE"
+    assert replay["controlEpoch"] == committed["controlEpoch"]
+    assert replay["control"]["requiredTool"]["name"] == "unreal_rag_search"
+
+    persisted = json.loads(
+        (task_root(tmp_path, started["taskSessionId"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["inspectionProgress"]["discoveryActionCursor"] == 1
+    assert persisted["lastToolOutcome"]["tool"] == "unreal_symbol_lookup"
 
 
 def test_consumed_last_reconstruction_candidate_does_not_loop_on_task_status() -> None:

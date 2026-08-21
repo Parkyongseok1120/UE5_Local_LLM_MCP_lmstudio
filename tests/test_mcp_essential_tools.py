@@ -307,7 +307,7 @@ def test_rag_evidence_tools_advertise_compact_route_ownership(monkeypatch, tmp_p
     ) is True
 
 
-def test_symbol_recovery_evidence_mark_failure_is_authoritative_error(
+def test_symbol_result_commit_failure_is_authoritative_error(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -342,7 +342,7 @@ def test_symbol_recovery_evidence_mark_failure_is_authoritative_error(
     }
     monkeypatch.setattr(
         task_api,
-        "task_mark_recovery_evidence",
+        "task_commit_routed_analysis_result",
         lambda *_args, **_kwargs: {
             "ok": False,
             "active": True,
@@ -376,7 +376,7 @@ def test_symbol_recovery_evidence_mark_failure_is_authoritative_error(
     assert result["isError"] is True
     assert structured["ok"] is False
     assert structured["errorCode"] == "RECOVERY_EVIDENCE_ARGUMENT_MISMATCH"
-    assert structured["recoveryEvidence"]["ok"] is False
+    assert structured["taskResultCommit"]["ok"] is False
     assert structured["control"]["version"] == 2
     assert structured["control"]["epoch"] == 7
     assert structured["control"]["requiredTool"] == {
@@ -386,6 +386,155 @@ def test_symbol_recovery_evidence_mark_failure_is_authoritative_error(
     assert structured["requiredNextTool"] == "unreal_symbol_lookup"
     assert structured["requiredNextToolArgs"] == {"query": "ExpectedSymbol"}
     assert "symbol evidence" not in result["content"][0]["text"]
+
+
+def test_symbol_success_commits_and_advances_authoritative_discovery_route(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("MCP_FRONTEND", "lmstudio")
+    mod = _load_rag_mcp_module()
+    index = tmp_path / "rag.sqlite"
+    index.touch()
+    server = mod.McpServer(index)
+    server.workspace = tmp_path
+
+    monkeypatch.setattr(mod, "symbol_lookup", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(mod, "assemble_context", lambda *_args, **_kwargs: "symbol evidence")
+    monkeypatch.setattr(mod, "active_project_names", lambda: [])
+    import index_staleness
+    import target_resolver
+    from task_api import task_start
+
+    monkeypatch.setattr(
+        index_staleness,
+        "project_source_stale_status",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        target_resolver,
+        "resolve_symbol_target",
+        lambda *_args, **_kwargs: {"status": "not_found"},
+    )
+    started = task_start(
+        tmp_path,
+        request="Analyze cinematic C++",
+        mode="read_only",
+        plan_payload={
+            "taskKind": "cpp_analysis",
+            "writeGate": {"writesAllowed": False},
+            "orchestration": {"requiredBeforeWrite": []},
+            "inspectionContract": {
+                "intent": "cpp_analysis",
+                "coverageMode": "targeted_overview",
+                "evidenceBudget": {"representativePairs": 1},
+            },
+            "suggestedToolCalls": [
+                {
+                    "tool": "unreal_symbol_lookup",
+                    "args": {"query": "cinematic", "top_k": 8},
+                },
+                {
+                    "tool": "unreal_rag_search",
+                    "args": {
+                        "query": "cinematic",
+                        "mode": "review",
+                        "hybrid": False,
+                        "top_k": 4,
+                    },
+                },
+            ],
+        },
+    )
+    compact_authorization = {
+        "taskSessionId": started["taskSessionId"],
+        "ownerCapability": started["taskAuthorization"]["ownerCapability"],
+    }
+
+    sent: list[dict] = []
+    server.send = sent.append
+    server.handle_tool_call(
+        402,
+        {
+            "name": "unreal_symbol_lookup",
+            "arguments": {
+                "query": "cinematic",
+                "top_k": 8,
+                "taskAuthorization": compact_authorization,
+            },
+        },
+    )
+
+    result = sent[-1]["result"]
+    structured = result["structuredContent"]
+    assert result["isError"] is False
+    assert structured["ok"] is True
+    assert structured["taskResultCommit"]["ok"] is True
+    assert structured["taskResultCommit"]["committedTool"] == "unreal_symbol_lookup"
+    assert structured["control"]["version"] == 2
+    assert structured["control"]["epoch"] == started["controlEpoch"] + 1
+    assert structured["control"]["requiredTool"] == {
+        "name": "unreal_rag_search",
+        "args": {
+            "query": "cinematic",
+            "mode": "review",
+            "hybrid": False,
+            "top_k": 4,
+        },
+    }
+    assert structured["requiredNextTool"] == "unreal_rag_search"
+    assert structured["taskAuthorization"] == compact_authorization
+
+    import rag_delivery
+
+    monkeypatch.setattr(
+        rag_delivery,
+        "deliver_rag_result",
+        lambda **kwargs: {
+            "suppressed": False,
+            "semanticQueryKey": "cinematic",
+            "deliveryVariantKey": "review",
+            "continuationToken": "",
+            "deliveredFullContext": kwargs.get("rows") is not None,
+        },
+    )
+    monkeypatch.setattr(
+        server,
+        "_run_search_with_diagnostics",
+        lambda *_args, **_kwargs: ([], "rag evidence", "project_miss", "compact", {}),
+    )
+    sent.clear()
+    server.handle_tool_call(
+        403,
+        {
+            "name": "unreal_rag_search",
+            "arguments": {
+                "query": "cinematic",
+                "mode": "review",
+                "hybrid": False,
+                "top_k": 4,
+                "taskAuthorization": structured["taskAuthorization"],
+            },
+        },
+    )
+
+    rag_result = sent[-1]["result"]
+    rag_structured = rag_result["structuredContent"]
+    assert rag_result["isError"] is False
+    assert rag_structured["taskResultCommit"]["ok"] is True
+    assert rag_structured["taskResultCommit"]["committedTool"] == "unreal_rag_search"
+    assert rag_structured["taskResultCommit"]["discoveryActionCursor"] == 2
+    assert rag_structured["control"]["epoch"] == structured["control"]["epoch"] + 1
+    assert rag_structured["control"].get("requiredTool") != {
+        "name": "unreal_rag_search",
+        "args": {
+            "query": "cinematic",
+            "mode": "review",
+            "hybrid": False,
+            "top_k": 4,
+        },
+    }
 
 
 def test_route_authorization_refresh_replaces_stale_full_arguments():
