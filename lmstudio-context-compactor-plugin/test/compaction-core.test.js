@@ -888,6 +888,73 @@ test("newer v2 control discards stale or mismatched semantic blockers", () => {
   assert.ok(mismatchedFingerprint.diagnostics.includes("semanticBlockerDiscarded=control_fingerprint_mismatch"));
 });
 
+test("inactive-tool failure advances from stale required read to tool-free synthesis", () => {
+  const plannerControl = {
+    version: 2,
+    authoritative: true,
+    epoch: 5,
+    taskSessionId: "task-inactive-read",
+    controlFingerprint: "5".repeat(64),
+    routeHash: "route-planner-5",
+    phase: "planner",
+    disposition: "require_tool",
+    requiredTool: { name: "read_file", args: { path: "Source/Demo/Foo.h" } },
+    allowedTools: ["read_file"],
+    retryPolicy: { sameSemanticInput: "once" },
+  };
+  const synthesisControl = {
+    version: 2,
+    authoritative: true,
+    epoch: 6,
+    taskSessionId: "task-inactive-read",
+    controlFingerprint: "6".repeat(64),
+    routeHash: "route-synthesis-6",
+    phase: "synthesis",
+    disposition: "continue",
+    requiredTool: null,
+    allowedTools: [],
+    retryPolicy: { sameSemanticInput: "forbidden" },
+  };
+  const base = [
+    { role: "user", content: "Analyze the cinematic C++ system" },
+    { role: "tool", content: JSON.stringify({ control: plannerControl }) },
+  ];
+  const prior = core.buildCheckpoint(base);
+  const advanced = core.buildCheckpoint([
+    ...base,
+    {
+      role: "assistant",
+      toolCalls: [{
+        id: "server-owned-read-5",
+        name: "read_file",
+        arguments: { path: "Source/Demo/Foo.h" },
+      }],
+    },
+    {
+      role: "tool",
+      toolResults: [{
+        toolCallId: "server-owned-read-5",
+        name: "read_file",
+        isError: true,
+        content: JSON.stringify({
+          ok: false,
+          errorCode: "TASK_CONTROL_OBLIGATION_REQUIRED",
+          retryable: false,
+          doNotRetry: ["read_file"],
+          controlEpoch: 6,
+          control: synthesisControl,
+        }),
+      }],
+    },
+  ], prior);
+
+  assert.equal(advanced.serverControl.epoch, 6);
+  assert.equal(advanced.serverControl.phase, "synthesis");
+  assert.equal(advanced.serverControl.disposition, "continue");
+  assert.equal(advanced.serverControl.requiredTool, null);
+  assert.deepEqual(advanced.serverControl.allowedTools, []);
+});
+
 test("workflow stop without a deny-list remains fail-closed", () => {
   const messages = [
     { role: "user", content: "Fix the linker failure without inventing behavior" },

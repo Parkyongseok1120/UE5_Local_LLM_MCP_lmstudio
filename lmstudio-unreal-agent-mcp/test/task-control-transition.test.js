@@ -997,3 +997,43 @@ test("every successful late-stage tool replay is blocked and redirected", () => 
   value.status = "completed";
   assertBlocked("run_unreal_automation_tests", "use_authoritative_control");
 });
+
+test("tool-free synthesis rejects stale work with the committed authoritative control", () => {
+  const value = state();
+  value.toolRoute = {
+    routeHash: "route-synthesis-6",
+    phase: "synthesis",
+    roleSession: "synthesis",
+    activeTools: [],
+    pendingGates: [],
+  };
+  value.controlEpoch = 6;
+  value.controlState = {
+    version: 2,
+    authoritative: true,
+    epoch: 6,
+    taskSessionId: value.taskSessionId,
+    routeHash: "route-synthesis-6",
+    phase: "synthesis",
+    disposition: "continue",
+    requiredTool: null,
+    allowedTools: [],
+    retryPolicy: { sameSemanticInput: "forbidden" },
+  };
+
+  const blocked = validateToolRoute(
+    value,
+    { routeHash: "route-planner-5", routePhase: "planner" },
+    { path: "Source/Sample/Feature.h" },
+    "read_file",
+  );
+
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.errorCode, "TASK_CONTROL_OBLIGATION_REQUIRED");
+  assert.equal(blocked.alreadySatisfied, true);
+  assert.equal(blocked.reexecutionBlocked, true);
+  assert.equal(blocked.controlEpoch, 6);
+  assert.deepEqual(blocked.control, value.controlState);
+  assert.equal(blocked.nextAction, "use_authoritative_control");
+  assert.equal(blocked.nextActionIsTool, false);
+});

@@ -3100,6 +3100,57 @@ test("required evidence read advances the control epoch before gate handoff", ()
   }
 });
 
+test("single-active-route rejection projects the current authoritative control", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-active-control-workspace-"));
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-active-control-state-"));
+  const projectFile = path.join(workspace, "Demo.uproject");
+  fs.writeFileSync(projectFile, "{}");
+  const value = routeState(projectFile);
+  value.toolRoute = {
+    routeHash: "route-synthesis-6",
+    phase: "synthesis",
+    roleSession: "synthesis",
+    activeTools: [],
+    pendingGates: [],
+    maxToolCallsPerPhase: 0,
+  };
+  value.controlEpoch = 6;
+  value.controlState = {
+    version: 2,
+    authoritative: true,
+    epoch: 6,
+    taskSessionId: value.taskSessionId,
+    routeHash: value.toolRoute.routeHash,
+    phase: "synthesis",
+    disposition: "continue",
+    requiredTool: null,
+    allowedTools: [],
+    retryPolicy: { sameSemanticInput: "forbidden" },
+  };
+  writeRouteState(stateRoot, value);
+  const previous = process.env.AGENT_STATE_ROOT;
+  process.env.AGENT_STATE_ROOT = stateRoot;
+  try {
+    const denied = authorizeActiveRouteTool(
+      workspace,
+      "read_file",
+      { path: "Source/Demo/Foo.cpp" },
+      { consumeBudget: false, activeProject: projectFile },
+    );
+    assert.equal(denied.ok, false);
+    assert.equal(denied.errorCode, "TASK_TOOL_NOT_ACTIVE");
+    assert.equal(denied.taskSessionId, value.taskSessionId);
+    assert.equal(denied.controlEpoch, 6);
+    assert.deepEqual(denied.control, value.controlState);
+    assert.equal(denied.taskAuthorization.routePhase, "synthesis");
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_STATE_ROOT;
+    else process.env.AGENT_STATE_ROOT = previous;
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("rollback checkpoint advances task generation and snapshots the restored disk image", () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "task-rollback-checkpoint-workspace-"));
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-rollback-checkpoint-state-"));

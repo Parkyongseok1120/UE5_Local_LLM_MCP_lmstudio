@@ -82,3 +82,31 @@ test("inactive-tool fallback selects the executable active route before a future
   assert.equal(options.nextAction, "unreal_task_checkpoint");
   assert.equal(options.nextActionIsTool, true);
 });
+
+test("already-satisfied route failures preserve their replay-blocking evidence", () => {
+  const options = routeAuthorizationFailureOptions({
+    ok: false,
+    errorCode: "TASK_CONTROL_OBLIGATION_REQUIRED",
+    alreadySatisfied: true,
+    reexecutionBlocked: true,
+    control: {
+      version: 2,
+      authoritative: true,
+      epoch: 6,
+      taskSessionId: "task-synthesis",
+      routeHash: "route-synthesis",
+      phase: "synthesis",
+      disposition: "continue",
+      requiredTool: null,
+      allowedTools: [],
+      retryPolicy: { sameSemanticInput: "forbidden" },
+    },
+    nextAction: "use_authoritative_control",
+    nextActionIsTool: false,
+  }, "read_file");
+
+  assert.equal(options.alreadySatisfied, true);
+  assert.equal(options.reexecutionBlocked, true);
+  assert.equal(options.control.epoch, 6);
+  assert.equal(options.nextActionIsTool, false);
+});

@@ -3990,6 +3990,62 @@ function successfulServerOwnedRequiredToolDidNotAdvance(
   );
 }
 
+function failedServerControlReplayGuardMarker(control: any): string {
+  const compact = core.compactServerControl(control);
+  const requiredName = String(compact?.requiredTool?.name || "").trim();
+  if (!compact || !requiredName) return "";
+  return `serverRequiredToolFailedReplayForbidden:${core.sha256(core.stableStringify({
+    taskSessionId: String(compact.taskSessionId || ""),
+    epoch: Number(compact.epoch),
+    controlFingerprint: String(compact.controlFingerprint || ""),
+    requiredTool: requiredName.toLowerCase(),
+    requiredArgs: compact.requiredTool?.args || {},
+  }))}`;
+}
+
+function failedServerOwnedRequiredToolReplayForbidden(
+  priorControl: any,
+  nextControl: any,
+  pending: any,
+  result: any,
+): boolean {
+  if (core.toolResultOutcome(result) !== "failure") return false;
+  const hostToolCallId = String(pending?.hostToolCallId || "");
+  const pendingId = String(pending?.id || "");
+  if (
+    !hostToolCallId.includes(":server_owned_required_tool:")
+    && !pendingId.startsWith("server-owned-")
+  ) return false;
+  const prior = core.compactServerControl(priorControl);
+  const next = core.compactServerControl(nextControl);
+  if (!prior || !next || !prior.requiredTool || !next.requiredTool) return false;
+  if (
+    String(prior.taskSessionId || "") !== String(next.taskSessionId || "")
+    || Number(prior.epoch) !== Number(next.epoch)
+    || String(prior.controlFingerprint || "") !== String(next.controlFingerprint || "")
+  ) return false;
+  const pendingName = String(pending?.name || "").trim();
+  if (!(
+    toolNamesMatch(prior.requiredTool.name, pendingName)
+    && toolNamesMatch(next.requiredTool.name, pendingName)
+    && core.toolArgumentsSatisfy(prior.requiredTool.args, pending?.arguments)
+    && core.toolArgumentsSatisfy(next.requiredTool.args, pending?.arguments)
+  )) return false;
+  return core.parseJsonObjects(result?.content || "").some((payload: any) => {
+    const retryPolicy = String(payload?.control?.retryPolicy || "").trim().toLowerCase();
+    const deniedTools = [
+      ...(Array.isArray(payload?.doNotRetry) ? payload.doNotRetry : []),
+      ...(Array.isArray(payload?.doNotRetryTools) ? payload.doNotRetryTools : []),
+    ].map(String).filter(Boolean);
+    return Boolean(
+      payload?.retryable === false
+      || payload?.stopCurrentWorkflow === true
+      || retryPolicy === "forbidden"
+      || deniedTools.some((name: string) => toolNamesMatch(name, pendingName))
+    );
+  });
+}
+
 function synthesisCommitAcknowledged(result: any, pending: any, prepared: any = null): boolean {
   if (!core.toolResultSucceeded(result)) return false;
   const args = pending?.arguments && typeof pending.arguments === "object"
@@ -4553,6 +4609,7 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
   let synthesisNackControlApplied = false;
   let resolvedDirectProjectStatus: any = null;
   const successfulServerOwnedRequiredResults: Array<{ pending: any; result: any }> = [];
+  const failedServerOwnedRequiredResults: Array<{ pending: any; result: any }> = [];
   if (checkpoint && unresolvedPendingCalls.length > 0) {
     const currentSnapshots = core.snapshotMessages(messages);
     const { remainingPending, matchedIds, matchedCalls, abandonedIds } = reconcilePendingToolCalls(
@@ -4571,6 +4628,15 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
         )
       ) {
         successfulServerOwnedRequiredResults.push(match);
+      }
+      if (
+        core.toolResultOutcome(match.result) === "failure"
+        && (
+          hostToolCallId.includes(":server_owned_required_tool:")
+          || pendingId.startsWith("server-owned-")
+        )
+      ) {
+        failedServerOwnedRequiredResults.push(match);
       }
       const synthesisLifecyclePayload = core.parseJsonObjects(match.result?.content || "")
         .map((payload: any) => ({
@@ -5263,6 +5329,53 @@ async function generateUnlocked(ctl: GeneratorController, history: Chat): Promis
     );
     error.code = "SERVER_CONTROL_STALLED_AFTER_SUCCESSFUL_REQUIRED_TOOL";
     error.errorCode = "SERVER_CONTROL_STALLED_AFTER_SUCCESSFUL_REQUIRED_TOOL";
+    throw error;
+  }
+  const failedReplayGuardMarker = failedServerControlReplayGuardMarker(replayGuardControl);
+  const failedReplayGuardAlreadyDurable = Boolean(
+    failedReplayGuardMarker
+    && Array.isArray(preliminaryCheckpoint?.diagnostics)
+    && preliminaryCheckpoint.diagnostics.includes(failedReplayGuardMarker)
+  );
+  const failedRequiredToolReplayForbidden = failedServerOwnedRequiredResults.some(
+    (match) => failedServerOwnedRequiredToolReplayForbidden(
+      checkpoint?.serverControl,
+      replayGuardControl,
+      match.pending,
+      match.result,
+    ),
+  );
+  if (!auxiliaryMetaRequest && failedReplayGuardMarker && (
+    failedReplayGuardAlreadyDurable || failedRequiredToolReplayForbidden
+  )) {
+    preliminaryCheckpoint.diagnostics = [
+      ...(Array.isArray(preliminaryCheckpoint.diagnostics)
+        ? preliminaryCheckpoint.diagnostics
+        : []),
+      failedReplayGuardMarker,
+    ].filter((value: string, index: number, values: string[]) => (
+      values.indexOf(value) === index
+    )).slice(-64);
+    await persistCheckpoint(
+      sessionId,
+      preliminaryCheckpoint,
+      requireCheckpointPersistence,
+      "server_required_tool_failed_with_replay_forbidden",
+    );
+    await appendEventBestEffort(sessionId, {
+      type: "server_required_tool_failure_replay_blocked",
+      at: isoNow(),
+      taskSessionId: String(replayGuardControl?.taskSessionId || ""),
+      controlEpoch: Number(replayGuardControl?.epoch || 0),
+      requiredTool: String(replayGuardControl?.requiredTool?.name || ""),
+      failedResultObserved: failedRequiredToolReplayForbidden,
+      durableGuardReapplied: failedReplayGuardAlreadyDurable,
+    });
+    const error: any = new Error(
+      "SERVER_CONTROL_STALLED_AFTER_FAILED_REQUIRED_TOOL: the exact server-owned tool failed with replay forbidden, but no newer authoritative control replaced the obligation. Replay was blocked.",
+    );
+    error.code = "SERVER_CONTROL_STALLED_AFTER_FAILED_REQUIRED_TOOL";
+    error.errorCode = "SERVER_CONTROL_STALLED_AFTER_FAILED_REQUIRED_TOOL";
     throw error;
   }
   const directProjectStatusGoal = latestUserGoalText(messages).trim();
@@ -9706,6 +9819,8 @@ export {
   resolveCurrentTurnCapConfig,
   reconcilePendingToolCalls,
   serverControlReplayGuardMarker,
+  failedServerControlReplayGuardMarker,
+  failedServerOwnedRequiredToolReplayForbidden,
   successfulServerOwnedRequiredToolDidNotAdvance,
   compactionWorkflowProgressSignature,
   compactToTarget,

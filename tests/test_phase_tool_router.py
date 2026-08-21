@@ -2212,7 +2212,12 @@ def test_active_task_cannot_bypass_route_or_phase_budget(
         arguments={"path": "Source/Demo/Foo.cpp", "taskAuthorization": auth},
     )
     assert inactive["ok"] is False
-    assert inactive["errorCode"] == "TASK_TOOL_NOT_ACTIVE"
+    assert inactive["errorCode"] == "TASK_CONTROL_OBLIGATION_REQUIRED"
+    assert inactive["reexecutionBlocked"] is True
+    assert inactive["control"]["version"] == 2
+    assert inactive["control"]["authoritative"] is True
+    assert inactive["controlEpoch"] == inactive["control"]["epoch"]
+    assert inactive["taskAuthorization"]["routePhase"] == inactive["toolRoute"]["phase"]
 
     replan = authorize_active_task_tool(
         tmp_path,

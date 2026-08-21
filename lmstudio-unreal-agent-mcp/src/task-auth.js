@@ -707,7 +707,7 @@ function validateToolRoute(state, fields, args, toolName) {
     toolName
     && control?.authoritative === true
     && !requiredControlName
-    && ["rediscover", "complete", "workflow_stop", "await_user"].includes(
+    && ["continue", "rediscover", "complete", "workflow_stop", "await_user"].includes(
       String(control.disposition || "")
     )
     && !allowedControlTools.has(toolName)
@@ -794,7 +794,7 @@ function validateToolRoute(state, fields, args, toolName) {
       errorCode: "TASK_TOOL_NOT_ACTIVE",
       error: `${toolName} is not active in route phase ${String(activeRoute.phase || "")}.`,
       toolRoute: activeRoute,
-      taskAuthorization: taskAuthorizationForState(state),
+      ...authoritativeControlFailureProjection(state),
       nextAction: [...activeTools][0] || pending[0] || "use_active_route_tool",
     };
   }
@@ -824,6 +824,7 @@ function validateToolRoute(state, fields, args, toolName) {
         errorCode: "TASK_TOOL_NOT_ACTIVE",
         error: `${toolName} requires the executor role session.`,
         toolRoute: activeRoute,
+        ...authoritativeControlFailureProjection(state),
       };
     }
     const selectedSlice = activeRoute.selectedSlice && typeof activeRoute.selectedSlice === "object"
@@ -991,6 +992,29 @@ function phaseBudgetRecoveryDecision(state = {}) {
       : "bounded_replan_handoff",
     boundedSynthesis,
     readiness,
+  };
+}
+
+function authoritativeControlFailureProjection(state) {
+  const control = state?.controlState && typeof state.controlState === "object"
+    ? state.controlState
+    : null;
+  const ownership = {
+    taskSessionId: String(state?.taskSessionId || control?.taskSessionId || ""),
+    taskAuthorization: taskAuthorizationForState(state),
+  };
+  if (
+    !control
+    || Number(control.version || 0) < 2
+    || control.authoritative !== true
+  ) return ownership;
+  return {
+    ...ownership,
+    controlEpoch: Math.max(0, Number(state?.controlEpoch || control.epoch || 0)),
+    // This envelope was committed by the production reducer. Authorization
+    // failures may project it, but must never reconstruct semantic control
+    // from route fields or recovery policy.
+    control: { ...control },
   };
 }
 
@@ -3831,6 +3855,7 @@ function authorizeActiveRouteTool(workspaceRoot, toolName, args = {}, options = 
       errorCode: "TASK_TOOL_NOT_ACTIVE",
       error: `${toolName} is not active in route phase ${String(route.phase || "")}.`,
       toolRoute: route,
+      ...authoritativeControlFailureProjection(active.state),
     };
   }
   if (options.consumeBudget === false) {

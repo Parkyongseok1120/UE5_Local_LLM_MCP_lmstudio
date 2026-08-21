@@ -1424,6 +1424,17 @@ async function enforceTaskAuth(args, options = {}) {
       authorizationRefreshRequired: routeStale || authMismatch,
       ...(recoveryNextSteps.length ? { nextSteps: recoveryNextSteps } : {}),
       ...(auth.taskAuthorization ? { taskAuthorization: auth.taskAuthorization } : {}),
+      ...(Number.isInteger(Number(auth.controlEpoch))
+        ? { controlEpoch: Math.max(0, Number(auth.controlEpoch)) }
+        : {}),
+      ...(auth.toolRoute && typeof auth.toolRoute === "object"
+        ? { toolRoute: auth.toolRoute }
+        : {}),
+      // Authorization is a projection boundary, not a semantic reducer. If
+      // task state already committed v2 control, carry it through unchanged.
+      ...(auth.control && typeof auth.control === "object"
+        ? { control: { ...auth.control } }
+        : {}),
       ...(auth.nextAction ? { nextAction: auth.nextAction } : {}),
       ...(auth.nextActionIsTool !== undefined
         ? { nextActionIsTool: Boolean(auth.nextActionIsTool) }

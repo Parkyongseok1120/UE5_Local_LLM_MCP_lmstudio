@@ -10,6 +10,8 @@ const core = require("../src/compaction-core");
 
 test("successful server-owned exact tool cannot replay without control advance", () => {
   const {
+    failedServerControlReplayGuardMarker,
+    failedServerOwnedRequiredToolReplayForbidden,
     serverControlReplayGuardMarker,
     successfulServerOwnedRequiredToolDidNotAdvance,
   } = require("../dist/generator.js");
@@ -96,6 +98,48 @@ test("successful server-owned exact tool cannot replay without control advance",
       control,
       pending,
       { content: JSON.stringify({ ok: false, errorCode: "RAG_INDEX_MISSING" }) },
+    ),
+    false,
+  );
+
+  const replayForbiddenFailure = {
+    isError: true,
+    content: JSON.stringify({
+      ok: false,
+      errorCode: "TASK_TOOL_NOT_ACTIVE",
+      retryable: false,
+      doNotRetry: ["unreal_symbol_lookup"],
+      control: { version: 1, phase: "unreal_symbol_lookup", status: "Blocked" },
+    }),
+  };
+  assert.equal(
+    failedServerOwnedRequiredToolReplayForbidden(
+      control,
+      control,
+      pending,
+      replayForbiddenFailure,
+    ),
+    true,
+  );
+  assert.match(
+    failedServerControlReplayGuardMarker(control),
+    /^serverRequiredToolFailedReplayForbidden:[a-f0-9]{64}$/,
+  );
+  assert.equal(
+    failedServerOwnedRequiredToolReplayForbidden(
+      control,
+      { ...control, epoch: 3, controlFingerprint: "c".repeat(64) },
+      pending,
+      replayForbiddenFailure,
+    ),
+    false,
+  );
+  assert.equal(
+    failedServerOwnedRequiredToolReplayForbidden(
+      control,
+      control,
+      pending,
+      { isError: true, content: JSON.stringify({ ok: false, retryable: true }) },
     ),
     false,
   );
@@ -2358,6 +2402,117 @@ test("control v2 emits an exact server-owned read without model serialization", 
       && event.requiredToolSchemaMissing === false
       && event.promptMeasurementBypassedForExactServerControl === true
     )));
+  } finally {
+    delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
+test("replay-forbidden exact-tool failure cannot be emitted again without newer control", async () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "context-compactor-failed-read-replay-"));
+  process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR = stateRoot;
+  try {
+    const { generate } = require("../dist/generator.js");
+    const model = {
+      identifier: "failed-read-replay-model",
+      async applyPromptTemplate() { throw new Error("stalled exact control must not reach the model"); },
+      async countTokens() { throw new Error("stalled exact control must not reach prompt measurement"); },
+      async getContextLength() { return 100_000; },
+      respond() { throw new Error("stalled exact control must not reach model serialization"); },
+    };
+    const requiredPath = "Source/Project_MJS/Public/Character/Player/CPlayerCharacter.h";
+    const control = {
+      version: 2,
+      authoritative: true,
+      epoch: 5,
+      taskSessionId: "task-failed-read-replay",
+      controlFingerprint: "5".repeat(64),
+      routeHash: "route-planner-5",
+      phase: "planner",
+      disposition: "require_tool",
+      requiredTool: { name: "read_file", args: { path: requiredPath } },
+      allowedTools: ["read_file"],
+      retryPolicy: { sameSemanticInput: "once" },
+    };
+    const baseMessages = [
+      { role: "user", content: [{ type: "text", text: "시네마틱 C++ 시스템 분석해줘" }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: "planner-control-5",
+        name: "unreal_task_checkpoint",
+        content: JSON.stringify({
+          ok: true,
+          taskAuthorization: {
+            taskSessionId: control.taskSessionId,
+            ownerCapability: "owner-failed-read-replay",
+          },
+          control,
+        }),
+      }] },
+    ];
+    const tools = [{
+      type: "function",
+      function: {
+        name: "read_file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" }, sessionId: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    }];
+    const firstEvents = [];
+    await generate(
+      controllerFor(model, {}, stateRoot, firstEvents, tools),
+      Chat.from({ messages: baseMessages }),
+    );
+    const request = firstEvents.find((event) => event.kind === "end")?.request;
+    assert.equal(request?.name, "read_file");
+    assert.equal(request?.arguments?.path, requiredPath);
+
+    const failure = {
+      ok: false,
+      errorCode: "TASK_TOOL_NOT_ACTIVE",
+      retryable: false,
+      doNotRetry: ["read_file"],
+      error: "read_file is not active in route phase synthesis.",
+      control: {
+        version: 1,
+        phase: "read_file",
+        status: "Blocked",
+        nextAction: "unreal_task_checkpoint",
+        nextActionIsTool: true,
+        retryPolicy: "once",
+      },
+    };
+    const secondHistory = Chat.from({ messages: [
+      ...baseMessages,
+      { role: "assistant", content: [{
+        type: "toolCallRequest",
+        toolCallRequest: request,
+      }] },
+      { role: "tool", content: [{
+        type: "toolCallResult",
+        toolCallId: request.id,
+        name: request.name,
+        isError: true,
+        content: JSON.stringify(failure),
+      }] },
+    ] });
+    const secondEvents = [];
+    await assert.rejects(
+      generate(controllerFor(model, {}, stateRoot, secondEvents, tools), secondHistory),
+      (error) => error?.errorCode === "SERVER_CONTROL_STALLED_AFTER_FAILED_REQUIRED_TOOL",
+    );
+    assert.equal(secondEvents.some((event) => event.kind === "end"), false);
+    assert.ok(activeCheckpoint(stateRoot).diagnostics.some(
+      (item) => item.startsWith("serverRequiredToolFailedReplayForbidden:"),
+    ));
+    const sessionDir = fs.readdirSync(stateRoot, { withFileTypes: true })
+      .find((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "_base");
+    const events = fs.readFileSync(path.join(stateRoot, sessionDir.name, "events.jsonl"), "utf8")
+      .trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.ok(events.some((event) => event.type === "server_required_tool_failure_replay_blocked"));
   } finally {
     delete process.env.LMS_CONTEXT_COMPACTOR_STATE_DIR;
     fs.rmSync(stateRoot, { recursive: true, force: true });

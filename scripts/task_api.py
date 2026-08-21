@@ -11951,6 +11951,32 @@ def authorize_task_tool(
         if (
             tool_name not in CONTROL_PLANE_TOOLS
             and control.get("authoritative") is True
+            and not required_control_name
+            and str(control.get("disposition") or "")
+            in {"continue", "rediscover", "complete", "workflow_stop", "await_user"}
+            and tool_name not in allowed_control_tools
+        ):
+            current_authorization = task_authorization_for_state(state)
+            return {
+                "ok": False,
+                "errorCode": "TASK_CONTROL_OBLIGATION_REQUIRED",
+                "error": f"{tool_name} is no longer an authoritative action.",
+                "alreadySatisfied": True,
+                "reexecutionBlocked": True,
+                "taskSessionId": task_session_id,
+                "taskAuthorization": current_authorization,
+                "toolRoute": compact_tool_route(route),
+                "controlEpoch": _control_epoch(state.get("controlEpoch")),
+                "control": dict(control),
+                "requiredUserInput": control.get("requiredUserInput"),
+                "nextAction": "use_authoritative_control",
+                "nextActionIsTool": False,
+                "nextActionArgs": {},
+                "retryable": False,
+            }
+        if (
+            tool_name not in CONTROL_PLANE_TOOLS
+            and control.get("authoritative") is True
             and tool_name in {str(item) for item in route.get("activeTools") or []}
             and tool_name not in allowed_control_tools
         ):
@@ -12002,7 +12028,10 @@ def authorize_task_tool(
                         f"{route.get('phase')}"
                     ),
                     "toolRoute": compact_tool_route(route),
+                    "taskSessionId": task_session_id,
                     "taskAuthorization": task_authorization_for_state(state),
+                    "controlEpoch": _control_epoch(state.get("controlEpoch")),
+                    "control": dict(control),
                     "nextAction": pending[0] if pending else "use_active_route_tool",
                 }
             return _auth_refresh_failure(
@@ -12025,6 +12054,10 @@ def authorize_task_tool(
                     f"{route.get('phase')}"
                 ),
                 "toolRoute": compact_tool_route(route),
+                "taskSessionId": task_session_id,
+                "taskAuthorization": task_authorization_for_state(state),
+                "controlEpoch": _control_epoch(state.get("controlEpoch")),
+                "control": dict(control),
             }
         required_first_tool = str(route.get("requiredFirstTool") or "").strip()
         route_facts = (

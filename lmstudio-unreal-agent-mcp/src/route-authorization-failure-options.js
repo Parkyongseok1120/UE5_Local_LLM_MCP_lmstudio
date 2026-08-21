@@ -66,6 +66,8 @@ function routeAuthorizationFailureOptions(result = {}, toolName = "") {
     recoveryActionRequired,
     taskAuthorizationSource: "server_only",
     doNotFabricateTaskAuthorization: true,
+    ...(result.alreadySatisfied === true ? { alreadySatisfied: true } : {}),
+    ...(result.reexecutionBlocked === true ? { reexecutionBlocked: true } : {}),
     ...(toolName && !sameCallRetry ? { doNotRetry: [String(toolName)] } : {}),
     ...(nextAction ? { nextAction } : {}),
     nextActionIsTool,

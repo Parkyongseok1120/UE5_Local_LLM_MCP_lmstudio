@@ -805,7 +805,11 @@ def test_agent_route_filter_bridges_rag_workspace_by_active_project(
         )
         denied_payload = _tool_payload(denied["result"])
         assert denied["result"].get("isError") is True
-        assert denied_payload["errorCode"] == "TASK_TOOL_NOT_ACTIVE"
+        assert denied_payload["errorCode"] == "TASK_CONTROL_OBLIGATION_REQUIRED"
+        assert denied_payload["control"]["version"] == 2
+        assert denied_payload["control"]["authoritative"] is True
+        assert denied_payload["controlEpoch"] == denied_payload["control"]["epoch"]
+        assert denied_payload["reexecutionBlocked"] is True
         assert denied_payload["stopCurrentWorkflow"] is False
 
         detached = client.request(
