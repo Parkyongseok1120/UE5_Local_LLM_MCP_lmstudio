@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const core = require("../src/direct-compaction-core.js");
 
@@ -276,4 +278,73 @@ test("token pressure is the only normal compaction decision", () => {
 test("fallback message threshold applies only when remaining token measurement is unavailable", () => {
   assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 24 }, { compactAboveMessageCount: 24 }), true);
   assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 23 }, { compactAboveMessageCount: 24 }), false);
+});
+
+test("actual Qwen E2E transcript keeps the cinematic objective through three hard compactions", () => {
+  const fixture = JSON.parse(fs.readFileSync(
+    path.join(__dirname, "fixtures", "qwen-direct-e2e-continuity.json"),
+    "utf8",
+  ));
+  const fromFixture = (item) => message(item.role, item.text || "", {
+    toolResults: item.toolResults || [],
+  });
+  const hardCompact = (messages) => {
+    const result = core.buildCheckpoint(messages, {
+      recentCompleteTurns: 0,
+      maxCheckpointChars: 16000,
+    });
+    const retained = new Set(result.retainedIndexes);
+    return {
+      result,
+      messages: [
+        ...messages.filter((item, index) => item.role === "system" && retained.has(index)),
+        message("system", result.checkpoint),
+        ...messages.filter((item, index) => item.role !== "system" && retained.has(index)),
+      ],
+    };
+  };
+
+  let history = fixture.initialMessages.map(fromFixture);
+  const first = hardCompact(history);
+  history = [...first.messages, ...fixture.afterFirstCompaction.map(fromFixture)];
+  const second = hardCompact(history);
+  history = [...second.messages, ...fixture.afterSecondCompaction.map(fromFixture)];
+  const third = hardCompact(history);
+  const objective = "시네마틱 C++ 시스템에 대해서 더 구체적으로 분석해줘";
+  const project = "C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject";
+
+  assert.equal(first.result.memory.latestUserMessage, objective);
+  assert.equal(first.result.memory.activeObjective.text, objective);
+  assert.equal(first.result.memory.activeProject.descriptor, project);
+  assert.equal(first.result.memory.recentRawTail.length, 4);
+  for (const result of [second.result, third.result]) {
+    assert.equal(result.memory.latestUserMessage, "어 진행해");
+    assert.equal(result.memory.activeObjective.text, objective);
+    assert.equal(result.memory.continuationAntecedent.text, objective);
+    assert.equal(result.memory.activeProject.descriptor, project);
+    assert.ok(result.memory.recentRawTail.length >= 4 && result.memory.recentRawTail.length <= 8);
+    assert.doesNotMatch(JSON.stringify(result.memory), /requiredTool|allowedTools|taskAuthorization|synthesisLatch/iu);
+  }
+  assert.match(third.result.memory.currentWorkStatus.lastAssistantUpdate.text, /빌드 결과/u);
+  assert.match(
+    third.result.memory.completedOrArchivedObjectives.map((item) => item.text).join("\n"),
+    /지금 무슨 프로젝트지/u,
+  );
+  assert.notEqual(third.result.memory.activeObjective.text, "지금 무슨 프로젝트지");
+});
+
+test("emergency checkpoint compaction always emits parseable continuity JSON", () => {
+  const result = core.buildCheckpoint([
+    message("user", `긴 요청 ${"가".repeat(30000)}`),
+    message("assistant", `진행 상황 ${"나".repeat(30000)}`),
+    message("user", "좋아, 계속 진행해"),
+  ], { maxCheckpointChars: 2000 });
+  const marker = result.checkpoint.indexOf("[Direct continuity state v1]");
+  const jsonStart = result.checkpoint.indexOf("{", marker);
+  const parsed = JSON.parse(result.checkpoint.slice(jsonStart));
+
+  assert.equal(parsed.schemaVersion, 1);
+  assert.equal(parsed.authority, "factual_memory_only");
+  assert.equal(parsed.latestUserMessageVerbatimRetainedSeparately, true);
+  assert.match(parsed.activeObjective.text, /^긴 요청/u);
 });

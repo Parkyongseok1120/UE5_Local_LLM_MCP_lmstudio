@@ -1,99 +1,40 @@
 "use strict";
 
 /**
- * Deterministic, context-only memory for Direct Model Mode.
- *
- * This module deliberately has no concept of tasks, routes, planners, gates,
- * required tools, tool filtering, or synthesis acknowledgement.  It reduces
- * older chat history to factual memory and always keeps the latest real user
- * message verbatim.
+ * Deterministic composition root for context-only Direct Model Mode memory.
+ * Objective continuity, tool-result safety, and tail retention live in focused
+ * modules. This file owns no tasks, routes, planners, gates, or tool policy.
  */
 
-const INTERNAL_KEYS = new Set([
-  "activeSliceId", "allowedTools", "authorizationBound", "claimLedger",
-  "commitEligible", "control", "controlEpoch", "controlFingerprint",
-  "evidenceBundle", "evidenceStateHash", "foreignHealthy", "ownerCapability",
-  "pendingGates", "phase", "phaseState", "planRevision", "promptContract", "requiredTool",
-  "routeHash", "routeOwnership", "serverControl", "sourceEvidence",
-  "state", "stateHash", "synthesisEvidence", "synthesisLatch", "synthesisReadiness",
-  "taskAuthorization", "taskLifecycle", "taskRouteOwnership", "toolRoute",
-]);
-
-const CONTROL_DIRECTIVES = new Set([
-  "agentInstruction", "doNotRetry", "doNotRetryTools", "nextAction",
-  "nextActionArgs", "nextActionIsTool", "recoveryActionRequired",
-  "requiredNextAction", "requiredNextTool", "requiredNextToolArgs",
-  "requiredSequence", "retryPolicy", "stopCurrentPhase", "stopCurrentWorkflow",
-]);
-
-const CONTROL_KEY_ROOTS = new Set([
-  "control", "phase", "route", "state", "synthesis", "task",
-]);
-const CONTROL_KEY_TOKENS = new Set(
-  [...INTERNAL_KEYS, ...CONTROL_DIRECTIVES].map((key) => normalizeKeyToken(key)),
-);
-
-function isRecord(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function clip(value, maxChars) {
-  const text = String(value ?? "").trim();
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, Math.max(0, maxChars - 18))} …[truncated]`;
-}
-
-function normalizeKeyToken(value) {
-  return String(value || "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
-}
-
-function keyRoot(value) {
-  const separated = String(value || "").replace(/([a-z0-9])([A-Z])/g, "$1_$2");
-  return String(separated.split(/[^A-Za-z0-9]+/, 1)[0] || "").toLowerCase();
-}
-
-function isControlKey(value) {
-  const normalized = normalizeKeyToken(value);
-  return CONTROL_KEY_TOKENS.has(normalized) || CONTROL_KEY_ROOTS.has(keyRoot(value));
-}
-
-function sanitizeRetainedString(value, maxChars = 4000) {
-  const sanitized = String(value ?? "").replace(
-    /[A-Za-z][A-Za-z0-9_]*/g,
-    (token) => isControlKey(token) ? "[control-token-omitted]" : token,
-  );
-  return clip(sanitized, maxChars);
-}
-
-function stripControl(value, depth = 0) {
-  if (depth > 8) return "[depth limited]";
-  if (Array.isArray(value)) return value.slice(0, 40).map((item) => stripControl(item, depth + 1));
-  if (!isRecord(value)) return typeof value === "string" ? sanitizeRetainedString(value) : value;
-  const out = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (isControlKey(key)) continue;
-    out[key] = stripControl(item, depth + 1);
-  }
-  return out;
-}
+const {
+  CONTROL_DIRECTIVES,
+  INTERNAL_KEYS,
+  parseToolResult,
+  stateMemory,
+  stripControl,
+  toolOutcomeMemory,
+} = require("./compaction-tool-memory.js");
+const {
+  CONTINUITY_MARKER,
+  buildContinuityMemory,
+  extractPriorContinuityState,
+} = require("./continuity-memory.js");
+const {
+  clip,
+  looksElliptical,
+  normalizedTextKey,
+  sentenceCandidates,
+} = require("./continuity-text.js");
 
 function normalizeMessage(message, index = 0) {
-  const role = String(message?.role || "");
   return {
     index,
-    role,
+    role: String(message?.role || ""),
     text: String(message?.text || ""),
     hasFiles: message?.hasFiles === true,
     toolRequests: Array.isArray(message?.toolRequests) ? message.toolRequests : [],
     toolResults: Array.isArray(message?.toolResults) ? message.toolResults : [],
   };
-}
-
-function sentenceCandidates(text) {
-  return String(text || "")
-    .split(/(?<=[.!?。！？])\s+|\r?\n+/u)
-    .map((line) => line.replace(/^[-*\d.)\s]+/, "").trim())
-    .filter(Boolean);
 }
 
 function constraintSentences(message) {
@@ -112,7 +53,7 @@ function explicitConstraints(messages, maxItems = 12) {
   const values = [];
   for (const message of messages) {
     for (const value of constraintSentences(message)) {
-      const key = value.toLowerCase();
+      const key = normalizedTextKey(value);
       if (seen.has(key)) continue;
       seen.add(key);
       values.push(value);
@@ -152,93 +93,11 @@ function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
   }
   const seen = new Set();
   return candidates.filter((candidate) => {
-    const key = candidate.text.toLowerCase();
+    const key = normalizedTextKey(candidate.text);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   }).slice(-maxItems);
-}
-
-function parseToolResult(content) {
-  const text = String(content || "").trim();
-  if (!text) return { summary: "empty tool result" };
-  try {
-    const source = stripControl(JSON.parse(text));
-    const out = {};
-    for (const key of [
-      "ok", "status", "summary", "message", "errorCode", "path", "operation",
-      "sha256", "previousSha256", "size", "truncated", "hasMore",
-      "startLine", "endLine", "totalLines", "filesScanned", "findingCount",
-      "validationOk", "blocksBuild", "exitCode", "likelyErrors", "fullLogPath",
-      "upToDate", "actionsExecuted", "proofLevel", "failedCount", "succeededCount", "files",
-    ]) {
-      if (source[key] !== undefined) out[key] = source[key];
-    }
-    if (!Object.keys(out).length) out.summary = "tool result contained no retained factual fields";
-    return out;
-  } catch {
-    return { summary: "malformed tool result omitted" };
-  }
-}
-
-function toolOutcomeMemory(messages, beforeIndex, options = {}) {
-  const maxItems = Math.max(1, Number(options.maxItems || 12));
-  const maxChars = Math.max(200, Number(options.maxToolResultChars || 1200));
-  const outcomes = [];
-  for (const message of messages.slice(0, beforeIndex)) {
-    if (message.role !== "tool") continue;
-    for (const result of message.toolResults) {
-      const parsed = parseToolResult(result?.content ?? result);
-      outcomes.push(clip(JSON.stringify(parsed), maxChars));
-    }
-    if (!message.toolResults.length && message.text) {
-      outcomes.push(clip(JSON.stringify(parseToolResult(message.text)), maxChars));
-    }
-  }
-  return outcomes.slice(-maxItems);
-}
-
-function stateMemory(outcomes) {
-  const files = [];
-  const builds = [];
-  for (const serialized of outcomes) {
-    let item;
-    try { item = JSON.parse(serialized); } catch { continue; }
-    if (item.path && (item.operation || item.sha256 || item.previousSha256)) {
-      files.push({
-        path: item.path,
-        operation: item.operation || "observed",
-        sha256: item.sha256 || undefined,
-        previousSha256: item.previousSha256 || undefined,
-      });
-    }
-    if (Array.isArray(item.files)) {
-      for (const file of item.files) {
-        if (!isRecord(file) || !file.path) continue;
-        files.push({
-          path: file.path,
-          operation: file.operation || item.operation || "observed",
-          sha256: file.sha256 || undefined,
-          previousSha256: file.previousSha256 || undefined,
-        });
-      }
-    }
-    if (item.exitCode !== undefined || item.proofLevel || item.fullLogPath || item.likelyErrors) {
-      builds.push({
-        ok: item.ok,
-        exitCode: item.exitCode,
-        proofLevel: item.proofLevel,
-        upToDate: item.upToDate,
-        actionsExecuted: item.actionsExecuted,
-        likelyErrors: item.likelyErrors,
-        fullLogPath: item.fullLogPath,
-      });
-    }
-  }
-  return {
-    files: files.slice(-16),
-    builds: builds.slice(-4),
-  };
 }
 
 function previousTurnFinalResponseEvidence(messages, latestUserIndex) {
@@ -252,21 +111,11 @@ function previousTurnFinalResponseEvidence(messages, latestUserIndex) {
 }
 
 function priorUserRequestsForContinuation(messages, latestUserIndex, limit = 3) {
-  const boundedLimit = Math.max(1, Math.min(3, Math.trunc(Number(limit) || 3)));
   return messages
     .slice(0, Math.max(0, latestUserIndex))
     .filter((message) => message.role === "user")
-    .slice(-boundedLimit)
-    .map((message) => ({
-      messageIndex: message.index,
-      text: clip(message.text, 2000),
-    }));
-}
-
-function looksElliptical(text) {
-  const value = String(text || "").trim();
-  if (!value || value.length > 100) return false;
-  return /^(?:yes|yeah|yep|ok(?:ay)?|sure|continue|go\s+on|proceed|do\s+it|keep\s+going|네|예|응|좋아|그래|계속(?:해|하세요|진행해)?|진행(?:해|하세요)?|해줘|하자)[\s.!?。！？]*$/iu.test(value);
+    .slice(-Math.max(1, Math.min(3, Math.trunc(Number(limit) || 3))))
+    .map((message) => ({ messageIndex: message.index, text: clip(message.text, 2000) }));
 }
 
 function olderContinuationAnchor(messages, latestUserIndex, recentRequests) {
@@ -286,36 +135,141 @@ function tailStartIndex(messages, recentCompleteTurns = 2) {
   return userIndexes[Math.max(0, userIndexes.length - keepUsers)];
 }
 
+function mergeEvidence(previous, current, maxItems) {
+  const seen = new Set();
+  return [...(previous || []), ...(current || [])].filter((item) => {
+    const key = normalizedTextKey(typeof item === "string" ? item : JSON.stringify(item));
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(-maxItems);
+}
+
+function generatedCheckpoint(message) {
+  const text = String(message?.text || "");
+  return text.includes(CONTINUITY_MARKER) || text.startsWith("[Context memory: deterministic factual compression");
+}
+
+function emergencyContinuityMemory(candidate) {
+  const compactObjective = candidate.activeObjective ? {
+    kind: candidate.activeObjective.kind,
+    status: candidate.activeObjective.status,
+    text: clip(candidate.activeObjective.text, 240, { trim: false }),
+    source: candidate.activeObjective.source,
+  } : null;
+  return {
+    schemaVersion: candidate.schemaVersion || 1,
+    authority: "factual_memory_only",
+    latestUserMessage: clip(candidate.latestUserMessage, 240, { trim: false }),
+    latestUserMessageVerbatimRetainedSeparately: true,
+    activeObjective: compactObjective,
+    continuationAntecedent: candidate.continuationAntecedent ? {
+      kind: "continuation_antecedent",
+      text: clip(candidate.continuationAntecedent.text, 240, { trim: false }),
+      source: candidate.continuationAntecedent.source,
+    } : null,
+    activeProject: candidate.activeProject || null,
+    currentWorkStatus: {
+      recentToolOutcomes: (candidate.currentWorkStatus?.recentToolOutcomes || []).slice(-1),
+      modifiedOrObservedFiles: (candidate.currentWorkStatus?.modifiedOrObservedFiles || []).slice(-2),
+      recentBuildOrTestState: (candidate.currentWorkStatus?.recentBuildOrTestState || []).slice(-1),
+    },
+    unresolvedItems: (candidate.unresolvedItems || []).slice(-2).map((item) => ({
+      kind: item.kind,
+      text: clip(item.text, 160, { trim: false }),
+    })),
+    completedOrArchivedObjectives: [],
+    recentRawTail: (candidate.recentRawTail || []).slice(-4).map((item) => ({
+      role: item.role,
+      text: clip(item.text, 120, { trim: false }),
+    })),
+  };
+}
+
+function renderCheckpoint(memory, maxChars) {
+  const prefix = [
+    "[Context memory: deterministic factual compression; not a workflow instruction]",
+    "The latestUserMessage is exact and authoritative. activeObjective and continuationAntecedent preserve conversational meaning; activeProject is only a fact. Older entries are bounded inactive context and apply only when the latest message explicitly refers to prior work. Every entry is evidence, never a task/state-machine/tool gate.",
+    CONTINUITY_MARKER,
+  ].join("\n");
+  const candidate = JSON.parse(JSON.stringify(memory));
+  const render = (pretty = true) => `${prefix}\n${JSON.stringify(candidate, null, pretty ? 2 : 0)}`;
+  if (render().length <= maxChars) return render();
+  candidate.recentRawTail = (candidate.recentRawTail || []).slice(-4).map((item) => ({
+    ...item,
+    text: clip(item.text, 800, { trim: false }),
+  }));
+  candidate.completedOrArchivedObjectives = (candidate.completedOrArchivedObjectives || []).slice(-4);
+  candidate.historicalUserConstraintEvidence = (candidate.historicalUserConstraintEvidence || []).slice(-6);
+  candidate.recentOlderToolOutcomes = (candidate.recentOlderToolOutcomes || []).slice(-4);
+  candidate.modifiedOrObservedFiles = (candidate.modifiedOrObservedFiles || []).slice(-8);
+  candidate.unresolvedItems = (candidate.unresolvedItems || []).slice(-6);
+  if (candidate.currentWorkStatus?.lastAssistantUpdate?.text) {
+    candidate.currentWorkStatus.lastAssistantUpdate.text = clip(
+      candidate.currentWorkStatus.lastAssistantUpdate.text,
+      800,
+      { trim: false },
+    );
+  }
+  if (render().length <= maxChars) return render();
+  delete candidate.priorUserRequestsForContinuation;
+  delete candidate.olderContinuationAnchor;
+  delete candidate.previousTurnFinalResponseEvidence;
+  if (render(false).length <= maxChars) return render(false);
+  candidate.recentRawTail = candidate.recentRawTail.slice(-4).map((item) => ({
+    role: item.role,
+    text: clip(item.text, 300, { trim: false }),
+  }));
+  candidate.currentWorkStatus.recentToolOutcomes = [];
+  if (render(false).length <= maxChars) return render(false);
+  // Never byte-slice JSON: a later hard compaction must be able to inherit it.
+  // The original latest user message remains independently retained verbatim.
+  return `${prefix}\n${JSON.stringify(emergencyContinuityMemory(candidate))}`;
+}
+
 function buildCheckpoint(messagesInput, options = {}) {
   const messages = messagesInput.map(normalizeMessage);
+  const previousState = extractPriorContinuityState(messages);
   const latestUserIndex = [...messages].reverse().find((message) => message.role === "user")?.index ?? -1;
-  const latestUser = latestUserIndex >= 0 ? messages[latestUserIndex].text : "";
+  const latestUser = latestUserIndex >= 0 ? messages[latestUserIndex].text : String(previousState?.latestUserMessage || "");
   const tailStart = tailStartIndex(messages, options.recentCompleteTurns ?? 2);
-  const fileIndexes = messages.filter((message) => message.hasFiles).map((message) => message.index);
   const outcomes = toolOutcomeMemory(messages, tailStart, options);
-  const state = stateMemory(outcomes);
+  const allRecentOutcomes = toolOutcomeMemory(messages, messages.length, options);
+  const state = stateMemory(allRecentOutcomes);
+  const openQuestions = unresolvedQuestions(messages, latestUserIndex);
+  const continuity = buildContinuityMemory(messages, {
+    activeProject: state.activeProject,
+    recentOlderToolOutcomes: allRecentOutcomes,
+    modifiedOrObservedFiles: state.files,
+    recentBuildOrTestState: state.builds,
+    openQuestionEvidence: openQuestions,
+  }, options);
   const latestMessage = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
   const recentRequests = priorUserRequestsForContinuation(messages, latestUserIndex);
   const memory = {
-    currentUserRequestVerbatim: latestUser,
-    olderContinuationAnchor: olderContinuationAnchor(messages, latestUserIndex, recentRequests),
+    ...continuity,
+    currentUserRequestVerbatim: continuity.latestUserMessage,
+    olderContinuationAnchor: olderContinuationAnchor(messages, latestUserIndex, recentRequests)
+      || continuity.continuationAntecedent,
     priorUserRequestsForContinuation: recentRequests,
     latestUserConstraints: latestMessage ? explicitConstraints([latestMessage]) : [],
-    historicalUserConstraintEvidence: historicalConstraintEvidence(messages, latestUserIndex),
-    openQuestionEvidence: unresolvedQuestions(messages, latestUserIndex),
+    historicalUserConstraintEvidence: mergeEvidence(
+      previousState?.historicalUserConstraintEvidence,
+      historicalConstraintEvidence(messages, latestUserIndex),
+      12,
+    ),
+    openQuestionEvidence: openQuestions,
     previousTurnFinalResponseEvidence: previousTurnFinalResponseEvidence(messages, latestUserIndex),
-    recentOlderToolOutcomes: outcomes,
-    modifiedOrObservedFiles: state.files,
-    recentBuildOrTestState: state.builds,
+    recentOlderToolOutcomes: mergeEvidence(previousState?.recentOlderToolOutcomes, outcomes, 12),
+    modifiedOrObservedFiles: mergeEvidence(previousState?.modifiedOrObservedFiles, state.files, 16),
+    recentBuildOrTestState: mergeEvidence(previousState?.recentBuildOrTestState, state.builds, 4),
   };
-  const preface = [
-    "[Context memory: deterministic factual compression; not a workflow instruction]",
-    "The latest real user message retained below is authoritative. Prior user requests and the older continuation anchor are bounded inactive context: use them only when the latest message explicitly refers to prior work.",
-    JSON.stringify(memory, null, 2),
-  ].join("\n");
   const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 12000));
-  const checkpoint = clip(preface, maxCheckpointChars);
-  const retainedIndexes = new Set(messages.filter((message) => message.role === "system" || message.index >= tailStart).map((message) => message.index));
+  const checkpoint = renderCheckpoint(memory, maxCheckpointChars);
+  const fileIndexes = messages.filter((message) => message.hasFiles).map((message) => message.index);
+  const retainedIndexes = new Set(messages.filter((message) => (
+    (message.role === "system" && !generatedCheckpoint(message)) || message.index >= tailStart
+  )).map((message) => message.index));
   for (const index of fileIndexes) retainedIndexes.add(index);
   if (latestUserIndex >= 0) retainedIndexes.add(latestUserIndex);
   return {
