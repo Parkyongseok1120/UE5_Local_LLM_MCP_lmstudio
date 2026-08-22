@@ -265,7 +265,7 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": ".github/workflows/ci.yml:53 and .github/workflows/ci.yml:178",
+          "location": ".github/workflows/ci.yml:53-54 and .github/workflows/ci.yml:178-184",
           "symbol": "normal named suites and explicit direct_repetition selection"
         },
         {
@@ -277,13 +277,13 @@
         {
           "stage": "dispatch",
           "stageStatus": "present",
-          "location": "scripts/ci/run_ci_suite.py:105 and scripts/run_repetition_gate.py:42",
+          "location": "scripts/ci/run_ci_suite.py:105-110 and scripts/run_repetition_gate.py:42-53",
           "symbol": "normal pytest subprocess and three-pass repetition subprocesses"
         },
         {
           "stage": "side_effect",
           "stageStatus": "present",
-          "location": "pytest subprocess",
+          "location": "scripts/ci/run_ci_suite.py:105-110 and scripts/run_repetition_gate.py:45-53",
           "symbol": "propagated test exit code"
         }
       ]
