@@ -4,7 +4,8 @@
   "baseline": {
     "repositoryHead": "9725c609bb79a4a7f0340bfc50e06672a33f0be6",
     "branch": "fix/compactor-receipt-domain-ci",
-    "upstream": "origin/main",
+    "comparisonTarget": "origin/main",
+    "branchUpstream": null,
     "failingActionsRun": 32592144001,
     "failureObservation": "The baseline run failed only because a tracked evidence JSON contained workstation-specific home paths; sanitizer, Node MCP, and Context Compactor jobs were green."
   },
@@ -109,7 +110,9 @@
       "severity": "P1",
       "proofLevel": "TestVerified",
       "claimType": "state_transition",
-      "unknowns": [],
+      "unknowns": [
+        "Native LM Studio generation, hard-compaction, and restart behavior remains host-owned and was not observed in this TestVerified follow-up."
+      ],
       "evidence": [
         {
           "kind": "test",
@@ -151,7 +154,7 @@
       ]
     },
     {
-      "claim": "File observations remain actionable only when exact canonical project ownership and path containment are provable; ambiguous legacy/workspace evidence fails closed and same-name clones remain separate.",
+      "claim": "File observations are retained as factual evidence only when exact canonical project ownership and path containment are provable; retained observations remain fresh_read_required and never confer mutation authority, ambiguous legacy/workspace evidence fails closed, and same-name clones remain separate.",
       "verdict": "ByDesign",
       "severity": "P1",
       "proofLevel": "TestVerified",
@@ -231,7 +234,9 @@
       "severity": "P1",
       "proofLevel": "TestVerified",
       "claimType": "wiring",
-      "unknowns": [],
+      "unknowns": [
+        "The redesigned matrix has not yet run on GitHub-hosted Windows, Ubuntu, and macOS; this claim is limited to local TestVerified wiring and inventory closure."
+      ],
       "evidence": [
         {
           "kind": "project_source",
@@ -260,14 +265,20 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": ".github/workflows/ci.yml and scripts/run_repetition_gate.py",
-          "symbol": "named suite selection"
+          "location": ".github/workflows/ci.yml:53 and .github/workflows/ci.yml:178",
+          "symbol": "normal named suites and explicit direct_repetition selection"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/ci/run_ci_suite.py:24",
+          "symbol": "resolve_test_files"
         },
         {
           "stage": "dispatch",
           "stageStatus": "present",
-          "location": "scripts/ci/run_ci_suite.py",
-          "symbol": "validated pytest command"
+          "location": "scripts/ci/run_ci_suite.py:105 and scripts/run_repetition_gate.py:42",
+          "symbol": "normal pytest subprocess and three-pass repetition subprocesses"
         },
         {
           "stage": "side_effect",
@@ -278,19 +289,20 @@
       ]
     },
     {
-      "claim": "Portable package hygiene detects repeatedly escaped Windows home paths in every textual member while preserving public-profile placeholders, and both Qwen fixtures use generic project roots.",
+      "claim": "Portable package hygiene detects repeatedly escaped Windows home paths in every UTF-8 textual member within the 4 MiB scan bound while preserving public-profile placeholders, and both Qwen fixtures use generic project roots.",
       "verdict": "ByDesign",
       "severity": "P2",
       "proofLevel": "TestVerified",
       "claimType": "behavior",
       "unknowns": [
-        "The final clean-tree artifact is built only after the reviewed commits and is therefore reported separately from this pre-commit packet."
+        "The final clean-tree artifact is built only after the reviewed commits and is therefore reported separately from this pre-commit packet.",
+        "Installation and source-to-installed hash closure from that final clean artifact are pending and reported separately."
       ],
       "evidence": [
         {
           "kind": "project_source",
           "location": "scripts/build_integrated_package.py",
-          "observation": "The existing private-path scan collapses bounded repeated escaped separators before applying the established home-path policy to every textual package member."
+          "observation": "The existing private-path scan collapses bounded repeated escaped separators before applying the established home-path policy to UTF-8 textual package members no larger than 4 MiB."
         },
         {
           "kind": "test",
