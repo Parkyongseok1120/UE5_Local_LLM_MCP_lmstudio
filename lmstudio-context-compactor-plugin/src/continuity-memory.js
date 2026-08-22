@@ -7,8 +7,11 @@ const {
   projectRoot,
 } = require("./continuity-file-observations.js");
 const {
-  sanitizeDurableText,
-  sanitizeDurableValue,
+  sanitizeDerivedOperationalText,
+  sanitizeDerivedOperationalRecord,
+  sanitizeDerivedOperationalValue,
+  sanitizeStructuredDurableValue,
+  sanitizeUserAuthoredText,
 } = require("./durable-memory-sanitizer.js");
 const {
   clip,
@@ -20,6 +23,78 @@ const {
 const CONTINUITY_MARKER = "[Direct continuity state v2]";
 const LEGACY_CONTINUITY_MARKER = "[Direct continuity state v1]";
 const CONTINUITY_MARKERS = Object.freeze([CONTINUITY_MARKER, LEGACY_CONTINUITY_MARKER]);
+
+function sanitizeUserEvidenceRecord(value) {
+  const sanitized = sanitizeStructuredDurableValue(value);
+  if (typeof sanitized?.text === "string") {
+    sanitized.text = sanitizeUserAuthoredText(sanitized.text);
+  }
+  return sanitized;
+}
+
+function sanitizePriorUserFields(state) {
+  for (const key of ["latestUserMessage", "currentUserRequestVerbatim"]) {
+    if (typeof state?.[key] === "string") state[key] = sanitizeUserAuthoredText(state[key]);
+  }
+  for (const key of ["activeObjective", "continuationAntecedent", "olderContinuationAnchor"]) {
+    if (typeof state?.[key]?.text === "string") {
+      state[key].text = sanitizeUserAuthoredText(state[key].text);
+    }
+  }
+  for (const key of [
+    "completedOrArchivedObjectives",
+    "priorUserRequestsForContinuation",
+    "historicalUserConstraintEvidence",
+    "openQuestionEvidence",
+  ]) {
+    if (!Array.isArray(state?.[key])) continue;
+    state[key] = state[key].map((item) => sanitizeUserEvidenceRecord(item));
+  }
+  if (Array.isArray(state?.latestUserConstraints)) {
+    state.latestUserConstraints = state.latestUserConstraints.map((item) => (
+      typeof item === "string" ? sanitizeUserAuthoredText(item) : sanitizeStructuredDurableValue(item)
+    ));
+  }
+  return state;
+}
+
+function sanitizePriorContinuityState(value) {
+  const state = sanitizePriorUserFields(sanitizeStructuredDurableValue(value));
+  const work = state?.currentWorkStatus;
+  if (work?.lastAssistantUpdate?.text) {
+    work.lastAssistantUpdate.text = sanitizeDerivedOperationalText(work.lastAssistantUpdate.text);
+  }
+  for (const key of ["recentToolOutcomes", "recentBuildOrTestState"]) {
+    if (Array.isArray(work?.[key])) {
+      work[key] = work[key].map((item) => sanitizeDerivedOperationalRecord(item));
+    }
+  }
+  for (const key of ["recentOlderToolOutcomes", "recentBuildOrTestState"]) {
+    if (Array.isArray(state?.[key])) {
+      state[key] = state[key].map((item) => sanitizeDerivedOperationalRecord(item));
+    }
+  }
+  if (Array.isArray(state?.unresolvedItems)) {
+    state.unresolvedItems = state.unresolvedItems.map((item) => (
+      item?.kind === "assistant_progress_evidence"
+        ? sanitizeDerivedOperationalValue(item)
+        : sanitizeUserEvidenceRecord(item)
+    ));
+  }
+  if (Array.isArray(state?.recentRawTail)) {
+    state.recentRawTail = state.recentRawTail.map((item) => {
+      const sanitized = sanitizeStructuredDurableValue(item);
+      if (!sanitized || typeof sanitized !== "object") return sanitized;
+      if (sanitized.text) {
+        sanitized.text = sanitized.role === "assistant"
+          ? sanitizeDerivedOperationalText(sanitized.text)
+          : sanitizeUserAuthoredText(sanitized.text);
+      }
+      return sanitized;
+    });
+  }
+  return state;
+}
 
 function extractJsonObject(text, startAt) {
   const start = text.indexOf("{", startAt);
@@ -59,7 +134,7 @@ function extractPriorContinuityState(messages) {
     try {
       const parsed = JSON.parse(json);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return sanitizeDurableValue(parsed);
+        return sanitizePriorContinuityState(parsed);
       }
     } catch {
       // A clipped or corrupt checkpoint is not continuity evidence.
@@ -77,7 +152,7 @@ function lastAssistantUpdate(messages, minimumIndex = -1) {
   if (!message) return null;
   return {
     messageIndex: message.index,
-    text: clip(sanitizeDurableText(message.text), 2400, { trim: false }),
+    text: clip(sanitizeDerivedOperationalText(message.text), 2400, { trim: false }),
     source: "assistant_history",
   };
 }
@@ -96,7 +171,7 @@ function pendingAssistantItems(messages, activeObjective, maxItems = 8) {
     if (message.role !== "assistant" || message.index < activeIndex) continue;
     for (const sentence of sentenceCandidates(message.text)) {
       if (!patterns.some((pattern) => pattern.test(sentence))) continue;
-      const text = clip(sanitizeDurableText(sentence), 800);
+      const text = clip(sanitizeDerivedOperationalText(sentence), 800);
       const key = normalizedTextKey(text);
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -170,7 +245,7 @@ function buildContinuityMemory(messages, facts, options = {}) {
       ...(facts.recentBuildOrTestState || []),
     ].slice(-4),
   };
-  return sanitizeDurableValue({
+  return sanitizeStructuredDurableValue({
     schemaVersion: 2,
     authority: "factual_memory_only",
     latestUserMessage: objective.latestUserMessage,

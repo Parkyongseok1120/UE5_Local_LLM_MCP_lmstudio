@@ -10,12 +10,35 @@ function message(role, text, extra = {}) {
   return { role, text, hasFiles: false, toolRequests: [], toolResults: [], ...extra };
 }
 
+const EPHEMERAL_KEY_TOKENS = new Set([
+  "fileversionreceipt",
+  "mutationreceipt",
+  "receiptexpiresat",
+  "receiptowner",
+  "registryobservationversion",
+  "snapshotexpiresat",
+  "snapshotowner",
+  "snapshotreceipt",
+  "snapshotversion",
+]);
+
+function assertNoExactEphemeralKeys(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) assertNoExactEphemeralKeys(item);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, item] of Object.entries(value)) {
+    const normalized = key.replace(/[^A-Za-z0-9]/gu, "").toLowerCase();
+    assert.equal(EPHEMERAL_KEY_TOKENS.has(normalized), false, `ephemeral key survived: ${key}`);
+    assertNoExactEphemeralKeys(item);
+  }
+}
+
 function assertNoDurableFileCapability(result) {
   const durable = `${JSON.stringify(result.memory)}\n${result.checkpoint}`;
-  assert.doesNotMatch(
-    durable,
-    /fvr1_|fileVersionReceipt|snapshotVersion|current valid receipt|retry with this receipt|receipt for this file/iu,
-  );
+  assert.doesNotMatch(durable, /fvr1_[A-Za-z0-9_-]+/iu);
+  assertNoExactEphemeralKeys(result.memory);
 }
 
 test("latest real user request stays authoritative without promoting an older objective", () => {
@@ -246,8 +269,8 @@ test("bundle mutation results retain each modified path and hash", () => {
 });
 
 test("hard compaction drops a top-level file receipt and keeps only non-actionable file facts", () => {
-  const project = "C:\\Users\\sster\\Documents\\Github\\Project_MJS\\Project_MJS.uproject";
-  const absolutePath = "C:\\Users\\sster\\Documents\\Github\\Project_MJS\\Source\\Project_MJS\\Private\\Character\\SharedComponent\\HealthComponent.cpp";
+  const project = "C:\\Projects\\DirectTest\\Project_MJS\\Project_MJS.uproject";
+  const absolutePath = "C:\\Projects\\DirectTest\\Project_MJS\\Source\\Project_MJS\\Private\\Character\\SharedComponent\\HealthComponent.cpp";
   const result = core.buildCheckpoint([
     message("user", "Project_MJS의 사망 및 부활 파이프라인 구현을 계속해."),
     message("tool", "", { toolResults: [{ content: JSON.stringify({
@@ -268,7 +291,7 @@ test("hard compaction drops a top-level file receipt and keeps only non-actionab
   assertNoDurableFileCapability(result);
   assert.deepEqual(result.memory.modifiedOrObservedFiles, [{
     canonicalProject: project,
-    canonicalProjectRoot: "C:\\Users\\sster\\Documents\\Github\\Project_MJS",
+    canonicalProjectRoot: "C:\\Projects\\DirectTest\\Project_MJS",
     canonicalPath: absolutePath,
     path: "project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp",
     observationState: "modified",
@@ -515,8 +538,8 @@ test("emergency rendering keeps its hard size bound with an oversized inherited 
 });
 
 test("same-name clones remain distinct factual observations and neither is mutation-authoritative", () => {
-  const gitProject = "C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject";
-  const githubProject = "C:\\Users\\sster\\Documents\\Github\\Project_MJS\\Project_MJS.uproject";
+  const gitProject = "C:\\Projects\\GitClone\\Project_MJS\\Project_MJS.uproject";
+  const githubProject = "C:\\Projects\\GithubClone\\Project_MJS\\Project_MJS.uproject";
   const readResult = (activeProject, absolutePath, receipt, hash) => message("tool", "", {
     toolResults: [{ content: JSON.stringify({
       ok: true,
@@ -531,8 +554,8 @@ test("same-name clones remain distinct factual observations and neither is mutat
   });
   const result = core.buildCheckpoint([
     message("user", "두 checkout의 관찰 사실을 구분해."),
-    readResult(githubProject, "C:\\Users\\sster\\Documents\\Github\\Project_MJS\\Source\\Project_MJS\\Public\\Character\\SharedComponent\\HealthComponent.h", "fvr1_github", "a".repeat(64)),
-    readResult(gitProject, "C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Source\\Project_MJS\\Public\\Character\\SharedComponent\\HealthComponent.h", "fvr1_git", "b".repeat(64)),
+    readResult(githubProject, "C:\\Projects\\GithubClone\\Project_MJS\\Source\\Project_MJS\\Public\\Character\\SharedComponent\\HealthComponent.h", "fvr1_github", "a".repeat(64)),
+    readResult(gitProject, "C:\\Projects\\GitClone\\Project_MJS\\Source\\Project_MJS\\Public\\Character\\SharedComponent\\HealthComponent.h", "fvr1_git", "b".repeat(64)),
   ], { recentCompleteTurns: 0 });
 
   assertNoDurableFileCapability(result);
@@ -542,7 +565,7 @@ test("same-name clones remain distinct factual observations and neither is mutat
     new Set([githubProject, gitProject]),
   );
   assert.ok(result.memory.modifiedOrObservedFiles.every((item) => item.mutationSnapshotState === "fresh_read_required"));
-  assert.equal(result.memory.activeProject.root, "C:\\Users\\sster\\Documents\\Git\\Project_MJS");
+  assert.equal(result.memory.activeProject.root, "C:\\Projects\\GitClone\\Project_MJS");
 });
 
 test("a per-call exact project keeps a write on that clone without changing the active clone", () => {
@@ -1254,14 +1277,14 @@ test("partial independent mutation outcomes stay factual without preserving the 
   assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
 });
 
-test("the raw latest user message stays separate while its durable copy cannot carry a capability", () => {
+test("the durable user copy strips raw capability payloads but keeps diagnostic identifiers", () => {
   const latest = "Diagnose fvr1_user_supplied but never persist fileVersionReceipt in durable memory.";
   const result = core.buildCheckpoint([message("user", latest)], { recentCompleteTurns: 0 });
 
   assert.equal(result.latestUserVerbatim, latest);
   assertNoDurableFileCapability(result);
   assert.match(result.memory.currentUserRequestVerbatim, /ephemeral file capability omitted/iu);
-  assert.match(result.memory.currentUserRequestVerbatim, /never persist ephemeral file-mutation capability/iu);
+  assert.match(result.memory.currentUserRequestVerbatim, /never persist fileVersionReceipt/iu);
 });
 
 test("a receipt in a retained recent tool result remains live only outside the durable checkpoint", () => {
@@ -1324,6 +1347,7 @@ test("the minimized 5,692-line Qwen transcript replay keeps canonical facts thro
     path.join(__dirname, "fixtures", "qwen-receipt-path-confusion.json"),
     "utf8",
   ));
+  const fixtureProjectRoot = `${path.win32.dirname(fixture.canonicalProject)}\\`;
   const fromFixture = (item) => message(item.role, item.text || "", { toolResults: item.toolResults || [] });
   const compact = (history) => {
     const result = core.buildCheckpoint(history, { recentCompleteTurns: 0, maxCheckpointChars: 16000 });
@@ -1348,7 +1372,7 @@ test("the minimized 5,692-line Qwen transcript replay keeps canonical facts thro
     assert.equal(round.result.memory.activeProject.descriptor, fixture.canonicalProject);
     assert.ok(round.result.memory.modifiedOrObservedFiles.every((item) => (
       item.canonicalProject === fixture.canonicalProject
-      && item.canonicalPath.startsWith("C:\\Users\\sster\\Documents\\Github\\Project_MJS\\")
+      && item.canonicalPath.startsWith(fixtureProjectRoot)
       && item.mutationSnapshotState === "fresh_read_required"
     )));
   }
@@ -1443,7 +1467,10 @@ test("actual Qwen E2E transcript keeps the cinematic objective through three har
   history = [...second.messages, ...fixture.afterSecondCompaction.map(fromFixture)];
   const third = hardCompact(history);
   const objective = "시네마틱 C++ 시스템에 대해서 더 구체적으로 분석해줘";
-  const project = "C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject";
+  const projectObservation = fixture.initialMessages.find((item) => (
+    item.role === "tool" && Array.isArray(item.toolResults) && item.toolResults.length > 0
+  ));
+  const project = JSON.parse(projectObservation.toolResults[0].content).activeProject;
 
   assert.equal(first.result.memory.latestUserMessage, objective);
   assert.equal(first.result.memory.activeObjective.text, objective);
@@ -1491,4 +1518,269 @@ test("escape-heavy emergency text cannot exceed the hard checkpoint bound", () =
 
   assert.equal(parsed.schemaVersion, 2);
   assert.ok(result.checkpoint.length <= 2000, result.checkpoint.length);
+});
+
+test("Korean payment-receipt objective is preserved across hard compaction", () => {
+  const objective = "결제 영수증 데이터를 사용해 구매 내역 UI를 구현해.";
+  const result = core.buildCheckpoint([
+    message("user", objective),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.latestUserMessage, objective);
+  assert.equal(result.memory.activeObjective.text, objective);
+  assert.equal(result.memory.currentUserRequestVerbatim, objective);
+  assert.equal(result.memory.recentRawTail[0].text, objective);
+  assert.doesNotMatch(result.checkpoint, /fresh file snapshot required before mutation/iu);
+});
+
+test("English payment-receipt objective is preserved across hard compaction", () => {
+  const objective = "Implement a payment receipt parser and display the receipt history.";
+  const result = core.buildCheckpoint([
+    message("user", objective),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.latestUserMessage, objective);
+  assert.equal(result.memory.activeObjective.text, objective);
+  assert.match(result.checkpoint, /payment receipt parser/u);
+});
+
+test("receipt-domain code symbols remain exact user-authored objective text", () => {
+  const objective = "ReceiptActor와 FPaymentReceipt 구조를 분석해.";
+  const result = core.buildCheckpoint([
+    message("user", objective),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.latestUserMessage, objective);
+  assert.equal(result.memory.activeObjective.text, objective);
+  assert.match(result.checkpoint, /ReceiptActor와 FPaymentReceipt/u);
+});
+
+test("receipt-printer implementation goal is not rewritten as a file snapshot instruction", () => {
+  const objective = "영수증 프린터 연동 코드를 수정하고 receipt template을 저장해.";
+  const result = core.buildCheckpoint([
+    message("user", objective),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.latestUserMessage, objective);
+  assert.equal(result.memory.activeObjective.text, objective);
+  assert.doesNotMatch(result.checkpoint, /fresh file snapshot required before mutation/iu);
+});
+
+test("file-receipt diagnosis remains a diagnosis instead of executable guidance", () => {
+  const objective = "fileVersionReceipt가 hard compaction 뒤 왜 재사용되면 안 되는지 분석하고 C:\\Game\\Source\\snapshotVersionParser.cpp와 snapshotVersionHandler도 확인해.";
+  const result = core.buildCheckpoint([
+    message("user", objective),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.latestUserMessage, objective);
+  assert.equal(result.memory.activeObjective.text, objective);
+  assert.equal(result.memory.currentUserRequestVerbatim, objective);
+  assert.match(result.checkpoint, /snapshotVersionHandler/u);
+  assert.doesNotMatch(result.memory.activeObjective.text, /fresh file snapshot required before mutation/iu);
+  assertNoDurableFileCapability(result);
+});
+
+test("a raw capability in a user request is removed without collapsing its domain objective", () => {
+  const objective = "결제 receipt 화면을 구현하고 fvr1_AbC123을 사용해.";
+  const result = core.buildCheckpoint([
+    message("user", objective),
+  ], { recentCompleteTurns: 0 });
+
+  assert.match(result.memory.activeObjective.text, /^결제 receipt 화면을 구현하고 /u);
+  assert.match(result.memory.activeObjective.text, /fresh file snapshot required before mutation/iu);
+  assert.doesNotMatch(JSON.stringify(result.memory), /fvr1_/iu);
+});
+
+test("the same receipt phrase follows explicit user and assistant provenance policies", () => {
+  const phrase = "Continue with the returned receipt in the next prediction round.";
+  const result = core.buildCheckpoint([
+    message("user", phrase),
+    message("assistant", phrase),
+    message("user", "어 진행해"),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.activeObjective.text, phrase);
+  assert.equal(result.memory.continuationAntecedent.text, phrase);
+  assert.match(result.memory.currentWorkStatus.lastAssistantUpdate.text, /fresh file snapshot required before mutation/iu);
+  assert.equal(result.memory.recentRawTail[0].text, phrase);
+  assert.match(result.memory.recentRawTail[1].text, /fresh file snapshot required before mutation/iu);
+});
+
+test("ordinary assistant and tool payment-receipt facts survive operational sanitization", () => {
+  const assistantFact = "현재 영수증을 사용해 환불을 처리했습니다.";
+  const toolFact = "The current receipt is valid proof of purchase.";
+  const result = core.buildCheckpoint([
+    message("user", "Implement the purchase history UI."),
+    message("assistant", assistantFact),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ ok: true, summary: toolFact }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.currentWorkStatus.lastAssistantUpdate.text, assistantFact);
+  assert.match(JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes), /The current receipt is valid proof of purchase/u);
+  assert.doesNotMatch(JSON.stringify(result.memory), /fresh file snapshot required before mutation/iu);
+});
+
+test("returned and previous payment receipts remain ordinary assistant and tool facts", () => {
+  const assistantFact = "결제 API에서 반환된 영수증을 사용해 주문을 확인했습니다.";
+  const toolFact = "The previous receipt is valid proof of purchase for reimbursement.";
+  const result = core.buildCheckpoint([
+    message("user", "Verify the reimbursement flow."),
+    message("assistant", assistantFact),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ ok: true, summary: toolFact }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.currentWorkStatus.lastAssistantUpdate.text, assistantFact);
+  assert.match(JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes), /The previous receipt is valid proof of purchase for reimbursement/u);
+  assert.doesNotMatch(JSON.stringify(result.memory), /fresh file snapshot required before mutation/iu);
+});
+
+test("tool structural paths are never treated as operational receipt prose", () => {
+  const project = "C:\\Proj\\Game.uproject";
+  const absolutePath = "C:\\Proj\\Source\\Use This Receipt.cpp";
+  const result = core.buildCheckpoint([
+    message("user", "Inspect the exact file path."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      operation: "observed",
+      activeProject: project,
+      path: "project://Source/Use This Receipt.cpp",
+      absolutePath,
+      sha256: "a".repeat(64),
+    }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.modifiedOrObservedFiles[0].canonicalPath, absolutePath);
+  assert.equal(result.memory.modifiedOrObservedFiles[0].path, "project://Source/Use This Receipt.cpp");
+  assert.doesNotMatch(JSON.stringify(result.memory), /fresh file snapshot required before mutation\.cpp/iu);
+});
+
+test("canonical identities retain capability-like substrings as structural data", () => {
+  const project = "C:\\Projects\\fileVersionReceiptGame\\snapshotVersionGame.uproject";
+  const root = "C:\\Projects\\fileVersionReceiptGame";
+  const canonicalPath = `${root}\\Source\\snapshotVersionParser.cpp`;
+  const structuralHash = "fileVersionReceipt-snapshotVersion";
+  const result = core.buildCheckpoint([
+    message("user", "Inspect the canonical file identity."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      operation: "observed",
+      activeProject: project,
+      path: "project://Source/snapshotVersionParser.cpp",
+      absolutePath: canonicalPath,
+      sha256: structuralHash,
+    }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  const observation = result.memory.modifiedOrObservedFiles[0];
+  assert.equal(observation.canonicalProject, project);
+  assert.equal(observation.canonicalProjectRoot, root);
+  assert.equal(observation.canonicalPath, canonicalPath);
+  assert.equal(observation.sha256AtObservation, structuralHash);
+  assert.match(result.checkpoint, /fileVersionReceiptGame/u);
+  assert.match(result.checkpoint, /snapshotVersionParser\.cpp/u);
+  assertNoDurableFileCapability(result);
+});
+
+test("inherited user fields keep receipt-domain meaning while assistant fields are neutralized", () => {
+  const objective = "결제 영수증 데이터를 사용해 구매 내역 UI를 구현해.";
+  const question = "영수증 파일을 전달받아 파싱하는 형식은 무엇인가?";
+  const prior = {
+    schemaVersion: 2,
+    authority: "factual_memory_only",
+    latestUserMessage: objective,
+    activeObjective: { kind: "user_objective", status: "active", text: objective, source: "current_history" },
+    continuationAntecedent: { kind: "continuation_antecedent", text: objective, source: "current_history" },
+    currentWorkStatus: {
+      lastAssistantUpdate: {
+        text: "Continue with the returned receipt in the next prediction round.",
+        source: "assistant_history",
+      },
+      recentToolOutcomes: [],
+      modifiedOrObservedFiles: [],
+      recentBuildOrTestState: [],
+    },
+    unresolvedItems: [{ kind: "open_question_evidence", text: question }],
+    completedOrArchivedObjectives: [],
+    recentRawTail: [
+      { role: "user", text: objective, source: "current_history" },
+      { role: "assistant", text: "현재 리시트를 다음 파일 수정에 재사용해.", source: "current_history" },
+    ],
+  };
+  const result = core.buildCheckpoint([
+    message("system", `[Direct continuity state v2]\n${JSON.stringify(prior)}`),
+    message("user", "어 진행해"),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.activeObjective.text, objective);
+  assert.equal(result.memory.continuationAntecedent.text, objective);
+  assert.equal(result.memory.unresolvedItems[0].text, question);
+  assert.ok(result.memory.recentRawTail.some((item) => item.role === "user" && item.text === objective));
+  assert.match(JSON.stringify(result.memory.currentWorkStatus), /fresh file snapshot required before mutation/iu);
+  assert.doesNotMatch(JSON.stringify(result.memory.recentRawTail), /현재 리시트를 다음 파일 수정에 재사용해/u);
+});
+
+test("payment-receipt objective survives three hard compactions with no raw file capability", () => {
+  const objective = "결제 영수증 데이터를 사용해 구매 내역 UI를 구현해.";
+  const compact = (history) => {
+    const result = core.buildCheckpoint(history, {
+      recentCompleteTurns: 0,
+      maxCheckpointChars: 16000,
+    });
+    const retained = new Set(result.retainedIndexes);
+    return {
+      result,
+      history: [
+        ...history.filter((item, index) => item.role === "system" && retained.has(index)),
+        message("system", result.checkpoint),
+        ...history.filter((item, index) => item.role !== "system" && retained.has(index)),
+      ],
+    };
+  };
+
+  let history = [
+    message("user", objective),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      summary: "Continue with the returned receipt in the next prediction round.",
+      fileVersionReceipt: "fvr1_payment_round_zero",
+      snapshotVersion: 1,
+    }) }] }),
+    message("assistant", "Use fvr1_payment_round_zero for the next edit."),
+    message("user", "어 진행해"),
+  ];
+  const rounds = [];
+  for (let index = 0; index < 3; index += 1) {
+    const round = compact(history);
+    rounds.push(round.result);
+    history = [
+      ...round.history,
+      message("assistant", "Continue with the returned receipt in the next prediction round."),
+      message("user", "어 진행해"),
+    ];
+  }
+
+  for (const result of rounds) {
+    assert.equal(result.memory.activeObjective.text, objective);
+    assert.equal(result.memory.continuationAntecedent.text, objective);
+    assertNoDurableFileCapability(result);
+  }
+});
+
+test("emergency serialization preserves payment-receipt meaning and its hard bound", () => {
+  const objective = `결제 영수증 데이터를 사용해 구매 내역 UI를 구현해. ${"payment receipt history ".repeat(1000)}`;
+  const result = core.buildCheckpoint([
+    message("user", objective),
+    message("assistant", `Continue with fvr1_emergency_payment in the next edit. ${"progress ".repeat(5000)}`),
+    message("user", "어 진행해"),
+  ], { recentCompleteTurns: 0, maxCheckpointChars: 2000 });
+  const marker = result.checkpoint.indexOf("[Direct continuity state v2]");
+  const parsed = JSON.parse(result.checkpoint.slice(result.checkpoint.indexOf("{", marker)));
+
+  assert.ok(result.checkpoint.length <= 2000, result.checkpoint.length);
+  assert.match(parsed.activeObjective.text, /^결제 영수증 데이터를 사용해 구매 내역 UI를 구현해/u);
+  assert.doesNotMatch(result.checkpoint, /fvr1_/iu);
 });

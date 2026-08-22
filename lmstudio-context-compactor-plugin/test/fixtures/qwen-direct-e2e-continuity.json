@@ -22,7 +22,7 @@
     },
     {
       "role": "assistant",
-      "text": "현재 활성 프로젝트는 **Project_MJS**입니다. 경로: C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject"
+      "text": "현재 활성 프로젝트는 **Project_MJS**입니다. 경로: C:\\Projects\\DirectFixture\\Project_MJS\\Project_MJS.uproject"
     },
     {
       "role": "user",
@@ -48,7 +48,7 @@
       "role": "tool",
       "toolResults": [
         {
-          "content": "{\"ok\":true,\"path\":\"project://Source/Project_MJS/Private/Cinematic/Director/CinematicPostActionExecutor.cpp\",\"activeProject\":\"C:\\\\Users\\\\sster\\\\Documents\\\\Git\\\\Project_MJS\\\\Project_MJS.uproject\",\"sha256\":\"6447b2d248674cd3916a206fab6084d7477fb836c38d4b80d95a81d104bbfe68\",\"size\":3970}"
+          "content": "{\"ok\":true,\"path\":\"project://Source/Project_MJS/Private/Cinematic/Director/CinematicPostActionExecutor.cpp\",\"activeProject\":\"C:\\\\Projects\\\\DirectFixture\\\\Project_MJS\\\\Project_MJS.uproject\",\"sha256\":\"6447b2d248674cd3916a206fab6084d7477fb836c38d4b80d95a81d104bbfe68\",\"size\":3970}"
         }
       ]
     },

@@ -4,7 +4,7 @@
     "note": "Minimized from the 5,692-line LM Studio transcript. The first invalid receipt cause is unknown; the later cross-path mismatch and partial success are directly observed."
   },
   "objective": "Project_MJS의 사망·피격 반응 파이프라인을 구현하고 실제 Unreal 빌드까지 확인해.",
-  "canonicalProject": "C:\\Users\\sster\\Documents\\Github\\Project_MJS\\Project_MJS.uproject",
+  "canonicalProject": "C:\\Projects\\QwenFixture\\Project_MJS\\Project_MJS.uproject",
   "initialMessages": [
     {
       "role": "user",
@@ -14,7 +14,7 @@
       "role": "tool",
       "toolResults": [
         {
-          "content": "{\"ok\":true,\"path\":\"project://Source/Project_MJS/Public/Character/SharedComponent/HealthComponent.h\",\"absolutePath\":\"C:\\\\Users\\\\sster\\\\Documents\\\\Github\\\\Project_MJS\\\\Source\\\\Project_MJS\\\\Public\\\\Character\\\\SharedComponent\\\\HealthComponent.h\",\"activeProject\":\"C:\\\\Users\\\\sster\\\\Documents\\\\Github\\\\Project_MJS\\\\Project_MJS.uproject\",\"sha256\":\"f68abf0000000000000000000000000000000000000000000000000000000000\",\"fileVersionReceipt\":\"fvr1_M8kQREqKiycUHyTc51kwWA\",\"snapshotVersion\":8,\"snapshotCapturedAt\":\"2026-08-22T09:10:00.000Z\"}"
+          "content": "{\"ok\":true,\"path\":\"project://Source/Project_MJS/Public/Character/SharedComponent/HealthComponent.h\",\"absolutePath\":\"C:\\\\Projects\\\\QwenFixture\\\\Project_MJS\\\\Source\\\\Project_MJS\\\\Public\\\\Character\\\\SharedComponent\\\\HealthComponent.h\",\"activeProject\":\"C:\\\\Projects\\\\QwenFixture\\\\Project_MJS\\\\Project_MJS.uproject\",\"sha256\":\"f68abf0000000000000000000000000000000000000000000000000000000000\",\"fileVersionReceipt\":\"fvr1_M8kQREqKiycUHyTc51kwWA\",\"snapshotVersion\":8,\"snapshotCapturedAt\":\"2026-08-22T09:10:00.000Z\"}"
         }
       ]
     },
@@ -22,7 +22,7 @@
       "role": "tool",
       "toolResults": [
         {
-          "content": "{\"ok\":true,\"path\":\"project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp\",\"absolutePath\":\"C:\\\\Users\\\\sster\\\\Documents\\\\Github\\\\Project_MJS\\\\Source\\\\Project_MJS\\\\Private\\\\Character\\\\SharedComponent\\\\HealthComponent.cpp\",\"activeProject\":\"C:\\\\Users\\\\sster\\\\Documents\\\\Github\\\\Project_MJS\\\\Project_MJS.uproject\",\"sha256\":\"88ee870000000000000000000000000000000000000000000000000000000000\",\"fileVersionReceipt\":\"fvr1_CLlLYB0tsV7Q3fFFuXr-dg\",\"snapshotVersion\":12,\"snapshotCapturedAt\":\"2026-08-22T09:20:00.000Z\"}"
+          "content": "{\"ok\":true,\"path\":\"project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp\",\"absolutePath\":\"C:\\\\Projects\\\\QwenFixture\\\\Project_MJS\\\\Source\\\\Project_MJS\\\\Private\\\\Character\\\\SharedComponent\\\\HealthComponent.cpp\",\"activeProject\":\"C:\\\\Projects\\\\QwenFixture\\\\Project_MJS\\\\Project_MJS.uproject\",\"sha256\":\"88ee870000000000000000000000000000000000000000000000000000000000\",\"fileVersionReceipt\":\"fvr1_CLlLYB0tsV7Q3fFFuXr-dg\",\"snapshotVersion\":12,\"snapshotCapturedAt\":\"2026-08-22T09:20:00.000Z\"}"
         }
       ]
     },
@@ -30,7 +30,7 @@
       "role": "tool",
       "toolResults": [
         {
-          "content": "{\"ok\":true,\"path\":\"project://Source/Project_MJS/Public/Animation/CPlayerCharacterAnimInstance.h\",\"absolutePath\":\"C:\\\\Users\\\\sster\\\\Documents\\\\Github\\\\Project_MJS\\\\Source\\\\Project_MJS\\\\Public\\\\Animation\\\\CPlayerCharacterAnimInstance.h\",\"activeProject\":\"C:\\\\Users\\\\sster\\\\Documents\\\\Github\\\\Project_MJS\\\\Project_MJS.uproject\",\"sha256\":\"3c6b000000000000000000000000000000000000000000000000000000000000\",\"fileVersionReceipt\":\"fvr1_81lt_actual_anim_header\",\"snapshotVersion\":6}"
+          "content": "{\"ok\":true,\"path\":\"project://Source/Project_MJS/Public/Animation/CPlayerCharacterAnimInstance.h\",\"absolutePath\":\"C:\\\\Projects\\\\QwenFixture\\\\Project_MJS\\\\Source\\\\Project_MJS\\\\Public\\\\Animation\\\\CPlayerCharacterAnimInstance.h\",\"activeProject\":\"C:\\\\Projects\\\\QwenFixture\\\\Project_MJS\\\\Project_MJS.uproject\",\"sha256\":\"3c6b000000000000000000000000000000000000000000000000000000000000\",\"fileVersionReceipt\":\"fvr1_81lt_actual_anim_header\",\"snapshotVersion\":6}"
         }
       ]
     },
@@ -56,7 +56,7 @@
       "role": "tool",
       "toolResults": [
         {
-          "content": "{\"ok\":true,\"operation\":\"replaced\",\"path\":\"project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp\",\"activeProject\":\"C:\\\\Users\\\\sster\\\\Documents\\\\Github\\\\Project_MJS\\\\Project_MJS.uproject\",\"previousSha256\":\"88ee870000000000000000000000000000000000000000000000000000000000\",\"sha256\":\"2a47000000000000000000000000000000000000000000000000000000000000\",\"fileVersionReceipt\":\"fvr1_cpp_after_partial_success\",\"snapshotVersion\":13}"
+          "content": "{\"ok\":true,\"operation\":\"replaced\",\"path\":\"project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp\",\"activeProject\":\"C:\\\\Projects\\\\QwenFixture\\\\Project_MJS\\\\Project_MJS.uproject\",\"previousSha256\":\"88ee870000000000000000000000000000000000000000000000000000000000\",\"sha256\":\"2a47000000000000000000000000000000000000000000000000000000000000\",\"fileVersionReceipt\":\"fvr1_cpp_after_partial_success\",\"snapshotVersion\":13}"
         }
       ]
     },

@@ -5,6 +5,14 @@ const {
   looksElliptical,
   normalizedTextKey,
 } = require("./continuity-text.js");
+const { sanitizeUserAuthoredText } = require("./durable-memory-sanitizer.js");
+
+function retainedUserText(value, maxChars) {
+  const sanitized = sanitizeUserAuthoredText(value);
+  return maxChars
+    ? clip(sanitized, maxChars, { trim: false })
+    : sanitized;
+}
 
 function userMessages(messages) {
   return messages.filter((message) => message.role === "user" && String(message.text || "").trim());
@@ -19,7 +27,7 @@ function objectiveFromMessage(message, continuedBy = null) {
   return {
     kind: "user_objective",
     status: "active",
-    text: clip(message.text, 4000, { trim: false }),
+    text: retainedUserText(message.text, 4000),
     messageIndex: Number.isInteger(message.index) ? message.index : undefined,
     source: "current_history",
     ...(continuedBy ? { continuedBy } : {}),
@@ -32,7 +40,7 @@ function inheritedObjective(previousState, continuedBy = null) {
   return {
     kind: "user_objective",
     status: "active",
-    text: clip(previous.text, 4000, { trim: false }),
+    text: retainedUserText(previous.text, 4000),
     ...(Number.isInteger(previous.messageIndex) ? { messageIndex: previous.messageIndex } : {}),
     source: "prior_checkpoint",
     ...(continuedBy ? { continuedBy } : {}),
@@ -54,7 +62,7 @@ function archivedObjective(message, messages, nextUserIndex, reason) {
   return {
     kind: "user_objective",
     status: "completed_or_archived",
-    text: clip(message.text, 2000, { trim: false }),
+    text: retainedUserText(message.text, 2000),
     messageIndex: message.index,
     archiveReason: reason,
     assistantResponseEvidence: assistantEvidenceBetween(messages, message.index, nextUserIndex),
@@ -72,7 +80,7 @@ function mergeArchived(previousItems, currentItems, activeObjective, maxItems = 
     merged.push({
       kind: "user_objective",
       status: "completed_or_archived",
-      text: clip(item.text, 2000, { trim: false }),
+      text: retainedUserText(item.text, 2000),
       ...(Number.isInteger(item.messageIndex) ? { messageIndex: item.messageIndex } : {}),
       archiveReason: String(item.archiveReason || "superseded_by_later_user_request"),
       ...(item.assistantResponseEvidence ? { assistantResponseEvidence: item.assistantResponseEvidence } : {}),
@@ -84,7 +92,9 @@ function mergeArchived(previousItems, currentItems, activeObjective, maxItems = 
 function buildObjectiveContinuity(messages, previousState = null, options = {}) {
   const users = userMessages(messages);
   const latest = users.at(-1) || null;
-  const latestUserMessage = latest ? String(latest.text || "") : String(previousState?.latestUserMessage || "");
+  const latestUserMessage = retainedUserText(
+    latest ? latest.text : previousState?.latestUserMessage,
+  );
   const elliptical = Boolean(latest && looksElliptical(latest.text));
   const substantive = substantiveUserMessages(messages);
   const localAntecedent = elliptical
@@ -92,7 +102,7 @@ function buildObjectiveContinuity(messages, previousState = null, options = {}) 
     : null;
   const continuation = elliptical && latest ? {
     messageIndex: latest.index,
-    text: clip(latest.text, 1000, { trim: false }),
+    text: retainedUserText(latest.text, 1000),
   } : null;
   const activeObjective = elliptical
     ? (objectiveFromMessage(localAntecedent, continuation) || inheritedObjective(previousState, continuation))

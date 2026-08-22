@@ -2,7 +2,7 @@
 
 const path = require("node:path");
 
-const { sanitizeDurableValue } = require("./durable-memory-sanitizer.js");
+const { sanitizeStructuredDurableValue } = require("./durable-memory-sanitizer.js");
 
 function isRecord(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -79,7 +79,7 @@ function fileObservation(item, fallbackProject = "", fallbackOperation = "observ
   const descriptor = projectDescriptor(item, fallbackProject);
   const canonicalPath = canonicalFilePath(item, descriptor);
   if (!descriptor || !canonicalPath) return null;
-  return sanitizeDurableValue({
+  return sanitizeStructuredDurableValue({
     canonicalProject: descriptor || undefined,
     canonicalProjectRoot: projectRoot(descriptor) || undefined,
     canonicalPath: canonicalPath || undefined,

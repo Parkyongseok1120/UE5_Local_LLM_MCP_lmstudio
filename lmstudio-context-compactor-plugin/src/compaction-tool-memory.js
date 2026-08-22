@@ -12,8 +12,10 @@ const {
 } = require("./continuity-file-observations.js");
 const {
   isEphemeralCapabilityKey,
-  sanitizeDurableText,
-  sanitizeDurableValue,
+  sanitizeDerivedOperationalRecord,
+  sanitizeDerivedOperationalText,
+  sanitizeRawCapabilityText,
+  sanitizeStructuredDurableValue,
 } = require("./durable-memory-sanitizer.js");
 
 const INTERNAL_KEYS = new Set([
@@ -62,7 +64,11 @@ function sanitizeRetainedString(value, maxChars = 4000) {
     /[A-Za-z][A-Za-z0-9_]*/g,
     (token) => isControlKey(token) ? "[control-token-omitted]" : token,
   );
-  return clip(sanitizeDurableText(sanitized), maxChars);
+  return clip(sanitizeDerivedOperationalText(sanitized), maxChars);
+}
+
+function sanitizeRetainedStructureString(value) {
+  return sanitizeRawCapabilityText(value);
 }
 
 function exactProjectIdentity(value) {
@@ -76,7 +82,7 @@ function exactProjectIdentity(value) {
 function stripControl(value, depth = 0) {
   if (depth > 8) return "[depth limited]";
   if (Array.isArray(value)) return value.slice(0, 40).map((item) => stripControl(item, depth + 1));
-  if (!isRecord(value)) return typeof value === "string" ? sanitizeRetainedString(value) : value;
+  if (!isRecord(value)) return typeof value === "string" ? sanitizeRetainedStructureString(value) : value;
   const out = {};
   for (const [key, item] of Object.entries(value)) {
     if (isControlKey(key) || isEphemeralCapabilityKey(key, item)) continue;
@@ -101,7 +107,7 @@ function retainedFileFact(file, fallbackOperation = "observed") {
     fact.lastObservedAt = file.lastObservedAt || file.snapshotCapturedAt;
   }
   fact.mutationSnapshotState = "fresh_read_required";
-  return sanitizeDurableValue(fact);
+  return sanitizeStructuredDurableValue(fact);
 }
 
 function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
@@ -155,7 +161,7 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
     if (files.length) scoped.files = files;
     else delete scoped.files;
   }
-  return sanitizeDurableValue(scoped);
+  return sanitizeStructuredDurableValue(scoped);
 }
 
 function parseToolResult(content) {
@@ -190,8 +196,11 @@ function parseToolResult(content) {
         .map((file) => retainedFileFact(file, source.operation || "observed"))
         .filter(Boolean);
     }
+    for (const key of ["summary", "message", "status", "errorCode"]) {
+      if (typeof out[key] === "string") out[key] = sanitizeRetainedString(out[key]);
+    }
     if (!Object.keys(out).length) out.summary = "tool result contained no retained factual fields";
-    return sanitizeDurableValue(out);
+    return sanitizeStructuredDurableValue(out);
   } catch {
     return { summary: "malformed tool result omitted" };
   }
@@ -357,7 +366,7 @@ function parsedOutcomes(outcomes) {
   const parsed = [];
   for (const outcome of outcomes || []) {
     if (isRecord(outcome)) {
-      parsed.push(sanitizeDurableValue(outcome));
+      parsed.push(sanitizeDerivedOperationalRecord(outcome));
       continue;
     }
     try {

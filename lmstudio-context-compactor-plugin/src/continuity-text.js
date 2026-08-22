@@ -1,6 +1,15 @@
 "use strict";
 
-const { sanitizeDurableText } = require("./durable-memory-sanitizer.js");
+const {
+  sanitizeDerivedOperationalText,
+  sanitizeUserAuthoredText,
+} = require("./durable-memory-sanitizer.js");
+
+function sanitizeConversationText(role, value) {
+  return role === "user"
+    ? sanitizeUserAuthoredText(value)
+    : sanitizeDerivedOperationalText(value);
+}
 
 function clip(value, maxChars, { trim = true } = {}) {
   const raw = String(value ?? "");
@@ -45,7 +54,7 @@ function recentConversationTail(messages, previousTail = [], options = {}) {
     if (!item || !["user", "assistant"].includes(String(item.role || ""))) continue;
     combined.push({
       role: String(item.role),
-      text: clip(sanitizeDurableText(item.text), maxTextChars, { trim: false }),
+      text: clip(sanitizeConversationText(String(item.role), item.text), maxTextChars, { trim: false }),
       source: "prior_checkpoint",
     });
   }
@@ -53,7 +62,7 @@ function recentConversationTail(messages, previousTail = [], options = {}) {
     if (!message || !["user", "assistant"].includes(message.role) || !message.text) continue;
     combined.push({
       role: message.role,
-      text: clip(sanitizeDurableText(message.text), maxTextChars, { trim: false }),
+      text: clip(sanitizeConversationText(message.role, message.text), maxTextChars, { trim: false }),
       messageIndex: message.index,
       source: "current_history",
     });

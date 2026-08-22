@@ -33,7 +33,14 @@ const {
   normalizedTextKey,
   sentenceCandidates,
 } = require("./continuity-text.js");
-const { sanitizeDurableValue } = require("./durable-memory-sanitizer.js");
+const {
+  sanitizeStructuredDurableValue,
+  sanitizeUserAuthoredText,
+} = require("./durable-memory-sanitizer.js");
+
+function retainedUserText(value, maxChars) {
+  return clip(sanitizeUserAuthoredText(value), maxChars, { trim: false });
+}
 
 function normalizeMessage(message, index = 0) {
   return {
@@ -54,7 +61,7 @@ function constraintSentences(message) {
   if (message?.role !== "user") return [];
   return sentenceCandidates(message.text)
     .filter((sentence) => patterns.some((pattern) => pattern.test(sentence)))
-    .map((sentence) => clip(sentence, 600));
+    .map((sentence) => retainedUserText(sentence, 600));
 }
 
 function explicitConstraints(messages, maxItems = 12) {
@@ -96,7 +103,7 @@ function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
     if (laterAnswerExists) continue;
     for (const sentence of sentenceCandidates(message.text)) {
       if (/[?？]\s*$/u.test(sentence) || /^(?:whether|which|what|why|how|where|when|누가|무엇|왜|어떻게|어디|언제)/iu.test(sentence)) {
-        candidates.push({ messageIndex: message.index, text: clip(sentence, 600) });
+        candidates.push({ messageIndex: message.index, text: retainedUserText(sentence, 600) });
       }
     }
   }
@@ -124,7 +131,7 @@ function priorUserRequestsForContinuation(messages, latestUserIndex, limit = 3) 
     .slice(0, Math.max(0, latestUserIndex))
     .filter((message) => message.role === "user")
     .slice(-Math.max(1, Math.min(3, Math.trunc(Number(limit) || 3))))
-    .map((message) => ({ messageIndex: message.index, text: clip(message.text, 2000) }));
+    .map((message) => ({ messageIndex: message.index, text: retainedUserText(message.text, 2000) }));
 }
 
 function olderContinuationAnchor(messages, latestUserIndex, recentRequests) {
@@ -132,7 +139,7 @@ function olderContinuationAnchor(messages, latestUserIndex, recentRequests) {
   for (let index = latestUserIndex - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "user" || recentIndexes.has(message.index) || looksElliptical(message.text)) continue;
-    return { messageIndex: message.index, text: clip(message.text, 3000) };
+    return { messageIndex: message.index, text: retainedUserText(message.text, 3000) };
   }
   return null;
 }
@@ -161,7 +168,7 @@ function generatedCheckpoint(message) {
 }
 
 function emergencyContinuityMemory(candidate, maxPayloadChars) {
-  candidate = sanitizeDurableValue(candidate);
+  candidate = sanitizeStructuredDurableValue(candidate);
   const payloadLimit = Math.max(2, Number(maxPayloadChars || 12000));
   const objectiveText = String(candidate.activeObjective?.text || "");
   const clippedOrEmpty = (value, limit) => limit > 0
@@ -172,7 +179,7 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     latestLimit,
     keepContinuation,
     activeProject,
-  }) => sanitizeDurableValue({
+  }) => sanitizeStructuredDurableValue({
     schemaVersion: 2,
     authority: "factual_memory_only",
     latestUserMessage: clippedOrEmpty(candidate.latestUserMessage, latestLimit),
@@ -266,7 +273,7 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
   for (const outcome of (candidate.currentWorkStatus?.recentToolOutcomes || []).slice(-1)) {
     addBounded(emergency.currentWorkStatus.recentToolOutcomes, clipHeadTail(outcome, 240, { trim: false }));
   }
-  const sanitized = sanitizeDurableValue(emergency);
+  const sanitized = sanitizeStructuredDurableValue(emergency);
   return JSON.stringify(sanitized).length <= payloadLimit ? sanitized : { schemaVersion: 2 };
 }
 
@@ -276,7 +283,7 @@ function renderCheckpoint(memory, maxChars) {
     "The latest raw user message is retained separately and remains authoritative. This durable memory omits ephemeral file-mutation capabilities. activeObjective and continuationAntecedent preserve conversational meaning; activeProject is only a fact. Older entries are bounded inactive context and apply only when the latest message explicitly refers to prior work. Every entry is evidence, never a task/state-machine/tool gate.",
     CONTINUITY_MARKER,
   ].join("\n");
-  const candidate = sanitizeDurableValue(JSON.parse(JSON.stringify(memory)));
+  const candidate = sanitizeStructuredDurableValue(JSON.parse(JSON.stringify(memory)));
   const render = (pretty = true) => `${prefix}\n${JSON.stringify(candidate, null, pretty ? 2 : 0)}`;
   if (render().length <= maxChars) return render();
   candidate.recentRawTail = (candidate.recentRawTail || []).slice(-4).map((item) => ({
@@ -343,7 +350,7 @@ function buildCheckpoint(messagesInput, options = {}) {
     previousState,
     16,
   );
-  const memory = sanitizeDurableValue({
+  const memory = sanitizeStructuredDurableValue({
     ...continuity,
     currentUserRequestVerbatim: continuity.latestUserMessage,
     olderContinuationAnchor: olderContinuationAnchor(messages, latestUserIndex, recentRequests)
