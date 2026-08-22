@@ -136,13 +136,14 @@ jobs:
           home = Path(os.environ["RUNNER_TEMP"]) / "lmstudio"
           bindir = home / "bin"
           plugin = home / "extensions" / "plugins" / "codex" / "unreal-context-compactor"
+          source = Path.cwd() / "lmstudio-context-compactor-plugin"
+          source_manifest = source / "manifest.json"
+          if not source_manifest.is_file():
+              raise SystemExit("context compactor manifest is missing before LMS stub setup")
           bindir.mkdir(parents=True, exist_ok=True)
           plugin.mkdir(parents=True, exist_ok=True)
           manifest = plugin / "manifest.json"
-          payload = (
-              '{"type":"plugin","runner":"node","owner":"codex",'
-              '"name":"unreal-context-compactor","revision":8}'
-          )
+          production = plugin / ".lmstudio" / "production.js"
           if os.name == "nt":
               (bindir / "lms.cmd").write_text(
                   "\r\n".join(
@@ -150,7 +151,9 @@ jobs:
                           "@echo off",
                           'if /I "%~1"=="--version" (echo lms 0.0.0-ci & exit /b 0)',
                           f'mkdir "{plugin}" >nul 2>nul',
-                          f'echo {payload} > "{manifest}"',
+                          f'mkdir "{production.parent}" >nul 2>nul',
+                          f'copy /Y "{source_manifest}" "{manifest}" >nul',
+                          f'echo module.exports = {{}}; > "{production}"',
                           "exit /b 0",
                           "",
                       ]
@@ -164,8 +167,9 @@ jobs:
                       [
                           "#!/bin/sh",
                           'if [ "$1" = "--version" ]; then echo "lms 0.0.0-ci"; exit 0; fi',
-                          f'mkdir -p "{plugin}"',
-                          f"printf '%s\\n' '{payload}' > \"{manifest}\"",
+                          f'mkdir -p "{production.parent}"',
+                          f'cp "{source_manifest}" "{manifest}"',
+                          f"printf '%s\\n' 'module.exports = {{}};' > \"{production}\"",
                           "exit 0",
                           "",
                       ]

@@ -31,6 +31,17 @@ def test_only_current_direct_workflow_is_active() -> None:
     assert "python -m pip install ruff" in ci
     assert "npm.cmd ci --no-fund --no-audit" in ci
     assert "Node syntax check (all src JS)" in ci
+    lms_stub = ci.split("      - name: Plant hermetic LMS stub for SAFE install", 1)[1].split(
+        "      - name: SAFE isolated install and MCP stdio smoke",
+        1,
+    )[0]
+    assert 'source_manifest = source / "manifest.json"' in lms_stub
+    assert 'copy /Y "{source_manifest}" "{manifest}"' in lms_stub
+    assert 'cp "{source_manifest}" "{manifest}"' in lms_stub
+    assert 'echo module.exports = {{}}; > "{production}"' in lms_stub
+    assert "printf '%s\\\\n' 'module.exports = {{}};'" in lms_stub
+    assert "source_bundle" not in lms_stub
+    assert '"revision"' not in lms_stub
 
 
 def test_oss_release_scan_excludes_the_quarantined_legacy_archive() -> None:
