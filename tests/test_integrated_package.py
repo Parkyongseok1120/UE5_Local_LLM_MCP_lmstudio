@@ -109,6 +109,26 @@ def _load_builder_module():
     return module
 
 
+def test_builder_supports_package_import_used_by_release_ci() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from scripts import build_integrated_package as builder; "
+                "assert callable(builder._assert_clean_inventory)"
+            ),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
 def _node_relative_require_closure(*entries: Path) -> set[str]:
     pattern = re.compile(r'''require\(["'](\./[^"']+)["']\)''')
     pending = [entry.resolve() for entry in entries]

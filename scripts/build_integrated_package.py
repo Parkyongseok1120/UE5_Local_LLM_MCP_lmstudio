@@ -17,8 +17,6 @@ import zipfile
 from pathlib import Path
 from typing import Iterable
 
-from workspace_paths import resolve_index_path_in_workspace
-
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE_ROOT = "Evidence-First-Integrated"
 
@@ -566,6 +564,11 @@ def _validate_destination(path: Path, source: Path) -> Path:
 
 def _included_index_relative(source: Path) -> Path:
     """Return the configured source-local index path for --include-index."""
+
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from workspace_paths import resolve_index_path_in_workspace
 
     index = resolve_index_path_in_workspace(source)
     try:
