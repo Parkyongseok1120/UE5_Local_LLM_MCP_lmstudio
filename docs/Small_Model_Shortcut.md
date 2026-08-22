@@ -5,26 +5,21 @@ do not need a second agent framework. The user selects the model in LM Studio;
 the selected model remains the sole owner of reasoning, tool choice and order,
 stopping, and the final answer.
 
-## Starting profiles
+## Current model status
 
 ```powershell
-$env:UNREAL_RAG_MODEL_PROFILE = "qwen3_5_9b"
 python scripts/load_sampling_preset.py --show-profile
 ```
 
-Other compact starting points are `qwen3_8b`,
-`qwen3_5_9b_deepseek_v4_flash`, `gpt_oss_small`, and `gpt_oss_20b`.
+Qwen 3.8 27B is the primary currently validated recommendation. Muse Glimmer is
+under testing and is not yet a validated recommendation. Qwen 3.5, Qwen 3.6
+27B, and GPT-OSS profile names may still exist for historical compatibility or
+reproduction, but they are not current recommendations.
 
-| Profile | Context | Quant | Parallel requests |
-|---|---:|---|---:|
-| `qwen3_8b` | 24576 | Q4_K_M | 1 |
-| `qwen3_5_9b` | 24576 | Q4_K_M | 1 |
-| `qwen3_5_9b_deepseek_v4_flash` | 140032 | Q4_K_M | 1 |
-| `gpt_oss_small` | 32768 | Q4_K_M | 1 |
-| `gpt_oss_20b` | 32768 | Q4_K_M | 1 |
-
-The Flash profile also lists 65536 as a portable alternative. Choose the
-largest context that leaves reliable memory headroom on the actual machine.
+If the primary model does not fit the machine, select a compact model only after
+validating its exact artifact, tool-call behavior, context size, and memory
+headroom locally. This guide intentionally does not endorse an unvalidated
+compact fallback.
 
 ## Keep the chat usable
 
@@ -46,10 +41,12 @@ or profile-controlled retry loop.
 ## Safety is server-owned
 
 Smaller models do not weaken the MCP safety boundary. Direct writes still use
-path scope, exact-read/CAS checks, atomic replacement, locks, recoverable
-deletion approval, size limits, and bounded responses. Semantic denylist results
-are non-blocking advisories, including when the analyzer is unavailable. Builds
-are immediate diagnostic operations when enabled; they are not a completion gate.
+path scope, receipt-first snapshot/CAS checks, atomic replacement, locks,
+recoverable deletion approval, size limits, and bounded responses. A valid raw
+`expectedHash` remains compatible, and a reliable same-session latest snapshot
+may be resolved automatically. Semantic denylist results are non-blocking
+advisories, including when the analyzer is unavailable. Builds are immediate
+diagnostic operations when enabled; they are not a completion gate.
 
 The profile's `writeSafety` fields are bounded compatibility inputs for the
 legacy compile wrapper. They do not grant write permission and do not change
@@ -58,9 +55,11 @@ Direct MCP behavior.
 ## Optional compaction
 
 Enable the LM Studio context compactor independently when long chats need it.
-Compaction retains factual context but does not select a profile, alter static
-sampling, create a plan, choose tools, or decide that the user's request is
-complete. A compact model works with or without the compactor.
+Compaction retains bounded factual continuity: the active objective, continuation
+antecedent, active project/current work, unresolved items, and relevant
+file/tool/build facts. It does not select a profile, alter static sampling,
+create a plan, choose tools, require a next call, or decide that the user's
+request is complete. A compact model works with or without the compactor.
 
 For model-specific caveats and alias lookup, see
 [`Model_Profiles.md`](Model_Profiles.md) and

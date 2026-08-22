@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC3
+# UE5_Local_LLM_MCP_lmstudio 1.3.0
 
-> **GitHub prerelease (not stable/release-ready yet):** product metadata is aligned to **1.3.0 RC3**, while `releaseReady` remains `false` until Windows physical install and the remaining release gates pass. The portable reasoning skill, LM Studio MCP, preset, and Node/Python adapters install through one integrated workflow on Windows and Ubuntu Linux; **Apple Silicon macOS** physical FULL install is **PASS**; **Intel macOS** cannot install LM Studio-based components (custom Codex/Cline-only is allowed). Host **Python 3.10+** is required before `./install.sh` can start. See [1.3.0 RC3 notes](docs/Release_Notes_1_3_0_RC3.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **Stable v1.3.0 release:** Direct Model Mode is the supported default, and `releaseReady: true` records automated release/package readiness. The portable reasoning skill, LM Studio MCP, context plugin, and Node/Python adapters install through one integrated workflow on Windows, Ubuntu Linux, and Apple Silicon macOS; Intel macOS remains limited to custom Codex/portable-rule/Cline-only installs. Apple Silicon has a recorded physical FULL-install pass. A prior native Windows LM Studio GUI session exercised RAG/MCP tools and a real UBT invocation, but a clean-machine physical installer lifecycle and universal project/engine/plugin compatibility are not claimed. Host **Python 3.10+** is required before `./install.sh` can start. See the [1.3.0 release notes](docs/Release_Notes_1_3_0.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -28,22 +28,22 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — August 2026**
 >
-> **Current product label: 1.3.0 RC3 (prerelease).** RC3 packages the verified recovery state machine, atomic mutation journal, canonical project/build proof, Automation scope hardening, and Windows/POSIX path identity from the post-RC2 Develop line. Apple Silicon physical FULL install is recorded as PASS; Windows physical install is still unverified, so stable distribution remains blocked and `releaseReady` stays false.
+> **Current product label: 1.3.0 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and hard-compaction continuity memory. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
 >
-> The current runtime defaults to **Direct Model Mode**: the selected LLM owns tool choice and sequencing, while the MCP servers provide stable capabilities and enforce filesystem, process, and build safety. The default path has no server-owned task, route, planner, or synthesis gate. The saved v1.2.5 measurements and RC3 control-plane validation remain historical evidence, not a new Direct-mode score. Do not treat RC3 as stable until Windows validation and the remaining release gates close.
+> Automated source, package, installer, safety, and cross-platform gates define release readiness. Apple Silicon physical FULL-install evidence and a native Windows LM Studio GUI/RAG/UBT workflow record are retained, while clean-machine installer certification for every host and universal Unreal project/engine/plugin/editor-runtime compatibility remain outside the claim. The saved v1.2.5 measurements and RC control-plane validation remain historical evidence, not a new 1.3.0 Direct-mode score.
 
 ## Documentation Hub
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0_RC3.md"><img alt="1.3.0 RC3 Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC3-orange?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_0.md"><img alt="1.3.0 Notes" src="https://img.shields.io/badge/Release-1.3.0-blue?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
 </p>
 
 ## Latest Results
 
-These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 RC3 live rerun has not been completed yet.
+These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 Direct-mode live rerun has not been completed yet.
 
 | Model / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
@@ -59,12 +59,13 @@ These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 RC3 l
   <a href="docs/Holdout_Case_Difficulty.md"><img alt="Holdout Difficulty" src="https://img.shields.io/badge/Docs-36%20Case%20Difficulty-red?logo=gitbook"></a>
 </p>
 
-These are internal UE 5.8 RAG/MCP/UBT workflow measurements, not public standardized model benchmarks.
+These are historical internal UE 5.8 RAG/MCP/UBT workflow measurements, not public standardized model benchmarks or current model recommendations.
+
 ### Model-size and language caveat
 
-The 9B profile is the current **minimum floor**, not a reliability target. It is still under active stabilization, and tool selection, argument construction, repeated MCP calls, and long edit/build loops can remain unstable even when the MCP server and validation logic are healthy. This is a model-capability limitation, not automatically an MCP bug. The gap between the measured 9B and 27B workflows is large enough that their Pass@1 numbers should not be read as equivalent agent behavior.
+**Qwen 3.8 27B is the primary currently recommended and validated operating model for this stack.** That statement reflects current operating validation; no paired 1.3.0 score for it is claimed in the historical benchmark tables above. Muse Glimmer is under testing and is not yet a validated recommendation.
 
-For autonomous multi-step Unreal work, prefer a **24B–27B instruction/tool-calling model**. Keep 9B for bounded, short tasks after the target file, symbol, and intended change are already known. For Korean-first use, validate the exact local checkpoint: Qwen3 advertises support for 100+ languages and tool calling, while coding-specialized models such as Devstral Small 2 may be stronger at codebase operations but should not be assumed to have the same Korean fluency. See the [Qwen3 model card](https://huggingface.co/Qwen/Qwen3-30B-A3B) and [Devstral Small 2 model card](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512).
+Qwen 3.5, the community fine-tuned Qwen 3.6 27B checkpoint, and GPT-OSS are not currently recommended. Their saved rows and numbers remain historical evidence only. Smaller models can still be useful for bounded work, but they should not be inferred to provide the same autonomous tool-use reliability as the current operating recommendation.
 
 Historical RC3 workflow tests showed that deterministic handoffs cannot make a small model retain long evidence chains or produce exact tool calls reliably. That model-side limitation still matters, but the supported runtime no longer inserts the old Python task/route/planning/synthesis transitions. Their source remains only as unsupported historical/evaluation material and is omitted from the portable package.
 
@@ -108,7 +109,7 @@ The normal `unreal-rag` and `unreal-agent` entries are capability providers. The
 
 > **Important — select the real LLM as the chat model.**
 >
-> 1. Load and select the actual instruction/tool-calling model you want to use, such as Qwen, in LM Studio's **model dropdown**.
+> 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current primary validated recommendation.
 > 2. Create or open the chat and enable **`codex/unreal-context-compactor`** in that chat's **plugin panel**.
 > 3. Keep the actual LLM selected. `unreal-context-compactor` is a chat plugin, not a model or proxy model, and it has no `targetModel` to configure.
 > 4. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
@@ -129,6 +130,10 @@ The context plugin is a continuity aid, not a prerequisite for Direct MCP author
 One MCP installation can serve multiple Unreal projects and installed UE versions. `set_active_project` provides a convenient default, but Direct file, search, edit, log, command, build, and Automation tools accept an exact `.uproject` path or exact discovered project name through their advertised `project`, `projectRoot`, or `hint` field where applicable. A per-call project selector overrides the active project for that call only; it does not create route ownership or retarget another chat.
 
 Build and Automation calls resolve the selected project's engine association and may also accept an explicit `engineRoot`. This allows UE 5.x projects on different engine installations to share the same server. Prefer exact selectors: an ambiguous project name returns an error instead of silently choosing another project.
+
+RAG generations are engine-bound sibling shards. An exact project selector routes to the matching shard, and one call never merges evidence from projects bound to different engines. Existing-file reads and successful mutations return an opaque `fileVersionReceipt`; prefer it for later edits, while a valid raw `expectedHash` remains compatible. A reliable same-session latest snapshot may resolve automatically, and external changes fail closed with `FILE_VERSION_CONFLICT`.
+
+For portable builds, `target=Editor` resolves the selected project's canonical, configured preferred, or sole discovered custom Editor target; an explicit non-Editor target is unchanged. Build and Automation share the bounded process runner and timeout process-tree termination.
 
 ### Strict is a separate manual opt-in
 
@@ -157,10 +162,9 @@ See [Rider_Cline_Smoke_Checklist.md](docs/Rider_Cline_Smoke_Checklist.md) and [c
 > In LM Studio, turn off or hide the default **JavaScript/TypeScript Code Sandbox** plugin for Unreal coding chats. That sandbox uses a different working directory and is **not** rooted at your active `.uproject`; letting the model use it for file I/O causes wrong paths, broken edits, and conflicts with `unreal-agent`. Use only `unreal-rag` + `unreal-agent` MCP tools (`read_file`, `replace_in_file`, `write_file` for new files). Remove `lmstudio/js-code-sandbox:*`, `mcp/unreal-agent:*`, and `mcp/unreal-rag:*` broad auto-approval patterns from `%USERPROFILE%\.lmstudio\settings.json` and restart LM Studio; the MCP wildcards would suppress host confirmation for deletion and explicitly authorized Editor launch. The installer and `scripts/patch_mcp_config.py` perform this cleanup while preserving unrelated settings. Details: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md).
 
 ```powershell
-.\rag.ps1 collect-source -Root C:\UE_5.6\Engine\Source
-.\rag.ps1 collect-projects -Root C:\Projects\MyGame
-.\rag.ps1 collect-symbols -Root C:\Projects\MyGame\Source -SymbolScope project -ProjectName MyGame
-.\rag.ps1 build
+.\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
+.\rag.ps1 refresh -RefreshScope project_source
+.\rag.ps1 doctor
 ```
 
 Use safe mode first. Enable file writes and UBT only for trusted projects:
@@ -191,7 +195,7 @@ Practical rules for day-to-day Unreal project work:
 - **Do not paste full UBT/linker logs** into chat. Use `read_unreal_logs`: `mode=tail` for recent failures, `mode=first_error` to scan from byte zero for the original cause, and `mode=range` with `cursorByte`/`nextCursorByte` for bounded traversal.
 - **Header-then-.cpp is normal.** `write_file` on a new header may show advisory `CPP_DEFINITION_MISSING` until the matching `.cpp` is written — that is expected, not a rollback trigger on its own.
 - **Avoid invented UE APIs** the model often hallucinates: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. Prefer `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, `SpawnTransform` by value, and the owning actor/subsystem's `GetWorld()`.
-- **Compact tool responses:** `build_unreal_project` returns a one-line summary + up to 40 likely errors + its timestamped `fullLogPath` under `.agent/logs` (not full stdout/stderr). `read_unreal_logs` defaults to the newest bounded tail and exposes whether the source was truncated. The chat plugin retains factual memory such as the latest real user request, observed/modified files, recent tool outcomes, and recent build/test state; it deliberately removes task/route/control/synthesis internals and required-next-tool directives.
+- **Compact tool responses:** `build_unreal_project` returns a one-line summary + up to 40 likely errors + its timestamped `fullLogPath` under `.agent/logs` (not full stdout/stderr). `read_unreal_logs` defaults to the newest bounded tail and exposes whether the source was truncated. The chat plugin retains bounded factual continuity such as the latest real user request, active objective, continuation antecedent, current work and unresolved items, observed/modified files, recent tool outcomes, and recent build/test state; it deliberately removes task/route/control/synthesis internals and required-next-tool directives.
 
 Automatic compaction extends a session but cannot shrink an oversized system prompt/tool schema or repair a saturated KV cache. If it cannot restore the hard safety margin, start a fresh chat with a short factual handoff containing the exact project, current request, files already changed, and remaining build/test errors.
 
@@ -203,7 +207,8 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 | Topic | File |
 |---|---|
-| 1.3.0 RC3 release notes | [docs/Release_Notes_1_3_0_RC3.md](docs/Release_Notes_1_3_0_RC3.md) |
+| 1.3.0 release notes | [docs/Release_Notes_1_3_0.md](docs/Release_Notes_1_3_0.md) |
+| 1.3.0 RC3 release notes (historical) | [docs/Release_Notes_1_3_0_RC3.md](docs/Release_Notes_1_3_0_RC3.md) |
 | 1.3.0 RC2 release notes | [docs/Release_Notes_1_3_0_RC2.md](docs/Release_Notes_1_3_0_RC2.md) |
 | 1.3.0 Beta5 release notes (was RC2) | [docs/Release_Notes_1_3_0_Beta5.md](docs/Release_Notes_1_3_0_Beta5.md) |
 | 1.3.0 Beta4 release notes (was RC1) | [docs/Release_Notes_1_3_0_Beta4.md](docs/Release_Notes_1_3_0_Beta4.md) |
@@ -220,9 +225,9 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 ## Summary
 
-1.3.0 RC3 is a GitHub prerelease (`releaseReady` false). The new `v1.3.0-rc3` tag does not rewrite any earlier RC/Beta tag. Legacy Strict transition/recovery behavior, atomic rollback, project proof, installer paths, and release hygiene remain guarded by automated checks; the default Direct entries do not invoke that task workflow. GUI E2E and a new paired live-model score are not claimed.
+1.3.0 is the stable Direct Model Mode release (`releaseReady: true` for automated release/package readiness). The `v1.3.0` tag does not rewrite any earlier RC/Beta tag. Scoped SHA-256 file-version receipts, bounded process execution, RAG provenance, context continuity, installer paths, and package hygiene are guarded by automated checks. Historical GUI evidence includes a native Windows LM Studio RAG/MCP session and real UBT invocation, but a clean-machine Windows installer lifecycle, universal physical compatibility, GUI coverage for the final Direct runtime, and a new paired live-model score are not claimed.
 
-For narrow UE 5.8 compile-fix work, the current community fine-tuned Qwen 3.6 27B local workflow is strong in live UBT validation (36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B also has a saved compact-model result (35/36 Pass@K, 33/36 Pass@1). Treat these as internal workflow results, not general model equivalence to Claude or GPT-class systems.
+For narrow UE 5.8 compile-fix work, historical community fine-tuned Qwen 3.6 27B and Qwen 3.5 9B runs recorded 36/36 Pass@K with 36/36 Pass@1 and 35/36 Pass@K with 33/36 Pass@1, respectively. Those checkpoints and GPT-OSS are not current recommendations; the values remain historical internal workflow evidence, not general model equivalence to Claude or GPT-class systems. Qwen 3.8 27B is the current primary recommended and validated operating model, without a claimed paired 1.3.0 score. Muse Glimmer remains under testing and is not yet a validated recommendation.
 
 If you want local LLMs for Unreal C++ with less hallucination, select the real model, search evidence first, read the exact project source, then answer or patch. Improve RAG, validation, safety boundaries, and failure analysis first; use fine-tuning later only when the workflow is already measured on real project errors.
 

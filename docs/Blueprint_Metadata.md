@@ -24,10 +24,12 @@ Editor-side `.uasset` mutation is outside the portable Direct metadata contract.
 
 Blueprint export records best-effort graph, node, and pin summaries. On UE 5.8, full node/pin coverage requires the `LmStudioGraphExporter` C++ editor plugin because Python cannot read protected `EdGraph.Nodes` directly.
 
-Install it once per project through the integrated installer's explicit plugin
-prompt, or copy `tools/ue_plugins/LmStudioGraphExporter` into the project's
-`Plugins` folder and enable it deliberately. Declining leaves the project
-untouched and uses the Python fallback.
+The integrated installer never installs or enables this plugin. With Unreal
+Editor closed, manually copy `tools/ue_plugins/LmStudioGraphExporter` into the
+exact selected project's `Plugins` folder, add/enable it in that project's
+`.uproject`, then reopen the Editor. If you do not deliberately make that project
+mutation, the project remains untouched and the exporter uses the Python
+fallback.
 
 With the plugin installed, Blueprint export records:
 
@@ -63,8 +65,8 @@ Material instances inherit the parent material graph when they have no local exp
 Project text collection already includes `.usf` and `.ush` files. Use:
 
 ```powershell
-.\rag.ps1 collect-projects -Root C:\Projects\MyGame
-.\rag.ps1 build-incremental
+.\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
+.\rag.ps1 refresh -RefreshScope project_source
 ```
 
 Then ask the chat model to call `unreal_rag_search` with a shader-focused query.
@@ -94,3 +96,8 @@ The exporter covers SkeletalMesh skeleton/material/physics asset references, Ani
 ## Implementation boundary
 
 These exports make BP, Material, SkeletalMesh, AnimBP, Notify, Montage, and Sequencer relationships visible to RAG. Actual node rewiring or `.uasset` mutation must still be executed inside Unreal Editor through Editor Python, Editor Utility, or a dedicated plugin command; the repository-side index gives the agent the map it needs before making those Editor-side changes.
+
+Direct Editor ingest binds every row to the canonical selected project root plus
+its descriptor stem and commits it only to that project's engine-bound shard.
+Same-name project clones are not interchangeable, and a single query never merges
+Editor evidence across engine shards.

@@ -12,7 +12,7 @@ const { resolveAgentStateRoot } = require("./runtime-state-root");
 const pendingPaths = new Map();
 const OWNER = `${process.pid}:${crypto.randomUUID()}`;
 const HEARTBEAT_INTERVAL_MS = 60_000;
-const STALE_LOCK_AGE_MS = HEARTBEAT_INTERVAL_MS * 3;
+const LOCK_INITIALIZATION_GRACE_MS = 5_000;
 let processIdentityCache;
 
 function canonicalLockKey(absPath, hostPlatform = process.platform) {
@@ -148,11 +148,16 @@ function isStaleLock(lockPath) {
     return true;
   }
   const owner = readLockOwner(lockPath);
-  if (!owner) {
-    return true;
+  const ownerMatch = /^(\d+):[^\r\n]+(?:\r?\n|$)/u.exec(owner);
+  if (!ownerMatch) {
+    try {
+      const ageMs = Math.max(0, Date.now() - fs.statSync(lockPath).mtimeMs);
+      return ageMs >= LOCK_INITIALIZATION_GRACE_MS;
+    } catch {
+      return true;
+    }
   }
-  const pidPart = owner.split(":")[0];
-  const pid = Number(pidPart);
+  const pid = Number(ownerMatch[1]);
   if (!Number.isFinite(pid) || pid <= 0) {
     return true;
   }
@@ -187,9 +192,13 @@ function tryAcquireCrossProcessLock(absPath, label = "write", stateRoot = resolv
   }
   const lockPath = lockFilePath(absPath, stateRoot);
   try {
+    const payload = lockPayload(label);
     const fd = fs.openSync(lockPath, "wx");
-    fs.writeFileSync(fd, lockPayload(label));
-    fs.closeSync(fd);
+    try {
+      fs.writeFileSync(fd, payload);
+    } finally {
+      fs.closeSync(fd);
+    }
     pendingPaths.set(key, { owner: OWNER, label, lockPath });
     return { ok: true, lockPath, key };
   } catch (err) {
@@ -210,10 +219,14 @@ function tryAcquireCrossProcessLock(absPath, label = "write", stateRoot = resolv
           if (!isStaleLock(lockPath)) {
             return { ok: false, holder: readLockOwner(lockPath), scope: "cross_process" };
           }
+          const payload = lockPayload(label);
           fs.unlinkSync(lockPath);
           const reclaimedFd = fs.openSync(lockPath, "wx");
-          fs.writeFileSync(reclaimedFd, lockPayload(label));
-          fs.closeSync(reclaimedFd);
+          try {
+            fs.writeFileSync(reclaimedFd, payload);
+          } finally {
+            fs.closeSync(reclaimedFd);
+          }
           pendingPaths.set(key, { owner: OWNER, label, lockPath });
           return { ok: true, lockPath, key, staleReclaimed: true };
         } catch (reclaimError) {

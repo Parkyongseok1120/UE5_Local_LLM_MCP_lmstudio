@@ -1,6 +1,6 @@
 {
   "name": "lmstudio-unreal-agent-mcp",
-  "version": "0.3.18",
+  "version": "0.3.19",
   "description": "Safe local file/build MCP server for LM Studio Unreal Engine coding agents.",
   "private": true,
   "main": "src/direct-server.js",

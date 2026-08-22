@@ -22,16 +22,25 @@ and do not hard-code an Unreal version or installation.
 
 - Treat current project files and build/log output as the source of truth; do
   not invent Unreal APIs.
-- Read an existing file before changing it. Use the returned SHA-256 with an
-  exact, uniquely matching patch; on a conflict, re-read instead of overwriting.
+- Read an existing file before changing it. Prefer its `fileVersionReceipt` for
+  an exact, uniquely matching patch; a valid raw `expectedHash` remains
+  compatible, and a reliable same-session latest snapshot may resolve
+  automatically. Use the new receipt returned by a successful mutation for a
+  consecutive edit. On `FILE_VERSION_CONFLICT` or `FILE_SNAPSHOT_*`, re-read
+  instead of overwriting.
 - `write_file` is for a new file. Multi-file edits are allowed only through the
   bounded atomic bundle capability and each existing-file patch still needs its
-  current hash.
+  current receipt, compatible raw hash, or reliable same-session snapshot.
 - Keep project-root containment, path normalization, size/output limits, atomic
   writes, per-path locks, recoverable-delete approval, and command allowlists.
 - Static validation is advisory. A requested build may run immediately when
   build execution is enabled, and its real UBT/UHT/compiler output is the
   authoritative diagnostic.
+- `target=Editor` resolves the selected project's canonical, configured
+  preferred, or sole discovered custom Editor target; preserve explicit
+  non-Editor targets. Build and Automation
+  share the bounded process runner, so inspect capture/omitted-byte metadata and
+  do not assume `fullLogPath` is unlimited raw output.
 - Avoid introducing C++ namespaces unless the target Unreal project requires
   them.
 

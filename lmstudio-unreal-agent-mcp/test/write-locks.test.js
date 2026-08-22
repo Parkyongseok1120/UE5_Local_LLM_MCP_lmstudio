@@ -119,6 +119,30 @@ if (result.ok) {
   }
 });
 
+test("fresh empty lock is protected during initialization and aged empty lock is reclaimed", () => {
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "initializing-lock-state-"));
+  const target = path.join(stateRoot, "target.cpp");
+  fs.writeFileSync(target, "content");
+  const lockPath = lockFilePath(target, stateRoot);
+  fs.closeSync(fs.openSync(lockPath, "wx"));
+  try {
+    assert.strictEqual(isStaleLock(lockPath), false);
+    const blocked = tryAcquireCrossProcessLock(target, "contender", stateRoot);
+    assert.strictEqual(blocked.ok, false);
+    assert.strictEqual(blocked.scope, "cross_process");
+
+    const aged = new Date(Date.now() - 10_000);
+    fs.utimesSync(lockPath, aged, aged);
+    assert.strictEqual(isStaleLock(lockPath), true);
+    const acquired = tryAcquireCrossProcessLock(target, "replacement", stateRoot);
+    assert.strictEqual(acquired.ok, true, JSON.stringify(acquired));
+    assert.strictEqual(acquired.staleReclaimed, true);
+  } finally {
+    releaseCrossProcessLock(target, stateRoot);
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test("reused live PID lock is stale when its birth identity differs", () => {
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reused-live-pid-state-"));
   const target = path.join(stateRoot, "target.cpp");

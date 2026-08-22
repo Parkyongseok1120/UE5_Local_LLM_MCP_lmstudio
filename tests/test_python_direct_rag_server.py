@@ -320,6 +320,33 @@ def test_transport_dispatches_capability_without_lifecycle_state(tmp_path: Path)
     assert not any(key.casefold().startswith("task") for key in structured)
 
 
+def test_transport_accepts_leading_utf8_bom_from_windows_powershell(
+    tmp_path: Path,
+) -> None:
+    output = io.StringIO()
+    errors = io.StringIO()
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18"},
+    }
+    server = DirectRagServer(
+        tmp_path / "rag.sqlite",
+        workspace=tmp_path,
+        input_stream=io.StringIO("\ufeff" + json.dumps(initialize) + "\n"),
+        output_stream=output,
+        error_stream=errors,
+    )
+
+    server.run()
+
+    response = _responses(output)[0]
+    assert response["id"] == 1
+    assert response["result"]["serverInfo"]["name"] == "unreal-rag-direct"
+    assert errors.getvalue() == ""
+
+
 def test_direct_project_switch_does_not_load_wrapper_or_validator_stack(tmp_path: Path) -> None:
     shared = tmp_path / "unreal-workspace.json"
     project = tmp_path / "Demo" / "Demo.uproject"

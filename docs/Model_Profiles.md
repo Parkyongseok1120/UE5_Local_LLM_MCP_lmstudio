@@ -12,11 +12,12 @@ stopping, and the final answer. All checked-in profiles use
 
 ## Select a recommendation
 
-The checked-in `activeProfile` is the fallback. A user can explicitly select a
-different recommendation for a process:
+The checked-in `activeProfile` is the fallback. Qwen 3.8 27B is the primary
+currently validated recommendation. A user can explicitly select that profile
+for a process:
 
 ```powershell
-$env:UNREAL_RAG_MODEL_PROFILE = "qwen3_5_9b"
+$env:UNREAL_RAG_MODEL_PROFILE = "qwen3_8_27b"
 python scripts/load_sampling_preset.py --show-profile
 ```
 
@@ -46,8 +47,10 @@ chat.
 | `notes` | Hardware or model-specific caution for the user |
 
 `writeSafety` cannot authorize a write. Direct MCP write tools independently
-enforce path scope, exact-read/CAS checks, atomic replacement, locks, deletion
-approval, and output bounds.
+enforce path scope, receipt-first snapshot/CAS checks, atomic replacement,
+locks, deletion approval, and output bounds. A valid raw `expectedHash` remains
+compatible, and a reliable same-session latest snapshot may resolve
+automatically.
 
 The following controller surfaces are intentionally absent:
 
@@ -61,26 +64,21 @@ The following controller surfaces are intentionally absent:
 for old callers. They produce a warning on stderr and never alter the resolved
 sampling values.
 
-## Included profiles
+## Current recommendation and compatibility profiles
 
-| Profile | Context | Quant | Parallel | Notes |
+| Profile | Context | Quant | Parallel | Status |
 |---|---:|---|---:|---|
-| `qwen3_8_27b` | 65536 | Q4_K_M | 1 | Default; 262144 is listed as a hardware-dependent alternative |
-| `qwen3_6_27b` | 32768 | Q4_K_M | 1 | 65536 alternative |
-| `qwen3_8b` | 24576 | Q4_K_M | 1 | Compact load |
-| `qwen3_5_9b` | 24576 | Q4_K_M | 1 | 32768 alternative where supported |
-| `qwen3_5_9b_deepseek_v4_flash` | 140032 | Q4_K_M | 1 | 65536 portable and 262144 native alternatives |
-| `generic_large` | 49152 | Q5_K_M | 1 | Generic large-model starting point |
-| `gpt_oss_20b` | 32768 | Q4_K_M | 1 | Validate the exact GGUF/tool-call behavior |
-| `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | 32768 | Q4_K_M | 1 | Community model starting point |
-| `gpt_oss_small` | 32768 | Q4_K_M | 1 | Compact GPT OSS starting point |
-| `gpt_oss_120b` | 32768 | Q5_K_M | 1 | Large GPT OSS starting point |
-| `qwen_coder_large` | 32768 | Q4_K_M | 1 | Generic coder starting point |
+| `qwen3_8_27b` | 65536 | Q4_K_M | 1 | Primary currently validated recommendation; 262144 remains a hardware-dependent alternative |
 
-These are starting recommendations, not capability grades or quality
-guarantees. Quantization, context size, GPU offload, flash attention, and
-parallel requests must be validated on the actual machine and exact model
-artifact.
+Muse Glimmer is under testing and is not yet a validated recommendation or a
+published checked-in profile. Qwen 3.5, Qwen 3.6 27B, and GPT-OSS aliases and
+profiles may remain in `lmstudio_sampling.json` so an existing installation can
+be inspected or reproduced, but they are historical compatibility/evaluation
+entries and are not currently recommended. Other generic or compact entries are
+unvalidated compatibility starting points, not product capability grades.
+
+Quantization, context size, GPU offload, flash attention, and parallel requests
+must still be validated on the actual machine and exact model artifact.
 
 ## Inspect static sampling
 
@@ -90,7 +88,7 @@ python scripts/load_sampling_preset.py --sampling-profile qwen3_8_27b --show-pro
 ```
 
 Changing sampling in LM Studio remains a user choice. The MCP and optional
-compactor do not rewrite these values while a task is running.
+compactor do not rewrite these values during a chat.
 
 Historical Pass@K and model-comparison results, where still useful, are kept in
 [`Model_Measurement_Results.md`](Model_Measurement_Results.md). They describe

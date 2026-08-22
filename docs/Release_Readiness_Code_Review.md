@@ -1,5 +1,13 @@
 # Release Readiness — Code Review Summary
 
+> **Historical / superseded snapshot.** This page records the earlier Stable
+> Gate review and intentionally preserves its point-in-time findings. It is not
+> the current 1.3.0 Direct-mode release checklist: several “remaining” and
+> “v-next” items below were later implemented. Use
+> [Release Notes 1.3.0](Release_Notes_1_3_0.md),
+> [Integrated Installer](Integrated_Installer.md), and the current CI workflow for
+> present behavior and gates.
+
 P0/P1 findings addressed in Release Readiness Plan implementation.
 
 ## P0 (resolved in tree)

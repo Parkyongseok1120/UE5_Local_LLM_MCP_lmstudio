@@ -42,9 +42,10 @@ These checks must not create a task, route lock, plan, or project-wide owner.
 - [ ] `get_workspace_info` reports the agent's resolved roots and enabled safety
   switches.
 - [ ] A bounded `read_file`/`read_file_range` works on a known selected-project
-  source file and returns a SHA-256 hash.
+  source file and returns both a SHA-256 hash and opaque `fileVersionReceipt`.
 - [ ] A second conversation can read/search without cancelling or resuming work
-  from the first conversation.
+  from the first conversation; it cannot borrow the first conversation's scoped
+  file snapshot receipt when a reliable owner is present.
 
 ## Optional mutation check
 
@@ -52,15 +53,24 @@ Run this only in a disposable line/comment and only when `ALLOW_WRITE=1` is an
 intentional choice.
 
 - [ ] Re-read the file immediately before editing.
-- [ ] `replace_in_file` uses the current hash, exact old text, and
-  `expectedOccurrences=1`.
-- [ ] A deliberately stale hash is rejected without overwriting the file.
-- [ ] Revert the smoke edit with a new current read/hash.
+- [ ] `replace_in_file` uses the current `fileVersionReceipt`, exact old text,
+  and `expectedOccurrences=1`. A valid raw `expectedHash` remains a compatibility
+  alternative.
+- [ ] A deliberately stale receipt or hash is rejected with
+  `FILE_VERSION_CONFLICT` without overwriting the file.
+- [ ] Revert the smoke edit with the receipt returned by the first mutation. A
+  reliable same-session latest snapshot may be used automatically; an avoidable
+  re-read is not required between successful consecutive edits.
+- [ ] A missing, expired, or wrong-scope receipt fails closed with
+  `FILE_SNAPSHOT_REQUIRED`, `FILE_SNAPSHOT_INVALID`, or
+  `FILE_SNAPSHOT_SCOPE_MISMATCH` as applicable.
 
 Atomic bundles are available for bounded multi-file edits; they are optional and
-must preserve the same per-file CAS and rollback guarantees. Deletion requires
-its separate short-lived approval token, current hash, enabled source-deletion
-switch, and explicit user approval.
+must preflight each existing file's receipt, compatible raw hash, or reliable
+same-session snapshot before committing, preserving atomic CAS and rollback
+guarantees. A deletion proposal returns its own short-lived approval token and
+`fileVersionReceipt`; deletion requires those values (or a compatible raw hash),
+the enabled source-deletion switch, and explicit user approval.
 
 ## Optional validation and build checks
 
@@ -68,8 +78,13 @@ switch, and explicit user approval.
   not issue a write/build permission token.
 - [ ] Rider can build the exact selected target/toolchain, or
   `build_unreal_project` runs immediately when `ALLOW_UNREAL_BUILD=1`.
+- [ ] Passing `target=Editor` resolves the selected project's canonical,
+  configured preferred, or sole discovered custom Editor target; an explicit
+  non-Editor target is left unchanged.
 - [ ] The result contains the real outcome and bounded log path/first useful
-  error; no prior static-validation certificate is required.
+  error; no prior static-validation certificate is required. Build and Automation
+  share the bounded process runner, timeout terminates the process tree, and
+  `fullLogPath` may be a bounded head/tail projection with omitted-byte metadata.
 
 ## Pass criteria
 

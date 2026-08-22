@@ -29,6 +29,24 @@ installer가 관리하는 `unreal-agent`는
 SAFE/AGENT 권한 안에서 프로젝트, 읽기, 로그, 변경, 정적 진단, 빌드,
 Automation, command capability를 제공합니다.
 
+읽기와 변경은 기존 파일 CAS를 위한 scope 제한 `fileVersionReceipt`를
+반환합니다. 다음 편집에는 receipt를 우선 사용하고 유효한 raw `expectedHash`도
+호환되며, 신뢰 가능한 동일 session에서는 최신 snapshot을 자동 해석할 수
+있습니다. Build와 Automation은 하나의 bounded process runner를 공유합니다.
+`target=Editor`는 선택 프로젝트의 canonical, 설정된 preferred Editor, 또는
+유일하게 발견된 custom `*Editor` target으로 해석되고 명시한 non-Editor target은
+바꾸지 않습니다.
+
+정확한 프로젝트 선택으로 여러 프로젝트와 Unreal 버전을 다룰 수 있으며 RAG는
+호환되는 엔진별 sibling shard로 이동합니다. 한 호출에서 서로 다른 엔진이 소유한
+프로젝트 shard를 합치지 않습니다. 선택적 context compactor는 제한된
+objective/work/file/tool/build continuity 사실을 보존하지만 planner, router, 도구
+권한 또는 완료 판단 주체가 되지 않습니다.
+
+현재 검증된 주 추천 모델은 Qwen 3.8 27B입니다. Muse Glimmer는 시험 중이며 아직
+검증된 추천이 아닙니다. Qwen 3.5, Qwen 3.6 27B, GPT-OSS 언급은 historical
+compatibility/evaluation 자료이며 현재 추천이 아닙니다.
+
 지원되는 Strict 구현은 별도 구성하는 Node `strict-server.js` 하나뿐입니다.
 제거된 Python task/route/planner controller는 배송되지 않으며
 `MCP_EXECUTION_MODE`로 어느 Direct entry도 전환할 수 없습니다.
@@ -39,15 +57,12 @@ Automation, command capability를 제공합니다.
 
 ## Portable RAG 유지보수
 
-패키지의 `rag.ps1`는 10개 수집/인덱스/프로젝트/refresh/status 명령만 가진
+패키지의 `rag.ps1`는 범위가 제한된 수집/인덱스/프로젝트/refresh/status 유지보수
 런처이며 모델이나 workflow controller가 아닙니다.
 
 ```powershell
 .\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
-.\rag.ps1 collect-projects -Root C:\Projects\MyGame
-.\rag.ps1 collect-symbols -Root C:\Projects\MyGame\Source -SymbolScope project -ProjectName MyGame
-.\rag.ps1 collect-module-graph
-.\rag.ps1 build
+.\rag.ps1 refresh -RefreshScope project_source
 .\rag.ps1 doctor
 ```
 

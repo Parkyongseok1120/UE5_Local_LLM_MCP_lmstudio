@@ -24,14 +24,19 @@ use a per-command bypass:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 doctor
 ```
 
-Build project evidence with explicit roots:
+Select one exact existing descriptor, then refresh its complete project evidence:
 
 ```powershell
-.\rag.ps1 collect-projects -Root C:\Projects\MyGame
-.\rag.ps1 collect-symbols -Root C:\Projects\MyGame\Source -SymbolScope project -ProjectName MyGame
-.\rag.ps1 build
+.\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
+.\rag.ps1 refresh -RefreshScope project_source
 .\rag.ps1 doctor
 ```
+
+`project_source` runs the project text, profile, architecture/`Build.cs`, and
+project-symbol collectors and commits the rebuilt index generation. Do not use a
+manual project `collect-symbols` command that supplies only `-ProjectName`: project
+symbol ownership requires both the descriptor stem and its exact root, and the
+portable wrapper deliberately routes that work through `refresh`.
 
 For full engine-source text, run the explicitly expensive collector before the
 build:
@@ -41,12 +46,38 @@ build:
 .\rag.ps1 build-incremental
 ```
 
-Select or clear the shared default project without creating task state:
+Change or clear the shared default project without creating task state:
 
 ```powershell
 .\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
 .\rag.ps1 clear-project
 ```
+
+## Project provenance and engine-bound indexes
+
+Project-scoped evidence is owned by the composite identity of the canonical
+descriptor parent (`project_root`) and the `.uproject` descriptor stem
+(`project`). A same-name checkout at another physical root is a different
+project. Collection and Editor ingest reject rows that lack this exact root +
+stem provenance or that claim a different descriptor, so selecting one clone
+cannot replace or retrieve another clone's rows.
+
+Legacy project rows are migrated only when their old path or prior descriptor
+inventory proves one unambiguous owner. In particular, stem-only Editor rows are
+adopted only when that stem previously mapped to exactly one canonical root.
+Missing, malformed, ambiguous, or foreign provenance fails closed instead of
+being guessed into the selected clone.
+
+Integrated installs place generated indexes under
+`<state-home>/indexes/<namespace>/rag.sqlite`; the default state home is
+`~/.evidence-first` unless `--state-home` is supplied. A namespace is bound to the
+resolved Unreal engine association/version (for example `unreal58`; custom
+associations receive distinct deterministic namespaces). The runtime may select
+a matching sibling shard whose `build_manifest.json` proves that binding, but a
+single search or refresh never merges results across engine shards. A selection
+spanning different engine bindings fails with
+`RAG_MULTI_ENGINE_QUERY_UNSUPPORTED`; a missing or mismatched shard fails with
+`RAG_ENGINE_INDEX_MISMATCH`.
 
 `refresh` defaults to `project_source` and never starts Unreal Editor:
 

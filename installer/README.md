@@ -27,6 +27,24 @@ engine or select a custom/source engine folder. The authority choice is:
 AGENT authority requires a second confirmation and the final install summary shows
 the selected authority before any installation work starts.
 
+Generated RAG indexes default to the installer-owned
+`<state-home>/indexes/<namespace>/rag.sqlite` (default state home
+`~/.evidence-first`). The installed shared workspace and both Direct MCP entries
+receive that absolute path. A deliberately configured nonstandard external index
+remains user-managed. A prior package-relative index is reused only after
+query-level readiness checks; a broken or incomplete candidate is not promoted as
+the managed index.
+
+For every RAG build, the installer resolves a frozen set of exact existing
+`.uproject` descriptors; Standard/Full additionally bind engine evidence to one
+selected engine. Project rows use
+canonical descriptor root plus descriptor stem as ownership, keeping same-name
+clones isolated. Incompatible engine projects are reported/excluded, and the
+active descriptor may not be silently excluded. Versioned/custom associations
+use manifest-bound sibling index namespaces; no build or query merges projects
+across engine shards. Ambiguous legacy provenance fails closed rather than being
+assigned to the selected clone.
+
 After installation, select the actual LLM you want to use in LM Studio and enable
 `codex/unreal-context-compactor` in the chat's plugin panel. The plugin compacts the
 selected model's history transparently; it is not selected from the model dropdown.
@@ -41,6 +59,11 @@ uses host-native common locations and accepts `UNREAL_ENGINE_ROOT` or
 `Build.sh` (with the UBT DLL through `dotnet` as fallback), while Windows keeps its
 existing UBT/Build.bat path.
 
+Blueprint node/pin graph coverage therefore remains a manual project choice. With
+Unreal Editor closed, the user must copy `tools/ue_plugins/LmStudioGraphExporter`
+into the exact project's `Plugins` directory and enable it in that `.uproject`.
+The installer has no graph-plugin prompt and never performs this mutation.
+
 PowerShell 7 (`pwsh`) is only for optional, manually invoked `rag.ps1` maintenance:
 
 ```text
@@ -52,3 +75,12 @@ Python 3.12. Node/npm is bootstrapped only for Unreal or context-compactor
 components. All pinned runtime archives are SHA-256 verified and safely extracted.
 The Linux runtime baseline is Ubuntu 22.04/24.04 with glibc; musl/Alpine is rejected
 with an actionable error.
+
+Cross-platform CI exercises installer, package, Direct MCP, collector, and shard
+behavior with controlled fixtures. The recorded physical FULL-install pass is
+Apple Silicon with UE 5.8 and documented Editor-export, API-connectivity, and
+signing/notarization limitations. Windows also has a prior native RAG/MCP/real-UBT
+session, but no clean-machine physical installer-lifecycle proof. Linux has
+automation/fixture coverage, not a recorded physical install claim. None of this
+claims universal compatibility across hosts, engine builds, projects, plugins, or
+Editor runtimes.

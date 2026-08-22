@@ -76,6 +76,8 @@ class DirectRagServer:
     def run(self) -> None:
         for raw_line in self._input:
             line = raw_line.strip()
+            if line.startswith("\ufeff"):
+                line = line[1:].lstrip()
             if not line:
                 continue
             request: dict[str, Any] | None = None

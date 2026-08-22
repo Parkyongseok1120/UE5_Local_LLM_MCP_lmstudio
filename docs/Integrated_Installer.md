@@ -2,7 +2,7 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release label: **1.3.0 RC3** (GitHub prerelease; `portablePackage.releaseReady` is `false` until Windows physical install validation and remaining release gates complete). The installer reports the same value with `python3 install.py --version`; the current RC3 portable manifest is `2.1.7` (the immutable `v1.3.0-rc2` snapshot remains `2.1.3`).
+Product release label: **1.3.0**. The installer reports the same value with `python3 install.py --version`; the stable portable manifest is `2.1.8`. `portablePackage.releaseReady: true` records automated release/package readiness, not universal physical-install certification.
 
 ## Requirements
 
@@ -11,9 +11,10 @@ Product release label: **1.3.0 RC3** (GitHub prerelease; `portablePackage.releas
 - Runtime archives are pinned by version and SHA-256 for x64/arm64 on Windows, Apple Silicon macOS, and Ubuntu/glibc. [`installer/runtime-manifest.json`](../installer/runtime-manifest.json) is the SSOT for URL, filename, platform, architecture, checksum, executable, and probe metadata. Extraction rejects traversal, unsafe links, encrypted ZIP members, special files, and archive bombs before writing the runtime cache.
 - **Intel macOS:** LM Studio / Unreal / context-compactor installs abort early. Custom Codex / portable_rule / Cline-only installs are allowed.
 - **Apple Silicon macOS:** physical FULL install verified on darwin-arm64 (runtimes, Context Compactor 45/45, LM Studio plugin install/activation, UE 5.8 auto-discovery, full RAG 88,829 chunks, evidence-first MCP smoke, installer `ok: true`). Separate limitations: Unreal Editor asset metadata headless export **FAIL**; LM Studio API server connectivity **UNVERIFIED** when the API server was not running; installer signing/notarization is **not claimed**. The repository release notes retain the detailed historical record.
-- **Windows:** fixture/CI install paths are exercised; physical Windows install is **not yet verified** and keeps `releaseReady` false.
-- SAFE also needs LM Studio 0.4+ for native MCP API use (unsupported on Intel Mac).
-- FULL context compaction additionally needs the LM Studio `lms` CLI.
+- **Windows:** automated fixture/CI installer and Direct MCP paths are exercised. A prior native Windows LM Studio GUI session used the RAG/MCP tools and reached a real UBT invocation against a local Unreal project. That is runtime workflow evidence, not proof of a clean-machine physical installer lifecycle; universal project, engine, and plugin compatibility is not claimed.
+- Every supported LM Studio/Unreal profile needs LM Studio 0.4+ and its `lms`
+  CLI because the context compactor is mandatory. Only the explicitly unsupported
+  emergency bypass can omit it. Intel macOS cannot install these components.
 - RAG index generation is a separate opt-in action. Lite requires a project search root or active project; Standard and Full additionally require a resolvable Unreal Engine source tree.
 
 ### Host baseline
@@ -38,7 +39,7 @@ when an operator chooses the optional `rag.ps1` maintenance wrapper, for example
 pwsh -NoProfile -File ./rag.ps1 refresh -RefreshScope project_source
 ```
 
-These are implemented and fixture-tested paths. The repository release notes retain the Apple Silicon physical FULL-install record; Windows physical certification and the listed Apple Silicon limitations still block `releaseReady`.
+These are implemented and fixture-tested paths. The repository release notes retain the Apple Silicon physical FULL-install record and the native Windows LM Studio GUI/RAG/UBT workflow record. Release readiness means the final source, package, installer, safety, and cross-platform automation gates pass. It does not erase the listed Apple Silicon limitations or claim a clean-machine physical installer lifecycle on every host.
 
 ## Start
 
@@ -64,15 +65,15 @@ AGENT requires a second confirmation. Declining that confirmation continues safe
 | FULL | Same required components as STANDARD (kept for compatibility) | Read-only |
 | CUSTOM | Explicit components; LM Studio/Unreal selections still force context compactor | Read-only by default |
 
-Install profile and RAG indexing depth are independent. Use `--index-tier lite|standard|full`; selecting FULL does not select full indexing and never builds an index unless `--build-rag` is also supplied. Installed RAG data is owned by the stable `<state-home>/indexes/<namespace>/` directory (default `~/.evidence-first/indexes/`), never by a versioned package directory. An upgrade reuses a ready managed index or migrates the newest query-ready prior package index with hard links when possible and copies otherwise.
+Install profile and RAG indexing depth are independent. Use `--index-tier lite|standard|full`; selecting FULL does not select full indexing and never builds an index unless `--build-rag` is also supplied. Installed RAG data is owned by the stable `<state-home>/indexes/<namespace>/` directory (default `~/.evidence-first/indexes/`), never by a versioned package directory. An upgrade reuses a ready managed index or migrates the newest query-ready prior package index with hard links when possible and copies otherwise. Each generation is bound to one engine version or custom association. Standard/Full builds may include multiple compatible projects for that engine; incompatible projects use sibling namespaces, and one query never merges different engine shards.
 
-Every LM Studio / Unreal profile installs the transparent context-compactor plugin. The plugin only compacts older model-facing chat history; it does not proxy the model, select tools, or grant write/build authority. Direct Qwen/GPT selection becomes write-capable only after AGENT authority is explicitly enabled. Cline, CLI, Ollama, custom, and remote frontends require their own continuity policy.
+Every LM Studio / Unreal profile installs the transparent context-compactor plugin. The plugin only compacts older model-facing chat history; it does not proxy the model, select tools, or grant write/build authority. The selected real model becomes write-capable only after AGENT authority is explicitly enabled. Cline, CLI, Ollama, custom, and remote frontends require their own continuity policy.
 
 The context compactor is **required** for every LM Studio / Unreal install profile. Interactive installs no longer offer an opt-out. `--skip-context-compactor` is blocked unless paired with `--allow-skip-context-compactor` (unsupported emergency bypass). On Windows, macOS, and Linux the installer resolves the `lms` CLI in this order: `LMSTUDIO_CLI`, `<lmstudio-home>/bin`, OS app/PATH candidates; runs `lms dev --install -y`; ensures the plugin exists under the managed `extensions/plugins/codex/unreal-context-compactor` (syncing from the host default LM Studio home or materializing from the repo when `lms` wrote elsewhere); and pins `codex/unreal-context-compactor` with `developer.allowDevelopmentPlugins=true` in that home's `settings.json`.
 
 > **Important — select the real LLM as the chat model.**
 > Installing/pinning the plugin is not enough.
-> 1. Load and select the actual instruction/tool-calling model, such as Qwen, in LM Studio's **model dropdown**.
+> 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current primary validated recommendation; Muse Glimmer is under testing only.
 > 2. Create or open the chat and enable **`codex/unreal-context-compactor`** in that chat's **plugin panel**.
 > 3. Keep the actual LLM selected. The compactor is a chat plugin, not a model or proxy model.
 > 4. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.

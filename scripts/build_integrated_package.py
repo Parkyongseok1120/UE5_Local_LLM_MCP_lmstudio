@@ -471,6 +471,7 @@ PORTABLE_CONTENT_FILES = frozenset(
         "docs/LMStudio_Unreal_Agent_Setup.md",
         "docs/Project_Routing.md",
         "docs/RAG_Setup.md",
+        "docs/Release_Notes_1_3_0.md",
         "docs/Rider_Cline_Smoke_Checklist.md",
         "docs/Safe_Agent_Mode.md",
         "docs/Troubleshooting.md",
@@ -751,12 +752,14 @@ def _write_launchers(staging: Path) -> None:
         "- **Apple Silicon macOS**: physical FULL install verified on darwin-arm64 "
         "(runtimes, context compactor, LM Studio plugin activation, Unreal auto-detect, "
         "full RAG, evidence-first MCP smoke). Signing/notarization is not claimed; "
-        "see docs/Release_Notes_1_3_0_RC3.md for known limitations.\n"
+        "see docs/Release_Notes_1_3_0.md for the release boundary.\n"
         "- **Intel macOS (x86_64)**: LM Studio is not supported by LM Studio upstream. "
         "LM Studio / Unreal / context-compactor installs abort early. "
         "Custom Codex / portable-rule / Cline-only installs remain allowed.\n"
-        "- **Windows**: fixture/CI install paths exist; physical Windows install is not "
-        "yet verified and keeps releaseReady false.\n\n"
+        "- **Windows**: automated fixture/CI installer and Direct MCP paths are exercised. "
+        "A prior native LM Studio GUI session observed RAG/MCP tool use and a real UBT "
+        "invocation. A clean-machine physical installer lifecycle and universal "
+        "project/engine/plugin coverage are not claimed.\n\n"
         "## Launch\n\n"
         "- Windows: `INSTALL.bat`\n"
         "- Ubuntu Linux and Apple Silicon macOS: `./install.sh`\n\n"
@@ -908,7 +911,7 @@ def _manifest(
         "hostNotes": {
             "macos-apple-silicon": "Physical FULL install PASS on darwin-arm64; signing/notarization not claimed; Python 3.10+ required to bootstrap",
             "macos-intel": "LM Studio configuration unsupported; custom/Cline-only allowed",
-            "windows": "Physical Windows install not yet verified; blocks releaseReady",
+            "windows": "Automated CI/fixture paths and a prior native LM Studio GUI/RAG/UBT workflow are evidenced; clean-machine installer lifecycle and universal compatibility are not claimed",
         },
         "defaultProfile": "safe",
         "indexIncluded": include_index,

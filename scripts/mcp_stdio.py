@@ -9,6 +9,11 @@ from typing import Any, TextIO
 
 def configure_stdio_utf8() -> None:
     """Best-effort UTF-8 for text streams; binary writes remain the primary path."""
+    if hasattr(sys.stdin, "reconfigure"):
+        try:
+            sys.stdin.reconfigure(encoding="utf-8-sig", errors="replace")
+        except Exception:
+            pass
     if hasattr(sys.stdout, "reconfigure"):
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")

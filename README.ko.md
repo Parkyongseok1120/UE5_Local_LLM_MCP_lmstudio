@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0 RC3
+# UE5_Local_LLM_MCP_lmstudio 1.3.0
 
-> **GitHub 프리릴리스 (stable 배포 준비 전):** 제품 메타데이터는 **1.3.0 RC3**로 맞췄지만, Windows 실기 설치와 남은 릴리스 게이트가 끝날 때까지 `releaseReady`는 `false`입니다. portable reasoning skill, LM Studio MCP, preset, Node/Python adapter는 Windows·Ubuntu Linux에서 통합 workflow로 설치할 수 있습니다. **Apple Silicon macOS** 실기 FULL 설치는 **PASS**이고, **Intel macOS**는 LM Studio 구성 설치가 초기에 차단됩니다(custom Codex/Cline-only는 허용). `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.0 RC3 노트](docs/Release_Notes_1_3_0_RC3.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
+> **Stable v1.3.0 릴리스:** Direct Model Mode가 기본 지원 경로이며 `releaseReady: true`는 자동 릴리스·패키지 준비 완료를 뜻합니다. portable reasoning skill, LM Studio MCP, context plugin, Node/Python adapter는 Windows·Ubuntu Linux·Apple Silicon macOS에서 하나의 통합 workflow로 설치합니다. Intel macOS는 custom Codex/portable-rule/Cline-only 설치만 지원합니다. Apple Silicon은 실기 FULL 설치 PASS 기록이 있습니다. Windows에서는 과거 native LM Studio GUI 세션으로 RAG/MCP tool과 실제 UBT 호출을 확인했지만, clean-machine physical installer lifecycle과 모든 project/engine/plugin 조합의 호환성은 주장하지 않습니다. `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.0 릴리스 노트](docs/Release_Notes_1_3_0.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
@@ -28,9 +28,9 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 > **프로젝트 현황 — 2026년 8월**
 >
-> **현재 제품 라벨은 1.3.0 RC3 GitHub 프리릴리스입니다.** RC3는 RC2 이후 검증한 recovery state machine, atomic mutation journal, canonical project/build proof, Automation 범위, Windows/POSIX 경로 identity를 배포합니다. Apple Silicon 실기 FULL 설치는 PASS지만 Windows 실기 설치는 아직 미검증이라 `releaseReady`는 false입니다.
+> **현재 제품 라벨은 stable 1.3.0입니다.** 지원 runtime은 Direct Model Mode, scoped file-version receipt, provenance-bound RAG generation, bounded Build/Automation process, hard-compaction continuity memory를 사용합니다. MCP 서버는 capability와 파일시스템·프로세스·빌드·프로젝트 안전 경계를 제공하며 모델의 task plan이나 tool 순서를 소유하지 않습니다.
 >
-> 현재 런타임의 기본값은 **Direct Model Mode**입니다. 선택한 LLM이 도구 선택과 순서를 소유하고 MCP 서버는 안정적인 capability와 파일시스템·프로세스·빌드 안전 경계를 제공합니다. 기본 경로에는 서버 소유 task, route, planner, synthesis gate가 없습니다. 저장된 v1.2.5 측정과 RC3 control-plane 검증은 과거 근거로 유지되지만 새 Direct-mode 점수는 아닙니다. Windows 검증과 남은 릴리스 게이트가 끝날 때까지 RC3를 stable로 간주하지 마세요.
+> 자동 source·package·installer·safety·cross-platform gate가 release readiness를 정의합니다. Apple Silicon physical FULL-install 근거와 native Windows LM Studio GUI/RAG/UBT workflow 기록은 보존하지만, 모든 host의 clean-machine installer 인증이나 모든 Unreal project/engine/plugin/editor-runtime 조합의 호환성은 주장하지 않습니다. 저장된 v1.2.5 측정과 RC control-plane 검증은 과거 근거이며 새 1.3.0 Direct-mode 점수가 아닙니다.
 
 ---
 
@@ -38,14 +38,14 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0_RC3.md"><img alt="1.3.0 RC3 Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC3-orange?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_0.md"><img alt="1.3.0 Notes" src="https://img.shields.io/badge/Release-1.3.0-blue?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
 </p>
 
 ## 최신 결과
 
-아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 RC3 paired live 재측정은 아직 완료되지 않았습니다.
+아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 Direct-mode paired live 재측정은 아직 완료되지 않았습니다.
 
 | 모델 / run | Pass@K | Pass@1 | Artifact |
 |---|---:|---:|---|
@@ -61,13 +61,13 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
   <a href="docs/Holdout_Case_Difficulty.md"><img alt="Holdout Difficulty" src="https://img.shields.io/badge/Docs-36%20Case%20Difficulty-red?logo=gitbook"></a>
 </p>
 
-이 수치는 UE 5.8 RAG/MCP/UBT 내부 workflow 측정 결과입니다. 공개 표준 모델 벤치마크가 아닙니다.
+이 수치는 historical UE 5.8 RAG/MCP/UBT 내부 workflow 측정 결과입니다. 공개 표준 모델 벤치마크나 현재 모델 추천이 아닙니다.
 
 ### 모델 크기와 한국어 사용상의 한계
 
-9B 프로필은 현재 **최소 하단선**이지 안정 운용을 보장하는 기준이 아닙니다. MCP 서버와 validation이 정상이어도 툴 선택, 인자 구성, 반복 MCP 호출, 긴 수정/빌드 루프에서 불안정할 수 있습니다. 이는 자동으로 MCP 버그라고 볼 문제가 아니라 모델 용량과 agentic tool-use 능력의 한계입니다. 측정된 9B와 27B의 차이가 크므로 Pass@1 수치만으로 두 모델의 에이전트 동작을 동등하다고 보면 안 됩니다.
+**Qwen 3.8 27B가 이 stack의 현재 주 권장·검증 operating model입니다.** 이는 현재 운용 검증을 뜻하며, 위 historical benchmark 표에는 이 모델의 paired 1.3.0 점수를 주장하지 않습니다. Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다.
 
-여러 단계를 자율적으로 수행하는 Unreal 작업에는 **24B~27B instruction/tool-calling 모델**을 권장합니다. 9B는 대상 파일·심볼·변경 내용이 이미 확정된 짧은 작업에 한정하는 편이 좋습니다. 한국어 우선 사용이라면 정확한 로컬 checkpoint를 직접 검증해야 합니다. Qwen3는 100개 이상의 언어와 tool calling을 명시하지만, Devstral Small 2처럼 코드베이스 작업에 특화된 모델이 같은 수준의 한국어 표현력을 보장하는 것은 아닙니다. [Qwen3 모델 카드](https://huggingface.co/Qwen/Qwen3-30B-A3B)와 [Devstral Small 2 모델 카드](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512)를 참고하세요.
+Qwen 3.5, community fine-tuned Qwen 3.6 27B checkpoint, GPT-OSS는 현재 추천 대상이 아닙니다. 저장된 행과 수치는 historical evidence로만 유지합니다. 작은 모델도 범위가 제한된 작업에 사용할 수 있지만, 현재 운용 권장 모델과 같은 수준의 자율 tool-use 안정성을 제공한다고 추론하면 안 됩니다.
 
 과거 RC3 workflow 검증에서는 deterministic handoff가 작은 모델에게 긴 근거 기억이나 정확한 tool call 생성을 보장하지 못한다는 점이 드러났습니다. 이 모델측 한계는 여전히 중요하지만 지원 runtime은 예전 Python task/route/planning/synthesis transition을 더 이상 삽입하지 않습니다. 해당 source는 지원되지 않는 과거 평가 자료로만 남고 portable package에서는 제외됩니다.
 
@@ -101,7 +101,7 @@ Windows에서는 루트의 `INSTALL.bat`, Linux와 macOS에서는 `install.sh`�
 
 > **중요 — 실제 LLM을 채팅 모델로 선택하세요.**
 >
-> 1. Qwen처럼 실제로 사용할 instruction/tool-calling 모델을 LM Studio에 로드하고 **모델 드롭다운**에서 직접 선택합니다.
+> 1. 실제 instruction/tool-calling 모델을 LM Studio에 로드하고 **모델 드롭다운**에서 직접 선택합니다. 현재 주 검증 권장 모델은 Qwen 3.8 27B입니다.
 > 2. 채팅을 만들거나 연 뒤 그 채팅의 **plugin panel**에서 **`codex/unreal-context-compactor`** 를 활성화합니다.
 > 3. 실제 LLM 선택을 유지합니다. `unreal-context-compactor`는 chat plugin이지 모델이나 proxy model이 아니며 설정할 `targetModel`도 없습니다.
 > 4. Local Server를 시작하고 기본 `unreal-rag`, `unreal-agent` MCP entry를 활성화합니다.
@@ -123,6 +123,10 @@ MCP 설치 하나로 여러 Unreal 프로젝트와 설치된 UE 버전을 함께
 
 build와 Automation 호출은 선택한 프로젝트 descriptor의 engine association을 해석하고 필요하면 명시적 `engineRoot`도 받을 수 있습니다. 따라서 서로 다른 UE 5.x 설치를 쓰는 프로젝트가 같은 서버를 공유할 수 있습니다. 모호한 프로젝트 이름은 다른 프로젝트를 임의로 선택하지 않고 오류를 반환하므로 정확한 selector를 사용하세요.
 
+RAG generation은 엔진별 sibling shard에 묶입니다. 정확한 프로젝트 selector는 호환 shard를 선택하며, 한 호출에서 서로 다른 엔진에 묶인 프로젝트 근거를 합치지 않습니다. 기존 파일 읽기와 성공한 변경은 opaque `fileVersionReceipt`를 반환하므로 다음 편집에는 이를 우선 사용하세요. 유효한 raw `expectedHash`도 호환되고 신뢰 가능한 동일 session의 최신 snapshot은 자동 해석될 수 있으며, 외부 변경은 `FILE_VERSION_CONFLICT`로 fail-closed됩니다.
+
+portable build의 `target=Editor`는 선택 프로젝트의 canonical, 설정된 preferred, 또는 유일하게 발견된 custom Editor target으로 해석되고 명시한 non-Editor target은 그대로 유지됩니다. Build와 Automation은 bounded process runner와 timeout process-tree 종료를 공유합니다.
+
 ### Strict는 별도 수동 opt-in입니다
 
 installer가 관리하는 `unreal-rag`, `unreal-agent` entry는 그대로 유지하세요. 지원되는 Strict surface는 별도 이름의 Node entry 하나뿐입니다.
@@ -138,10 +142,9 @@ Node MCP transport는 선택된 모델이 최종 채팅 답변을 출력하는 �
 > Unreal 코딩 채팅에서는 LM Studio 기본 **JavaScript/TypeScript Code Sandbox** 플러그인을 비활성화하거나 숨기세요. 이 샌드박스는 별도 작업 디렉터리를 쓰며 활성 `.uproject` 루트와 **연결되지 않습니다**. 모델이 여기서 파일 I/O를 하면 경로 오류, 잘못된 편집, `unreal-agent`와의 충돌이 납니다. 프로젝트 파일 작업은 `unreal-rag` + `unreal-agent` MCP만 사용하세요 (`read_file`, `replace_in_file`, 신규 파일만 `write_file`). `%USERPROFILE%\.lmstudio\settings.json`에서 `lmstudio/js-code-sandbox:*`, `mcp/unreal-agent:*`, `mcp/unreal-rag:*` 같은 광역 자동 승인 패턴을 제거하고 LM Studio를 재시작하세요. MCP 광역 승인은 삭제 및 명시적으로 허용한 Editor 실행의 host 확인까지 건너뜁니다. installer와 `scripts/patch_mcp_config.py`는 관련 없는 설정을 보존하면서 이 패턴들을 제거합니다. 자세한 내용: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md).
 
 ```powershell
-.\rag.ps1 collect-source -Root C:\UE_5.6\Engine\Source
-.\rag.ps1 collect-projects -Root C:\Projects\MyGame
-.\rag.ps1 collect-symbols -Root C:\Projects\MyGame\Source -SymbolScope project -ProjectName MyGame
-.\rag.ps1 build
+.\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
+.\rag.ps1 refresh -RefreshScope project_source
+.\rag.ps1 doctor
 ```
 
 처음에는 safe mode를 권장합니다. 파일 쓰기와 UBT 실행은 신뢰하는 프로젝트에서만 켜세요.
@@ -159,6 +162,8 @@ wrapper, planner, 평가 harness, query controller를 실행하지 않습니다.
 ## 실사용 세션 팁
 
 Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 길게 이어지는 채팅**에는 tool 결과, build log, retry가 계속 쌓입니다. 실제 LLM을 선택한 상태에서 그 채팅에 `codex/unreal-context-compactor`를 활성화하면 plugin이 해당 모델의 tokenizer 예산을 측정하고 hard margin이 소진되기 전에 오래된 model-facing 기록만 결정적 사실 메모리로 교체합니다. task route, required-next-tool 명령, planner state, synthesis gate를 보존하거나 생성하지 않습니다.
+
+hard compaction의 bounded continuity state는 최신 사용자 요청, active objective, continuation antecedent, 현재 작업과 미해결 항목, 관찰·변경 파일, 최근 tool 결과와 build/test 상태를 보존할 수 있습니다. 이 사실 메모리는 plan, route, 도구 권한, 다음 호출, 완료 판단을 소유하지 않습니다.
 
 | LM Studio 로그 증상 | 대응 |
 |---|---|
@@ -185,7 +190,8 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 | 주제 | 파일 |
 |---|---|
-| 1.3.0 RC3 릴리스 노트 | [docs/Release_Notes_1_3_0_RC3.md](docs/Release_Notes_1_3_0_RC3.md) |
+| 1.3.0 릴리스 노트 | [docs/Release_Notes_1_3_0.md](docs/Release_Notes_1_3_0.md) |
+| 1.3.0 RC3 릴리스 노트 (과거 기록) | [docs/Release_Notes_1_3_0_RC3.md](docs/Release_Notes_1_3_0_RC3.md) |
 | 1.3.0 RC2 릴리스 노트 | [docs/Release_Notes_1_3_0_RC2.md](docs/Release_Notes_1_3_0_RC2.md) |
 | 1.3.0 Beta5 릴리스 노트 (과거 RC2) | [docs/Release_Notes_1_3_0_Beta5.md](docs/Release_Notes_1_3_0_Beta5.md) |
 | 1.3.0 Beta4 릴리스 노트 (과거 RC1) | [docs/Release_Notes_1_3_0_Beta4.md](docs/Release_Notes_1_3_0_Beta4.md) |
@@ -202,9 +208,9 @@ Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 �
 
 ## 요약
 
-1.3.0 RC3는 GitHub prerelease입니다(`releaseReady` false). 새 `v1.3.0-rc3` 태그는 기존 RC/Beta 태그를 이동하지 않습니다. Legacy Strict transition/recovery, 원자적 rollback, project proof, 설치·릴리스 위생은 자동 검증으로 보호하지만 기본 Direct entry는 그 task workflow를 실행하지 않습니다. GUI E2E와 새 paired live-model 점수는 주장하지 않습니다.
+1.3.0은 stable Direct Model Mode 릴리스입니다(`releaseReady: true`는 자동 릴리스·패키지 준비 상태). `v1.3.0` 태그는 기존 RC/Beta 태그를 이동하지 않습니다. Scoped SHA-256 file-version receipt, bounded process 실행, RAG provenance, context continuity, installer 경로, package hygiene는 자동 검증으로 보호합니다. 과거 GUI 근거에는 native Windows LM Studio RAG/MCP 세션과 실제 UBT 호출이 포함되지만 clean-machine Windows installer lifecycle, 보편적 physical compatibility, 최종 Direct runtime의 GUI coverage, 새 paired live-model 점수는 주장하지 않습니다.
 
-좁은 UE 5.8 compile-fix 작업에서는 현재 community fine-tuned Qwen 3.6 27B local workflow가 live UBT validation에서 강한 결과를 냈습니다(36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B도 compact-model 결과를 저장했습니다(35/36 Pass@K, 33/36 Pass@1). 이 결과는 내부 workflow 측정이며, Claude/GPT 계열과의 일반 모델 동등성 주장이 아닙니다.
+좁은 UE 5.8 compile-fix 작업에서 과거 community fine-tuned Qwen 3.6 27B와 Qwen 3.5 9B run은 각각 36/36 Pass@K·36/36 Pass@1, 35/36 Pass@K·33/36 Pass@1을 기록했습니다. 이 checkpoint들과 GPT-OSS는 현재 추천 대상이 아니며, 수치는 Claude/GPT 계열과의 일반 모델 동등성 주장이 아닌 historical 내부 workflow evidence로만 유지합니다. Qwen 3.8 27B가 현재 주 권장·검증 operating model이지만 paired 1.3.0 점수는 아직 주장하지 않습니다. Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다.
 
 로컬 LLM으로 Unreal C++ hallucination을 줄이고 싶다면 실제 모델을 직접 선택하고 근거를 검색한 뒤 정확한 프로젝트 source를 읽고 답변하거나 patch하세요. RAG, validation, safety boundary, failure analysis를 먼저 개선하고 fine-tuning은 workflow가 실제 프로젝트 error에서 측정된 뒤에 적용하는 것이 좋습니다.
 

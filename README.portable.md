@@ -30,6 +30,25 @@ The installer-managed `unreal-agent` entry launches
 read, log, mutation, static-validation, build, Automation, and command
 capabilities under the configured SAFE/AGENT authority.
 
+Reads and mutations issue scoped `fileVersionReceipt` values for existing-file
+CAS. Prefer the receipt for a later edit; valid raw `expectedHash` remains
+compatible, and a reliable same-session latest snapshot can be resolved
+automatically. Build and Automation share one bounded process runner, and
+`target=Editor` resolves the selected project's canonical, configured preferred,
+or sole discovered custom Editor target without rewriting an explicit non-Editor
+target.
+
+Exact project selection supports multiple projects and Unreal versions by
+routing RAG to the compatible engine-bound sibling shard; one call does not
+merge projects owned by different engine shards. The optional context compactor
+retains bounded factual objective/work/file/tool/build continuity but never
+becomes a planner, router, tool authority, or completion authority.
+
+Qwen 3.8 27B is the primary currently validated model recommendation. Muse
+Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5,
+Qwen 3.6 27B, and GPT-OSS references are historical compatibility/evaluation
+material, not current recommendations.
+
 The only supported Strict implementation is the separately configured Node
 `strict-server.js`. The removed Python task/route/planner controller is not
 shipped and `MCP_EXECUTION_MODE` does not switch either Direct entry.
@@ -40,15 +59,12 @@ See [Direct tool discipline](docs/LMStudio_MCP_Tool_Discipline.md),
 
 ## Portable RAG maintenance
 
-The packaged `rag.ps1` is a 10-command collection/index/project/refresh/status
-launcher, not a model or workflow controller.
+The packaged `rag.ps1` is a bounded collection/index/project/refresh/status
+maintenance launcher, not a model or workflow controller.
 
 ```powershell
 .\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
-.\rag.ps1 collect-projects -Root C:\Projects\MyGame
-.\rag.ps1 collect-symbols -Root C:\Projects\MyGame\Source -SymbolScope project -ProjectName MyGame
-.\rag.ps1 collect-module-graph
-.\rag.ps1 build
+.\rag.ps1 refresh -RefreshScope project_source
 .\rag.ps1 doctor
 ```
 

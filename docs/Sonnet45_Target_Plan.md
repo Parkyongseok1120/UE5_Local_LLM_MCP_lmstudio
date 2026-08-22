@@ -1,5 +1,14 @@
 # Sonnet 4.5-Oriented Target Plan
 
+> **Historical / superseded model-track plan.** The table and strategy below are
+> retained as a point-in-time design record, not current model recommendations.
+> The current primary recommendation is Qwen 3.8 27B; see
+> [Model Profiles](Model_Profiles.md) and
+> [Release Notes 1.3.0](Release_Notes_1_3_0.md). Qwen 3.5, the community
+> fine-tuned Qwen 3.6 27B track, and GPT-OSS are historical and are not currently
+> recommended. Muse Glimmer is under testing and is not yet a validated or
+> recommended model.
+
 The project target is upgraded from a Sonnet 4-oriented workflow to a Sonnet 4.5-oriented workflow.
 
 This is a system target, not a current performance claim.

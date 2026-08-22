@@ -14,7 +14,9 @@ The factual health payload should identify the configured index and project
 binding. The saved evaluation baseline uses UE 5.8, but the Direct MCP resolves
 the selected `.uproject` descriptor and supports multiple installed UE 5.x
 versions. Pass an exact per-call project selector and, when discovery cannot
-resolve a custom/source build, an explicit `engineRoot`.
+resolve a custom/source build, an explicit `engineRoot`. Exact project selection
+also chooses its compatible engine-bound RAG shard; one call does not merge
+projects owned by different engine shards.
 
 ## 2. MCP configuration
 
@@ -25,7 +27,7 @@ Required servers:
 - `unreal-rag` — active-project selection, factual search/symbol evidence, health, and index refresh/status
 - `unreal-agent` — read/write files, UBT build
 
-The normal entries run **Direct Model Mode**. Their catalog is stable and is not reduced by task state, route phase, or `MCP_ESSENTIAL_TOOLS`. Direct calls do not require `unreal_task_start`, `unreal_agent_plan`, `taskAuthorization`, a required-next-tool handoff, or synthesis acknowledgement. Filesystem containment, hashes, command allowlists, deletion approval, and SAFE/AGENT authority still apply. See [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
+The normal entries run **Direct Model Mode**. Their catalog is stable and is not reduced by task state, route phase, or `MCP_ESSENTIAL_TOOLS`. Direct calls do not require `unreal_task_start`, `unreal_agent_plan`, `taskAuthorization`, a required-next-tool handoff, or synthesis acknowledgement. Filesystem containment, scoped snapshot/CAS checks, command allowlists, deletion approval, and SAFE/AGENT authority still apply. See [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
 
 After path changes:
 
@@ -54,12 +56,12 @@ Before the model sends its final answer in Node Strict, it must explicitly call 
 
 > **Select the real LLM; enable the compactor as a chat plugin.**
 >
-> 1. Load and select the actual model you want to use, such as Qwen, in the **model dropdown**.
+> 1. Load and select the actual model in the **model dropdown**. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation.
 > 2. Create or open a chat.
 > 3. Enable **`codex/unreal-context-compactor`** in that chat's **plugin panel**.
 > 4. Keep the real LLM selected. The compactor is not a proxy model and has no `targetModel` setting.
 
-The plugin compacts older model-facing history and passes the selected model's MCP tools through unchanged. It is not a write/build authority signal. Installation pins the plugin but does not prove that it is enabled for a particular chat; confirm the chat-level toggle in LM Studio.
+The plugin compacts older model-facing history and passes the selected model's MCP tools through unchanged. Its factual continuity state can retain the active objective, continuation antecedent, active project/current work, unresolved items, and bounded file/tool/build facts, including `fileVersionReceipt`. It cannot plan, route, authorize a write/build, require a next tool, or declare completion. Installation pins the plugin but does not prove that it is enabled for a particular chat; confirm the chat-level toggle in LM Studio.
 
 This command verifies the installed source/build wiring, not chat-level activation:
 
@@ -72,7 +74,7 @@ npm run status
 
 Direct Mode uses [`prompts/lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). It leaves reasoning, tool selection, stopping, and the final answer with the LLM selected in LM Studio while asking for focused evidence, edits, and honest verification. Tool schemas describe their own arguments; do not add task, route, planner, gate, or required-next-tool instructions.
 
-Every currently supported model profile—including Qwen 3.8, Qwen 3.6, Qwen 3.5, GPT OSS, and smaller fallback models—uses the same [`lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). Do not combine it with an older model-specific or `compact_mcp_base` prompt. Historical evaluation prompts encode removed planner/task gates, do not describe the Node `strict_begin` lifecycle, and are excluded from the portable Direct runtime.
+Every current Direct profile uses the same [`lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). Qwen 3.8 27B is the primary validated recommendation. Muse Glimmer is under testing only; Qwen 3.5, Qwen 3.6 27B, and GPT-OSS profiles or scorecards are historical compatibility/evaluation material rather than current recommendations. Do not combine the Direct prompt with an older model-specific or `compact_mcp_base` prompt. Historical evaluation prompts encode removed planner/task gates, do not describe the Node `strict_begin` lifecycle, and are excluded from the portable Direct runtime.
 
 **Qwen / thinking models:** if visible reasoning causes prose instead of a requested tool call, turn thinking off for bounded edit/build turns. This is a model sampling choice, not a Direct MCP gate.
 
@@ -84,7 +86,7 @@ No server-owned task bootstrap is required. A useful first pass is:
 2. If it is not the requested project, pass the exact `.uproject`/project name on the call or use `unreal_set_active_project` / `set_active_project`.
 3. Check `unreal_rag_health` when RAG evidence is needed.
 4. Use `get_workspace_info` when you need the agent's roots and safety flags.
-5. Search or inspect, read the exact target, then use `replace_in_file`; `write_file` is only for brand-new files.
+5. Search or inspect, read the exact target, retain its `fileVersionReceipt`, then use `replace_in_file`; `write_file` is only for brand-new files.
 
 These are practical suggestions, not a required server sequence. The selected model may omit irrelevant steps or call `build_unreal_project` immediately when the user asks only for a build diagnosis.
 
@@ -95,7 +97,7 @@ Do not paste saved N-turn/task templates into a Direct chat. They are historical
 ## 5. Standard loop
 
 ```
-exact project -> search/inspect -> read_file_range/read_file -> replace_in_file -> optional static_validate_project -> build/test when useful
+exact project -> search/inspect -> read + retain receipt -> replace_in_file -> optional static_validate_project -> build/test when useful
 ```
 
 Rules:
@@ -103,9 +105,10 @@ Rules:
 - Do **not** paste full `.cpp` in chat when MCP write is available.
 - Do not claim a successful build or test without its output. A source-only task may still finish without a build when that limitation is stated.
 - Existing source files are patch-only. `write_file` is for brand-new files; existing `.h`, `.cpp`, and `.cs` writes are blocked by default in `unreal-agent`.
-- Direct writes enforce containment, create-only/patch-only rules, read-hash concurrency, size limits, atomicity, and locks. Narrow semantic denylist findings are success-response advisories only; analyzer findings or unavailability never authorize or block a Direct write/build. `VALIDATE_ON_WRITE` does not run project-wide static validation or gate a Direct write/build.
+- Direct writes enforce containment, create-only/patch-only rules, scoped snapshot/CAS concurrency, size limits, atomicity, and locks. Prefer `fileVersionReceipt`; a valid raw `expectedHash` remains compatible, and a reliable same-session latest snapshot may be resolved automatically. Successful mutations return a new receipt for consecutive edits. Re-read after `FILE_VERSION_CONFLICT`, `FILE_SNAPSHOT_*`, or uncertain external state. Narrow semantic denylist findings are success-response advisories only; analyzer findings or unavailability never authorize or block a Direct write/build. `VALIDATE_ON_WRITE` does not run project-wide static validation or gate a Direct write/build.
 - `static_validate_project` is an independent advisory diagnostic. Its findings do not authorize, roll back, or block `build_unreal_project`.
-- `build_unreal_project` resolves and runs the selected project/version immediately when `ALLOW_UNREAL_BUILD=1`; no task, plan, code-sketch, or static-validation certificate is required.
+- `build_unreal_project` resolves and runs the selected project/version immediately when `ALLOW_UNREAL_BUILD=1`; no task, plan, code-sketch, or static-validation certificate is required. `target=Editor` resolves the selected project's canonical, configured preferred, or sole discovered custom Editor target, while an explicit non-Editor target is unchanged.
+- Build and Automation share a bounded process runner. Timeout terminates the process tree; stdout/stderr and the persisted `fullLogPath` can be bounded head/tail projections with omitted-byte metadata rather than complete raw output.
 
 ## 6. RAG query hints
 
@@ -153,12 +156,11 @@ Choose and load the model in LM Studio itself. MCP servers do not select, switch
 
 | Profile | Use |
 |---------|-----|
-| `qwen3_8_27b` | **Default recommendation** — 64K context, Q4_K_M, parallel 1 |
-| `qwen3_6_27b` | Older 27B alternative; 32K baseline |
-| `qwen3_5_9b` | Compact MCP alternative; ctx 24576 |
-| `gpt_oss_20b` | Experimental — ctx 32768, 2-file cap |
-| `gpt_oss_small` | GPT OSS below 20B; ctx 32768 |
-| `qwen3_8b` | Small Qwen; ctx 24576 |
+| `qwen3_8_27b` | **Primary validated recommendation** — 64K context, Q4_K_M, parallel 1 |
+
+Muse Glimmer is under testing and has no validated recommendation yet. Legacy
+Qwen 3.5, Qwen 3.6 27B, and GPT-OSS entries may remain resolvable for historical
+compatibility, but this guide does not recommend them for current Direct use.
 
 Old N-turn prompts and post-build Python planner tools are historical evaluation fixtures, not supported Direct MCP behavior. Direct exposes immediate build/test diagnostics and leaves any subsequent inspection to the selected model.
 

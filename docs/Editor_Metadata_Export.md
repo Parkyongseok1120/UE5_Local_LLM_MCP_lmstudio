@@ -30,23 +30,37 @@ editor_tools = r'...\tools\ue_export'
 sys.path.insert(0, editor_tools)
 
 exec(open(editor_tools + r'\export_blueprint_metadata.py', encoding='utf-8').read())
-export_blueprint_metadata('/Game', r'C:\export\bp.jsonl')
+export_blueprint_metadata('/Game', r'C:\Projects\MyGame\Saved\LmStudioMetadataExports\bp.jsonl')
 
 exec(open(editor_tools + r'\export_material_metadata.py', encoding='utf-8').read())
-export_material_metadata('/Game', r'C:\export\materials.jsonl')
+export_material_metadata('/Game', r'C:\Projects\MyGame\Saved\LmStudioMetadataExports\materials.jsonl')
 
 exec(open(editor_tools + r'\export_animation_metadata.py', encoding='utf-8').read())
-export_animation_metadata('/Game', r'C:\export\animation.jsonl')
+export_animation_metadata('/Game', r'C:\Projects\MyGame\Saved\LmStudioMetadataExports\animation.jsonl')
 ```
 
 ## Ingest
 
-When a manual refresh is requested, its export path is resolved from the exact
-selected `.uproject`:
+Direct refresh requires an exact selected, existing `.uproject`. Its ingest path
+is always resolved from that captured descriptor rather than mutable global
+selection state:
 
 - Default export folder: `{ProjectRoot}/Saved/LmStudioMetadataExports`
-- Fallback (no active project): `%LOCALAPPDATA%/LmStudio/UnrealMetadataExports`
 - Content path: `editorExportContentPath` in `unreal-workspace.json` (default `/Game`)
+
+There is no no-project fallback in the Direct refresh path, and Direct refresh
+does not consume an arbitrary shared `editorExportDir` override because that path
+cannot prove which clone produced the files. Standalone export helpers may still
+accept an explicit destination, but place files in the selected project's default
+folder before running `rag.ps1 refresh`.
+
+During ingest, Direct resolves the exact descriptor, stamps every row with its
+canonical parent (`project_root`) and descriptor stem (`project`), and validates
+that composite owner. A same-name project at another root is a different owner.
+Stem-only legacy Editor rows migrate only when the previous descriptor inventory
+maps that stem to one unique root; ambiguous, malformed, missing, or foreign
+provenance fails closed. The resulting generation remains bound to that project's
+engine shard, and no Editor refresh or query merges sibling engine indexes.
 
 ### Blueprint node/pin exporter plugin
 
@@ -84,9 +98,10 @@ explicitly so execution does not depend on the Editor process working directory.
 ```python
 editor_tools = r'...\tools\ue_export'
 exec(open(editor_tools + r'\run_all_exports.py', encoding='utf-8').read())
-run_all_metadata_exports(r'C:\UnrealExports', content_path='/Game', tools_dir=editor_tools)
-run_all_metadata_exports(r'C:\UnrealExports', content_path='/Game/06_Environment/BossStage', tools_dir=editor_tools)
-export_materials_only(r'C:\UnrealExports', content_path='/Game', tools_dir=editor_tools)
+project_exports = r'C:\Projects\MyGame\Saved\LmStudioMetadataExports'
+run_all_metadata_exports(project_exports, content_path='/Game', tools_dir=editor_tools)
+run_all_metadata_exports(project_exports, content_path='/Game/06_Environment/BossStage', tools_dir=editor_tools)
+export_materials_only(project_exports, content_path='/Game', tools_dir=editor_tools)
 ```
 
 Register Editor menu (optional):
@@ -96,7 +111,7 @@ editor_tools = r'...\tools\ue_export'
 menu_script = editor_tools + r'\register_export_menu.py'
 menu_scope = {'__file__': menu_script}
 exec(compile(open(menu_script, encoding='utf-8').read(), menu_script, 'exec'), menu_scope)
-menu_scope.get('register_lmstudio_export_menu')(r'C:\UnrealExports', content_path='/Game')
+menu_scope.get('register_lmstudio_export_menu')(r'C:\Projects\MyGame\Saved\LmStudioMetadataExports', content_path='/Game')
 ```
 
 The default Direct MCP exposes `unreal_rag_refresh` for the same bounded refresh

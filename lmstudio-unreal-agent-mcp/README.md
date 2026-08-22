@@ -41,8 +41,8 @@ Strict는 Direct capability 위에 대화별 소형 lifecycle만 추가합니다
 진단·실행:
 
 - `static_validate_project` — 빌드를 허가하거나 막지 않는 선택적 진단
-- `build_unreal_project` — plan/task/static-validation 선행 조건 없이 즉시 UBT/UHT 실행
-- `run_unreal_automation_tests`
+- `build_unreal_project` — plan/task/static-validation 선행 조건 없이 즉시 UBT/UHT 실행. `target=Editor`는 선택 프로젝트의 canonical, 설정된 preferred Editor, 또는 유일하게 발견된 custom `*Editor` target으로 해석되며 명시한 non-Editor target은 그대로 유지
+- `run_unreal_automation_tests` — build와 같은 bounded process owner 사용
 - `run_command` — 좁은 진단 allowlist만 허용
 
 ## 프로젝트와 경로 소유권
@@ -67,12 +67,13 @@ active project의 유일한 저장소는 `SHARED_UNREAL_CONFIG`가 가리키는 
 
 - 쓰기: `ALLOW_WRITE=1` 필요
 - 새 파일: create-only; 기존 파일 덮어쓰기 금지
-- 기존 파일 변경: 사전 읽기에서 받은 SHA-256 CAS, exact occurrence, path lock, atomic replace 필요
-- 여러 파일 변경: transaction journal과 rollback을 갖춘 atomic bundle
-- 삭제: `ALLOW_SOURCE_DELETE=1`, Source 경로, 해시, 만료되는 승인 토큰, `userApproved=true`가 모두 필요하며 recoverable trash로 이동
+- 기존 파일 변경: 읽기 또는 직전 변경에서 받은 `fileVersionReceipt`를 우선 사용. 유효한 raw `expectedHash`도 호환되며 신뢰 가능한 동일 session에서는 최신 snapshot을 자동 사용할 수 있음. 외부 변경은 `FILE_VERSION_CONFLICT`, 누락·만료·scope 불일치는 `FILE_SNAPSHOT_*`로 fail-closed
+- 연속 파일 변경: 성공한 mutation이 반환한 새 receipt 또는 신뢰 가능한 동일-session snapshot을 사용하며, 충돌이나 외부 상태가 불확실할 때 다시 읽음
+- 여러 파일 변경: 각 기존 파일의 receipt/raw hash/same-session snapshot을 commit 전에 모두 확인하는 transaction journal과 rollback을 갖춘 atomic bundle
+- 삭제: `ALLOW_SOURCE_DELETE=1`, Source 경로, proposal이 반환한 receipt(또는 호환 raw hash), 만료되는 승인 토큰, `userApproved=true`가 모두 필요하며 recoverable trash로 이동
 - 빌드·Automation: `ALLOW_UNREAL_BUILD=1` 필요
 - 명령: `ALLOW_COMMANDS=1` 및 진단 allowlist 필요
-- 읽기·검색·로그·프로세스 출력: byte/line/result/time 경계 적용
+- 읽기·검색·로그·프로세스 출력: byte/line/result/time 경계 적용. Build와 Automation은 동일한 bounded runner로 stdout/stderr의 head+tail만 보존할 수 있고 timeout 시 process tree를 종료하며, `fullLogPath`도 capture budget을 넘은 원본 전체가 아니라 bounded projection일 수 있음
 - 반복된 동일 실패: 새 정보가 없음을 작은 비재시도 오류로 반환. 성공한 읽기는 새 채팅을 방해하지 않도록 항상 본문을 반환하며, 같은 대화가 앞선 `repeatReceipt`를 명시적으로 되돌려 준 경우에만 축약
 
 ## 설치
@@ -90,6 +91,6 @@ cd $HOME\.lmstudio\UE5_Local_LLM_MCP_lmstudio
 
 ## 일반적인 사용
 
-모델은 고정된 workflow 없이 필요한 capability를 직접 고릅니다. 예를 들어 정확한 프로젝트를 지정해 파일을 읽고 해시 기반 패치를 적용한 뒤 바로 빌드할 수 있으며, static validation은 필요할 때만 별도로 호출합니다. 실패 응답은 사실, 제한된 재시도 정보, 선택적 단일 제안만 제공하고 다음 호출을 강제하지 않습니다.
+모델은 고정된 workflow 없이 필요한 capability를 직접 고릅니다. 예를 들어 정확한 프로젝트를 지정해 파일을 읽고 receipt 기반 CAS 패치를 적용한 뒤 `target=Editor` alias로 바로 해당 프로젝트의 Editor target을 빌드할 수 있으며, static validation은 필요할 때만 별도로 호출합니다. 실패 응답은 사실, 제한된 재시도 정보, 선택적 단일 제안만 제공하고 다음 호출을 강제하지 않습니다.
 
 신뢰하지 않는 프롬프트에서는 쓰기, 명령, 빌드 환경변수를 활성화하지 마십시오.

@@ -240,7 +240,7 @@ jobs:
 
       - name: Direct production regression suite
         run: >
-          pytest
+          python -m pytest
           tests/test_python_direct_rag_server.py
           tests/test_tool_manifest_contract.py
           tests/test_direct_mcp_subprocess_e2e.py
@@ -292,7 +292,7 @@ jobs:
 
       - name: Direct transport and safety hardening gate
         run: >
-          pytest
+          python -m pytest
           tests/test_python_direct_rag_server.py
           tests/test_tool_manifest_contract.py
           tests/test_direct_mcp_subprocess_e2e.py

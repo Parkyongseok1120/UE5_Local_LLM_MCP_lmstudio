@@ -21,17 +21,18 @@ Call-time boundaries in Direct mode are concrete safety checks:
 
 - `ALLOW_WRITE`, `ALLOW_COMMANDS`, and `ALLOW_UNREAL_BUILD` control mutation/process authority.
 - Project containment and exact per-call project resolution prevent cross-project writes.
-- Existing-file edits require the SHA-256 returned by a read; stale hashes fail with `READ_CONFLICT`.
-- `write_file` is create-only; `replace_in_file` patches an existing file; deletion needs a matching proposal, current hash, explicit user approval, and `ALLOW_SOURCE_DELETE=1`.
-- Build and Automation resolve the selected `.uproject` and matching installed engine/version before execution.
+- Existing-file edits require current version evidence. Prefer the opaque `fileVersionReceipt` returned by a read or the immediately preceding mutation; a valid raw `expectedHash` remains compatible, and a reliable same-session latest snapshot may be resolved automatically. External changes fail with `FILE_VERSION_CONFLICT`; missing, invalid, or scope-mismatched snapshot evidence fails closed with `FILE_SNAPSHOT_*` errors.
+- `write_file` is create-only; `replace_in_file` patches an existing file. A deletion proposal returns both its approval token and `fileVersionReceipt`; deletion accepts that receipt or a compatible raw hash plus explicit user approval and `ALLOW_SOURCE_DELETE=1`.
+- Build and Automation resolve the selected `.uproject` and matching installed engine/version before execution. For builds, the portable `Editor` target alias resolves the selected project's canonical `<ProjectName>Editor`, configured preferred Editor target, or sole discovered custom `*Editor` target; an explicit non-Editor target is unchanged.
+- Exact project selection also routes RAG to the compatible engine-bound index shard. A single RAG call does not merge projects that belong to different engine shards.
 
 No task lease, route owner, planner gate, required next tool, or synthesis acknowledgement participates in those checks.
 
 ## LM Studio context plugin
 
-Select the actual LLM, such as Qwen, in the model dropdown. Enable `codex/unreal-context-compactor` in the chat's plugin panel and keep the actual LLM selected. The compactor is a prediction-loop chat plugin, not a proxy model, MCP authority source, tool filter, or `targetModel` selector.
+Select the actual LLM in the model dropdown. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation. Enable `codex/unreal-context-compactor` in the chat's plugin panel and keep the actual LLM selected. The compactor is a prediction-loop chat plugin, not a proxy model, MCP authority source, tool filter, or `targetModel` selector.
 
-The plugin may replace older model-facing history with deterministic factual memory while retaining the latest real user request and recent complete turns. It deliberately strips task/route/control/synthesis internals and required-tool directives. Installation and `npm run status` verify availability and source/build wiring, not chat-level activation; confirm the plugin toggle in LM Studio.
+The plugin may replace older model-facing history with deterministic factual continuity state while retaining the latest real user request and recent complete turns. That bounded state can include the active objective, a continuation antecedent for elliptical follow-ups, active project, current work status, unresolved items, and relevant file/tool/build facts such as `fileVersionReceipt`. It deliberately strips task/route/control/synthesis internals and required-tool directives and never becomes workflow authority. Installation and `npm run status` verify availability and source/build wiring, not chat-level activation; confirm the plugin toggle in LM Studio.
 
 ## Direct duplicate behavior
 
@@ -68,11 +69,11 @@ When reviewing gameplay/cinematic logic (not compile errors):
 
 ## Validate-on-write
 
-`VALIDATE_ON_WRITE` is a legacy server setting. The default Direct `write_file`, `replace_in_file`, and `apply_edit_bundle` paths do not run project-wide static validation and do not require a validator certificate. They enforce their own hard mutation safety: project containment, target/create rules, size limits, exact read hashes, atomic/CAS writes, locks, and deletion approval. Narrow semantic denylist findings are advisory evidence only; a finding or unavailable analyzer never authorizes or blocks the mutation.
+`VALIDATE_ON_WRITE` is a legacy server setting. The default Direct `write_file`, `replace_in_file`, and `apply_edit_bundle` paths do not run project-wide static validation and do not require a validator certificate. They enforce their own hard mutation safety: project containment, target/create rules, size limits, scoped read/mutation snapshots, atomic/CAS writes, locks, and deletion approval. Narrow semantic denylist findings are advisory evidence only; a finding or unavailable analyzer never authorizes or blocks the mutation.
 
 `static_validate_project` is a separate **advisory** capability. It returns `validationOk`, findings, and scan metadata, but also reports `advisory=true` and `blocksBuild=false`. A model may run it before or after an edit, skip it, fix a relevant finding, or proceed directly to UBT/UHT. Its findings never authorize a write, roll back an edit, or close the build tool.
 
-`build_unreal_project` is an immediate diagnostic/execution capability. When `ALLOW_UNREAL_BUILD=1` and project/engine resolution succeeds, it runs without consulting a task, plan, code-sketch result, `VALIDATE_ON_WRITE`, or `static_validate_project`. Build output is the authoritative compile result; a static scan is useful supplementary evidence, not a prerequisite.
+`build_unreal_project` is an immediate diagnostic/execution capability. When `ALLOW_UNREAL_BUILD=1` and project/engine resolution succeeds, it runs without consulting a task, plan, code-sketch result, `VALIDATE_ON_WRITE`, or `static_validate_project`. Passing `target=Editor` selects the resolved project's canonical, configured preferred, or sole discovered custom Editor target; any explicit non-Editor target is preserved. Build output is the authoritative compile result; a static scan is useful supplementary evidence, not a prerequisite.
 
 ## Write Safety and Flow
 
@@ -82,24 +83,24 @@ When reviewing gameplay/cinematic logic (not compile errors):
 |----------|---------|--------|
 | Authority | `ALLOW_WRITE=0` | Mutation is rejected before disk access |
 | Project/target safety | path escapes project, existing target passed to `write_file`, protected path | Mutation is rejected |
-| Concurrency | missing/stale `expectedHash`, occurrence mismatch, path lock | Mutation is rejected; re-read before changing arguments |
+| Concurrency | missing usable version evidence, stale receipt/hash, scope-mismatched receipt, occurrence mismatch, path lock | Mutation is rejected with `FILE_SNAPSHOT_REQUIRED`, `FILE_SNAPSHOT_INVALID`, `FILE_SNAPSHOT_SCOPE_MISMATCH`, `FILE_VERSION_CONFLICT`, or the applicable match/lock error; re-read when current evidence is unavailable or stale |
 | Prospective semantic denylist advisory | known unsafe Unreal API pattern or unavailable analyzer | Successful mutation reports a bounded non-blocking warning; build remains separately callable |
 | Advisory project scan | `static_validate_project` finding | No automatic rollback and no build block |
 
-**Advisory ≠ write permission:** validator warnings cannot bypass authority, containment, hash, target, or delete-approval checks.
+**Advisory ≠ write permission:** validator warnings cannot bypass authority, containment, snapshot/CAS, target, or delete-approval checks.
 
 ### Generation self-check (non-blocking)
 
 `unreal_code_sketch_claim_validate` and `unreal_architecture_reasoning` are not part of the supported MCP surface. Their repository-local implementations belong to the unsupported historical Python controller and are omitted from portable runtime packaging. Direct can inspect the same source with factual RAG and project reads, then use immediate build/test diagnostics without importing either gate.
 
-`write_file` is **create-only**. It creates brand-new files and refuses to overwrite any file that already exists (every extension, not just source). Direct Mode has no existing-file override for this tool; use `replace_in_file` with a current read hash.
+`write_file` is **create-only**. It creates brand-new files and refuses to overwrite any file that already exists (every extension, not just source). Direct Mode has no existing-file override for this tool; use `replace_in_file` with the current `fileVersionReceipt` (preferred) or a compatible raw `expectedHash`.
 
 - If `write_file` returns `blocked because file already exists`: switch to `replace_in_file`. **Do not retry `write_file`** on that path.
 - On a tool timeout (`MCP error -32001`): never immediately retry the same write. First verify state with `list_directory` / `read_file`. If the file now exists, switch to `replace_in_file`; if the situation is unclear, stop and summarize for the user. A timeout is a hard-stop signal.
 - After a successful `write_file` / `replace_in_file`: report the changed file briefly, then choose the next useful diagnostic or edit. There is no server-required next step.
 - Pause for user direction on genuine risk or scope ambiguity: an uncertain timeout state, rollback failure, conflicting external edit, destructive approval, or a requested scope change. An advisory static finding alone is not a server stop signal.
 - If a write response says `rollback skipped ... (conflict)`: another operation changed the file. Stop, `read_file` the current content, and reconcile before editing again.
-- **Direct repetition:** successful Direct RAG searches and Node reads are condensed only when the caller echoes the state-bound `repeatReceipt` from its prior full result. Without it, identical calls return full content. Direct RAG has no pagination token; use `nextDetailLevel` only when returned. Repeated Node failures may be automatically bounded but remain failures. Do not interpret any duplicate status as a recovery gate. For a repeated write, re-read first: its hash/target/occurrence safety will reject a stale or no-longer-applicable patch.
+- **Direct repetition:** successful Direct RAG searches and Node reads are condensed only when the caller echoes the state-bound `repeatReceipt` from its prior full result. Without it, identical calls return full content. Direct RAG has no pagination token; use `nextDetailLevel` only when returned. Repeated Node failures may be automatically bounded but remain failures. Do not interpret any duplicate status as a recovery gate. For consecutive edits, use the `fileVersionReceipt` returned by the immediately preceding mutation, or let a reliable same-session snapshot resolve it automatically. Re-read after `FILE_VERSION_CONFLICT`, after snapshot expiry/restart, or whenever external state is uncertain.
 
 ## Forbidden Tools
 
@@ -129,8 +130,8 @@ Direct Mode has no required chat order. A common implementation flow is:
 
 1. Select or pass the exact `.uproject`/project name for the current call.
 2. Search or inspect only the evidence relevant to the request.
-3. Read each exact target and retain its SHA-256.
-4. Patch existing files with `replace_in_file` or create new files with `write_file`.
+3. Read each exact target and retain its `fileVersionReceipt`; retain the SHA-256 only when a raw `expectedHash` is needed for compatibility.
+4. Patch existing files with `replace_in_file`, passing the receipt when the transport cannot supply a reliable session, or create new files with `write_file`.
 5. Optionally run `static_validate_project` for supplementary findings.
 6. Run `build_unreal_project` or Automation whenever the user needs compile/runtime evidence.
 
@@ -139,11 +140,11 @@ The model may omit irrelevant steps, revisit a file after changed evidence, or c
 For edit tasks:
 
 - Do not write when `ALLOW_WRITE=0`, the user requested analysis only, or the target/scope is not established.
-- Read every existing target before `replace_in_file`; for a new file, inspect the containing module/directory and confirm the path does not already exist before `write_file`.
+- Read every existing target before its first `replace_in_file` and retain the returned receipt. A successful mutation issues a new receipt for a consecutive edit; re-read on a version conflict or when external state may have changed. For a new file, inspect the containing module/directory and confirm the path does not already exist before `write_file`.
 - Prefer `replace_in_file` with `expectedOccurrences=1` for existing files.
 - Use `write_file` only for brand-new files. Existing `.h`, `.hpp`, `.cpp`, `.c`, `.cc`, `.cxx`, and `.cs` files are patch-only.
 - Run `build_unreal_project` after C++ or `Build.cs` edits when compile proof is part of the requested outcome; it does not require a prior static validator.
-- If cleanup appears to require deleting files, finish all edits first, call `propose_file_deletions`, report the count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval plus the LM Studio tool-confirmation prompt before `delete_file`. Keep `ALLOW_SOURCE_DELETE=0` unless deletion is deliberately enabled for that session.
+- If cleanup appears to require deleting files, finish all edits first, call `propose_file_deletions`, retain each proposal's `fileVersionReceipt`, report the count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval plus the LM Studio tool-confirmation prompt before `delete_file`. Keep `ALLOW_SOURCE_DELETE=0` unless deletion is deliberately enabled for that session.
 - On UBT failure, inspect the bounded current error context, read the implicated source, and patch the smallest failing surface.
 
 ## Diagram Output
@@ -156,11 +157,11 @@ No MCP task bootstrap is required. Confirm the exact project and safety flags on
 
 ## Context Budget and Session Handoff
 
-`build_unreal_project` is compact by default: it returns a one-line `summary`, up to 40 likely error lines, and a timestamped path under `.agent/logs` as `fullLogPath`. Raw stdout/stderr is omitted unless `verboseOutput=true`. `read_unreal_logs` defaults to a bounded tail; use `mode=first_error` to scan from byte zero and `mode=range` with `cursorByte`/`nextCursorByte` when exact traversal is needed. Always inspect `truncated`/`hasMore`.
+Build and Automation share one bounded process owner. It keeps bounded head and tail captures for stdout and stderr, records omitted-byte metadata, terminates the process tree on timeout, and persists only that bounded projection when the process exceeds the capture budget. `build_unreal_project` is compact by default: it returns a one-line `summary`, up to 40 likely error lines, and the timestamped bounded process log path under `.agent/logs` as `fullLogPath`; `verboseOutput=true` returns the bounded captured streams, not guaranteed unbounded raw output. `read_unreal_logs` defaults to a bounded tail; use `mode=first_error` to scan from byte zero and `mode=range` with `cursorByte`/`nextCursorByte` when exact traversal is needed. Always inspect `truncated`/`hasMore` and process capture metadata.
 
 Direct responses are bounded and remain valid JSON; errors use a much smaller ceiling than successful evidence payloads. An oversized success is returned as retryable `OUTPUT_LIMIT_EXCEEDED` without partial evidence or a cursor; narrow the byte/line/detail/result arguments before retrying.
 
-For long LM Studio chats, keep the actual LLM selected and enable `codex/unreal-context-compactor` in the chat plugin panel. The plugin retains bounded factual memory; it does not preserve task routes or required tool commands.
+For long LM Studio chats, keep the actual LLM selected and enable `codex/unreal-context-compactor` in the chat plugin panel. The plugin retains bounded factual continuity—active objective, continuation antecedent, active project/current work, unresolved items, and relevant file/tool/build facts—but never preserves or creates task routes, required tool commands, or workflow authority.
 
 If context/KV cache still saturates, start a fresh chat with a short factual handoff containing the exact project, current request, files already changed/observed, latest build/test result, open errors, and failed approaches. Direct Mode does not require a `write_session_handoff` artifact or a resume checkpoint.
 
@@ -172,24 +173,12 @@ If context/KV cache still saturates, start a fresh chat with a short factual han
 
 Historical model-specific planner prompts are not shipped. Direct profiles use [`prompts/lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md), which leaves reasoning, tool choice, stopping, and the final answer with the model selected in LM Studio.
 
-## Model-Specific Notes
+## Model Selection Notes
 
-### Qwen 3.6 27B
-
-- Historically the primary Pass@K evaluation model; in the supported runtime it is used directly as the selected chat model.
-- In Direct chat, select Qwen itself and enable the context compactor in the chat plugin panel; use a concise Direct prompt rather than the legacy planner prompt.
-- **Thinking leak:** disable visible reasoning in LM Studio or use execute/`compile_fix_patch` turns with thinking OFF. Do not print "thinking process" in visible chat.
-- For `module_fix` / `GameplayTags` / `Build.cs` errors: read full `*.Build.cs` from project state, then patch the file — do not answer with explanation only.
-
-### GPT OSS 20B
-
-- JSON argument drift is common; prefer one file per patch turn even though the profile allows 2.
-- Context is 32768 in sampling profile.
-
-### Qwen 3.5 9B
-
-- Keep API names and paths in English; Korean summaries are OK.
-- Context should be at least 24576 for compact profiles.
+- **Qwen 3.8 27B** is the primary currently recommended and validated model for the Direct runtime.
+- **Muse Glimmer** is under testing only. Do not present it as a validated recommendation until current Direct-mode evidence is published.
+- Qwen 3.5, Qwen 3.6 27B, and GPT-OSS references in saved scorecards are historical measurements, not current recommendations.
+- For `module_fix` / `GameplayTags` / `Build.cs` errors, read the full current `*.Build.cs` before patching and report the actual build evidence.
 
 ## Troubleshooting
 
@@ -205,7 +194,8 @@ Historical model-specific planner prompts are not shipped. Direct profiles use [
 | Hallucinated analysis | Force `read_file` before claims or edits |
 | False logic bugs (early return = "missing") | Read sibling `.h` UENUM/field docs first, classify `ByDesign`/`Ambiguous`, and cite the actual contract; no claim-validator gate is required |
 | `status=no_new_information` | The caller echoed a successful Direct RAG/Node read's still-valid `repeatReceipt`, or a Node failure repeated. Reuse evidence only when it exists in this chat; otherwise omit the receipt for a full result. No recovery tool is required |
-| Repeated/no-op patch or `READ_CONFLICT` | Re-read the current file, use its new SHA-256, and patch only text that still exists with the exact occurrence count |
+| `FILE_VERSION_CONFLICT` or repeated/no-op patch | Another writer changed the file or the exact text no longer applies. Re-read, retain the new receipt, and patch only text that still exists with the exact occurrence count. |
+| `FILE_SNAPSHOT_REQUIRED`, `FILE_SNAPSHOT_INVALID`, or `FILE_SNAPSHOT_SCOPE_MISMATCH` | Read the exact file in the exact selected project and pass its new `fileVersionReceipt`. Do not transfer receipts across project, path, conversation/session owner, process restart, or expiry; a valid raw `expectedHash` remains compatible. |
 | Tool not in list | Confirm the Direct process is current. Removed task/planner/synthesis and Python compile-loop tools are not supported; Node lifecycle tools exist only in Node Strict |
 | `unreal_rag_refresh` times out | Re-run the same supported `python install.py --profile ... --yes` command used for this installation so the managed MCP entries and timeouts are regenerated, then restart LM Studio. Refresh is synchronous and defaults to `scope=project_source`, which never starts Unreal Editor. `scope=editor_metadata` or `all` ingests existing exports without launching Editor unless the caller explicitly sets `allowEditorLaunch=true`. |
 | Write target blocked | Existing files require `replace_in_file`; keep writes under the selected project's allowed roots and use `write_file` only for a new path |

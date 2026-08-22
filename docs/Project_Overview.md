@@ -24,8 +24,10 @@ not create a task, plan, route, required-next-tool obligation, or synthesis gate
   for ordinary reads.
 - `codex/unreal-context-compactor` is an LM Studio chat plugin. It compacts older
   model-facing history under token pressure while calling the actual model
-  selected by the user. It is not a model, proxy model, tool router, or authority
-  source.
+  selected by the user. Its bounded factual continuity can retain the active
+  objective, continuation antecedent, active project/current work, unresolved
+  items, and relevant file/tool/build facts. It is not a model, proxy model,
+  tool router, planner, or authority source.
 
 ## Safety that remains authoritative
 
@@ -35,13 +37,15 @@ The runtime retains:
 - exact selected-project containment and normalized path resolution;
 - source/config/plugin-source mutation allowlists and protected-directory denial;
 - bounded reads, responses, process output, and mutation size/file limits;
-- read-before-write SHA-256 compare-and-swap for existing files;
+- receipt-first scoped snapshot/CAS for existing files, with compatible raw
+  `expectedHash` and reliable same-session latest-snapshot fallback;
 - create-only new-file writes, per-path locks, atomic replacement, and recoverable
   multi-file transaction journals;
-- explicit source-delete proposal, current-hash confirmation, environment opt-in,
-  and LM Studio's own tool confirmation;
-- command allowlists, process-tree timeout/output termination, and explicit
-  build/Automation authority flags.
+- explicit source-delete proposal, proposal receipt/hash confirmation,
+  environment opt-in, and LM Studio's own tool confirmation;
+- command allowlists, one shared bounded Build/Automation process owner,
+  process-tree timeout termination, bounded head/tail log projection, and
+  explicit build/Automation authority flags.
 
 Static and semantic code findings are advisory. They may inform the model but do
 not approve or block a permitted edit or build. Real UBT/UHT/compiler output is
@@ -54,7 +58,12 @@ the shared active-project controller support multiple roots, while per-call
 selectors allow one Direct process to work across projects without silently
 retargeting later calls. Engine resolution uses each project's
 `EngineAssociation`, registered installations, or an explicit engine root and
-verifies the resolved engine version before a build.
+verifies the resolved engine version before a build. RAG indexes are
+engine-bound sibling shards: an exact project selector chooses the compatible
+shard, and one call never merges projects owned by different engines. For a
+build, `target=Editor` resolves the selected project's canonical, configured
+preferred, or sole discovered custom Editor target; explicit non-Editor targets
+are unchanged.
 
 ## LM Studio setup
 
@@ -85,12 +94,19 @@ See [Architecture](ARCHITECTURE.md),
 route, required-next-tool, synthesis gate가 없습니다.
 
 `unreal-rag`는 8개의 사실 조회/갱신 도구만 제공하고, `unreal-agent`는 프로젝트
-탐색·읽기·CAS 편집·빌드·테스트·로그 기능을 제공합니다. 필요한 경우 매 호출에
-정확한 `.uproject`를 넘길 수 있으므로 active project를 몰래 바꾸지 않고 여러
-프로젝트를 다룰 수 있습니다. Strict는 별도 Node 진입점이며 다른 대화의 상태로
-일반 읽기를 막지 않습니다.
+탐색·읽기·receipt/CAS 편집·빌드·테스트·로그 기능을 제공합니다. 필요한 경우 매
+호출에 정확한 `.uproject`를 넘길 수 있으므로 active project를 몰래 바꾸지 않고
+여러 프로젝트를 다룰 수 있습니다. 정확한 프로젝트 선택자는 해당 엔진에 묶인
+sibling RAG shard를 선택하며 한 호출에서 서로 다른 엔진 shard를 합치지 않습니다.
+Strict는 별도 Node 진입점이며 다른 대화의 상태로 일반 읽기를 막지 않습니다.
+
+context compactor는 active objective, continuation antecedent, 현재 프로젝트/작업,
+미해결 항목, 관련 파일·도구·빌드 사실을 제한된 continuity state로 보존할 수
+있지만 plan, route, 권한, 다음 도구, 완료 판단을 소유하지 않습니다.
 
 Direct가 제거한 것은 서버의 작업 판단권입니다. 프로젝트 경로 제한, 보호 폴더
-차단, 크기 제한, SHA-256 CAS, 원자적 쓰기/rollback, 삭제 확인, 명령 allowlist,
-프로세스 제한은 계속 hard gate입니다. 정적·semantic finding은 advisory이고 실제
-UBT/UHT/compiler 결과가 빌드 판단의 근거입니다.
+차단, 크기 제한, `fileVersionReceipt` 우선 snapshot/CAS(raw `expectedHash` 호환),
+원자적 쓰기/rollback, 삭제 확인, 명령 allowlist, 공유 bounded Build/Automation
+process owner는 계속 hard gate입니다. `target=Editor`는 선택 프로젝트의 실제
+Editor target으로 해석되고 명시한 non-Editor target은 유지됩니다. 정적·semantic
+finding은 advisory이고 실제 UBT/UHT/compiler 결과가 빌드 판단의 근거입니다.

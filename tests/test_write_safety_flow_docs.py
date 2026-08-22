@@ -39,6 +39,10 @@ def test_direct_prompt_leaves_sequence_stopping_and_final_answer_with_model() ->
 def test_direct_prompt_keeps_repeat_and_editor_launch_safety_explicit() -> None:
     text = _read(DIRECT_SYSTEM)
     assert "repeatReceipt" in text
+    assert "fileVersionReceipt" in text
+    assert "expectedHash" in text
+    assert "FILE_VERSION_CONFLICT" in text
+    assert "FILE_SNAPSHOT_SCOPE_MISMATCH" in text
     assert "allowEditorLaunch=true" in text
     assert "only when the user explicitly asked" in text
     assert "must not start Unreal Editor" in text
@@ -49,7 +53,8 @@ def test_compatibility_prompt_is_direct_not_a_second_controller() -> None:
     assert "deprecated compatibility prompt" in lowered
     assert "lmstudio_direct_model_system.md" in lowered
     assert "there is no mandatory" in lowered
-    assert "exact-read/cas" in lowered
+    assert "fileversionreceipt" in lowered
+    assert "same-session latest" in lowered
     assert "create-only" in lowered
 
 
@@ -57,20 +62,26 @@ def test_tool_discipline_documents_concrete_write_and_build_boundaries() -> None
     text = _read(TOOL_DISCIPLINE)
     lowered = text.lower()
     assert "create-only" in lowered
-    assert "exact read hashes" in lowered
+    assert "fileversionreceipt" in lowered
+    assert "scoped read/mutation snapshots" in lowered
     assert "atomic/cas writes" in lowered
     assert "path lock" in lowered
     assert "rollback skipped" in lowered
     assert "responses are bounded" in lowered
     assert "advisory" in lowered
     assert "immediate diagnostic/execution capability" in lowered
+    assert "target=editor" in lowered
+    assert "build and automation share one bounded process owner" in lowered
 
 
 def test_tool_discipline_documents_direct_repetition_without_forced_recovery() -> None:
     text = _read(TOOL_DISCIPLINE)
     assert "status=no_new_information" in text
     assert "Direct repetition" in text
-    assert "READ_CONFLICT" in text
+    assert "FILE_VERSION_CONFLICT" in text
+    assert "FILE_SNAPSHOT_REQUIRED" in text
+    assert "FILE_SNAPSHOT_INVALID" in text
+    assert "FILE_SNAPSHOT_SCOPE_MISMATCH" in text
     assert "Direct duplicate behavior" in text
     assert "repeatReceipt" in text
 

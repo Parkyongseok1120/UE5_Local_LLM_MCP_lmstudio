@@ -1,5 +1,12 @@
 # Release Readiness Patch Backlog (Stable Gate)
 
+> **Historical / superseded snapshot.** This backlog describes an earlier Stable
+> Gate milestone. Status rows and deferred items below are retained as historical
+> facts and must not be read as the current 1.3.0 backlog. Use
+> [Release Notes 1.3.0](Release_Notes_1_3_0.md),
+> [Integrated Installer](Integrated_Installer.md), and the current CI workflow for
+> the supported Direct-mode release contract.
+
 No new features. Remaining work after Stable Gate Stabilization.
 
 ## P0 — closed

@@ -14,13 +14,19 @@ do not own a task, route, plan, write gate, or synthesis phase.
 2. Use `unreal_rag_search` and `unreal_symbol_lookup` to locate evidence, then
    use `search_files`, `read_file_range`, or `read_file` for the source of truth.
 3. Before changing an existing file, read the current content and retain the
-   returned hash. Use `replace_in_file` with a unique match and the expected
-   hash/CAS field. Use `write_file` only for a new file.
+   returned `fileVersionReceipt`. Use `replace_in_file` with a unique match and
+   that receipt. A valid raw `expectedHash` remains compatible, and a reliable
+   same-session latest snapshot may resolve automatically. A successful mutation
+   returns a new receipt for a consecutive edit. Use `write_file` only for a new
+   file; re-read on `FILE_VERSION_CONFLICT` or `FILE_SNAPSHOT_*`.
 4. Treat `static_validate_project` as advisory. Fix useful findings, but do not
    treat it as permission to write or build.
 5. Build immediately when a build is needed. Prefer Rider for an interactive
    developer build; use `build_unreal_project` when MCP build execution is
-   explicitly enabled. Report the actual build result and log path.
+   explicitly enabled. `target=Editor` resolves the selected project's canonical,
+   configured preferred, or sole discovered custom Editor target; preserve any
+   explicit non-Editor target. Report
+   the actual build result and bounded process log/capture metadata.
 6. Inspect logs or re-read changed files when evidence is needed. Stop or retry
    based on the returned error itself—there is no server-owned next action.
 7. Produce the final response directly from verified tool results.
@@ -31,8 +37,9 @@ do not own a task, route, plan, write gate, or synthesis phase.
   exact selector supplied by the user and re-resolve after a project switch.
 - Do not hard-code an Unreal installation or version. Let project association,
   engine registration, or an explicit engine selector resolve the toolchain.
-- Never reuse a path, hash, cursor, or build result from one project as evidence
-  for another project.
+- Never reuse a path, `fileVersionReceipt`, hash, cursor, or build result from one
+  project as evidence for another project. Exact project selection must use the
+  compatible engine-bound RAG shard rather than merge different engine shards.
 - In Unreal C++ changes, avoid introducing namespaces unless the target project
   already requires one.
 
@@ -47,10 +54,14 @@ different call is appropriate.
 
 ## Safety boundaries
 
-- Existing source files are patch-only; use hash/CAS protection when offered.
+- Existing source files are patch-only; prefer scoped `fileVersionReceipt`/CAS
+  protection, with raw `expectedHash` only as a compatibility option.
 - Use exact project-relative paths and bounded reads/searches.
 - Keep recoverable-delete approval, path containment, atomic writes, write
   locks, and external-change detection intact.
+- Build and Automation share a bounded process owner. Timeout terminates the
+  process tree, and `fullLogPath` can contain bounded head/tail output with
+  omitted-byte metadata rather than unlimited raw output.
 - Do not use generic shell, JavaScript sandbox, browser, Deno, or Node `fs`
   access as a substitute for the MCP file tools.
 - Do not claim success without current file, validation, build, or user-provided

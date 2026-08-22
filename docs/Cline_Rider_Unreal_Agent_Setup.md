@@ -32,6 +32,8 @@ proxy model inference.
 
 The tooling must not hard-code a particular Unreal version. Project association,
 registered engines, or an explicit selector determines the engine used to build.
+The exact project selector also chooses the compatible engine-bound RAG shard;
+one call does not combine projects from different engine shards.
 
 ## 3. Cline MCP setup
 
@@ -74,7 +76,7 @@ Use the [Direct smoke checklist](Rider_Cline_Smoke_Checklist.md) after installat
 unreal_get_active_project (or an exact project selector)
   -> unreal_rag_search / unreal_symbol_lookup
   -> search_files / read_file_range / read_file
-  -> replace_in_file with current hash/CAS, or write_file for a new file
+  -> replace_in_file with current fileVersionReceipt/CAS, or write_file for a new file
   -> optional advisory static_validate_project
   -> Rider Build, or enabled build_unreal_project
   -> inspect current output/logs
@@ -84,13 +86,22 @@ unreal_get_active_project (or an exact project selector)
 Rules:
 
 - Existing `.h`, `.hpp`, `.cpp`, `.c`, `.cc`, `.cxx`, and `.cs` files are
-  patch-only. Re-read after a CAS/hash mismatch instead of overwriting an
-  external change.
+  patch-only. Prefer the `fileVersionReceipt` returned by a read or immediately
+  preceding mutation; a valid raw `expectedHash` remains compatible, and a
+  reliable same-session latest snapshot may be resolved automatically. Re-read
+  after `FILE_VERSION_CONFLICT`, a `FILE_SNAPSHOT_*` error, or uncertain external
+  state instead of overwriting another change.
 - Use a unique replacement and exact project-relative path. If it does not
   match, read a narrower range and derive a new patch from current content.
 - `static_validate_project` is an advisory diagnostic, not a write/build gate.
 - Build does not require a plan, validation token, task session, or synthesis
   checkpoint. MCP build execution still requires its explicit safety enablement.
+  `target=Editor` resolves the selected project's canonical, configured
+  preferred, or sole discovered custom Editor target; explicit non-Editor
+  targets are unchanged.
+- Build and Automation share one bounded process runner. Timeout terminates the
+  process tree, and `fullLogPath` may contain the bounded head/tail projection
+  with omitted-byte metadata rather than unlimited raw output.
 - A `repeatReceipt` may be echoed only by the same conversation that retained the
   original successful content. Calls without it receive full results.
 - Do not call historical workflow-controller, task-recovery, route-ownership,
@@ -105,7 +116,7 @@ Rules:
 | Rider | Interactive C++ editing, UBT builds, debugger, project structure |
 | Cline model | Tool selection, sequencing, retry decisions, final answer |
 | `unreal-rag` MCP | Project selection, retrieval, symbols, index health/refresh |
-| `unreal-agent` MCP | Bounded reads, searches, CAS-safe mutations, validation, builds, logs |
+| `unreal-agent` MCP | Bounded reads, searches, receipt/CAS-safe mutations, validation, builds, logs |
 | LM Studio (optional) | Cline model provider only; not an MCP control plane |
 
 ## 6. LM Studio Chat
@@ -122,7 +133,8 @@ compaction is wanted.
 | Cline MCP catalog is empty | Rerun the integrated installer with the Cline component, restart Cline, then inspect MCP stderr |
 | Wrong project | Pass the exact `.uproject` selector or deliberately update the shared default |
 | Slow search | Narrow project/path/query; use lexical-only search if the Direct tool exposes that option |
-| CAS/hash mismatch | Re-read current content and create a new bounded patch; do not force overwrite |
+| `FILE_VERSION_CONFLICT` | Re-read current content, retain its new receipt, and create a new bounded patch; do not force overwrite |
+| `FILE_SNAPSHOT_REQUIRED`, `FILE_SNAPSHOT_INVALID`, or `FILE_SNAPSHOT_SCOPE_MISMATCH` | Read the exact file under the exact project and pass that new `fileVersionReceipt`; do not transfer it across a project, path, owner/session, runtime restart, or expiry |
 | Static validation reports an issue | Treat it as advisory evidence, fix relevant findings, then run the real build |
 | Build is disabled | Build in Rider or explicitly enable the documented MCP build switch |
 | Model tries a generic sandbox | Cancel it and continue with the bounded MCP file tools |

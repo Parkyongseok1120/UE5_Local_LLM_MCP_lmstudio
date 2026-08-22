@@ -12,15 +12,20 @@ settings, filter MCP tools, or interpret Unreal workflow state. The existing
 providers. Because compaction is limited to chat history, the same plugin can be
 used across Unreal Engine versions and projects.
 
-Version 0.4.46 defaults to enabled mode. `observeOnly` can be enabled in the plugin
+Version 0.4.47 defaults to enabled mode. `observeOnly` can be enabled in the plugin
 settings to measure pressure without changing the model-facing history. Soft
-compaction retains recent complete turns; hard compaction retains the current user
-turn plus bounded factual memory. If exact token measurement is unavailable, a
-message-count threshold provides a conservative fallback.
+compaction retains recent complete turns. Hard compaction keeps the current user
+turn separately and emits bounded `[Direct continuity state v1]` factual memory:
+the active objective, continuation antecedent for an elliptical follow-up, active
+project, current work status, unresolved items, archived objectives, recent tool
+outcomes, and relevant file/build facts including `fileVersionReceipt`. This state
+cannot plan, route, authorize tools, require a next call, or declare the request
+complete. If exact token measurement is unavailable, a message-count threshold
+provides a conservative fallback.
 
 ## Use in LM Studio
 
-1. Load and select the actual LLM you want to use, such as Qwen.
+1. Load and select the actual LLM. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation.
 2. Enable `codex/unreal-context-compactor` for the chat in LM Studio's plugin panel.
 3. Keep using the actual LLM as the chat model. The plugin runs in its prediction
    loop and passes the selected model's tools through unchanged.

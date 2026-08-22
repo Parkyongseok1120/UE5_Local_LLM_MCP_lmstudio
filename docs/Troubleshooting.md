@@ -18,11 +18,18 @@ Use the MCP call's `scope=engine` for engine-only evidence or `scope=mixed` for
 engine and exact-project evidence. `scope=auto` uses the built-in classifier;
 routing is not controlled by process environment variables.
 
+If `RAG_RAW_MULTI_ENGINE_CORPUS` appears, rebuild separate engine-bound sibling
+shards instead of merging incompatible engine provenance into one index. Pass an
+exact `.uproject` selector so the Direct server can choose the compatible shard.
+Same-name project clones must be selected by exact path; ambiguous legacy Editor
+rows are never guessed and require fresh, correctly rooted metadata exports.
+
 ## Build.cs index drift after parser fix
 
 ```powershell
-.\rag.ps1 collect-symbols -Root C:\Projects\MyGame\Source -Tier public -SymbolScope project -ProjectName MyGame
-.\rag.ps1 build-incremental
+.\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
+.\rag.ps1 refresh -RefreshScope project_source
+.\rag.ps1 doctor
 ```
 
 ## Release / install verification
@@ -38,7 +45,7 @@ Rerun `python install.py --profile standard --yes` to restore SAFE read-only def
 
 ## AGENT write is blocked by compactor/task authority
 
-The default Direct MCP never uses context-compactor telemetry, a task, a route, a planner, or synthesis state as write authority. Select Qwen/GPT (the real LLM) in the model dropdown and enable `codex/unreal-context-compactor` separately in the chat plugin panel. The plugin is optional continuity support and does not grant or revoke `ALLOW_WRITE`, `ALLOW_COMMANDS`, or `ALLOW_UNREAL_BUILD`.
+The default Direct MCP never uses context-compactor telemetry, a task, a route, a planner, or synthesis state as write authority. Select the real LLM in the model dropdown and enable `codex/unreal-context-compactor` separately in the chat plugin panel. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5, Qwen 3.6 27B, and GPT-OSS references are historical rather than current recommendations. The plugin is optional factual continuity support and does not grant or revoke `ALLOW_WRITE`, `ALLOW_COMMANDS`, or `ALLOW_UNREAL_BUILD`.
 
 If a default chat returns `CONTEXT_COMPACTOR_NOT_ACTIVE`, `TASK_AUTH_*`, `TASK_ROUTE_*`, a required-next-tool recovery, or synthesis acknowledgement, an unsupported legacy Python entry or stale process is active. Re-run the installer, verify that `unreal-rag` launches `scripts/unreal_rag_direct.py` and `unreal-agent` launches `src/direct-server.js`, and fully restart LM Studio/MCP processes. The installer removes stale entries pointing at the removed monolithic Python server. Do not repair or invent task authorization for a Direct call. A separately named Node Strict entry returns `STRICT_SESSION_INVALID` for its own `strict_begin` lifecycle; it does not use Python task authorization.
 
@@ -47,7 +54,7 @@ If a default chat returns `CONTEXT_COMPACTOR_NOT_ACTIVE`, `TASK_AUTH_*`, `TASK_R
 Check chat-level plugin activation and context pressure:
 
 1. **Create a new chat.**
-2. Load and select the actual LLM, such as Qwen, in the model dropdown.
+2. Load and select the actual LLM in the model dropdown.
 3. Enable **`codex/unreal-context-compactor`** in that chat's plugin panel.
 4. Keep the actual LLM selected. The compactor runs in the prediction loop and passes tools through unchanged.
 
@@ -61,19 +68,34 @@ Successful Direct RAG searches and Node reads are condensed only when the curren
 - `mode=first_error` scans from byte zero for the first actionable error within the bounded scan budget.
 - `mode=range cursorByte=N` returns `nextCursorByte` and `hasMore` for deterministic traversal.
 
-When `sourceTruncated=true`, do not claim that the returned tail contains the root cause.
+When `sourceTruncated=true`, do not claim that the returned tail contains the root cause. Build and Automation use the same bounded process owner: stdout/stderr retain bounded head and tail captures, timeout terminates the process tree, and `fullLogPath` persists that bounded projection rather than guaranteed unlimited raw output when the capture budget is exceeded.
 
 ## Direct edit/build after an interruption
 
 Direct Mode has no task lease or checkpoint to recover. Re-establish observable state instead:
 
 1. Confirm or pass the exact project for this call.
-2. Read every target that may have changed and use its current SHA-256.
+2. Read every target that may have changed and retain its current
+   `fileVersionReceipt`; a valid raw `expectedHash` remains compatible.
 3. Check `ALLOW_WRITE` / `ALLOW_UNREAL_BUILD` in `get_workspace_info`.
 4. Recompute the smallest applicable patch; do not retry stale arguments.
 5. Run `build_unreal_project` immediately when compile diagnosis is needed.
 
+Within an uninterrupted reliable session, a successful mutation returns a new
+receipt and the latest same-session snapshot may resolve automatically for the
+next edit. After a process restart, receipt expiry/eviction, a version conflict,
+or uncertain external activity, re-read instead of assuming continuity.
+
 If task lease/checkpoint errors appear, remove the unsupported legacy Python entry or stale process and reinstall the current Direct entries. Those errors are not part of the default Direct or Node Strict contract.
+
+## File snapshot or version errors
+
+| Error | Meaning and recovery |
+|-------|----------------------|
+| `FILE_VERSION_CONFLICT` | The current whole-file SHA no longer matches the resolved snapshot. Re-read the exact file, reconcile the external change, and patch the current text. |
+| `FILE_SNAPSHOT_REQUIRED` | No valid raw `expectedHash`, explicit receipt, or reliable same-session latest snapshot was available. Read the file and pass its `fileVersionReceipt`. |
+| `FILE_SNAPSHOT_INVALID` | The receipt expired, was evicted, or was not issued by this runtime. Re-read; do not reconstruct or persist opaque receipts across runtime restarts. |
+| `FILE_SNAPSHOT_SCOPE_MISMATCH` | The receipt belongs to another project, path, or reliable conversation/session owner. Select and read the exact target; never transfer receipts across those scopes. |
 
 ## Node Strict session is unfinished or orphaned
 
@@ -86,9 +108,18 @@ MCP transport cannot observe the model's final-answer delivery. The model must e
 Direct writes may return bounded `semanticAdvisory` findings from the local Unreal
 API denylist. They are informational and never close or open a write/build gate.
 Review the finding, read the affected source, and let the model or user decide
-whether to revise, validate further, or build. Exact path scope, SHA-256 compare-
-and-swap, atomic commit/rollback, mutation-size limits, and delete approval remain
-hard safety boundaries.
+whether to revise, validate further, or build. Exact path scope, receipt-first
+snapshot/CAS (with compatible raw `expectedHash`), atomic commit/rollback,
+mutation-size limits, and delete approval remain hard safety boundaries.
+
+## Build target or process-output confusion
+
+Use `target=Editor` as the portable alias for the selected project's canonical,
+configured preferred, or sole discovered custom Editor target. Explicit
+non-Editor targets are passed through unchanged. If target discovery remains
+ambiguous, pass the exact discovered target instead of guessing. Inspect process capture metadata before treating
+`fullLogPath` as complete; omitted-byte counts mean the log contains bounded
+head/tail evidence only.
 
 ## Runtime debugging in Direct Mode
 

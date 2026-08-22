@@ -47,8 +47,28 @@ def test_installer_profiles_are_manifest_driven() -> None:
     module = _load_installer_module()
     sys.modules.pop("integrated_install", None)
     manifest = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.0 RC3"
-    assert manifest["version"] == "2.1.7"
+    node_package = json.loads(
+        (ROOT / "lmstudio-unreal-agent-mcp" / "package.json").read_text(encoding="utf-8")
+    )
+    node_lock = json.loads(
+        (ROOT / "lmstudio-unreal-agent-mcp" / "package-lock.json").read_text(encoding="utf-8")
+    )
+    compactor_package = json.loads(
+        (ROOT / "lmstudio-context-compactor-plugin" / "package.json").read_text(encoding="utf-8")
+    )
+    compactor_lock = json.loads(
+        (ROOT / "lmstudio-context-compactor-plugin" / "package-lock.json").read_text(encoding="utf-8")
+    )
+    compactor_manifest = json.loads(
+        (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.0"
+    assert manifest["version"] == "2.1.8"
+    assert node_package["version"] == node_lock["version"] == "0.3.19"
+    assert node_lock["packages"][""]["version"] == "0.3.19"
+    assert compactor_package["version"] == compactor_lock["version"] == "0.4.47"
+    assert compactor_lock["packages"][""]["version"] == "0.4.47"
+    assert compactor_manifest["revision"] == 94
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
@@ -61,7 +81,7 @@ def test_installer_profiles_are_manifest_driven() -> None:
         "ubuntu-linux",
         "macos-apple-silicon",
     ]
-    assert manifest["portablePackage"]["releaseReady"] is False
+    assert manifest["portablePackage"]["releaseReady"] is True
 
 
 def test_installer_upgrade_cleanup_preserves_unrelated_custom_mcps() -> None:
