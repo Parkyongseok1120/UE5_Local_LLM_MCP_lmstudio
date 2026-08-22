@@ -30,6 +30,8 @@ If this project has been useful to you, please consider sponsoring — it helps 
 >
 > **Current product label: 1.3.0 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, and bounded build/Automation processes. The optional context-continuity plugin is not chat-activated by the installer and its internal compaction opt-in defaults OFF. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
 >
+> Post-release `main` component metadata is Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, and portable manifest 2.1.11. The Compactor removes runtime-local file-mutation capabilities from durable memory while preserving user-authored domain language such as payment `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, and `리시트`; ordinary receipt language is not interpreted as mutation authority.
+>
 > Automated source, package, installer, safety, and cross-platform gates define release readiness. Apple Silicon physical FULL-install evidence and a native Windows LM Studio GUI/RAG/UBT workflow record are retained, while clean-machine installer certification for every host and universal Unreal project/engine/plugin/editor-runtime compatibility remain outside the claim. The saved v1.2.5 measurements and RC control-plane validation remain historical evidence, not a new 1.3.0 Direct-mode score.
 
 ## Documentation Hub

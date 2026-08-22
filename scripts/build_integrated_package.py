@@ -934,14 +934,23 @@ def _scan_private_paths(staging: Path) -> None:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        for match in PRIVATE_PATH_RE.finditer(text):
-            snippet = match.group(0)
-            # Ignore documentation placeholders such as <name> / YOUR_NAME.
-            if "<" in snippet or "YOUR_NAME" in snippet.upper() or "USERNAME" in snippet.upper():
-                continue
-            raise ValueError(
-                f"private home path leaked into package: {path.relative_to(staging)}"
-            )
+        candidates = [text]
+        # JSON serialization and source string literals double Windows
+        # separators. Nested strings can double them repeatedly, so inspect
+        # each bounded collapsed form for every textual package member.
+        normalized = text
+        while "\\\\" in normalized:
+            normalized = normalized.replace("\\\\", "\\")
+            candidates.append(normalized)
+        for candidate in candidates:
+            for match in PRIVATE_PATH_RE.finditer(candidate):
+                snippet = match.group(0)
+                # Ignore documentation placeholders such as <name> / YOUR_NAME.
+                if "<" in snippet or "YOUR_NAME" in snippet.upper() or "USERNAME" in snippet.upper():
+                    continue
+                raise ValueError(
+                    f"private home path leaked into package: {path.relative_to(staging)}"
+                )
 
 
 def _assert_clean_inventory(manifest: dict[str, object]) -> list[str]:

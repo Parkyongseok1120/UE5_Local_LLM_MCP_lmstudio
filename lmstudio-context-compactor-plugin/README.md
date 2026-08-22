@@ -12,7 +12,7 @@ settings, filter MCP tools, or interpret Unreal workflow state. The existing
 providers. Because compaction is limited to chat history, the same plugin can be
 used across Unreal Engine versions and projects.
 
-Version 0.4.49 defaults to disabled mode. The top-level LM Studio chat-plugin switch
+Version 0.4.50 defaults to disabled mode. The top-level LM Studio chat-plugin switch
 and the nested `Enable transparent compaction` switch are independent, and both must
 be explicitly enabled for compaction to run. `observeOnly` can be enabled in the
 plugin settings to measure pressure without changing the model-facing history. Soft
@@ -27,7 +27,11 @@ and operation. Every compacted observation is marked
 `fileVersionReceipt` values, snapshot registration counters, and executable
 receipt instructions are removed from current and inherited checkpoints. A receipt
 may remain usable only in a recent, uncompressed tool result from the live runtime;
-it never becomes durable continuity memory. This state cannot plan, route,
+it never becomes durable continuity memory. Sanitization uses the field provenance
+known during continuity assembly: user-authored payment `receipt`, `ReceiptActor`,
+`FPaymentReceipt`, `영수증`, and `리시트` language remains intact, while operational
+assistant/tool prose that directs reuse of a file-mutation receipt is neutralized.
+Generic receipt vocabulary is not a capability. This state cannot plan, route,
 authorize tools, require a next call, or declare the request complete. If exact
 token measurement is unavailable, a message-count threshold provides a
 conservative fallback.

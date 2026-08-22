@@ -385,7 +385,7 @@
       "evidence": [
         {
           "kind": "build",
-          "location": "C:/Users/sster/Documents/.agent/logs/2026-08-22T18-17-18-444Z-Project_MJS-build.log",
+          "location": "external .agent/logs build record for the selected project",
           "observation": "UE 5.8 Project_MJSEditor Win64 Development build returned exit 0 with proofLevel BuiltStale, upToDate true, and actionsExecuted 0."
         },
         {
@@ -400,12 +400,12 @@
           "stage": "entry",
           "stageStatus": "present",
           "location": "Direct MCP build request",
-          "symbol": "explicit C:/Users/sster/Documents/Git/Project_MJS/Project_MJS.uproject"
+          "symbol": "explicit exact Project_MJS.uproject selector"
         },
         {
           "stage": "dispatch",
           "stageStatus": "present",
-          "location": "C:/Program Files/Epic Games/UE_5.8",
+          "location": "host-resolved Unreal Engine 5.8 root",
           "symbol": "Project_MJSEditor Win64 Development"
         },
         {

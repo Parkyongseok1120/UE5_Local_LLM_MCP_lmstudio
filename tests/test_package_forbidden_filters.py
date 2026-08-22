@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -123,3 +124,40 @@ def test_assert_clean_inventory_counts_forbidden_zero_for_clean_set(builder) -> 
 def test_assert_clean_inventory_rejects_forbidden_rows(builder, name: str) -> None:
     with pytest.raises(ValueError, match="forbidden files"):
         builder._assert_clean_inventory({"inventory": [{"path": f"scripts/{name}"}]})
+
+
+@pytest.mark.parametrize("nested", (False, True))
+def test_private_path_scan_rejects_json_escaped_windows_home(
+    builder, tmp_path: Path, nested: bool
+) -> None:
+    private_home = "C:" + "\\" + "Users" + "\\" + "private-user" + "\\Project"
+    payload: object = {"path": private_home}
+    if nested:
+        payload = {"toolResult": json.dumps(payload)}
+    (tmp_path / "fixture.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="private home path leaked into package: fixture.json"):
+        builder._scan_private_paths(tmp_path)
+
+
+def test_private_path_scan_allows_json_escaped_public_profile(builder, tmp_path: Path) -> None:
+    public_path = "C:" + "\\" + "Users" + "\\" + "Public" + "\\Project"
+    (tmp_path / "fixture.json").write_text(
+        json.dumps({"path": public_path}),
+        encoding="utf-8",
+    )
+
+    builder._scan_private_paths(tmp_path)
+
+
+def test_private_path_scan_rejects_source_literal_windows_home(builder, tmp_path: Path) -> None:
+    escaped_separator = "\\" * 2
+    source = (
+        'const fixturePath = "C:'
+        f"{escaped_separator}Users{escaped_separator}private-user"
+        f'{escaped_separator}Project";\n'
+    )
+    (tmp_path / "fixture.js").write_text(source, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="private home path leaked into package: fixture.js"):
+        builder._scan_private_paths(tmp_path)

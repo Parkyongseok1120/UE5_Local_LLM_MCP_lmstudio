@@ -9,23 +9,34 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from scripts.ci.ci_suites import SUITES
+    from scripts.ci.run_ci_suite import SuiteValidationError, resolve_test_files
+except ModuleNotFoundError:  # Direct execution: python scripts/run_repetition_gate.py ...
+    from ci.ci_suites import SUITES
+    from ci.run_ci_suite import SuiteValidationError, resolve_test_files
+
 ROOT = Path(__file__).resolve().parents[1]
 REPEAT = 10
-SUITES = [
-    "tests/test_python_direct_rag_server.py",
-    "tests/test_direct_mcp_subprocess_e2e.py",
-    "tests/test_cross_language_tool_contract.py",
-    "tests/test_build_rag_index_atomic.py",
-    "tests/test_atomic_io.py",
-]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "suite",
+        choices=tuple(name for name in SUITES if name.endswith("_repetition")),
+        default="direct_repetition",
+        nargs="?",
+        help="Named repetition suite from scripts/ci/ci_suites.py",
+    )
     parser.add_argument("--repeat", type=int, default=REPEAT)
-    parser.add_argument("--suite", action="append", default=[], help="Run only these suite paths (repeatable)")
     args = parser.parse_args()
-    suites = list(args.suite) if args.suite else SUITES
+    if args.repeat < 1:
+        parser.error("--repeat must be at least 1")
+    try:
+        suites = list(resolve_test_files((args.suite,)))
+    except SuiteValidationError as exc:
+        parser.error(str(exc))
     report = {"repeat": args.repeat, "suites": suites, "runs": {}, "ok": True}
     py = sys.executable
     for suite in suites:
