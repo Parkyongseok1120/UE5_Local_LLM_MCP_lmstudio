@@ -4,8 +4,8 @@ export const directConfigSchematics = createConfigSchematics()
   .field(
     "enabled",
     "boolean",
-    { displayName: "Enable transparent compaction", subtitle: "Compact older chat context while the model selected in LM Studio remains the reasoning and tool-use owner." },
-    true,
+    { displayName: "Enable transparent compaction", subtitle: "Explicit opt-in: compact older chat context while the model selected in LM Studio remains the reasoning and tool-use owner." },
+    false,
   )
   .field(
     "observeOnly",

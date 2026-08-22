@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -66,3 +67,49 @@ def test_packaged_setup_docs_use_existing_installer_and_doctor_commands() -> Non
         "bench_lmstudio_mcp.py",
     ):
         assert source_checkout_only not in combined
+
+
+def test_current_docs_keep_context_compactor_off_by_default() -> None:
+    current_docs = (
+        "README.md",
+        "README.ko.md",
+        "README.portable.md",
+        "README.portable.ko.md",
+        "installer/README.md",
+        "lmstudio-context-compactor-plugin/README.md",
+        "docs/Integrated_Installer.md",
+        "docs/LMStudio_Unreal_Agent_Setup.md",
+        "docs/LMStudio_MCP_Tool_Discipline.md",
+        "docs/Project_Overview.md",
+        "docs/Troubleshooting.md",
+        "docs/Cline_Rider_Unreal_Agent_Setup.md",
+        "docs/Small_Model_Shortcut.md",
+        "docs/ARCHITECTURE.md",
+        "docs/Community_Finetune_Model_Optimization.md",
+        "docs/Model_Profiles.md",
+    )
+    documents = {relative: _read(relative) for relative in current_docs}
+    combined = "\n".join(documents.values())
+
+    for relative, document in documents.items():
+        assert "OFF" in document, relative
+    for primary in (
+        "README.md",
+        "README.ko.md",
+        "installer/README.md",
+        "lmstudio-context-compactor-plugin/README.md",
+        "docs/Integrated_Installer.md",
+        "docs/LMStudio_Unreal_Agent_Setup.md",
+        "docs/LMStudio_MCP_Tool_Discipline.md",
+        "docs/Project_Overview.md",
+        "docs/Troubleshooting.md",
+    ):
+        assert re.search(r"Enable\s+transparent\s+compaction", documents[primary]), primary
+
+    assert "enable **`codex/unreal-context-compactor`**" not in combined
+    assert "Enable `codex/unreal-context-compactor`" not in combined
+    assert "`codex/unreal-context-compactor`** 를 활성화합니다" not in combined
+    assert re.search(r"Installation/pinning\s+is\s+availability,\s+not\s+activation", combined)
+    assert "New chats start OFF" not in combined
+    assert "New chats start with no chat plugins enabled" not in combined
+    assert "새 채팅은 OFF로 시작" not in combined

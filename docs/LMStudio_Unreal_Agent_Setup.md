@@ -54,14 +54,14 @@ Before the model sends its final answer in Node Strict, it must explicitly call 
 
 ## 2b. Context compactor (multi-turn chats)
 
-> **Select the real LLM; enable the compactor as a chat plugin.**
+> **Select the real LLM; keep the compactor disabled by default.**
 >
 > 1. Load and select the actual model in the **model dropdown**. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation.
 > 2. Create or open a chat.
-> 3. Enable **`codex/unreal-context-compactor`** in that chat's **plugin panel**.
-> 4. Keep the real LLM selected. The compactor is not a proxy model and has no `targetModel` setting.
+> 3. Leave the top-level **`codex/unreal-context-compactor`** switch **OFF** in that chat's **plugin panel**. Turn it off manually in an older chat that retained an opt-in.
+> 4. Leave the nested **Enable transparent compaction** switch OFF. It is separate from top-level activation.
 
-The plugin compacts older model-facing history and passes the selected model's MCP tools through unchanged. Its factual continuity state can retain the active objective, continuation antecedent, active project/current work, unresolved items, and bounded file/tool/build facts, including `fileVersionReceipt`. It cannot plan, route, authorize a write/build, require a next tool, or declare completion. Installation pins the plugin but does not prove that it is enabled for a particular chat; confirm the chat-level toggle in LM Studio.
+Installation pins the plugin for availability but does not activate it for a chat. The default Direct setup therefore uses the real LLM without the compactor. Only a deliberate two-switch, per-chat opt-in runs the prediction loop; that optional path passes the selected model's MCP tools through unchanged and may retain bounded factual continuity. It cannot plan, route, authorize a write/build, require a next tool, or declare completion.
 
 This command verifies the installed source/build wiring, not chat-level activation:
 

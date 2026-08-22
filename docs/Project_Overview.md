@@ -27,7 +27,9 @@ not create a task, plan, route, required-next-tool obligation, or synthesis gate
   selected by the user. Its bounded factual continuity can retain the active
   objective, continuation antecedent, active project/current work, unresolved
   items, and relevant file/tool/build facts. It is not a model, proxy model,
-  tool router, planner, or authority source.
+  tool router, planner, or authority source. It is installed for availability without
+  activating the host-owned chat toggle, which must be verified OFF per chat; its
+  nested compaction opt-in defaults OFF.
 
 ## Safety that remains authoritative
 
@@ -68,8 +70,9 @@ are unchanged.
 ## LM Studio setup
 
 1. Load and select the real instruction/tool-calling model in LM Studio.
-2. Enable `codex/unreal-context-compactor` in the chat's plugin panel; keep the
-   real model selected in the model dropdown.
+2. Leave the top-level `codex/unreal-context-compactor` switch OFF in the chat's
+   plugin panel, and leave its nested `Enable transparent compaction` switch OFF.
+   Existing chats can retain an old opt-in, so turn it off manually per chat.
 3. Start Local Server and enable the `unreal-rag` and `unreal-agent` MCP entries.
 4. Keep SAFE/read-only authority unless writes, commands, or builds are actually
    required. Enable AGENT authority explicitly when they are.
@@ -77,8 +80,8 @@ are unchanged.
    index reports that project source is newer than indexed evidence.
 
 Installing or pinning the compactor proves source availability, not that a
-particular chat's plugin toggle is enabled. Confirm that toggle in the LM Studio
-UI. Editor metadata refresh starts Unreal Editor only when the caller explicitly
+particular chat's plugin toggle is OFF. Confirm the OFF state in the LM Studio UI
+for every new or existing chat. Editor metadata refresh starts Unreal Editor only when the caller explicitly
 sets `allowEditorLaunch=true` for the relevant refresh scope.
 
 See [Architecture](ARCHITECTURE.md),
@@ -102,7 +105,9 @@ Strict는 별도 Node 진입점이며 다른 대화의 상태로 일반 읽기�
 
 context compactor는 active objective, continuation antecedent, 현재 프로젝트/작업,
 미해결 항목, 관련 파일·도구·빌드 사실을 제한된 continuity state로 보존할 수
-있지만 plan, route, 권한, 다음 도구, 완료 판단을 소유하지 않습니다.
+있지만 plan, route, 권한, 다음 도구, 완료 판단을 소유하지 않습니다. 기본
+운용에서는 상단 채팅 플러그인 토글과 내부 `Enable transparent compaction`
+토글을 모두 OFF로 유지하며, 기존 채팅의 활성화 상태는 채팅별로 직접 끕니다.
 
 Direct가 제거한 것은 서버의 작업 판단권입니다. 프로젝트 경로 제한, 보호 폴더
 차단, 크기 제한, `fileVersionReceipt` 우선 snapshot/CAS(raw `expectedHash` 호환),

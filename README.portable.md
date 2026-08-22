@@ -42,7 +42,9 @@ Exact project selection supports multiple projects and Unreal versions by
 routing RAG to the compatible engine-bound sibling shard; one call does not
 merge projects owned by different engine shards. The optional context compactor
 retains bounded factual objective/work/file/tool/build continuity but never
-becomes a planner, router, tool authority, or completion authority.
+becomes a planner, router, tool authority, or completion authority. It is installed
+for availability without activating LM Studio's host-owned chat toggle; verify that
+toggle is OFF per chat. The nested `Enable transparent compaction` opt-in defaults OFF.
 
 Qwen 3.8 27B is the primary currently validated model recommendation. Muse
 Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5,

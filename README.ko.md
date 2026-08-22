@@ -28,7 +28,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 > **프로젝트 현황 — 2026년 8월**
 >
-> **현재 제품 라벨은 stable 1.3.0입니다.** 지원 runtime은 Direct Model Mode, scoped file-version receipt, provenance-bound RAG generation, bounded Build/Automation process, hard-compaction continuity memory를 사용합니다. MCP 서버는 capability와 파일시스템·프로세스·빌드·프로젝트 안전 경계를 제공하며 모델의 task plan이나 tool 순서를 소유하지 않습니다.
+> **현재 제품 라벨은 stable 1.3.0입니다.** 지원 runtime은 Direct Model Mode, scoped file-version receipt, provenance-bound RAG generation, bounded Build/Automation process를 사용합니다. 선택적 context-continuity plugin은 installer가 채팅에서 활성화하지 않으며 내부 compaction opt-in 기본값도 OFF입니다. MCP 서버는 capability와 파일시스템·프로세스·빌드·프로젝트 안전 경계를 제공하며 모델의 task plan이나 tool 순서를 소유하지 않습니다.
 >
 > 자동 source·package·installer·safety·cross-platform gate가 release readiness를 정의합니다. Apple Silicon physical FULL-install 근거와 native Windows LM Studio GUI/RAG/UBT workflow 기록은 보존하지만, 모든 host의 clean-machine installer 인증이나 모든 Unreal project/engine/plugin/editor-runtime 조합의 호환성은 주장하지 않습니다. 저장된 v1.2.5 측정과 RC control-plane 검증은 과거 근거이며 새 1.3.0 Direct-mode 점수가 아닙니다.
 
@@ -99,14 +99,14 @@ Windows에서는 루트의 `INSTALL.bat`, Linux와 macOS에서는 `install.sh`�
 
 일반 `unreal-rag`와 `unreal-agent` entry는 capability provider입니다. 모델은 요청에 맞춰 검색, 읽기, 수정, 검증, 빌드, 테스트 순서를 직접 고릅니다. capability를 쓰기 전에 `unreal_task_start`를 시작하거나 서버 plan을 만들거나 route authorization을 얻거나 synthesis를 commit할 필요가 **없습니다**. 읽기/쓰기 경로 제한, optimistic concurrency, command allowlist, 삭제 승인, SAFE/AGENT 권한은 그대로 적용됩니다.
 
-> **중요 — 실제 LLM을 채팅 모델로 선택하세요.**
+> **중요 — 실제 LLM을 선택하고 context compactor는 기본적으로 끄세요.**
 >
 > 1. 실제 instruction/tool-calling 모델을 LM Studio에 로드하고 **모델 드롭다운**에서 직접 선택합니다. 현재 주 검증 권장 모델은 Qwen 3.8 27B입니다.
-> 2. 채팅을 만들거나 연 뒤 그 채팅의 **plugin panel**에서 **`codex/unreal-context-compactor`** 를 활성화합니다.
-> 3. 실제 LLM 선택을 유지합니다. `unreal-context-compactor`는 chat plugin이지 모델이나 proxy model이 아니며 설정할 `targetModel`도 없습니다.
+> 2. 그 채팅의 **plugin panel**에서 상단 **`codex/unreal-context-compactor`** 토글을 **OFF**로 유지합니다. installer는 LM Studio가 소유한 이 토글을 켜지 않으므로 새 채팅과 기존 채팅 모두에서 OFF인지 직접 확인합니다.
+> 3. 내부 **Enable transparent compaction** 토글도 OFF로 유지합니다. 이 토글은 상단 활성화와 별개이며 상단 토글이 꺼져 있으면 효과가 없습니다.
 > 4. Local Server를 시작하고 기본 `unreal-rag`, `unreal-agent` MCP entry를 활성화합니다.
 
-plugin은 선택된 모델로 context pressure를 측정하고 필요할 때 오래된 model-facing 채팅 기록만 압축합니다. 모델을 고르거나 sampling을 바꾸거나 MCP 도구를 필터링하거나 write/build 권한을 부여하지 않습니다. installer는 plugin을 설치하고 revision을 pin하지만 현재 LM Studio에는 특정 채팅에서 활성화됐음을 지속적으로 증명하는 API가 없습니다. chat plugin panel의 toggle을 직접 확인하세요.
+기본 설정에서는 compactor가 실행되지 않습니다. installer는 plugin을 설치하고 revision을 pin해 목록에서 사용할 수 있게 할 뿐 채팅에서 활성화하지 않습니다. 특정 긴 채팅에서 실험하려는 경우에만 두 토글을 모두 명시적으로 켭니다. plugin은 모델을 고르거나 sampling을 바꾸거나 MCP 도구를 필터링하거나 write/build 권한을 부여하지 않습니다.
 
 아래 명령은 설치된 plugin의 source layout과 컴파일된 prediction-loop wiring을 검증합니다. 채팅별 활성화를 증명하지는 않습니다.
 
@@ -161,13 +161,13 @@ wrapper, planner, 평가 harness, query controller를 실행하지 않습니다.
 
 ## 실사용 세션 팁
 
-Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 길게 이어지는 채팅**에는 tool 결과, build log, retry가 계속 쌓입니다. 실제 LLM을 선택한 상태에서 그 채팅에 `codex/unreal-context-compactor`를 활성화하면 plugin이 해당 모델의 tokenizer 예산을 측정하고 hard margin이 소진되기 전에 오래된 model-facing 기록만 결정적 사실 메모리로 교체합니다. task route, required-next-tool 명령, planner state, synthesis gate를 보존하거나 생성하지 않습니다.
+Holdout eval은 짧고 깨끗한 turn에서 돌아갑니다. **LM Studio에서 길게 이어지는 채팅**에는 tool 결과, build log, retry가 계속 쌓입니다. 기본 운용에서는 `codex/unreal-context-compactor` 상단 토글을 OFF로 유지하고, 적절한 context 길이나 짧은 사실 handoff를 포함한 새 채팅을 우선 사용하세요. 압축은 특정 채팅에서 두 토글을 모두 켜는 명시적 실험 경로이며 task route, required-next-tool 명령, planner state, synthesis gate를 보존하거나 생성하지 않습니다.
 
 hard compaction의 bounded continuity state는 최신 사용자 요청, active objective, continuation antecedent, 현재 작업과 미해결 항목, 관찰·변경 파일, 최근 tool 결과와 build/test 상태를 보존할 수 있습니다. 이 사실 메모리는 plan, route, 도구 권한, 다음 호출, 완료 판단을 소유하지 않습니다.
 
 | LM Studio 로그 증상 | 대응 |
 |---|---|
-| `request (...) exceeds the available context size (54272)` | 실제 LLM이 선택되어 있고 이 채팅의 plugin panel에서 `codex/unreal-context-compactor`가 켜져 있는지 확인하세요. `npm --prefix lmstudio-context-compactor-plugin run status`는 설치된 source/build wiring만 검증합니다. 그래도 pressure가 너무 크면 context를 늘리거나 5–10줄 사실 handoff와 함께 새 채팅을 시작하세요. |
+| `request (...) exceeds the available context size (54272)` | 실제 LLM이 선택되어 있는지 확인하고 기본 설정에서는 `codex/unreal-context-compactor`를 OFF로 유지하세요. 적절한 context 길이를 쓰거나 5–10줄 사실 handoff와 함께 새 채팅을 시작합니다. `npm --prefix lmstudio-context-compactor-plugin run status`는 설치된 source/build wiring만 검증합니다. |
 | `failed to restore kv cache` / `cache size limit reached` | 위와 동일 — 세션 메모리가 포화된 상태입니다. context만 올리는 것보다 새 채팅이 빠릅니다. |
 | 긴 수정 루프 뒤 `Model failed to generate a tool call` | 멈추고, 변경 파일 + 남은 에러를 요약한 뒤 새 채팅으로. |
 | Unreal 작업 중 로그에 `js-code-sandbox` 등장 | 위 Quick Install 안내대로 비활성화하세요. |
@@ -178,9 +178,9 @@ hard compaction의 bounded continuity state는 최신 사용자 요청, active o
 - **UBT/linker 전체 로그를 채팅에 붙여넣지 마세요.** `read_unreal_logs`의 `mode=tail`은 최근 오류, `mode=first_error`는 byte 0부터 최초 원인 탐색, `mode=range`와 `cursorByte`/`nextCursorByte`는 제한된 범위 순회에 사용하세요.
 - **헤더 → .cpp 순서는 정상입니다.** 새 헤더에 `write_file` 후 `CPP_DEFINITION_MISSING` advisory가 보일 수 있습니다. 매칭 `.cpp`를 쓰기 전까지는 기대되는 동작이며, 그 자체로 롤백 사유가 아닙니다.
 - 모델이 자주 지어내는 **UE API**는 피하세요: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. 대신 `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, 값으로 넘기는 `SpawnTransform`, 소유 actor/subsystem의 `GetWorld()`를 쓰세요.
-- **compact tool 응답:** `build_unreal_project`는 한 줄 summary + likely error 최대 40줄 + `.agent/logs` 아래의 timestamped `fullLogPath`를 반환합니다(stdout/stderr 전체 아님). `read_unreal_logs`는 최신 로그의 제한된 tail이 기본이며 원본 잘림 여부를 반환합니다. chat plugin은 최신 실제 사용자 요청, 관찰/수정 파일, 최근 tool outcome, 최근 build/test state 같은 사실 메모리를 유지하고 task/route/control/synthesis 내부 상태와 required-next-tool directive는 의도적으로 제거합니다.
+- **compact tool 응답:** `build_unreal_project`는 한 줄 summary + likely error 최대 40줄 + `.agent/logs` 아래의 timestamped `fullLogPath`를 반환합니다(stdout/stderr 전체 아님). `read_unreal_logs`는 최신 로그의 제한된 tail이 기본이며 원본 잘림 여부를 반환합니다. 선택적 chat plugin을 두 토글로 명시적으로 켠 경우에만 최신 실제 사용자 요청, 관찰/수정 파일, 최근 tool outcome, 최근 build/test state 같은 사실 메모리를 유지하며 task/route/control/synthesis 내부 상태와 required-next-tool directive는 의도적으로 제거합니다.
 
-자동 압축은 세션을 연장하지만, 이미 너무 큰 system prompt/tool schema를 줄이거나 포화된 KV cache를 복구할 수는 없습니다. hard safety margin을 회복하지 못하면 정확한 프로젝트, 현재 요청, 이미 바꾼 파일, 남은 build/test 오류를 담은 짧은 사실 handoff와 함께 새 채팅을 시작하세요.
+선택적으로 켠 자동 압축도 이미 너무 큰 system prompt/tool schema를 줄이거나 포화된 KV cache를 복구할 수는 없습니다. 기본 복구는 정확한 프로젝트, 현재 요청, 이미 바꾼 파일, 남은 build/test 오류를 담은 짧은 사실 handoff와 함께 새 채팅을 시작하는 것입니다.
 
 자세한 내용: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md), [Troubleshooting.md](docs/Troubleshooting.md).
 

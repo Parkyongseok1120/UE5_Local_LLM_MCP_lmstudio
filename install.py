@@ -29,6 +29,7 @@ if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 from installer.direct_rag_build import create_direct_rag_build_plan  # noqa: E402
+from installer.lmstudio_plugin_install import ensure_current_plugin_install  # noqa: E402
 from installer.unreal_engine_binding import (  # noqa: E402
     bind_installer_engine,
     common_engine_locations as _common_engine_locations,
@@ -1016,8 +1017,8 @@ def _prompt_yes_no(question: str, default: bool) -> bool:
 
 def _interactive_profile() -> str:
     print("Install profile:")
-    print("  1. SAFE (recommended: portable Codex + LM Studio + required context compactor)")
-    print("  2. STANDARD (SAFE + read-only Unreal adapter; context compactor required)")
+    print("  1. SAFE (recommended: portable Codex + LM Studio + installed, opt-in context compactor)")
+    print("  2. STANDARD (SAFE + read-only Unreal adapter; compactor not chat-activated)")
     print("  3. FULL (same required components as STANDARD; kept for compatibility)")
     print("  4. CUSTOM")
     choice = input("Select [1]: ").strip() or "1"
@@ -1096,8 +1097,8 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
 
     if interactive:
         print(
-            "\nLM Studio context compactor is required and will be installed/activated "
-            "whenever LM Studio or Unreal components are selected."
+            "\nLM Studio context compactor will be installed and pinned, but the installer "
+            "does not activate it for chats; its internal compaction opt-in defaults off."
         )
         if _prompt_yes_no("Install a rule into another coding agent?", False):
             components.add("portable_rule")
@@ -1130,7 +1131,7 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         components.discard("lmstudio")
     if args.no_unreal:
         components.discard("unreal")
-    _enforce_required_context_compactor(components, args)
+    _enforce_context_compactor_installation(components, args)
     if args.rule_path:
         components.add("portable_rule")
     elif "portable_rule" in components:
@@ -1156,8 +1157,8 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
     return profile, components
 
 
-def _enforce_required_context_compactor(components: set[str], args: argparse.Namespace) -> None:
-    """Force context_compactor whenever LM Studio integration is present."""
+def _enforce_context_compactor_installation(components: set[str], args: argparse.Namespace) -> None:
+    """Install context_compactor with LM Studio without implying chat activation."""
     needs_compactor = "lmstudio" in components or "unreal" in components
     if not needs_compactor:
         components.discard("context_compactor")
@@ -1165,14 +1166,14 @@ def _enforce_required_context_compactor(components: set[str], args: argparse.Nam
     allow_skip = bool(getattr(args, "allow_skip_context_compactor", False))
     if args.skip_context_compactor and not allow_skip:
         raise ValueError(
-            "Context compactor is required for LM Studio installs. "
+            "Context compactor installation is required for LM Studio installs. "
             "--skip-context-compactor is blocked unless you also pass "
             "--allow-skip-context-compactor (unsupported emergency bypass)."
         )
     if args.skip_context_compactor and allow_skip:
         components.discard("context_compactor")
         print(
-            "WARNING: skipping required LM Studio context compactor "
+            "WARNING: skipping the bundled LM Studio context-compactor installation "
             "(unsupported emergency bypass)."
         )
         return
@@ -1573,25 +1574,6 @@ def _resolve_lms_cli(lmstudio_home: Path) -> str | None:
     return None
 
 
-def _copy_context_compactor_tree(source_dir: Path, destination_dir: Path) -> None:
-    """Copy a plugin tree into the managed LM Studio extensions path."""
-    destination_dir.parent.mkdir(parents=True, exist_ok=True)
-    if destination_dir.exists():
-        shutil.rmtree(destination_dir)
-    shutil.copytree(
-        source_dir,
-        destination_dir,
-        ignore=shutil.ignore_patterns(
-            ".git",
-            ".pytest_cache",
-            "__pycache__",
-            "*.pyc",
-            ".DS_Store",
-        ),
-    )
-    _sync_directory(destination_dir)
-
-
 def _ensure_context_compactor_on_disk(
     *,
     plugin_src: Path,
@@ -1599,62 +1581,40 @@ def _ensure_context_compactor_on_disk(
 ) -> dict[str, Any]:
     """Guarantee the plugin exists under the managed LM Studio home.
 
-    `lms` always installs into the host default LM Studio home. When the
-    installer targets a different home (tests, custom LMSTUDIO_HOME), sync from
-    the default install or materialize from the repository source.
+    `lms` builds `.lmstudio/production.js` in its installed plugin tree. When the
+    installer targets another home, sync only a current compiled installation.
     """
     target_manifest = _context_compactor_install_path(lmstudio_home)
     target_dir = target_manifest.parent
-    detail: dict[str, Any] = {
-        "target": str(target_manifest),
-        "source": None,
-        "copied": False,
-    }
-    if target_manifest.is_file():
-        detail["source"] = "already-present"
-        return detail
-
     default_home = _default_lmstudio_home().resolve()
     managed_home = lmstudio_home.expanduser().resolve()
     default_manifest = _context_compactor_install_path(default_home)
-    if managed_home != default_home and default_manifest.is_file():
-        _copy_context_compactor_tree(default_manifest.parent, target_dir)
-        detail["source"] = "default-lmstudio-home"
-        detail["copied"] = True
+    candidates: list[tuple[str, Path]] = []
+    if managed_home != default_home:
+        candidates.append(("default-lmstudio-home", default_manifest.parent))
+    detail = ensure_current_plugin_install(
+        source_dir=plugin_src,
+        target_dir=target_dir,
+        installed_candidates=candidates,
+    )
+    if detail.get("copied"):
         # #region agent log
         _agent_debug_log(
             "H3",
             "install.py:_ensure_context_compactor_on_disk",
-            "synced plugin from default LM Studio home",
-            {"from": str(default_manifest.parent), "to": str(target_dir)},
+            "synchronized current built plugin",
+            {"to": str(target_dir), "source": detail.get("source")},
         )
         # #endregion
-        return detail
-
-    if (plugin_src / "manifest.json").is_file():
-        _copy_context_compactor_tree(plugin_src, target_dir)
-        detail["source"] = "repository-source"
-        detail["copied"] = True
-        # #region agent log
-        _agent_debug_log(
-            "H3",
-            "install.py:_ensure_context_compactor_on_disk",
-            "materialized plugin from repository source",
-            {"from": str(plugin_src), "to": str(target_dir)},
-        )
-        # #endregion
-        return detail
-
-    detail["source"] = "missing"
     return detail
 
 
-def _activate_context_compactor_in_settings(
+def _configure_context_compactor_availability(
     lmstudio_home: Path,
     *,
     dry_run: bool,
 ) -> dict[str, Any]:
-    """Pin the installed plugin and enable development plugins in LM Studio settings."""
+    """Make the installed plugin visible without enabling it for any chat."""
     settings_path = lmstudio_home / "settings.json"
     result: dict[str, Any] = {
         "settingsPath": str(settings_path),
@@ -1765,21 +1725,22 @@ def _install_context_compactor(
             },
         )
         # #endregion
-        if not installed_manifest.is_file():
+        if ensure_detail.get("ready") is not True:
             raise RuntimeError(
-                "context compactor install finished but the plugin was not found at "
-                f"{installed_manifest}. Confirm LM Studio plugin install succeeded on this OS."
+                "context compactor install finished without a current compiled plugin at "
+                f"{installed_manifest}. Re-run without --skip-deps so the current revision "
+                "and production bundle can be built and synchronized."
             )
-    activation = _activate_context_compactor_in_settings(
+    availability = _configure_context_compactor_availability(
         args.lmstudio_home,
         dry_run=args.dry_run,
     )
     return {
         "lms": lms,
         "installedManifest": str(installed_manifest),
-        "installed": True if args.dry_run else installed_manifest.is_file(),
+        "installed": True if args.dry_run else ensure_detail.get("ready") is True,
         "ensure": ensure_detail,
-        "activation": activation,
+        "availability": availability,
         "pluginId": CONTEXT_COMPACTOR_PLUGIN_ID,
     }
 
@@ -2230,7 +2191,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-context-compactor",
         action="store_true",
-        help="Blocked unless paired with --allow-skip-context-compactor (unsupported).",
+        help="Skip installation; blocked unless paired with --allow-skip-context-compactor (unsupported).",
     )
     parser.add_argument(
         "--allow-skip-context-compactor",

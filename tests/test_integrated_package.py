@@ -38,6 +38,11 @@ def _plant_fake_lms(lmstudio_home: Path) -> None:
         / "unreal-context-compactor"
     )
     manifest = plugin_dir / "manifest.json"
+    bundle = plugin_dir / ".lmstudio" / "production.js"
+    current_manifest = json.loads(
+        (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
+    )
+    manifest_json = json.dumps(current_manifest, separators=(",", ":"))
     if os.name == "nt":
         script = bindir / "lms.cmd"
         script.write_text(
@@ -45,12 +50,9 @@ def _plant_fake_lms(lmstudio_home: Path) -> None:
                 [
                     "@echo off",
                     'if /I "%~1"=="--version" (echo lms 0.0.0-test & exit /b 0)',
-                    f'mkdir "{plugin_dir}" >nul 2>nul',
-                    (
-                        "echo {\"type\":\"plugin\",\"runner\":\"node\",\"owner\":\"codex\","
-                        "\"name\":\"unreal-context-compactor\",\"revision\":8} > "
-                        f'"{manifest}"'
-                    ),
+                    f'mkdir "{bundle.parent}" >nul 2>nul',
+                    f'echo {manifest_json} > "{manifest}"',
+                    f'echo module.exports = {{}}; > "{bundle}"',
                     "exit /b 0",
                     "",
                 ]
@@ -64,13 +66,9 @@ def _plant_fake_lms(lmstudio_home: Path) -> None:
                 [
                     "#!/bin/sh",
                     'if [ "$1" = "--version" ]; then echo "lms 0.0.0-test"; exit 0; fi',
-                    f'mkdir -p "{plugin_dir}"',
-                    (
-                        "printf '%s\\n' "
-                        "'{\"type\":\"plugin\",\"runner\":\"node\",\"owner\":\"codex\","
-                        "\"name\":\"unreal-context-compactor\",\"revision\":8}' "
-                        f'> "{manifest}"'
-                    ),
+                    f'mkdir -p "{bundle.parent}"',
+                    f"printf '%s\\n' '{manifest_json}' > \"{manifest}\"",
+                    f"printf '%s\\n' 'module.exports = {{}};' > \"{bundle}\"",
                     "exit 0",
                     "",
                 ]
@@ -433,6 +431,12 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     ):
         packaged_readme = (output / language_readme).read_text(encoding="utf-8")
         assert packaged_readme == (ROOT / source_template).read_text(encoding="utf-8")
+        assert re.search(r"Enable\s+transparent\s+compaction", packaged_readme)
+        assert "OFF" in packaged_readme
+    portable_install = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
+    assert "never chat-activated by the installer" in portable_install
+    assert "LM Studio plugin installation/pinning, Unreal auto-detect" in portable_install
+    assert "installation/pinning with the chat toggle OFF" not in portable_install
     assert _broken_local_markdown_links(output) == []
     assert not (output / "README.portable.md").exists()
     assert not (output / "README.portable.ko.md").exists()
@@ -743,13 +747,14 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "direct_rag_build_scope.py",
         "direct_rag_build_stage.py",
         "direct_rag_build_steps.py",
+        "lmstudio_plugin_install.py",
         "manifest.json",
         "runtime-manifest.json",
         "unreal_engine_binding.py",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.3.0"
-    assert packaged_installer_manifest["version"] == "2.1.8"
+    assert packaged_installer_manifest["version"] == "2.1.9"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
     assert (output / "docs" / "Release_Notes_1_3_0.md").is_file()
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()

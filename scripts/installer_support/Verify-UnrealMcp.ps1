@@ -393,11 +393,11 @@ else {
         $activationExit = $LASTEXITCODE
         if ($activationExit -eq 0) {
             Write-Host "[PASS] Context compactor direct source mode" -ForegroundColor Green
-            Warn "Confirm the plugin is enabled in LM Studio for the chat that uses the actual selected LLM."
+            Warn "Default policy keeps the top-level chat-plugin switch and nested compaction switch OFF. Source verification does not inspect per-chat state."
         }
         elseif ($requireRuntime -and $activationExit -eq 3) {
             Check "context compactor runtime activation evidence" {
-                throw "runtime activation is not exposed by the current LM Studio hook; verify the chat plugin panel: $($activationOutput.Trim())"
+                throw "runtime activation is not exposed by the current LM Studio hook; default policy is OFF, and explicit opt-in tests must inspect the chat plugin panel: $($activationOutput.Trim())"
             }
         }
         else {

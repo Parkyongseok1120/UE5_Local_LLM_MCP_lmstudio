@@ -58,13 +58,13 @@ function main(argv = process.argv.slice(2)) {
   if (json) process.stdout.write(`${JSON.stringify(result)}\n`);
   else if (result.ok) {
     process.stdout.write("[PASS] Transparent context-compactor source layout verified.\n");
-    process.stdout.write("Select the actual LLM in LM Studio and enable this plugin for the chat.\n");
+    process.stdout.write("Default policy: keep the top-level chat-plugin switch and nested compaction switch OFF.\n");
   } else {
     process.stdout.write(`[FAIL] Context-compactor source verification failed: ${result.issues.join("; ")}\n`);
   }
   if (!result.ok) return 2;
   if (requireRuntime) {
-    if (!json) process.stdout.write("[UNPROVEN] Verify chat activation in LM Studio's plugin panel.\n");
+    if (!json) process.stdout.write("[UNPROVEN] Chat activation is host-owned; default policy keeps it OFF.\n");
     return 3;
   }
   return 0;

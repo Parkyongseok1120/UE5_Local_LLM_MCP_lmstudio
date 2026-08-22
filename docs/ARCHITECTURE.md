@@ -12,7 +12,7 @@ unreal-agent MCP (20 Direct file/log/edit/build/test/command tools)
   → containment + scoped fileVersionReceipt snapshots + CAS mutation authority
   → shared bounded Build/Automation process owner + immediate diagnostics
 
-optional codex/unreal-context-compactor chat plugin
+optional codex/unreal-context-compactor chat plugin (host toggle OFF by policy)
   → factual active objective/continuation/work/file/tool/build continuity only
 
 optional Node strict-server.js
@@ -25,7 +25,7 @@ optional Node strict-server.js
 |--------|------|
 | **unreal-rag** | Eight factual capabilities: active project get/set, search, symbol lookup, health, rebuild status, synchronous refresh, and inventory |
 | **unreal-agent** | Twenty Direct project/file/log/edit/build/test/allowlisted-command capabilities, including scoped receipt/CAS mutation and the shared bounded process runner |
-| **context compactor** | Optional model-facing history compaction with bounded factual continuity; no planner, router, tool authority, or completion authority |
+| **context compactor** | Installed/pinned for availability; the installer never enables host-owned chat activation, and the inner compaction opt-in defaults OFF; no planner, router, tool authority, or completion authority |
 | **unreal-agent-strict** | Optional Node-only conversation lifecycle around the Node capability surface |
 
 ## Direct workflow

@@ -360,6 +360,7 @@ REQUIRED_RUNTIME_FILES = (
     "installer/direct_rag_build_scope.py",
     "installer/direct_rag_build_stage.py",
     "installer/direct_rag_build_steps.py",
+    "installer/lmstudio_plugin_install.py",
     "installer/unreal_engine_binding.py",
     "scripts/installer_support/Install-PathHelpers.ps1",
     "lmstudio-unreal-agent-mcp/package.json",
@@ -745,12 +746,13 @@ def _write_launchers(staging: Path) -> None:
         "- Node.js 20+/npm is downloaded only for Unreal/context components and PowerShell 7 "
         "(`pwsh`) only for an opt-in RAG build. Runtime archives are pinned by SHA-256 and safely "
         "extracted for the host CPU architecture (arm64/x64).\n"
-        "- FULL context compaction also requires the LM Studio `lms` CLI.\n\n"
+        "- Context-compactor installation requires the LM Studio `lms` CLI. The plugin is installed "
+        "for availability but never chat-activated by the installer; verify the host-owned toggle is OFF.\n\n"
         "## Host support\n\n"
         "- **Windows**: supported for LM Studio and Unreal-integrated profiles.\n"
         "- **Ubuntu 22.04/24.04 with glibc**: supported; musl/Alpine is not.\n"
         "- **Apple Silicon macOS**: physical FULL install verified on darwin-arm64 "
-        "(runtimes, context compactor, LM Studio plugin activation, Unreal auto-detect, "
+        "(runtimes, context compactor, LM Studio plugin installation/pinning, Unreal auto-detect, "
         "full RAG, evidence-first MCP smoke). Signing/notarization is not claimed; "
         "see docs/Release_Notes_1_3_0.md for the release boundary.\n"
         "- **Intel macOS (x86_64)**: LM Studio is not supported by LM Studio upstream. "

@@ -30,9 +30,9 @@ No task lease, route owner, planner gate, required next tool, or synthesis ackno
 
 ## LM Studio context plugin
 
-Select the actual LLM in the model dropdown. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation. Enable `codex/unreal-context-compactor` in the chat's plugin panel and keep the actual LLM selected. The compactor is a prediction-loop chat plugin, not a proxy model, MCP authority source, tool filter, or `targetModel` selector.
+Select the actual LLM in the model dropdown. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation. Keep the top-level `codex/unreal-context-compactor` switch OFF in the chat's plugin panel, and keep its nested `Enable transparent compaction` switch OFF. Installation/pinning is availability, not activation. The compactor is an optional prediction-loop chat plugin, not a proxy model, MCP authority source, tool filter, or `targetModel` selector.
 
-The plugin may replace older model-facing history with deterministic factual continuity state while retaining the latest real user request and recent complete turns. That bounded state can include the active objective, a continuation antecedent for elliptical follow-ups, active project, current work status, unresolved items, and relevant file/tool/build facts such as `fileVersionReceipt`. It deliberately strips task/route/control/synthesis internals and required-tool directives and never becomes workflow authority. Installation and `npm run status` verify availability and source/build wiring, not chat-level activation; confirm the plugin toggle in LM Studio.
+The optional path may replace older model-facing history with deterministic factual continuity state while retaining the latest real user request and recent complete turns. That bounded state can include the active objective, a continuation antecedent for elliptical follow-ups, active project, current work status, unresolved items, and relevant file/tool/build facts such as `fileVersionReceipt`. It deliberately strips task/route/control/synthesis internals and required-tool directives and never becomes workflow authority. Installation and `npm run status` verify availability and source/build wiring only. Existing chats can retain an old top-level opt-in, so turn that switch off manually.
 
 ## Direct duplicate behavior
 
@@ -161,7 +161,7 @@ Build and Automation share one bounded process owner. It keeps bounded head and 
 
 Direct responses are bounded and remain valid JSON; errors use a much smaller ceiling than successful evidence payloads. An oversized success is returned as retryable `OUTPUT_LIMIT_EXCEEDED` without partial evidence or a cursor; narrow the byte/line/detail/result arguments before retrying.
 
-For long LM Studio chats, keep the actual LLM selected and enable `codex/unreal-context-compactor` in the chat plugin panel. The plugin retains bounded factual continuity—active objective, continuation antecedent, active project/current work, unresolved items, and relevant file/tool/build facts—but never preserves or creates task routes, required tool commands, or workflow authority.
+For long LM Studio chats, keep the actual LLM selected and leave `codex/unreal-context-compactor` OFF by default. Prefer a suitable context length or a fresh chat with a concise factual handoff. Compaction is available only as a deliberate two-switch, per-chat experiment and never preserves or creates task routes, required tool commands, or workflow authority.
 
 If context/KV cache still saturates, start a fresh chat with a short factual handoff containing the exact project, current request, files already changed/observed, latest build/test result, open errors, and failed approaches. Direct Mode does not require a `write_session_handoff` artifact or a resume checkpoint.
 
@@ -187,7 +187,7 @@ Historical model-specific planner prompts are not shipped. Direct profiles use [
 | Model answers without requested tool evidence | Ask it to call the relevant Direct capability; verify the default `unreal-rag` / `unreal-agent` entries are enabled |
 | Wrong paths (`Documents` vs project) | Pass the exact `.uproject`/project name on the call, or inspect/set the active project |
 | Write unexpectedly allowed on analysis-only request | Disable AGENT authority (`ALLOW_WRITE=0`) or restate the no-write scope; Direct has no planner write gate |
-| `CONTEXT_COMPACTOR_NOT_ACTIVE` / compactor authority error | A legacy Strict server/config is active. Default Direct never gates MCP authority on compactor telemetry. Enable the actual chat plugin separately and restart the Direct MCP entries |
+| `CONTEXT_COMPACTOR_NOT_ACTIVE` / compactor authority error | A legacy Strict server/config is active. Default Direct never gates MCP authority on compactor telemetry. Keep the chat plugin OFF, restore the Direct MCP entries with the installer, and restart the stale processes |
 | `TASK_AUTH_*`, `TASK_ROUTE_*`, `requiredNextTool`, or synthesis recovery | An unsupported legacy Python process or stale config is active. Re-run the installer, verify `unreal-rag` launches `scripts/unreal_rag_direct.py`, and restart; do not invent authorization |
 | `STRICT_SESSION_INVALID` | A Node Strict session is absent, waiting, terminal, orphaned, owned by another connection, or bound to different arguments. Inspect `strict_status`; begin a new session or explicitly approve `strict_resume` for an orphan |
 | Model calls `run_javascript` / `js-code-sandbox` | Remove sandbox auto-approval, hide/disable that plugin, and restate that project I/O must use Direct `unreal-agent` tools |

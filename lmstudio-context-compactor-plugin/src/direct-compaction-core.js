@@ -284,7 +284,7 @@ function buildCheckpoint(messagesInput, options = {}) {
 }
 
 function shouldCompact(measurement, options = {}) {
-  if (options.enabled === false || options.observeOnly === true) return false;
+  if (options.enabled !== true || options.observeOnly === true) return false;
   const messageCount = Number(measurement.messageCount || 0);
   const remaining = Number(measurement.remainingTokens);
   const softRemaining = Math.max(0, Number(options.softRemainingTokens || 14000));

@@ -65,7 +65,7 @@ function numeric(value: unknown, fallback: number, min: number, max: number): nu
 function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
   const config = ctl.getPluginConfig(directConfigSchematics);
   return {
-    enabled: config.get("enabled") !== false,
+    enabled: config.get("enabled") === true,
     observeOnly: config.get("observeOnly") === true,
     softRemainingTokens: numeric(config.get("softRemainingTokens"), 14000, 0, 1_000_000),
     hardRemainingTokens: numeric(config.get("hardRemainingTokens"), 8000, 0, 1_000_000),

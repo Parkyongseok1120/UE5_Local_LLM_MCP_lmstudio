@@ -269,6 +269,7 @@ test("previous final response is recorded as evidence without claiming objective
 });
 
 test("token pressure is the only normal compaction decision", () => {
+  assert.equal(core.shouldCompact({ remainingTokens: 100, messageCount: 100 }), false);
   assert.equal(core.shouldCompact({ remainingTokens: 13999, messageCount: 3 }, { enabled: true, softRemainingTokens: 14000 }), true);
   assert.equal(core.shouldCompact({ remainingTokens: 14001, messageCount: 100 }, { enabled: true, softRemainingTokens: 14000 }), false);
   assert.equal(core.shouldCompact({ remainingTokens: 100, messageCount: 100 }, { enabled: false, softRemainingTokens: 14000 }), false);
@@ -276,8 +277,8 @@ test("token pressure is the only normal compaction decision", () => {
 });
 
 test("fallback message threshold applies only when remaining token measurement is unavailable", () => {
-  assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 24 }, { compactAboveMessageCount: 24 }), true);
-  assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 23 }, { compactAboveMessageCount: 24 }), false);
+  assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 24 }, { enabled: true, compactAboveMessageCount: 24 }), true);
+  assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 23 }, { enabled: true, compactAboveMessageCount: 24 }), false);
 });
 
 test("actual Qwen E2E transcript keeps the cinematic objective through three hard compactions", () => {

@@ -54,7 +54,10 @@ Direct MCP behavior.
 
 ## Optional compaction
 
-Enable the LM Studio context compactor independently when long chats need it.
+Keep the LM Studio context compactor's top-level chat toggle OFF by default, and
+keep the nested `Enable transparent compaction` switch OFF. Installation/pinning
+only makes it available. If explicitly testing the optional path for one long chat,
+both switches must be enabled for that chat.
 Compaction retains bounded factual continuity: the active objective, continuation
 antecedent, active project/current work, unresolved items, and relevant
 file/tool/build facts. It does not select a profile, alter static sampling,

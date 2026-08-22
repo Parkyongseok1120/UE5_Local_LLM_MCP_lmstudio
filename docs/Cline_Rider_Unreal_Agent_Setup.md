@@ -123,8 +123,9 @@ Rules:
 
 For direct LM Studio chat, use
 [`LMStudio_Unreal_Agent_Setup.md`](LMStudio_Unreal_Agent_Setup.md). The chat-level
-context-compactor toggle must be enabled in the LM Studio UI for each chat where
-compaction is wanted.
+context-compactor toggle is host-owned and must be kept OFF per chat. The installer
+does not activate it, and the nested opt-in defaults OFF; only a deliberate per-chat experiment should opt in to both the
+top-level switch and the nested `Enable transparent compaction` switch.
 
 ## 7. Troubleshooting
 

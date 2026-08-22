@@ -63,12 +63,17 @@ def test_installer_profiles_are_manifest_driven() -> None:
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.0"
-    assert manifest["version"] == "2.1.8"
+    assert manifest["version"] == "2.1.9"
+    assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
+    assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is False
+    assert manifest["safety"]["contextCompactionEnabledByDefault"] is False
+    assert "contextCompactorEnabledByDefault" not in manifest["safety"]
+    assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
     assert node_package["version"] == node_lock["version"] == "0.3.19"
     assert node_lock["packages"][""]["version"] == "0.3.19"
-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.47"
-    assert compactor_lock["packages"][""]["version"] == "0.4.47"
-    assert compactor_manifest["revision"] == 94
+    assert compactor_package["version"] == compactor_lock["version"] == "0.4.48"
+    assert compactor_lock["packages"][""]["version"] == "0.4.48"
+    assert compactor_manifest["revision"] == 95
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
@@ -494,7 +499,7 @@ def test_interactive_engine_selector_rejects_invalid_custom_root(
 
 
 def _plant_fake_lms(lmstudio_home: Path) -> None:
-    """Provide a no-op LMS CLI that marks the context-compactor plugin as installed."""
+    """Provide an LMS CLI that installs the current compiled compactor identity."""
     bindir = lmstudio_home / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
     plugin_dir = (
@@ -505,6 +510,11 @@ def _plant_fake_lms(lmstudio_home: Path) -> None:
         / "unreal-context-compactor"
     )
     manifest = plugin_dir / "manifest.json"
+    bundle = plugin_dir / ".lmstudio" / "production.js"
+    current_manifest = json.loads(
+        (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
+    )
+    manifest_json = json.dumps(current_manifest, separators=(",", ":"))
     if os.name == "nt":
         script = bindir / "lms.cmd"
         script.write_text(
@@ -512,12 +522,9 @@ def _plant_fake_lms(lmstudio_home: Path) -> None:
                 [
                     "@echo off",
                     'if /I "%~1"=="--version" (echo lms 0.0.0-test & exit /b 0)',
-                    f'mkdir "{plugin_dir}" >nul 2>nul',
-                    (
-                        "echo {\"type\":\"plugin\",\"runner\":\"node\",\"owner\":\"codex\","
-                        "\"name\":\"unreal-context-compactor\",\"revision\":8} > "
-                        f'"{manifest}"'
-                    ),
+                    f'mkdir "{bundle.parent}" >nul 2>nul',
+                    f'echo {manifest_json} > "{manifest}"',
+                    f'echo module.exports = {{}}; > "{bundle}"',
                     "exit /b 0",
                     "",
                 ]
@@ -531,13 +538,9 @@ def _plant_fake_lms(lmstudio_home: Path) -> None:
                 [
                     "#!/bin/sh",
                     'if [ "$1" = "--version" ]; then echo "lms 0.0.0-test"; exit 0; fi',
-                    f'mkdir -p "{plugin_dir}"',
-                    (
-                        "printf '%s\\n' "
-                        "'{\"type\":\"plugin\",\"runner\":\"node\",\"owner\":\"codex\","
-                        "\"name\":\"unreal-context-compactor\",\"revision\":8}' "
-                        f'> "{manifest}"'
-                    ),
+                    f'mkdir -p "{bundle.parent}"',
+                    f"printf '%s\\n' '{manifest_json}' > \"{manifest}\"",
+                    f"printf '%s\\n' 'module.exports = {{}};' > \"{bundle}\"",
                     "exit 0",
                     "",
                 ]
@@ -775,7 +778,7 @@ def test_runtime_bootstrap_only_requests_components_that_need_runtimes() -> None
     sys.modules.pop("integrated_install", None)
 
 
-def test_context_compactor_is_forced_for_lmstudio_profiles() -> None:
+def test_context_compactor_installation_is_included_for_lmstudio_profiles() -> None:
     module = _load_installer_module()
     for profile in ("safe", "standard", "full"):
         args = module.build_parser().parse_args(["--profile", profile, "--yes"])
@@ -785,12 +788,12 @@ def test_context_compactor_is_forced_for_lmstudio_profiles() -> None:
     sys.modules.pop("integrated_install", None)
 
 
-def test_skip_context_compactor_requires_allow_flag() -> None:
+def test_skip_context_compactor_installation_requires_allow_flag() -> None:
     module = _load_installer_module()
     args = module.build_parser().parse_args(
         ["--profile", "standard", "--yes", "--skip-context-compactor"]
     )
-    with pytest.raises(ValueError, match="Context compactor is required"):
+    with pytest.raises(ValueError, match="Context compactor installation is required"):
         module._resolve_components(args)
     args = module.build_parser().parse_args(
         [
@@ -826,36 +829,194 @@ def test_resolve_lms_cli_prefers_env_and_platform_binaries(
     sys.modules.pop("integrated_install", None)
 
 
-def test_activate_context_compactor_pins_plugin_in_settings(tmp_path: Path) -> None:
+def test_context_compactor_pins_shortcut_without_activation_claim(tmp_path: Path) -> None:
     module = _load_installer_module()
     home = tmp_path / ".lmstudio"
     home.mkdir()
-    result = module._activate_context_compactor_in_settings(home, dry_run=False)
+    result = module._configure_context_compactor_availability(home, dry_run=False)
     settings = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     assert result["pinned"] is True
+    assert "activation" not in result
     assert module.CONTEXT_COMPACTOR_PLUGIN_ID in settings["chat"]["pinnedPlugins"]
     assert settings["developer"]["allowDevelopmentPlugins"] is True
     sys.modules.pop("integrated_install", None)
 
 
-def test_ensure_context_compactor_materializes_from_source_when_missing(
+def _make_context_compactor_source(tmp_path: Path) -> Path:
+    source = tmp_path / "context-compactor-source"
+    source.mkdir()
+    for name in ("manifest.json", "package.json"):
+        shutil.copy2(ROOT / "lmstudio-context-compactor-plugin" / name, source / name)
+    return source
+
+
+def _plant_current_context_compactor_install(module, home: Path, plugin_src: Path) -> Path:
+    target_dir = module._context_compactor_install_path(home).parent
+    production = target_dir / ".lmstudio" / "production.js"
+    production.parent.mkdir(parents=True)
+    shutil.copy2(plugin_src / "manifest.json", target_dir / "manifest.json")
+    production.write_text("module.exports = { current: true };\n", encoding="utf-8")
+    return target_dir
+
+
+def test_ensure_context_compactor_syncs_current_default_install_when_target_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     module = _load_installer_module()
     home = tmp_path / "managed-lmstudio"
-    empty_default = tmp_path / "empty-default-lmstudio"
-    empty_default.mkdir()
-    monkeypatch.setattr(module, "_default_lmstudio_home", lambda: empty_default)
-    plugin_src = ROOT / "lmstudio-context-compactor-plugin"
+    default_home = tmp_path / "default-lmstudio"
+    plugin_src = _make_context_compactor_source(tmp_path)
+    _plant_current_context_compactor_install(module, default_home, plugin_src)
+    monkeypatch.setattr(module, "_default_lmstudio_home", lambda: default_home)
     detail = module._ensure_context_compactor_on_disk(
         plugin_src=plugin_src,
         lmstudio_home=home,
     )
     manifest = home / "extensions" / "plugins" / "codex" / "unreal-context-compactor" / "manifest.json"
     assert detail["copied"] is True
-    assert detail["source"] == "repository-source"
+    assert detail["source"] == "default-lmstudio-home"
+    assert detail["ready"] is True
     assert manifest.is_file()
+    assert (manifest.parent / ".lmstudio" / "production.js").is_file()
+    sys.modules.pop("integrated_install", None)
+
+
+def test_ensure_context_compactor_replaces_stale_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    plugin_src = _make_context_compactor_source(tmp_path)
+    source_manifest = json.loads((plugin_src / "manifest.json").read_text(encoding="utf-8"))
+    home = tmp_path / "managed-lmstudio"
+    default_home = tmp_path / "default-lmstudio"
+    _plant_current_context_compactor_install(module, default_home, plugin_src)
+    target_dir = module._context_compactor_install_path(home).parent
+    target_bundle = target_dir / ".lmstudio" / "production.js"
+    target_bundle.parent.mkdir(parents=True)
+    stale_manifest = {**source_manifest, "revision": source_manifest["revision"] - 1}
+    (target_dir / "manifest.json").write_text(json.dumps(stale_manifest), encoding="utf-8")
+    target_bundle.write_text("module.exports = { stale: true };\n", encoding="utf-8")
+    monkeypatch.setattr(module, "_default_lmstudio_home", lambda: default_home)
+
+    detail = module._ensure_context_compactor_on_disk(
+        plugin_src=plugin_src,
+        lmstudio_home=home,
+    )
+
+    installed_manifest = json.loads((target_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert detail["previousStatus"] == "manifest-mismatch"
+    assert detail["source"] == "default-lmstudio-home"
+    assert detail["copied"] is True
+    assert detail["ready"] is True
+    assert installed_manifest["revision"] == source_manifest["revision"]
+    assert target_bundle.read_text(encoding="utf-8") == "module.exports = { current: true };\n"
+    sys.modules.pop("integrated_install", None)
+
+
+def test_ensure_context_compactor_replaces_current_manifest_without_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    plugin_src = _make_context_compactor_source(tmp_path)
+    home = tmp_path / "managed-lmstudio"
+    default_home = tmp_path / "default-lmstudio"
+    _plant_current_context_compactor_install(module, default_home, plugin_src)
+    target_dir = module._context_compactor_install_path(home).parent
+    target_dir.mkdir(parents=True)
+    shutil.copy2(plugin_src / "manifest.json", target_dir / "manifest.json")
+    (target_dir / "stale-only.txt").write_text("incomplete\n", encoding="utf-8")
+    monkeypatch.setattr(module, "_default_lmstudio_home", lambda: default_home)
+
+    detail = module._ensure_context_compactor_on_disk(
+        plugin_src=plugin_src,
+        lmstudio_home=home,
+    )
+
+    assert detail["previousStatus"] == "missing-production-bundle"
+    assert detail["source"] == "default-lmstudio-home"
+    assert detail["copied"] is True
+    assert detail["ready"] is True
+    assert (target_dir / ".lmstudio" / "production.js").is_file()
+    assert not (target_dir / "stale-only.txt").exists()
+    sys.modules.pop("integrated_install", None)
+
+
+def test_ensure_context_compactor_rejects_source_tree_without_production_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_installer_module()
+    plugin_src = _make_context_compactor_source(tmp_path)
+    home = tmp_path / "managed-lmstudio"
+    empty_default = tmp_path / "empty-default-lmstudio"
+    empty_default.mkdir()
+    monkeypatch.setattr(module, "_default_lmstudio_home", lambda: empty_default)
+
+    detail = module._ensure_context_compactor_on_disk(
+        plugin_src=plugin_src,
+        lmstudio_home=home,
+    )
+
+    assert detail["ready"] is False
+    assert detail["source"] == "missing-current-production-install"
+    assert detail["candidateStatuses"] == {"default-lmstudio-home": "missing-manifest"}
+    assert not module._context_compactor_install_path(home).exists()
+    sys.modules.pop("integrated_install", None)
+
+
+def test_context_compactor_backup_cleanup_failure_keeps_new_install(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from installer import lmstudio_plugin_install
+
+    module = _load_installer_module()
+    plugin_src = _make_context_compactor_source(tmp_path)
+    source_manifest = json.loads((plugin_src / "manifest.json").read_text(encoding="utf-8"))
+    default_home = tmp_path / "default-lmstudio"
+    default_dir = _plant_current_context_compactor_install(module, default_home, plugin_src)
+    home = tmp_path / "managed-lmstudio"
+    target_dir = module._context_compactor_install_path(home).parent
+    target_bundle = target_dir / ".lmstudio" / "production.js"
+    target_bundle.parent.mkdir(parents=True)
+    (target_dir / "manifest.json").write_text(
+        json.dumps({**source_manifest, "revision": source_manifest["revision"] - 1}),
+        encoding="utf-8",
+    )
+    target_bundle.write_text("module.exports = { stale: true };\n", encoding="utf-8")
+    (target_dir / "keep.txt").write_text("old backup evidence\n", encoding="utf-8")
+
+    original_rmtree = lmstudio_plugin_install.shutil.rmtree
+
+    def partially_fail_backup_cleanup(path, *args, **kwargs):
+        candidate = Path(path)
+        if candidate.name.startswith(".unreal-context-compactor-old-"):
+            keep = candidate / "keep.txt"
+            if keep.exists():
+                keep.unlink()
+            raise OSError("simulated partial backup cleanup failure")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        lmstudio_plugin_install.shutil,
+        "rmtree",
+        partially_fail_backup_cleanup,
+    )
+    detail = lmstudio_plugin_install.ensure_current_plugin_install(
+        source_dir=plugin_src,
+        target_dir=target_dir,
+        installed_candidates=[("default-lmstudio-home", default_dir)],
+    )
+
+    assert detail["ready"] is True
+    assert detail["backupCleanup"]["pending"] is True
+    assert "partial backup cleanup failure" in detail["backupCleanup"]["error"]
+    assert json.loads((target_dir / "manifest.json").read_text(encoding="utf-8"))["revision"] == source_manifest["revision"]
+    assert target_bundle.read_text(encoding="utf-8") == "module.exports = { current: true };\n"
+    assert Path(detail["backupCleanup"]["path"]).exists()
     sys.modules.pop("integrated_install", None)
 
 

@@ -59,7 +59,8 @@ def test_context_compactor_status_verifies_direct_source_layout() -> None:
     status = _run_activation_status()
     assert status.returncode == 0, status.stderr or status.stdout
     assert "Transparent context-compactor source layout verified" in status.stdout
-    assert "actual LLM" in status.stdout
+    assert "top-level chat-plugin switch" in status.stdout
+    assert "OFF" in status.stdout
 
 
 def test_context_compactor_status_does_not_fabricate_runtime_activation() -> None:

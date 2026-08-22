@@ -114,6 +114,27 @@ test("low-pressure history passes through without proxy model selection or sampl
   assert.equal(ctl.debugValue.compacted, false);
 });
 
+test("missing compaction opt-in fails closed even under token pressure", async () => {
+  const history = Chat.from([
+    { role: "user", content: "old request" },
+    { role: "assistant", content: "old ".repeat(5000) },
+    { role: "user", content: "current request" },
+  ]);
+  let receivedHistory;
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async getContextLength() { return 32768; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 30000; },
+    async act(chat) { receivedHistory = chat; return {}; },
+  };
+  const ctl = fakeController(history, selectedModel, { enabled: undefined });
+  await handlePredictionLoop(ctl);
+
+  assert.equal(receivedHistory, history);
+  assert.equal(ctl.debugValue.compacted, false);
+});
+
 test("the compactor cannot be selected recursively as the token source", async () => {
   const history = Chat.from([{ role: "user", content: "hello" }]);
   const ctl = fakeController(history, { identifier: "codex/unreal-context-compactor", async act() {} });

@@ -1,7 +1,7 @@
 {
   "name": "Evidence-First Integrated Coding Stack",
   "productVersion": "1.3.0",
-  "version": "2.1.8",
+  "version": "2.1.9",
   "requires": {
     "python": "3.10+",
     "node": "20+",
@@ -27,14 +27,16 @@
     "agentModeRequires": ["--enable-agent-mode", "--accept-agent-risk"],
     "interactiveAgentModeSelector": true,
     "indexTierIsIndependent": true,
-    "contextCompactorRequiredWithLmStudio": true
+    "contextCompactorInstalledWithLmStudio": true,
+    "contextCompactorChatActivationManagedByInstaller": false,
+    "contextCompactionEnabledByDefault": false
   },
   "portablePackage": {
     "launchers": ["INSTALL.bat", "install.sh"],
     "indexIncludedByDefault": false,
     "supportedHosts": ["windows", "ubuntu-linux", "macos-apple-silicon"],
     "hostNotes": {
-      "macos-apple-silicon": "Physical FULL install PASS on darwin-arm64 (runtimes, context compactor 45/45, LM Studio plugin activate, UE 5.8 auto-detect, full RAG 88829 chunks, evidence-first MCP smoke, ok:true). Limitations: headless Unreal asset metadata export FAIL; LM Studio API connectivity UNVERIFIED when server was down; installer signing/notarization not claimed.",
+      "macos-apple-silicon": "Physical FULL install PASS on darwin-arm64 (runtimes, context compactor 45/45, LM Studio plugin installation/pinning, UE 5.8 auto-detect, full RAG 88829 chunks, evidence-first MCP smoke, ok:true). Chat-level activation was not durably proven. Limitations: headless Unreal asset metadata export FAIL; LM Studio API connectivity UNVERIFIED when server was down; installer signing/notarization not claimed.",
       "macos-intel": "LM Studio configuration unsupported; custom Codex/portable_rule/Cline-only allowed",
       "windows": "Automated CI/fixture installer and Direct MCP paths are exercised. A prior native Windows LM Studio GUI session observed RAG/MCP tool use and a real UBT invocation; a clean-machine physical installer lifecycle and universal project/engine/plugin coverage are not claimed."
     },

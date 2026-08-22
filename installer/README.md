@@ -45,11 +45,13 @@ use manifest-bound sibling index namespaces; no build or query merges projects
 across engine shards. Ambiguous legacy provenance fails closed rather than being
 assigned to the selected clone.
 
-After installation, select the actual LLM you want to use in LM Studio and enable
-`codex/unreal-context-compactor` in the chat's plugin panel. The plugin compacts the
-selected model's history transparently; it is not selected from the model dropdown.
-Install/pin makes the plugin available but does not prove that it is enabled for a
-specific chat, so confirm the chat-level state in LM Studio.
+After installation, select the actual LLM you want to use in LM Studio and leave the
+top-level `codex/unreal-context-compactor` switch OFF in the chat's plugin panel.
+Install/pin only makes the plugin available; it does not enable it for a chat. Chat
+activation is owned by LM Studio, so verify the top-level switch is OFF in every new
+or existing chat. The nested `Enable
+transparent compaction` setting is also OFF by default and is a separate internal
+opt-in. Enable both switches only when deliberately testing compaction for one chat.
 
 On every supported host, `install.py --build-rag` invokes the managed Python
 collectors directly. It does not require PowerShell, start Unreal Editor, execute

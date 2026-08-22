@@ -28,7 +28,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — August 2026**
 >
-> **Current product label: 1.3.0 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and hard-compaction continuity memory. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
+> **Current product label: 1.3.0 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, and bounded build/Automation processes. The optional context-continuity plugin is not chat-activated by the installer and its internal compaction opt-in defaults OFF. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
 >
 > Automated source, package, installer, safety, and cross-platform gates define release readiness. Apple Silicon physical FULL-install evidence and a native Windows LM Studio GUI/RAG/UBT workflow record are retained, while clean-machine installer certification for every host and universal Unreal project/engine/plugin/editor-runtime compatibility remain outside the claim. The saved v1.2.5 measurements and RC control-plane validation remain historical evidence, not a new 1.3.0 Direct-mode score.
 
@@ -97,7 +97,7 @@ cd UE5_Local_LLM_MCP_lmstudio
 # Ubuntu Linux/macOS: ./install.sh
 ```
 
-The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal adapter is included, it presents a numbered SAFE/AGENT authority choice and shows the final authority in a confirmation summary. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. FULL adds the context compactor but remains read-only unless AGENT authority is explicitly confirmed. See [Integrated Installer](docs/Integrated_Installer.md).
+The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal adapter is included, it presents a numbered SAFE/AGENT authority choice and shows the final authority in a confirmation summary. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. All LM Studio/Unreal profiles install and pin the context compactor so it is available, but never chat-activate it; the plugin's internal compaction opt-in defaults OFF. FULL remains read-only unless AGENT authority is explicitly confirmed. See [Integrated Installer](docs/Integrated_Installer.md).
 
 ### One installer, two platform launchers
 
@@ -110,11 +110,11 @@ The normal `unreal-rag` and `unreal-agent` entries are capability providers. The
 > **Important — select the real LLM as the chat model.**
 >
 > 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current primary validated recommendation.
-> 2. Create or open the chat and enable **`codex/unreal-context-compactor`** in that chat's **plugin panel**.
-> 3. Keep the actual LLM selected. `unreal-context-compactor` is a chat plugin, not a model or proxy model, and it has no `targetModel` to configure.
+> 2. Leave the top-level **`codex/unreal-context-compactor`** switch **OFF** in that chat's **plugin panel**. The installer does not enable this host-owned switch; verify it is OFF in every new or existing chat.
+> 3. Keep the nested **Enable transparent compaction** switch OFF as well. It is a plugin-internal opt-in and does not activate the plugin while the top-level switch is off.
 > 4. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
 
-The plugin measures pressure with the selected model and compacts only older model-facing chat history when needed. It does not choose the model, change sampling, filter MCP tools, or grant write/build authority. The installer makes the plugin available and pins its revision, but LM Studio does not currently expose durable proof that it is enabled for a particular chat; confirm the chat-level toggle in the plugin panel.
+The default setup does not run the compactor. Installation and pinning only make it available in the panel; they do not add it to a chat. If you deliberately test the experimental compaction path for one long chat, opt in to both switches for that chat. The plugin does not choose the model, change sampling, filter MCP tools, or grant write/build authority.
 
 This command verifies the installed plugin's source layout and compiled prediction-loop wiring. It does **not** prove chat-level activation:
 
@@ -180,11 +180,11 @@ run a model, wrapper, planner, evaluation harness, or query-side controller.
 
 ## Real-Use Session Tips
 
-Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context grows with every tool result, build log, and retry. With the actual LLM selected and `codex/unreal-context-compactor` enabled for the chat, the plugin measures that model's tokenizer budget and replaces only older model-facing history with deterministic factual memory before the hard margin is exhausted. It does not preserve or generate task routes, required-next-tool commands, planner state, or synthesis gates.
+Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context grows with every tool result, build log, and retry. Keep the context compactor's top-level chat switch OFF by default. Prefer a suitable context length or a fresh chat with a short factual handoff. The experimental compaction path is a deliberate per-chat, two-switch opt-in; when enabled, it replaces only older model-facing history with deterministic factual memory and never owns task routes, required-next-tool commands, planner state, or synthesis gates.
 
 | Symptom in LM Studio logs | What to do |
 |---|---|
-| `request (...) exceeds the available context size (54272)` | Confirm that the actual LLM is selected and `codex/unreal-context-compactor` is enabled in this chat's plugin panel. `npm --prefix lmstudio-context-compactor-plugin run status` verifies installed source/build wiring only. If pressure remains too high, use a larger context or start a new chat with a 5–10-line factual handoff. |
+| `request (...) exceeds the available context size (54272)` | Confirm that the actual LLM is selected. Keep `codex/unreal-context-compactor` OFF for the default setup, then use a suitable context length or start a new chat with a 5–10-line factual handoff. `npm --prefix lmstudio-context-compactor-plugin run status` verifies installed source/build wiring only. |
 | `failed to restore kv cache` / `cache size limit reached` | Same as above — session memory is saturated. New chat is faster than raising context alone. |
 | `Model failed to generate a tool call` after a long edit loop | Stop, summarize changed files + remaining errors, new chat. |
 | `js-code-sandbox` appears in logs during Unreal work | Disable it (see Quick Install note above). |

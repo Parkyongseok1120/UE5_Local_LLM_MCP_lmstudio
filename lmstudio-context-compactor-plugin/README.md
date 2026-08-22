@@ -12,8 +12,10 @@ settings, filter MCP tools, or interpret Unreal workflow state. The existing
 providers. Because compaction is limited to chat history, the same plugin can be
 used across Unreal Engine versions and projects.
 
-Version 0.4.47 defaults to enabled mode. `observeOnly` can be enabled in the plugin
-settings to measure pressure without changing the model-facing history. Soft
+Version 0.4.48 defaults to disabled mode. The top-level LM Studio chat-plugin switch
+and the nested `Enable transparent compaction` switch are independent, and both must
+be explicitly enabled for compaction to run. `observeOnly` can be enabled in the
+plugin settings to measure pressure without changing the model-facing history. Soft
 compaction retains recent complete turns. Hard compaction keeps the current user
 turn separately and emits bounded `[Direct continuity state v1]` factual memory:
 the active objective, continuation antecedent for an elliptical follow-up, active
@@ -26,13 +28,18 @@ provides a conservative fallback.
 ## Use in LM Studio
 
 1. Load and select the actual LLM. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation.
-2. Enable `codex/unreal-context-compactor` for the chat in LM Studio's plugin panel.
-3. Keep using the actual LLM as the chat model. The plugin runs in its prediction
-   loop and passes the selected model's tools through unchanged.
+2. Leave the top-level `codex/unreal-context-compactor` switch OFF for the default
+   setup. The installer does not enable this LM Studio-owned state; verify it is OFF
+   in every new or existing chat.
+3. Leave the nested `Enable transparent compaction` switch OFF. It does not control
+   top-level chat activation and has no effect while the top-level switch is off.
+4. Only for a deliberate per-chat compaction test, enable both switches and keep
+   using the actual LLM as the chat model.
 
-The integrated installer pins the plugin so it is easy to enable, but LM Studio does
-not currently expose a durable API that proves whether the plugin is enabled for a
-specific chat. Verify that state in the chat's plugin panel.
+The integrated installer installs and pins the plugin so it remains available, but
+does not activate it for a chat. It deliberately avoids rewriting LM Studio's private
+per-chat conversation storage, which is version-specific. Existing chat activation
+must therefore be turned off in that chat's plugin panel.
 
 ## Status and development
 
@@ -54,5 +61,5 @@ The supported installation path is the repository root `INSTALL.bat` on Windows 
 `install.sh` on macOS/Linux. Select a profile that includes `context_compactor`, or
 use that component in a CUSTOM installation for a plugin-only repair. The installer
 restores locked dependencies, runs the focused tests and TypeScript build, installs
-the plugin with `lms dev --install -y`, and verifies the installed revision and
-compiled prediction-loop bundle.
+the plugin with `lms dev --install -y`, and verifies its owner/name/revision identity
+plus a non-empty compiled `.lmstudio/production.js` bundle.
