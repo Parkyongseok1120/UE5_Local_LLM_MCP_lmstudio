@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from atomic_io import atomic_write_text
+from direct_rag_symbol_legacy import legacy_symbol_belongs_to_project
 from workspace_paths import filesystem_path_identity
 
 PROJECT_RAW_FILES = (
@@ -62,41 +63,6 @@ def _exact_identity(project: Path) -> tuple[str, str]:
     return root, descriptor.stem.casefold()
 
 
-def _absolute_path_within(value: Any, root: Path) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return False
-    candidate = Path(text).expanduser()
-    if not candidate.is_absolute():
-        return False
-    try:
-        candidate.resolve().relative_to(root)
-    except (OSError, ValueError):
-        return False
-    return True
-
-
-def _legacy_symbol_belongs_to_project(row: dict[str, Any], project: Path) -> bool:
-    """Recognize only the old symbol schema sufficiently to replace its own rows."""
-
-    if _row_root(row):
-        return False
-    metadata = row.get("metadata")
-    if not isinstance(metadata, dict):
-        return False
-    descriptor = project.expanduser().resolve()
-    if (
-        _row_project(row) != descriptor.stem.casefold()
-        or str(row.get("source") or "").strip() != "unreal_symbol"
-        or str(metadata.get("scope") or "").strip().casefold() != "project"
-    ):
-        return False
-    root = descriptor.parent.resolve()
-    return _absolute_path_within(metadata.get("root"), root) and _absolute_path_within(
-        row.get("path"), root
-    )
-
-
 def merge_project_jsonl(destination: Path, incoming: Path, project: Path) -> None:
     expected = _exact_identity(project)
     new_rows = _rows(incoming)
@@ -116,7 +82,7 @@ def merge_project_jsonl(destination: Path, incoming: Path, project: Path) -> Non
             (_row_root(row), _row_project(row)) != expected
             and not (
                 destination.name == "raw_project_symbols.jsonl"
-                and _legacy_symbol_belongs_to_project(row, project)
+                and legacy_symbol_belongs_to_project(row, project)
             )
         )
     ]
@@ -147,11 +113,18 @@ def replace_project_architecture(
 
 
 def merge_project_collection(stage: Path, collection: Path, project: Path) -> None:
+    from direct_rag_editor_legacy import (
+        legacy_descriptor_roots,
+        migrate_legacy_editor_rows,
+    )
+    # Incoming descriptors cannot prove ownership of prior provenance-less rows.
+    prior_descriptor_roots = legacy_descriptor_roots(stage, project)
     for name in PROJECT_RAW_FILES:
         incoming = collection / name
         if not incoming.is_file():
             raise RuntimeError(f"Collector did not produce required output: {name}")
         merge_project_jsonl(stage / name, incoming, project)
+    migrate_legacy_editor_rows(stage, project, prior_descriptor_roots)
     architecture = collection / "project_architecture"
     if not architecture.is_dir():
         raise RuntimeError("Architecture collector did not produce its output directory")

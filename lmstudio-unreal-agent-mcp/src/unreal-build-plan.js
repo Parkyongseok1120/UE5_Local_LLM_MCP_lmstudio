@@ -11,6 +11,30 @@ function defaultPlatform(hostPlatform = process.platform) {
   return "Linux";
 }
 
+function resolveBuildTarget(requestedTarget, project) {
+  const requested = String(requestedTarget || "").trim();
+  if (requested && requested.toLowerCase() !== "editor") return requested;
+
+  const targets = Array.isArray(project.allTargets)
+    ? project.allTargets.map((target) => String(target).trim()).filter(Boolean)
+    : [];
+  const preferred = String(project.preferredTarget || "").trim();
+  const canonicalEditor = `${project.projectName}Editor`;
+
+  if (requested) {
+    const exactCanonical = targets.find(
+      (target) => target.toLowerCase() === canonicalEditor.toLowerCase(),
+    );
+    if (exactCanonical) return exactCanonical;
+    if (preferred.toLowerCase().endsWith("editor")) return preferred;
+
+    const editorTargets = targets.filter((target) => target.toLowerCase().endsWith("editor"));
+    if (editorTargets.length === 1) return editorTargets[0];
+  }
+
+  return preferred || canonicalEditor;
+}
+
 async function resolveBuildPlan(workspaceRoot, configPath, args = {}) {
   const selection = await resolveProjectSelection(workspaceRoot, configPath, {
     hint: args.hint,
@@ -40,9 +64,8 @@ async function resolveBuildPlan(workspaceRoot, configPath, args = {}) {
     };
   }
 
-  const target = String(
-    args.target || project.preferredTarget || `${project.projectName}Editor`,
-  ).trim();
+  const requestedTarget = String(args.target || "").trim();
+  const target = resolveBuildTarget(requestedTarget, project);
   const platform = String(
     args.platform
     || selection.config.defaultPlatform
@@ -72,6 +95,8 @@ async function resolveBuildPlan(workspaceRoot, configPath, args = {}) {
       projectDir: path.dirname(projectPath),
       projectName: projectNameFromPath(projectPath),
       target,
+      requestedTarget: requestedTarget || null,
+      targetWasAlias: requestedTarget.toLowerCase() === "editor",
       platform,
       configuration,
       allTargets: project.allTargets,
@@ -80,4 +105,4 @@ async function resolveBuildPlan(workspaceRoot, configPath, args = {}) {
   };
 }
 
-module.exports = { defaultPlatform, resolveBuildPlan };
+module.exports = { defaultPlatform, resolveBuildPlan, resolveBuildTarget };

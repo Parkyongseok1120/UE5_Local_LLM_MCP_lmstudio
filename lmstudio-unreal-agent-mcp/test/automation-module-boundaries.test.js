@@ -52,12 +52,11 @@ test("Automation facade preserves public exports while owners stay bounded", () 
   }
 });
 
-test("Automation process owner reuses build process decoding and tree termination", () => {
+test("Automation process owner reuses the shared bounded process lifecycle", () => {
   const source = fs.readFileSync(path.join(SOURCE_ROOT, "automation-process-runner.js"), "utf8");
-  assert.match(source, /require\("\.\/build-executor"\)/);
-  assert.match(source, /decodeBuildOutput/);
-  assert.match(source, /killProcessTree/);
-  assert.doesNotMatch(source, /function\s+(?:decodeBuildOutput|killProcessTree|assertEngineContainment)\b/);
+  assert.match(source, /require\("\.\/bounded-process-runner"\)/);
+  assert.match(source, /runBoundedProcess/);
+  assert.doesNotMatch(source, /stdoutChunks|stderrChunks|killProcessTree|decodeBuildOutput/);
 
   const commandSource = fs.readFileSync(path.join(SOURCE_ROOT, "automation-command-contract.js"), "utf8");
   assert.match(commandSource, /assertEngineContainment/);

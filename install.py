@@ -32,7 +32,7 @@ from installer.direct_rag_build import create_direct_rag_build_plan  # noqa: E40
 from installer.unreal_engine_binding import (  # noqa: E402
     bind_installer_engine,
     common_engine_locations as _common_engine_locations,
-    detect_engine_root as _detect_engine_root,
+    detect_engine_root as _detect_engine_root_with,
     engine_root_is_valid as _engine_root_is_valid,
     engine_version_from_root as _engine_version_from_root,
     launcher_manifest_engine_locations as _launcher_manifest_engine_locations,
@@ -74,6 +74,16 @@ CONTEXT_COMPACTOR_PLUGIN_NAME = "unreal-context-compactor"
 
 INVALID_LOCK_GRACE_SECONDS = 300
 MAX_INSTALLER_JSON_BYTES = 16 * 1024 * 1024
+
+
+def _detect_engine_root(engine_association: str = "") -> Path | None:
+    """Keep the installer test/UX seam while using the canonical resolver."""
+
+    return _detect_engine_root_with(
+        engine_association,
+        launcher_locations=_launcher_manifest_engine_locations(),
+        common_locations=_common_engine_locations(),
+    )
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -1966,6 +1976,7 @@ def install(
                 selection=getattr(args, "_engine_selection", ""),
                 shared_config=shared,
                 workspace_root=ROOT,
+                detect_engine_root_fn=_detect_engine_root,
             )
             association = engine_binding.association
             args.engine_root = engine_binding.engine_root
