@@ -36,6 +36,8 @@ def _process_request(export_dir: Path, tools_dir: Path) -> None:
     content_path = str(job.get("contentPath") or "/Game")
     maps_path = str(job.get("mapsPath") or content_path)
     scope = str(job.get("scope") or "all").lower()
+    project_file = str(job.get("projectFile") or "")
+    run_id = str(job.get("jobId") or "")
 
     run_all_path = tools_dir / "run_all_exports.py"
     namespace: dict = {}
@@ -44,15 +46,30 @@ def _process_request(export_dir: Path, tools_dir: Path) -> None:
     exec(f"_TOOLS_DIR = {str(tools_dir)!r}\n" + source, namespace)
 
     if scope in {"material", "materials"}:
-        manifest = namespace["export_materials_only"](str(export_dir), content_path=content_path, tools_dir=str(tools_dir))
+        manifest = namespace["export_materials_only"](
+            str(export_dir),
+            content_path=content_path,
+            tools_dir=str(tools_dir),
+            requested_project_file=project_file,
+            run_id=run_id,
+        )
     elif scope in {"blueprint", "blueprints", "bp"}:
-        manifest = namespace["export_blueprints_only"](str(export_dir), content_path=content_path, tools_dir=str(tools_dir))
+        manifest = namespace["export_blueprints_only"](
+            str(export_dir),
+            content_path=content_path,
+            tools_dir=str(tools_dir),
+            requested_project_file=project_file,
+            run_id=run_id,
+        )
     else:
         manifest = namespace["run_all_metadata_exports"](
             str(export_dir),
             content_path=content_path,
             maps_path=maps_path,
             tools_dir=str(tools_dir),
+            requested_project_file=project_file,
+            run_id=run_id,
+            scope=scope,
         )
 
     request_path.unlink(missing_ok=True)
@@ -65,6 +82,7 @@ def _process_request(export_dir: Path, tools_dir: Path) -> None:
             "contentPath": content_path,
             "scope": scope,
             "manifest": manifest,
+            "runId": run_id,
         },
     )
 

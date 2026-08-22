@@ -1,80 +1,53 @@
 # Unreal Context Compactor for LM Studio
 
-This plugin is a model-facing context proxy. It keeps the visible LM Studio chat intact,
-measures the actual tokenizer context, persists a deterministic checkpoint, and sends a
-compacted `Chat` to the configured underlying local model when the remaining budget is low.
+This LM Studio plugin compacts chat context transparently while the model selected in
+LM Studio remains the reasoning, sampling, and tool-use owner. It measures context
+pressure with that selected model, keeps the latest real user request verbatim, and
+replaces older history with deterministic factual memory only when the remaining
+budget is low.
 
-`targetModel` is optional when exactly one LLM is loaded; that model is selected automatically.
-With zero or multiple loaded LLMs, the plugin fails with a list of candidates and asks for an
-exact model key. The existing `mcp/unreal-agent` and `mcp/unreal-rag` plugins remain tool providers.
+The plugin does not select a target model, replace the selected model's sampling
+settings, filter MCP tools, or interpret Unreal workflow state. The existing
+`mcp/unreal-agent` and `mcp/unreal-rag` integrations remain independent tool
+providers. Because compaction is limited to chat history, the same plugin can be
+used across Unreal Engine versions and projects.
 
-Version 0.4.46 is active by default (`enabled=true`, `observeOnly=false`). It persists a checkpoint
-before every prediction and buffers model text/tool calls until LM Studio confirms a safe stop.
-Context-limit and max-output truncations are discarded instead of being presented as completed work.
-Every proxied prediction pins temperature/top-p/top-k/min-p, has independent wall-clock and semantic
-no-progress limits, and rejects buffered output if the loaded model instance changes mid-transaction.
-UI heartbeats never renew the semantic-progress deadline. Exact active-project bootstrap, pre-route
-planner, catalog-refresh, and v2 required-tool calls bypass model serialization when every required
-argument is server-owned.
-Architecture proposals now carry an explicit local/network scope and stable invariant IDs. Bounded local
-features use the Bound contract without Strict-only alternatives, migration, or RPC ceremony.
-Explicit reasoning fragments stream as live progress while final text and tool calls remain atomic.
-The latest server-owned `activeTools` route is also intersected with the combined LM Studio catalog
-before prediction, preventing stale cross-MCP tool schemas from causing avoidable rejected calls.
-When a new executor route contains mutation tools but LM Studio still holds the Agent provider's
-pre-route catalog, the proxy forces one read-only catalog refresh. If the mutation schemas are still
-missing afterward, generation fails closed instead of polling health, checkpoint, or source reads.
-Terminal task responses also clear callable route ownership while preserving resume as an explicit
-user affordance, so a cancelled/completed task cannot leak its former executor/verifier route.
-Server-required recovery tools are now the only forced schema for their next prediction; an unrelated
-multi-read batch can no longer be generated and rejected after a RAG direct-source handoff.
-Provider-qualified LM Studio tool names are normalized before route matching, and server-owned task
-authorization/required arguments are injected into the selected schema before prediction. Initial
-server-controlled direct-source reads can also recover from an LM Studio per-chat catalog snapshot
-that temporarily drops `read_file` or `read_file_range`; mutation schemas still fail closed.
-active-project discovery remains a pre-task control call, while a planner with an already resolved
-project context no longer asks the model to repeat it. A successful bootstrap lookup forces that planner
-immediately, with both planner goal fields overwritten by the exact current user message. Broad feature requests now receive one bounded
-source-discovery phase before the atomic feature-intent bind instead of being forced into a resolver
-call with no exact file snapshot.
-Write requests without a server-owned route also have a bounded discovery phase: natural-language
-new-system design requests enter architecture validation, and ordinary source discovery is handed
-off to `unreal_agent_plan` after six successful discovery calls instead of reading files indefinitely.
-Strict tool-call rejection remains off by default, so multiple valid tool calls are preserved.
+Version 0.4.46 defaults to enabled mode. `observeOnly` can be enabled in the plugin
+settings to measure pressure without changing the model-facing history. Soft
+compaction retains recent complete turns; hard compaction retains the current user
+turn plus bounded factual memory. If exact token measurement is unavailable, a
+message-count threshold provides a conservative fallback.
 
-Final synthesis now uses a server-owned report grammar before the commit handshake. Every nonblank
-line must be a single `-` bullet with a same-line claim ID from the exact evidence bundle; headings,
-standalone prose, tables, wrapped bullets, unknown IDs, and uncited structural bullets fail closed.
-Partial coverage uses six fixed bilingual disclosure bullets. One bounded low-effort format repair is
-allowed, but all synthesis prediction recovery paths share a two-attempt ceiling. A failed repair is
-bound to the real user-turn identity, so automatic re-entry cannot invoke the model again; a new user
-continuation can start a fresh bounded attempt. Claim IDs prove evidence-record identity, not semantic
-entailment, so unsupported statements must still be omitted.
+## Use in LM Studio
 
-> **Important — you must select this plugin as the chat model**  
-> 1. Load the underlying LLM (e.g. Qwen) once; leave it loaded.  
-> 2. **Create a new chat** (existing chats keep the old selection).  
-> 3. Choose **`unreal-context-compactor`** in that chat’s **model dropdown**.  
-> Selecting the underlying Qwen/GPT model directly **bypasses** compaction even though the plugin is installed.
+1. Load and select the actual LLM you want to use, such as Qwen.
+2. Enable `codex/unreal-context-compactor` for the chat in LM Studio's plugin panel.
+3. Keep using the actual LLM as the chat model. The plugin runs in its prediction
+   loop and passes the selected model's tools through unchanged.
 
-After sending one message through the proxy, run `npm run status` from this directory on Windows,
-macOS, or Linux. A successful check requires fresh routing evidence (30 minutes by default), and
-reports the routed target model and latest measured token budget. Historical stale evidence cannot
-make an inactive chat look active.
+The integrated installer pins the plugin so it is easy to enable, but LM Studio does
+not currently expose a durable API that proves whether the plugin is enabled for a
+specific chat. Verify that state in the chat's plugin panel.
 
-The proxy is advisory for normal AGENT installs. Selecting Qwen/GPT directly bypasses compaction but does not disable server-authorized writes. A strict proxy requirement is an explicit LM Studio-only administrator policy; other frontends must use their own continuity proof.
+## Status and development
 
-Per-session storage keeps the newest 20 checkpoint generations, three rolled event files, and the active files. A bounded daily GC removes completed/inactive sessions after 90 days and cancelled sessions after 30 days. Active/running sessions and sessions containing quarantined `*.corrupt-*` artifacts are never auto-deleted. Retention can be increased with `LMS_CONTEXT_COMPACTOR_COMPLETED_RETENTION_DAYS`, `LMS_CONTEXT_COMPACTOR_CANCELLED_RETENTION_DAYS`, and `LMS_CONTEXT_COMPACTOR_INACTIVE_RETENTION_DAYS`.
+Run `npm run status` to verify that the direct prediction-loop source layout is
+complete and that `src/index.ts` registers the expected handler. This is a source
+verification only; it never reports runtime activation based on file presence.
+`npm run test:active` intentionally exits with code 3 while the current LM Studio
+hook cannot provide durable activation evidence.
 
+For local development, run:
 
-For local development, run lms dev from this directory. The plugin uses the existing mcp/unreal-agent and mcp/unreal-rag installations; it does not replace either MCP server.
+```text
+npm ci
+npm test
+npm run dev
+```
 
-## Installation file: Y
-
-The normal user path is the root `INSTALL.bat` (or `install.sh` on Linux/macOS); choose the FULL
-profile to install the MCP stack and context compactor together. The portable package restores the plugin dependencies,
-runs its tests/build, installs it through LM Studio, and verifies the installed revision.
-
-For a plugin-only repair, use the integrated CUSTOM profile with the `context_compactor` component.
-It checks Node/npm and the LM Studio CLI, restores locked dependencies, runs unit tests and the
-TypeScript build, then installs the plugin through `lms dev --install -y`.
+The supported installation path is the repository root `INSTALL.bat` on Windows or
+`install.sh` on macOS/Linux. Select a profile that includes `context_compactor`, or
+use that component in a CUSTOM installation for a plugin-only repair. The installer
+restores locked dependencies, runs the focused tests and TypeScript build, installs
+the plugin with `lms dev --install -y`, and verifies the installed revision and
+compiled prediction-loop bundle.

@@ -10,7 +10,7 @@ const client = new LMStudioClient({
 
 const host = client.plugins.getSelfRegistrationHost();
 let configRegistered = false;
-let generatorRegistered = false;
+let predictionLoopRegistered = false;
 
 const context: PluginContext = {
   withConfigSchematics(configSchematics) {
@@ -19,16 +19,16 @@ const context: PluginContext = {
     host.setConfigSchematics(configSchematics);
     return context;
   },
-  withGenerator(generator) {
-    if (generatorRegistered) throw new Error("Generator already registered");
-    generatorRegistered = true;
-    host.setGenerator(generator);
+  withPredictionLoopHandler(handler) {
+    if (predictionLoopRegistered) throw new Error("Prediction loop handler already registered");
+    predictionLoopRegistered = true;
+    host.setPredictionLoopHandler(handler);
     return context;
   },
   withGlobalConfigSchematics() { throw new Error("Global config is not used by this plugin"); },
-  withPredictionLoopHandler() { throw new Error("Prediction loop handler is not used by this plugin"); },
   withPromptPreprocessor() { throw new Error("Prompt preprocessor is not used by this plugin"); },
   withToolsProvider() { throw new Error("Tools provider is not used by this plugin"); },
+  withGenerator() { throw new Error("Generator proxy is not used by the Direct context compactor"); },
 };
 
 (globalThis as any).__LMS_PLUGIN_CONTEXT = true;

@@ -20,11 +20,15 @@ Current coverage:
 Commands:
 
 ```powershell
-.\rag.ps1 collect-blueprint-metadata -Question C:\export\bp.jsonl -ProjectName MyGame
-.\rag.ps1 collect-material-metadata -Question C:\export\materials.jsonl -ProjectName MyGame
-.\rag.ps1 collect-animation-metadata -Question C:\export\animation.jsonl -ProjectName MyGame
-.\rag.ps1 build-incremental
+.\rag.ps1 set-project -ProjectFile C:\path\MyGame.uproject
+.\rag.ps1 refresh -RefreshScope editor_metadata -AllowEditorLaunch
 ```
+
+`editor_metadata` consumes existing project export artifacts by default. The
+explicit `-AllowEditorLaunch` switch authorizes launching the selected project's
+Editor when fresh exports are needed. Use `-RefreshScope all` to refresh both
+project source and Editor metadata. The Direct MCP exposes this workflow through
+`unreal_rag_refresh`; the roadmap does not add asset-mutation tools.
 
 ## Stage 2: Plan Before Mutation
 

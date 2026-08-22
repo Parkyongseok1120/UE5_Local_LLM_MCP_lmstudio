@@ -244,21 +244,11 @@ def main() -> int:
     else:
         checks.append(check("rag_index", index_ok, index_detail))
 
-    include_owner_count = 0
     if index_path.is_file():
         try:
             import sqlite3
 
             conn = sqlite3.connect(index_path)
-            tables = {
-                str(row[0])
-                for row in conn.execute("select name from sqlite_master where type='table'")
-            }
-            if "include_owners" in tables:
-                include_owner_count = int(
-                    conn.execute("select count(*) from include_owners").fetchone()[0]
-                )
-
             # Verify that expected search indexes exist. Missing indexes degrade
             # sidecar query performance silently (rebuild index to add them).
             EXPECTED_INDEXES = {
@@ -284,22 +274,7 @@ def main() -> int:
 
             conn.close()
         except sqlite3.Error:
-            include_owner_count = -1
-    if include_owner_count == 0:
-        checks.append(
-            warn(
-                "include_owners_sidecar",
-                "0 rows — run: .\\rag.ps1 collect-module-graph; .\\rag.ps1 build-incremental",
-            )
-        )
-    elif include_owner_count > 0:
-        checks.append(
-            check(
-                "include_owners_sidecar",
-                True,
-                f"{include_owner_count} include_owner rows in {index_path.name}",
-            )
-        )
+            pass
 
     manifest_path = index_path.parent / "build_manifest.json"
     if manifest_path.is_file():

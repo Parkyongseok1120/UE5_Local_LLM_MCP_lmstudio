@@ -46,20 +46,33 @@ def resolve_project_name(explicit: str) -> str:
     return "Project"
 
 
-def discover_exports(export_dir: Path) -> list[tuple[Path, str]]:
+def discover_exports(
+    export_dir: Path,
+    *,
+    project_file: Path | None = None,
+    require_manifest: bool = False,
+) -> list[tuple[Path, str]]:
+    if require_manifest or (export_dir / "export_manifest.json").is_file():
+        if project_file is None:
+            if require_manifest:
+                raise ValueError("Exact project_file is required for a completed export manifest")
+        else:
+            from editor_export_contract import completed_export_files
+
+            return completed_export_files(export_dir, project_file)[1]
     found: list[tuple[Path, str]] = []
-    seen: set[str] = set()
+    seen: set[Path] = set()
     if not export_dir.is_dir():
         return found
     for pattern, kind in EXPORT_PATTERNS:
         for path in sorted(export_dir.glob(pattern)):
             if not path.is_file():
                 continue
-            key = f"{kind}:{path.resolve()}"
-            if key in seen:
+            resolved = path.resolve()
+            if resolved in seen:
                 continue
-            seen.add(key)
-            found.append((path.resolve(), kind))
+            seen.add(resolved)
+            found.append((resolved, kind))
     return found
 
 
@@ -68,6 +81,9 @@ def main() -> int:
     parser.add_argument("--export-dir", required=True, help="Directory containing Editor export JSONL files.")
     parser.add_argument("--out-dir", default="", help="Output directory (default: configured RAG data directory).")
     parser.add_argument("--project-name", default="")
+    parser.add_argument("--project-root", default="")
+    parser.add_argument("--project-file", default="", help="Exact .uproject bound by export_manifest.json.")
+    parser.add_argument("--require-manifest", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -78,7 +94,20 @@ def main() -> int:
         out_dir = workspace / out_dir
     project_name = resolve_project_name(args.project_name)
 
-    exports = discover_exports(export_dir)
+    project_file = Path(args.project_file).expanduser().resolve() if args.project_file else None
+    manifest = None
+    try:
+        if args.require_manifest:
+            from editor_export_contract import completed_export_files
+
+            if project_file is None:
+                raise ValueError("--project-file is required with --require-manifest")
+            manifest, exports = completed_export_files(export_dir, project_file)
+        else:
+            exports = discover_exports(export_dir, project_file=project_file)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[fail] {exc}")
+        return 2
     if not exports:
         print(f"[warn] no export JSONL files found under: {export_dir}")
         print("Expected names like blueprints.jsonl, materials.jsonl, animation.jsonl")
@@ -97,6 +126,8 @@ def main() -> int:
             str(collector),
             "--project-name",
             project_name,
+            "--project-root",
+            str(args.project_root or ""),
             "--out-dir",
             str(out_dir),
             "--export",
@@ -107,6 +138,11 @@ def main() -> int:
             print(f"[fail] ingest failed for {path}")
             return result.returncode
         ingested += 1
+
+    if manifest is not None and not args.dry_run:
+        from editor_capture_state import record_completed_capture
+
+        record_completed_capture(out_dir, manifest)
 
     print(f"done: ingested {ingested} export file(s) from {export_dir}")
     return 0

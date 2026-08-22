@@ -13,7 +13,7 @@ const {
   probeMutationSemanticGuard,
 } = require("../src/mutation-semantic-guard");
 
-test("prospective mutation rejects reverse turn clamped on a later line", () => {
+test("semantic analyzer reports reverse turn clamped on a later line", () => {
   const result = validateMutationSemanticText(`
 int32 URuleEngine::AdvanceTurnIndex(int32 CurrentIndex, int32 Direction) const
 {
@@ -27,7 +27,7 @@ int32 URuleEngine::AdvanceTurnIndex(int32 CurrentIndex, int32 Direction) const
   assert.ok(result.hits.some((hit) => hit.term === "turn_direction_clamped_instead_of_wrapped"));
 });
 
-test("prospective mutation accepts positive modulo traversal", () => {
+test("semantic analyzer reports no finding for positive modulo traversal", () => {
   const result = validateMutationSemanticText(`
 int32 URuleEngine::AdvanceTurnIndex(int32 CurrentIndex, int32 Direction) const
 {
@@ -40,7 +40,7 @@ int32 URuleEngine::AdvanceTurnIndex(int32 CurrentIndex, int32 Direction) const
   assert.deepStrictEqual(result.hits, []);
 });
 
-test("missing guard script fails closed", () => {
+test("missing guard script reports unavailable advisory evidence", () => {
   const previous = process.env.UNREAL58_ROOT;
   const fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mutation-guard-missing-"));
   const modulePath = require.resolve("../src/mutation-semantic-guard");

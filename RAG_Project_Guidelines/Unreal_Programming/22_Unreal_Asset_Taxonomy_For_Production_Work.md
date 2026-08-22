@@ -386,16 +386,16 @@ NPR(Non-Photorealistic Rendering) 및 카툰 스타일 작업에서는 다음 �
 |---|---|---|---|
 | path_only | unreal_project_asset_path | unreal_rag_search | 경로·파일명만 인덱싱. 그래프/레지스트리 필드 없음. |
 | registry | unreal_asset_registry | unreal_rag_search (mode=material_analysis 등) | MaterialFunction, MaterialLayer, MPC, PhysicalMaterial, Texture2D, BehaviorTree 등 대부분 비그래프 에셋. 타입·경로·태그 수준. |
-| graph_material | unreal_material_metadata | unreal_asset_graph_lookup, unreal_material_claim_validate | Material·MI·MaterialFunction·MaterialLayer·LayerBlend 그래프/파라미터 익스포트. MPC는 파라미터 메타만. |
-| graph_blueprint | unreal_blueprint_metadata | unreal_asset_graph_lookup, unreal_blueprint_claim_validate | Blueprint 클래스·변수·함수·그래프/노드/핀 요약 익스포트. |
-| graph_animation | unreal_animation_metadata (+ LevelSequence 등) | unreal_rag_search, unreal_asset_graph_lookup (제한적) | AnimSequence, AnimMontage, AnimBlueprint, SkeletalMesh, LevelSequence 등. |
+| graph_material | unreal_material_metadata | unreal_rag_search | Material·MI·MaterialFunction·MaterialLayer·LayerBlend 그래프/파라미터 익스포트. MPC는 파라미터 메타만. |
+| graph_blueprint | unreal_blueprint_metadata | unreal_rag_search | Blueprint 클래스·변수·함수·그래프/노드/핀 요약 익스포트. |
+| graph_animation | unreal_animation_metadata (+ LevelSequence 등) | unreal_rag_search | AnimSequence, AnimMontage, AnimBlueprint, SkeletalMesh, LevelSequence 등. |
 | source_code | unreal_source | unreal_rag_search, unreal_symbol_lookup | 프로젝트 C++/H, .usf/.ush 셰이더 텍스트. |
 | guidelines | project_guideline | unreal_rag_search | RAG_Project_Guidelines 문서 전용. |
-| not_exported_yet | — | unreal_run_editor_export (확장 필요) | Substrate 슬랩, Control Rig, IK Rig, Niagara DI, MRQ 프리셋 등 파이프라인 공백. |
+| not_exported_yet | — | — | Substrate 슬랩, Control Rig, IK Rig, Niagara DI, MRQ 프리셋 등 파이프라인 공백. |
 
 ### 기계 판독용 매핑
 
-에셋 클래스 → 작업 영역·RAG 커버리지·NPR 플래그 매핑은 [`config/unreal_asset_taxonomy.json`](../../config/unreal_asset_taxonomy.json)에 정의되어 있습니다. `scripts/asset_taxonomy.py`가 RAG 검색 결과와 MCP `unreal_asset_graph_lookup` 응답에 taxonomy 힌트를 붙입니다.
+에셋 클래스 → 작업 영역·RAG 커버리지·NPR 플래그 매핑은 [`config/unreal_asset_taxonomy.json`](../../config/unreal_asset_taxonomy.json)에 정의되어 있습니다. `scripts/asset_taxonomy.py`의 `classify_ue_asset_class`와 `taxonomy_text_lines`가 인덱싱할 taxonomy 사실을 생성합니다.
 
 ### 예시: Material Layer (`ML_BaseColor`)
 
@@ -404,7 +404,7 @@ NPR(Non-Photorealistic Rendering) 및 카툰 스타일 작업에서는 다음 �
 | UE Asset Class | `MaterialFunctionMaterialLayer` |
 | Taxonomy 항목 | Material Layer |
 | rag_coverage | `graph_material` |
-| `unreal_asset_graph_lookup` | Material Layer 그래프 익스포트 지원 (`get_material_function_expressions`) |
-| 권장 조치 | `export-editor-metadata` 후 `unreal_asset_graph_lookup`으로 노드·와이어 확인 |
+| Direct 조회 | `unreal_rag_search`가 `unreal_material_metadata`의 익스포트된 노드·와이어를 검색 |
+| 권장 조치 | Editor에서 metadata를 export한 뒤 `unreal_rag_refresh(scope=editor_metadata)`를 실행하고 `unreal_rag_search`로 확인 |
 
 Material Function (`MF_*`)도 동일하게 **graph_material**입니다. Material Parameter Collection (`MPC_*`)은 스칼라/벡터 파라미터 기본값만 익스포트되며 노드 그래프는 없습니다.

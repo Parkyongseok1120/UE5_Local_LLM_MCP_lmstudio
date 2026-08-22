@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -7,46 +8,57 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from read_query_history import (  # noqa: E402
-    consume_continuation_token,
-    delivery_variant_key,
-    issue_continuation_token,
-    reset_query_history,
+from direct_rag_history import (  # noqa: E402
+    forget,
+    query_keys,
+    receipt_matches,
+    record,
 )
-from workspace_paths import find_workspace_root  # noqa: E402
+from direct_rag_server import DirectRagServer  # noqa: E402
 
 
-def test_continuation_token_single_use() -> None:
-    reset_query_history()
-    index = find_workspace_root() / "data" / "unreal58" / "rag.sqlite"
-    key = delivery_variant_key(
+def test_direct_repeat_receipt_is_state_bound(monkeypatch, tmp_path: Path) -> None:
+    history = tmp_path / "direct-rag-history.json"
+    index = tmp_path / "rag.sqlite"
+    index.write_bytes(b"direct-index-fixture")
+    monkeypatch.setenv("DIRECT_RAG_HISTORY_PATH", str(history))
+    semantic, variant = query_keys(
         tool="unreal_rag_search",
         active_project="",
-        query="LyraHealthComponent",
+        projects=[],
+        query=f"LyraHealthComponent {tmp_path.name}",
         mode="auto",
         scope="auto",
-        detail_level="compact",
+        detail="compact",
         top_k=4,
         hybrid=False,
-        index_path=index,
-        session_id="sess1",
+        index=index,
     )
-    token = issue_continuation_token(key)
-    assert consume_continuation_token(token, key) is True
-    assert consume_continuation_token(token, key) is False
+    receipt = record(semantic, variant, "compact", match_count=1)
+    assert receipt_matches("", variant) is False
+    assert receipt_matches(receipt, variant) is True
+    assert forget(variant) is True
 
 
-def test_mcp_tools_list_matches_stable_manifest(monkeypatch, tmp_path) -> None:
-    import importlib.util
-
-    monkeypatch.setenv("MCP_ESSENTIAL_TOOLS", "1")
-    monkeypatch.delenv("ALLOW_CONTROL_PLANE_TOOLS", raising=False)
-    spec = importlib.util.spec_from_file_location("unreal_rag_mcp", ROOT / "scripts" / "unreal_rag_mcp.py")
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    server = module.McpServer(tmp_path / "missing.sqlite")
-    names = {tool["name"] for tool in server.all_tool_definitions()}
+def test_direct_rag_tools_list_matches_stable_manifest(tmp_path: Path) -> None:
+    output = io.StringIO()
+    server = DirectRagServer(
+        tmp_path / "missing.sqlite",
+        workspace=tmp_path,
+        output_stream=output,
+    )
+    server.handle_message({"jsonrpc": "2.0", "id": 7, "method": "tools/list"})
+    response = json.loads(output.getvalue())
+    tools = response["result"]["tools"]
+    names = {tool["name"] for tool in tools}
     manifest = json.loads((ROOT / "config" / "stable_tool_manifest.json").read_text(encoding="utf-8-sig"))
     assert names == set(manifest["ragEssential"])
-    assert "unreal_task_start" not in names
+    assert not any(name.startswith("unreal_task_") for name in names)
+    serialized = json.dumps(tools, ensure_ascii=False)
+    for legacy_control in (
+        "taskAuthorization",
+        "requiredNextTool",
+        "nextAction",
+        "gatePassed",
+    ):
+        assert legacy_control not in serialized

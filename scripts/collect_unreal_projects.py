@@ -40,16 +40,28 @@ TEXT_EXTENSIONS = {
 }
 ASSET_EXTENSIONS = {".uasset", ".umap"}
 SKIP_DIRS = {
+    ".agent",
+    ".cline",
+    ".codex",
+    ".continue",
     ".git",
+    ".github",
+    ".idea",
+    ".openai",
     ".vs",
     "Binaries",
+    "Build",
+    "coverage",
     "DerivedDataCache",
+    "dist",
     "golden",
     "Intermediate",
+    "node_modules",
     "Saved",
     "text_snapshot",
     "unreal_projects",
 }
+_SKIP_DIRS_FOLDED = {name.casefold() for name in SKIP_DIRS}
 
 
 def stable_id(value: str) -> str:
@@ -69,7 +81,12 @@ def read_text(path: Path) -> str | None:
 
 
 def has_skip_part(path: Path) -> bool:
-    return any(part in SKIP_DIRS or part.lower().startswith("unreal") and part[6:].isdigit() for part in path.parts)
+    return any(
+        part.startswith(".")
+        or part.casefold() in _SKIP_DIRS_FOLDED
+        or (part.lower().startswith("unreal") and part[6:].isdigit())
+        for part in path.parts
+    )
 
 
 def find_projects(root: Path) -> list[Path]:
@@ -124,6 +141,7 @@ def collect_project(
     copy_root: Path | None,
 ) -> tuple[int, int]:
     project_root = project_file.parent.resolve()
+    descriptor = project_file.resolve()
     project_name = project_file.stem
     text_count = 0
     asset_count = 0
@@ -146,7 +164,7 @@ def collect_project(
 
             write_text_snapshot(copy_root, project_name, relative_path, path)
             item = {
-                "id": stable_id(f"{project_root}:{relative}"),
+                "id": stable_id(f"{descriptor}:{relative}"),
                 "source": "unreal_project_text",
                 "path": str(path),
                 "title": f"{project_name}/{relative}",
@@ -154,6 +172,7 @@ def collect_project(
                 "metadata": {
                     "project": project_name,
                     "project_root": str(project_root),
+                    "project_file": str(descriptor),
                     "relative_path": relative,
                     "extension": suffix,
                 },
@@ -173,7 +192,7 @@ def collect_project(
                 ]
             )
             item = {
-                "id": stable_id(f"{project_root}:{relative}"),
+                "id": stable_id(f"{descriptor}:{relative}"),
                 "source": "unreal_project_asset_path",
                 "path": str(path),
                 "title": f"{project_name}/{relative}",
@@ -181,6 +200,7 @@ def collect_project(
                 "metadata": {
                     "project": project_name,
                     "project_root": str(project_root),
+                    "project_file": str(descriptor),
                     "relative_path": relative,
                     "extension": suffix,
                     "path_only": True,

@@ -4,43 +4,30 @@
    - `tools/ue_export/export_blueprint_metadata.py`
    - `tools/ue_export/export_material_metadata.py`
    - `tools/ue_export/export_animation_metadata.py`
-2. Convert to RAG JSONL:
+2. Ingest the exports and rebuild the index without starting Editor:
 
 ```powershell
-.\rag.ps1 collect-blueprint-metadata -Question C:\export\blueprints.jsonl -ProjectName MyGame
-.\rag.ps1 collect-material-metadata -Question C:\export\materials.jsonl -ProjectName MyGame
-.\rag.ps1 collect-animation-metadata -Question C:\export\animation.jsonl -ProjectName MyGame
+.\rag.ps1 refresh -RefreshScope editor_metadata
 ```
 
-3. Rebuild the index:
+To ask the launcher to produce fresh exports too, authorize that external
+Editor process explicitly:
 
 ```powershell
-.\rag.ps1 build-incremental
-```
-
-Or use the unified collector:
-
-```powershell
-.\rag.ps1 collect-editor-metadata -ProjectName MyGame -Question "C:\export\bp.jsonl:blueprint"
-.\rag.ps1 collect-editor-metadata -ProjectName MyGame -Question "C:\export\materials.jsonl:material"
-.\rag.ps1 collect-editor-metadata -ProjectName MyGame -Question "C:\export\animation.jsonl:animation"
-.\rag.ps1 build-incremental
+.\rag.ps1 refresh -RefreshScope editor_metadata -AllowEditorLaunch
 ```
 
 See [Editor_Metadata_Export.md](Editor_Metadata_Export.md) for asset registry and project settings exports.
-See [Asset_Automation_Roadmap.md](Asset_Automation_Roadmap.md) for the staged path from metadata to Editor-side `.uasset` mutation.
+Editor-side `.uasset` mutation is outside the portable Direct metadata contract.
 
 ## Blueprint graph coverage
 
 Blueprint export records best-effort graph, node, and pin summaries. On UE 5.8, full node/pin coverage requires the `LmStudioGraphExporter` C++ editor plugin because Python cannot read protected `EdGraph.Nodes` directly.
 
-Install it once per project:
-
-```powershell
-.\rag.ps1 install-editor-graph-plugin
-```
-
-The command copies the plugin into the active project's `Plugins` folder, enables it in the `.uproject`, and runs UnrealBuildTool when the module needs compiling. The interactive installer asks for Y/N confirmation; choosing `N` leaves the project untouched and uses the Python fallback.
+Install it once per project through the integrated installer's explicit plugin
+prompt, or copy `tools/ue_plugins/LmStudioGraphExporter` into the project's
+`Plugins` folder and enable it deliberately. Declining leaves the project
+untouched and uses the Python fallback.
 
 With the plugin installed, Blueprint export records:
 
@@ -76,26 +63,21 @@ Material instances inherit the parent material graph when they have no local exp
 Project text collection already includes `.usf` and `.ush` files. Use:
 
 ```powershell
-.\rag.ps1 collect-projects -CopyProjectText
+.\rag.ps1 collect-projects -Root C:\Projects\MyGame
 .\rag.ps1 build-incremental
-.\rag.ps1 query -Mode shader -Question "GlobalShader usf ush RenderCore RHI plugin setup"
 ```
+
+Then ask the chat model to call `unreal_rag_search` with a shader-focused query.
 
 For material screenshots, first run the material metadata export when possible, then ask the model to compare the visible screenshot facts with `unreal_material_metadata`:
 
-```powershell
-.\rag.ps1 collect-material-metadata -Question C:\export\materials.jsonl -ProjectName MyGame
-.\rag.ps1 build-incremental
-.\rag.ps1 query -Mode material_analysis -Question "MI_Player material parameters textures static switch"
-```
+Run the Editor-metadata refresh above, then ask the chat model to search for the
+material asset and compare only observed screenshot and indexed metadata facts.
 
 For Blueprint function/variable call analysis:
 
-```powershell
-.\rag.ps1 collect-blueprint-metadata -Question C:\export\blueprints.jsonl -ProjectName MyGame
-.\rag.ps1 build-incremental
-.\rag.ps1 query -Mode blueprint_analysis -Question "BP_Player variables function calls EventGraph pins"
-```
+Run the Editor-metadata refresh above, then use `unreal_rag_search` for the
+Blueprint name, variables, calls, nodes, and pins.
 
 ## Animation and Sequencer coverage
 

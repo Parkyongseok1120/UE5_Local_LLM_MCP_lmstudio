@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from direct_rag_project_selectors import exact_project_descriptor
 from workspace_paths import load_shared_config, resolve_index_dir
 from parse_build_cs import parse_build_cs_file
 
@@ -93,33 +94,29 @@ def architecture_category(name: str, base_class: str, macro: str) -> str:
     return "Class"
 
 
-def resolve_project_root(project_arg: str | None) -> Path:
-    if project_arg:
-        candidate = Path(project_arg).resolve()
-        if candidate.is_file() and candidate.suffix.lower() == ".uproject":
-            return candidate.parent
-        if candidate.is_dir():
-            uprojects = list(candidate.glob("*.uproject"))
-            if uprojects:
-                return uprojects[0].parent
-            return candidate
-        raise SystemExit(f"Invalid project path: {project_arg}")
-
-    config = load_shared_config()
-    active = str(config.get("activeProject") or "").strip()
-    if not active:
-        raise SystemExit("No activeProject. Run pick-project or pass --project.")
-    active_path = Path(active).resolve()
-    if active_path.suffix.lower() == ".uproject":
-        return active_path.parent
-    return active_path
+def resolve_project_descriptor(project_arg: str | None) -> Path:
+    selected = str(project_arg or "").strip()
+    if not selected:
+        selected = str(load_shared_config().get("activeProject") or "").strip()
+    if not selected:
+        raise SystemExit("No activeProject. Run rag.ps1 set-project or pass --project.")
+    descriptor = exact_project_descriptor(selected)
+    if descriptor is not None:
+        return descriptor
+    candidate = Path(selected).expanduser()
+    if candidate.is_dir() and len(list(candidate.glob("*.uproject"))) > 1:
+        raise SystemExit(
+            f"Ambiguous project directory; pass one exact .uproject path: {candidate}"
+        )
+    raise SystemExit(f"Project selector does not identify one existing .uproject: {selected}")
 
 
-def scan_architecture(project_root: Path) -> dict[str, Any]:
-    project_name = project_root.name
-    uproject = next(project_root.glob("*.uproject"), None)
-    if uproject:
-        project_name = uproject.stem
+def scan_architecture(project_file: Path) -> dict[str, Any]:
+    descriptor = project_file.expanduser().resolve()
+    if not descriptor.is_file() or descriptor.suffix.casefold() != ".uproject":
+        raise ValueError(f"Architecture scan requires one exact .uproject: {project_file}")
+    project_root = descriptor.parent
+    project_name = descriptor.stem
 
     classes: list[dict[str, Any]] = []
     subsystems: list[dict[str, Any]] = []
@@ -136,8 +133,8 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
 
     from plugin_project_context import build_plugin_project_context, iter_scan_root_files, resolve_scan_roots
 
-    plugin_ctx = build_plugin_project_context(project_root)
-    scan_roots = resolve_scan_roots(project_root)
+    plugin_ctx = build_plugin_project_context(descriptor)
+    scan_roots = resolve_scan_roots(descriptor)
     source_files: list[Path] = []
     for scan_root in scan_roots:
         if not scan_root.is_dir():
@@ -149,6 +146,7 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
         return {
             "project": project_name,
             "projectRoot": str(project_root),
+            "projectFile": str(descriptor),
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "classes": classes,
             "types": classes,
@@ -260,6 +258,7 @@ def scan_architecture(project_root: Path) -> dict[str, Any]:
     return {
         "project": project_name,
         "projectRoot": str(project_root),
+        "projectFile": str(descriptor),
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "classes": classes,
         "types": classes,
@@ -333,16 +332,21 @@ def make_summary_text(arch: dict[str, Any], max_chars: int = 2000) -> str:
 def make_rag_doc(arch: dict[str, Any], summary: str) -> dict[str, Any]:
     project = str(arch.get("project") or "unknown")
     project_root = str(arch.get("projectRoot") or "")
+    project_file = str(
+        arch.get("projectFile") or (Path(project_root) / f"{project}.uproject")
+    )
+    architecture_name = f"{project}.project_architecture.json"
     return {
-        "id": stable_id(f"project_architecture:{project_root}"),
+        "id": stable_id(f"project_architecture:{project_file}"),
         "source": "project_architecture",
-        "path": str(Path(project_root) / "project_architecture.json"),
+        "path": str(Path(project_root) / architecture_name),
         "title": f"{project} architecture brief",
         "text": summary,
         "metadata": {
             "project": project,
             "project_root": project_root,
-            "relative_path": "project_architecture.json",
+            "project_file": project_file,
+            "relative_path": architecture_name,
             "extension": ".json",
             "class_count": arch.get("summary", {}).get("classCount", 0),
             "subsystem_count": arch.get("summary", {}).get("subsystemCount", 0),
@@ -376,8 +380,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    project_root = resolve_project_root(args.project)
-    arch = scan_architecture(project_root)
+    project = resolve_project_descriptor(args.project)
+    arch = scan_architecture(project)
     out_dir = Path(args.out_dir) if args.out_dir else resolve_index_dir()
     jsonl = Path(args.jsonl) if args.jsonl else None
     write_outputs(arch, out_dir, jsonl)

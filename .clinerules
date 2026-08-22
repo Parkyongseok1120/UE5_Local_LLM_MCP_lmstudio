@@ -1,34 +1,47 @@
-# Unreal Agent Rules (Cline + Rider) — stable install
+# Unreal Direct MCP Rules for Cline + Rider
 
-Primary IDE: **JetBrains Rider**. AI agent: **Cline** with MCP `unreal-rag` + `unreal-agent` (Essential tools only).
+The selected Cline model owns interpretation, tool choice, call order, retry
+decisions, stopping, and the final answer. `unreal-rag` and `unreal-agent` are
+bounded capability providers; tool results are facts and optional advice, not a
+server-owned workflow.
 
-## Tool roles
+## Capability roles
 
-- `unreal-rag` — search, symbols, health, `unreal_agent_session`, project switch via `unreal_set_active_project`
-- `unreal-agent` — read/write files, `static_validate_project`, `build_unreal_project`, `read_unreal_logs`
-- Do not invent Unreal APIs. No evidence → say verification is required.
+- `unreal-rag`: exact active-project selection, indexed search, symbol lookup,
+  health, rebuild status, and explicit refresh.
+- `unreal-agent`: project/workspace inspection, bounded source reads, CAS-safe
+  mutations, advisory static validation, builds, Automation tests, and logs.
+- Rider: interactive navigation, builds, debugging, and developer inspection.
 
-## Session bootstrap
+Choose only the capabilities useful for the current request. There is no
+mandatory bootstrap, validation-before-build sequence, or final-response gate.
+Resolve the exact project whenever ambiguity or cross-project work is possible,
+and do not hard-code an Unreal version or installation.
 
-1. `unreal_get_active_project` or agent `get_active_project`
-2. Set project via RAG `unreal_set_active_project` (canonical path)
-3. `unreal_rag_health` and `unreal_project_status` once per session
+## Source and mutation safety
 
-## Implementation loop
+- Treat current project files and build/log output as the source of truth; do
+  not invent Unreal APIs.
+- Read an existing file before changing it. Use the returned SHA-256 with an
+  exact, uniquely matching patch; on a conflict, re-read instead of overwriting.
+- `write_file` is for a new file. Multi-file edits are allowed only through the
+  bounded atomic bundle capability and each existing-file patch still needs its
+  current hash.
+- Keep project-root containment, path normalization, size/output limits, atomic
+  writes, per-path locks, recoverable-delete approval, and command allowlists.
+- Static validation is advisory. A requested build may run immediately when
+  build execution is enabled, and its real UBT/UHT/compiler output is the
+  authoritative diagnostic.
+- Avoid introducing C++ namespaces unless the target Unreal project requires
+  them.
 
-1. Search — `unreal_rag_search` or `unreal_agent_session`
-2. Read — `read_file` / `read_file_range`
-3. Patch — `replace_in_file` with `expectedOccurrences=1`
-4. Validate — `static_validate_project` when validate-on-write timed out
-5. Build — Rider UBT preferred; agent `build_unreal_project` when agent mode enabled
-6. Fix — compile log → RAG `compile_fix` / `module_fix` / `reflection_fix`
+## Results and repetition
 
-## Safety
-
-- Single-file edits only (`apply_edit_bundle` disabled in stable installs)
-- Never retry the same `unreal_rag_search` when `repeatDetected=true`
-- Prefer Rider Build over `run_command`
-
-## Finish criteria
-
-Build passed (log checked) or exact blocker with next tool step. Never claim success without evidence.
+- Use the current result to decide whether another call is useful. Suggestions
+  never force a next tool.
+- Echo an opaque `repeatReceipt` only when this same conversation retained the
+  original successful content and deliberately wants a concise unchanged-result
+  acknowledgement. Never invent or transfer receipts between conversations.
+- Report verified outcomes and actual log paths. If verification was not run or
+  a safety boundary blocked the action, state that limitation directly; do not
+  manufacture a success or a compulsory next step.

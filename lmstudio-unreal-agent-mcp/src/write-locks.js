@@ -6,8 +6,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
-const { ensureStateRootLayout, resolveAgentStateRoot } = require("./state-root");
-const { resolvePythonExe } = require("./validate-write");
+const { resolvePythonExe } = require("./python-executable");
+const { resolveAgentStateRoot } = require("./runtime-state-root");
 
 const pendingPaths = new Map();
 const OWNER = `${process.pid}:${crypto.randomUUID()}`;
@@ -20,7 +20,7 @@ function canonicalLockKey(absPath, hostPlatform = process.platform) {
 }
 
 function lockFilePath(absPath, stateRoot = resolveAgentStateRoot()) {
-  ensureStateRootLayout(stateRoot);
+  fs.mkdirSync(path.join(path.resolve(stateRoot), "locks"), { recursive: true });
   const digest = crypto.createHash("sha256").update(canonicalLockKey(absPath)).digest("hex");
   return path.join(stateRoot, "locks", `${digest}.lock`);
 }

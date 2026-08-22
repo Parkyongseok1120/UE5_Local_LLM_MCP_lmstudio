@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Check the complete prospective source text for shared known-bad patterns.
+"""Report shared known-bad patterns in complete prospective source text.
 
-The MCP write server calls this with source text on stdin immediately before a
-single-file mutation, or immediately after an atomic bundle commit while the
-transaction can still roll back. Keeping this adapter tiny lets writes consult
-the same denylist as the code-sketch gate without duplicating regexes in Node.
+The Direct MCP uses this analyzer only for advisory evidence: its findings,
+absence, or execution failure never authorize or block a mutation. Hard path,
+CAS, atomicity, lock, size, and deletion-approval gates remain independent.
+Keeping the adapter tiny avoids duplicating the Python denylist in Node.
 """
 
 from __future__ import annotations

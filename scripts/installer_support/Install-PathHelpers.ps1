@@ -257,7 +257,6 @@ function Get-RagDataPaths {
         DataDir         = $dir
         IndexPath       = $indexPath
         EngineVersion   = if ($cfg -and $cfg.engineVersion) { [string]$cfg.engineVersion } else { "" }
-        ModuleGraphPath = Join-Path $dir "raw_module_graph.jsonl"
     }
 }
 
@@ -555,33 +554,12 @@ function Build-ClineMcpConfig {
         [switch]$EnableAgentMode
     )
 
-    $ragServer = Join-Path $RagRoot "scripts\unreal_rag_mcp.py"
-    $agentServer = Join-Path $AgentRoot "src\server.js"
+    $ragServer = Join-Path $RagRoot "scripts\unreal_rag_direct.py"
+    $agentServer = Join-Path $AgentRoot "src\direct-server.js"
     $allowWrite = if ($EnableAgentMode) { "1" } else { "0" }
     $allowCommands = if ($EnableAgentMode) { "1" } else { "0" }
     $allowBuild = if ($EnableAgentMode) { "1" } else { "0" }
-    $validateOnWrite = if ($EnableAgentMode) { "1" } else { "0" }
-
-    $McpBridgePairId = $null
-    $bridgePath = Join-Path $AgentStateRoot "mcp-bridge-pair.id"
-    $legacyBridgePath = Join-Path $AgentStateRoot "mcp-bridge-connection.id"
-    if (Test-Path -LiteralPath $bridgePath) {
-        $McpBridgePairId = (Get-Content -LiteralPath $bridgePath -Raw -ErrorAction SilentlyContinue).Trim()
-    }
-    elseif (Test-Path -LiteralPath $legacyBridgePath) {
-        $McpBridgePairId = (Get-Content -LiteralPath $legacyBridgePath -Raw -ErrorAction SilentlyContinue).Trim()
-    }
-    if (-not $McpBridgePairId -or $McpBridgePairId.Length -lt 8) {
-        $McpBridgePairId = [guid]::NewGuid().ToString("N")
-        $bridgeDir = Split-Path -Parent $bridgePath
-        if ($bridgeDir -and -not (Test-Path -LiteralPath $bridgeDir)) {
-            New-Item -ItemType Directory -Force -Path $bridgeDir | Out-Null
-        }
-        Set-Content -LiteralPath $bridgePath -Value $McpBridgePairId -Encoding UTF8
-    }
-    elseif (-not (Test-Path -LiteralPath $bridgePath)) {
-        Set-Content -LiteralPath $bridgePath -Value $McpBridgePairId -Encoding UTF8
-    }
+    $directRagStateRoot = Join-Path (Split-Path -Parent $AgentStateRoot) "unreal-rag-direct"
 
     $workspaceRoot = $DocumentsRoot
     if ($SharedConfigPath -and (Test-Path -LiteralPath $SharedConfigPath)) {
@@ -602,13 +580,11 @@ function Build-ClineMcpConfig {
                 timeout = 420000
                 env     = [ordered]@{
                     SHARED_UNREAL_CONFIG   = $SharedConfigPath
-                    AGENT_STATE_ROOT       = $AgentStateRoot
-                    MCP_BRIDGE_PAIR_ID     = $McpBridgePairId
+                    DIRECT_RAG_STATE_ROOT  = $directRagStateRoot
                     UNREAL58_ROOT          = $RagRoot
                     UNREAL58_PORTABLE_ROOT = $PortableRoot
                     PYTHONUTF8             = "1"
                     PYTHONIOENCODING       = "utf-8"
-                    MCP_ESSENTIAL_TOOLS    = "1"
                 }
             }
             "unreal-agent" = [ordered]@{
@@ -620,30 +596,70 @@ function Build-ClineMcpConfig {
                     AGENT_MCP_CONFIG            = $AgentConfigPath
                     SHARED_UNREAL_CONFIG        = $SharedConfigPath
                     AGENT_STATE_ROOT            = $AgentStateRoot
-                    MCP_BRIDGE_PAIR_ID          = $McpBridgePairId
                     PYTHON_EXE                  = $PythonExe
                     UNREAL58_ROOT               = $RagRoot
                     UNREAL58_PORTABLE_ROOT      = $PortableRoot
                     ALLOW_WRITE                 = $allowWrite
                     ALLOW_COMMANDS              = $allowCommands
                     ALLOW_UNREAL_BUILD          = $allowBuild
-                    VALIDATE_ON_WRITE           = $validateOnWrite
-                    VALIDATE_ON_WRITE_TIMEOUT_MS = "45000"
                     MAX_READ_BYTES              = "524288"
                     MAX_OUTPUT_BYTES            = "262144"
                     COMMAND_TIMEOUT_MS          = "600000"
-                    MCP_ESSENTIAL_TOOLS         = "1"
-                    MCP_REQUIRE_PLAN_AUTH        = "1"
                 }
             }
         }
     }
 }
 
+function Test-LegacyPythonControlMcpEntry {
+    param(
+        [string]$Name,
+        $Entry
+    )
+
+    if ($null -eq $Entry) { return $false }
+    $normalizedName = ([string]$Name).Trim().ToLowerInvariant()
+    if ($normalizedName -eq "unreal-rag-strict") { return $true }
+    $entryArgs = @($Entry.args)
+    foreach ($value in $entryArgs) {
+        $basename = (([string]$value) -replace '\\', '/').Split('/')[-1].ToLowerInvariant()
+        if ($basename -eq "unreal_rag_mcp.py") { return $true }
+    }
+
+    $entryEnv = $Entry.env
+    if ($null -eq $entryEnv) { return $false }
+    $commandName = (([string]$Entry.command) -replace '\\', '/').Split('/')[-1].ToLowerInvariant()
+    $pythonEntry = $commandName -in @("py", "py.exe") -or $commandName.StartsWith("python")
+    if (-not $pythonEntry) {
+        $pythonEntry = [bool](@($entryArgs | Where-Object { ([string]$_).ToLowerInvariant().EndsWith(".py") }).Count)
+    }
+    if (-not $pythonEntry) { return $false }
+
+    $envNames = @($entryEnv.PSObject.Properties.Name)
+    $component = ([string]$entryEnv.CONTROL_RUNTIME_COMPONENT).Trim().ToLowerInvariant()
+    if ($component -eq "rag" -and (
+            $envNames -contains "CONTROL_RUNTIME_MANIFEST" -or
+            $envNames -contains "CONTROL_RUNTIME_REQUIRED"
+        )) {
+        return $true
+    }
+    $strict = ([string]$entryEnv.MCP_EXECUTION_MODE).Trim().ToLowerInvariant() -eq "strict"
+    $taskKeys = @(
+        "MCP_ESSENTIAL_TOOLS",
+        "MCP_EXTENDED_TOOLS",
+        "ALLOW_CONTROL_PLANE_TOOLS",
+        "MCP_REQUIRE_PLAN_AUTH",
+        "CONTROL_RUNTIME_COMPONENT"
+    )
+    $hasTaskKey = [bool](@($taskKeys | Where-Object { $envNames -contains $_ }).Count)
+    return $strict -and ($normalizedName.StartsWith("unreal-rag") -or $hasTaskKey)
+}
+
 function Merge-ClineMcpSettings {
     param(
         $Existing,
-        $Desired
+        $Desired,
+        [ref]$RemovedLegacyServers
     )
 
     if ($null -eq $Existing) {
@@ -658,9 +674,14 @@ function Merge-ClineMcpSettings {
     }
 
     $servers = [ordered]@{}
+    $removed = @()
     if ($Existing.mcpServers) {
         foreach ($property in $Existing.mcpServers.PSObject.Properties) {
             if ($property.Name -notin @("unreal-rag", "unreal-agent")) {
+                if (Test-LegacyPythonControlMcpEntry -Name $property.Name -Entry $property.Value) {
+                    $removed += $property.Name
+                    continue
+                }
                 $servers[$property.Name] = $property.Value
             }
         }
@@ -671,6 +692,9 @@ function Merge-ClineMcpSettings {
         }
     }
     $merged["mcpServers"] = $servers
+    if ($null -ne $RemovedLegacyServers) {
+        $RemovedLegacyServers.Value = @($removed)
+    }
     return $merged
 }
 
@@ -847,10 +871,20 @@ function Sync-ClineMcpSettings {
     if ($WriteCli) { $writes += $paths.Cli }
 
     $results = @()
+    $safetyNormalizations = @()
     foreach ($targetPath in $writes) {
         $existing = Read-JsonObject $targetPath
-        $merged = Merge-ClineMcpSettings -Existing $existing -Desired $desired
-        $changedKeys = @("unreal-rag", "unreal-agent")
+        $removedLegacy = [ref]@()
+        $merged = Merge-ClineMcpSettings `
+            -Existing $existing `
+            -Desired $desired `
+            -RemovedLegacyServers $removedLegacy
+        $safetyNormalizations += @(
+            $removedLegacy.Value | ForEach-Object {
+                "mcpServers.${_}:removed_legacy_python_control"
+            }
+        )
+        $changedKeys = @("unreal-rag", "unreal-agent") + @($removedLegacy.Value)
         if ($WhatIf) {
             Write-Host "[WhatIf] Would update $targetPath (keys: $($changedKeys -join ', '))" -ForegroundColor Cyan
         }
@@ -862,6 +896,7 @@ function Sync-ClineMcpSettings {
         CliPath    = if ($WriteCli) { $paths.Cli } else { $null }
         Config     = $desired
         Writes     = $results
+        SafetyNormalizations = @($safetyNormalizations)
         WhatIf     = [bool]$WhatIf
     }
 }

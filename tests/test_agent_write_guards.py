@@ -210,9 +210,11 @@ const fsp = require('fs').promises;
     assert existing.read_text(encoding="utf-8") == "original content"
 
 
-def test_validate_after_write_fail_open_on_timeout_fail_closed_on_findings(tmp_path: Path) -> None:
-    # Mock UNREAL58_ROOT with a slow validator and a failing validator to check
-    # both the time-budget fail-open path and the real-findings fail-closed path.
+def test_direct_static_validation_reports_timeout_and_findings_as_advisory_evidence(
+    tmp_path: Path,
+) -> None:
+    # Direct validation reports bounded evidence only. It does not own a write
+    # rollback or build-readiness state transition.
     slow_root = tmp_path / "slow_root"
     (slow_root / "scripts").mkdir(parents=True)
     (slow_root / "scripts" / "validate_project_sources.py").write_text(
@@ -228,41 +230,33 @@ def test_validate_after_write_fail_open_on_timeout_fail_closed_on_findings(tmp_p
         encoding="utf-8",
     )
     project = tmp_path / "Demo"
-    source_file = project / "Source" / "Demo" / "Private" / "Thing.cpp"
-    source_file.parent.mkdir(parents=True)
-    source_file.write_text("// x", encoding="utf-8")
-    (project / "Demo.uproject").write_text("{}", encoding="utf-8")
+    project.mkdir()
 
     script = f"""
-process.env.VALIDATE_ON_WRITE = '1';
-process.env.VALIDATE_ON_WRITE_TIMEOUT_MS = '2000';
+process.env.STATIC_VALIDATION_TIMEOUT_MS = '25';
 process.env.UNREAL58_ROOT = {json.dumps(str(slow_root))};
-const validateWrite = require('./src/validate-write.js');
+const validation = require('./src/direct-static-validation.js');
 (async () => {{
-  const absPath = {json.dumps(str(source_file))};
-  const timedOut = await validateWrite.validateAfterWrite(absPath, () => null);
-
-  // Point the module at the failing validator for the fail-closed check.
-  delete require.cache[require.resolve('./src/validate-write.js')];
+  const projectRoot = {json.dumps(str(project))};
+  const timedOut = await validation.runStaticValidation(projectRoot, {{ env: process.env, timeoutMs: 25 }});
   process.env.UNREAL58_ROOT = {json.dumps(str(failing_root))};
-  const validateWrite2 = require('./src/validate-write.js');
-  const failed = await validateWrite2.validateAfterWrite(absPath, () => null);
+  const failed = await validation.runStaticValidation(projectRoot, {{ env: process.env, timeoutMs: 5000 }});
 
   console.log(JSON.stringify({{
     timedOutOk: timedOut.ok,
     timedOutSkipped: timedOut.skipped,
     timedOutFlag: timedOut.timedOut,
-    note: timedOut.note || '',
+    timedOutCodes: (timedOut.findings || []).map((f) => f.code),
     failedOk: failed.ok,
     failedCodes: (failed.findings || []).map((f) => f.code),
   }}));
 }})();
 """
     payload = _run_node(script)
-    assert payload["timedOutOk"] is True
-    assert payload["timedOutSkipped"] is True
+    assert payload["timedOutOk"] is False
+    assert payload["timedOutSkipped"] is False
     assert payload["timedOutFlag"] is True
-    assert "validation skipped (time budget)" in payload["note"]
+    assert "VALIDATOR_TIMEOUT" in payload["timedOutCodes"]
     assert payload["failedOk"] is False
     assert "MOCK_FINDING" in payload["failedCodes"]
 
@@ -359,134 +353,21 @@ console.log(JSON.stringify({{ first: first.ok, reclaimed: reclaimed.ok }}));
     assert payload == {"first": True, "reclaimed": False}
 
 
-def test_resolve_validate_on_write_timeout_ms_default_and_env() -> None:
+def test_resolve_direct_static_validation_timeout_ms_default_and_env() -> None:
     script = """
-const validateWrite = require('./src/validate-write.js');
-delete process.env.VALIDATE_ON_WRITE_TIMEOUT_MS;
-const defaultMs = validateWrite.resolveValidateOnWriteTimeoutMs();
-process.env.VALIDATE_ON_WRITE_TIMEOUT_MS = '12000';
-const customMs = validateWrite.resolveValidateOnWriteTimeoutMs();
-process.env.VALIDATE_ON_WRITE_TIMEOUT_MS = '-5';
-const invalidMs = validateWrite.resolveValidateOnWriteTimeoutMs();
+const validation = require('./src/direct-static-validation.js');
+delete process.env.STATIC_VALIDATION_TIMEOUT_MS;
+const defaultMs = validation.resolveStaticValidationTimeoutMs();
+process.env.STATIC_VALIDATION_TIMEOUT_MS = '12000';
+const customMs = validation.resolveStaticValidationTimeoutMs();
+process.env.STATIC_VALIDATION_TIMEOUT_MS = '-5';
+const invalidMs = validation.resolveStaticValidationTimeoutMs();
 console.log(JSON.stringify({ defaultMs, customMs, invalidMs }));
 """
     payload = _run_node(script)
-    assert payload["defaultMs"] == 45000
+    assert payload["defaultMs"] == 120000
     assert payload["customMs"] == 12000
-    assert payload["invalidMs"] == 45000
-
-
-def test_mutation_history_rejects_consecutive_identical_call() -> None:
-    script = """
-const history = require('./src/mutation-history.js');
-history.clearMutationHistory();
-const first = history.checkAndRecordMutation('replace_in_file', '/tmp/Foo.cpp', 'old\\u0000new\\u0000');
-const second = history.checkAndRecordMutation('replace_in_file', '/tmp/Foo.cpp', 'old\\u0000new\\u0000');
-const message = history.duplicateMutationMessage('replace_in_file', 'Source/Foo.cpp', second);
-console.log(JSON.stringify({
-  firstDuplicate: first.duplicate,
-  secondDuplicate: second.duplicate,
-  secondConsecutive: second.consecutive,
-  message,
-}));
-"""
-    payload = _run_node(script)
-    assert payload["firstDuplicate"] is False
-    assert payload["secondDuplicate"] is True
-    assert payload["secondConsecutive"] is True
-    assert "read_file" in payload["message"]
-    assert "Do NOT repeat" in payload["message"]
-    assert "summarize" in payload["message"]
-
-
-def test_mutation_history_allows_one_interleaved_retry_then_rejects() -> None:
-    # write Foo.cpp -> fix Foo.h -> retry identical Foo.cpp is legitimate once;
-    # the third identical attempt is a loop.
-    script = """
-const history = require('./src/mutation-history.js');
-history.clearMutationHistory();
-const first = history.checkAndRecordMutation('write_file', '/tmp/Foo.cpp', 'content-a');
-const other = history.checkAndRecordMutation('write_file', '/tmp/Foo.h', 'header');
-const retry = history.checkAndRecordMutation('write_file', '/tmp/Foo.cpp', 'content-a');
-const another = history.checkAndRecordMutation('write_file', '/tmp/Bar.h', 'bar');
-const third = history.checkAndRecordMutation('write_file', '/tmp/Foo.cpp', 'content-a');
-console.log(JSON.stringify({
-  first: first.duplicate,
-  other: other.duplicate,
-  retry: retry.duplicate,
-  third: third.duplicate,
-  thirdAttempts: third.attempts,
-}));
-"""
-    payload = _run_node(script)
-    assert payload["first"] is False
-    assert payload["other"] is False
-    assert payload["retry"] is False
-    assert payload["third"] is True
-    assert payload["thirdAttempts"] == 3
-
-
-def test_mutation_history_ttl_and_cap_eviction() -> None:
-    script = """
-const history = require('./src/mutation-history.js');
-history.clearMutationHistory();
-// TTL: identical call after expiry is treated as fresh.
-const t0 = 1000000;
-history.checkAndRecordMutation('write_file', '/tmp/A.cpp', 'x', { now: t0, ttlMs: 5000 });
-const expired = history.checkAndRecordMutation('write_file', '/tmp/A.cpp', 'x', { now: t0 + 6000, ttlMs: 5000 });
-// Cap: oldest entries evicted beyond maxEntries.
-history.clearMutationHistory();
-for (let i = 0; i < 5; i++) {
-  history.checkAndRecordMutation('write_file', '/tmp/file' + i + '.cpp', 'c' + i, { now: t0 + i, maxEntries: 3 });
-}
-const size = history.mutationHistorySize();
-console.log(JSON.stringify({ expiredDuplicate: expired.duplicate, size }));
-"""
-    payload = _run_node(script)
-    assert payload["expiredDuplicate"] is False
-    assert payload["size"] <= 4  # pruned to maxEntries before each insert
-
-
-def test_mutation_history_distinguishes_paths_and_payloads() -> None:
-    script = """
-const history = require('./src/mutation-history.js');
-history.clearMutationHistory();
-history.checkAndRecordMutation('replace_in_file', '/tmp/Foo.cpp', 'old\\u0000new\\u0000');
-const differentPath = history.checkAndRecordMutation('replace_in_file', '/tmp/Bar.cpp', 'old\\u0000new\\u0000');
-const differentPayload = history.checkAndRecordMutation('replace_in_file', '/tmp/Foo.cpp', 'old\\u0000other\\u0000');
-const differentTool = history.checkAndRecordMutation('write_file', '/tmp/Foo.cpp', 'old\\u0000new\\u0000');
-console.log(JSON.stringify({
-  differentPath: differentPath.duplicate,
-  differentPayload: differentPayload.duplicate,
-  differentTool: differentTool.duplicate,
-}));
-"""
-    payload = _run_node(script)
-    assert payload == {
-        "differentPath": False,
-        "differentPayload": False,
-        "differentTool": False,
-    }
-
-
-def test_resolve_validate_on_write_reads_current_allow_write_env() -> None:
-    script = """
-const validateWrite = require('./src/validate-write.js');
-delete process.env.VALIDATE_ON_WRITE;
-process.env.ALLOW_WRITE = '1';
-const defaultOn = validateWrite.resolveValidateOnWrite();
-process.env.VALIDATE_ON_WRITE = '0';
-const explicitOff = validateWrite.resolveValidateOnWrite();
-process.env.VALIDATE_ON_WRITE = 'yes';
-const explicitOn = validateWrite.resolveValidateOnWrite();
-console.log(JSON.stringify({ defaultOn, explicitOff, explicitOn }));
-"""
-    payload = _run_node(script)
-    assert payload == {
-        "defaultOn": True,
-        "explicitOff": False,
-        "explicitOn": True,
-    }
+    assert payload["invalidMs"] == 120000
 
 
 def test_run_static_validation_scopes_to_write_target(tmp_path: Path) -> None:
@@ -513,15 +394,15 @@ def test_run_static_validation_scopes_to_write_target(tmp_path: Path) -> None:
     )
     script = f"""
 process.env.UNREAL58_ROOT = {json.dumps(str(mock_root))};
-const validateWrite = require('./src/validate-write.js');
+const validation = require('./src/direct-static-validation.js');
 (async () => {{
-  const scoped = await validateWrite.runStaticValidation({json.dumps(str(tmp_path))}, {{ writeTarget: 'Source/Demo/New.h' }});
-  const taskScoped = await validateWrite.runStaticValidation({json.dumps(str(tmp_path))}, {{ scopeTargets: ['Source/Demo/New.h', 'Source/Demo/New.cpp'] }});
-  const unscoped = await validateWrite.runStaticValidation({json.dumps(str(tmp_path))});
+  const scoped = await validation.runStaticValidation({json.dumps(str(tmp_path))}, {{ writeTarget: 'Source/Demo/New.h' }});
+  const multiScoped = await validation.runStaticValidation({json.dumps(str(tmp_path))}, {{ scopeTargets: ['Source/Demo/New.h', 'Source/Demo/New.cpp'] }});
+  const unscoped = await validation.runStaticValidation({json.dumps(str(tmp_path))});
   console.log(JSON.stringify({{
     scopedOk: scoped.ok,
     scopedDeferred: scoped.deferredCount,
-    taskScopeTargets: taskScoped.scopeTargets,
+    scopeTargets: multiScoped.scopeTargets,
     unscopedOk: unscoped.ok,
   }}));
 }})();
@@ -530,7 +411,7 @@ const validateWrite = require('./src/validate-write.js');
     # With a writeTarget, the mock reports hasBlockingErrors=false -> the write stays.
     assert payload["scopedOk"] is True
     assert payload["scopedDeferred"] == 1
-    assert payload["taskScopeTargets"] == [
+    assert payload["scopeTargets"] == [
         "Source/Demo/New.h",
         "Source/Demo/New.cpp",
     ]
@@ -539,61 +420,11 @@ const validateWrite = require('./src/validate-write.js');
     assert payload["unscopedOk"] is False
 
 
-def test_format_validation_result_shows_advisory_for_scoped_pass() -> None:
-    script = """
-const validateWrite = require('./src/validate-write.js');
-const text = validateWrite.formatValidationResult({
-  ok: true,
-  projectRoot: '/tmp/Demo',
-  writeTarget: 'Source/Demo/New.h',
-  findingCount: 1,
-  deferredCount: 1,
-  preExistingCount: 0,
-  findings: [{ severity: 'error', code: 'CPP_DEFINITION_MISSING', path: 'Source/Demo/New.h', line: 1, message: 'mock' }],
-});
-console.log(JSON.stringify({ text }));
-"""
-    payload = _run_node(script)
-    text = payload["text"]
-    assert "Validation passed for this write" in text
-    assert "Advisory: 1 deferred counterpart finding(s)" in text
-
-
-def test_format_validation_result_never_hides_skipped_validation() -> None:
-    script = """
-const validateWrite = require('./src/validate-write.js');
-const text = validateWrite.formatValidationResult({
-  ok: true,
-  skipped: true,
-  infrastructureError: true,
-  projectRoot: '/tmp/Demo',
-  scanMode: 'scoped',
-  findingCount: 0,
-  findings: [],
-  advisoryFindings: [{
-    severity: 'error',
-    code: 'VALIDATOR_EXEC_FAILED',
-    path: '/tmp/Demo',
-    line: 0,
-    message: 'Python runtime was unavailable.',
-  }],
-  note: 'Python runtime was unavailable.',
-});
-console.log(JSON.stringify({ text }));
-"""
-    payload = _run_node(script)
-    text = payload["text"]
-    assert "Validation SKIPPED" in text
-    assert "Python runtime was unavailable" in text
-    assert "VALIDATOR_EXEC_FAILED" in text
-    assert "static_validate_project" in text
-
-
 def test_blocking_errors_of_falls_back_to_has_errors_when_field_missing() -> None:
     script = """
-const validateWrite = require('./src/validate-write.js');
-const legacy = validateWrite.blockingErrorsOf({ hasErrors: true });
-const modern = validateWrite.blockingErrorsOf({ hasErrors: true, hasBlockingErrors: false });
+const validation = require('./src/direct-static-validation.js');
+const legacy = validation.blockingErrorsOf({ hasErrors: true });
+const modern = validation.blockingErrorsOf({ hasErrors: true, hasBlockingErrors: false });
 console.log(JSON.stringify({ legacy, modern }));
 """
     payload = _run_node(script)

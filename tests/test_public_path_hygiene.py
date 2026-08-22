@@ -26,8 +26,6 @@ SKIP_FILES = {
     ROOT / "CONTRIBUTING.md",
     ROOT / "SECURITY.md",
     ROOT / "tests" / "test_public_path_hygiene.py",
-    ROOT / "docs" / "Live_Validation_Results_20260711.md",
-    ROOT / "docs" / "Roadmap_9B_Domain_Expansion.md",
     ROOT / "docs" / "Project_Overview.md",
 }
 

@@ -29,8 +29,9 @@ def run_headless_export_job() -> None:
     maps_path = str(job.get("mapsPath") or content_path)
     scope = str(job.get("scope") or "all").lower()
     tools_dir = str(job["toolsDir"])
+    project_file = str(job["projectFile"])
+    run_id = str(job["jobId"])
     done_path = str(job["donePath"])
-    error_path = str(job.get("errorPath") or "")
 
     run_all_path = os.path.join(tools_dir, "run_all_exports.py")
     namespace: dict = {}
@@ -39,15 +40,30 @@ def run_headless_export_job() -> None:
     exec(f"_TOOLS_DIR = {tools_dir!r}\n" + source, namespace)
 
     if scope in {"material", "materials"}:
-        manifest = namespace["export_materials_only"](export_dir, content_path=content_path, tools_dir=tools_dir)
+        manifest = namespace["export_materials_only"](
+            export_dir,
+            content_path=content_path,
+            tools_dir=tools_dir,
+            requested_project_file=project_file,
+            run_id=run_id,
+        )
     elif scope in {"blueprint", "blueprints", "bp"}:
-        manifest = namespace["export_blueprints_only"](export_dir, content_path=content_path, tools_dir=tools_dir)
+        manifest = namespace["export_blueprints_only"](
+            export_dir,
+            content_path=content_path,
+            tools_dir=tools_dir,
+            requested_project_file=project_file,
+            run_id=run_id,
+        )
     else:
         manifest = namespace["run_all_metadata_exports"](
             export_dir,
             content_path=content_path,
             maps_path=maps_path,
             tools_dir=tools_dir,
+            requested_project_file=project_file,
+            run_id=run_id,
+            scope=scope,
         )
 
     payload = {
@@ -57,6 +73,7 @@ def run_headless_export_job() -> None:
         "contentPath": content_path,
         "scope": scope,
         "manifest": manifest,
+        "runId": run_id,
     }
     _write_json(done_path, payload)
     unreal.log(f"LM Studio headless metadata export complete: {export_dir}")
@@ -75,6 +92,7 @@ if __name__ == "__main__":
                 {
                     "ok": False,
                     "mode": "headless",
+                    "runId": str(job.get("jobId") or ""),
                     "error": str(exc),
                     "traceback": traceback.format_exc(),
                 },

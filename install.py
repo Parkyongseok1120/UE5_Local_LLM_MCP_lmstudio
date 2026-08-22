@@ -28,7 +28,18 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
-from control_runtime_identity import build_runtime_manifest
+from installer.direct_rag_build import create_direct_rag_build_plan  # noqa: E402
+from installer.unreal_engine_binding import (  # noqa: E402
+    bind_installer_engine,
+    common_engine_locations as _common_engine_locations,
+    detect_engine_root as _detect_engine_root,
+    engine_root_is_valid as _engine_root_is_valid,
+    engine_version_from_root as _engine_version_from_root,
+    launcher_manifest_engine_locations as _launcher_manifest_engine_locations,
+)
+from direct_rag_refresh_lock import index_refresh_lock  # noqa: E402
+from direct_rag_refresh_transaction import recover_interrupted_refresh  # noqa: E402
+
 
 INSTALL_MANIFEST = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
 PRODUCT_VERSION = str(INSTALL_MANIFEST["productVersion"])
@@ -40,6 +51,7 @@ UNSAFE_AUTO_APPROVALS = {
     "lmstudio/js-code-sandbox:*",
     "mcp/unreal-agent:*",
     "mcp/unreal-rag:*",
+    "mcp/unreal-rag:unreal_architecture_reasoning",
 }
 PROFILE_DEFAULTS = {
     name: set(components)
@@ -88,146 +100,6 @@ def _default_cline_settings_path() -> Path:
     return Path.home() / CLINE_SETTINGS_RELATIVE_PATH
 
 
-def _engine_root_is_valid(root: Path) -> bool:
-    engine = root / "Engine"
-    if not engine.is_dir():
-        return False
-    candidates = [
-        engine / "Source",
-        engine / "Build" / "BatchFiles" / "Build.bat",
-        engine / "Build" / "BatchFiles" / "Mac" / "Build.sh",
-        engine / "Build" / "BatchFiles" / "Linux" / "Build.sh",
-        engine / "Binaries" / "DotNET" / "UnrealBuildTool" / "UnrealBuildTool.dll",
-    ]
-    return any(path.exists() for path in candidates)
-
-
-def _launcher_manifest_engine_locations() -> list[Path]:
-    manifests: list[Path] = []
-    if sys.platform == "win32":
-        program_data = os.environ.get("PROGRAMDATA", "").strip()
-        if program_data:
-            manifests.append(Path(program_data) / "Epic" / "UnrealEngineLauncher" / "LauncherInstalled.dat")
-    elif sys.platform == "darwin":
-        manifests.append(
-            Path.home()
-            / "Library"
-            / "Application Support"
-            / "Epic"
-            / "UnrealEngineLauncher"
-            / "LauncherInstalled.dat"
-        )
-    locations: list[Path] = []
-    for manifest in manifests:
-        try:
-            if manifest.stat().st_size > 2 * 1024 * 1024:
-                continue
-            payload = json.loads(manifest.read_text(encoding="utf-8-sig"))
-        except (OSError, ValueError, json.JSONDecodeError, UnicodeError):
-            continue
-        rows = payload.get("InstallationList") if isinstance(payload, dict) else None
-        for row in rows if isinstance(rows, list) else []:
-            location = str(row.get("InstallLocation") or "").strip() if isinstance(row, dict) else ""
-            if location:
-                locations.append(Path(location).expanduser())
-    return locations
-
-
-def _engine_sort_key(path: Path) -> tuple[tuple[int, ...], str]:
-    match = re.search(r"UE[_ -]?(\d+(?:\.\d+)*)", path.name, flags=re.IGNORECASE)
-    version = tuple(int(part) for part in match.group(1).split(".")) if match else ()
-    return version, path.name.casefold()
-
-
-def _common_engine_locations() -> list[Path]:
-    explicit = os.environ.get("UNREAL_ENGINE_ROOT", "").strip()
-    locations: list[Path] = [Path(explicit).expanduser()] if explicit else []
-    if sys.platform == "win32":
-        for name in ("ProgramFiles", "ProgramFiles(x86)"):
-            value = os.environ.get(name, "").strip()
-            if value:
-                locations.append(Path(value) / "Epic Games")
-    elif sys.platform == "darwin":
-        locations.extend((Path("/Users/Shared/Epic Games"), Path("/Applications/Epic Games")))
-    else:
-        locations.extend(
-            (
-                Path.home() / "UnrealEngine",
-                Path.home() / "Epic Games",
-                Path("/opt/UnrealEngine"),
-                Path("/opt/Epic Games"),
-            )
-        )
-    return locations
-
-
-def _detect_engine_root(engine_association: str = "") -> Path | None:
-    candidates: list[Path] = []
-    for location in [*_launcher_manifest_engine_locations(), *_common_engine_locations()]:
-        if _engine_root_is_valid(location):
-            candidates.append(location)
-        try:
-            if location.is_dir():
-                candidates.extend(
-                    path
-                    for path in location.glob("UE_*")
-                    if _engine_root_is_valid(path)
-                )
-        except OSError:
-            continue
-    unique: dict[str, Path] = {}
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            continue
-        unique[str(resolved).casefold()] = resolved
-    ordered = sorted(unique.values(), key=_engine_sort_key, reverse=True)
-    requested = _engine_association_folder(engine_association)
-    if engine_association.strip():
-        # Registered/source-build identifiers are opaque. Selecting a newest
-        # installed launcher engine for one would silently build/index the
-        # wrong project, so only a numeric association may be auto-discovered.
-        if not requested:
-            return None
-        exact = next((path for path in ordered if path.name.casefold() == requested.casefold()), None)
-        if exact:
-            return exact
-        return None
-    return ordered[0] if ordered else None
-
-
-def _engine_association_folder(value: str) -> str:
-    """Return an exact launcher folder name for a numeric association only."""
-
-    match = re.fullmatch(r"(?:UE_)?(\d+(?:\.\d+)+)", str(value or "").strip(), re.IGNORECASE)
-    return f"UE_{match.group(1)}" if match else ""
-
-
-def _engine_root_matches_numeric_association(root: Path, association: str) -> bool:
-    """Check a project binding without guessing from a custom source-build ID."""
-
-    requested = _engine_association_folder(association)
-    if not requested:
-        return True
-    requested_version = requested.removeprefix("UE_")
-    return (
-        _engine_version_from_root(root) == requested_version
-        or root.name.casefold() == requested.casefold()
-    )
-
-
-def _configured_engine_root_for_association(
-    shared: dict[str, Any],
-    association: str,
-) -> Path | None:
-    mappings = shared.get("engineRootsByAssociation")
-    if not association or not isinstance(mappings, dict):
-        return None
-    candidate = Path(str(mappings.get(association) or "")).expanduser()
-    return candidate.resolve() if _engine_root_is_valid(candidate) else None
-
-
 def _engine_minor_version(value: str) -> str:
     """Return a numeric Unreal major.minor version, or an empty string."""
 
@@ -235,24 +107,6 @@ def _engine_minor_version(value: str) -> str:
     if not match:
         return ""
     return f"{int(match.group(1))}.{int(match.group(2))}"
-
-
-def _engine_version_from_root(engine_root: Path | None) -> str:
-    """Read the selected engine's major.minor without changing selection policy."""
-
-    if not engine_root:
-        return ""
-    build_version = engine_root / "Engine" / "Build" / "Build.version"
-    try:
-        payload = _load_json(build_version, {})
-    except (OSError, ValueError, json.JSONDecodeError):
-        payload = {}
-    if isinstance(payload, dict):
-        major = payload.get("MajorVersion")
-        minor = payload.get("MinorVersion")
-        if isinstance(major, int) and isinstance(minor, int):
-            return f"{major}.{minor}"
-    return _engine_minor_version(engine_root.name)
 
 
 def _shared_index_selection_is_managed(
@@ -696,7 +550,7 @@ def _interactive_engine_selection(args: argparse.Namespace) -> None:
                 f"UNREAL_ENGINE_ROOT does not contain a usable Unreal Engine layout: {configured}"
             )
         args.engine_root = configured
-        args._engine_selection = "explicit"
+        args._engine_selection = "environment"
         print(f"  Using UNREAL_ENGINE_ROOT: {configured}")
         return
 
@@ -1177,7 +1031,7 @@ def _interactive_rag_indexing(args: argparse.Namespace) -> None:
     print("\nRAG indexing (independent of install profile):")
     print("  1. SKIP (default: configure the adapter only)")
     print("  2. LITE (project text + asset paths; fastest)")
-    print("  3. STANDARD (recommended: project/engine symbols + module graph)")
+    print("  3. STANDARD (recommended: project and engine API symbols)")
     print("  4. FULL (STANDARD + complete Engine\\Source text; large and slow)")
     choice = input("Select [1]: ").strip() or "1"
     selected = {"2": "lite", "3": "standard", "4": "full"}.get(choice)
@@ -1322,6 +1176,64 @@ def _merge_mcp_entry(config: dict[str, Any], name: str, entry: dict[str, Any]) -
     servers[name] = entry
 
 
+def _is_legacy_python_control_entry(name: str, entry: Any) -> bool:
+    """Identify only the removed Python RAG controller, including renamed copies."""
+
+    if not isinstance(entry, dict):
+        return False
+    normalized_name = str(name or "").strip().casefold()
+    if normalized_name == "unreal-rag-strict":
+        return True
+    args = entry.get("args")
+    arguments = list(args) if isinstance(args, list) else []
+    basenames = {
+        str(value).replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        for value in arguments
+    }
+    if "unreal_rag_mcp.py" in basenames:
+        return True
+
+    env = entry.get("env")
+    if not isinstance(env, dict):
+        return False
+    command_name = str(entry.get("command") or "").replace("\\", "/").rsplit("/", 1)[-1]
+    python_entry = command_name.casefold() in {"py", "py.exe"} or command_name.casefold().startswith(
+        "python"
+    ) or any(str(value).casefold().endswith(".py") for value in arguments)
+    if not python_entry:
+        return False
+    component = str(env.get("CONTROL_RUNTIME_COMPONENT") or "").strip().casefold()
+    if component == "rag" and any(
+        key in env for key in ("CONTROL_RUNTIME_MANIFEST", "CONTROL_RUNTIME_REQUIRED")
+    ):
+        return True
+    strict = str(env.get("MCP_EXECUTION_MODE") or "").strip().casefold() == "strict"
+    task_keys = {
+        "MCP_ESSENTIAL_TOOLS",
+        "MCP_EXTENDED_TOOLS",
+        "ALLOW_CONTROL_PLANE_TOOLS",
+        "MCP_REQUIRE_PLAN_AUTH",
+        "CONTROL_RUNTIME_COMPONENT",
+    }
+    return strict and (
+        normalized_name.startswith("unreal-rag") or any(key in env for key in task_keys)
+    )
+
+
+def _remove_legacy_python_control_entries(config: dict[str, Any]) -> list[str]:
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        return []
+    removed = [
+        str(name)
+        for name, entry in list(servers.items())
+        if _is_legacy_python_control_entry(str(name), entry)
+    ]
+    for name in removed:
+        servers.pop(name, None)
+    return removed
+
+
 def _mcp_entry_for_frontend(entry: dict[str, Any], frontend: str) -> dict[str, Any]:
     """Clone an MCP entry without leaking LM Studio-only routing policy."""
     normalized_frontend = str(frontend or "unknown").strip().lower() or "unknown"
@@ -1355,32 +1267,27 @@ def _unreal_entries(
     shared_config: Path,
     agent_config: Path,
     context_compactor_advisory: bool = False,
-    runtime_git_commit: str = "",
     engine_association: str = "",
     index_path: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     allow = "1" if args.enable_agent_mode else "0"
     state_root = args.lmstudio_home / "state" / "unreal-agent"
-    runtime_manifest = args.lmstudio_home / "config" / "control-runtime.json"
+    rag_state_root = args.lmstudio_home / "state" / "unreal-rag-direct"
     managed_index = index_path.expanduser().resolve() if index_path else None
     rag_entry = {
         "command": str(python_exe),
         "args": [
-            str(ROOT / "scripts" / "unreal_rag_mcp.py"),
+            str(ROOT / "scripts" / "unreal_rag_direct.py"),
             *(["--index", str(managed_index)] if managed_index else []),
         ],
         "timeout": 420000,
         "env": {
             "SHARED_UNREAL_CONFIG": str(shared_config),
-            "AGENT_STATE_ROOT": str(state_root),
+            "DIRECT_RAG_STATE_ROOT": str(rag_state_root),
             "UNREAL58_ROOT": str(ROOT),
             "MCP_FRONTEND": "lmstudio",
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
-            "MCP_ESSENTIAL_TOOLS": "1",
-            "CONTROL_RUNTIME_MANIFEST": str(runtime_manifest),
-            "CONTROL_RUNTIME_COMPONENT": "rag",
-            "CONTROL_RUNTIME_REQUIRED": "1",
             **(
                 {"UNREAL_RAG_INDEX_PATH": str(managed_index)}
                 if managed_index
@@ -1390,7 +1297,7 @@ def _unreal_entries(
     }
     agent_entry = {
         "command": str(node_exe),
-        "args": [str(ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js")],
+        "args": [str(ROOT / "lmstudio-unreal-agent-mcp" / "src" / "direct-server.js")],
         "timeout": 720000,
         "env": {
             "WORKSPACE_ROOT": str(args.workspace_root[0]),
@@ -1406,12 +1313,6 @@ def _unreal_entries(
             "MAX_READ_BYTES": "524288",
             "MAX_OUTPUT_BYTES": "262144",
             "COMMAND_TIMEOUT_MS": "600000",
-            "MCP_ESSENTIAL_TOOLS": "1",
-            "MCP_REQUIRE_PLAN_AUTH": "1",
-            "VALIDATE_ON_WRITE": allow,
-            "CONTROL_RUNTIME_MANIFEST": str(runtime_manifest),
-            "CONTROL_RUNTIME_COMPONENT": "agent",
-            "CONTROL_RUNTIME_REQUIRED": "1",
             **(
                 {"UNREAL_RAG_INDEX_PATH": str(managed_index)}
                 if managed_index
@@ -1419,21 +1320,9 @@ def _unreal_entries(
             ),
         },
     }
-    # Installed MCP components may not retain the repository's .git directory.
-    # Carry the manifest commit into both processes so runtime-identity compares
-    # the same immutable release identity instead of silently losing that check.
-    if str(runtime_git_commit).strip():
-        rag_entry["env"]["CONTROL_RUNTIME_GIT_COMMIT"] = str(runtime_git_commit).strip()
-        agent_entry["env"]["CONTROL_RUNTIME_GIT_COMMIT"] = str(runtime_git_commit).strip()
-        rag_entry["env"]["CONTROL_RUNTIME_EXPECTED_GIT_COMMIT"] = str(runtime_git_commit).strip()
-        agent_entry["env"]["CONTROL_RUNTIME_EXPECTED_GIT_COMMIT"] = str(runtime_git_commit).strip()
-    if context_compactor_advisory:
-        # Compactor is required for LM Studio installs. Advisory telemetry stays on;
-        # strict write-blocking remains opt-in via MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1.
-        rag_entry["env"]["MCP_CONTEXT_COMPACTOR_ADVISORY"] = "1"
-        rag_entry["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] = "0"
-        rag_entry["env"]["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] = "lmstudio"
-        rag_entry["env"]["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] = "300"
+    # The transparent compactor is selected in LM Studio's chat-plugin panel.
+    # MCP processes neither route through it nor use its telemetry as authority.
+    del context_compactor_advisory
     if args.engine_root:
         rag_entry["env"]["UNREAL_ENGINE_ROOT"] = str(args.engine_root)
         agent_entry["env"]["UNREAL_ENGINE_ROOT"] = str(args.engine_root)
@@ -1871,11 +1760,6 @@ def _install_context_compactor(
                 "context compactor install finished but the plugin was not found at "
                 f"{installed_manifest}. Confirm LM Studio plugin install succeeded on this OS."
             )
-        runtime_manifest_path = installed_manifest.parent / "control-runtime.json"
-        _atomic_write_bytes(
-            runtime_manifest_path,
-            _json_bytes(build_runtime_manifest(ROOT, require_clean_source=True)),
-        )
     activation = _activate_context_compactor_in_settings(
         args.lmstudio_home,
         dry_run=args.dry_run,
@@ -1923,6 +1807,7 @@ def install(
                 f"UNREAL_ENGINE_ROOT does not contain a usable Unreal Engine layout: {environment_engine}"
             )
         args.engine_root = environment_engine
+        args._engine_selection = "environment"
     if args.active_project:
         args.active_project = args.active_project.expanduser().resolve()
         if not args.active_project.is_file() or args.active_project.suffix.lower() != ".uproject":
@@ -1954,7 +1839,7 @@ def install(
         if int(version.split(".")[0]) < 20:
             raise RuntimeError(f"Node.js 20+ required, found {version}")
         unreal_agent_root = ROOT / "lmstudio-unreal-agent-mcp"
-        if not (unreal_agent_root / "src" / "server.js").is_file():
+        if not (unreal_agent_root / "src" / "direct-server.js").is_file():
             raise FileNotFoundError("Unreal agent MCP source is missing")
         if args.skip_deps:
             unreal_agent_dependency = (
@@ -2015,10 +1900,14 @@ def install(
             existing_agent = existing_servers.get("unreal-agent") if isinstance(existing_servers, dict) else None
             existing_env = existing_agent.get("env") if isinstance(existing_agent, dict) else None
             if isinstance(existing_env, dict):
-                for key in ("ALLOW_WRITE", "ALLOW_COMMANDS", "ALLOW_UNREAL_BUILD", "VALIDATE_ON_WRITE"):
+                for key in ("ALLOW_WRITE", "ALLOW_COMMANDS", "ALLOW_UNREAL_BUILD"):
                     if str(existing_env.get(key, "0")).strip().lower() not in {"", "0", "false", "no", "off"}:
                         report["safetyNormalizations"].append(f"unreal-agent.env.{key}")
                     existing_env[key] = "0"
+                for key in ("VALIDATE_ON_WRITE", "VALIDATE_ON_WRITE_TIMEOUT_MS", "MCP_REQUIRE_PLAN_AUTH"):
+                    if key in existing_env:
+                        report["safetyNormalizations"].append(f"unreal-agent.env.{key}")
+                        existing_env.pop(key, None)
 
         evidence_entry = _evidence_mcp_entry(python_exe, installed_skill)
         if "lmstudio" in components:
@@ -2060,7 +1949,6 @@ def install(
 
             shared_path = args.lmstudio_home / "config" / "unreal-workspace.json"
             agent_path = args.lmstudio_home / "config" / "unreal-agent.json"
-            runtime_manifest_path = args.lmstudio_home / "config" / "control-runtime.json"
             shared = _load_json(shared_path, {})
             if not isinstance(shared, dict):
                 raise ValueError("unreal-workspace.json must contain a JSON object")
@@ -2072,72 +1960,18 @@ def install(
             else:
                 shared.setdefault("activeProject", None)
             shared["projectSearchRoots"] = [str(path) for path in args.workspace_root]
-            existing_engine = Path(str(shared.get("defaultEngineRoot") or "")).expanduser()
-            association = ""
-            if args.active_project:
-                try:
-                    project_data = _load_json(args.active_project, {})
-                    association = str(project_data.get("EngineAssociation") or "")
-                except (OSError, ValueError, json.JSONDecodeError):
-                    association = ""
-            detected_engine = args.engine_root
-            selection = getattr(args, "_engine_selection", "")
-            if association:
-                # A project's EngineAssociation is an exact binding. Resolve a
-                # custom/source-build value only through an explicit root or
-                # exact persisted map; never let a prior default/latest engine
-                # retarget a different project during installation.
-                if detected_engine is not None:
-                    detected_engine = detected_engine.resolve()
-                    if not _engine_root_is_valid(detected_engine):
-                        raise ValueError(
-                            f"--engine-root does not contain a usable Unreal Engine layout: {detected_engine}"
-                        )
-                    if not _engine_root_matches_numeric_association(detected_engine, association):
-                        raise ValueError(
-                            "--engine-root does not match the active project's "
-                            f"EngineAssociation {association!r}"
-                        )
-                elif selection != "launcher":
-                    detected_engine = _configured_engine_root_for_association(shared, association)
-                    if detected_engine is None and _engine_association_folder(association):
-                        if _engine_root_is_valid(existing_engine) and _engine_root_matches_numeric_association(
-                            existing_engine, association
-                        ):
-                            detected_engine = existing_engine.resolve()
-                if detected_engine is None:
-                    detected_engine = _detect_engine_root(association)
-                if detected_engine is None:
-                    raise ValueError(
-                        "ENGINE_ASSOCIATION_UNRESOLVED: active project uses "
-                        f"EngineAssociation {association!r}. Select its engine with --engine-root "
-                        "or configure engineRootsByAssociation for this source/custom build."
-                    )
-                if not _engine_root_matches_numeric_association(detected_engine, association):
-                    raise ValueError(
-                        "Resolved engine does not match the active project's "
-                        f"EngineAssociation {association!r}: {detected_engine}"
-                    )
-                if not _engine_association_folder(association):
-                    mappings = shared.get("engineRootsByAssociation")
-                    shared["engineRootsByAssociation"] = {
-                        **(mappings if isinstance(mappings, dict) else {}),
-                        association: str(detected_engine),
-                    }
-            else:
-                if (
-                    selection != "launcher"
-                    and detected_engine is None
-                    and _engine_root_is_valid(existing_engine)
-                ):
-                    detected_engine = existing_engine.resolve()
-                if detected_engine is None:
-                    detected_engine = _detect_engine_root("")
-            args.engine_root = detected_engine
-            shared["defaultEngineRoot"] = str(detected_engine) if detected_engine else ""
+            engine_binding = bind_installer_engine(
+                active_project=args.active_project,
+                requested_engine_root=args.engine_root,
+                selection=getattr(args, "_engine_selection", ""),
+                shared_config=shared,
+                workspace_root=ROOT,
+            )
+            association = engine_binding.association
+            args.engine_root = engine_binding.engine_root
             _sync_installer_index_settings(
                 shared,
-                detected_engine,
+                engine_binding.engine_root,
                 state_home=args.state_home,
             )
             configured_index = Path(str(shared.get("indexPath") or "")).expanduser()
@@ -2178,13 +2012,11 @@ def install(
                 "activeProject": shared.get("activeProject"),
             }
             tx.write_file(agent_path, _json_bytes(agent_payload))
-            runtime_manifest = build_runtime_manifest(ROOT, require_clean_source=True)
-            tx.write_file(runtime_manifest_path, _json_bytes(runtime_manifest))
-            report["controlRuntimeManifest"] = str(runtime_manifest_path)
-            runtime_git_commit = str(
-                runtime_manifest.get("expectedSourceGitCommit") or ""
-            ).strip()
             assert mcp_config is not None
+            report["safetyNormalizations"].extend(
+                f"mcpServers.{name}:removed_legacy_python_control"
+                for name in _remove_legacy_python_control_entries(mcp_config)
+            )
             for name, entry in _unreal_entries(
                 args,
                 python_exe,
@@ -2192,14 +2024,13 @@ def install(
                 shared_path,
                 agent_path,
                 context_compactor_advisory=("context_compactor" in components),
-                runtime_git_commit=runtime_git_commit,
                 engine_association=association,
                 index_path=configured_index,
             ).items():
                 _merge_mcp_entry(mcp_config, name, entry)
 
         settings_path = args.lmstudio_home / "settings.json"
-        if not args.enable_agent_mode and settings_path.exists() and ("lmstudio" in components or "unreal" in components):
+        if settings_path.exists() and ("lmstudio" in components or "unreal" in components):
             settings = _load_json(settings_path, {})
             chat = settings.get("chat") if isinstance(settings, dict) else None
             patterns = chat.get("skipToolConfirmationPatterns") if isinstance(chat, dict) else None
@@ -2231,6 +2062,11 @@ def install(
             cline = _load_json(args.cline_settings, {"mcpServers": {}})
             if not isinstance(cline, dict):
                 raise ValueError("Cline settings must contain a JSON object")
+            if "unreal" in components:
+                report["safetyNormalizations"].extend(
+                    f"cline.mcpServers.{name}:removed_legacy_python_control"
+                    for name in _remove_legacy_python_control_entries(cline)
+                )
             _merge_mcp_entry(cline, "evidence-first", evidence_entry)
             if "unreal" in components and mcp_config:
                 for name in ("unreal-rag", "unreal-agent"):
@@ -2250,36 +2086,41 @@ def install(
             )
 
         if args.build_rag:
-            pwsh = str(getattr(args, "runtime_pwsh", None) or "") or shutil.which("pwsh")
-            if not pwsh:
-                if args.dry_run:
-                    pwsh = "pwsh"
-                else:
-                    raise FileNotFoundError(
-                        "--build-rag requires PowerShell 7 (pwsh). Re-run the platform launcher without "
-                        "--skip-runtime-bootstrap so the installer can download it."
-                    )
             if not args.dry_run:
                 external_actions_started.append("rag-index-build")
-            _run(
-                _powershell_file_command(
-                    pwsh,
-                    ROOT / "scripts" / "run_index_pipeline.ps1",
-                    [
-                        "-WorkspaceRoot",
-                        str(ROOT),
-                        "-Tier",
-                        args.index_tier,
-                        "-PythonExe",
-                        str(python_exe),
-                        "-IndexPath",
-                        str(configured_index),
-                        "-NonInteractive",
-                    ],
-                ),
-                cwd=ROOT,
-                dry_run=args.dry_run,
+            lock_context = (
+                contextlib.nullcontext()
+                if args.dry_run
+                else index_refresh_lock(configured_index)
             )
+            with lock_context:
+                if not args.dry_run:
+                    recover_interrupted_refresh(configured_index.parent)
+                rag_plan = create_direct_rag_build_plan(
+                    python_executable=python_exe,
+                    index_dir=configured_index,
+                    tier=args.index_tier,
+                    project_roots=list(args.workspace_root),
+                    active_project=args.active_project,
+                    engine_root=args.engine_root,
+                    root=ROOT,
+                    dry_run=args.dry_run,
+                )
+                try:
+                    for step in rag_plan.steps:
+                        _run(list(step.command), cwd=ROOT, dry_run=args.dry_run)
+                    rag_plan.commit()
+                    report["ragBuild"] = {
+                        "tier": rag_plan.tier,
+                        "transactional": True,
+                        "steps": [step.name for step in rag_plan.steps],
+                        "engineVersion": rag_plan.engine_version,
+                        "engineAssociation": rag_plan.engine_association or None,
+                        "includedProjects": [str(path) for path in rag_plan.included_projects],
+                        "excludedProjects": [str(path) for path in rag_plan.excluded_projects],
+                    }
+                finally:
+                    rag_plan.discard()
 
         if "unreal" in components:
             readiness = (
@@ -2419,9 +2260,9 @@ def _runtime_requirements(
     *,
     build_rag: bool,
 ) -> tuple[bool, bool]:
+    del build_rag  # Direct RAG indexing is Python-only.
     need_node = bool({"unreal", "context_compactor"} & components)
-    need_pwsh = bool(build_rag)
-    return need_node, need_pwsh
+    return need_node, False
 
 
 def _bootstrap_runtime_phase(

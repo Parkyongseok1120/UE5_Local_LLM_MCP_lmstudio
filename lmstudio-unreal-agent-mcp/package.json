@@ -3,10 +3,11 @@
   "version": "0.3.18",
   "description": "Safe local file/build MCP server for LM Studio Unreal Engine coding agents.",
   "private": true,
-  "main": "src/server.js",
+  "main": "src/direct-server.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node src/direct-server.js",
+    "start:strict": "node src/strict-server.js",
     "test": "node test/run-tests.js"
   },
   "dependencies": {

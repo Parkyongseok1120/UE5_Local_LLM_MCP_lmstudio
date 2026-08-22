@@ -15,18 +15,29 @@ def export_project_settings(out_path: str) -> None:
         if not ini_path.is_file():
             continue
         text = ini_path.read_text(encoding="utf-8", errors="replace")
+        section = ""
+        occurrences = {}
         for line in text.splitlines():
             line = line.strip()
-            if not line or line.startswith(";") or line.startswith("["):
+            if not line or line.startswith(";"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip()
                 continue
             if "=" in line:
                 key, _, value = line.partition("=")
+                setting = key.strip()
+                occurrence_key = (section, setting)
+                ordinal = occurrences.get(occurrence_key, 0)
+                occurrences[occurrence_key] = ordinal + 1
                 rows.append(
                     {
                         "path": f"Config/{ini_name}",
-                        "setting": key.strip(),
+                        "section": section,
+                        "setting": setting,
+                        "ordinal": ordinal,
                         "value": value.strip(),
-                        "title": f"{ini_name}: {key.strip()}",
+                        "title": f"{ini_name} [{section}]: {setting} #{ordinal}",
                     }
                 )
     with open(out_path, "w", encoding="utf-8") as f:

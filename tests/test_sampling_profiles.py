@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Tests for LM Studio sampling profile resolution."""
+"""Contracts for static, user-selected LM Studio recommendations."""
 
 from __future__ import annotations
 
@@ -8,91 +8,190 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import load_sampling_preset as sampling  # noqa: E402
-import query_rag  # noqa: E402
 
 SAMPLING_PATH = ROOT / "config" / "lmstudio_sampling.json"
 
 
+def _config() -> dict:
+    return json.loads(SAMPLING_PATH.read_text(encoding="utf-8-sig"))
+
+
 def _profiles() -> dict:
-    return json.loads(SAMPLING_PATH.read_text(encoding="utf-8-sig"))["profiles"]
+    return _config()["profiles"]
 
 
-def test_model_alias_resolves_gpt_oss_profile(monkeypatch):
+def _walk_keys(value: object) -> set[str]:
+    if isinstance(value, dict):
+        keys = {str(key) for key in value}
+        for child in value.values():
+            keys.update(_walk_keys(child))
+        return keys
+    if isinstance(value, list):
+        keys: set[str] = set()
+        for child in value:
+            keys.update(_walk_keys(child))
+        return keys
+    return set()
+
+
+@pytest.fixture(autouse=True)
+def _reset_profile_state(monkeypatch):
     monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
     sampling.set_sampling_profile("")
+    yield
+    sampling.set_sampling_profile("")
 
+
+def test_model_alias_resolves_exact_and_embedded_model_ids():
     assert sampling.resolve_profile_name_for_model("gpt-oss-20b (LM Studio live)") == "gpt_oss_20b"
-
-
-def test_model_alias_resolves_qwen36_heretic_profile(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("")
-
-    assert (
-        sampling.resolve_profile_name_for_model(
-            "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max (LM Studio)"
-        )
-        == "qwen3_6_27b"
-    )
-
-
-def test_model_alias_resolves_qwen36_lmstudio_gguf_profile(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("")
-
-    assert (
-        sampling.resolve_profile_name_for_model(
-            "lmstudio-community/Qwen3.6-27B-GGUF/Qwen3.6-27B-Q4_K_M.gguf"
-        )
-        == "qwen3_6_27b"
-    )
-
-
-def test_model_alias_resolves_qwen38_27b_without_family_fallback(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("")
-
     assert (
         sampling.resolve_profile_name_for_model(
             "lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
         )
         == "qwen3_8_27b"
     )
-
-
-def test_qwen38_profile_has_one_compactor_resolved_reasoning_policy():
-    limits = sampling.profile_edit_limits("qwen3_8_27b")
-    policy = limits["reasoningPolicy"]
-    plan = sampling.load_sampling_preset(turn="plan", profile="qwen3_8_27b")
-
-    assert policy["owner"] == "compactor_generator_resolved_prediction_policy"
-    assert policy["transport"] == "generator_raw_kv_config"
-    assert policy["capabilityStatus"] == "model_profile_bound"
-    assert policy["fieldKey"] == (
-        "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort"
+    assert (
+        sampling.resolve_profile_name_for_model(
+            "qwen3.6-27b-heretic-uncensored-finetune-neo-code-di-imatrix-max"
+        )
+        == "qwen3_6_27b"
     )
-    assert policy["failClosedIfUnpinned"] is True
-    assert policy["supportedEfforts"] == ["low", "medium", "extra_high"]
-    assert limits["contextLength"] == 65536
-    assert plan["reasoningEffort"] == "low"
-    assert plan["topK"] == 20
-    assert plan["minP"] == 0
-    assert plan["thinking"] == "on"
-    execute = sampling.load_sampling_preset(turn="execute", profile="qwen3_8_27b")
-    assert execute["thinking"] == "off"
 
 
-def test_sampling_cli_can_resolve_profile_from_model_alias():
+def test_model_alias_does_not_override_explicit_environment_profile(monkeypatch):
+    monkeypatch.setenv("UNREAL_RAG_MODEL_PROFILE", "qwen3_5_9b")
+
+    assert sampling.set_sampling_profile_for_model("gpt-oss-20b") == ""
+    assert sampling.resolve_profile_name() == "qwen3_5_9b"
+
+
+def test_checked_in_schema_has_no_hidden_planner_or_phase_policy():
+    config = _config()
+    all_keys = _walk_keys(config)
+    forbidden = {
+        "modeMap",
+        "turnPresets",
+        "reasoningPolicy",
+        "agentPolicy",
+        "planningRequired",
+        "mcpToolDiscipline",
+        "strictRecommendedSystemPrompt",
+        "promptContract",
+        "targetTier",
+        "assemblyBudgetScale",
+        "compileFixMaxAttempts",
+        "defaultTopK",
+        "deltaTopK",
+        "candidateLimitScale",
+        "historyTurns",
+        "twoPhase",
+    }
+
+    assert forbidden.isdisjoint(all_keys)
+    assert "conservative_compile_fix" not in config["profiles"]
+    assert "review_only" not in config["profiles"]
+
+
+def test_profiles_are_only_static_load_chat_and_bounded_safety_metadata():
+    allowed_profile_keys = {
+        "contextLength",
+        "contextLengthAlternatives",
+        "quantDefault",
+        "recommendedParallelRequests",
+        "recommendedSystemPrompt",
+        "sampling",
+        "writeSafety",
+        "notes",
+    }
+    allowed_sampling_keys = {"temperature", "topP", "topK", "minP", "maxTokens"}
+    allowed_safety_keys = {"maxFilesPerEdit", "preferPatchOverFullFile"}
+
+    for name, profile in _profiles().items():
+        assert set(profile) <= allowed_profile_keys, name
+        assert set(profile["sampling"]) <= allowed_sampling_keys, name
+        assert set(profile["writeSafety"]) == allowed_safety_keys, name
+        assert profile["writeSafety"]["maxFilesPerEdit"] <= 2, name
+        assert profile["recommendedParallelRequests"] >= 1, name
+
+
+def test_all_profiles_use_the_direct_model_authority_prompt():
+    expected = "prompts/lmstudio_direct_model_system.md"
+    for name, profile in _profiles().items():
+        assert profile["recommendedSystemPrompt"] == expected, name
+
+    direct_prompt = (ROOT / expected).read_text(encoding="utf-8")
+    assert "You own the reasoning" in direct_prompt
+    assert "choice and order" in direct_prompt
+    assert "decision to stop" in direct_prompt
+    assert "final answer" in direct_prompt
+
+
+def test_mode_turn_and_wrapper_retry_flags_are_true_no_ops():
+    base = sampling.load_sampling_preset(profile="qwen3_8_27b")
+
+    assert sampling.load_sampling_preset(
+        mode="refactor_r0",
+        turn="plan",
+        profile="qwen3_8_27b",
+    ) == base
+    assert sampling.load_sampling_preset(
+        mode="compile_fix",
+        turn="compile_fix_patch",
+        profile="qwen3_8_27b",
+    ) == base
+
+    sampling.set_sampling_profile("qwen3_8_27b")
+    assert sampling.preset_for_wrapper("agent_edit") == base
+    assert sampling.preset_for_wrapper("compile_fix", compile_patch=True) == base
+
+
+def test_cli_mode_and_turn_are_deprecated_no_ops():
+    script = str(ROOT / "scripts" / "load_sampling_preset.py")
+    base = subprocess.run(
+        [sys.executable, script, "--sampling-profile", "qwen3_6_27b"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    staged = subprocess.run(
+        [
+            sys.executable,
+            script,
+            "--sampling-profile",
+            "qwen3_6_27b",
+            "--mode",
+            "compile_fix",
+            "--turn",
+            "plan",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    assert base.returncode == staged.returncode == 0
+    assert json.loads(base.stdout) == json.loads(staged.stdout)
+    assert "deprecated no-ops" in staged.stderr
+
+
+def test_show_profile_exposes_only_recommendations_and_bounded_safety():
+    script = str(ROOT / "scripts" / "load_sampling_preset.py")
     proc = subprocess.run(
         [
             sys.executable,
-            str(ROOT / "scripts" / "load_sampling_preset.py"),
+            script,
             "--model",
-            "qwen3.5-9b",
+            "qwen/qwen3.8-27b",
             "--show-profile",
         ],
         capture_output=True,
@@ -101,108 +200,59 @@ def test_sampling_cli_can_resolve_profile_from_model_alias():
         errors="replace",
         check=False,
     )
+
     assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout)["profile"] == "qwen3_5_9b"
+    shown = json.loads(proc.stdout)
+    assert shown["profile"] == "qwen3_8_27b"
+    assert shown["contextLength"] == 65536
+    assert shown["quantDefault"] == "Q4_K_M"
+    assert shown["recommendedParallelRequests"] == 1
+    assert shown["recommendedSystemPrompt"] == "prompts/lmstudio_direct_model_system.md"
+    assert shown["maxFilesPerEdit"] == 2
+    assert "planningRequired" not in shown
+    assert "reasoningPolicy" not in shown
 
 
-def test_qwen36_profile_mcp_meta(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    limits = sampling.profile_edit_limits("qwen3_6_27b")
+def test_legacy_policy_accessor_is_a_small_compatibility_view():
+    policy = sampling.profile_agent_policy("qwen3_5_9b")
 
-    assert limits["maxFilesPerEdit"] == 2
-    assert limits["mcpEssentialTools"] is True
-    assert "lmstudio_qwen36" in limits["recommendedSystemPrompt"]
-    assert limits["contextLength"] == 32768
-    assert limits["preferSymbolLookupOverFileRead"] is True
-    assert limits["enforceRangeRead"] is True
-    assert limits["rangeReadContextLines"] == 40
-    assert limits["patchChangedLineLimit"] == 60
-    assert limits["noOpGuard"] is True
-    assert limits["defaultTopK"] == 6
-    assert limits["deltaTopK"] == 3
-    assert limits["candidateLimitScale"] == 16
-
-
-def test_qwen36_plan_turn_max_tokens_is_3072(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("qwen3_6_27b")
-    preset = sampling.load_sampling_preset(mode="refactor_r0")
-    assert preset["maxTokens"] == 3072
+    assert set(policy) == {
+        "contextLength",
+        "contextLengthAlternatives",
+        "quantDefault",
+        "recommendedParallelRequests",
+        "recommendedSystemPrompt",
+        "sampling",
+        "maxFilesPerEdit",
+        "preferPatchOverFullFile",
+    }
+    assert policy["contextLength"] == 24576
+    assert policy["maxFilesPerEdit"] == 2
 
 
-def test_module_fix_mode_uses_compile_fix_patch_preset(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("qwen3_6_27b")
+def test_long_context_profile_keeps_portable_and_native_load_choices():
+    recommendation = sampling.profile_recommendation(
+        "qwen3_5_9b_deepseek_v4_flash"
+    )
 
-    preset = sampling.load_sampling_preset(mode="module_fix")
-
-    assert preset["thinking"] == "off"
-    assert preset["temperature"] == 0.07
-    assert preset["topP"] == 0.82
-
-
-def test_gpt_oss_compile_fix_analyze_preset_is_low_temperature(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("")
-    sampling.set_sampling_profile_for_model("gpt-oss-20b")
-
-    preset = sampling.load_sampling_preset(mode="compile_fix")
-    limits = sampling.profile_edit_limits("gpt_oss_20b")
-
-    assert preset["temperature"] == 0.08
-    assert preset["maxTokens"] == 2560
-    assert limits["maxFilesPerEdit"] == 2
-    assert limits["compileFixMaxAttempts"] == 3
-    assert limits["contextLength"] == 32768
+    assert recommendation["contextLength"] == 140032
+    assert recommendation["contextLengthAlternatives"] == [65536, 262144]
+    assert recommendation["recommendedParallelRequests"] == 1
 
 
-def test_qwen35_flash_profile_uses_verified_long_context():
-    profile = _profiles()["qwen3_5_9b_deepseek_v4_flash"]
-    limits = sampling.profile_edit_limits("qwen3_5_9b_deepseek_v4_flash")
-
-    assert profile["contextLength"] == 140032
-    assert profile["contextLengthVariant_native_max"] == 262144
-    assert limits["contextLength"] == 140032
-    assert limits["recommendedParallelRequests"] == 1
-
-
-def test_all_profiles_context_at_least_24576():
+def test_all_profiles_keep_minimum_context_and_known_quantization():
     for name, profile in _profiles().items():
-        assert profile["contextLength"] >= 24576, f"{name} context below 24576"
+        assert profile["contextLength"] >= 24576, name
+        assert profile["quantDefault"] in {"Q4_K_M", "Q5_K_M"}, name
 
 
-def test_gpt_oss_profiles_context_32768():
-    profiles = _profiles()
-    for name in ("gpt_oss_20b", "gpt_oss_small", "gpt_oss_120b", "gpt_oss_20b_claude_opus_sonnet_reasoning_i1"):
-        assert profiles[name]["contextLength"] == 32768
-
-
-def test_model_alias_does_not_override_env_profile(monkeypatch):
-    monkeypatch.setenv("UNREAL_RAG_MODEL_PROFILE", "conservative_compile_fix")
-    sampling.set_sampling_profile("")
-
-    selected = sampling.set_sampling_profile_for_model("gpt-oss-20b")
-
-    assert selected == ""
-    assert sampling.resolve_profile_name() == "conservative_compile_fix"
-
-
-def test_query_rag_ask_lmstudio_selects_loaded_model_profile(monkeypatch):
-    monkeypatch.delenv("UNREAL_RAG_MODEL_PROFILE", raising=False)
-    sampling.set_sampling_profile("")
-    args = type(
-        "Args",
-        (),
-        {
-            "ask_lmstudio": True,
-            "sampling_profile": "",
-            "model": "",
-        },
-    )()
-    monkeypatch.setattr(query_rag, "resolve_model", lambda _args: "qwen3.5-9b-deepseek-v4-flash")
-
-    selected = query_rag.apply_model_profile_from_args(args)
-
-    assert selected == "qwen3_5_9b_deepseek_v4_flash"
-    assert args.model == "qwen3.5-9b-deepseek-v4-flash"
-    assert sampling.resolve_profile_name() == "qwen3_5_9b_deepseek_v4_flash"
+def test_primary_setup_never_recommends_a_historical_controller_prompt():
+    setup = (ROOT / "docs" / "LMStudio_Unreal_Agent_Setup.md").read_text(encoding="utf-8")
+    assert "lmstudio_direct_model_system.md" in setup
+    for obsolete in (
+        "lmstudio_compact_mcp_base.md",
+        "lmstudio_qwen35_9b_compact_system.md",
+        "lmstudio_qwen36_27b_compact_system.md",
+        "lmstudio_gpt_oss_compact_system.md",
+    ):
+        assert obsolete not in setup

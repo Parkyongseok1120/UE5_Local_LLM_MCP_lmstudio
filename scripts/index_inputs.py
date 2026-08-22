@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 # Single source of truth — shared by incremental_build.py and rag_index_ops.py.
@@ -11,7 +12,6 @@ RAW_INPUT_FILES: tuple[str, ...] = (
     "raw_game_design.jsonl",
     "raw_symbols.jsonl",
     "raw_project_symbols.jsonl",
-    "raw_module_graph.jsonl",
     "raw_project_profiles.jsonl",
     "raw_project_architecture.jsonl",
     "raw_blueprint_metadata.jsonl",
@@ -29,12 +29,23 @@ RAW_INPUT_FILES: tuple[str, ...] = (
     "raw_asset_registry.jsonl",
     "raw_project_settings.jsonl",
     "raw_level_metadata.jsonl",
-    "raw_failure_memory.jsonl",
     "raw_build_logs.jsonl",
     "raw_docs.jsonl",
     "raw_source.jsonl",
     "raw_projects.jsonl",
 )
+
+FORBIDDEN_RAW_INPUT_FILES = frozenset({"raw_failure_memory.jsonl"})
+INDEX_INPUT_POLICY_VERSION = 4
+INDEX_INPUT_POLICY_FINGERPRINT = hashlib.sha256(
+    "\n".join(
+        (
+            f"version={INDEX_INPUT_POLICY_VERSION}",
+            *(f"input={name}" for name in RAW_INPUT_FILES),
+            *(f"forbidden={name}" for name in sorted(FORBIDDEN_RAW_INPUT_FILES)),
+        )
+    ).encode("utf-8")
+).hexdigest()
 
 
 def existing_input_paths(data_dir: Path) -> list[Path]:

@@ -1,4 +1,3 @@
-# After Phase 1 (Build.cs parser): re-run symbol + module graph collection, then incremental index build.
+# After Build.cs parser changes: re-run symbol collection, then rebuild the index.
 #   .\rag.ps1 collect-symbols --tier public
-#   .\rag.ps1 collect-module-graph
 #   .\rag.ps1 build-incremental

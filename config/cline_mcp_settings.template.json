@@ -3,34 +3,29 @@
     "unreal-rag": {
       "command": "{PYTHON_EXE}",
       "args": [
-        "{REPO_ROOT}/scripts/unreal_rag_mcp.py"
+        "{REPO_ROOT}/scripts/unreal_rag_direct.py"
       ],
       "timeout": 420000,
       "env": {
         "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
-        "AGENT_STATE_ROOT": "{AGENT_STATE_ROOT}",
-        "MCP_BRIDGE_PAIR_ID": "{MCP_BRIDGE_PAIR_ID}",
+        "DIRECT_RAG_STATE_ROOT": "{LMSTUDIO_HOME}/state/unreal-rag-direct",
         "UNREAL58_ROOT": "{REPO_ROOT}",
         "PYTHONUTF8": "1",
-        "PYTHONIOENCODING": "utf-8",
-        "MCP_ESSENTIAL_TOOLS": "1"
+        "PYTHONIOENCODING": "utf-8"
       }
     },
     "unreal-agent": {
       "command": "{NODE_EXE}",
       "args": [
-        "{AGENT_MCP_ROOT}/src/server.js"
+        "{AGENT_MCP_ROOT}/src/direct-server.js"
       ],
       "env": {
         "WORKSPACE_ROOT": "{USER_DOCUMENTS}",
         "AGENT_MCP_CONFIG": "{AGENT_MCP_ROOT}/config/agent-mcp.json",
         "SHARED_UNREAL_CONFIG": "{LMSTUDIO_HOME}/config/unreal-workspace.json",
         "AGENT_STATE_ROOT": "{AGENT_STATE_ROOT}",
-        "MCP_BRIDGE_PAIR_ID": "{MCP_BRIDGE_PAIR_ID}",
         "PYTHON_EXE": "{PYTHON_EXE}",
-        "UNREAL58_ROOT": "{REPO_ROOT}",
-        "MCP_ESSENTIAL_TOOLS": "1",
-        "MCP_REQUIRE_PLAN_AUTH": "1"
+        "UNREAL58_ROOT": "{REPO_ROOT}"
       }
     }
   }

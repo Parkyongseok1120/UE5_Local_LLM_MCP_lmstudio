@@ -10,34 +10,39 @@ Run these scripts in UE Editor Python or an Editor Utility:
 
 | Script | Output type |
 |--------|-------------|
-| `export_blueprint_metadata.py` | Blueprint graph/variables/functions |
-| `export_material_metadata.py` | Material/MI/MF/ML/MPC |
-| `export_texture_metadata.py` | Texture2D/Cube/RenderTarget settings |
-| `export_mesh_metadata.py` | StaticMesh/GeometryCollection slots & LOD |
-| `export_world_look_metadata.py` | PostProcess/Sky/Fog/DataLayer |
-| `export_structured_asset_metadata.py` | DataTable, Niagara, AI, Audio, Input, UI, GAS |
-| `export_animation_metadata.py` | Anim + PoseAsset/Skeleton/PhysicsAsset/ControlRig/IK |
-| `export_fmod_metadata.py` | FMOD Event/Bank (when plugin present) |
-| `export_asset_registry.py` | Asset registry summary |
+| `tools/ue_export/export_blueprint_metadata.py` | Blueprint graph/variables/functions |
+| `tools/ue_export/export_material_metadata.py` | Material/MI/MF/ML/MPC |
+| `tools/ue_export/export_texture_metadata.py` | Texture2D/Cube/RenderTarget settings |
+| `tools/ue_export/export_mesh_metadata.py` | StaticMesh/GeometryCollection slots & LOD |
+| `tools/ue_export/export_world_look_metadata.py` | PostProcess/Sky/Fog/DataLayer |
+| `tools/ue_export/export_structured_asset_metadata.py` | DataTable, Niagara, AI, Audio, Input, UI, GAS |
+| `tools/ue_export/export_animation_metadata.py` | Anim + PoseAsset/Skeleton/PhysicsAsset/ControlRig/IK |
+| `tools/ue_export/export_fmod_metadata.py` | FMOD Event/Bank (when plugin present) |
+| `tools/ue_export/export_asset_registry.py` | Asset registry summary |
 | `tools/ue_export/export_project_settings.py` | DefaultGame/Engine/Input.ini keys |
 | `tools/ue_export/export_level_metadata.py` | Map assets |
 
 Example:
 
 ```python
-exec(open(r'...\export_blueprint_metadata.py').read())
+import sys
+editor_tools = r'...\tools\ue_export'
+sys.path.insert(0, editor_tools)
+
+exec(open(editor_tools + r'\export_blueprint_metadata.py', encoding='utf-8').read())
 export_blueprint_metadata('/Game', r'C:\export\bp.jsonl')
 
-exec(open(r'...\export_material_metadata.py').read())
+exec(open(editor_tools + r'\export_material_metadata.py', encoding='utf-8').read())
 export_material_metadata('/Game', r'C:\export\materials.jsonl')
 
-exec(open(r'...\export_animation_metadata.py').read())
+exec(open(editor_tools + r'\export_animation_metadata.py', encoding='utf-8').read())
 export_animation_metadata('/Game', r'C:\export\animation.jsonl')
 ```
 
 ## Ingest
 
-Export paths are resolved automatically from the active `.uproject`:
+When a manual refresh is requested, its export path is resolved from the exact
+selected `.uproject`:
 
 - Default export folder: `{ProjectRoot}/Saved/LmStudioMetadataExports`
 - Fallback (no active project): `%LOCALAPPDATA%/LmStudio/UnrealMetadataExports`
@@ -45,92 +50,61 @@ Export paths are resolved automatically from the active `.uproject`:
 
 ### Blueprint node/pin exporter plugin
 
-UE 5.8 protects `EdGraph.Nodes` from Python, so full Blueprint node and pin links require the C++ editor plugin. Install it once per project:
-
-```powershell
-.\rag.ps1 install-editor-graph-plugin
-```
-
-Or install for an explicit project:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\installer_support\Install-EditorGraphPlugin.ps1 -ProjectFile C:\Path\Game.uproject
-```
-
-The installer copies `tools\ue_plugins\LmStudioGraphExporter` into `<ProjectRoot>\Plugins`, enables it in the `.uproject`, hash-checks existing project plugin copies, updates stale copies, and runs UnrealBuildTool when the module needs compiling. Close Unreal Editor before installing. Then run:
-
-```powershell
-.\rag.ps1 export-editor-metadata
-```
+UE 5.8 protects `EdGraph.Nodes` from Python, so full Blueprint node and pin links
+require the C++ editor plugin. The integrated installer does not copy or enable
+this plugin. If you deliberately opt into that project mutation, copy
+`tools\ue_plugins\LmStudioGraphExporter` into `<ProjectRoot>\Plugins` and enable
+it in the `.uproject` yourself. Close Unreal Editor before changing the project.
 
 When the plugin is present, `export_blueprint_metadata.py` uses it automatically and exports Blueprint `graphs`, `nodes`, `pins`, and `graph_links`. Without the plugin, the Python fallback still exports parent class, graph names, variables, and dependencies where UE exposes them.
 
-### Install / indexing (automatic)
+### Manual export and refresh
 
-During `INSTALL-*-BUILD-RAG.bat`, after you pick a project, the installer asks whether to enable automatic Editor export and then asks whether to install the Blueprint graph exporter plugin. If you answer `N`, plugin installation is skipped and Blueprint export uses the limited Python fallback.
-
-If automatic export is enabled, the indexing pipeline runs:
-
-1. Unreal Editor export (headless or live Editor watcher)
-2. JSONL ingest
-3. Index rebuild
-
-You can re-run manually:
+The integrated installer and `install.py --build-rag` never launch Unreal Editor,
+run these exporters, copy the graph plugin, or modify the `.uproject`. Produce
+exports deliberately in Editor Python, then ingest existing JSONL without starting
+Editor:
 
 ```powershell
-.\rag.ps1 export-editor-metadata
+pwsh -NoProfile -File .\rag.ps1 refresh -RefreshScope editor_metadata
 ```
 
-Folder-scoped export:
+Starting Unreal Editor from the maintenance wrapper is a separate, explicit opt-in:
 
 ```powershell
-.\rag.ps1 export-editor-metadata -Question "/Game/06_Environment/BossStage"
+pwsh -NoProfile -File .\rag.ps1 refresh -RefreshScope editor_metadata -AllowEditorLaunch
 ```
 
-Sync only (auto-export when stale):
+Manual Editor Python (optional) can produce a folder-scoped export before the
+no-launch ingest:
 
-```powershell
-.\rag.ps1 sync-editor-metadata
-```
-
-Watch the active project and refresh after source/config or Content asset changes:
-
-```powershell
-.\rag.ps1 watch-active-project
-```
-
-Legacy manual Editor Python (optional):
+The aggregate helper is `tools/ue_export/run_all_exports.py`; pass its directory
+explicitly so execution does not depend on the Editor process working directory.
 
 ```python
-exec(open(r'...\run_all_exports.py', encoding='utf-8').read())
-run_all_metadata_exports(r'C:\UnrealExports', content_path='/Game')
-run_all_metadata_exports(r'C:\UnrealExports', content_path='/Game/06_Environment/BossStage')
-export_materials_only(r'C:\UnrealExports', content_path='/Game')
+editor_tools = r'...\tools\ue_export'
+exec(open(editor_tools + r'\run_all_exports.py', encoding='utf-8').read())
+run_all_metadata_exports(r'C:\UnrealExports', content_path='/Game', tools_dir=editor_tools)
+run_all_metadata_exports(r'C:\UnrealExports', content_path='/Game/06_Environment/BossStage', tools_dir=editor_tools)
+export_materials_only(r'C:\UnrealExports', content_path='/Game', tools_dir=editor_tools)
 ```
 
 Register Editor menu (optional):
 
 ```python
-exec(open(r'...\register_export_menu.py', encoding='utf-8').read())
-register_lmstudio_export_menu(r'C:\UnrealExports', content_path='/Game')
+editor_tools = r'...\tools\ue_export'
+menu_script = editor_tools + r'\register_export_menu.py'
+menu_scope = {'__file__': menu_script}
+exec(compile(open(menu_script, encoding='utf-8').read(), menu_script, 'exec'), menu_scope)
+menu_scope.get('register_lmstudio_export_menu')(r'C:\UnrealExports', content_path='/Game')
 ```
 
-MCP tools for agents:
-
-- `unreal_editor_metadata_status` — freshness vs project uassets
-- `unreal_sync_editor_metadata` — ingest export dir + rebuild index
-- `unreal_asset_graph_lookup` — lookup any material/blueprint by path or name
-- `unreal_material_claim_validate` / `unreal_blueprint_claim_validate` — verify wire/pin claims
-
-Legacy per-file ingest:
-
-Convenience commands:
-
-```powershell
-.\rag.ps1 collect-blueprint-metadata -Question C:\export\bp.jsonl -ProjectName MyGame
-.\rag.ps1 collect-material-metadata -Question C:\export\materials.jsonl -ProjectName MyGame
-.\rag.ps1 collect-animation-metadata -Question C:\export\animation.jsonl -ProjectName MyGame
-```
+The default Direct MCP exposes `unreal_rag_refresh` for the same bounded refresh
+and `unreal_rag_search` for factual indexed lookup. Its default
+`allowEditorLaunch=false` only ingests existing exports; a launch requires both
+`scope=editor_metadata|all` and `allowEditorLaunch=true`. The removed editor
+workflow, asset-graph, and claim-validation MCP tools are not part of the supported
+eight-tool RAG catalog.
 
 ## RAG source tags
 
@@ -152,7 +126,7 @@ Not every Unreal asset type is exported with full graph metadata. Use the produc
 
 - **Guideline:** `RAG_Project_Guidelines/Unreal_Programming/22_Unreal_Asset_Taxonomy_For_Production_Work.md`
 - **Machine-readable map:** `config/unreal_asset_taxonomy.json`
-- **Runtime helper:** `scripts/asset_taxonomy.py` (`classify_ue_asset_class`, `graph_lookup_guidance`)
+- **Runtime helper:** `scripts/asset_taxonomy.py` (`classify_ue_asset_class`, `taxonomy_text_lines`)
 
 | RAG tier | Typical sources | Graph export today |
 |----------|-----------------|-------------------|
@@ -163,6 +137,8 @@ Not every Unreal asset type is exported with full graph metadata. Use the produc
 | `registry` | `unreal_asset_registry` | Path + class + taxonomy tags (e.g. Material Function, Material Layer, MPC) |
 | `path_only` | `unreal_project_asset_path` | Path string only |
 
-`unreal_asset_registry` rows now include taxonomy lines (`taxonomy_item`, `rag_coverage`, `work_domain`) from `collect_editor_metadata.py`. When `unreal_asset_graph_lookup` misses graph data, it returns taxonomy guidance and `stopRetryingLookup` hints. Material Layer / Material Function graphs require a fresh `export-editor-metadata` run after the exporter update.
+`unreal_asset_registry` rows include taxonomy lines (`taxonomy_item`, `rag_coverage`, `work_domain`) from `collect_editor_metadata.py`. Material Layer / Material Function graphs require a fresh manual Editor export followed by an `editor_metadata` refresh after the exporter changes.
 
-Graph builder and project-aware behavior consume summarized nodes. Direct `.uasset` graph mutation still belongs in Unreal Editor automation, but these exports give the agent the asset map required before making those Editor-side changes.
+The Direct index builder stores these summarized nodes for `unreal_rag_search`.
+Direct `.uasset` graph mutation still belongs in Unreal Editor automation, but
+the exports provide factual graph evidence before an Editor-side change.

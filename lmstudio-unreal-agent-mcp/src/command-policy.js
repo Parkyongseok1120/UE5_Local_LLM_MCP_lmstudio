@@ -19,7 +19,16 @@ function readOnlyGitCommandAllowed(commandLine) {
     return lower === "--output"
       || lower.startsWith("--output=")
       || lower === "--ext-diff"
-      || lower === "--textconv";
+      || lower === "--textconv"
+      || lower === "--no-index"
+      || lower === "--git-dir"
+      || lower.startsWith("--git-dir=")
+      || lower === "--work-tree"
+      || lower.startsWith("--work-tree=")
+      || /^[a-z]:[\\/]/i.test(arg)
+      || /^\\\\/.test(arg)
+      || /^\//.test(arg)
+      || /(^|[\\/])\.\.([\\/]|$)/.test(arg);
   });
   if (unsafeDiffOption) return false;
 
@@ -43,17 +52,6 @@ function allowedCommandBase(commandLine, hostPlatform = process.platform) {
   const trimmed = String(commandLine || "").trim();
   if (!trimmed) return false;
   if (/[&|<>]/.test(trimmed)) return false;
-  if (
-    hostPlatform === "win32"
-    && /^(dir|type|where|findstr)(\s|$)/i.test(trimmed)
-    && /[%!^\r\n]/.test(trimmed)
-  ) {
-    // These built-ins are dispatched through cmd.exe. Block expansion/escape
-    // syntax before the allowlist so an inherited environment cannot turn a
-    // seemingly read-only probe into a second command.
-    return false;
-  }
-
   const lower = trimmed.toLowerCase();
   const denyPatterns = [
     /\bdel\b/i,
@@ -78,13 +76,6 @@ function allowedCommandBase(commandLine, hostPlatform = process.platform) {
   }
 
   const allowPatterns = [
-    /^dir(\s|$)/i,
-    /^type(\s|$)/i,
-    /^where(\s|$)/i,
-    /^findstr(\s|$)/i,
-    /^cl(\s|$)/i,
-    /^msbuild(\s|$)/i,
-    /^dotnet\s+build(\s|$)/i,
     /^node\s+--version$/i,
     /^npm\s+--version$/i,
     /^python\s+--version$/i,
@@ -101,9 +92,6 @@ function allowedCommandBase(commandLine, hostPlatform = process.platform) {
 function parseAllowedCommand(commandLine, hostPlatform = process.platform) {
   const trimmed = String(commandLine || "").trim();
   if (!allowedCommandBase(trimmed, hostPlatform)) return null;
-  if (hostPlatform === "win32" && /^(dir|type|where|findstr)(\s|$)/i.test(trimmed)) {
-    return { file: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", trimmed], shell: false };
-  }
   const parts = splitCommandTokens(trimmed);
   if (!parts.length) return null;
   const file = parts[0].replace(/^"|"$/g, "");

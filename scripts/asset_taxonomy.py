@@ -69,44 +69,6 @@ def taxonomy_text_lines(asset_class: str) -> list[str]:
     return lines
 
 
-def graph_lookup_guidance(*, asset_class: str = "", asset_path: str = "") -> list[str]:
-    data = load_taxonomy()
-    levels = data.get("rag_coverage_levels") or {}
-    info = classify_ue_asset_class(asset_class)
-    actions: list[str] = []
-
-    if info:
-        coverage = info["rag_coverage"]
-        level_desc = str(levels.get(coverage) or coverage)
-        actions.append(
-            f"Asset class '{asset_class}' is taxonomy '{info['item_name']}' "
-            f"({info['section_title']}). RAG coverage: {coverage} — {level_desc}"
-        )
-        if coverage == "graph_material":
-            actions.append(
-                "Material, MaterialInstance, MaterialFunction, MaterialLayer, and MPC export via unreal_material_metadata."
-            )
-        elif coverage == "structured_metadata":
-            actions.append("Use unreal_asset_graph_lookup or unreal_rag_search; structured fields export via unreal_structured_metadata.")
-        elif coverage == "texture_metadata":
-            actions.append("Texture settings export via unreal_texture_metadata (width/height/compression/sRGB).")
-        elif coverage == "mesh_metadata":
-            actions.append("Mesh slots/LOD/Nanite export via unreal_mesh_metadata.")
-        elif coverage == "world_look_metadata":
-            actions.append("PostProcess/Sky/Fog export via unreal_world_look_metadata.")
-        elif coverage == "fmod_metadata":
-            actions.append("FMOD assets export via unreal_fmod_metadata when FMOD plugin is present.")
-        elif coverage == "registry":
-            actions.append("Use unreal_rag_search mode=material_analysis or registry path; graph lookup will not find this type yet.")
-        elif coverage == "not_exported_yet":
-            actions.append("This asset family is not in the Editor export pipeline yet.")
-    elif asset_path:
-        actions.append(f"No taxonomy mapping for asset class '{asset_class or 'unknown'}'. Check unreal_asset_registry in RAG.")
-
-    actions.append("See RAG_Project_Guidelines/Unreal_Programming/22_Unreal_Asset_Taxonomy_For_Production_Work.md")
-    return actions
-
-
 def work_domain_label(domain_id: str) -> str:
     for row in load_taxonomy().get("work_domains") or []:
         if str(row.get("id") or "") == domain_id:

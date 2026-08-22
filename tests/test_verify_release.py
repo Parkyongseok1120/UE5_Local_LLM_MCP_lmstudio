@@ -38,4 +38,15 @@ def test_release_command_check_has_timeout_and_execution_evidence():
 def test_release_tool_manifest_matches_runtime_contract():
     result = verify_tool_manifest()
     assert result["ok"] is True, result.get("issues")
-    assert result["essentialToolCount"] >= 10
+    assert result["essentialToolCount"] == 8
+
+
+def test_release_query_probe_uses_only_the_direct_retrieval_path() -> None:
+    source = (ROOT / "scripts" / "verify_release.py").read_text(encoding="utf-8")
+    probe = (ROOT / "scripts" / "direct_rag_probe.py").read_text(encoding="utf-8")
+
+    assert "direct_rag_probe.py" in source
+    assert "evaluate_rag_queries.py" not in source
+    assert "from direct_rag_search import rag_search" in probe
+    assert "from rag_search import" not in probe
+    assert "\nimport rag_search" not in probe

@@ -117,28 +117,17 @@ def verify_tool_manifest(root: Path = ROOT) -> dict[str, Any]:
         manifest = json.loads(
             (root / "config" / "stable_tool_manifest.json").read_text(encoding="utf-8-sig")
         )
-        from plan_consistency import RAG_ESSENTIAL_TOOLS
-        from unreal_rag_mcp import ESSENTIAL_TOOL_NAMES, McpServer
+        from direct_rag_contract import direct_rag_tool_definitions
 
         declared = list(manifest.get("ragEssential") or [])
         declared_set = set(declared)
-        # Tool definitions are pure; bypass __init__ so a contract check never
-        # reconciles machine-local jobs or touches runtime state.
-        definition_server = object.__new__(McpServer)
-        registered = {
-            row["name"]
-            for row in definition_server._all_tool_definitions_unfiltered()
-        }
+        registered_definitions = direct_rag_tool_definitions()
+        direct_runtime = {row["name"] for row in registered_definitions}
         issues: list[str] = []
         if len(declared) != len(declared_set):
             issues.append("ragEssential contains duplicate names")
-        if declared_set != set(RAG_ESSENTIAL_TOOLS):
-            issues.append("manifest and plan_consistency essential sets differ")
-        if declared_set != set(ESSENTIAL_TOOL_NAMES):
-            issues.append("manifest and MCP essential sets differ")
-        missing = declared_set - registered
-        if missing:
-            issues.append(f"essential tools are not registered: {sorted(missing)}")
+        if declared_set != direct_runtime:
+            issues.append("manifest and Direct MCP catalog differ")
         return {
             "ok": not issues,
             "essentialToolCount": len(declared_set),
@@ -158,16 +147,19 @@ def installed_mcp_status(mcp_path: Path) -> dict[str, Any]:
     servers = payload.get("mcpServers") or {}
     matching = []
     for name, entry in servers.items():
-        env = entry.get("env") or {}
-        essential = str(env.get("MCP_ESSENTIAL_TOOLS") or "").strip().lower()
-        if essential in {"1", "true", "yes", "on"}:
+        args = [str(item).replace("\\", "/") for item in entry.get("args") or []]
+        if any(
+            item.endswith("/scripts/unreal_rag_direct.py")
+            or item.endswith("/src/direct-server.js")
+            for item in args
+        ):
             matching.append(str(name))
     return {
         "ok": bool(matching),
         "detail": (
-            f"essential profile configured for: {', '.join(matching)}"
+            f"Direct MCP entries configured for: {', '.join(matching)}"
             if matching
-            else "no MCP server has MCP_ESSENTIAL_TOOLS=1"
+            else "no Direct Unreal MCP entry is configured"
         ),
     }
 
@@ -175,7 +167,13 @@ def installed_mcp_status(mcp_path: Path) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify Unreal RAG release readiness.")
     parser.add_argument("--skip-lmstudio", action="store_true")
-    parser.add_argument("--skip-wrapper-dry", action="store_true")
+    parser.add_argument(
+        "--skip-node-entry",
+        "--skip-wrapper-dry",
+        dest="skip_node_entry",
+        action="store_true",
+        help="Skip the Node Direct entry syntax check. The old flag name remains an alias for CLI compatibility.",
+    )
     parser.add_argument(
         "--repo-only",
         action="store_true",
@@ -312,9 +310,9 @@ def main() -> int:
                 "sample_rag_query",
                 [
                     py,
-                    str(SCRIPTS / "evaluate_rag_queries.py"),
-                    "--query-set",
-                    "config/rag_eval_genre_queries.json",
+                    str(SCRIPTS / "direct_rag_probe.py"),
+                    "--index",
+                    str(index),
                 ],
                 timeout_sec=timeout_sec,
             )
@@ -322,35 +320,36 @@ def main() -> int:
 
     results.append(
         run_command_check(
-            "orchestrator_plan",
-            [
-                py,
-                str(SCRIPTS / "agent_orchestrator.py"),
-                "--request",
-                "Fix missing generated.h",
-                "--mode",
-                "compile_fix",
-                "--json",
-            ],
+            "direct_rag_entry",
+            [py, str(SCRIPTS / "unreal_rag_direct.py"), "--help"],
             timeout_sec=timeout_sec,
         )
     )
 
-    if args.skip_wrapper_dry or args.repo_only:
+    if args.skip_node_entry:
         results.append(
             check(
-                "wrapper_dry_run",
+                "direct_node_entry",
                 True,
                 "explicitly skipped",
                 required=False,
                 skipped=True,
             )
         )
+    elif node is None:
+        results.append(
+            check(
+                "direct_node_entry",
+                False,
+                "node executable is missing",
+                proof_level="executed",
+            )
+        )
     else:
         results.append(
             run_command_check(
-                "wrapper_dry_run",
-                [py, str(SCRIPTS / "lmstudio_unreal_wrapper.py"), "--request", "noop", "--dry-run"],
+                "direct_node_entry",
+                [node, "--check", str(ROOT / "lmstudio-unreal-agent-mcp" / "src" / "direct-server.js")],
                 timeout_sec=timeout_sec,
             )
         )

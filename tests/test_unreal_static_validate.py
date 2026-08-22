@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -38,9 +39,9 @@ from unreal_static_validate import (  # noqa: E402
 )
 from collect_unreal_symbols import infer_module_name  # noqa: E402
 from retry_feedback import static_validation_retry_feedback  # noqa: E402
-from bootstrap_local_holdout import write_fixture_case  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "compile_fix_ceiling" / "missing_gameplaytags_dep"
+NAVIGATION_FIXTURE = ROOT / "tests" / "fixtures" / "compile_fix_ceiling" / "missing_navigation_system_dep"
 
 
 def _write(path: Path, content: str) -> None:
@@ -443,9 +444,10 @@ def test_module_fix_c1083_retry_feedback_does_not_block_build_cs_edit() -> None:
 
 
 def test_navigation_build_cs_fix_not_blocked_by_static_gate(tmp_path: Path) -> None:
-    fixture = write_fixture_case("local_navigation_system_missing_module", tmp_path)
-    build_cs = fixture / "Source" / "HoldoutFixture" / "HoldoutFixture.Build.cs"
-    golden_build_cs = fixture / "golden" / "Source" / "HoldoutFixture" / "HoldoutFixture.Build.cs"
+    fixture = tmp_path / "CompileFixNav"
+    shutil.copytree(NAVIGATION_FIXTURE, fixture)
+    build_cs = fixture / "Source" / "CompileFixNav" / "CompileFixNav.Build.cs"
+    golden_build_cs = fixture / "golden" / "Source" / "CompileFixNav" / "CompileFixNav.Build.cs"
 
     build_cs.write_text(golden_build_cs.read_text(encoding="utf-8"), encoding="utf-8")
     findings = validate_unreal_readiness(fixture, skip_include_path_checks=True)

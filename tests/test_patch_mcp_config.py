@@ -14,7 +14,7 @@ def load_module():
     return module
 
 
-def test_prune_forbidden_js_sandbox_auto_approval_patterns() -> None:
+def test_prune_forbidden_mutating_mcp_and_sandbox_auto_approval_patterns() -> None:
     mod = load_module()
     settings = {
         "chat": {
@@ -23,6 +23,7 @@ def test_prune_forbidden_js_sandbox_auto_approval_patterns() -> None:
                 "lmstudio/js-code-sandbox:run_javascript",
                 "lmstudio/js-code-sandbox:*",
                 "mcp/unreal-rag:*",
+                "mcp/unreal-rag:unreal_architecture_reasoning",
             ]
         }
     }
@@ -30,13 +31,13 @@ def test_prune_forbidden_js_sandbox_auto_approval_patterns() -> None:
     removed = mod.prune_forbidden_tool_confirmation_patterns(settings)
 
     assert removed == [
+        "mcp/unreal-agent:*",
         "lmstudio/js-code-sandbox:run_javascript",
         "lmstudio/js-code-sandbox:*",
-    ]
-    assert settings["chat"]["skipToolConfirmationPatterns"] == [
-        "mcp/unreal-agent:*",
         "mcp/unreal-rag:*",
+        "mcp/unreal-rag:unreal_architecture_reasoning",
     ]
+    assert settings["chat"]["skipToolConfirmationPatterns"] == []
 
 
 def test_prune_forbidden_patterns_is_noop_without_chat_settings() -> None:
@@ -74,7 +75,7 @@ def test_patch_unreal_rag_sets_long_tool_timeout(tmp_path) -> None:
     patched = mod.patch_unreal_rag(entry, workspace, python)
 
     assert patched["timeout"] == mod.DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
-    assert patched["args"] == [str(workspace / "scripts" / "unreal_rag_mcp.py")]
+    assert patched["args"] == [str(workspace / "scripts" / "unreal_rag_direct.py")]
 
 
 def test_patch_unreal_rag_overwrites_existing_timeout(tmp_path) -> None:
@@ -88,14 +89,20 @@ def test_patch_unreal_rag_overwrites_existing_timeout(tmp_path) -> None:
     assert patched["timeout"] == mod.DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
 
 
-def test_patch_unreal_rag_repairs_old_strict_proxy_gate_to_advisory(tmp_path) -> None:
+def test_patch_unreal_rag_removes_old_proxy_authority_keys(tmp_path) -> None:
     mod = load_module()
     python = tmp_path / "python.exe"
     python.write_text("", encoding="utf-8")
     entry = {
         "command": "python",
         "args": [],
-        "env": {"MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE": "1"},
+        "env": {
+            "MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE": "1",
+            "MCP_EXECUTION_MODE": "strict",
+            "MCP_EXTENDED_TOOLS": "1",
+            "CONTROL_RUNTIME_REQUIRED": "1",
+            "CONTROL_RUNTIME_MANIFEST": "legacy.json",
+        },
     }
 
     patched = mod.patch_unreal_rag(
@@ -105,14 +112,16 @@ def test_patch_unreal_rag_repairs_old_strict_proxy_gate_to_advisory(tmp_path) ->
         context_compactor_advisory=True,
     )
 
-    assert patched["env"]["MCP_CONTEXT_COMPACTOR_ADVISORY"] == "1"
-    assert patched["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "0"
     assert patched["env"]["MCP_FRONTEND"] == "lmstudio"
-    assert patched["env"]["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] == "lmstudio"
-    assert patched["env"]["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] == "300"
+    assert "MCP_EXECUTION_MODE" not in patched["env"]
+    assert not any(key.startswith("MCP_CONTEXT_COMPACTOR_") for key in patched["env"])
+    assert "MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE" not in patched["env"]
+    assert "MCP_EXTENDED_TOOLS" not in patched["env"]
+    assert "CONTROL_RUNTIME_REQUIRED" not in patched["env"]
+    assert "CONTROL_RUNTIME_MANIFEST" not in patched["env"]
 
 
-def test_patch_unreal_rag_clears_old_strict_gate_when_compactor_is_missing(tmp_path) -> None:
+def test_patch_unreal_rag_clears_old_proxy_keys_regardless_of_install_detection(tmp_path) -> None:
     mod = load_module()
     python = tmp_path / "python.exe"
     python.write_text("", encoding="utf-8")
@@ -133,13 +142,13 @@ def test_patch_unreal_rag_clears_old_strict_gate_when_compactor_is_missing(tmp_p
         context_compactor_advisory=False,
     )
 
-    assert patched["env"]["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "0"
-    assert patched["env"]["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] == "lmstudio"
+    assert "MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE" not in patched["env"]
+    assert "MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS" not in patched["env"]
     assert "MCP_CONTEXT_COMPACTOR_ADVISORY" not in patched["env"]
     assert "MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS" not in patched["env"]
 
 
-def test_patch_unreal_agent_sets_validate_on_write_and_timeout(tmp_path) -> None:
+def test_patch_unreal_agent_selects_direct_entry_and_removes_workflow_gates(tmp_path) -> None:
     mod = load_module()
     node = tmp_path / "node.exe"
     node.write_text("", encoding="utf-8")
@@ -150,15 +159,14 @@ def test_patch_unreal_agent_sets_validate_on_write_and_timeout(tmp_path) -> None
     patched = mod.patch_unreal_agent(entry, ROOT, node, python)
 
     assert patched["timeout"] == mod.DEFAULT_UNREAL_AGENT_MCP_TIMEOUT_MS
-    assert patched["env"]["MCP_REQUIRE_PLAN_AUTH"] == "1"
-    assert patched["env"]["VALIDATE_ON_WRITE"] == "1"
-    assert patched["env"]["VALIDATE_ON_WRITE_TIMEOUT_MS"] == "45000"
-    assert patched["env"]["MCP_AGENT_RESULT_MAX_CHARS"] == "32000"
-    assert patched["env"]["BUILD_VERBOSE_OUTPUT"] == "0"
+    assert patched["args"] == [str(ROOT / "lmstudio-unreal-agent-mcp" / "src" / "direct-server.js")]
+    assert "MCP_EXECUTION_MODE" not in patched["env"]
+    for key in ("MCP_REQUIRE_PLAN_AUTH", "VALIDATE_ON_WRITE", "VALIDATE_ON_WRITE_TIMEOUT_MS", "MCP_AGENT_RESULT_MAX_CHARS", "BUILD_VERBOSE_OUTPUT"):
+        assert key not in patched["env"]
     assert patched["env"]["PYTHON_EXE"] == str(python)
 
 
-def test_patch_unreal_agent_preserves_existing_context_env_values(tmp_path) -> None:
+def test_patch_unreal_agent_removes_existing_proxy_control_values(tmp_path) -> None:
     mod = load_module()
     node = tmp_path / "node.exe"
     node.write_text("", encoding="utf-8")
@@ -175,5 +183,53 @@ def test_patch_unreal_agent_preserves_existing_context_env_values(tmp_path) -> N
     python.write_text("", encoding="utf-8")
     patched = mod.patch_unreal_agent(entry, ROOT, node, python)
 
-    assert patched["env"]["MCP_AGENT_RESULT_MAX_CHARS"] == "12000"
-    assert patched["env"]["BUILD_VERBOSE_OUTPUT"] == "1"
+    assert "MCP_AGENT_RESULT_MAX_CHARS" not in patched["env"]
+    assert "BUILD_VERBOSE_OUTPUT" not in patched["env"]
+
+
+def test_upgrade_cleanup_removes_only_legacy_python_control_entries() -> None:
+    mod = load_module()
+    config = {
+        "mcpServers": {
+            "unreal-rag-strict": {
+                "command": "python",
+                "args": ["renamed.py"],
+                "env": {"MCP_EXECUTION_MODE": "strict"},
+            },
+            "copied-rag": {
+                "command": "C:/Python/python.exe",
+                "args": [r"C:\old\scripts\unreal_rag_mcp.py"],
+            },
+            "renamed-control": {
+                "command": "python3",
+                "args": ["custom_name.py"],
+                "env": {
+                    "CONTROL_RUNTIME_COMPONENT": "rag",
+                    "CONTROL_RUNTIME_MANIFEST": "control-runtime.json",
+                },
+            },
+            "keep-python-strict": {
+                "command": "python",
+                "args": ["unrelated.py"],
+                "env": {"MCP_EXECUTION_MODE": "strict"},
+            },
+            "keep-node-custom": {
+                "command": "node",
+                "args": ["custom.js"],
+                "env": {
+                    "CONTROL_RUNTIME_COMPONENT": "rag",
+                    "CONTROL_RUNTIME_MANIFEST": "custom.json",
+                },
+            },
+            "keep-unrelated": {"command": "example", "args": []},
+        }
+    }
+
+    removed = mod.remove_legacy_python_control_entries(config)
+
+    assert removed == ["unreal-rag-strict", "copied-rag", "renamed-control"]
+    assert set(config["mcpServers"]) == {
+        "keep-python-strict",
+        "keep-node-custom",
+        "keep-unrelated",
+    }

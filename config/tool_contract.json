@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "description": "Authoritative MCP tool contract registry for runtime soak and exposure coherence checks.",
+  "version": 2,
+  "description": "Direct Model Mode capability classification. This registry describes effects and timeouts only; it does not authorize, order, route, or require tool calls.",
   "sourceManifest": "config/stable_tool_manifest.json",
   "timeoutClasses": {
     "fast": 15000,
@@ -10,23 +10,53 @@
     "background": 3600000
   },
   "sideEffectClasses": {
-    "read_only": ["read_file", "read_file_range", "search_files", "unreal_rag_search", "unreal_semantic_refactor_guard"],
-    "write": ["write_file", "replace_in_file", "apply_edit_bundle"],
-    "build": ["build_unreal_project", "unreal_start_compile_loop"],
-    "control_plane": ["unreal_task_start", "unreal_task_cancel", "unreal_task_resume", "unreal_task_status", "unreal_task_checkpoint", "unreal_task_define_slices", "unreal_feature_intent_resolve"]
+    "read_only": [
+      "unreal_get_active_project",
+      "unreal_rag_search",
+      "unreal_symbol_lookup",
+      "unreal_rag_health",
+      "unreal_rag_rebuild_status",
+      "unreal_rag_capabilities",
+      "get_workspace_info",
+      "list_unreal_projects",
+      "get_active_project",
+      "detect_unreal_project",
+      "list_directory",
+      "search_files",
+      "read_file",
+      "read_file_range",
+      "read_symbol",
+      "read_unreal_logs",
+      "propose_file_deletions",
+      "static_validate_project"
+    ],
+    "configuration": ["unreal_set_active_project", "set_active_project"],
+    "write": ["write_file", "replace_in_file", "apply_edit_bundle", "delete_file"],
+    "index_maintenance": ["unreal_rag_refresh"],
+    "diagnostic_process": ["build_unreal_project", "run_unreal_automation_tests", "run_command"]
   },
   "servers": {
     "rag": {
       "essential": "ragEssential",
-      "hiddenUntilControlPlane": "ragHiddenUntilControlPlane"
+      "visible": "ragEssential"
     },
     "agent": {
       "essential": "agentEssential",
-      "hiddenUntilControlPlane": "agentHiddenUntilControlPlane"
+      "visible": "agentEssential"
     }
   },
   "malformedArgsPolicy": {
-    "errorCode": "INVALID_ARGUMENTS",
-    "retryable": false
+    "ragErrorCode": "INVALID_TOOL_ARGUMENTS",
+    "agentErrorCode": "INVALID_ARGUMENTS",
+    "retryableWithCorrectedArguments": true
+  },
+  "conditionalExternalProcesses": {
+    "unreal_rag_refresh": {
+      "argument": "allowEditorLaunch",
+      "requiredValue": true,
+      "scopes": ["editor_metadata", "all"],
+      "defaultScope": "project_source",
+      "effect": "May start an Unreal Editor subprocess to create fresh metadata exports. Without explicit true, only existing exports may be ingested."
+    }
   }
 }

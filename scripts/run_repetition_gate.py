@@ -12,17 +12,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REPEAT = 10
 SUITES = [
-    "tests/test_plan_slice_terminal_state.py",
-    "tests/test_wrapper_slice_progression.py",
-    "tests/test_architecture_evidence_node_execution.py",
-    "tests/test_validation_context_cache.py",
-    "tests/test_mermaid_validate.py",
-    "tests/test_fault_injection_plan_state.py",
+    "tests/test_python_direct_rag_server.py",
+    "tests/test_direct_mcp_subprocess_e2e.py",
     "tests/test_cross_language_tool_contract.py",
-    "tests/test_rag_staleness_search.py",
-    "tests/test_compile_fix_plan_separation.py",
-    "tests/test_job_cancel_deterministic.py",
-    "tests/test_mcp_soak_matrix.py",
+    "tests/test_build_rag_index_atomic.py",
+    "tests/test_atomic_io.py",
 ]
 
 

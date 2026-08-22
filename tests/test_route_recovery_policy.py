@@ -1,52 +1,88 @@
+"""Removal regressions for the historical server-owned route recovery policy.
+
+The filename is retained so downstream test selectors keep working, but the
+contract is intentionally inverted: Direct servers expose capabilities and the
+selected model owns recovery and tool order.
+"""
+
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-
-from route_recovery_policy import (  # noqa: E402
-    load_route_recovery_policy,
-    recovery_codes,
-    route_recovery_action,
-)
 
 
-def test_every_recovery_code_has_one_declared_action() -> None:
-    policy = load_route_recovery_policy()
-    actions = policy["defaultActions"]
-    assert recovery_codes("recoveryActionCodes") == frozenset(actions)
-    for error_code in actions:
-        recovery = route_recovery_action(error_code)
-        assert recovery["action"]
-        assert isinstance(recovery["isTool"], bool)
+def _json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
-def test_all_declared_tool_actions_exist_in_stable_public_catalog() -> None:
-    policy = load_route_recovery_policy()
-    manifest = json.loads(
-        (ROOT / "config" / "stable_tool_manifest.json").read_text(encoding="utf-8")
-    )
+def test_direct_public_catalog_contains_no_task_or_recovery_actions() -> None:
+    manifest = _json(ROOT / "config" / "stable_tool_manifest.json")
     public_tools = set(manifest["ragEssential"]) | set(manifest["agentEssential"])
-    tool_actions = {
-        str(item["action"])
-        for item in policy["defaultActions"].values()
-        if item.get("isTool") is True
+    removed_route_tools = {
+        "unreal_agent_plan",
+        "unreal_code_sketch_claim_validate",
+        "unreal_project_status",
+        "unreal_task_checkpoint",
+        "unreal_task_list_active",
+        "unreal_task_quarantine_corrupt",
     }
-    tool_actions.add(str(policy["fallbackAction"]["action"]))
-    assert tool_actions <= public_tools
+
+    assert public_tools.isdisjoint(removed_route_tools)
+    assert not any(name.startswith("unreal_task_") for name in public_tools)
+    assert "ragHiddenUntilControlPlane" not in manifest
+    assert "agentHiddenUntilControlPlane" not in manifest
 
 
-def test_auth_mismatch_routes_to_real_tool_without_exposing_a_fake_action() -> None:
-    recovery = route_recovery_action("TASK_AUTH_MISMATCH")
-    assert recovery == {"action": "unreal_agent_plan", "isTool": True}
+def test_default_mcp_templates_select_dedicated_direct_entries() -> None:
+    combined = _json(ROOT / "config" / "cline_mcp_settings.template.json")
+    agent = _json(
+        ROOT
+        / "lmstudio-unreal-agent-mcp"
+        / "config"
+        / "lmstudio-mcp-unreal-agent.json.template"
+    )
+
+    assert combined["mcpServers"]["unreal-rag"]["args"][-1].endswith(
+        "/scripts/unreal_rag_direct.py"
+    )
+    assert combined["mcpServers"]["unreal-agent"]["args"][-1].endswith(
+        "/src/direct-server.js"
+    )
+    assert agent["mcpServers"]["unreal-agent"]["args"][-1].endswith(
+        "\\src\\direct-server.js"
+    )
+    assert "MCP_EXECUTION_MODE" not in json.dumps(
+        {"combined": combined, "agent": agent},
+        ensure_ascii=False,
+    )
 
 
-def test_unknown_code_falls_back_to_active_task_listing() -> None:
-    assert route_recovery_action("SOMETHING_NEW") == {
-        "action": "unreal_task_list_active",
-        "isTool": True,
+def test_direct_composition_roots_do_not_import_legacy_route_owners() -> None:
+    sources = {
+        "node": (
+            ROOT / "lmstudio-unreal-agent-mcp" / "src" / "direct-server.js"
+        ).read_text(encoding="utf-8"),
+        "python": (ROOT / "scripts" / "unreal_rag_direct.py").read_text(
+            encoding="utf-8"
+        ),
     }
+    forbidden = (
+        "task-auth",
+        "phase_tool_router",
+        "route-recovery-policy",
+        "route_recovery_policy",
+        "synthesis-readiness",
+        "synthesis_readiness",
+    )
+
+    for runtime, source in sources.items():
+        assert all(name not in source for name in forbidden), runtime
+
+
+def test_historical_python_monolith_is_quarantined_from_the_product_runtime() -> None:
+    assert not (ROOT / "scripts" / "unreal_rag_mcp.py").exists()
+    assert (ROOT / "legacy_eval" / "scripts" / "unreal_rag_mcp.py").is_file()
+    assert (ROOT / "scripts" / "unreal_rag_direct.py").is_file()

@@ -1,10 +1,10 @@
 {
-  "_comment": "Example MCP config for lmstudio-unreal-agent-mcp. The root integrated installer manages %USERPROFILE%\\.lmstudio\\mcp.json. ALLOW_WRITE/COMMANDS/UNREAL_BUILD default to 0 (read-only safe mode). Choose AGENT authority only for trusted projects. write_file is create-only: it never overwrites an existing file (use replace_in_file to edit). Do NOT set ALLOW_EXISTING_SOURCE_WRITE unless you deliberately need a one-off manual overwrite; unset it right after.",
+  "_comment": "Default Direct Model Mode example. The root installer manages %USERPROFILE%\\.lmstudio\\mcp.json. Reads are task-free; ALLOW_WRITE/COMMANDS/UNREAL_BUILD default to 0. write_file is create-only and replace_in_file requires the current SHA-256. Pass project on individual calls when one process serves multiple Unreal projects.",
   "mcpServers": {
     "unreal-agent": {
       "command": "node",
       "args": [
-        "%USERPROFILE%\\.lmstudio\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-unreal-agent-mcp\\src\\server.js"
+        "%USERPROFILE%\\.lmstudio\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-unreal-agent-mcp\\src\\direct-server.js"
       ],
       "env": {
         "WORKSPACE_ROOT": "%USERPROFILE%\\Documents",

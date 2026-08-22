@@ -20,7 +20,6 @@ from unreal_static_validate import (
     resolve_write_scope_paths,
     validate_unreal_readiness,
 )
-from workspace_paths import resolve_index_dir
 
 
 @dataclass
@@ -65,7 +64,6 @@ def normalize_scope_target(value: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Unreal project sources")
     parser.add_argument("--project-root", type=Path, required=True)
-    parser.add_argument("--module-graph", type=Path, default=None)
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
         "--write-target",
@@ -102,11 +100,6 @@ def main() -> int:
         )
         return 2
 
-    module_graph = args.module_graph
-    if module_graph is None:
-        default_graph = resolve_index_dir() / "raw_module_graph.jsonl"
-        module_graph = default_graph if default_graph.is_file() else None
-
     write_target = args.write_target
     try:
         scope_targets = list(
@@ -127,7 +120,7 @@ def main() -> int:
         scoped_file_count = len(scope)
         scan_mode = "scoped"
         scope_kind = "write_target"
-        findings = validate_unreal_readiness(root, module_graph, scope_paths=scope)
+        findings = validate_unreal_readiness(root, scope_paths=scope)
     elif scope_targets:
         scope_by_path: dict[Path, None] = {}
         for target in scope_targets:
@@ -137,9 +130,9 @@ def main() -> int:
         scoped_file_count = len(scope)
         scan_mode = "scoped"
         scope_kind = "task_slice"
-        findings = validate_unreal_readiness(root, module_graph, scope_paths=scope)
+        findings = validate_unreal_readiness(root, scope_paths=scope)
     else:
-        findings = validate_unreal_readiness(root, module_graph)
+        findings = validate_unreal_readiness(root)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
     has_errors = has_static_errors(findings)

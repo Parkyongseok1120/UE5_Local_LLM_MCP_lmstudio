@@ -5,12 +5,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from index_inputs import RAW_INPUT_FILES, existing_input_paths
+from index_inputs import (
+    FORBIDDEN_RAW_INPUT_FILES,
+    INDEX_INPUT_POLICY_FINGERPRINT,
+    RAW_INPUT_FILES,
+    existing_input_paths,
+)
+from rag_build_metadata_projection import chunk_metadata_policy
 from workspace_paths import find_workspace_root, resolve_index_dir
 
 
@@ -18,12 +23,45 @@ def input_paths(data_dir: Path) -> list[Path]:
     return existing_input_paths(data_dir)
 
 
+def _missing_recorded_inputs(manifest: dict, inputs: list[Path]) -> list[str]:
+    recorded = {
+        str(item.get("path") or ""): item
+        for item in manifest.get("inputs", [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    }
+    current_inputs = {str(path.resolve()) for path in inputs}
+    return sorted(
+        Path(recorded_path).name
+        for recorded_path, info in recorded.items()
+        if (
+            Path(recorded_path).name in RAW_INPUT_FILES
+            or Path(recorded_path).name in FORBIDDEN_RAW_INPUT_FILES
+        )
+        and info.get("exists", True) is not False
+        and recorded_path not in current_inputs
+    )
+
+
 def manifest_stale(data_dir: Path, manifest_path: Path, sqlite_path: Path) -> tuple[bool, str]:
     if not sqlite_path.exists():
         return True, "index-missing"
 
     inputs = input_paths(data_dir)
+    manifest: dict = {}
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return True, "manifest-invalid"
+        if manifest.get("inputPolicyFingerprint") != INDEX_INPUT_POLICY_FINGERPRINT:
+            return True, "input-policy-changed"
+        if manifest.get("chunkMetadataPolicy") != chunk_metadata_policy():
+            return True, "chunk-metadata-policy-changed"
     if not inputs:
+        if manifest:
+            missing_recorded = _missing_recorded_inputs(manifest, inputs)
+            if missing_recorded:
+                return True, f"manifest-input-missing ({', '.join(missing_recorded)})"
         return False, "no-inputs"
 
     newest_input = max(inputs, key=lambda path: path.stat().st_mtime)
@@ -38,12 +76,14 @@ def manifest_stale(data_dir: Path, manifest_path: Path, sqlite_path: Path) -> tu
     if not manifest_path.exists():
         return True, "manifest-missing"
 
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except Exception:
-        return True, "manifest-invalid"
-
-    recorded = {item["path"]: item for item in manifest.get("inputs", []) if isinstance(item, dict)}
+    recorded = {
+        str(item.get("path") or ""): item
+        for item in manifest.get("inputs", [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    }
+    missing_recorded = _missing_recorded_inputs(manifest, inputs)
+    if missing_recorded:
+        return True, f"manifest-input-missing ({', '.join(missing_recorded)})"
     for path in inputs:
         resolved = str(path.resolve())
         info = recorded.get(resolved)
@@ -72,37 +112,47 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", type=Path, default=None, help="Output directory (default: configured RAG data directory).")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--engine-version", default=None)
+    parser.add_argument("--engine-association", default=None)
+    parser.add_argument("--project", type=Path, default=None, help="Exact .uproject engine provenance.")
     args = parser.parse_args()
 
     workspace = find_workspace_root()
+    from direct_rag_build_binding import resolve_build_binding
+
+    binding = resolve_build_binding(
+        workspace,
+        args.project,
+        args.engine_version,
+        args.engine_association,
+    )
+    if binding.get("ok") is not True:
+        print(f"error: {binding.get('error')}", file=sys.stderr)
+        return 2
     data_dir = args.out_dir.resolve() if args.out_dir and args.out_dir.is_absolute() else (
         (workspace / args.out_dir).resolve() if args.out_dir else resolve_index_dir(workspace)
     )
-    manifest_path = data_dir / "build_manifest.json"
-    sqlite_path = data_dir / "rag.sqlite"
+    from direct_rag_public_build import build_public_index
 
-    stale, reason = manifest_stale(data_dir, manifest_path, sqlite_path)
-    if not args.force and not stale:
-        print(f"skip: {reason}")
-        return 0
-
-    inputs = input_paths(data_dir)
-    if not inputs:
-        print("error: no raw input jsonl files found", file=sys.stderr)
-        return 1
-
-    cmd = [
-        sys.executable,
-        str(workspace / "scripts" / "build_rag_index.py"),
-        "--out-dir",
-        str(data_dir),
-        "--workspace-root",
-        str(workspace),
-        "--input",
-        *[str(path) for path in inputs],
-    ]
-    print(f"rebuild: {reason}")
-    return subprocess.call(cmd, cwd=workspace)
+    result = build_public_index(
+        workspace=workspace,
+        index_dir=data_dir,
+        force=args.force,
+        stale_check=manifest_stale,
+        engine_version=binding.get("engineVersion"),
+        engine_association=binding.get("engineAssociation"),
+        engine_root=str(binding.get("engineRoot") or ""),
+    )
+    if result.get("skipped"):
+        print(f"skip: {result.get('reason') or 'up-to-date'}")
+    elif result.get("ok"):
+        print(f"rebuild: {result.get('reason') or 'stale'}")
+        output = str((result.get("build") or {}).get("outputTail") or "")
+        if output:
+            print(output, end="" if output.endswith("\n") else "\n")
+    else:
+        print(f"error: {result.get('error') or 'RAG build failed'}", file=sys.stderr)
+    return 0 if result.get("ok") else 1
 
 
 if __name__ == "__main__":

@@ -64,6 +64,42 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert manifest["portablePackage"]["releaseReady"] is False
 
 
+def test_installer_upgrade_cleanup_preserves_unrelated_custom_mcps() -> None:
+    module = _load_installer_module()
+    config = {
+        "mcpServers": {
+            "unreal-rag-strict": {
+                "command": "python",
+                "args": ["copy.py"],
+                "env": {"MCP_EXECUTION_MODE": "strict"},
+            },
+            "renamed-old-rag": {
+                "command": "python.exe",
+                "args": ["C:/old/scripts/unreal_rag_mcp.py"],
+            },
+            "renamed-control": {
+                "command": "python3",
+                "args": ["renamed.py"],
+                "env": {
+                    "CONTROL_RUNTIME_COMPONENT": "rag",
+                    "CONTROL_RUNTIME_REQUIRED": "1",
+                },
+            },
+            "keep-custom": {
+                "command": "python",
+                "args": ["custom.py"],
+                "env": {"MCP_EXECUTION_MODE": "strict"},
+            },
+        }
+    }
+
+    removed = module._remove_legacy_python_control_entries(config)
+
+    assert removed == ["unreal-rag-strict", "renamed-old-rag", "renamed-control"]
+    assert set(config["mcpServers"]) == {"keep-custom"}
+    sys.modules.pop("integrated_install", None)
+
+
 @pytest.mark.parametrize(
     ("system_name", "unreal_platform"),
     [("Windows", "Win64"), ("Darwin", "Mac"), ("Linux", "Linux")],
@@ -573,6 +609,7 @@ def test_safe_profile_normalizes_known_existing_unsafe_state(tmp_path: Path) -> 
                         "mcp/unreal-agent:*",
                         "mcp/unreal-rag:*",
                         "lmstudio/js-code-sandbox:*",
+                        "mcp/unreal-rag:unreal_architecture_reasoning",
                     ]
                 }
             }
@@ -587,8 +624,58 @@ def test_safe_profile_normalizes_known_existing_unsafe_state(tmp_path: Path) -> 
     mcp = json.loads((lmstudio / "mcp.json").read_text(encoding="utf-8"))
     env = mcp["mcpServers"]["unreal-agent"]["env"]
     assert {env[key] for key in ("ALLOW_WRITE", "ALLOW_COMMANDS", "ALLOW_UNREAL_BUILD")} == {"0"}
+    assert "VALIDATE_ON_WRITE" not in env
     settings = json.loads((lmstudio / "settings.json").read_text(encoding="utf-8"))
     assert settings["chat"]["skipToolConfirmationPatterns"] == ["keep-me"]
+
+
+def test_standard_upgrade_removes_stale_python_controller_entries_and_reports_them(
+    tmp_path: Path,
+) -> None:
+    lmstudio = tmp_path / "lmstudio"
+    lmstudio.mkdir()
+    (lmstudio / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "unreal-rag-strict": {
+                        "command": "python",
+                        "args": ["renamed.py"],
+                        "env": {"MCP_EXECUTION_MODE": "strict"},
+                    },
+                    "copied-old-rag": {
+                        "command": "python",
+                        "args": ["C:/old/scripts/unreal_rag_mcp.py"],
+                    },
+                    "keep-custom": {"command": "custom", "args": ["server"]},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(
+        tmp_path,
+        "--profile",
+        "standard",
+        "--skip-deps",
+        "--workspace-root",
+        str(tmp_path / "projects"),
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = json.loads(result.stdout)
+    assert "mcpServers.unreal-rag-strict:removed_legacy_python_control" in report[
+        "safetyNormalizations"
+    ]
+    assert "mcpServers.copied-old-rag:removed_legacy_python_control" in report[
+        "safetyNormalizations"
+    ]
+    config = json.loads((lmstudio / "mcp.json").read_text(encoding="utf-8"))
+    assert "unreal-rag-strict" not in config["mcpServers"]
+    assert "copied-old-rag" not in config["mcpServers"]
+    assert "keep-custom" in config["mcpServers"]
+    assert config["mcpServers"]["unreal-rag"]["args"][0].endswith("unreal_rag_direct.py")
 
 
 def test_dry_run_is_zero_mutation(tmp_path: Path) -> None:
@@ -664,7 +751,7 @@ def test_runtime_bootstrap_only_requests_components_that_need_runtimes() -> None
         True,
         False,
     )
-    assert module._runtime_requirements({"unreal"}, build_rag=True) == (True, True)
+    assert module._runtime_requirements({"unreal"}, build_rag=True) == (True, False)
     sys.modules.pop("integrated_install", None)
 
 
@@ -841,6 +928,23 @@ def test_rag_build_rejects_profiles_without_unreal_component(tmp_path: Path) -> 
 
 
 def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) -> None:
+    lmstudio = tmp_path / "lmstudio"
+    lmstudio.mkdir()
+    (lmstudio / "settings.json").write_text(
+        json.dumps(
+            {
+                "chat": {
+                    "skipToolConfirmationPatterns": [
+                        "keep-me",
+                        "mcp/unreal-agent:*",
+                        "mcp/unreal-rag:*",
+                        "mcp/unreal-rag:unreal_architecture_reasoning",
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     result = _run(
         tmp_path,
         "--profile",
@@ -862,6 +966,9 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
     assert payload["unrealAgentDependency"]["source"] == "preinstalled_skip_deps"
     mcp = json.loads((tmp_path / "lmstudio" / "mcp.json").read_text(encoding="utf-8"))
     env = mcp["mcpServers"]["unreal-agent"]["env"]
+    assert mcp["mcpServers"]["unreal-agent"]["args"] == [
+        str(ROOT / "lmstudio-unreal-agent-mcp" / "src" / "direct-server.js")
+    ]
     assert Path(env["PYTHON_EXE"]).resolve() == Path(sys.executable).resolve()
     assert {
         env[key]
@@ -869,16 +976,24 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
             "ALLOW_WRITE",
             "ALLOW_COMMANDS",
             "ALLOW_UNREAL_BUILD",
-            "VALIDATE_ON_WRITE",
         )
     } == {"1"}
     runtime_manifest_path = tmp_path / "lmstudio" / "config" / "control-runtime.json"
-    runtime_manifest = json.loads(runtime_manifest_path.read_text(encoding="utf-8"))
-    assert payload["controlRuntimeManifest"] == str(runtime_manifest_path)
-    assert set(runtime_manifest["components"]) == {"agent", "rag", "compactor"}
-    assert runtime_manifest["expectedSourceGitCommit"] == runtime_manifest["components"]["agent"]["gitCommit"]
-    assert env["CONTROL_RUNTIME_MANIFEST"] == str(runtime_manifest_path)
-    assert env["CONTROL_RUNTIME_REQUIRED"] == "1"
+    assert not runtime_manifest_path.exists()
+    assert "controlRuntimeManifest" not in payload
+    assert "MCP_EXECUTION_MODE" not in env
+    assert "CONTROL_RUNTIME_MANIFEST" not in env
+    rag_env = mcp["mcpServers"]["unreal-rag"]["env"]
+    assert "CONTROL_RUNTIME_MANIFEST" not in rag_env
+    assert "CONTROL_RUNTIME_REQUIRED" not in rag_env
+    assert "MCP_REQUIRE_PLAN_AUTH" not in env
+    assert "VALIDATE_ON_WRITE" not in env
+    settings = json.loads((lmstudio / "settings.json").read_text(encoding="utf-8"))
+    assert settings["chat"]["skipToolConfirmationPatterns"] == ["keep-me"]
+    assert any(
+        "mcp/unreal-agent:*" in item
+        for item in payload["safetyNormalizations"]
+    )
     installed_runtime_manifest = (
         tmp_path
         / "lmstudio"
@@ -888,12 +1003,10 @@ def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) ->
         / "unreal-context-compactor"
         / "control-runtime.json"
     )
-    assert installed_runtime_manifest.is_file()
-    installed_compactor_runtime = json.loads(installed_runtime_manifest.read_text(encoding="utf-8"))
-    assert installed_compactor_runtime["expectedSourceGitCommit"] == runtime_manifest["expectedSourceGitCommit"]
+    assert not installed_runtime_manifest.exists()
 
 
-def test_full_agent_install_keeps_context_proxy_advisory(tmp_path: Path) -> None:
+def test_full_agent_install_keeps_compactor_independent_from_mcp_authority(tmp_path: Path) -> None:
     module = _load_installer_module()
     args = module.build_parser().parse_args(["--profile", "full"])
     args.enable_agent_mode = True
@@ -909,18 +1022,16 @@ def test_full_agent_install_keeps_context_proxy_advisory(tmp_path: Path) -> None
     )
     rag_env = entries["unreal-rag"]["env"]
     assert rag_env["MCP_FRONTEND"] == "lmstudio"
-    assert rag_env["MCP_CONTEXT_COMPACTOR_ADVISORY"] == "1"
-    assert rag_env["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] == "0"
-    assert rag_env["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] == "lmstudio"
-    assert rag_env["MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS"] == "300"
-    manifest_path = tmp_path / "lmstudio" / "config" / "control-runtime.json"
-    for name in ("unreal-rag", "unreal-agent"):
-        runtime_env = entries[name]["env"]
-        assert runtime_env["CONTROL_RUNTIME_MANIFEST"] == str(manifest_path)
-        assert runtime_env["CONTROL_RUNTIME_REQUIRED"] == "1"
-    assert rag_env["CONTROL_RUNTIME_COMPONENT"] == "rag"
-    assert entries["unreal-agent"]["env"]["CONTROL_RUNTIME_COMPONENT"] == "agent"
-    assert entries["unreal-rag"]["args"] == [str(ROOT / "scripts" / "unreal_rag_mcp.py")]
+    assert not any(key.startswith("MCP_CONTEXT_COMPACTOR_") for key in rag_env)
+    assert "MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE" not in rag_env
+    runtime_env = entries["unreal-rag"]["env"]
+    assert "CONTROL_RUNTIME_MANIFEST" not in runtime_env
+    assert "CONTROL_RUNTIME_REQUIRED" not in runtime_env
+    assert "CONTROL_RUNTIME_COMPONENT" not in rag_env
+    assert "MCP_EXECUTION_MODE" not in entries["unreal-agent"]["env"]
+    assert "CONTROL_RUNTIME_COMPONENT" not in entries["unreal-agent"]["env"]
+    assert entries["unreal-rag"]["args"] == [str(ROOT / "scripts" / "unreal_rag_direct.py")]
+    assert entries["unreal-agent"]["args"] == [str(ROOT / "lmstudio-unreal-agent-mcp" / "src" / "direct-server.js")]
     sys.modules.pop("integrated_install", None)
 
 
@@ -943,7 +1054,7 @@ def test_cline_entries_do_not_inherit_lmstudio_context_policy(tmp_path: Path) ->
     cline_agent = module._mcp_entry_for_frontend(entries["unreal-agent"], "cline")
 
     assert entries["unreal-rag"]["env"]["MCP_FRONTEND"] == "lmstudio"
-    assert entries["unreal-rag"]["env"]["MCP_CONTEXT_COMPACTOR_ADVISORY"] == "1"
+    assert not any(key.startswith("MCP_CONTEXT_COMPACTOR_") for key in entries["unreal-rag"]["env"])
     assert cline_rag["env"]["MCP_FRONTEND"] == "cline"
     assert cline_agent["env"]["MCP_FRONTEND"] == "cline"
     assert module.LMSTUDIO_CONTEXT_POLICY_ENV.isdisjoint(cline_rag["env"])
@@ -1167,10 +1278,6 @@ def test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded(
         (tmp_path / "lmstudio" / "config" / "unreal-workspace.json").read_text(encoding="utf-8")
     )
     mcp = json.loads((tmp_path / "lmstudio" / "mcp.json").read_text(encoding="utf-8"))
-    manifest = json.loads(
-        (tmp_path / "lmstudio" / "config" / "control-runtime.json").read_text(encoding="utf-8")
-    )
-    commit = manifest["components"]["agent"]["gitCommit"]
     assert shared["engineRootsByAssociation"][association] == str(engine)
     assert (
         mcp["mcpServers"]["unreal-rag"]["env"]["UNREAL_ENGINE_ROOT_ASSOCIATION"]
@@ -1180,10 +1287,10 @@ def test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded(
         mcp["mcpServers"]["unreal-agent"]["env"]["UNREAL_ENGINE_ROOT_ASSOCIATION"]
         == association
     )
-    assert mcp["mcpServers"]["unreal-rag"]["env"]["CONTROL_RUNTIME_GIT_COMMIT"] == commit
-    assert mcp["mcpServers"]["unreal-agent"]["env"]["CONTROL_RUNTIME_GIT_COMMIT"] == commit
-    assert mcp["mcpServers"]["unreal-rag"]["env"]["CONTROL_RUNTIME_EXPECTED_GIT_COMMIT"] == commit
-    assert mcp["mcpServers"]["unreal-agent"]["env"]["CONTROL_RUNTIME_EXPECTED_GIT_COMMIT"] == commit
+    assert "CONTROL_RUNTIME_GIT_COMMIT" not in mcp["mcpServers"]["unreal-rag"]["env"]
+    assert "CONTROL_RUNTIME_GIT_COMMIT" not in mcp["mcpServers"]["unreal-agent"]["env"]
+    assert "CONTROL_RUNTIME_EXPECTED_GIT_COMMIT" not in mcp["mcpServers"]["unreal-rag"]["env"]
+    assert "CONTROL_RUNTIME_EXPECTED_GIT_COMMIT" not in mcp["mcpServers"]["unreal-agent"]["env"]
 
 
 def test_custom_active_project_engine_fails_closed_without_an_exact_binding(tmp_path: Path) -> None:
@@ -1239,7 +1346,7 @@ def test_selected_engine_writes_dynamic_index_config_for_unpinned_rag_mcp(tmp_pa
     ).resolve()
     assert Path(shared["indexPath"]).resolve() == managed_index
     assert mcp["mcpServers"]["unreal-rag"]["args"] == [
-        str(ROOT / "scripts" / "unreal_rag_mcp.py"),
+        str(ROOT / "scripts" / "unreal_rag_direct.py"),
         "--index",
         str(managed_index),
     ]
@@ -1329,8 +1436,8 @@ def test_invalid_unreal_engine_environment_fails_instead_of_silently_falling_bac
     assert "UNREAL_ENGINE_ROOT does not contain a usable Unreal Engine layout" in result.stdout
 
 
-@pytest.mark.parametrize("tier", ["standard", "full"])
-def test_rag_build_uses_tier_aware_collection_pipeline(tmp_path: Path, tier: str) -> None:
+@pytest.mark.parametrize("tier", ["lite", "standard", "full"])
+def test_rag_build_uses_transactional_direct_python_plan(tmp_path: Path, tier: str) -> None:
     result = _run(
         tmp_path,
         "--profile",
@@ -1345,14 +1452,21 @@ def test_rag_build_uses_tier_aware_collection_pipeline(tmp_path: Path, tier: str
     )
     assert result.returncode == 0, result.stderr or result.stdout
     combined = f"{result.stdout}\n{result.stderr}"
-    assert "run_index_pipeline.ps1" in combined
-    assert f"-Tier {tier}" in combined
-    assert "-PythonExe" in combined
-    assert "rag.ps1 build" not in combined
-    if sys.platform == "win32":
-        assert "-NoProfile -ExecutionPolicy Bypass -File" in combined
+    payload = json.loads(result.stdout[result.stdout.find("{") :])
+    assert payload["ragBuild"]["tier"] == tier
+    assert payload["ragBuild"]["transactional"] is True
+    assert "collect_unreal_projects.py" in combined
+    assert "direct_rag_build_generation.py" in combined
+    assert "run_index_pipeline.ps1" not in combined
+    assert "warm_symbol_cache.py" not in combined
+    assert "rag_search.py" not in combined
+    assert "pwsh" not in combined.lower()
+    if tier == "lite":
+        assert "collect_unreal_symbols.py" not in combined
+        assert "collect_unreal_source.py" not in combined
     else:
-        assert "-ExecutionPolicy" not in combined
+        assert "collect_unreal_symbols.py" in combined
+        assert ("collect_unreal_source.py" in combined) is (tier == "full")
 
 
 @pytest.mark.parametrize(
@@ -1446,26 +1560,397 @@ def test_powershell_file_command_bypasses_restricted_process_policy(tmp_path: Pa
     assert completed.stdout.strip() == "policy-smoke"
 
 
-def test_tier_pipeline_removes_inputs_excluded_by_standard_and_lite() -> None:
-    pipeline = (ROOT / "scripts" / "run_index_pipeline.ps1").read_text(encoding="utf-8")
-    assert 'if ($resolvedTier -ne "full")' in pipeline
-    assert 'Remove-TierInput -Path $sourcePath -Reason "excluded by $resolvedTier tier"' in pipeline
-    for path_name in (
-        "$symbolsPath",
-        "$moduleGraphPath",
-        "$projectSymbolsPath",
-        "$projectProfilesPath",
-        "$projectArchitecturePath",
-    ):
-        assert path_name in pipeline
+@pytest.mark.parametrize(
+    ("tier", "has_symbols", "has_source"),
+    [("lite", False, False), ("standard", True, False), ("full", True, True)],
+)
+def test_direct_rag_plan_owns_tier_pruning_and_collector_order(
+    tmp_path: Path,
+    tier: str,
+    has_symbols: bool,
+    has_source: bool,
+) -> None:
+    from installer.direct_rag_build import create_direct_rag_build_plan
 
-
-def test_tier_pipeline_collects_portable_guideline_inputs_before_build() -> None:
-    pipeline = (ROOT / "scripts" / "run_index_pipeline.ps1").read_text(encoding="utf-8")
-    assert 'collect_project_guidelines.py' in pipeline
-    assert 'collect_game_design_docs.py' in pipeline
-    assert '$guidelinesRoot = Join-Path $workspace "RAG_Project_Guidelines"' in pipeline
-    assert '$gameDesignRoot = Join-Path $workspace "Game_Design_Docs"' in pipeline
-    assert pipeline.index('Write-Host "[1/9] collect-guidelines"') < pipeline.index(
-        'Write-Host "[9/9] build index"'
+    guidelines = tmp_path / "guidelines"
+    game_design = tmp_path / "game-design"
+    guidelines.mkdir()
+    game_design.mkdir()
+    plan = create_direct_rag_build_plan(
+        python_executable=Path(sys.executable),
+        index_dir=tmp_path / "index" / "rag.sqlite",
+        tier=tier,
+        project_roots=[tmp_path / "projects"],
+        active_project=None,
+        engine_root=tmp_path / "UE_5.8",
+        guidelines_root=guidelines,
+        game_design_root=game_design,
+        dry_run=True,
     )
+
+    names = [step.name for step in plan.steps]
+    assert names[:3] == ["collect-guidelines", "collect-game-design", "collect-projects"]
+    assert names[-1] == "build-index"
+    assert ("collect-engine-public-symbols" in names) is has_symbols
+    assert ("collect-engine-source" in names) is has_source
+    assert ("raw_source.jsonl" in plan.prune_files) is (tier != "full")
+    if tier == "lite":
+        assert "raw_symbols.jsonl" in plan.prune_files
+    assert "run_index_pipeline.ps1" not in " ".join(
+        argument for step in plan.steps for argument in step.command
+    )
+
+
+def _write_tiny_unreal_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    engine = tmp_path / "UE_5.8"
+    engine_header = engine / "Engine" / "Source" / "Runtime" / "Core" / "Public" / "TinyEngineType.h"
+    engine_header.parent.mkdir(parents=True)
+    engine_header.write_text(
+        "#pragma once\nUSTRUCT()\nstruct FTinyEngineType { GENERATED_BODY() };\n",
+        encoding="utf-8",
+    )
+    (engine_header.parents[1] / "Core.Build.cs").write_text(
+        "using UnrealBuildTool; public class Core : ModuleRules { public Core(ReadOnlyTargetRules T) : base(T) {} }\n",
+        encoding="utf-8",
+    )
+
+    project = tmp_path / "TinyProject"
+    descriptor = project / "TinyProject.uproject"
+    source = project / "Source" / "TinyProject"
+    (source / "Public").mkdir(parents=True)
+    descriptor.write_text(
+        json.dumps({"FileVersion": 3, "Modules": [{"Name": "TinyProject", "Type": "Runtime"}]}),
+        encoding="utf-8",
+    )
+    (source / "TinyProject.Build.cs").write_text(
+        "using UnrealBuildTool; public class TinyProject : ModuleRules { public TinyProject(ReadOnlyTargetRules T) : base(T) {} }\n",
+        encoding="utf-8",
+    )
+    (source / "Public" / "TinyActor.h").write_text(
+        "#pragma once\nUCLASS()\nclass UTinyActor { GENERATED_BODY() };\n",
+        encoding="utf-8",
+    )
+    return engine, descriptor
+
+
+def test_direct_rag_plan_builds_and_commits_a_real_current_index(tmp_path: Path) -> None:
+    from installer.direct_rag_build import create_direct_rag_build_plan
+
+    engine, descriptor = _write_tiny_unreal_fixture(tmp_path)
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    (index_dir / "raw_source.jsonl").write_text('{"id":"stale"}\n', encoding="utf-8")
+    plan = create_direct_rag_build_plan(
+        python_executable=Path(sys.executable),
+        index_dir=index_dir,
+        tier="standard",
+        project_roots=[descriptor.parent],
+        active_project=descriptor,
+        engine_root=engine,
+        guidelines_root=tmp_path / "no-guidelines",
+        game_design_root=tmp_path / "no-game-design",
+    )
+    try:
+        for step in plan.steps:
+            completed = subprocess.run(
+                step.command,
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            assert completed.returncode == 0, f"{step.name}: {completed.stdout}\n{completed.stderr}"
+        plan.commit()
+    finally:
+        plan.discard()
+
+    assert not (index_dir / "raw_source.jsonl").exists()
+    for name in (
+        "raw_projects.jsonl",
+        "raw_symbols.jsonl",
+        "raw_project_symbols.jsonl",
+        "raw_project_profiles.jsonl",
+        "raw_project_architecture.jsonl",
+        "rag.sqlite",
+        "build_manifest.json",
+    ):
+        assert (index_dir / name).is_file(), name
+    with sqlite3.connect(index_dir / "rag.sqlite") as connection:
+        assert connection.execute("select count(*) from chunks").fetchone()[0] > 0
+    manifest = json.loads((index_dir / "build_manifest.json").read_text(encoding="utf-8"))
+    assert str(plan.stage_dir) not in json.dumps(manifest)
+
+
+def test_direct_rag_plan_preserves_custom_engine_provenance_in_fresh_index(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import installer.direct_rag_build as direct_build
+
+    engine, descriptor = _write_tiny_unreal_fixture(tmp_path)
+    descriptor.write_text(
+        json.dumps({"FileVersion": 3, "EngineAssociation": "StudioFork"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        direct_build,
+        "project_engine_version",
+        lambda project, _workspace: {
+            "ok": True,
+            "project": str(project),
+            "engineVersion": "5.8",
+            "engineAssociation": "StudioFork",
+            "engineRoot": str(engine),
+        },
+    )
+    index_dir = tmp_path / "custom-index"
+    plan = direct_build.create_direct_rag_build_plan(
+        python_executable=Path(sys.executable),
+        index_dir=index_dir,
+        tier="standard",
+        project_roots=[descriptor],
+        active_project=descriptor,
+        engine_root=engine,
+        guidelines_root=tmp_path / "no-guidelines",
+        game_design_root=tmp_path / "no-game-design",
+    )
+    try:
+        for step in plan.steps:
+            completed = subprocess.run(
+                step.command,
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            assert completed.returncode == 0, f"{step.name}: {completed.stdout}\n{completed.stderr}"
+        plan.commit()
+    finally:
+        plan.discard()
+
+    manifest = json.loads((index_dir / "build_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["engineVersion"] == "5.8"
+    assert manifest["engineAssociation"] == "StudioFork"
+    assert plan.engine_association == "StudioFork"
+
+
+def test_direct_rag_plan_excludes_projects_owned_by_another_engine(
+    tmp_path: Path,
+) -> None:
+    from installer.direct_rag_build import create_direct_rag_build_plan
+
+    engine, selected = _write_tiny_unreal_fixture(tmp_path)
+    selected.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
+    other = selected.parent / "Other.uproject"
+    other.write_text(json.dumps({"EngineAssociation": "5.7"}), encoding="utf-8")
+
+    plan = create_direct_rag_build_plan(
+        python_executable=Path(sys.executable),
+        index_dir=tmp_path / "index",
+        tier="standard",
+        project_roots=[selected.parent],
+        active_project=selected,
+        engine_root=engine,
+        guidelines_root=tmp_path / "no-guidelines",
+        game_design_root=tmp_path / "no-game-design",
+        dry_run=True,
+    )
+
+    assert plan.included_projects == (selected.resolve(),)
+    assert plan.excluded_projects == (other.resolve(),)
+    collect = next(step for step in plan.steps if step.name == "collect-project-set")
+    assert str(selected.resolve()) in collect.command
+    assert str(other.resolve()) not in collect.command
+
+
+def test_standard_plan_collects_every_included_exact_project(tmp_path: Path) -> None:
+    from installer.direct_rag_build import create_direct_rag_build_plan
+
+    engine, project_a = _write_tiny_unreal_fixture(tmp_path)
+    project_a.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
+    project_b = project_a.parent / "SecondProject.uproject"
+    project_b.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
+
+    plan = create_direct_rag_build_plan(
+        python_executable=Path(sys.executable),
+        index_dir=tmp_path / "index",
+        tier="standard",
+        project_roots=[project_a.parent],
+        active_project=project_a,
+        engine_root=engine,
+        guidelines_root=tmp_path / "no-guidelines",
+        game_design_root=tmp_path / "no-game-design",
+        dry_run=True,
+    )
+
+    assert set(plan.included_projects) == {project_a.resolve(), project_b.resolve()}
+    names = [step.name for step in plan.steps]
+    assert "collect-project-set" in names
+    assert not any(name.startswith("collect-active-project-") for name in names)
+    collect = next(step for step in plan.steps if step.name == "collect-project-set")
+    assert collect.command.count("--project") == 2
+    assert str(project_a.resolve()) in collect.command
+    assert str(project_b.resolve()) in collect.command
+
+
+def test_project_set_collector_preserves_same_folder_descriptor_identity(
+    tmp_path: Path,
+) -> None:
+    shared = tmp_path / "Shared"
+    source = shared / "Source" / "Shared" / "Public"
+    source.mkdir(parents=True)
+    project_a = shared / "GameA.uproject"
+    project_b = shared / "GameB.uproject"
+    for descriptor, module in ((project_a, "GameA"), (project_b, "GameB")):
+        descriptor.write_text(
+            json.dumps(
+                {
+                    "EngineAssociation": "5.8",
+                    "Modules": [{"Name": module, "Type": "Runtime"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+    (source.parent / "Shared.Build.cs").write_text(
+        "using UnrealBuildTool; public class Shared : ModuleRules "
+        "{ public Shared(ReadOnlyTargetRules T) : base(T) {} }\n",
+        encoding="utf-8",
+    )
+    (source / "SharedActor.h").write_text(
+        "#pragma once\nUCLASS()\nclass USharedActor { GENERATED_BODY() };\n",
+        encoding="utf-8",
+    )
+    stage = tmp_path / "stage"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "direct_rag_project_set.py"),
+            "--workspace", str(ROOT),
+            "--out-dir", str(stage),
+            "--project", str(project_a),
+            "--project", str(project_b),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    for name in (
+        "raw_projects.jsonl",
+        "raw_project_profiles.jsonl",
+        "raw_project_architecture.jsonl",
+        "raw_project_symbols.jsonl",
+    ):
+        rows = [
+            json.loads(line)
+            for line in (stage / name).read_text(encoding="utf-8").splitlines()
+        ]
+        by_project = {
+            project: {row["id"] for row in rows if row["metadata"]["project"] == project}
+            for project in ("GameA", "GameB")
+        }
+        assert all(by_project.values()), name
+        assert by_project["GameA"].isdisjoint(by_project["GameB"]), name
+        assert {row["metadata"]["project_root"] for row in rows} == {str(shared.resolve())}
+    assert len(list((stage / "project_architecture").glob("*/project_architecture.json"))) == 2
+    assert not list(stage.glob(".project-collection-*"))
+
+
+def test_standard_plan_builds_both_same_binding_projects_end_to_end(
+    tmp_path: Path,
+) -> None:
+    from installer.direct_rag_build import create_direct_rag_build_plan
+
+    engine, project_a = _write_tiny_unreal_fixture(tmp_path)
+    project_a.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
+    project_b = project_a.parent / "SecondProject.uproject"
+    project_b.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
+    index_dir = tmp_path / "index"
+    plan = create_direct_rag_build_plan(
+        python_executable=Path(sys.executable),
+        index_dir=index_dir,
+        tier="standard",
+        project_roots=[project_a.parent],
+        active_project=project_a,
+        engine_root=engine,
+        guidelines_root=tmp_path / "no-guidelines",
+        game_design_root=tmp_path / "no-game-design",
+    )
+    try:
+        for step in plan.steps:
+            completed = subprocess.run(
+                step.command,
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+            assert completed.returncode == 0, (
+                f"{step.name}: {completed.stdout}\n{completed.stderr}"
+            )
+        plan.commit()
+    finally:
+        plan.discard()
+
+    for name in (
+        "raw_projects.jsonl",
+        "raw_project_profiles.jsonl",
+        "raw_project_architecture.jsonl",
+        "raw_project_symbols.jsonl",
+    ):
+        rows = [
+            json.loads(line)
+            for line in (index_dir / name).read_text(encoding="utf-8").splitlines()
+        ]
+        assert {row["metadata"]["project"] for row in rows} == {
+            "TinyProject",
+            "SecondProject",
+        }, name
+    with sqlite3.connect(index_dir / "rag.sqlite") as connection:
+        projects = {
+            row[0]
+            for row in connection.execute(
+                "select distinct project from chunks where project <> ''"
+            )
+        }
+    assert {"TinyProject", "SecondProject"} <= projects
+
+
+def test_failed_direct_rag_stage_leaves_prior_inputs_and_index_byte_stable(tmp_path: Path) -> None:
+    from installer.direct_rag_build import create_direct_rag_build_plan
+
+    _engine, descriptor = _write_tiny_unreal_fixture(tmp_path)
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    old_raw = b'{"id":"prior"}\n'
+    old_index = b"prior-index-bytes"
+    (index_dir / "raw_projects.jsonl").write_bytes(old_raw)
+    (index_dir / "rag.sqlite").write_bytes(old_index)
+    plan = create_direct_rag_build_plan(
+        python_executable=Path(sys.executable),
+        index_dir=index_dir,
+        tier="lite",
+        project_roots=[descriptor.parent],
+        active_project=descriptor,
+        engine_root=None,
+        guidelines_root=tmp_path / "no-guidelines",
+        game_design_root=tmp_path / "no-game-design",
+    )
+    try:
+        first = subprocess.run(plan.steps[0].command, cwd=str(ROOT), check=False, timeout=60)
+        assert first.returncode == 0
+        failed = subprocess.run([sys.executable, "-c", "raise SystemExit(9)"], check=False)
+        assert failed.returncode == 9
+    finally:
+        plan.discard()
+
+    assert (index_dir / "raw_projects.jsonl").read_bytes() == old_raw
+    assert (index_dir / "rag.sqlite").read_bytes() == old_index
+    assert not plan.stage_dir.exists()

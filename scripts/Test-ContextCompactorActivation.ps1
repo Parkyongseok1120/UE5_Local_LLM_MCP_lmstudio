@@ -1,6 +1,5 @@
 param(
-    [string]$StateRoot = "",
-    [switch]$RequireCompaction,
+    [switch]$RequireRuntime,
     [switch]$Json
 )
 
@@ -30,8 +29,7 @@ if (-not (Test-Path -LiteralPath $nodeChecker)) {
 }
 
 $nodeArgs = @($nodeChecker)
-if ($StateRoot) { $nodeArgs += @("--state-root", $StateRoot) }
-if ($RequireCompaction) { $nodeArgs += "--require-compaction" }
+if ($RequireRuntime) { $nodeArgs += "--require-runtime" }
 if ($Json) { $nodeArgs += "--json" }
 & $nodeCommand.Source @nodeArgs
 exit $LASTEXITCODE

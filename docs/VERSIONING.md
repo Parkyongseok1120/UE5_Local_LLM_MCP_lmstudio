@@ -20,6 +20,6 @@ This repository uses **independent version numbers** per component. They are not
 
 For every prerelease or stable tag, record all component versions in the release notes. They may differ. The immutable `v1.3.0-rc2` snapshot contains product 1.3.0 RC2, node 0.3.15, context compactor 0.4.39/revision 85, and portable manifest 2.1.3. The current RC3 correction line is product 1.3.0 RC3, node 0.3.18, context compactor 0.4.43/revision 89, and portable manifest 2.1.7.
 
-The human-facing label is `1.3.0 RC3`. Publish this candidate with the distinct tag `v1.3.0-rc3`. **Do not force-move** any existing RC/Beta tag. RC3 is a GitHub prerelease; `portablePackage.releaseReady` stays `false` until Windows physical installation and the remaining stable-release gates close. See [`docs/Release_Notes_1_3_0_RC3.md`](Release_Notes_1_3_0_RC3.md).
+The human-facing label is `1.3.0 RC3`. Publish this candidate with the distinct tag `v1.3.0-rc3`. **Do not force-move** any existing RC/Beta tag. RC3 is a GitHub prerelease; `portablePackage.releaseReady` stays `false` until Windows physical installation and the remaining stable-release gates close. Repository release notes carry the historical evidence.
 
-See also [`docs/Version_Performance_History.md`](Version_Performance_History.md) for evaluation history tied to product versions.
+Evaluation history tied to product versions remains in the development repository and is intentionally excluded from the portable Direct package.

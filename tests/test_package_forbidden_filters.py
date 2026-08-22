@@ -82,11 +82,27 @@ def test_include_rejects_forbidden_names_outside_scripts(builder, tmp_path: Path
         assert builder._include(relative, include_index=False) is False, name
 
 
-def test_include_keeps_benign_neighbors(builder) -> None:
-    assert builder._include(Path("scripts/build_integrated_package.py"), include_index=False) is True
+def test_include_uses_the_explicit_direct_runtime_allowlist(builder) -> None:
+    assert builder._include(Path("scripts/build_integrated_package.py"), include_index=False) is False
     assert builder._include(Path("docs/Integrated_Installer.md"), include_index=False) is True
+    assert builder._include(Path("scripts/unreal_rag_direct.py"), include_index=False) is True
     assert builder._include(Path("scripts/scratch.bak"), include_index=False) is False
-    assert builder._include(Path("scripts/phase_tool_router.py"), include_index=False) is True
+    assert builder._include(Path("scripts/phase_tool_router.py"), include_index=False) is False
+    assert builder._include(Path("rag.ps1"), include_index=False) is False
+    assert builder._include(Path("scripts/portable_rag.ps1"), include_index=False) is True
+    for legacy_node in (
+        "edit-bundle.js",
+        "mutation-generation.js",
+        "resolve-recovery-journal-cli.js",
+        "state-root.js",
+        "transaction-journal.js",
+        "validate-write.js",
+        "validation-dirty.js",
+    ):
+        assert builder._include(
+            Path("lmstudio-unreal-agent-mcp/src") / legacy_node,
+            include_index=False,
+        ) is False
     assert builder.FORBIDDEN_PACKAGE_MARKERS.search("scripts/local_notes.py") is None
     assert builder.FORBIDDEN_INVENTORY_RE.search("config/workspace.example.json") is None
 

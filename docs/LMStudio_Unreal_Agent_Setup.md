@@ -5,46 +5,63 @@ Use this guide for **LM Studio basic chat** with `unreal-rag` + `unreal-agent` M
 ## 1. Prerequisites
 
 ```powershell
-cd $HOME\.lmstudio\Unreal58-RAG
+# Run from the stable directory where this repository/portable ZIP was extracted.
+cd C:\path\to\UE5_Local_LLM_MCP_lmstudio
 .\rag.ps1 doctor
-.\scripts\installer_support\Verify-UnrealMcp.ps1
 ```
 
-Both should PASS. Engine default: **UE 5.8**.
+The factual health payload should identify the configured index and project
+binding. The saved evaluation baseline uses UE 5.8, but the Direct MCP resolves
+the selected `.uproject` descriptor and supports multiple installed UE 5.x
+versions. Pass an exact per-call project selector and, when discovery cannot
+resolve a custom/source build, an explicit `engineRoot`.
 
 ## 2. MCP configuration
 
 File: `$HOME\.lmstudio\mcp.json`
 
 Required servers:
-- `unreal-rag` — search, health, agent plan
+
+- `unreal-rag` — active-project selection, factual search/symbol evidence, health, and index refresh/status
 - `unreal-agent` — read/write files, UBT build
 
-**LM Studio chat (weak models):** set on **both** servers:
-
-```json
-"MCP_ESSENTIAL_TOOLS": "1"
-```
-
-Installer and `scripts/patch_mcp_config.py` enable this by default. See [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
+The normal entries run **Direct Model Mode**. Their catalog is stable and is not reduced by task state, route phase, or `MCP_ESSENTIAL_TOOLS`. Direct calls do not require `unreal_task_start`, `unreal_agent_plan`, `taskAuthorization`, a required-next-tool handoff, or synthesis acknowledgement. Filesystem containment, hashes, command allowlists, deletion approval, and SAFE/AGENT authority still apply. See [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
 
 After path changes:
 
 ```powershell
-powershell -File $HOME\.lmstudio\scripts\patch_mcp_runtime_paths.ps1
+cd C:\path\to\UE5_Local_LLM_MCP_lmstudio
+python install.py --profile standard --yes
+.\rag.ps1 doctor
 ```
+
+Re-run the same installer profile/options originally used when Agent write/build
+authority was enabled; `standard` above is the read-only/default repair example.
 
 Restart LM Studio so MCP servers reload.
 
+## 2a. Node Strict (optional)
+
+Do not change the installer-managed Direct entries in place. The sole supported Strict implementation is a separately named Node entry:
+
+- Node Strict: copy `unreal-agent` to `unreal-agent-strict` and point it at `lmstudio-unreal-agent-mcp/src/strict-server.js`. Call `strict_begin` to create its conversation-scoped session. Reads/searches remain free; mutations and long-running tools require that session.
+
+The old Python task/route/planner controller is unsupported, is not an MCP configuration option, and is omitted from portable packages. `MCP_EXECUTION_MODE` does not select a supported Python mode. Node Strict has no Python peer, shared session, cross-server authorization, or automatic handoff. Avoid exposing Node Strict beside the same Direct tool names unless duplicate-name debugging is intentional.
+
+Before the model sends its final answer in Node Strict, it must explicitly call `strict_complete`, because MCP transport cannot observe final-answer delivery. Use `strict_fail` or `strict_cancel` for those outcomes. An unfinished session becomes nonblocking `orphaned` state on connection/process shutdown, TTL expiry, or restart; `strict_resume` requires explicit user approval.
+
 ## 2b. Context compactor (multi-turn chats)
 
-> **Important — select `unreal-context-compactor` as the chat model**  
-> 1. Load the underlying LLM (e.g. Qwen) once and leave it loaded.  
-> 2. **Create a new chat.**  
-> 3. In the **model dropdown**, choose **`unreal-context-compactor`**.  
-> The installer installs the plugin but does not change an existing chat’s model. Selecting Qwen directly bypasses compaction.
+> **Select the real LLM; enable the compactor as a chat plugin.**
+>
+> 1. Load and select the actual model you want to use, such as Qwen, in the **model dropdown**.
+> 2. Create or open a chat.
+> 3. Enable **`codex/unreal-context-compactor`** in that chat's **plugin panel**.
+> 4. Keep the real LLM selected. The compactor is not a proxy model and has no `targetModel` setting.
 
-Verify after one message:
+The plugin compacts older model-facing history and passes the selected model's MCP tools through unchanged. It is not a write/build authority signal. Installation pins the plugin but does not prove that it is enabled for a particular chat; confirm the chat-level toggle in LM Studio.
+
+This command verifies the installed source/build wiring, not chat-level activation:
 
 ```powershell
 cd <repo>\lmstudio-context-compactor-plugin
@@ -53,68 +70,70 @@ npm run status
 
 ## 3. System prompt
 
-Base rules: [`prompts/lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_base.md)
+Direct Mode uses [`prompts/lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). It leaves reasoning, tool selection, stopping, and the final answer with the LLM selected in LM Studio while asking for focused evidence, edits, and honest verification. Tool schemas describe their own arguments; do not add task, route, planner, gate, or required-next-tool instructions.
 
-| Model | System prompt |
-|-------|---------------|
-| **Qwen 3.6 27B** (primary) | [`lmstudio_qwen36_27b_compact_system.md`](../prompts/lmstudio_qwen36_27b_compact_system.md) + base |
-| GPT OSS | [`lmstudio_gpt_oss_compact_system.md`](../prompts/lmstudio_gpt_oss_compact_system.md) |
-| Qwen 3.5 9B / 8B | [`lmstudio_compact_mcp_base.md`](../prompts/lmstudio_compact_mcp_base.md) + [`lmstudio_qwen35_9b_compact_system.md`](../prompts/lmstudio_qwen35_9b_compact_system.md) |
+Every currently supported model profile—including Qwen 3.8, Qwen 3.6, Qwen 3.5, GPT OSS, and smaller fallback models—uses the same [`lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). Do not combine it with an older model-specific or `compact_mcp_base` prompt. Historical evaluation prompts encode removed planner/task gates, do not describe the Node `strict_begin` lifecycle, and are excluded from the portable Direct runtime.
 
-Paste the base rules first and the matching model file immediately after them into LM Studio **System Prompt**. A Markdown link in a prompt does not load the linked file into LM Studio.
-
-**Qwen / thinking models:** set thinking OFF for plan, critique, and execute turns. The repository's Qwen 3.5 Flash sampling profile also specifies `thinking: off`; visible reasoning can run before the required first tool call and break the plan/tool contract.
+**Qwen / thinking models:** if visible reasoning causes prose instead of a requested tool call, turn thinking off for bounded edit/build turns. This is a model sampling choice, not a Direct MCP gate.
 
 ## 4. Session start (every chat)
 
-Paste [`prompts/lmstudio_session_bootstrap.md`](../prompts/lmstudio_session_bootstrap.md) as the **first user message**, or manually:
+No server-owned task bootstrap is required. A useful first pass is:
 
 1. `unreal_get_active_project`
-2. If wrong project: `unreal_set_active_project` or `unreal_open_project_picker`
-3. `unreal_rag_health` once
-4. `get_workspace_info` (unreal-agent)
-5. For implementation: `unreal_agent_plan` then `unreal_rag_search` **before** any edit
-6. Use `read_file_range` / `read_file`, then `replace_in_file`; `write_file` is only for brand-new files
+2. If it is not the requested project, pass the exact `.uproject`/project name on the call or use `unreal_set_active_project` / `set_active_project`.
+3. Check `unreal_rag_health` when RAG evidence is needed.
+4. Use `get_workspace_info` when you need the agent's roots and safety flags.
+5. Search or inspect, read the exact target, then use `replace_in_file`; `write_file` is only for brand-new files.
+
+These are practical suggestions, not a required server sequence. The selected model may omit irrelevant steps or call `build_unreal_project` immediately when the user asks only for a build diagnosis.
 
 Do not use `run_javascript`, `js-code-sandbox`, Deno file APIs, Node `fs`, or browser/code-sandbox tools for project file I/O. If LM Studio exposes the JavaScript/TypeScript Code Sandbox plugin, hide or disable it for Unreal coding chats.
 
-Task templates: [`lmstudio_user_compile_fix.md`](../prompts/lmstudio_user_compile_fix.md), [`lmstudio_user_agent_edit.md`](../prompts/lmstudio_user_agent_edit.md), [`lmstudio_user_code_sketch.md`](../prompts/lmstudio_user_code_sketch.md)
+Do not paste saved N-turn/task templates into a Direct chat. They are historical evaluation inputs, not supported MCP instructions or portable runtime assets.
 
 ## 5. Standard loop
 
 ```
-unreal_agent_plan -> RAG search -> read_file_range/read_file -> replace_in_file -> build_unreal_project -> read log on failure
+exact project -> search/inspect -> read_file_range/read_file -> replace_in_file -> optional static_validate_project -> build/test when useful
 ```
 
 Rules:
+
 - Do **not** paste full `.cpp` in chat when MCP write is available.
-- Do **not** say "done" without build output.
+- Do not claim a successful build or test without its output. A source-only task may still finish without a build when that limitation is stated.
 - Existing source files are patch-only. `write_file` is for brand-new files; existing `.h`, `.cpp`, and `.cs` writes are blocked by default in `unreal-agent`.
-- `replace_in_file` / `write_file` run static validation when `VALIDATE_ON_WRITE=1` (default on when `ALLOW_WRITE=1` via `patch_mcp_config.py`; blocks duplicate basenames, bad includes like `Game/Framework/`, and missing project includes).
+- Direct writes enforce containment, create-only/patch-only rules, read-hash concurrency, size limits, atomicity, and locks. Narrow semantic denylist findings are success-response advisories only; analyzer findings or unavailability never authorize or block a Direct write/build. `VALIDATE_ON_WRITE` does not run project-wide static validation or gate a Direct write/build.
+- `static_validate_project` is an independent advisory diagnostic. Its findings do not authorize, roll back, or block `build_unreal_project`.
+- `build_unreal_project` resolves and runs the selected project/version immediately when `ALLOW_UNREAL_BUILD=1`; no task, plan, code-sketch, or static-validation certificate is required.
 
-## 6. Modes
+## 6. RAG query hints
 
-| Task | RAG mode | Notes |
+| Need | Optional RAG hint | Notes |
 |------|----------|-------|
-| New component | `prototype_component` | one UActorComponent |
-| Code sketch / 시안 | `code_sketch` | draft only; symbol-verified, no writes/build |
-| Compile error | `compile_fix` | paste error line |
-| Runtime crash | `runtime_debug` | paste log/callstack |
-| Refactor plan | `refactor_r0`..`r4` | plan only first |
+| New component evidence | `prototype_component` | Prefer component-related engine/project examples |
+| Code evidence | `code_sketch` | Retrieval ranking hint only; it does not draft or validate a plan |
+| Compile error evidence | `compile_fix` | Include the diagnostic text in the query |
+| Runtime crash evidence | `runtime_debug` | Include the log or callstack in the query |
+| Refactor evidence | `refactor_r0`..`r4` | Historical ranking aliases only; they do not create stages or gate Direct tools |
 
-User prompt presets: [`prompts/prototype_component.md`](../prompts/prototype_component.md), [`prompts/refactor_R0_R2.md`](../prompts/refactor_R0_R2.md)
+Use the single Direct system prompt for these requests. Historical fixed-order
+prototype/refactor presets are not shipped. They remain quarantined under
+`legacy_eval/prompts` only in the development repository because they referenced
+removed planner and validation-gate tools.
 
 ## 7. Large codegen
 
-Use `unreal_start_compile_loop` + poll `unreal_compile_loop_status` instead of manual multi-file paste.
+Default Direct exposes the immediate `build_unreal_project` diagnostic and does not expose a model-driving compile loop. The old `unreal_start_compile_loop`, `unreal_compile_loop_status`, `unreal_cancel_compile_loop`, and `unreal_generate_compile_loop` MCP tools are unsupported and are not shipped in the portable runtime. Keep the selected chat model in control of any subsequent read, edit, build, or test call.
 
 ## 8. Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| RAG MCP fails to start | Run `patch_mcp_runtime_paths.ps1`; avoid WindowsApps python |
+| RAG MCP fails to start | From the current checkout/package, re-run the same `python install.py --profile ... --yes` command used for installation, run `.\rag.ps1 doctor`, then restart LM Studio. Avoid WindowsApps Python. |
 | write blocked | `ALLOW_WRITE=1` in unreal-agent env |
-| Validation errors after write | Fix `BAD_INCLUDE_PATH`, missing `.generated.h`, RPC `_Implementation` |
+| `static_validate_project` reports findings | Treat them as advisory diagnostics; fix relevant findings or build immediately to obtain authoritative UBT/UHT output |
+| Direct call returns `status=no_new_information` | This chat echoed a still-valid `repeatReceipt` from a full Direct RAG/Node read, or a Node failure repeated. Omit an unknown receipt to receive full content. Direct RAG has no pagination token; use `nextDetailLevel` only when a result is truncated. |
 | Slow search | Use `hybrid=false` on search for faster FTS-only (Phase H tuning) |
 
 ## 9. Rider + Cline (주력 IDE)
@@ -128,35 +147,22 @@ Install MCP into Cline:
 python install.py --profile custom --components codex,lmstudio,unreal,cline --cline-settings C:\path\to\cline_mcp_settings.json
 ```
 
-Legacy Continue: [`docs/Continue_Qwen_Unreal_Agent_Setup.md`](Continue_Qwen_Unreal_Agent_Setup.md) (not recommended).
+## 10. Static model recommendations
 
-## 10. Sonnet 4.5-oriented track
-
-Sampling presets: [`config/lmstudio_sampling.json`](../config/lmstudio_sampling.json)
+Choose and load the model in LM Studio itself. MCP servers do not select, switch, or retune the model by task, phase, retry, or turn.
 
 | Profile | Use |
 |---------|-----|
-| `qwen3_6_27b` | **Primary** — wrapper + MCP chat; Pass@K KPI |
+| `qwen3_8_27b` | **Default recommendation** — 64K context, Q4_K_M, parallel 1 |
+| `qwen3_6_27b` | Older 27B alternative; 32K baseline |
 | `qwen3_5_9b` | Compact MCP alternative; ctx 24576 |
 | `gpt_oss_20b` | Experimental — ctx 32768, 2-file cap |
 | `gpt_oss_small` | GPT OSS below 20B; ctx 32768 |
 | `qwen3_8b` | Small Qwen; ctx 24576 |
 
-N-turn prompts:
-- [`prompts/lmstudio_reasoning_turn1_plan.md`](../prompts/lmstudio_reasoning_turn1_plan.md)
-- [`prompts/lmstudio_reasoning_turn2_critique.md`](../prompts/lmstudio_reasoning_turn2_critique.md)
-- [`prompts/lmstudio_reasoning_turn3_execute.md`](../prompts/lmstudio_reasoning_turn3_execute.md)
+Old N-turn prompts and post-build Python planner tools are historical evaluation fixtures, not supported Direct MCP behavior. Direct exposes immediate build/test diagnostics and leaves any subsequent inspection to the selected model.
 
-After UBT pass: `unreal_runtime_config_check`  
-Genre gate: `unreal_genre_scope_validate`
-
-Regression:
-
-```powershell
-.\rag.ps1 sonnet-tier-gate
-.\rag.ps1 eval-reasoning
-```
-
-This is a target track, not a current Sonnet 4.5-grade claim. See [Sonnet45_Target_Plan.md](Sonnet45_Target_Plan.md).
-
-Hybrid vs FTS A/B: see `qwen3_6_27b.abTuning` in sampling.json — run Phase 14 only after score ≥80.
+The portable `rag.ps1` contains no model evaluation or planner commands. Use it
+only for the documented collection, index, Direct project selection, refresh,
+and health operations; conduct model evaluation in a separate development
+checkout so it cannot become runtime authority.

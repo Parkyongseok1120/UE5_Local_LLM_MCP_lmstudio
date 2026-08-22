@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from parse_build_cs import format_dependency_lines, parse_build_cs_text
@@ -42,14 +43,50 @@ DEFINITION_RE = re.compile(
     r"(?P<class>[A-Za-z_][A-Za-z0-9_]*)::(?P<name>~?[A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
 
-_SYMBOL_SCOPE = "engine"
-_SYMBOL_PROJECT = ""
+@dataclass(frozen=True)
+class SymbolOwnership:
+    """Immutable ownership attached to every row from one collector invocation."""
+
+    scope: str
+    project: str = ""
+    project_root: str = ""
 
 
-def set_symbol_context(*, scope: str = "engine", project_name: str = "") -> None:
-    global _SYMBOL_SCOPE, _SYMBOL_PROJECT
-    _SYMBOL_SCOPE = scope
-    _SYMBOL_PROJECT = project_name
+def resolve_symbol_ownership(
+    *, scope: str, project_name: str = "", project_root: str = ""
+) -> SymbolOwnership:
+    project = project_name.strip()
+    root_text = project_root.strip()
+    if scope == "engine":
+        if project or root_text:
+            raise ValueError(
+                "--project-name and --project-root require --scope project"
+            )
+        return SymbolOwnership(scope="engine")
+    if scope != "project":
+        raise ValueError(f"Unsupported symbol scope: {scope}")
+    if not project or not root_text:
+        raise ValueError(
+            "--scope project requires both --project-name and --project-root"
+        )
+
+    root = Path(root_text).expanduser().resolve()
+    descriptors = [
+        path.resolve()
+        for path in root.glob("*.uproject")
+        if path.is_file() and path.stem == project
+    ]
+    if len(descriptors) != 1:
+        raise ValueError(
+            "Project symbol ownership must identify one exact "
+            f"descriptor: {root / f'{project}.uproject'}"
+        )
+    descriptor = descriptors[0]
+    return SymbolOwnership(
+        scope="project",
+        project=descriptor.stem,
+        project_root=str(descriptor.parent.resolve()),
+    )
 
 
 def stable_id(value: str) -> str:
@@ -88,18 +125,29 @@ def is_public_tier_header(path: Path, root: Path, text: str) -> bool:
     return bool(REFLECTION_MACRO_RE.search(text))
 
 
-def make_include_sidecar_item(root: Path, path: Path, text: str, module_name: str) -> dict | None:
+def make_include_sidecar_item(
+    root: Path,
+    path: Path,
+    text: str,
+    module_name: str,
+    ownership: SymbolOwnership,
+) -> dict | None:
     includes = INCLUDE_RE.findall(text)
     if not includes:
         return None
-    return {
+    item = {
         "path": str(path),
         "relative_path": relative_path(root, path),
         "module_name": module_name,
         "includes": includes,
         "symbol_kind": "include_map",
         "path_only": True,
+        "scope": ownership.scope,
     }
+    if ownership.scope == "project":
+        item["project"] = ownership.project
+        item["project_root"] = ownership.project_root
+    return item
 
 
 def infer_module_name(root: Path, path: Path) -> str:
@@ -146,6 +194,7 @@ def make_item(
     *,
     root: Path,
     path: Path,
+    ownership: SymbolOwnership,
     source: str,
     title: str,
     text: str,
@@ -153,11 +202,7 @@ def make_item(
     symbol_kind: str,
     module_name: str,
     extra: dict | None = None,
-    scope: str | None = None,
-    project_name: str | None = None,
 ) -> dict:
-    resolved_scope = scope or _SYMBOL_SCOPE
-    resolved_project = project_name if project_name is not None else _SYMBOL_PROJECT
     metadata = {
         "root": str(root),
         "relative_path": relative_path(root, path),
@@ -165,14 +210,18 @@ def make_item(
         "symbol_name": symbol_name,
         "symbol_kind": symbol_kind,
         "module_name": module_name,
-        "scope": resolved_scope,
     }
-    if resolved_project:
-        metadata["project"] = resolved_project
     if extra:
         metadata.update(extra)
+    metadata["scope"] = ownership.scope
+    if ownership.scope == "project":
+        metadata["project"] = ownership.project
+        metadata["project_root"] = ownership.project_root
+    identity = f"{source}:{path}:{symbol_kind}:{symbol_name}:{title}"
+    if ownership.scope == "project":
+        identity += f":{ownership.project_root}:{ownership.project}"
     return {
-        "id": stable_id(f"{source}:{path}:{symbol_kind}:{symbol_name}:{title}"),
+        "id": stable_id(identity),
         "source": source,
         "path": str(path),
         "title": title,
@@ -181,7 +230,12 @@ def make_item(
     }
 
 
-def collect_module(root: Path, path: Path, text: str) -> list[dict]:
+def collect_module(
+    root: Path,
+    path: Path,
+    text: str,
+    ownership: SymbolOwnership,
+) -> list[dict]:
     module_name = infer_module_name(root, path)
     parsed = parse_build_cs_text(text, module_name)
     dependencies = parsed.get("dependencies") or {}
@@ -206,6 +260,7 @@ def collect_module(root: Path, path: Path, text: str) -> list[dict]:
         make_item(
             root=root,
             path=path,
+            ownership=ownership,
             source="unreal_symbol",
             title=f"{module_name} module dependencies",
             text="\n".join(lines).strip(),
@@ -217,7 +272,13 @@ def collect_module(root: Path, path: Path, text: str) -> list[dict]:
     ]
 
 
-def collect_includes(root: Path, path: Path, text: str, module_name: str) -> list[dict]:
+def collect_includes(
+    root: Path,
+    path: Path,
+    text: str,
+    module_name: str,
+    ownership: SymbolOwnership,
+) -> list[dict]:
     includes = INCLUDE_RE.findall(text)
     if not includes:
         return []
@@ -234,6 +295,7 @@ def collect_includes(root: Path, path: Path, text: str, module_name: str) -> lis
         make_item(
             root=root,
             path=path,
+            ownership=ownership,
             source="unreal_symbol",
             title=title,
             text=body,
@@ -245,7 +307,13 @@ def collect_includes(root: Path, path: Path, text: str, module_name: str) -> lis
     ]
 
 
-def collect_unreal_types(root: Path, path: Path, text: str, module_name: str) -> list[dict]:
+def collect_unreal_types(
+    root: Path,
+    path: Path,
+    text: str,
+    module_name: str,
+    ownership: SymbolOwnership,
+) -> list[dict]:
     items: list[dict] = []
     for macro_match in UCLASS_RE.finditer(text):
         after_macro = text[macro_match.end() : macro_match.end() + 1200]
@@ -277,6 +345,7 @@ def collect_unreal_types(root: Path, path: Path, text: str, module_name: str) ->
             make_item(
                 root=root,
                 path=path,
+                ownership=ownership,
                 source="unreal_symbol",
                 title=f"{symbol_name} {kind_by_macro[macro]}",
                 text=body,
@@ -289,7 +358,13 @@ def collect_unreal_types(root: Path, path: Path, text: str, module_name: str) ->
     return items
 
 
-def collect_ufunctions(root: Path, path: Path, text: str, module_name: str) -> list[dict]:
+def collect_ufunctions(
+    root: Path,
+    path: Path,
+    text: str,
+    module_name: str,
+    ownership: SymbolOwnership,
+) -> list[dict]:
     items: list[dict] = []
     for match in UFUNCTION_RE.finditer(text):
         decl = clean_decl(match.group("decl"))
@@ -310,6 +385,7 @@ def collect_ufunctions(root: Path, path: Path, text: str, module_name: str) -> l
             make_item(
                 root=root,
                 path=path,
+                ownership=ownership,
                 source="unreal_symbol",
                 title=f"{symbol_name} reflected function",
                 text=body,
@@ -322,7 +398,13 @@ def collect_ufunctions(root: Path, path: Path, text: str, module_name: str) -> l
     return items
 
 
-def collect_uproperties(root: Path, path: Path, text: str, module_name: str) -> list[dict]:
+def collect_uproperties(
+    root: Path,
+    path: Path,
+    text: str,
+    module_name: str,
+    ownership: SymbolOwnership,
+) -> list[dict]:
     items: list[dict] = []
     for match in UPROPERTY_RE.finditer(text):
         decl = clean_decl(match.group("decl"))
@@ -343,6 +425,7 @@ def collect_uproperties(root: Path, path: Path, text: str, module_name: str) -> 
             make_item(
                 root=root,
                 path=path,
+                ownership=ownership,
                 source="unreal_symbol",
                 title=f"{symbol_name} reflected property",
                 text=body,
@@ -355,7 +438,14 @@ def collect_uproperties(root: Path, path: Path, text: str, module_name: str) -> 
     return items
 
 
-def collect_definitions(root: Path, path: Path, text: str, module_name: str, max_definitions: int) -> list[dict]:
+def collect_definitions(
+    root: Path,
+    path: Path,
+    text: str,
+    module_name: str,
+    max_definitions: int,
+    ownership: SymbolOwnership,
+) -> list[dict]:
     if max_definitions <= 0 or path.suffix.lower() not in {".cpp", ".cc", ".cxx", ".inl"}:
         return []
     items: list[dict] = []
@@ -386,6 +476,7 @@ def collect_definitions(root: Path, path: Path, text: str, module_name: str, max
             make_item(
                 root=root,
                 path=path,
+                ownership=ownership,
                 source="unreal_symbol",
                 title=f"{symbol_name} definition",
                 text=body,
@@ -405,12 +496,13 @@ def collect_file(
     path: Path,
     args: argparse.Namespace,
     sidecar_items: list[dict],
+    ownership: SymbolOwnership,
 ) -> list[dict]:
     text = read_text(path)
     if not text or len(text.strip()) < args.min_chars:
         return []
     if path.name.endswith(".Build.cs"):
-        return collect_module(root, path, text)
+        return collect_module(root, path, text, ownership)
 
     module_name = infer_module_name(root, path)
     public_tier = args.tier == "public"
@@ -422,26 +514,45 @@ def collect_file(
 
     items: list[dict] = []
     if public_tier:
-        sidecar = make_include_sidecar_item(root, path, text, module_name)
+        sidecar = make_include_sidecar_item(
+            root,
+            path,
+            text,
+            module_name,
+            ownership,
+        )
         if sidecar:
             sidecar_items.append(sidecar)
     else:
-        items.extend(collect_includes(root, path, text, module_name))
-    items.extend(collect_unreal_types(root, path, text, module_name))
-    items.extend(collect_ufunctions(root, path, text, module_name))
-    items.extend(collect_uproperties(root, path, text, module_name))
+        items.extend(collect_includes(root, path, text, module_name, ownership))
+    items.extend(collect_unreal_types(root, path, text, module_name, ownership))
+    items.extend(collect_ufunctions(root, path, text, module_name, ownership))
+    items.extend(collect_uproperties(root, path, text, module_name, ownership))
     if args.include_definitions and not public_tier:
-        items.extend(collect_definitions(root, path, text, module_name, args.max_definitions_per_file))
+        items.extend(
+            collect_definitions(
+                root,
+                path,
+                text,
+                module_name,
+                args.max_definitions_per_file,
+                ownership,
+            )
+        )
     return items
 
 
 def collect(args: argparse.Namespace) -> None:
     roots = [Path(value).expanduser().resolve() for value in args.root]
+    ownership = resolve_symbol_ownership(
+        scope=args.scope,
+        project_name=args.project_name,
+        project_root=args.project_root,
+    )
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sidecar_path = Path(args.sidecar_out) if args.sidecar_out else out_path.parent / "sidecar_symbols_meta.jsonl"
     sidecar_items: list[dict] = []
-    set_symbol_context(scope=args.scope, project_name=args.project_name)
 
     written = 0
     scanned = 0
@@ -461,7 +572,7 @@ def collect(args: argparse.Namespace) -> None:
                 if path.stat().st_size > args.max_bytes:
                     continue
                 scanned += 1
-                for item in collect_file(root, path, args, sidecar_items):
+                for item in collect_file(root, path, args, sidecar_items, ownership):
                     handle.write(json.dumps(item, ensure_ascii=False) + "\n")
                     written += 1
                 if scanned % 1000 == 0:
@@ -515,6 +626,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-definitions-per-file", type=int, default=25)
     parser.add_argument("--scope", choices=("engine", "project"), default="engine")
     parser.add_argument("--project-name", default="")
+    parser.add_argument("--project-root", default="")
     parser.add_argument(
         "--append",
         action="store_true",

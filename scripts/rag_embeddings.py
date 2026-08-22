@@ -20,7 +20,6 @@ PRIORITY_SOURCES = (
     "unreal_symbol",
     "project_profile",
     "build_log",
-    "module_graph",
     "game_design_doc",
     "epic_docs",
 )
@@ -214,10 +213,11 @@ def search_embeddings(
 
     from fastembed import TextEmbedding
 
-    from rag_search import SearchOptions, search
-
     if chunk_ids is None:
-        fts_rows = search(
+        from direct_rag_lexical import lexical_search
+        from rag_types import SearchOptions
+
+        fts_rows = lexical_search(
             index,
             query,
             top_k=fts_prefilter,

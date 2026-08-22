@@ -26,6 +26,9 @@ DEFAULT_UNREAL_AGENT_MCP_TIMEOUT_MS = 720_000
 FORBIDDEN_TOOL_CONFIRMATION_PATTERNS = {
     "lmstudio/js-code-sandbox:run_javascript",
     "lmstudio/js-code-sandbox:*",
+    "mcp/unreal-agent:*",
+    "mcp/unreal-rag:*",
+    "mcp/unreal-rag:unreal_architecture_reasoning",
 }
 NODE_CANDIDATES = (
     Path(r"C:\Program Files\nodejs\node.exe"),
@@ -101,17 +104,6 @@ def patch_server(entry: dict[str, Any], workspace: Path, shared_config: Path) ->
     return entry
 
 
-def context_compactor_is_installed() -> bool:
-    return (
-        DEFAULT_LMSTUDIO_ROOT
-        / "extensions"
-        / "plugins"
-        / "codex"
-        / "unreal-context-compactor"
-        / "manifest.json"
-    ).is_file()
-
-
 def patch_unreal_rag(
     entry: dict[str, Any],
     workspace: Path,
@@ -123,30 +115,36 @@ def patch_unreal_rag(
     # The RAG server resolves its index from workspace/shared configuration at
     # startup.  Do not pin the generated MCP entry to the engine version that
     # happened to be active when this repair command was run.
-    entry["args"] = [str(workspace / "scripts" / "unreal_rag_mcp.py")]
+    entry["args"] = [str(workspace / "scripts" / "unreal_rag_direct.py")]
     entry = patch_server(entry, workspace, SHARED_CONFIG)
     env = dict(entry.get("env") or {})
     env["UNREAL58_ROOT"] = str(workspace)
+    env["DIRECT_RAG_STATE_ROOT"] = str(DEFAULT_LMSTUDIO_ROOT / "state" / "unreal-rag-direct")
     env["MCP_FRONTEND"] = "lmstudio"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
-    env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
-    # This command repairs normal Beta 3 installs. Clear an inherited hard gate
-    # even when the optional plugin is missing or corrupt; strict mode is an
-    # explicit administrator policy, not a stale-install default.
-    env["MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE"] = "0"
-    env["MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS"] = "lmstudio"
-    compactor_installed = (
-        context_compactor_is_installed()
-        if context_compactor_advisory is None
-        else context_compactor_advisory
-    )
-    if compactor_installed:
-        env["MCP_CONTEXT_COMPACTOR_ADVISORY"] = "1"
-        env.setdefault("MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS", "300")
-    else:
-        env.pop("MCP_CONTEXT_COMPACTOR_ADVISORY", None)
-        env.pop("MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS", None)
+    # Compaction is a transparent LM Studio chat plugin, not an MCP authority.
+    # Clear every proxy-era telemetry/gate key while repairing older configs.
+    del context_compactor_advisory
+    for key in (
+        "MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE",
+        "MCP_CONTEXT_COMPACTOR_REQUIRED_FRONTENDS",
+        "MCP_CONTEXT_COMPACTOR_ADVISORY",
+        "MCP_CONTEXT_COMPACTOR_MAX_AGE_SECONDS",
+        "MCP_ESSENTIAL_TOOLS",
+        "MCP_EXTENDED_TOOLS",
+        "ALLOW_CONTROL_PLANE_TOOLS",
+        "MCP_REQUIRE_PLAN_AUTH",
+        "MCP_EXECUTION_MODE",
+        "MCP_BRIDGE_PAIR_ID",
+        "AGENT_STATE_ROOT",
+        "CONTROL_RUNTIME_MANIFEST",
+        "CONTROL_RUNTIME_COMPONENT",
+        "CONTROL_RUNTIME_REQUIRED",
+        "CONTROL_RUNTIME_GIT_COMMIT",
+        "CONTROL_RUNTIME_EXPECTED_GIT_COMMIT",
+    ):
+        env.pop(key, None)
     entry["env"] = env
     entry["timeout"] = DEFAULT_UNREAL_RAG_MCP_TIMEOUT_MS
     return entry
@@ -154,10 +152,10 @@ def patch_unreal_rag(
 
 def resolve_agent_root(workspace: Path) -> Path:
     bundled = workspace / "lmstudio-unreal-agent-mcp"
-    if (bundled / "src" / "server.js").is_file():
+    if (bundled / "src" / "direct-server.js").is_file():
         return bundled.resolve()
     fallback = DEFAULT_LMSTUDIO_ROOT / "lmstudio-unreal-agent-mcp"
-    if (fallback / "src" / "server.js").is_file():
+    if (fallback / "src" / "direct-server.js").is_file():
         return fallback.resolve()
     raise FileNotFoundError(
         "lmstudio-unreal-agent-mcp not found beside workspace or under ~/.lmstudio"
@@ -172,22 +170,28 @@ def patch_unreal_agent(
 ) -> dict[str, Any]:
     agent_root = resolve_agent_root(workspace)
     entry["command"] = str(node_exe)
-    entry["args"] = [str(agent_root / "src" / "server.js")]
+    entry["args"] = [str(agent_root / "src" / "direct-server.js")]
     env = dict(entry.get("env") or {})
     env.setdefault("WORKSPACE_ROOT", str(Path.home() / "Documents"))
     env["AGENT_MCP_CONFIG"] = str(agent_root / "config" / "agent-mcp.json")
     env["SHARED_UNREAL_CONFIG"] = str(SHARED_CONFIG)
     env["UNREAL58_ROOT"] = str(workspace)
     env["PYTHON_EXE"] = str(python_exe)
-    env.setdefault("MCP_ESSENTIAL_TOOLS", "1")
-    env.setdefault("MCP_REQUIRE_PLAN_AUTH", "1")
-    env.setdefault("MCP_AGENT_RESULT_MAX_CHARS", "32000")
-    env.setdefault("BUILD_VERBOSE_OUTPUT", "0")
-    if env.get("ALLOW_WRITE", "").strip().lower() in {"1", "true", "yes", "on"}:
-        env.setdefault("VALIDATE_ON_WRITE", "1")
-        # Time budget for validation-on-write; fail-open past this to avoid the
-        # -32001 client-timeout retry spiral on slow validators.
-        env.setdefault("VALIDATE_ON_WRITE_TIMEOUT_MS", "45000")
+    for key in (
+        "MCP_ESSENTIAL_TOOLS",
+        "MCP_REQUIRE_PLAN_AUTH",
+        "MCP_AGENT_RESULT_MAX_CHARS",
+        "BUILD_VERBOSE_OUTPUT",
+        "VALIDATE_ON_WRITE",
+        "VALIDATE_ON_WRITE_TIMEOUT_MS",
+        "MCP_EXECUTION_MODE",
+        "CONTROL_RUNTIME_MANIFEST",
+        "CONTROL_RUNTIME_COMPONENT",
+        "CONTROL_RUNTIME_REQUIRED",
+        "CONTROL_RUNTIME_GIT_COMMIT",
+        "CONTROL_RUNTIME_EXPECTED_GIT_COMMIT",
+    ):
+        env.pop(key, None)
     entry["env"] = env
     entry["timeout"] = DEFAULT_UNREAL_AGENT_MCP_TIMEOUT_MS
     return entry
@@ -234,15 +238,67 @@ def patch_lmstudio_settings(settings_json: Path, dry_run: bool = False) -> list[
     return removed
 
 
+def is_legacy_python_control_entry(name: str, entry: Any) -> bool:
+    """Match the unsupported Python RAG controller without pruning custom MCPs."""
+
+    if not isinstance(entry, dict):
+        return False
+    normalized_name = str(name or "").strip().casefold()
+    if normalized_name == "unreal-rag-strict":
+        return True
+    args = entry.get("args")
+    arguments = list(args) if isinstance(args, list) else []
+    basenames = {
+        str(value).replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        for value in arguments
+    }
+    if "unreal_rag_mcp.py" in basenames:
+        return True
+    env = entry.get("env")
+    if not isinstance(env, dict):
+        return False
+    command_name = str(entry.get("command") or "").replace("\\", "/").rsplit("/", 1)[-1]
+    python_entry = command_name.casefold() in {"py", "py.exe"} or command_name.casefold().startswith(
+        "python"
+    ) or any(str(value).casefold().endswith(".py") for value in arguments)
+    if not python_entry:
+        return False
+    component = str(env.get("CONTROL_RUNTIME_COMPONENT") or "").strip().casefold()
+    if component == "rag" and any(
+        key in env for key in ("CONTROL_RUNTIME_MANIFEST", "CONTROL_RUNTIME_REQUIRED")
+    ):
+        return True
+    strict = str(env.get("MCP_EXECUTION_MODE") or "").strip().casefold() == "strict"
+    task_keys = {
+        "MCP_ESSENTIAL_TOOLS",
+        "MCP_EXTENDED_TOOLS",
+        "ALLOW_CONTROL_PLANE_TOOLS",
+        "MCP_REQUIRE_PLAN_AUTH",
+        "CONTROL_RUNTIME_COMPONENT",
+    }
+    return strict and (
+        normalized_name.startswith("unreal-rag") or any(key in env for key in task_keys)
+    )
+
+
+def remove_legacy_python_control_entries(config: dict[str, Any]) -> list[str]:
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        return []
+    removed = [
+        str(name)
+        for name, entry in list(servers.items())
+        if is_legacy_python_control_entry(str(name), entry)
+    ]
+    for name in removed:
+        servers.pop(name, None)
+    return removed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mcp-json", type=Path, default=DEFAULT_LMSTUDIO_ROOT / "mcp.json")
     parser.add_argument("--settings-json", type=Path, default=DEFAULT_LMSTUDIO_ROOT / "settings.json")
-    parser.add_argument(
-        "--keep-js-sandbox-auto-approval",
-        action="store_true",
-        help="Do not remove LM Studio js-code-sandbox auto-approval patterns from settings.json.",
-    )
     parser.add_argument(
         "--python",
         type=Path,
@@ -262,6 +318,12 @@ def main() -> None:
     node_exe = (args.node or resolve_node_exe()).resolve()
     config = load_json(args.mcp_json)
     servers = config.setdefault("mcpServers", {})
+    existing_standard_rag = servers.get("unreal-rag") if isinstance(servers, dict) else None
+    removed_legacy = remove_legacy_python_control_entries(config)
+    if isinstance(existing_standard_rag, dict) and "unreal-rag" not in servers:
+        # The standard key is replaced in place below; only duplicate/renamed
+        # legacy entries disappear from the resulting configuration.
+        servers["unreal-rag"] = existing_standard_rag
     mcp_remote_proxy = (
         resolve_mcp_remote_proxy()
         if any(entry_uses_mcp_remote(entry) for entry in servers.values())
@@ -280,24 +342,33 @@ def main() -> None:
 
     if args.dry_run:
         print(json.dumps(config, ensure_ascii=False, indent=2))
-        if not args.keep_js_sandbox_auto_approval:
-            removed = patch_lmstudio_settings(args.settings_json, dry_run=True)
-            if removed:
-                print(
-                    "Would remove forbidden LM Studio tool auto-approval patterns: "
-                    + ", ".join(removed),
-                    file=sys.stderr,
-                )
+        if removed_legacy:
+            print(
+                "Safety normalization would remove unsupported Python control MCP entries: "
+                + ", ".join(removed_legacy),
+                file=sys.stderr,
+            )
+        removed = patch_lmstudio_settings(args.settings_json, dry_run=True)
+        if removed:
+            print(
+                "Would remove forbidden LM Studio tool auto-approval patterns: "
+                + ", ".join(removed),
+                file=sys.stderr,
+            )
         return
 
     save_json(args.mcp_json, config)
-    if not args.keep_js_sandbox_auto_approval:
-        removed = patch_lmstudio_settings(args.settings_json)
-        if removed:
-            print(
-                "Removed forbidden LM Studio tool auto-approval patterns: "
-                + ", ".join(removed)
-            )
+    if removed_legacy:
+        print(
+            "Safety normalization removed unsupported Python control MCP entries: "
+            + ", ".join(removed_legacy)
+        )
+    removed = patch_lmstudio_settings(args.settings_json)
+    if removed:
+        print(
+            "Removed forbidden LM Studio tool auto-approval patterns: "
+            + ", ".join(removed)
+        )
     print(f"Patched {args.mcp_json}")
 
 

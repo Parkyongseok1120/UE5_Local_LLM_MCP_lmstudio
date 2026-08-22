@@ -1,114 +1,98 @@
-# Model Profiles and Agent Policy
+# LM Studio Load and Chat Profiles
 
-Profiles live in `config/lmstudio_sampling.json`.
+[`config/lmstudio_sampling.json`](../config/lmstudio_sampling.json) contains
+static recommendations for a model that the user has already chosen in LM
+Studio. A profile does not load or switch a model, classify a request, create a
+plan, choose tools, order tools, control the context compactor, or decide when a
+response is finished.
 
-Switch via `activeProfile` or `UNREAL_RAG_MODEL_PROFILE`.
+The model selected in LM Studio owns reasoning, tool selection and order,
+stopping, and the final answer. All checked-in profiles use
+[`prompts/lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md).
+
+## Select a recommendation
+
+The checked-in `activeProfile` is the fallback. A user can explicitly select a
+different recommendation for a process:
 
 ```powershell
-$env:UNREAL_RAG_MODEL_PROFILE = "gpt_oss_20b"
+$env:UNREAL_RAG_MODEL_PROFILE = "qwen3_5_9b"
 python scripts/load_sampling_preset.py --show-profile
 ```
 
-## Project Target
-
-The project target is now a **Sonnet 4.5-oriented workflow track**. The latest community fine-tuned Qwen 3.6 27B run reaches the target on this narrow internal 36-case UE 5.8 holdout, but this remains a RAG/MCP/UBT workflow result, not a claim that the base model or local model family is generally Sonnet 4.5-grade.
-
-## Agent Policy Fields
-
-| Field | Purpose |
-|-------|---------|
-| ragBudgetScale | Context assembly scale |
-| maxFilesPerEdit | Wrapper + orchestrator file cap |
-| preferPatch | Patch vs full-file default |
-| planningRequired | Require plan before execute |
-| deepSearch | Allow broader retrieval and hybrid-friendly use |
-| compileFixMaxAttempts | Wrapper retry cap when the CLI default is used |
-| allowRefactorModes | Enable refactor_r* modes |
-| jsonRepairStrict | Strict JSON bundle parsing |
-| historyTurns | Message history cap hint |
-| defaultTopK | Default RAG top_k when the CLI default is used |
-| deltaTopK | Failure-specific retry RAG top_k |
-| candidateLimitScale | Search candidate multiplier |
-| targetTier | Internal quality target label |
-| promptContract | Short prompt contract injected into wrapper runs |
-| mcpEssentialTools | Recommend Essential Tools mode for LM Studio chat |
-| recommendedSystemPrompt | Path to compact system prompt |
-| mcpToolDiscipline | e.g. `one_tool_per_turn` |
-
-## Profiles
-
-| Profile | Use case |
-|---------|----------|
-| `qwen3_6_27b` | **Primary** — community fine-tuned Qwen 3.6 27B local model; wrapper + MCP chat; current 36-case live Pass@1/Pass@K KPI track; Essential Tools |
-| `qwen3_5_9b` | Qwen 3.5 9B compact MCP; ctx 24576, Essential Tools; measured 35/36 Pass@K, 33/36 Pass@1 on latest live holdout |
-| `qwen3_5_9b_deepseek_v4_flash` | Community flash GGUF; compact MCP |
-| `qwen3_8b` | Small compact; ctx 24576, 2-file cap |
-| `gpt_oss_20b` | **Variable stability** — ctx 32768, 2-file cap; experimental MCP |
-| `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | Community GPT OSS 20B reasoning i1; ctx 32768 |
-| `gpt_oss_small` | GPT OSS below 20B; ctx 32768, 2-file cap |
-| `gpt_oss_120b` | Large GPT OSS; ctx 32768, 2-file cap |
-| `qwen_coder_large` | Codegen-heavy; 2-file cap |
-| `conservative_compile_fix` | Low-temperature compile-fix fallback; ctx 24576 |
-| `review_only` | Inspect-only; maxFilesPerEdit=0, ctx 24576 |
-
-**Context rules:** minimum **24576** for all profiles; **`gpt_oss_*`** at **32768**.
-
-## Practical Tuning Direction
-
-**Recommended MCP chat track:** `qwen3_6_27b` or `qwen3_5_9b` + Essential Tools + session bootstrap — see [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
-
-**Capability grades (internal, fixture/live KPI):**
-
-| Area | Grade |
-|------|-------|
-| RAG / project understanding | Very good |
-| UE code review | Good |
-| Single-file compile-fix | Good |
-| Build.cs / multi-file fixes | Strong on current measured holdout: 36/36 live Pass@1, 12/12 multifile Pass@1, 0 Build.cs false positives |
-| MCP native tool-call | Experimental — verify with `bench_lmstudio_mcp.py` |
-| Overall agent automation | Experimental — do not trust unattended edits |
-
-**Compact alternative:** `qwen3_5_9b` — generally more stable than GPT OSS 20B.
-
-**Main local track (wrapper + Pass@1/Pass@K):** `qwen3_6_27b` when VRAM allows. The saved KPI used a community fine-tuned Qwen 3.6 27B model, not a base release. Latest saved 36-case live holdout: `20260709-144441-pass1-target` with **36/36 Pass@1** and **36/36 Pass@K**.
-
-**Measured compact track:** `qwen3_5_9b_deepseek_v4_flash` / `qwen3.5-9b-deepseek-v4-flash` reached **36/36 Pass@K** and **35/36 Pass@1** in `20260711-090534-qwen35-9b` after scoped write stabilization. Prior baseline `20260709-153021-qwen35-9b` was **35/36 Pass@K** and **33/36 Pass@1**.
-
-See [Model_Measurement_Results.md](Model_Measurement_Results.md) for the full bilingual measurement summary.
-
-Small and 20B-class models improve most from:
-
-- lower temperature
-- strict JSON output
-- smaller top_k
-- fewer files per edit
-- patch-first edits
-- short retry context focused on the current build error
-- no broad refactor modes
-
-Qwen 3.6 27B improves most from:
-
-- broader retrieval
-- explicit critique/verification loop
-- more failure-specific retry context
-- strict no-op detection
-- symbol-first and range-first reads before full-file reads
-- low-temperature execute/compile-patch turns
-- real-project Pass@1/Pass@3 measurement
-
-See [Qwen36_27B_Upgrade_Plan.md](Qwen36_27B_Upgrade_Plan.md) for the current upgrade runbook.
-
-## Resolve Policy
+The resolver can also map an LM Studio model id or GGUF filename to a known
+profile:
 
 ```powershell
-python scripts/load_sampling_preset.py --show-profile
-python scripts/load_sampling_preset.py --sampling-profile gpt_oss_20b --show-profile
-python scripts/load_sampling_preset.py --sampling-profile qwen3_5_9b_deepseek_v4_flash --show-profile
-python scripts/load_sampling_preset.py --sampling-profile gpt_oss_20b_claude_opus_sonnet_reasoning_i1 --show-profile
-python scripts/load_sampling_preset.py --sampling-profile qwen3_6_27b --show-profile
-python scripts/load_sampling_preset.py --sampling-profile qwen3_6_27b --mode compile_fix
+python scripts/load_sampling_preset.py --model "qwen/qwen3.8-27b" --show-profile
 ```
 
-## Community Fine-Tune Notes
+Alias resolution is only a lookup convenience. It does not call LM Studio,
+change the loaded model, proxy a request, or select another model during a
+chat.
 
-Community GGUF fine-tunes are supported as separate profiles because they often need different decoding behavior from their base family. These profiles are optimization targets, not quality guarantees. Always verify with UBT or Editor-side validation before claiming a fix is complete.
+## Schema
+
+| Field | Meaning |
+|---|---|
+| `contextLength` | Recommended LM Studio load context |
+| `contextLengthAlternatives` | Optional memory/capacity alternatives for the user to evaluate |
+| `quantDefault` | Recommended starting quantization |
+| `recommendedParallelRequests` | Recommended LM Studio server request concurrency |
+| `recommendedSystemPrompt` | Direct system prompt path |
+| `sampling` | One static chat recommendation; it does not change by task, phase, retry, or turn |
+| `writeSafety.maxFilesPerEdit` | Compatibility limit consumed by the legacy compile wrapper |
+| `writeSafety.preferPatchOverFullFile` | Compatibility safety preference consumed by the legacy compile wrapper |
+| `notes` | Hardware or model-specific caution for the user |
+
+`writeSafety` cannot authorize a write. Direct MCP write tools independently
+enforce path scope, exact-read/CAS checks, atomic replacement, locks, deletion
+approval, and output bounds.
+
+The following controller surfaces are intentionally absent:
+
+- mode-to-stage maps and turn presets;
+- per-phase thinking, reasoning effort, or sampling changes;
+- planner, retry, retrieval, and tool-order policy;
+- model proxy or model routing metadata;
+- context-compactor ownership or activation policy.
+
+`--mode` and `--turn` remain accepted by the helper only as deprecated no-ops
+for old callers. They produce a warning on stderr and never alter the resolved
+sampling values.
+
+## Included profiles
+
+| Profile | Context | Quant | Parallel | Notes |
+|---|---:|---|---:|---|
+| `qwen3_8_27b` | 65536 | Q4_K_M | 1 | Default; 262144 is listed as a hardware-dependent alternative |
+| `qwen3_6_27b` | 32768 | Q4_K_M | 1 | 65536 alternative |
+| `qwen3_8b` | 24576 | Q4_K_M | 1 | Compact load |
+| `qwen3_5_9b` | 24576 | Q4_K_M | 1 | 32768 alternative where supported |
+| `qwen3_5_9b_deepseek_v4_flash` | 140032 | Q4_K_M | 1 | 65536 portable and 262144 native alternatives |
+| `generic_large` | 49152 | Q5_K_M | 1 | Generic large-model starting point |
+| `gpt_oss_20b` | 32768 | Q4_K_M | 1 | Validate the exact GGUF/tool-call behavior |
+| `gpt_oss_20b_claude_opus_sonnet_reasoning_i1` | 32768 | Q4_K_M | 1 | Community model starting point |
+| `gpt_oss_small` | 32768 | Q4_K_M | 1 | Compact GPT OSS starting point |
+| `gpt_oss_120b` | 32768 | Q5_K_M | 1 | Large GPT OSS starting point |
+| `qwen_coder_large` | 32768 | Q4_K_M | 1 | Generic coder starting point |
+
+These are starting recommendations, not capability grades or quality
+guarantees. Quantization, context size, GPU offload, flash attention, and
+parallel requests must be validated on the actual machine and exact model
+artifact.
+
+## Inspect static sampling
+
+```powershell
+python scripts/load_sampling_preset.py --sampling-profile qwen3_8_27b
+python scripts/load_sampling_preset.py --sampling-profile qwen3_8_27b --show-profile
+```
+
+Changing sampling in LM Studio remains a user choice. The MCP and optional
+compactor do not rewrite these values while a task is running.
+
+Historical Pass@K and model-comparison results, where still useful, are kept in
+[`Model_Measurement_Results.md`](Model_Measurement_Results.md). They describe
+specific model files, prompts, and test runs; they are not enforced by this
+profile file.

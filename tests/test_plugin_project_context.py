@@ -15,13 +15,6 @@ from plugin_project_context import (  # noqa: E402
     FLAT_FIXTURE_SKIP_DIRS,
     validate_uplugin_descriptor,
 )
-from plan_slice_state import mark_slice_complete, init_slice_state  # noqa: E402
-from read_query_history import (  # noqa: E402
-    query_fingerprint,
-    record_query_delivery,
-    reset_query_history,
-    reset_query_history_for_index,
-)
 
 
 def _fixture_tree(tmp_path: Path) -> Path:
@@ -70,37 +63,6 @@ def test_uplugin_duplicate_module_detected(tmp_path: Path):
     )
     findings = validate_uplugin_descriptor(path)
     assert any(item.get("code") == "UPLUGIN_MODULE_DUPLICATE" for item in findings)
-
-
-def test_slice_complete_rejects_empty_writes(tmp_path: Path):
-    state = init_slice_state([{"slice_id": "s1", "title": "t"}])
-    updated = mark_slice_complete(
-        state,
-        project_root=tmp_path,
-        written_paths=[],
-        plan_slices=[{"slice_id": "s1"}],
-    )
-    assert updated["slices"][0]["status"] == "failed"
-
-
-def test_query_history_index_reset(tmp_path: Path):
-    reset_query_history()
-    index_path = tmp_path / "rag.sqlite"
-    index_path.write_bytes(b"abc")
-    fp = query_fingerprint(
-        tool="unreal_rag_search",
-        active_project="Demo",
-        query="test",
-        mode="auto",
-        scope="auto",
-        detail_level="compact",
-        top_k=6,
-        hybrid=False,
-        index_path=index_path,
-    )
-    record_query_delivery(fp, detail_level="compact", match_count=1, index_path=index_path)
-    dropped = reset_query_history_for_index(index_path)
-    assert dropped == 1
 
 
 def test_orphan_plugin_source_tree_is_scanned(tmp_path: Path) -> None:

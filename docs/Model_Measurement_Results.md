@@ -8,7 +8,7 @@ These results are internal UE 5.8 RAG/MCP/UBT workflow measurements. They are no
 
 The current product is **1.3.0 RC3**, but no paired RC3 live-model rerun has been completed. All scores on this page remain historical v1.2.5 baselines until a new artifact is published. Do not attribute them to Beta4/Beta5/RC1/RC2/RC3 architecture or orchestration changes. RC3's denser deterministic control contract may expose model-side limits in long-history retention, recovery, and exact schema emission; no score on this page measures that effect.
 
-Full validation write-up for the 2026-07-11 post-stabilization run: [Live_Validation_Results_20260711.md](Live_Validation_Results_20260711.md).
+The detailed 2026-07-11 post-stabilization write-up is retained only in the historical evaluation archive.
 
 ### Latest 36-Case Live Holdout
 
@@ -41,7 +41,7 @@ Full validation write-up for the 2026-07-11 post-stabilization run: [Live_Valida
 
 현재 제품은 **1.3.0 RC3**이지만 RC3 paired live-model 재측정은 아직 완료되지 않았습니다. 새로운 artifact가 공개되기 전까지 이 문서의 모든 점수는 historical v1.2.5 baseline이며, Beta4/Beta5/RC1/RC2/RC3 변경의 품질 향상 수치로 사용하면 안 됩니다. RC3에서는 긴 이력 유지, 복구 판단, 정확한 tool schema 생성 같은 모델측 한계가 더 잘 드러날 수 있지만 아직 수치화하지 않았습니다.
 
-2026-07-11 stabilization 이후 검증 전체 기록: [Live_Validation_Results_20260711.md](Live_Validation_Results_20260711.md).
+2026-07-11 stabilization 이후 상세 기록은 과거 평가 archive에만 보존합니다.
 
 ### 최신 36-case Live Holdout
 

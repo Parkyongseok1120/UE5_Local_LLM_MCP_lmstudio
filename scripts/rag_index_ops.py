@@ -3,20 +3,17 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from index_inputs import RAW_INPUT_FILES, existing_input_paths
+from incremental_build import manifest_stale
+from direct_rag_generation_identity import RagGenerationTransitionError
+from direct_rag_readonly_db import connect_readonly
+from index_inputs import RAW_INPUT_FILES
 
-
-def _iso_mtime(path: Path) -> str | None:
-    try:
-        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
-    except OSError:
-        return None
+REQUIRED_CHUNK_COLUMNS = frozenset({"project_root"})
 
 
 def _file_info(path: Path) -> dict[str, Any]:
@@ -40,13 +37,14 @@ def index_health(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
         "indexStatus": "unknown",
         "projectBindingStatus": "unknown",
         "errorCode": "",
-        "nextRequiredAction": "inspect_index_health",
         "indexPath": str(index),
         "indexExists": index.exists(),
         "chunksJsonl": _file_info(chunks_jsonl),
         "chunkCount": 0,
         "sourceBreakdown": {},
         "layerBreakdown": {},
+        "schemaMissingColumns": [],
+        "forbiddenSourceRows": 0,
         "lastBuiltAt": None,
     }
 
@@ -55,8 +53,19 @@ def index_health(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
         info["lastBuiltAt"] = info["indexFile"]["modifiedAt"]
         conn: sqlite3.Connection | None = None
         try:
-            conn = sqlite3.connect(index)
+            conn = connect_readonly(index)
+            columns = {
+                str(row[1])
+                for row in conn.execute("pragma table_info(chunks)").fetchall()
+            }
+            info["schemaMissingColumns"] = sorted(REQUIRED_CHUNK_COLUMNS - columns)
             info["chunkCount"] = int(conn.execute("select count(*) from chunks").fetchone()[0])
+            info["forbiddenSourceRows"] = int(
+                conn.execute(
+                    "select count(*) from chunks where source = ?",
+                    ("unreal_failure_memory",),
+                ).fetchone()[0]
+            )
             for row in conn.execute(
                 "select source, count(*) from chunks group by source order by count(*) desc"
             ):
@@ -65,7 +74,7 @@ def index_health(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
                 "select layer, count(*) from chunks where layer != '' group by layer order by count(*) desc limit 20"
             ):
                 info["layerBreakdown"][str(row[0])] = int(row[1])
-        except (sqlite3.Error, OSError) as exc:
+        except (sqlite3.Error, OSError, RagGenerationTransitionError) as exc:
             info["indexError"] = str(exc)
             info["indexReadable"] = False
         finally:
@@ -78,28 +87,20 @@ def index_health(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
     if info.get("indexError"):
         info["indexStatus"] = "unavailable"
         info["errorCode"] = "RAG_INDEX_UNREADABLE"
-        info["nextRequiredAction"] = "run_rag_build_or_doctor"
-        info["okForChat"] = False
-        info["chatAction"] = "stop_and_report_rag_rebuild_required"
-        info["chatMessage"] = (
-            "RAG index is present but unreadable. Do not search project files for RAG repair scripts from MCP chat; "
-            "tell the user to run .\\rag.ps1 build or .\\rag.ps1 doctor from the RAG workspace."
-        )
+    elif index.exists() and int(info.get("chunkCount") or 0) == 0:
+        info["indexStatus"] = "not_ready"
+        info["errorCode"] = "RAG_INDEX_EMPTY"
+    elif info.get("schemaMissingColumns"):
+        info["indexStatus"] = "migration_required"
+        info["errorCode"] = "RAG_INDEX_SCHEMA_OUTDATED"
+    elif int(info.get("forbiddenSourceRows") or 0) > 0:
+        info["indexStatus"] = "migration_required"
+        info["errorCode"] = "RAG_INDEX_FORBIDDEN_SOURCE_PRESENT"
     elif index.exists() and int(info.get("chunkCount") or 0) > 0:
         info["indexStatus"] = "ready"
-        info["nextRequiredAction"] = "continue"
-        info["okForChat"] = True
-        info["chatAction"] = "continue"
     else:
         info["indexStatus"] = "not_ready"
-        info["errorCode"] = "RAG_INDEX_EMPTY" if index.exists() else "RAG_INDEX_MISSING"
-        info["nextRequiredAction"] = "run_rag_build_or_doctor"
-        info["okForChat"] = False
-        info["chatAction"] = "stop_and_report_rag_rebuild_required"
-        info["chatMessage"] = (
-            "RAG index is missing or empty. Do not continue with RAG-dependent coding claims; "
-            "tell the user to run .\\rag.ps1 build or .\\rag.ps1 doctor from the RAG workspace."
-        )
+        info["errorCode"] = "RAG_INDEX_MISSING"
     return info
 
 
@@ -107,63 +108,28 @@ def rebuild_status(index: Path, data_dir: Path | None = None) -> dict[str, Any]:
     data_dir = data_dir or index.parent
     health = index_health(index, data_dir)
     inputs: list[dict[str, Any]] = []
-    newest_input_mtime: float | None = None
-    newest_input_name: str | None = None
-
     for name in RAW_INPUT_FILES:
         path = data_dir / name
         file_info = _file_info(path)
         inputs.append({"name": name, **file_info})
-        if file_info["exists"] and file_info["modifiedAt"]:
-            mtime = Path(path).stat().st_mtime
-            if newest_input_mtime is None or mtime > newest_input_mtime:
-                newest_input_mtime = mtime
-                newest_input_name = name
 
-    index_mtime = index.stat().st_mtime if index.exists() else None
-    stale = False
-    reason = "index-up-to-date"
-
-    if not index.exists():
-        stale = True
-        reason = "index-missing"
-    elif health.get("indexError"):
-        stale = True
-        reason = "index-unreadable"
-    elif newest_input_mtime is not None and (index_mtime is None or newest_input_mtime > index_mtime):
-        stale = True
-        reason = f"input-newer-than-index ({newest_input_name})"
+    manifest_path = data_dir / "build_manifest.json"
+    stale, reason = manifest_stale(data_dir, manifest_path, index)
+    if health.get("indexError"):
+        stale, reason = True, "index-unreadable"
+    elif health.get("schemaMissingColumns"):
+        stale, reason = True, "index-schema-outdated"
+    elif int(health.get("forbiddenSourceRows") or 0) > 0:
+        stale, reason = True, "forbidden-source-present"
     elif health["chunkCount"] == 0:
-        stale = True
-        reason = "index-empty"
-
-    chunks_jsonl = data_dir / "chunks.jsonl"
-    if chunks_jsonl.exists() and index.exists():
-        if chunks_jsonl.stat().st_mtime > index.stat().st_mtime:
-            stale = True
-            reason = "chunks-jsonl-newer-than-index"
+        stale, reason = True, "index-empty"
 
     return {
         **health,
         "needsRebuild": stale,
         "reason": reason,
         "rawInputs": inputs,
-        "buildManifest": _file_info(data_dir / "build_manifest.json"),
-        "recommendedCommand": ".\\rag.ps1 build",
-        "recommendedDoctorCommand": ".\\rag.ps1 doctor",
-        "chatAction": health.get("chatAction", "continue"),
-        "chatMessage": health.get("chatMessage", ""),
-        "collectHints": [
-            ".\\rag.ps1 collect-guidelines",
-            ".\\rag.ps1 collect-projects -CopyProjectText",
-            ".\\rag.ps1 collect-symbols",
-            ".\\rag.ps1 collect-module-graph",
-        ],
-        "architecture": {
-            "unrealRagRole": "Evidence retrieval for Unreal C++ knowledge, guidelines, symbols, and project text.",
-            "unrealAgentRole": "Sandboxed file edits and UnrealBuildTool execution in WORKSPACE_ROOT.",
-            "loraRole": "Answer format and behavior tuning; knowledge stays in RAG.",
-        },
+        "buildManifest": _file_info(manifest_path),
     }
 
 
@@ -172,17 +138,16 @@ def capabilities_summary() -> dict[str, Any]:
         "tools": {
             "unreal_rag_search": "Mode-aware hybrid FTS + symbol retrieval.",
             "unreal_symbol_lookup": "Shortcut for class/function/API symbol lookup.",
-            "unreal_open_project_picker": "Open a desktop GUI to pick the active .uproject.",
             "unreal_get_active_project": "Read shared activeProject for RAG and agent.",
             "unreal_set_active_project": "Set or clear shared activeProject (.uproject path).",
             "unreal_rag_health": "Index size, chunk counts, source breakdown.",
             "unreal_rag_rebuild_status": "Whether raw inputs are newer than the index.",
-            "unreal_start_compile_loop": "Start wrapper as background job (non-blocking).",
-            "unreal_compile_loop_status": "Poll wrapper job progress and output.",
+            "unreal_rag_refresh": "Synchronously refresh selected active-project index inputs.",
+            "unreal_rag_capabilities": "Describe the bounded Direct RAG surface.",
         },
         "cliAlternatives": {
-            "wrapper": ".\\rag.ps1 wrapper -Question \"...\"",
-            "query": ".\\rag.ps1 query -Question \"...\"",
+            "doctor": ".\\rag.ps1 doctor",
             "build": ".\\rag.ps1 build",
+            "refresh": ".\\rag.ps1 refresh",
         },
     }

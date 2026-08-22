@@ -12,9 +12,8 @@ Supports:
 After parser changes, reindex:
 
 ```powershell
-.\rag.ps1 collect-symbols --tier public
-.\rag.ps1 collect-module-graph
+.\rag.ps1 collect-symbols -Root C:\Projects\MyGame\Source -Tier public -SymbolScope project -ProjectName MyGame
 .\rag.ps1 build-incremental
 ```
 
-See also [Build_Cs_Reindex.md](Build_Cs_Reindex.md).
+See [RAG_Setup.md](RAG_Setup.md) for the current portable collect/build commands.

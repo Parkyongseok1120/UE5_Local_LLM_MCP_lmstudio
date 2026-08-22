@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -417,3 +418,120 @@ def test_project_engine_association_rejects_invalid_descriptor(tmp_path):
 
     assert association == ""
     assert "Could not read project descriptor" in error
+
+
+def test_wait_for_markers_rejects_stale_done_marker_without_matching_run_id(
+    tmp_path,
+):
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    marker = export_dir / DONE_NAME
+    marker.write_text(
+        json.dumps({"ok": True, "runId": "old-run"}),
+        encoding="utf-8",
+    )
+
+    payload = wait_for_export_markers(
+        export_dir,
+        timeout_sec=0.02,
+        poll_sec=0.001,
+        expected_run_id="new-run",
+    )
+
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "EDITOR_EXPORT_MARKER_TIMEOUT"
+    assert not marker.exists()
+
+
+def test_wait_for_markers_rejects_error_marker_without_run_id(tmp_path):
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    marker = export_dir / runner.ERROR_NAME
+    marker.write_text(json.dumps({"ok": False, "error": "stale"}), encoding="utf-8")
+
+    payload = wait_for_export_markers(
+        export_dir,
+        timeout_sec=0.02,
+        poll_sec=0.001,
+        expected_run_id="exact-run",
+    )
+
+    assert payload["ok"] is False
+    assert payload["errorCode"] == "EDITOR_EXPORT_MARKER_TIMEOUT"
+    assert not marker.exists()
+
+
+def test_run_editor_export_rejects_non_uproject_file_before_job_creation(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    wrong_file = workspace / "project.json"
+    wrong_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(runner, "find_workspace_root", lambda: workspace)
+    monkeypatch.setattr(
+        runner,
+        "build_export_job",
+        lambda **_kwargs: pytest.fail("invalid project must not create an export job"),
+    )
+
+    result = run_editor_export(mode="headless", uproject=wrong_file)
+
+    assert result["ok"] is False
+    assert "exact .uproject" in result["error"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "error_code"),
+    [
+        (subprocess.TimeoutExpired("UnrealEditor", 3), "EDITOR_EXPORT_PROCESS_TIMEOUT"),
+        (OSError("spawn denied"), "EDITOR_EXPORT_PROCESS_FAILED"),
+    ],
+)
+def test_headless_process_failures_return_fail_closed_result(
+    tmp_path,
+    monkeypatch,
+    failure,
+    error_code,
+):
+    import editor_export_process
+
+    workspace = tmp_path / "workspace"
+    script = workspace / "tools" / "ue_export" / "headless_export_job.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    project = tmp_path / "Game" / "Game.uproject"
+    project.parent.mkdir()
+    project.write_text("{}", encoding="utf-8")
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    executable = tmp_path / "UnrealEditor-Cmd"
+    executable.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        editor_export_process,
+        "resolve_editor_executable",
+        lambda _root: executable,
+    )
+
+    def fail_process(*_args, **_kwargs):
+        raise failure
+
+    result = editor_export_process.run_headless_export(
+        uproject=project,
+        engine_root=tmp_path / "Engine",
+        job={
+            "jobId": "exact-run",
+            "jobPath": str(tmp_path / "job.json"),
+            "exportDir": str(export_dir),
+        },
+        timeout_sec=3,
+        workspace=workspace,
+        wait_for_markers=lambda *_args, **_kwargs: pytest.fail(
+            "a failed process must not accept completion markers"
+        ),
+        run_process=fail_process,
+    )
+
+    assert result["ok"] is False
+    assert result["errorCode"] == error_code

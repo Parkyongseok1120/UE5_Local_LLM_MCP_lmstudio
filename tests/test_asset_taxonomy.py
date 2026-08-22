@@ -13,7 +13,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from asset_taxonomy import (  # noqa: E402
     classify_ue_asset_class,
-    graph_lookup_guidance,
     load_taxonomy,
     taxonomy_text_lines,
 )
@@ -56,9 +55,3 @@ def test_taxonomy_text_lines_include_coverage():
     joined = "\n".join(lines)
     assert "rag_coverage: graph_material" in joined
     assert "taxonomy_item: Material Layer" in joined
-
-
-def test_graph_lookup_guidance_for_material_layer():
-    hints = graph_lookup_guidance(asset_class="MaterialFunctionMaterialLayer", asset_path="/Game/Foo/ML_BaseColor")
-    assert any("Material Layer" in hint for hint in hints)
-    assert any("graph_material" in hint.lower() or "material_metadata" in hint.lower() for hint in hints)

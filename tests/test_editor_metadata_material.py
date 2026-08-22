@@ -17,8 +17,6 @@ from build_rag_index import infer_doc_type, infer_layer  # noqa: E402
 from collect_editor_metadata import merge_export_into_raw, parse_export_spec, row_to_chunk, source_for_row  # noqa: E402
 from material_claim_validate import validate_material_claims  # noqa: E402
 from material_graph_format import format_graph_edge  # noqa: E402
-from rag_search import resolve_mode  # noqa: E402
-from asset_graph_lookup import lookup_asset_graph, search_asset_graphs  # noqa: E402
 import export_blueprint_metadata as blueprint_export  # noqa: E402
 from export_material_metadata import (
     _collect_material_graph,
@@ -275,12 +273,6 @@ def test_anim_montage_row_to_chunk_includes_sections_and_notifies():
     assert "AnimNotify_HitWindow" in chunk["text"]
 
 
-def test_rendering_analysis_modes_resolve_from_query():
-    assert resolve_mode("USF USH GlobalShader RenderCore plugin setup", "auto") == "shader"
-    assert resolve_mode("material screenshot texture parameter static switch", "auto") == "material_analysis"
-    assert resolve_mode("Blueprint graph variable function call pins", "auto") == "blueprint_analysis"
-
-
 def test_merge_export_replaces_same_project_asset(tmp_path):
     out_path = tmp_path / "raw_material_metadata.jsonl"
     first = row_to_chunk(
@@ -310,45 +302,6 @@ def test_merge_export_replaces_same_project_asset(tmp_path):
     assert replaced == 1
     assert len(rows) == 1
     assert "NewNode" in rows[0]["text"]
-
-
-def test_asset_graph_lookup_by_short_name(tmp_path):
-    row = row_to_chunk(
-        "unreal_material_metadata",
-        {
-            "asset_path": "/Game/06_Environment/BossStage/M_Blackhole_Core",
-            "graph_edges": [{"from": "Tex_1", "to": "Multiply_1", "to_input": "A"}],
-        },
-        "OtherGame",
-    )
-    raw_path = tmp_path / "raw_material_metadata.jsonl"
-    raw_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-
-    payload = lookup_asset_graph(
-        "M_Blackhole_Core",
-        asset_kind="material",
-        index_dir=tmp_path,
-        project_name="OtherGame",
-    )
-
-    assert payload["ok"] is True
-    assert payload["primary"]["graphEdgeCount"] == 1
-    assert "M_Blackhole_Core" in payload["primary"]["assetPath"]
-
-
-def test_asset_graph_search_finds_materials(tmp_path):
-    row = row_to_chunk(
-        "unreal_material_metadata",
-        {"asset_path": "/Game/Materials/MI_Armor", "expressions": []},
-        "OtherGame",
-    )
-    raw_path = tmp_path / "raw_material_metadata.jsonl"
-    raw_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
-
-    payload = search_asset_graphs("Armor", index_dir=tmp_path, project_name="OtherGame")
-
-    assert payload["ok"] is True
-    assert payload["results"][0]["name"] == "MI_Armor"
 
 
 class FakeInput:
@@ -484,7 +437,7 @@ def test_is_material_function_class_includes_layer_blend():
     assert not _is_material_function_class("Material")
 
 
-def test_material_layer_row_ingest_and_lookup(tmp_path):
+def test_material_layer_row_ingest_preserves_graph_evidence(tmp_path):
     export_row = {
         "asset_path": "/Game/01_Character/98_Shading/M_Layer/ML_BaseColor",
         "asset_type": "MaterialFunctionMaterialLayer",
@@ -523,18 +476,7 @@ def test_material_layer_row_ingest_and_lookup(tmp_path):
     chunk = row_to_chunk("unreal_material_metadata", export_row, "OtherGame")
 
     assert ingested == 1
+    assert replaced == 0
     assert "graph_edges:" in chunk["text"]
     assert "Tex_Base -> LayerOut_BaseColor.Input" in chunk["text"]
-
-    payload = lookup_asset_graph(
-        "ML_BaseColor",
-        asset_kind="material",
-        index_dir=tmp_path,
-        project_name="OtherGame",
-    )
-
-    assert payload["ok"] is True
-    assert payload["primary"]["graphEdgeCount"] == 2
-    assert payload["primary"]["expressionCount"] == 2
-    assert payload["primary"]["assetPath"].endswith("ML_BaseColor")
 

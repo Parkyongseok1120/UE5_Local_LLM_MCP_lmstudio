@@ -34,8 +34,12 @@ jobs:
       - name: Python syntax gate (portable sources)
         run: python -m compileall -q install.py installer scripts skills tools
 
-      - name: Control protocol and error-catalog totality gate
-        run: python scripts/validate_control_protocol.py
+      - name: Python Direct RAG catalog and import-isolation gate
+        run: >
+          python -m pytest
+          tests/test_python_direct_rag_server.py
+          tests/test_tool_manifest_contract.py
+          -q --tb=short
 
       - name: Root Node contract tests
         run: >
@@ -53,7 +57,10 @@ jobs:
           tests/test_integrated_installer.py
           tests/test_bootstrap_runtimes.py
           tests/test_integrated_package.py
+          tests/test_package_forbidden_filters.py
           tests/test_install_sh_python_launcher.py
+          tests/test_patch_mcp_config.py
+          tests/test_verify_release.py
           tests/test_evidence_first_mcp.py
           tests/test_evidence_first_benchmark.py
           -q --tb=short
@@ -69,35 +76,39 @@ jobs:
           }
         working-directory: lmstudio-unreal-agent-mcp
 
-      - name: Agent MCP full test suite
+      - name: Agent Direct and Node Strict safety suite
         run: npm test
         working-directory: lmstudio-unreal-agent-mcp
 
-      - name: Version-local engine evidence and multi-slice routing
+      - name: Direct production RAG index and path portability gate
         run: >
           python -m pytest
-          tests/test_code_sketch_claim_validate.py
-          tests/test_automation_capability_and_gate_bounds.py
-          tests/test_control_transition_parity.py
-          tests/test_editor_export_runner.py
+          tests/test_direct_mcp_subprocess_e2e.py
+          tests/test_cross_language_tool_contract.py
+          tests/test_project_controller.py
+          tests/test_project_context.py
+          tests/test_project_routing.py
+          tests/test_index_path_resolver.py
+          tests/test_index_inputs.py
+          tests/test_build_rag_index_atomic.py
+          tests/test_build_rag_index_compact.py
+          tests/test_rag_refresh.py
           tests/test_rag_smoke.py
-          tests/test_task_api_integration.py
-          tests/test_static_recovery_server_bridge.py
+          tests/test_direct_rag_project_isolation.py
+          tests/test_dynamic_rag_cli_defaults.py
+          tests/test_direct_installer_docs.py
+          tests/test_rag_doctor_repo_only.py
+          tests/test_active_project_read_resolver.py
+          tests/test_collect_unreal_projects.py
+          tests/test_editor_export_runner.py
           tests/test_unreal_static_validate.py
           tests/test_validate_project_sources.py
-          tests/test_write_lock_stale.py
-          tests/test_claim_validation_engine_portability.py
           tests/test_engine_registration_portability.py
           tests/test_project_name_resolver.py
-          tests/test_project_switch_contract_integration.py
-          tests/test_request_intent_cross_runtime.py
-          tests/test_runtime_verify.py
-          tests/test_semantic_ambiguity.py
           tests/test_target_resolver.py
-          tests/test_transcript_replay_contract.py
           tests/test_ue_export_compatibility.py
-          tests/test_phase_tool_router.py::test_successful_build_advances_multi_slice_plan_before_completion
-          tests/test_phase_tool_router.py::test_successful_build_binds_automation_gate_without_completing_task
+          tests/test_public_path_hygiene.py
+          tests/test_no_project_hardcode.py
           -q --tb=short
 
       - name: Install context compactor dependencies
@@ -227,27 +238,80 @@ jobs:
         run: npm.cmd ci --no-fund --no-audit
         working-directory: lmstudio-unreal-agent-mcp
 
-      - name: Run tests
-        run: pytest --tb=short -q
-        working-directory: ${{ github.workspace }}
-
-      - name: Hardening fault-injection gate
+      - name: Direct production regression suite
         run: >
-          pytest tests/test_tool_manifest_contract.py
-          tests/test_tool_call_authorization.py
-          tests/test_project_cache_generation.py
-          tests/test_atomic_io.py
-          tests/test_mcp_envelope.py
-          tests/test_mcp_stable_subprocess_e2e.py
+          pytest
+          tests/test_python_direct_rag_server.py
+          tests/test_tool_manifest_contract.py
+          tests/test_direct_mcp_subprocess_e2e.py
+          tests/test_cross_language_tool_contract.py
+          tests/test_integrated_installer.py
+          tests/test_bootstrap_runtimes.py
+          tests/test_integrated_package.py
+          tests/test_package_forbidden_filters.py
+          tests/test_install_sh_python_launcher.py
           tests/test_installer_gates.py
+          tests/test_patch_mcp_config.py
+          tests/test_verify_release.py
+          tests/test_project_controller.py
+          tests/test_project_context.py
+          tests/test_project_routing.py
+          tests/test_index_path_resolver.py
+          tests/test_index_inputs.py
+          tests/test_build_rag_index_atomic.py
+          tests/test_build_rag_index_compact.py
+          tests/test_rag_refresh.py
+          tests/test_rag_smoke.py
+          tests/test_direct_rag_project_isolation.py
+          tests/test_dynamic_rag_cli_defaults.py
+          tests/test_direct_installer_docs.py
+          tests/test_rag_doctor_repo_only.py
+          tests/test_active_project_read_resolver.py
+          tests/test_collect_unreal_projects.py
+          tests/test_editor_metadata_material.py
+          tests/test_editor_metadata_provenance.py
+          tests/test_asset_taxonomy.py
+          tests/test_plugin_project_context.py
+          tests/test_agent_write_guards.py
+          tests/test_atomic_io.py
+          tests/test_unreal_static_validate.py
+          tests/test_validate_project_sources.py
+          tests/test_editor_export_runner.py
+          tests/test_engine_registration_portability.py
+          tests/test_project_name_resolver.py
+          tests/test_target_resolver.py
+          tests/test_ue_export_compatibility.py
+          tests/test_public_path_hygiene.py
+          tests/test_no_project_hardcode.py
+          tests/test_cline_direct_contract.py
+          tests/test_direct_test_import_isolation.py
+          tests/test_direct_source_import_isolation.py
+          tests/test_ci_release_readiness.py
           -q --tb=short
         working-directory: ${{ github.workspace }}
 
-      - name: Domain contract gate
-        run: python scripts/eval_domain_contract.py --pytest-only
+      - name: Direct transport and safety hardening gate
+        run: >
+          pytest
+          tests/test_python_direct_rag_server.py
+          tests/test_tool_manifest_contract.py
+          tests/test_direct_mcp_subprocess_e2e.py
+          tests/test_cross_language_tool_contract.py
+          tests/test_agent_write_guards.py
+          tests/test_atomic_io.py
+          tests/test_installer_gates.py
+          tests/test_patch_mcp_config.py
+          -q --tb=short
+        working-directory: ${{ github.workspace }}
 
-      - name: Repetition gate
-        run: python scripts/run_repetition_gate.py --repeat 3
+      - name: Direct deterministic repetition gate
+        run: >
+          python scripts/run_repetition_gate.py --repeat 3
+          --suite tests/test_python_direct_rag_server.py
+          --suite tests/test_direct_mcp_subprocess_e2e.py
+          --suite tests/test_cross_language_tool_contract.py
+          --suite tests/test_build_rag_index_atomic.py
+          --suite tests/test_atomic_io.py
 
   python-lint:
     name: Python lint (ruff)
@@ -346,7 +410,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          powershell -NoProfile -ExecutionPolicy Bypass -File rag.ps1 doctor -RepoOnly
+          powershell -NoProfile -ExecutionPolicy Bypass -File rag.ps1 doctor
 
   installer-gates:
     name: Installer verify and WhatIf

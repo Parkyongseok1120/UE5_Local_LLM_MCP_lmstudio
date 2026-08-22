@@ -15,8 +15,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from conftest import require_agent_mcp_deps  # noqa: E402
 from mcp_stdio_client import StdioJsonRpc  # noqa: E402
 
-RAG_SCRIPT = ROOT / "scripts" / "unreal_rag_mcp.py"
-AGENT_SERVER = ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js"
+RAG_SCRIPT = ROOT / "scripts" / "unreal_rag_direct.py"
+AGENT_SERVER = ROOT / "lmstudio-unreal-agent-mcp" / "src" / "direct-server.js"
 SOAK_CALLS = int(os.environ.get("MCP_SOAK_CALLS", "100"))
 
 
@@ -66,7 +66,6 @@ def agent_env(tmp_path: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         {
-            "MCP_ESSENTIAL_TOOLS": "1",
             "WORKSPACE_ROOT": str(tmp_path),
             "AGENT_STATE_ROOT": str(tmp_path / "state"),
             "SHARED_UNREAL_CONFIG": str(tmp_path / "unreal-workspace.json"),
@@ -83,7 +82,6 @@ def rag_env(tmp_path: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         {
-            "MCP_ESSENTIAL_TOOLS": "1",
             "AGENT_STATE_ROOT": str(tmp_path / "state"),
             "SHARED_UNREAL_CONFIG": str(tmp_path / "unreal-workspace.json"),
         }
@@ -102,19 +100,25 @@ def test_agent_repeated_read_file_calls(agent_env: dict[str, str], tmp_path: Pat
     client = StdioJsonRpc(["node", str(AGENT_SERVER)], env=agent_env, cwd=ROOT / "lmstudio-unreal-agent-mcp")
     try:
         _init_client(client, name="soak-agent")
-        for idx in range(min(2, SOAK_CALLS)):
-            resp = _tools_call(client, 100 + idx, "read_file", {"path": str(sample)})
-            assert "result" in resp
-            assert resp["result"].get("isError") is not True
-        for idx in range(2, SOAK_CALLS):
-            resp = _tools_call(client, 100 + idx, "read_file", {"path": str(sample)})
+        resp = _tools_call(client, 100, "read_file", {"path": str(sample)})
+        assert "result" in resp
+        assert resp["result"].get("isError") is not True
+        first_payload = resp["result"].get("structuredContent") or {}
+        receipt = first_payload.get("repeatReceipt")
+        assert isinstance(receipt, str) and receipt
+        for idx in range(1, SOAK_CALLS):
+            resp = _tools_call(
+                client,
+                100 + idx,
+                "read_file",
+                {"path": str(sample), "repeatReceipt": receipt},
+            )
             assert "result" in resp
             assert resp["result"].get("isError") is not True
             payload = resp["result"].get("structuredContent") or {}
             assert payload.get("ok") is True
-            assert payload.get("resultKind") == "cache_hit"
-            assert payload.get("evidenceProgressed") is False
-            assert payload.get("workflowProgressed") is False
+            assert payload.get("duplicate") is True
+            assert payload.get("status") == "no_new_information"
             assert "errorCode" not in payload
     finally:
         client.close()
@@ -140,13 +144,20 @@ def test_rag_repeated_health_calls(rag_env: dict[str, str], tmp_path: Path) -> N
             # structured payload, not misreported as an MCP transport error.
             assert resp["result"].get("isError") is not True
             structured = resp["result"].get("structuredContent") or {}
-            assert structured.get("okForChat") is False
-            assert structured.get("chatAction") == "stop_and_select_active_project"
-            assert structured.get("errorCode") == "RAG_PROJECT_UNBOUND"
+            assert structured.get("executionStatus") == "succeeded"
+            assert structured.get("indexStatus") == "unavailable"
+            assert "okForChat" not in structured
+            assert structured.get("projectBindingStatus") == "unbound"
+            assert structured.get("errorCode") is None
+            assert structured.get("indexReasonCode") in {
+                "RAG_INDEX_EMPTY",
+                "RAG_INDEX_UNREADABLE",
+            }
             observed_health.append(
                 (
-                    structured.get("okForChat"),
-                    structured.get("chatAction"),
+                    structured.get("executionStatus"),
+                    structured.get("indexStatus"),
+                    structured.get("projectBindingStatus"),
                     structured.get("indexReadable"),
                 )
             )

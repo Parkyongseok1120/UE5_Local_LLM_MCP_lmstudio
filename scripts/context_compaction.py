@@ -1,8 +1,8 @@
-"""Deterministic context-budget and checkpoint helpers shared by local wrappers.
+"""Transparent context-budget helpers for the optional local wrapper.
 
-The LM Studio Generator uses the JavaScript equivalent. This module deliberately
-keeps control-plane state structured so a natural-language summary cannot reset
-build recovery or duplicate-call guards.
+The checkpoint contains only conversation facts needed after old messages are
+removed.  It never selects a model/tool, owns a route, or carries an executable
+next-action directive.
 """
 
 from __future__ import annotations
@@ -79,21 +79,21 @@ def build_checkpoint(messages: list[dict[str, Any]], previous: dict[str, Any] | 
     prior = previous or {}
     touched: list[str] = list(prior.get("modifiedFiles") or [])
     diagnostics: list[str] = list(prior.get("diagnostics") or [])
-    required: dict[str, Any] | None = prior.get("requiredNextTool")
     objective = str(prior.get("objective") or "")
+    latest_user_message = str(prior.get("latestUserMessage") or "")
+    unresolved_questions: list[str] = list(prior.get("unresolvedQuestions") or [])
     signature_contracts: list[dict[str, Any]] = list(prior.get("exactSignatureContracts") or [])
+    factual_tool_results: list[dict[str, Any]] = list(prior.get("factualToolResults") or [])
     for message in messages:
         content = str(message.get("content") or "")
         if not objective and message.get("role") == "user" and content.strip():
             objective = content.strip()[:1200]
+        if message.get("role") == "user" and content.strip():
+            latest_user_message = content
+            unresolved_questions.extend(
+                line.strip() for line in content.splitlines() if line.strip().endswith("?")
+            )
         for payload in _parse_json(content):
-            if isinstance(payload.get("requiredNextTool"), str):
-                required = {
-                    "name": payload["requiredNextTool"],
-                    "args": payload.get("requiredNextToolArgs") or {},
-                }
-            if payload.get("ok") is True and (payload.get("phase") == "complete" or payload.get("buildOutcome") == "succeeded"):
-                required = None
             for key in ("path", "file", "projectRelative", "projectPath"):
                 if isinstance(payload.get(key), str):
                     touched.append(payload[key].replace("\\", "/"))
@@ -103,42 +103,62 @@ def build_checkpoint(messages: list[dict[str, Any]], previous: dict[str, Any] | 
             contract = payload.get("signatureContract")
             if isinstance(contract, dict):
                 signature_contracts.append(contract)
+            if message.get("role") == "tool":
+                factual_tool_results.append(
+                    {
+                        key: payload[key]
+                        for key in (
+                            "ok", "errorCode", "message", "path", "file", "sha256",
+                            "size", "startLine", "endLine", "buildOutcome", "exitCode",
+                        )
+                        if key in payload
+                    }
+                )
     return {
         "schemaVersion": SCHEMA_VERSION,
         "checkpointGeneration": int(prior.get("checkpointGeneration") or 0) + 1,
         "objective": objective,
+        "latestUserMessage": latest_user_message,
+        "unresolvedQuestions": list(dict.fromkeys(unresolved_questions))[-16:],
         "modifiedFiles": list(dict.fromkeys(touched))[-32:],
         "diagnostics": list(dict.fromkeys(diagnostics))[-32:],
-        "requiredNextTool": required,
         "exactSignatureContracts": signature_contracts[-16:],
-        "mutationGeneration": int(prior.get("mutationGeneration") or 0),
+        "factualToolResults": factual_tool_results[-16:],
         "buildState": dict(prior.get("buildState") or {}),
-        "pendingToolCall": prior.get("pendingToolCall"),
-        "completedToolCallIds": list(dict.fromkeys(prior.get("completedToolCallIds") or [])),
     }
 
 
 def compact_messages(messages: list[dict[str, Any]], checkpoint: dict[str, Any], recent_messages: int = 12) -> list[dict[str, Any]]:
     if not messages:
         return messages
-    pinned: list[dict[str, Any]] = []
+    pinned_system: list[dict[str, Any]] = []
+    latest_user: dict[str, Any] | None = None
     rest: list[dict[str, Any]] = []
-    first_user = False
-    for message in messages:
-        if message.get("role") == "system" or (message.get("role") == "user" and not first_user):
-            pinned.append(message)
-            first_user = first_user or message.get("role") == "user"
+    latest_user_index = max(
+        (index for index, message in enumerate(messages) if message.get("role") == "user"),
+        default=-1,
+    )
+    for index, message in enumerate(messages):
+        if message.get("role") == "system":
+            pinned_system.append(message)
+        elif index == latest_user_index:
+            latest_user = message
         else:
             rest.append(message)
-    tail = rest[-max(1, recent_messages):]
+    tail = rest[-max(0, recent_messages):] if recent_messages > 0 else []
     summary = {
         "type": "context_checkpoint",
         "schemaVersion": SCHEMA_VERSION,
         "checkpoint": checkpoint,
         "compactedMessageCount": max(0, len(rest) - len(tail)),
-        "instruction": "Control fields are authoritative. Re-read current files and trust latest build feedback.",
+        "instruction": "Background context only. The selected model decides whether any tool call or final answer follows.",
     }
-    return [*pinned, {"role": "system", "content": json.dumps(summary, ensure_ascii=False, separators=(",", ":"))}, *tail]
+    return [
+        *pinned_system,
+        {"role": "system", "content": json.dumps(summary, ensure_ascii=False, separators=(",", ":"))},
+        *tail,
+        *([latest_user] if latest_user is not None else []),
+    ]
 
 
 def session_fingerprint(messages: list[dict[str, Any]]) -> str:

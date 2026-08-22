@@ -127,6 +127,12 @@ foreach ($file in $scanFiles) {
     $rel = $file.Substring($root.Length).TrimStart('\', '/')
     $relNormalized = $rel.Replace('/', '\')
     $relPosix = $rel.Replace('\', '/')
+    # Historical evaluation artifacts are intentionally quarantined outside the
+    # shippable product surface. They preserve audit evidence, but are not part
+    # of an OSS release and must not influence the release-path hygiene scan.
+    if ($relPosix -match '(?i)^legacy_eval/') {
+        continue
+    }
     if ($rel -match '(?i)Verify-Oss-Ready\.ps1$') {
         continue
     }
@@ -249,7 +255,7 @@ $required = @(
     '.gitignore',
     'scripts\rag_doctor.py',
     'scripts\workspace_paths.py',
-    'lmstudio-unreal-agent-mcp\src\server.js'
+    'lmstudio-unreal-agent-mcp\src\direct-server.js'
 )
 foreach ($item in $required) {
     if (-not (Test-Path (Join-Path $root $item))) {

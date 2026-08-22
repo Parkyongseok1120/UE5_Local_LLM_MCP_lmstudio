@@ -3,7 +3,7 @@
     "unreal-agent": {
       "command": "node",
       "args": [
-        "%USERPROFILE%\\.lmstudio\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-unreal-agent-mcp\\src\\server.js"
+        "%USERPROFILE%\\.lmstudio\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-unreal-agent-mcp\\src\\direct-server.js"
       ],
       "env": {
         "WORKSPACE_ROOT": "%USERPROFILE%\\Documents",
@@ -14,13 +14,10 @@
         "ALLOW_WRITE": "0",
         "ALLOW_COMMANDS": "0",
         "ALLOW_UNREAL_BUILD": "0",
-        "VALIDATE_ON_WRITE": "1",
         "MAX_READ_BYTES": "524288",
         "MAX_OUTPUT_BYTES": "262144",
-        "MCP_AGENT_RESULT_MAX_CHARS": "32000",
-        "BUILD_VERBOSE_OUTPUT": "0",
         "COMMAND_TIMEOUT_MS": "600000",
-        "MCP_ESSENTIAL_TOOLS": "1"
+        "DIRECT_REPEAT_CACHE_TTL_MS": "600000"
       },
       "timeout": 720000
     }

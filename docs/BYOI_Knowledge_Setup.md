@@ -5,11 +5,15 @@ Build your local RAG index from a licensed Epic UE install. **Never commit** `da
 ## Quick start
 
 ```powershell
-cd Unreal58-RAG
-.\scripts\installer_support\Configure-Knowledge.ps1   # pick UE_5.x, sets indexNamespace
-.\rag.ps1 update-engine              # collect source + symbols + graph + build
-.\rag.ps1 doctor
+cd UE5_Local_LLM_MCP_lmstudio
+.\scripts\installer_support\Configure-Knowledge.ps1
 ```
+
+The configuration command selects one installed UE 5.x version, writes the local
+workspace configuration, then runs source collection, public-symbol collection,
+index build, and `doctor`. Add `-SkipBuild` when you only
+want to write the configuration. The script prints the exact supported commands
+to run later.
 
 ## Engine version policy
 
@@ -26,13 +30,16 @@ cd Unreal58-RAG
 
 Configure in `config/workspace.json` (from `config/workspace.json.template`).
 
-## Update commands
+## Direct update commands
 
 | Command | Action |
 |---------|--------|
-| `update-engine` | Re-collect Epic source, symbols (public tier), module graph, rebuild |
-| `update-project` | Sync active `.uproject` into index |
-| `update-guidelines` | Refresh `RAG_Project_Guidelines` chunks |
+| `collect-source -Root <UE root>\Engine\Source` | Re-collect source from one licensed Unreal installation |
+| `collect-symbols -Root <UE root>\Engine\Source -Tier public -SymbolScope engine` | Re-collect public engine symbols |
+| `build` | Atomically rebuild the configured index |
+| `set-project -ProjectFile <path.uproject>` | Select one exact project for Direct RAG calls |
+| `refresh -RefreshScope project_source` | Refresh the selected project's source without launching the Editor |
+| `doctor` | Report factual configuration, binding, and index health |
 
 ## Legal
 

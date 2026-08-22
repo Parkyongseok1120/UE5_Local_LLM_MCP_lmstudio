@@ -1,9 +1,9 @@
 [
   {
-    "id": "multi_step_read_before_plan",
-    "user": "Find the active Unreal project, then call unreal_agent_plan for a compile_fix on a missing generated.h error. Do not write files yet.",
-    "expect_tools": ["unreal_get_active_project", "unreal_agent_plan"],
-    "notes": "Two-turn discipline; single-turn probe should fail"
+    "id": "multi_step_project_then_rag",
+    "user": "Find the active Unreal project, then search its local RAG index for a missing generated.h compile error. Do not write files yet.",
+    "expect_tools": ["unreal_get_active_project", "unreal_rag_search"],
+    "notes": "Direct read-only discovery across two turns"
   },
   {
     "id": "no_tool_name_in_user_message",

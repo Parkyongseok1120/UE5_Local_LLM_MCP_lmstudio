@@ -9,11 +9,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from task_api import (
-    task_require_automation_after_build,
-    task_root,
-    task_start,
-)
 from unreal_capability_detection import detect_unreal_capabilities
 
 
@@ -143,78 +138,3 @@ def test_capability_detection_composes_official_cqtest_directory_and_name(
         "Game.MyGame.MinimalTest",
         "Game.MyGame.MyFixture",
     }
-
-
-def test_automation_filter_persistence_batches_total_limit_and_rejects_overflow(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("AGENT_STATE_ROOT", str(tmp_path / "state"))
-    started = task_start(
-        tmp_path,
-        request="Verify a bounded project-independent slice",
-        mode="agent_edit",
-        plan_payload={
-            "taskKind": "codegen",
-            "writeGate": {"writesAllowed": True, "maxFilesPerEdit": 1},
-            "orchestration": {"requiredBeforeWrite": []},
-            "executablePlanSlices": [
-                {"sliceId": "runtime", "files": ["Source/Runtime/Feature.cpp"]}
-            ],
-        },
-    )
-    bounded = [f"Portable.Filter{index:04d}" for index in range(4096)]
-    state_path = task_root(tmp_path, started["taskSessionId"]) / "state.json"
-    post_static = json.loads(state_path.read_text(encoding="utf-8"))
-    post_static["controlState"] = {
-        "version": 2,
-        "authoritative": True,
-        "activeSliceId": "runtime",
-        "mutationGeneration": 0,
-        "requiredTool": {"name": "build_unreal_project", "args": {}},
-    }
-    post_static.setdefault("continuity", {})["checkpoint"] = {
-        "activeSliceId": "runtime",
-        "mutationGeneration": 0,
-        "validation": {"status": "passed"},
-    }
-    state_path.write_text(json.dumps(post_static), encoding="utf-8")
-
-    overflow = task_require_automation_after_build(
-        tmp_path,
-        task_authorization=started["taskAuthorization"],
-        mutation_generation=0,
-        proof_level="Built",
-        build_proof_digest="b" * 64,
-        build_log_path=".agent/logs/overflow-build.log",
-        test_filter="",
-        test_filters=[*bounded, "Portable.FilterOverflow"],
-        declared_tests=[],
-    )
-
-    assert overflow["ok"] is False
-    assert overflow["errorCode"] == "AUTOMATION_FILTER_SET_TOO_LARGE"
-    assert overflow["filterCount"] == 4097
-    assert overflow["maxFilters"] == 4096
-    after_overflow = json.loads(state_path.read_text(encoding="utf-8"))
-    assert "buildVerification" not in after_overflow
-
-    accepted = task_require_automation_after_build(
-        tmp_path,
-        task_authorization=started["taskAuthorization"],
-        mutation_generation=0,
-        proof_level="Built",
-        build_proof_digest="b" * 64,
-        build_log_path=".agent/logs/latest-build.log",
-        test_filter="",
-        test_filters=bounded,
-        declared_tests=[f"{name}.Case" for name in bounded],
-    )
-
-    assert accepted["ok"] is True
-    assert accepted["testFilters"] == bounded[:256]
-    assert accepted["filterBatchCount"] == 16
-    before_overflow = json.loads(state_path.read_text(encoding="utf-8"))
-    assert before_overflow["buildVerification"]["testFilters"] == bounded[:256]
-    assert before_overflow["buildVerification"]["allFilterCount"] == 4096
-    assert len(before_overflow["buildVerification"]["remainingFilterBatches"]) == 15

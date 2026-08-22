@@ -1,83 +1,72 @@
-# RAG Setup — `rag.ps1` Reference
+# Direct RAG setup and portable maintenance
 
-## Execution Policy
-
-If PowerShell blocks `.\rag.ps1` with an execution policy error, keep the system policy unchanged and run it with a per-command bypass:
-
-```powershell
-cd "$env:USERPROFILE\Documents\Git\UE5_Local_LLM_MCP_lmstudio"
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 doctor
-```
-
-## Building the RAG Index
-
-Build a useful local RAG index for your active Unreal project:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-projects -CopyProjectText
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-symbols
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-module-graph
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 doctor
-```
-
-For a minimal guideline-only index:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
-```
-
-After rebuilding the index, restart LM Studio MCP servers or restart LM Studio so `unreal-rag` reloads the new `rag.sqlite`.
-
-> When writing docs, issues, or logs, avoid hard-coding a personal Windows user profile path. Prefer `$env:USERPROFILE\...` or `%USERPROFILE%\...`.
-
-## Shader / Material / Blueprint Knowledge
-
-Project text indexing already includes `.usf` and `.ush` shader files:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-projects -CopyProjectText
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 query -Mode shader -Question "USF USH GlobalShader RenderCore RHI plugin setup"
-```
-
-For Material and Blueprint graph analysis, export metadata from Unreal Editor first, then ingest it:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-material-metadata -Question C:\Path\To\materials.jsonl -ProjectName MyGame
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 collect-blueprint-metadata -Question C:\Path\To\blueprints.jsonl -ProjectName MyGame
-powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 build
-```
-
-Use `-Mode material_analysis` for material node screenshots/parameter inventory and `-Mode blueprint_analysis` for Blueprint variables, functions, nodes, and pins.
-
-## Blueprint Graph Exporter Plugin
-
-For reliable Blueprint node/pin/link analysis, install the editor graph exporter plugin into each Unreal project you want to inspect:
-
-```powershell
-.\rag.ps1 pick-project
-.\rag.ps1 install-editor-graph-plugin
-```
-
-When project metadata setup is run, it asks:
-
-```text
-Install Blueprint graph exporter plugin into this active project? [Y/n]
-```
-
-Choose `Y` to copy `tools\ue_plugins\LmStudioGraphExporter` into `<YourProject>\Plugins\LmStudioGraphExporter`, enable it in the project's `.uproject`, and build the editor module with UnrealBuildTool when needed. Existing project copies are hash-checked against this repo's plugin source; stale copies are updated automatically by the installer.
-
-**What improves after installing the plugin:**
-
-- Blueprint and AnimBlueprint exports include real graph nodes, pins, and links.
-- Local-model answers can verify actual asset wiring instead of guessing from names only.
-- Claim validation and `blueprint_analysis` become much better at finding missing events, disconnected pins, and parameter usage.
-- The install is per project and portable: it does not modify the Unreal Engine installation.
-
-## One-Command Setup
+The integrated installer is the normal setup path:
 
 ```powershell
 python install.py --profile standard --yes --build-rag
-python install.py --profile standard --yes --build-rag --enable-agent-mode --accept-agent-risk
 ```
+
+Add `--enable-agent-mode --accept-agent-risk` only when file mutation and build
+authority are deliberately needed. The RAG MCP itself remains an eight-tool,
+task-free factual evidence service.
+
+## Portable `rag.ps1`
+
+The packaged launcher is intentionally small. It supports only factual
+collection, index build, Direct project selection, synchronous refresh, and
+health inspection. It does not run a model, planner, task/route controller,
+wrapper, or evaluation harness.
+
+If Windows PowerShell blocks the script, keep the system policy unchanged and
+use a per-command bypass:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\rag.ps1 doctor
+```
+
+Build project evidence with explicit roots:
+
+```powershell
+.\rag.ps1 collect-projects -Root C:\Projects\MyGame
+.\rag.ps1 collect-symbols -Root C:\Projects\MyGame\Source -SymbolScope project -ProjectName MyGame
+.\rag.ps1 build
+.\rag.ps1 doctor
+```
+
+For full engine-source text, run the explicitly expensive collector before the
+build:
+
+```powershell
+.\rag.ps1 collect-source -Root C:\UE_5.6\Engine\Source
+.\rag.ps1 build-incremental
+```
+
+Select or clear the shared default project without creating task state:
+
+```powershell
+.\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
+.\rag.ps1 clear-project
+```
+
+`refresh` defaults to `project_source` and never starts Unreal Editor:
+
+```powershell
+.\rag.ps1 refresh
+```
+
+An Editor-metadata refresh ingests existing exports without launching Editor.
+Starting Unreal Editor is a separate, explicit side effect and requires both an
+Editor scope and `-AllowEditorLaunch`:
+
+```powershell
+.\rag.ps1 refresh -RefreshScope editor_metadata
+.\rag.ps1 refresh -RefreshScope editor_metadata -AllowEditorLaunch
+```
+
+After rebuilding, restart the MCP processes so an already-running server opens
+the current `rag.sqlite`. Ask questions through LM Studio/Cline and the
+`unreal_rag_search` or `unreal_symbol_lookup` MCP capabilities; `rag.ps1` is not
+a query/model frontend.
+
+On Linux and macOS, invoke the same launcher with PowerShell Core, for example
+`pwsh ./rag.ps1 doctor`.

@@ -18,7 +18,6 @@ sys.path.insert(0, str(SCRIPTS))
 
 from preflight_lmstudio import (  # noqa: E402
     AUTO_MODEL_ALIASES,
-    extract_assistant_text,
     is_embedding_model,
     resolve_lmstudio_model,
 )
@@ -36,23 +35,36 @@ TOOL_PROBE_SYSTEM = """You are an Unreal MCP agent. Rules:
 - After the tool returns, visible reply: one short English sentence only; no thinking process text.
 """
 
-SCENARIOS = (
+DIRECT_SCENARIOS = (
     {
         "id": "get_active_project",
         "user": "Call unreal_get_active_project now. Do not answer until the tool returns.",
         "expect_tool": "unreal_get_active_project",
     },
     {
-        "id": "agent_plan_bootstrap",
-        "user": "Call unreal_agent_plan with mode=compile_fix and request='missing generated.h in header'. One tool only.",
-        "expect_tool": "unreal_agent_plan",
+        "id": "rag_search",
+        "user": (
+            "Call unreal_rag_search with query='UActorComponent BeginPlay lifecycle'. "
+            "One tool only; do not answer until the tool returns."
+        ),
+        "expect_tool": "unreal_rag_search",
     },
     {
-        "id": "agent_plan_korean_trigger",
-        "user": "구현 계획을 세워줘. Turn 1에서는 unreal_agent_plan만 호출하고 답변은 하지 마.",
-        "expect_tool": "unreal_agent_plan",
+        "id": "read_project_file",
+        "user": (
+            "Call read_file with path='project://Config/DefaultEngine.ini'. "
+            "One tool only; do not answer until the tool returns."
+        ),
+        "expect_tool": "read_file",
     },
 )
+
+# Backward-compatible name for callers that import the benchmark set.
+SCENARIOS = DIRECT_SCENARIOS
+
+
+def benchmark_scenarios() -> tuple[dict[str, str], ...]:
+    return DIRECT_SCENARIOS
 
 
 def fetch_v0_models(base_url: str, timeout: float = 5.0) -> list[dict[str, Any]]:
@@ -126,15 +138,32 @@ def probe_tools_schema() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": "unreal_agent_plan",
-                "description": "Build an agent plan for the given request and mode.",
+                "name": "unreal_rag_search",
+                "description": "Search the local Unreal RAG index for relevant evidence.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "request": {"type": "string"},
-                        "mode": {"type": "string"},
+                        "query": {"type": "string"},
+                        "top_k": {"type": "integer", "minimum": 1, "maximum": 16},
                     },
-                    "required": ["request"],
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a bounded project or workspace file as evidence.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "project": {"type": "string"},
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
                 },
             },
         },
@@ -157,13 +186,22 @@ def thinking_leak_rate(text: str) -> bool:
     return any(marker in lowered for marker in markers)
 
 
-def run_scenario(base_url: str, model: str, scenario: dict[str, Any]) -> dict[str, Any]:
+def run_scenario(
+    base_url: str,
+    model: str,
+    scenario: dict[str, Any],
+) -> dict[str, Any]:
     messages = [
         {"role": "system", "content": TOOL_PROBE_SYSTEM},
         {"role": "user", "content": scenario["user"]},
     ]
     try:
-        response = chat_completion(base_url, model, messages, tools=probe_tools_schema())
+        response = chat_completion(
+            base_url,
+            model,
+            messages,
+            tools=probe_tools_schema(),
+        )
     except Exception as exc:
         return {
             "id": scenario["id"],
@@ -175,7 +213,8 @@ def run_scenario(base_url: str, model: str, scenario: dict[str, Any]) -> dict[st
     choice = (response.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     tool_calls = message.get("tool_calls") or []
-    visible = extract_assistant_text(message)
+    visible = str(message.get("content") or "")
+    reasoning = str(message.get("reasoning_content") or "")
     names = [
         str((call.get("function") or {}).get("name") or "")
         for call in tool_calls
@@ -190,6 +229,7 @@ def run_scenario(base_url: str, model: str, scenario: dict[str, Any]) -> dict[st
         "toolCalls": len(tool_calls),
         "toolNames": names,
         "thinkingLeak": thinking_leak_rate(visible) or content_with_tool_call,
+        "reasoningContentPresent": bool(reasoning.strip()),
         "contentWithToolCall": content_with_tool_call,
         "visibleTail": visible[:240],
     }
@@ -207,11 +247,15 @@ def write_payload(path: Path, payload: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Bench LM Studio MCP tool-call KPI.")
+    parser = argparse.ArgumentParser(
+        description="Bench LM Studio MCP tool-call KPI.",
+        allow_abbrev=False,
+    )
     parser.add_argument("--url", default="http://localhost:1234/v1")
     parser.add_argument("--model", default="")
     parser.add_argument("--out", type=Path, default=DEFAULT_BASELINE)
     args = parser.parse_args()
+    scenarios = benchmark_scenarios()
 
     model = resolve_loaded_chat_model(args.url, args.model)
     if not model or is_embedding_model(model):
@@ -219,8 +263,9 @@ def main() -> int:
             "generatedAt": datetime.now(timezone.utc).isoformat(),
             "model": model,
             "url": args.url,
+            "mode": "direct",
             "passCount": 0,
-            "total": len(SCENARIOS),
+            "total": len(scenarios),
             "passRate": 0.0,
             "thinkingLeakCount": 0,
             "error": "No loaded chat model found in LM Studio; refusing to benchmark embedding model.",
@@ -231,12 +276,13 @@ def main() -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 1
 
-    results = [run_scenario(args.url, model, scenario) for scenario in SCENARIOS]
+    results = [run_scenario(args.url, model, scenario) for scenario in scenarios]
     passed = sum(1 for row in results if row.get("pass"))
     payload = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "model": model,
         "url": args.url,
+        "mode": "direct",
         "passCount": passed,
         "total": len(results),
         "passRate": passed / len(results) if results else 0.0,

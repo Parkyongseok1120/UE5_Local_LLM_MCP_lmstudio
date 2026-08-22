@@ -1,5 +1,10 @@
 #!/usr/bin/env python
-"""Unified active-project switch: invalidate caches, report readiness, optional prepare."""
+"""Direct active-project selection and factual binding status.
+
+This module owns one piece of mutable state: ``activeProject`` in the shared
+workspace configuration.  It deliberately does not plan work, prepare a
+project, launch Unreal Editor, rebuild an index, or choose a follow-up tool.
+"""
 
 from __future__ import annotations
 
@@ -8,14 +13,23 @@ import json
 from pathlib import Path
 from typing import Any
 
-from workspace_paths import find_workspace_root, load_shared_config, save_shared_config
+from direct_rag_project_cache import invalidate_direct_project_switch
+from workspace_paths import (
+    canonical_absolute_path_identity,
+    find_workspace_root,
+    load_shared_config,
+    save_shared_config,
+)
 
 
 def _validate_uproject(project_path: str) -> tuple[Path | None, str | None]:
-    resolved = Path(project_path).expanduser().resolve()
+    try:
+        resolved = Path(project_path).expanduser().resolve()
+    except OSError as exc:
+        return None, f"Could not resolve projectPath: {exc}"
     if not resolved.is_file():
         return None, f"projectPath not found: {resolved}"
-    if resolved.suffix.lower() != ".uproject":
+    if resolved.suffix.casefold() != ".uproject":
         return None, "projectPath must be an existing .uproject file."
     try:
         payload = json.loads(resolved.read_text(encoding="utf-8-sig"))
@@ -26,18 +40,68 @@ def _validate_uproject(project_path: str) -> tuple[Path | None, str | None]:
     return resolved, None
 
 
+def _binding_status(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {
+            "ok": True,
+            "ready": False,
+            "reason": "no_active_project",
+            "activeProject": None,
+            "bindingStatus": "unbound",
+        }
+    resolved, error = _validate_uproject(value)
+    if error or resolved is None:
+        return {
+            "ok": True,
+            "ready": False,
+            "reason": "active_project_invalid",
+            "activeProject": value,
+            "bindingStatus": "stale",
+            "observation": error,
+        }
+    return {
+        "ok": True,
+        "ready": True,
+        "reason": "active_project_valid",
+        "activeProject": str(resolved),
+        "projectName": resolved.stem,
+        "projectRoot": str(resolved.parent),
+        "bindingStatus": "bound",
+    }
+
+
+def _invalidate(previous: str | None, current: str | None) -> tuple[dict[str, Any], bool]:
+    try:
+        payload = invalidate_direct_project_switch(previous, current)
+    except Exception as exc:  # Config is already durable; report cache degradation.
+        return {"ok": False, "error": str(exc)}, True
+    return payload, payload.get("ok") is not True
+
+
 def switch_active_project(
     workspace: Path,
     *,
     project_path: str | None = None,
     clear: bool = False,
-    prepare: bool = False,
-    force_prepare: bool = False,
 ) -> dict[str, Any]:
+    """Atomically select or clear one exact project, then invalidate Direct caches."""
+
+    del workspace  # Retained as an explicit caller boundary; no repository state is mutated.
     config = load_shared_config()
     previous = str(config.get("activeProject") or "").strip()
 
     if clear:
+        if not previous:
+            return {
+                "ok": True,
+                "status": "completed",
+                "switchResult": "already_clear",
+                "changed": False,
+                "activeProject": None,
+                "cacheInvalidation": None,
+                "cacheRefreshRequired": False,
+                "readiness": _binding_status(None),
+            }
         config["activeProject"] = None
         try:
             save_shared_config(config)
@@ -46,72 +110,45 @@ def switch_active_project(
                 "ok": False,
                 "switchResult": "failed",
                 "error": f"Failed to save shared config: {exc}",
-                "activeProject": previous or None,
+                "activeProject": previous,
             }
-
-        invalidate_payload: dict[str, Any] | None = None
-        cache_refresh_required = False
-        try:
-            from project_switch_invalidate import on_project_switch_invalidate
-
-            invalidate_payload = on_project_switch_invalidate(previous or None, None, workspace=workspace)
-        except Exception as exc:
-            invalidate_payload = {"ok": False, "error": str(exc)}
-            cache_refresh_required = True
-        if invalidate_payload and not invalidate_payload.get("ok", True):
-            cache_refresh_required = True
-
+        invalidation, degraded = _invalidate(previous, None)
         return {
             "ok": True,
-            "switchResult": "cleared",
+            "status": "completed",
+            "switchResult": "cleared_degraded" if degraded else "cleared",
+            "changed": True,
             "activeProject": None,
-            "message": "Active project cleared.",
-            "cacheInvalidation": invalidate_payload,
-            "cacheRefreshRequired": cache_refresh_required,
-            "readiness": {"ready": False, "reason": "no_active_project"},
+            "cacheInvalidation": invalidation,
+            "cacheRefreshRequired": degraded,
+            "readiness": _binding_status(None),
         }
 
     if not project_path:
-        return {"ok": False, "switchResult": "failed", "error": "Provide projectPath or clear=true."}
-
+        return {
+            "ok": False,
+            "switchResult": "failed",
+            "error": "Provide projectPath or clear=true.",
+        }
     resolved, error = _validate_uproject(project_path)
     if error or resolved is None:
         return {"ok": False, "switchResult": "failed", "error": error}
 
-    if previous:
-        try:
-            previous_resolved = Path(previous).expanduser().resolve()
-        except OSError:
-            previous_resolved = Path(previous).expanduser().absolute()
-        if previous_resolved == resolved:
-            return {
-                "ok": True,
-                "status": "completed",
-                "switchResult": "already_active",
-                "changed": False,
-                "activeProject": str(resolved),
-                "message": f"Active project is already {resolved.name}",
-                "cacheInvalidation": None,
-                "cacheRefreshRequired": False,
-                "prepareRequested": False,
-            }
-
-    readiness: dict[str, Any]
-    try:
-        from on_active_project_changed import active_project_check_status
-
-        readiness = active_project_check_status(resolved, workspace)
-    except Exception as exc:
+    if previous and canonical_absolute_path_identity(previous) == canonical_absolute_path_identity(resolved):
         return {
-            "ok": False,
-            "switchResult": "failed",
-            "error": f"Project validation failed: {exc}",
-            "activeProject": previous or None,
+            "ok": True,
+            "status": "completed",
+            "switchResult": "already_active",
+            "changed": False,
+            "activeProject": str(resolved),
+            "cacheInvalidation": None,
+            "cacheRefreshRequired": False,
+            "readiness": _binding_status(str(resolved)),
         }
 
     config["activeProject"] = str(resolved)
-    export_dir = str(config.get("editorExportDir") or "").replace("\\", "/").rstrip("/").lower()
-    if not export_dir or export_dir.endswith("/saved/lmstudiometadataexports"):
+    configured_export = str(config.get("editorExportDir") or "").replace("\\", "/").rstrip("/").casefold()
+    if not configured_export or configured_export.endswith("/saved/lmstudiometadataexports"):
         config["editorExportDir"] = str(resolved.parent / "Saved" / "LmStudioMetadataExports")
     try:
         save_shared_config(config)
@@ -123,76 +160,45 @@ def switch_active_project(
             "activeProject": previous or None,
         }
 
-    invalidate_payload: dict[str, Any] | None = None
-    cache_refresh_required = False
-    try:
-        from project_switch_invalidate import on_project_switch_invalidate
-
-        invalidate_payload = on_project_switch_invalidate(previous or None, resolved, workspace=workspace)
-    except Exception as exc:
-        invalidate_payload = {"ok": False, "error": str(exc)}
-        cache_refresh_required = True
-    if invalidate_payload and not invalidate_payload.get("ok", True):
-        cache_refresh_required = True
-
-    prepare_payload: dict[str, Any] | None = None
-    if prepare or force_prepare:
-        try:
-            from on_active_project_changed import ensure_active_project_ready
-
-            prepare_payload = ensure_active_project_ready(
-                resolved,
-                previous_project=previous or None,
-                force=force_prepare,
-            )
-            readiness = prepare_payload.get("check") or readiness
-        except Exception as exc:
-            prepare_payload = {"ok": False, "error": str(exc)}
-
-    switch_result = "switched" if readiness.get("ready") and not cache_refresh_required else "switched_degraded"
+    invalidation, degraded = _invalidate(previous or None, str(resolved))
     return {
         "ok": True,
-        "switchResult": switch_result,
+        "status": "completed",
+        "switchResult": "switched_degraded" if degraded else "switched",
         "changed": True,
         "activeProject": str(resolved),
-        "message": f"Active project set to {resolved.name}",
-        "cacheInvalidation": invalidate_payload,
-        "cacheRefreshRequired": cache_refresh_required,
-        "readiness": readiness,
-        "autoSetup": prepare_payload,
-        "prepareRequested": prepare or force_prepare,
+        "cacheInvalidation": invalidation,
+        "cacheRefreshRequired": degraded,
+        "readiness": _binding_status(str(resolved)),
     }
 
 
 def active_project_readiness(workspace: Path | None = None) -> dict[str, Any]:
-    from on_active_project_changed import project_prepare_status
-
-    ws = workspace or find_workspace_root()
-    return project_prepare_status(ws)
+    del workspace
+    configured = str(load_shared_config().get("activeProject") or "").strip()
+    return _binding_status(configured or None)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Unified active project switch controller.")
-    parser.add_argument("--switch", dest="project_path", default="", help="Path to .uproject")
-    parser.add_argument("--clear", action="store_true")
-    parser.add_argument("--prepare", action="store_true")
-    parser.add_argument("--force-prepare", action="store_true")
-    parser.add_argument("--status", action="store_true", help="Report active project readiness only.")
+    parser = argparse.ArgumentParser(description="Select or inspect the shared Direct active project.")
+    actions = parser.add_mutually_exclusive_group(required=True)
+    actions.add_argument("--switch", dest="project_path", help="Absolute path to one .uproject")
+    actions.add_argument("--clear", action="store_true")
+    actions.add_argument("--status", action="store_true")
     args = parser.parse_args()
 
     workspace = find_workspace_root()
-    if args.status:
-        payload = active_project_readiness(workspace)
-    else:
-        payload = switch_active_project(
+    payload = (
+        active_project_readiness(workspace)
+        if args.status
+        else switch_active_project(
             workspace,
-            project_path=args.project_path or None,
+            project_path=args.project_path,
             clear=args.clear,
-            prepare=args.prepare,
-            force_prepare=args.force_prepare,
         )
+    )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
-    return 0 if payload.get("ok", True) else 1
+    return 0 if payload.get("ok") is True else 1
 
 
 if __name__ == "__main__":

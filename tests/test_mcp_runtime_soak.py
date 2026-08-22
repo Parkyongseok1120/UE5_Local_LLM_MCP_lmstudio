@@ -24,11 +24,10 @@ def _node_exe() -> str:
 
 def test_agent_mcp_initialize_and_tools_list(tmp_path: Path) -> None:
     require_agent_mcp_deps()
-    server = ROOT / "lmstudio-unreal-agent-mcp" / "src" / "server.js"
+    server = ROOT / "lmstudio-unreal-agent-mcp" / "src" / "direct-server.js"
     if not server.is_file():
         pytest.skip("agent server missing")
     env = os.environ.copy()
-    env["MCP_ESSENTIAL_TOOLS"] = "1"
     env["WORKSPACE_ROOT"] = str(tmp_path)
     env["AGENT_STATE_ROOT"] = str(tmp_path / "state")
     env["SHARED_UNREAL_CONFIG"] = str(tmp_path / "unreal-workspace.json")

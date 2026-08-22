@@ -89,12 +89,149 @@ Check "agent-mcp.json search roots" {
         }
     }
 }
-Check "unreal_rag_mcp.py compile" {
+Check "Direct RAG Python compile" {
     Push-Location (Join-Path $ragRoot "scripts")
-    try { & $py -m py_compile unreal_rag_mcp.py rag_search.py workspace_paths.py mutation_semantic_guard.py unreal_api_denylist.py }
+    try {
+        & $py -m py_compile `
+            unreal_rag_direct.py `
+            direct_rag_server.py `
+            direct_rag_evidence.py `
+            direct_rag_status.py `
+            direct_rag_contract.py `
+            direct_rag_corpus.py `
+            direct_rag_delivery.py `
+            direct_rag_atomic_replace.py `
+            direct_rag_backup_restore.py `
+            direct_rag_freshness.py `
+            direct_rag_freshness_rows.py `
+            direct_rag_generation_boundary.py `
+            direct_rag_generation_identity.py `
+            direct_rag_generation_swap.py `
+            direct_rag_all_refresh.py `
+            direct_rag_build_generation.py `
+            direct_rag_public_build.py `
+            direct_rag_raw_provenance.py `
+            direct_rag_raw_scope.py `
+            direct_rag_project_engine.py `
+            direct_rag_project_generation.py `
+            direct_rag_project_selectors.py `
+            direct_rag_manifest_binding.py `
+            direct_rag_index_registry.py `
+            direct_rag_index_ownership.py `
+            direct_rag_named_index.py `
+            direct_rag_named_candidate.py `
+            direct_rag_request_binding.py `
+            direct_rag_shard_selection.py `
+            direct_rag_unbuilt_shard.py `
+            direct_rag_history.py `
+            direct_rag_projects.py `
+            direct_rag_project_cache.py `
+            direct_rag_project_refresh.py `
+            direct_rag_project_collection.py `
+            direct_rag_project_merge.py `
+            direct_rag_project_set.py `
+            direct_rag_probe.py `
+            direct_rag_editor_stage.py `
+            direct_rag_editor_snapshot.py `
+            direct_rag_engine_collection.py `
+            direct_rag_engine_tier.py `
+            direct_rag_refresh_target.py `
+            direct_rag_refresh_facts.py `
+            direct_rag_refresh_lock.py `
+            direct_rag_refresh_journal.py `
+            direct_rag_refresh_recovery.py `
+            direct_rag_refresh_transaction.py `
+            direct_rag_refresh_cli.py `
+            direct_rag_startup_recovery.py `
+            direct_rag_search.py `
+            direct_rag_symbol.py `
+            direct_rag_index.py `
+            direct_rag_lexical.py `
+            direct_rag_limits.py `
+            direct_rag_retrieval.py `
+            direct_rag_selection.py `
+            direct_rag_result.py `
+            direct_rag_runtime.py `
+            direct_rag_sql.py `
+            direct_rag_readonly_db.py `
+            direct_rag_symbol_query.py `
+            direct_rag_build_binding.py `
+            rag_build_classification.py `
+            rag_build_input.py `
+            rag_build_metadata.py `
+            rag_build_metadata_projection.py `
+            rag_build_outputs.py `
+            rag_build_schema.py `
+            rag_build_writer.py `
+            active_project_sync.py `
+            active_project_paths.py `
+            editor_export_paths.py `
+            editor_export_runner.py `
+            editor_export_settings.py `
+            editor_export_location.py `
+            editor_export_project.py `
+            editor_export_markers.py `
+            editor_export_process.py `
+            editor_export_mode.py `
+            editor_export_contract.py `
+            editor_capture_state.py `
+            editor_metadata_catalog.py `
+            editor_metadata_provenance.py `
+            editor_metadata_sources.py `
+            editor_metadata_identity.py `
+            editor_metadata_projection.py `
+            editor_metadata_search_text.py `
+            editor_metadata_jsonl.py `
+            editor_metadata_merge.py `
+            editor_metadata_cli.py `
+            editor_sync_decision.py `
+            sync_editor_metadata.py `
+            editor_sync_context.py `
+            editor_sync_capture.py `
+            editor_sync_coordinator.py `
+            editor_sync_cli.py `
+            unreal_static_validate.py `
+            unreal_static_model.py `
+            unreal_static_scan.py `
+            unreal_static_reflection.py `
+            unreal_static_delegate.py `
+            unreal_static_lifecycle.py `
+            unreal_static_build.py `
+            unreal_static_include.py `
+            unreal_static_network.py `
+            unreal_static_crossfile.py `
+            unreal_static_safety.py `
+            unreal_static_registry.py `
+            unreal_static_runner.py `
+            portable_path_identity.py `
+            unreal_engine_discovery.py `
+            unreal_engine_registration.py `
+            unreal_engine_resolution.py `
+            unreal_engine_runtime_paths.py `
+            workspace_config.py `
+            workspace_index_paths.py `
+            workspace_locator.py `
+            workspace_paths.py `
+            ../installer/direct_rag_build.py `
+            ../installer/direct_rag_build_model.py `
+            ../installer/direct_rag_build_scope.py `
+            ../installer/direct_rag_build_stage.py `
+            ../installer/direct_rag_build_steps.py
+    }
     finally { Pop-Location }
 }
-Check "agent server.js" { if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) { throw "missing" } }
+Check "Direct RAG startup smoke" {
+    $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify","version":"1.0"}}}'
+    $list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+    $requests = "$init`n$list`n"
+    $stdout = ($requests | & $py (Join-Path $ragRoot "scripts\unreal_rag_direct.py") 2>$null | Out-String)
+    if ($stdout -notmatch 'unreal_rag_search') { throw "Direct RAG search capability missing" }
+    if ($stdout -match 'unreal_agent_plan|unreal_task_|taskAuthorization|requiredNextTool') {
+        throw "Direct RAG catalog leaked legacy workflow control"
+    }
+}
+Check "agent Direct server" { if (-not (Test-Path (Join-Path $agentRoot "src\direct-server.js"))) { throw "missing" } }
+Check "agent Strict server" { if (-not (Test-Path (Join-Path $agentRoot "src\strict-server.js"))) { throw "missing" } }
 Check "agent src JS syntax" {
     $jsFiles = Get-ChildItem -Path (Join-Path $agentRoot "src") -Filter *.js -Recurse
     if ($jsFiles.Count -eq 0) { throw "no JS files under agent src" }
@@ -109,44 +246,49 @@ Check "agent MCP startup smoke" {
         Warn "agent node_modules missing - skipped startup smoke (run npm ci in lmstudio-unreal-agent-mcp)"
         return
     }
-    $previousEssential = $env:MCP_ESSENTIAL_TOOLS
     $previousStateRoot = $env:AGENT_STATE_ROOT
     $previousSharedConfig = $env:SHARED_UNREAL_CONFIG
     $previousUnrealRoot = $env:UNREAL58_ROOT
     $verifyRoot = Join-Path $env:TEMP ("unreal-agent-verify-" + [guid]::NewGuid().ToString("N"))
     try {
-        $env:MCP_ESSENTIAL_TOOLS = "1"
         $env:AGENT_STATE_ROOT = Join-Path $verifyRoot "state\unreal-agent"
         $env:SHARED_UNREAL_CONFIG = Join-Path $verifyRoot "config\unreal-workspace.json"
         $env:UNREAL58_ROOT = $ragRoot
         $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"verify","version":"1.0"}}}'
         $list = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-        $input = "$init`n$list`n"
+        $requests = "$init`n$list`n"
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $stdout = ($input | & node (Join-Path $agentRoot "src\server.js") 2>$null | Out-String)
+            $stdout = ($requests | & node (Join-Path $agentRoot "src\direct-server.js") 2>$null | Out-String)
         }
         finally {
             $ErrorActionPreference = $prevEap
         }
         if ($stdout -notmatch '"tools"') { throw "tools/list did not return tools array" }
         if ($stdout -notmatch 'read_file') { throw "essential tool read_file missing from tools/list" }
+        if ($stdout -match 'taskAuthorization|ownerCapability|requiredNextTool') { throw "Direct catalog leaked workflow control" }
     }
     finally {
-        if ($null -eq $previousEssential) { Remove-Item Env:MCP_ESSENTIAL_TOOLS -ErrorAction SilentlyContinue } else { $env:MCP_ESSENTIAL_TOOLS = $previousEssential }
         if ($null -eq $previousStateRoot) { Remove-Item Env:AGENT_STATE_ROOT -ErrorAction SilentlyContinue } else { $env:AGENT_STATE_ROOT = $previousStateRoot }
         if ($null -eq $previousSharedConfig) { Remove-Item Env:SHARED_UNREAL_CONFIG -ErrorAction SilentlyContinue } else { $env:SHARED_UNREAL_CONFIG = $previousSharedConfig }
         if ($null -eq $previousUnrealRoot) { Remove-Item Env:UNREAL58_ROOT -ErrorAction SilentlyContinue } else { $env:UNREAL58_ROOT = $previousUnrealRoot }
         if (Test-Path -LiteralPath $verifyRoot) { Remove-Item -LiteralPath $verifyRoot -Recurse -Force }
     }
 }
-Check "agent state-root module" { if (-not (Test-Path (Join-Path $agentRoot "src\state-root.js"))) { throw "missing state-root.js" } }
-Check "rag shared state_root.py" { if (-not (Test-Path (Join-Path $root "scripts\state_root.py"))) { throw "missing scripts/state_root.py" } }
+Check "agent runtime-state-root module" { if (-not (Test-Path (Join-Path $agentRoot "src\runtime-state-root.js"))) { throw "missing runtime-state-root.js" } }
 Check "tool contract registry" { if (-not (Test-Path (Join-Path $root "config\tool_contract.json"))) { throw "missing config/tool_contract.json" } }
 Check "context compactor source" {
     $pluginRoot = Join-Path $ragRoot "lmstudio-context-compactor-plugin"
-    foreach ($required in @("manifest.json", "package.json", "src\generator.ts", "src\compaction-core.js", "scripts\status.cjs")) {
+    foreach ($required in @(
+        "manifest.json",
+        "package.json",
+        "src\index.ts",
+        "src\prediction-loop.ts",
+        "src\direct-compaction-core.js",
+        "src\direct-config.ts",
+        "scripts\status.cjs"
+    )) {
         if (-not (Test-Path -LiteralPath (Join-Path $pluginRoot $required))) {
             throw "missing lmstudio-context-compactor-plugin\$required"
         }
@@ -154,7 +296,7 @@ Check "context compactor source" {
 }
 Check "agent write-locks.js" { if (-not (Test-Path (Join-Path $agentRoot "src\write-locks.js"))) { throw "missing write-locks.js (single-flight write guard)" } }
 Check "agent write-lock reclaim bridge" { if (-not (Test-Path (Join-Path $agentRoot "src\write-lock-reclaim-bridge.py"))) { throw "missing write-lock-reclaim-bridge.py (transactional stale-lock recovery)" } }
-Check "agent mutation-history.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-history.js"))) { throw "missing mutation-history.js (duplicate-call loop breaker)" } }
+Check "agent direct-repeat-cache.js" { if (-not (Test-Path (Join-Path $agentRoot "src\direct-repeat-cache.js"))) { throw "missing direct-repeat-cache.js (observable-state repeat suppression)" } }
 Check "agent mutation-semantic-guard.js" { if (-not (Test-Path (Join-Path $agentRoot "src\mutation-semantic-guard.js"))) { throw "missing mutation-semantic-guard.js (write-path semantic denylist bridge)" } }
 Check "mutation_semantic_guard.py present" { if (-not (Test-Path (Join-Path $ragRoot "scripts\mutation_semantic_guard.py"))) { throw "missing scripts/mutation_semantic_guard.py" } }
 Check "unreal_api_denylist.py present" { if (-not (Test-Path (Join-Path $ragRoot "scripts\unreal_api_denylist.py"))) { throw "missing scripts/unreal_api_denylist.py" } }
@@ -215,14 +357,14 @@ Check "installed context compactor" {
     if (-not (Test-Path -LiteralPath (Join-Path $installedRoot ".lmstudio\production.js"))) {
         throw "installed plugin production entry missing"
     }
-    $sourceGenerator = Join-Path $ragRoot "lmstudio-context-compactor-plugin\dist\generator.js"
-    $installedGenerator = Join-Path $installedRoot "dist\generator.js"
-    if (Test-Path -LiteralPath $sourceGenerator) {
-        if (-not (Test-Path -LiteralPath $installedGenerator)) {
-            throw "installed plugin generator missing"
+    $sourcePredictionLoop = Join-Path $ragRoot "lmstudio-context-compactor-plugin\dist\prediction-loop.js"
+    $installedPredictionLoop = Join-Path $installedRoot "dist\prediction-loop.js"
+    if (Test-Path -LiteralPath $sourcePredictionLoop) {
+        if (-not (Test-Path -LiteralPath $installedPredictionLoop)) {
+            throw "installed plugin prediction-loop bundle missing"
         }
-        if ((Get-FileHash -LiteralPath $sourceGenerator -Algorithm SHA256).Hash -ne
-            (Get-FileHash -LiteralPath $installedGenerator -Algorithm SHA256).Hash) {
+        if ((Get-FileHash -LiteralPath $sourcePredictionLoop -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $installedPredictionLoop -Algorithm SHA256).Hash) {
             throw "installed plugin does not match the local tested build"
         }
     }
@@ -233,7 +375,8 @@ if (-not (Test-Path -LiteralPath $activationScript)) {
 }
 else {
     $activationArgs = @($activationScript, "--json")
-    if ($RequireContextCompaction) { $activationArgs += "--require-compaction" }
+    $requireRuntime = $RequireContextCompactorActivation -or $RequireContextCompaction
+    if ($requireRuntime) { $activationArgs += "--require-runtime" }
     $activationNode = Get-Command node -ErrorAction SilentlyContinue
     if (-not $activationNode) {
         if ($RequireContextCompactorActivation -or $RequireContextCompaction) {
@@ -249,15 +392,18 @@ else {
         $activationOutput = & $activationNode.Source @activationArgs 2>&1 | Out-String
         $activationExit = $LASTEXITCODE
         if ($activationExit -eq 0) {
-            Write-Host "[PASS] Context compactor activation evidence" -ForegroundColor Green
+            Write-Host "[PASS] Context compactor direct source mode" -ForegroundColor Green
+            Warn "Confirm the plugin is enabled in LM Studio for the chat that uses the actual selected LLM."
         }
-        elseif ($RequireContextCompactorActivation -or $RequireContextCompaction) {
-            Check "context compactor activation evidence" {
-                throw "proxy activation was not proven: $($activationOutput.Trim())"
+        elseif ($requireRuntime -and $activationExit -eq 3) {
+            Check "context compactor runtime activation evidence" {
+                throw "runtime activation is not exposed by the current LM Studio hook; verify the chat plugin panel: $($activationOutput.Trim())"
             }
         }
         else {
-            Warn "Context compactor is installed but has no runtime activation evidence. Select unreal-context-compactor as the chat model; selecting the underlying model bypasses it."
+            Check "context compactor source mode" {
+                throw "source verification failed: $($activationOutput.Trim())"
+            }
         }
     }
 }
@@ -294,16 +440,22 @@ Check "mcp.json unreal-rag entry" {
     $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $cfg.mcpServers."unreal-rag") { throw "unreal-rag not in mcp.json" }
 }
-Check "mcp.json AGENT_STATE_ROOT parity" {
+Check "mcp.json Direct RAG state root" {
     $mcp = Join-Path $HOME ".lmstudio\mcp.json"
     if (-not (Test-Path $mcp)) { throw "mcp.json missing - run the root integrated installer" }
     $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
-    $ragRoot = [string]$cfg.mcpServers."unreal-rag".env.AGENT_STATE_ROOT
-    $agentRoot = [string]$cfg.mcpServers."unreal-agent".env.AGENT_STATE_ROOT
-    if (-not $ragRoot) { throw "unreal-rag missing AGENT_STATE_ROOT" }
-    if (-not $agentRoot) { throw "unreal-agent missing AGENT_STATE_ROOT" }
-    if ($ragRoot -ne $agentRoot) {
-        throw "AGENT_STATE_ROOT mismatch: rag=$ragRoot agent=$agentRoot"
+    $directRagStateRoot = [string]$cfg.mcpServers."unreal-rag".env.DIRECT_RAG_STATE_ROOT
+    if ([string]::IsNullOrWhiteSpace($directRagStateRoot)) {
+        throw "unreal-rag missing DIRECT_RAG_STATE_ROOT"
+    }
+}
+Check "mcp.json agent state root" {
+    $mcp = Join-Path $HOME ".lmstudio\mcp.json"
+    if (-not (Test-Path $mcp)) { throw "mcp.json missing - run the root integrated installer" }
+    $cfg = Get-Content -LiteralPath $mcp -Raw -Encoding UTF8 | ConvertFrom-Json
+    $agentStateRoot = [string]$cfg.mcpServers."unreal-agent".env.AGENT_STATE_ROOT
+    if ([string]::IsNullOrWhiteSpace($agentStateRoot)) {
+        throw "unreal-agent missing AGENT_STATE_ROOT"
     }
 }
 Check "shared workspace config" {
@@ -350,8 +502,20 @@ Check "Cline MCP settings" {
 Check "clinerules" {
     if (-not (Test-Path (Join-Path $ragRoot ".clinerules"))) { throw "missing .clinerules" }
 }
-Check "validate-write hook" {
-    if (-not (Test-Path (Join-Path $agentRoot "src\validate-write.js"))) { throw "missing validate-write.js" }
+Check "Direct atomic mutation owners" {
+    foreach ($required in @(
+        "direct-bundle-capability.js",
+        "direct-edit-bundle.js",
+        "direct-edit-bundle-commit.js",
+        "direct-edit-bundle-plan.js",
+        "direct-static-validation.js",
+        "direct-transaction-recovery.js",
+        "direct-transaction-store.js"
+    )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $agentRoot "src\$required"))) {
+            throw "missing Direct atomic mutation owner: $required"
+        }
+    }
 }
 }
 

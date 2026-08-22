@@ -9,6 +9,7 @@ const {
   discoverProjects,
   listUnrealProjects,
   normalizeProjectName,
+  getActiveProject,
   resolveExactProjectNameSelection,
   resolveProjectSelection,
   setActiveProject,
@@ -115,6 +116,52 @@ test("setActiveProject resolves a unique normalized exact name", async () => {
     assert.equal(result.projectName, "My_Project");
     assert.equal(result.selectionReason, "exact-project-name");
     assert.deepEqual(controllerCalls, [["--switch", path.resolve(projectPath)]]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("setActiveProject clear reports controller failure without changing local state", async () => {
+  const harness = createHarness("unreal-clear-failure-");
+  const projectPath = createProject(harness.projectRoot, "KeepActive");
+  harness.configure({ activeProject: projectPath });
+  fs.writeFileSync(harness.localConfig, JSON.stringify({ activeProject: projectPath }), "utf8");
+  const controllerCalls = [];
+  try {
+    const result = await setActiveProject(harness.workspaceRoot, harness.localConfig, {
+      clear: true,
+      invokeProjectController: async (argv) => {
+        controllerCalls.push(argv);
+        return { ok: false, error: "shared config write failed" };
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /write failed/);
+    assert.equal(JSON.parse(fs.readFileSync(harness.localConfig, "utf8")).activeProject, projectPath);
+    assert.deepEqual(controllerCalls, [["--clear"]]);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("shared clear cannot resurrect a stale project from local config", async () => {
+  const harness = createHarness("unreal-shared-owner-clear-");
+  const staleProject = createProject(harness.projectRoot, "StaleLocalProject");
+  harness.configure({ activeProject: staleProject });
+  fs.writeFileSync(harness.localConfig, JSON.stringify({ activeProject: staleProject }), "utf8");
+  try {
+    const result = await setActiveProject(harness.workspaceRoot, harness.localConfig, {
+      clear: true,
+      invokeProjectController: async (argv) => {
+        assert.deepEqual(argv, ["--clear"]);
+        harness.configure({ activeProject: null });
+        return { ok: true, activeProject: null };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(getActiveProject(harness.localConfig), null);
+    assert.equal(JSON.parse(fs.readFileSync(harness.localConfig, "utf8")).activeProject, staleProject);
   } finally {
     harness.cleanup();
   }

@@ -1,22 +1,6 @@
 {
-  "description": "LM Studio inference presets for Unreal C++ agent work. Profiles switch via activeProfile or UNREAL_RAG_MODEL_PROFILE.",
-  "activeProfile": "qwen3_6_27b",
-  "modeMap": {
-    "refactor_r0": "plan",
-    "refactor_r1": "plan",
-    "refactor_r2": "execute",
-    "refactor_r3": "execute",
-    "refactor_r4": "execute",
-    "prototype_component": "execute",
-    "prototype_subsystem": "execute",
-    "agent_edit": "execute",
-    "codegen": "execute",
-    "compile_fix": "compile_fix_analyze",
-    "module_fix": "compile_fix_patch",
-    "reflection_fix": "compile_fix_analyze",
-    "runtime_debug": "compile_fix_analyze",
-    "api_lookup": "api_lookup"
-  },
+  "description": "Static, user-selected LM Studio load and chat recommendations. This file does not select models, plan work, order tools, switch stages, or configure the context compactor.",
+  "activeProfile": "qwen3_8_27b",
   "modelAliases": {
     "qwen3.8-27b": "qwen3_8_27b",
     "qwen3.8-27b-gguf": "qwen3_8_27b",
@@ -49,577 +33,183 @@
     "gpt-oss-20b-claude-opus-sonnet-reasoning-i1": "gpt_oss_20b_claude_opus_sonnet_reasoning_i1",
     "gpt-oss-20b-claude-opus-sonnet-reasoning-i1-gguf": "gpt_oss_20b_claude_opus_sonnet_reasoning_i1",
     "gpt-oss-120b": "gpt_oss_120b",
-    "qwen-coder-large": "qwen_coder_large",
-    "conservative-compile-fix": "conservative_compile_fix",
-    "review-only": "review_only"
+    "qwen-coder-large": "qwen_coder_large"
   },
   "profiles": {
     "qwen3_8_27b": {
       "contextLength": 65536,
-      "_contextNote": "The full stable MCP schema left only 3,739 tokens at 32K, below the compactor's 8K hard margin. Use 64K as the minimum production load context; the observed model advertises a 262K native maximum.",
-      "contextLengthVariant_nativeMax": 262144,
-      "assemblyBudgetScale": 1.1,
-      "targetTier": "sonnet_4_5_track",
-      "promptContract": "evidence_then_patch_strict",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_qwen36_27b_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
+      "contextLengthAlternatives": [262144],
       "quantDefault": "Q4_K_M",
-      "reasoningPolicy": {
-        "owner": "compactor_generator_resolved_prediction_policy",
-        "transport": "generator_raw_kv_config",
-        "capabilityStatus": "model_profile_bound",
-        "supportedEfforts": ["low", "medium", "extra_high"],
-        "defaultEffort": "low",
-        "failClosedIfUnpinned": true,
-        "fieldKey": "ext.virtualModel.customField.qwen.qwen3.827b.reasoningEffort",
-        "notes": "The generator resolves one immutable per-prediction policy from task phase and user-selected effort. It records transportConfigured separately from backendApplied=unknown/backendObserved=false because SDK 1.5.0 cannot observe backend application. Thinking-off phases omit the meaningless effort field."
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.6,
+        "topP": 0.95,
+        "topK": 20,
+        "minP": 0,
+        "maxTokens": 8192
       },
-      "agentPolicy": {
-        "ragBudgetScale": 1.1,
+      "writeSafety": {
         "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": true,
-        "compileFixMaxAttempts": 5,
-        "allowRefactorModes": true,
-        "jsonRepairStrict": true,
-        "historyTurns": 5,
-        "defaultTopK": 6,
-        "deltaTopK": 3,
-        "candidateLimitScale": 16,
-        "preferSymbolLookupOverFileRead": true,
-        "enforceRangeRead": true,
-        "rangeReadContextLines": 40,
-        "patchChangedLineLimit": 60,
-        "noOpGuard": true,
-        "targetTier": "sonnet_4_5_track",
-        "promptContract": "evidence_then_patch_strict"
+        "preferPatchOverFullFile": true
       },
-      "turnPresets": {
-        "plan": {
-          "thinking": "on",
-          "reasoningEffort": "low",
-          "temperature": 0.6,
-          "topP": 0.95,
-          "topK": 20,
-          "minP": 0,
-          "maxTokens": 3072
-        },
-        "critique": {
-          "thinking": "on",
-          "reasoningEffort": "medium",
-          "temperature": 0.6,
-          "topP": 0.95,
-          "topK": 20,
-          "minP": 0,
-          "maxTokens": 6144
-        },
-        "execute": {
-          "thinking": "off",
-          "reasoningEffort": "low",
-          "temperature": 0.1,
-          "topP": 0.85,
-          "topK": 20,
-          "minP": 0,
-          "maxTokens": 4096
-        },
-        "compile_fix_analyze": {
-          "thinking": "on",
-          "reasoningEffort": "medium",
-          "temperature": 0.6,
-          "topP": 0.95,
-          "topK": 20,
-          "minP": 0,
-          "maxTokens": 6144
-        },
-        "compile_fix_patch": {
-          "thinking": "off",
-          "reasoningEffort": "low",
-          "temperature": 0.07,
-          "topP": 0.82,
-          "topK": 20,
-          "minP": 0,
-          "maxTokens": 4096
-        },
-        "api_lookup": {
-          "thinking": "off",
-          "reasoningEffort": "low",
-          "temperature": 0.05,
-          "topP": 0.8,
-          "topK": 20,
-          "minP": 0,
-          "maxTokens": 2048
-        }
-      }
+      "notes": "64K is the practical baseline for the full Direct MCP tool schema; use the larger context only when hardware capacity has been verified."
     },
     "qwen3_6_27b": {
       "contextLength": 32768,
-      "_contextNote": "Qwen3.6-27B supports very long native context, but this workflow defaults to 32K for LM Studio stability. If RAM/VRAM is sufficient, A/B test 64K before raising production defaults.",
-      "contextLengthVariant_64k": 65536,
-      "assemblyBudgetScale": 1.1,
-      "targetTier": "sonnet_4_5_track",
-      "promptContract": "evidence_then_patch_strict",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_qwen36_27b_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
+      "contextLengthAlternatives": [65536],
       "quantDefault": "Q4_K_M",
-      "agentPolicy": {
-        "ragBudgetScale": 1.1,
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.18,
+        "topP": 0.9,
+        "maxTokens": 8192
+      },
+      "writeSafety": {
         "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": true,
-        "compileFixMaxAttempts": 5,
-        "allowRefactorModes": true,
-        "jsonRepairStrict": true,
-        "historyTurns": 5,
-        "defaultTopK": 6,
-        "deltaTopK": 3,
-        "candidateLimitScale": 16,
-        "preferSymbolLookupOverFileRead": true,
-        "enforceRangeRead": true,
-        "rangeReadContextLines": 40,
-        "patchChangedLineLimit": 60,
-        "noOpGuard": true,
-        "targetTier": "sonnet_4_5_track",
-        "promptContract": "evidence_then_patch_strict"
+        "preferPatchOverFullFile": true
       },
-      "abTuning": {
-        "preserve_thinking": ["off", "on"],
-        "contextLength": [32768, 49152],
-        "quant": ["Q4_K_M", "Q5_K_M"]
-      },
-      "turnPresets": {
-        "plan": {
-          "thinking": "on",
-          "temperature": 0.18,
-          "topP": 0.9,
-          "maxTokens": 3072,
-          "notes": "R0 / refactor_r0 / Turn1 plan — no code writes"
-        },
-        "critique": {
-          "thinking": "on",
-          "temperature": 0.15,
-          "topP": 0.9,
-          "maxTokens": 6144,
-          "notes": "Turn2 gap analysis — no code writes"
-        },
-        "execute": {
-          "thinking": "off",
-          "temperature": 0.1,
-          "topP": 0.85,
-          "maxTokens": 4096,
-          "notes": "Turn3 patch — max 2 files"
-        },
-        "compile_fix_analyze": {
-          "thinking": "on",
-          "temperature": 0.15,
-          "topP": 0.9,
-          "maxTokens": 6144
-        },
-        "compile_fix_patch": {
-          "thinking": "off",
-          "temperature": 0.07,
-          "topP": 0.82,
-          "maxTokens": 4096
-        },
-        "api_lookup": {
-          "thinking": "off",
-          "temperature": 0.05,
-          "topP": 0.8,
-          "maxTokens": 2048
-        }
-      }
+      "notes": "Start at 32K for portability and raise to 64K only after checking RAM, VRAM, and prompt headroom."
     },
     "qwen3_8b": {
       "contextLength": 24576,
-      "assemblyBudgetScale": 0.55,
-      "targetTier": "compact_sonnet_4_5_track",
-      "promptContract": "compact_evidence_patch_only",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_qwen35_9b_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
       "quantDefault": "Q4_K_M",
-      "agentPolicy": {
-        "ragBudgetScale": 0.55,
-        "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 3,
-        "allowRefactorModes": false,
-        "allowSmallRefactor": true,
-        "smallRefactorMaxFiles": 2,
-        "mediumRefactorPlanOnly": true,
-        "jsonRepairStrict": true,
-        "historyTurns": 2,
-        "defaultTopK": 5,
-        "deltaTopK": 3,
-        "candidateLimitScale": 14,
-        "targetTier": "compact_sonnet_4_5_track",
-        "promptContract": "compact_evidence_patch_only"
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.15,
+        "topP": 0.85,
+        "maxTokens": 4096
       },
-      "turnPresets": {
-        "plan": {
-          "thinking": "off",
-          "temperature": 0.4,
-          "topP": 0.9,
-          "maxTokens": 2048,
-          "notes": "Small model 2-turn shortcut — compact plan, no thinking"
-        },
-        "critique": {
-          "thinking": "off",
-          "temperature": 0.4,
-          "topP": 0.9,
-          "maxTokens": 1536,
-          "notes": "Optional; skip for 2-turn shortcut"
-        },
-        "execute": {
-          "thinking": "off",
-          "temperature": 0.1,
-          "topP": 0.8,
-          "maxTokens": 2048,
-          "notes": "Turn2 patch — max 2 files"
-        },
-        "compile_fix_analyze": {
-          "thinking": "off",
-          "temperature": 0.4,
-          "topP": 0.9,
-          "maxTokens": 2048
-        },
-        "compile_fix_patch": {
-          "thinking": "off",
-          "temperature": 0.1,
-          "topP": 0.8,
-          "maxTokens": 2048
-        },
-        "api_lookup": {
-          "thinking": "off",
-          "temperature": 0.05,
-          "topP": 0.8,
-          "maxTokens": 1024
-        }
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
       }
     },
     "qwen3_5_9b": {
       "contextLength": 24576,
-      "_contextNote": "YaRN 32K: Qwen3.5-9B was trained on 32K context. In LM Studio, set context length to 32768 and enable RoPE scaling (yarn) to break the 24K ceiling. Q4_K_M at 8GB VRAM supports 32K with flash attention.",
-      "contextLengthVariant_yarn32k": 32768,
-      "assemblyBudgetScale": 0.70,
-      "targetTier": "compact_sonnet_4_5_track",
-      "promptContract": "compact_evidence_patch_only",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_qwen35_9b_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
+      "contextLengthAlternatives": [32768],
       "quantDefault": "Q4_K_M",
-      "agentPolicy": {
-        "ragBudgetScale": 0.70,
-        "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 4,
-        "allowRefactorModes": false,
-        "allowSmallRefactor": true,
-        "smallRefactorMaxFiles": 2,
-        "mediumRefactorPlanOnly": true,
-        "jsonRepairStrict": true,
-        "twoPhase": true,
-        "noOpGuard": true,
-        "historyTurns": 3,
-        "defaultTopK": 5,
-        "deltaTopK": 4,
-        "candidateLimitScale": 16,
-        "preferSymbolLookupOverFileRead": true,
-        "enforceRangeRead": true,
-        "rangeReadContextLines": 30,
-        "targetTier": "compact_sonnet_4_5_track",
-        "promptContract": "compact_evidence_patch_only"
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.12,
+        "topP": 0.82,
+        "maxTokens": 4096
       },
-      "turnPresets": {
-        "plan": { "thinking": "off", "temperature": 0.22, "topP": 0.85, "maxTokens": 2560 },
-        "critique": { "thinking": "off", "temperature": 0.18, "topP": 0.85, "maxTokens": 1536 },
-        "execute": { "thinking": "off", "temperature": 0.07, "topP": 0.75, "maxTokens": 2560 },
-        "compile_fix_analyze": { "thinking": "off", "temperature": 0.12, "topP": 0.8, "maxTokens": 2560 },
-        "compile_fix_patch": { "thinking": "off", "temperature": 0.05, "topP": 0.75, "maxTokens": 2560 },
-        "api_lookup": { "thinking": "off", "temperature": 0.03, "topP": 0.75, "maxTokens": 1280 }
-      }
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
+      },
+      "notes": "The 32K alternative may require the model's supported RoPE scaling and additional memory."
     },
     "qwen3_5_9b_deepseek_v4_flash": {
       "contextLength": 140032,
-      "_contextNote": "This qwen35 GGUF reports maxContextLength=262144. Use 140032 for long single-agent sessions and Parallel=1 to avoid four concurrent slot/checkpoint chains; lower context only when another PC lacks RAM/VRAM.",
-      "contextLengthVariant_portable_64k": 65536,
-      "contextLengthVariant_native_max": 262144,
-      "recommendedParallelRequests": 1,
-      "assemblyBudgetScale": 0.78,
-      "targetTier": "compact_sonnet_4_5_track",
-      "promptContract": "flash_reasoning_compact_patch",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_qwen35_9b_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
+      "contextLengthAlternatives": [65536, 262144],
       "quantDefault": "Q4_K_M",
-      "agentPolicy": {
-        "ragBudgetScale": 0.78,
-        "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 4,
-        "allowRefactorModes": false,
-        "allowSmallRefactor": true,
-        "smallRefactorMaxFiles": 2,
-        "mediumRefactorPlanOnly": true,
-        "jsonRepairStrict": true,
-        "historyTurns": 3,
-        "defaultTopK": 6,
-        "deltaTopK": 4,
-        "candidateLimitScale": 16,
-        "preferSymbolLookupOverFileRead": true,
-        "enforceRangeRead": true,
-        "rangeReadContextLines": 30,
-        "targetTier": "compact_sonnet_4_5_track",
-        "promptContract": "flash_reasoning_compact_patch"
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.1,
+        "topP": 0.78,
+        "maxTokens": 4096
       },
-      "turnPresets": {
-        "plan": { "thinking": "off", "temperature": 0.18, "topP": 0.82, "maxTokens": 3072 },
-        "critique": { "thinking": "off", "temperature": 0.14, "topP": 0.82, "maxTokens": 2048 },
-        "execute": { "thinking": "off", "temperature": 0.06, "topP": 0.72, "maxTokens": 2816 },
-        "compile_fix_analyze": { "thinking": "off", "temperature": 0.1, "topP": 0.78, "maxTokens": 3072 },
-        "compile_fix_patch": { "thinking": "off", "temperature": 0.04, "topP": 0.72, "maxTokens": 2816 },
-        "api_lookup": { "thinking": "off", "temperature": 0.03, "topP": 0.72, "maxTokens": 1536 }
-      }
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
+      },
+      "notes": "Use one parallel request for the long-context load; use 64K on machines with less memory."
     },
     "generic_large": {
       "contextLength": 49152,
-      "assemblyBudgetScale": 1.25,
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
       "quantDefault": "Q5_K_M",
-      "turnPresets": {
-        "plan": {
-          "thinking": "on",
-          "temperature": 0.6,
-          "topP": 0.95,
-          "maxTokens": 8192,
-          "notes": "Large model — full 3-turn with critique"
-        },
-        "critique": {
-          "thinking": "on",
-          "temperature": 0.6,
-          "topP": 0.95,
-          "maxTokens": 8192
-        },
-        "execute": {
-          "thinking": "off",
-          "temperature": 0.15,
-          "topP": 0.8,
-          "maxTokens": 6144
-        },
-        "compile_fix_analyze": {
-          "thinking": "on",
-          "temperature": 0.6,
-          "topP": 0.95,
-          "maxTokens": 8192
-        },
-        "compile_fix_patch": {
-          "thinking": "off",
-          "temperature": 0.15,
-          "topP": 0.8,
-          "maxTokens": 6144
-        },
-        "api_lookup": {
-          "thinking": "off",
-          "temperature": 0.05,
-          "topP": 0.8,
-          "maxTokens": 3072
-        }
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.2,
+        "topP": 0.9,
+        "maxTokens": 8192
+      },
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
       }
     },
     "gpt_oss_20b": {
       "contextLength": 32768,
-      "assemblyBudgetScale": 0.72,
-      "targetTier": "compact_baseline_track",
-      "promptContract": "minimal_schema_patch",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "stabilityNote": "Variable in MCP/JSON loops; prefer qwen3_5_9b or qwen3_6_27b when available.",
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_gpt_oss_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
-      "agentPolicy": {
-        "ragBudgetScale": 0.72,
-        "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 3,
-        "allowRefactorModes": false,
-        "allowSmallRefactor": true,
-        "smallRefactorMaxFiles": 2,
-        "mediumRefactorPlanOnly": true,
-        "jsonRepairStrict": true,
-        "twoPhase": true,
-        "historyTurns": 2,
-        "defaultTopK": 5,
-        "deltaTopK": 3,
-        "candidateLimitScale": 14,
-        "targetTier": "compact_baseline_track",
-        "promptContract": "minimal_schema_patch"
-      },
       "quantDefault": "Q4_K_M",
-      "turnPresets": {
-        "plan": { "thinking": "off", "temperature": 0.18, "topP": 0.8, "maxTokens": 2560 },
-        "execute": { "thinking": "off", "temperature": 0.05, "topP": 0.7, "maxTokens": 2560 },
-        "compile_fix_analyze": { "thinking": "off", "temperature": 0.08, "topP": 0.76, "maxTokens": 2560 },
-        "compile_fix_patch": { "thinking": "off", "temperature": 0.035, "topP": 0.7, "maxTokens": 2304 },
-        "api_lookup": { "thinking": "off", "temperature": 0.03, "topP": 0.75, "maxTokens": 1280 }
-      }
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.1,
+        "topP": 0.8,
+        "maxTokens": 4096
+      },
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
+      },
+      "notes": "Tool-call and structured-output stability varies by GGUF; validate the exact file and quantization before unattended use."
     },
     "gpt_oss_20b_claude_opus_sonnet_reasoning_i1": {
       "contextLength": 32768,
-      "assemblyBudgetScale": 0.95,
-      "targetTier": "compact_sonnet_4_5_track",
-      "promptContract": "reasoning_i1_strict_patch_verify",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_gpt_oss_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
-      "agentPolicy": {
-        "ragBudgetScale": 0.95,
-        "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 5,
-        "allowRefactorModes": false,
-        "allowSmallRefactor": true,
-        "smallRefactorMaxFiles": 2,
-        "mediumRefactorPlanOnly": true,
-        "jsonRepairStrict": true,
-        "historyTurns": 3,
-        "defaultTopK": 8,
-        "deltaTopK": 4,
-        "candidateLimitScale": 18,
-        "targetTier": "compact_sonnet_4_5_track",
-        "promptContract": "reasoning_i1_strict_patch_verify"
-      },
       "quantDefault": "Q4_K_M",
-      "turnPresets": {
-        "plan": { "thinking": "off", "temperature": 0.16, "topP": 0.8, "maxTokens": 4096 },
-        "critique": { "thinking": "off", "temperature": 0.12, "topP": 0.78, "maxTokens": 3072 },
-        "execute": { "thinking": "off", "temperature": 0.05, "topP": 0.72, "maxTokens": 3584 },
-        "compile_fix_analyze": { "thinking": "off", "temperature": 0.08, "topP": 0.76, "maxTokens": 4096 },
-        "compile_fix_patch": { "thinking": "off", "temperature": 0.035, "topP": 0.7, "maxTokens": 3584 },
-        "api_lookup": { "thinking": "off", "temperature": 0.025, "topP": 0.72, "maxTokens": 1792 }
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.1,
+        "topP": 0.8,
+        "maxTokens": 6144
+      },
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
       }
     },
     "gpt_oss_small": {
       "contextLength": 32768,
-      "assemblyBudgetScale": 0.5,
-      "targetTier": "compact_baseline_track",
-      "promptContract": "minimal_schema_patch",
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_gpt_oss_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
-      "agentPolicy": {
-        "ragBudgetScale": 0.5,
-        "maxFilesPerEdit": 2,
-        "preferPatch": true,
-        "planningRequired": true,
-        "deepSearch": false,
-        "compileFixMaxAttempts": 3,
-        "allowRefactorModes": false,
-        "allowSmallRefactor": true,
-        "smallRefactorMaxFiles": 2,
-        "mediumRefactorPlanOnly": true,
-        "jsonRepairStrict": true,
-        "historyTurns": 1,
-        "defaultTopK": 4,
-        "deltaTopK": 2,
-        "candidateLimitScale": 12,
-        "targetTier": "compact_baseline_track",
-        "promptContract": "minimal_schema_patch"
-      },
       "quantDefault": "Q4_K_M",
-      "turnPresets": {
-        "plan": { "thinking": "off", "temperature": 0.2, "topP": 0.85, "maxTokens": 1536 },
-        "execute": { "thinking": "off", "temperature": 0.06, "topP": 0.75, "maxTokens": 1536 },
-        "compile_fix_analyze": { "thinking": "off", "temperature": 0.1, "topP": 0.8, "maxTokens": 1536 },
-        "compile_fix_patch": { "thinking": "off", "temperature": 0.05, "topP": 0.75, "maxTokens": 1536 },
-        "api_lookup": { "thinking": "off", "temperature": 0.03, "topP": 0.75, "maxTokens": 1024 }
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.1,
+        "topP": 0.8,
+        "maxTokens": 3072
+      },
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
       }
     },
     "gpt_oss_120b": {
       "contextLength": 32768,
-      "assemblyBudgetScale": 1.25,
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": false,
-      "mcpEssentialTools": true,
-      "recommendedSystemPrompt": "prompts/lmstudio_gpt_oss_compact_system.md",
-      "mcpToolDiscipline": "one_tool_per_turn",
-      "agentPolicy": {
-        "ragBudgetScale": 1.25,
-        "maxFilesPerEdit": 2,
-        "preferPatch": false,
-        "planningRequired": true,
-        "deepSearch": true,
-        "compileFixMaxAttempts": 4,
-        "allowRefactorModes": true,
-        "jsonRepairStrict": false,
-        "historyTurns": 6
-      },
       "quantDefault": "Q5_K_M",
-      "turnPresets": {
-        "plan": { "thinking": "on", "temperature": 0.5, "topP": 0.95, "maxTokens": 8192 },
-        "critique": { "thinking": "on", "temperature": 0.5, "topP": 0.95, "maxTokens": 8192 },
-        "execute": { "thinking": "off", "temperature": 0.15, "topP": 0.8, "maxTokens": 6144 }
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.15,
+        "topP": 0.85,
+        "maxTokens": 8192
+      },
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
       }
     },
     "qwen_coder_large": {
       "contextLength": 32768,
-      "assemblyBudgetScale": 1.1,
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
       "quantDefault": "Q4_K_M",
-      "turnPresets": {
-        "plan": { "thinking": "on", "temperature": 0.5, "topP": 0.95, "maxTokens": 6144 },
-        "execute": { "thinking": "off", "temperature": 0.12, "topP": 0.8, "maxTokens": 4096 }
-      }
-    },
-    "conservative_compile_fix": {
-      "contextLength": 24576,
-      "assemblyBudgetScale": 0.8,
-      "maxFilesPerEdit": 2,
-      "preferPatchOverFullFile": true,
-      "quantDefault": "Q4_K_M",
-      "turnPresets": {
-        "compile_fix_analyze": { "thinking": "on", "temperature": 0.2, "topP": 0.85, "maxTokens": 4096 },
-        "compile_fix_patch": { "thinking": "off", "temperature": 0.08, "topP": 0.75, "maxTokens": 2048 }
-      }
-    },
-    "review_only": {
-      "contextLength": 24576,
-      "assemblyBudgetScale": 0.6,
-      "maxFilesPerEdit": 0,
-      "preferPatchOverFullFile": true,
-      "quantDefault": "Q4_K_M",
-      "turnPresets": {
-        "plan": { "thinking": "off", "temperature": 0.3, "topP": 0.9, "maxTokens": 2048 },
-        "api_lookup": { "thinking": "off", "temperature": 0.05, "topP": 0.8, "maxTokens": 2048 }
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 0.15,
+        "topP": 0.85,
+        "maxTokens": 6144
+      },
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
       }
     }
   }

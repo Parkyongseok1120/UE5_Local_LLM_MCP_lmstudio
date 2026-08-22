@@ -6,10 +6,8 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
 
-import run_eval_regression  # noqa: E402
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _read(path: str) -> str:
@@ -17,133 +15,101 @@ def _read(path: str) -> str:
 
 
 def test_dev_requirements_include_pytest_for_github_actions() -> None:
-    requirements = _read("requirements-dev.txt")
-
-    assert "pytest" in requirements.lower()
+    assert "pytest" in _read("requirements-dev.txt").lower()
 
 
-def test_github_workflows_keep_windows_safe_commands() -> None:
+def test_only_current_direct_workflow_is_active() -> None:
+    workflows = ROOT / ".github" / "workflows"
+    names = {path.name for path in workflows.glob("*.yml")}
     ci = _read(".github/workflows/ci.yml")
-    eval_regression = _read(".github/workflows/eval-regression.yml")
 
+    assert "eval-regression.yml" not in names
+    assert "Direct production regression suite" in ci
+    assert "Agent Direct and Node Strict safety suite" in ci
+    assert "Context compactor full build and test suite" in ci
     assert "python -m pip install -r requirements-dev.txt" in ci
     assert "python -m pip install ruff" in ci
     assert "npm.cmd ci --no-fund --no-audit" in ci
     assert "Node syntax check (all src JS)" in ci
-    assert "tests/test_claim_validation_engine_portability.py" in ci
-    assert "W503" not in ci
-    assert "timeout-minutes: 10" in eval_regression
-    assert "python -m pip install -r requirements-dev.txt" in eval_regression
-    unit_tests_job = eval_regression.split("  unit-tests:", 1)[1]
-    assert "actions/setup-node@v4" in unit_tests_job
-    assert 'node-version: "20"' in unit_tests_job
-    assert "npm.cmd ci --no-fund --no-audit" in unit_tests_job
-    assert "--step-timeout 60" in eval_regression
 
 
-def test_ci_eval_regression_skips_ubt_dependent_steps_without_running_command() -> None:
-    fail_cmd = [sys.executable, "-c", "raise SystemExit(37)"]
+def test_oss_release_scan_excludes_the_quarantined_legacy_archive() -> None:
+    checker = _read("scripts/installer_support/Verify-Oss-Ready.ps1")
 
-    dry = run_eval_regression.run_cmd("eval_pass_at_k_dry", fail_cmd, ci=True, step_timeout=1)
-    e2e = run_eval_regression.run_cmd("eval_e2e_compile", fail_cmd, ci=True, step_timeout=1)
-
-    assert dry["pass"] is True
-    assert dry["skipped"] is True
-    assert dry["exitCode"] == 0
-    assert "UBT-dependent step skipped in CI" in dry["reason"]
-    assert e2e["pass"] is True
-    assert e2e["skipped"] is True
-    assert e2e["exitCode"] == 0
+    assert "$relPosix -match '(?i)^legacy_eval/'" in checker
+    assert "must not influence the release-path hygiene scan" in checker
 
 
-def test_ci_eval_regression_skips_rag_and_mcp_environment_dependent_steps() -> None:
-    fail_cmd = [sys.executable, "-c", "raise SystemExit(38)"]
+def test_ci_release_gates_are_direct_only_and_explicit() -> None:
+    ci = _read(".github/workflows/ci.yml")
+    production = ci.split("      - name: Direct production regression suite", 1)[1].split(
+        "        working-directory:", 1
+    )[0]
 
-    retrieval = run_eval_regression.run_cmd("retrieval_unreal_programming", fail_cmd, ci=True, step_timeout=1)
-    sequencer = run_eval_regression.run_cmd("retrieval_sequencer", fail_cmd, ci=True, step_timeout=1)
-    bench = run_eval_regression.run_cmd("bench_mcp", fail_cmd, ci=True, step_timeout=1)
-
-    assert retrieval["pass"] is True
-    assert retrieval["skipped"] is True
-    assert "RAG index/performance-dependent step skipped in CI" in retrieval["reason"]
-    assert sequencer["pass"] is True
-    assert sequencer["skipped"] is True
-    assert bench["pass"] is True
-    assert bench["skipped"] is True
-    assert bench["exitCode"] == 0
-
-
-def test_ci_eval_regression_still_runs_non_ubt_steps() -> None:
-    cmd = [sys.executable, "-c", "print('ran-non-ubt-step')"]
-
-    row = run_eval_regression.run_cmd("eval_agent_harness", cmd, ci=True, step_timeout=5)
-
-    assert row["pass"] is True
-    assert row["exitCode"] == 0
-    assert "ran-non-ubt-step" in row["stdoutTail"]
-
-
-def test_release_readiness_does_not_count_skipped_live_dependencies_as_execution_proof() -> None:
-    readiness = run_eval_regression.summarize_execution_readiness(
-        [
-            {"label": "static", "pass": True, "proofLevel": "executed"},
-            {
-                "label": "ubt",
-                "pass": True,
-                "skipped": True,
-                "proofLevel": "not_executed",
-            },
-        ],
-        live_requested=False,
+    required = (
+        "tests/test_python_direct_rag_server.py",
+        "tests/test_tool_manifest_contract.py",
+        "tests/test_direct_mcp_subprocess_e2e.py",
+        "tests/test_cross_language_tool_contract.py",
+        "tests/test_integrated_installer.py",
+        "tests/test_bootstrap_runtimes.py",
+        "tests/test_integrated_package.py",
+        "tests/test_package_forbidden_filters.py",
+        "tests/test_install_sh_python_launcher.py",
+        "tests/test_installer_gates.py",
+        "tests/test_patch_mcp_config.py",
+        "tests/test_verify_release.py",
+        "tests/test_project_controller.py",
+        "tests/test_project_context.py",
+        "tests/test_project_routing.py",
+        "tests/test_index_path_resolver.py",
+        "tests/test_index_inputs.py",
+        "tests/test_build_rag_index_atomic.py",
+        "tests/test_build_rag_index_compact.py",
+        "tests/test_rag_refresh.py",
+        "tests/test_rag_smoke.py",
+        "tests/test_direct_rag_project_isolation.py",
+        "tests/test_dynamic_rag_cli_defaults.py",
+        "tests/test_direct_installer_docs.py",
+        "tests/test_rag_doctor_repo_only.py",
+        "tests/test_active_project_read_resolver.py",
+        "tests/test_collect_unreal_projects.py",
+        "tests/test_editor_metadata_material.py",
+        "tests/test_editor_metadata_provenance.py",
+        "tests/test_asset_taxonomy.py",
+        "tests/test_plugin_project_context.py",
+        "tests/test_agent_write_guards.py",
+        "tests/test_atomic_io.py",
+        "tests/test_unreal_static_validate.py",
+        "tests/test_validate_project_sources.py",
+        "tests/test_editor_export_runner.py",
+        "tests/test_engine_registration_portability.py",
+        "tests/test_project_name_resolver.py",
+        "tests/test_target_resolver.py",
+        "tests/test_ue_export_compatibility.py",
+        "tests/test_public_path_hygiene.py",
+        "tests/test_no_project_hardcode.py",
+        "tests/test_cline_direct_contract.py",
+        "tests/test_direct_test_import_isolation.py",
+        "tests/test_direct_source_import_isolation.py",
+        "tests/test_ci_release_readiness.py",
+    )
+    legacy_names = (
+        "unreal_rag_mcp.py",
+        "test_agent_orchestrator.py",
+        "test_task_api_integration.py",
+        "test_phase_tool_router.py",
+        "test_conversation_ownership.py",
+        "eval_domain_contract.py",
+        "run_eval_regression.py",
     )
 
-    assert readiness["gatePassed"] is True
-    assert readiness["fullyValidated"] is False
-    assert readiness["executedPassCount"] == 1
-    assert readiness["skippedCount"] == 1
-    assert readiness["evidenceLevel"] == "static_partial_live_pending"
-    assert readiness["claimsAllowed"]["liveUbtLmStudioValidated"] is False
-
-
-def test_release_readiness_requires_requested_unskipped_live_run_for_full_claim() -> None:
-    readiness = run_eval_regression.summarize_execution_readiness(
-        [
-            {"label": "static", "pass": True, "proofLevel": "executed"},
-            {"label": "eval_pass_at_k_live", "pass": True, "proofLevel": "executed"},
-        ],
-        live_requested=True,
-    )
-
-    assert readiness["fullyValidated"] is True
-    assert readiness["evidenceLevel"] == "live_verified"
-    assert readiness["claimsAllowed"]["fullyReleaseValidated"] is True
-
-
-def test_release_readiness_fails_closed_when_every_step_is_skipped() -> None:
-    readiness = run_eval_regression.summarize_execution_readiness(
-        [
-            {
-                "label": "ubt",
-                "pass": True,
-                "skipped": True,
-                "proofLevel": "not_executed",
-            },
-            {
-                "label": "lmstudio",
-                "pass": False,
-                "skipped": True,
-                "proofLevel": "not_executed",
-            },
-        ],
-        live_requested=True,
-    )
-
-    assert readiness["gatePassed"] is False
-    assert readiness["failedCount"] == 0
-    assert readiness["executedCount"] == 0
-    assert readiness["evidenceLevel"] == "not_executed"
-    assert readiness["claimsAllowed"]["staticRegressionGatePassed"] is False
-    assert readiness["claimsAllowed"]["fullyReleaseValidated"] is False
+    assert all(path in production for path in required)
+    assert all(name not in ci for name in legacy_names)
+    assert "pytest --tb=short -q" not in ci
+    assert "--suite tests/test_python_direct_rag_server.py" in ci
+    assert "--suite tests/test_direct_mcp_subprocess_e2e.py" in ci
+    assert "--suite tests/test_build_rag_index_atomic.py" in ci
 
 
 def test_node_install_command_available_via_cmd_on_windows() -> None:
@@ -162,118 +128,16 @@ def test_node_install_command_available_via_cmd_on_windows() -> None:
     assert proc.stdout.strip()
 
 
-def test_eval_regression_compare_ignores_intentionally_skipped_pytest_baseline_steps() -> None:
-    baseline = {
-        "steps": [
-            {"label": "eval_reasoning", "pass": True},
-            {"label": "test_agent_orchestrator", "pass": True},
-        ],
-        "metrics": {},
-    }
-    current = {
-        "steps": [
-            {"label": "eval_reasoning", "pass": True},
-        ],
-        "metrics": {},
-    }
+def test_direct_agent_delete_file_requires_scoped_approval_and_current_hash() -> None:
+    catalog_js = _read("lmstudio-unreal-agent-mcp/src/direct-tool-catalog.js")
+    delete_js = _read("lmstudio-unreal-agent-mcp/src/direct-delete-capabilities.js")
 
-    delta = run_eval_regression.compare_reports(
-        current,
-        baseline,
-        ignored_missing_labels={"test_agent_orchestrator"},
-    )
-
-    assert delta["regressions"] == []
-
-
-def test_eval_regression_compare_flags_unexpected_missing_green_step() -> None:
-    baseline = {
-        "steps": [
-            {"label": "eval_reasoning", "pass": True},
-            {"label": "report_tier_kpi", "pass": True},
-        ],
-        "metrics": {},
-    }
-    current = {
-        "steps": [
-            {"label": "eval_reasoning", "pass": True},
-        ],
-        "metrics": {},
-    }
-
-    delta = run_eval_regression.compare_reports(current, baseline)
-
-    assert "step report_tier_kpi missing from current run" in delta["regressions"]
-
-
-def test_eval_regression_compares_pass_at_1_and_safety_counters():
-    baseline = {
-        "steps": [],
-        "metrics": {
-            "passAtKComparable": True,
-            "passAtKMode": "live",
-            "passAtKTier": "holdout",
-            "passAtKConfig": "same.json",
-            "passAt1Rate": 0.80,
-            "passAtKRate": 0.95,
-            "averageAttempts": 1.2,
-            "wrongFileEditCount": 0,
-            "buildCsFalsePositiveCount": 0,
-            "forbiddenPatchHitCount": 0,
-            "sameErrorRepeatedCount": 0,
-            "noOpEditCount": 0,
-        },
-    }
-    current = {
-        "steps": [],
-        "metrics": {
-            **baseline["metrics"],
-            "passAt1Rate": 0.70,
-            "wrongFileEditCount": 1,
-        },
-    }
-
-    delta = run_eval_regression.compare_reports(current, baseline)
-
-    assert any("Pass@1" in item for item in delta["regressions"])
-    assert any("wrong-file edits" in item for item in delta["regressions"])
-
-
-def test_eval_regression_does_not_compare_mismatched_live_suites():
-    baseline = {
-        "steps": [],
-        "metrics": {
-            "passAtKComparable": True,
-            "passAtKMode": "live",
-            "passAtKTier": "27b",
-            "passAtKConfig": "suite-a.json",
-            "passAt1Rate": 1.0,
-        },
-    }
-    current = {
-        "steps": [],
-        "metrics": {
-            "passAtKComparable": True,
-            "passAtKMode": "live",
-            "passAtKTier": "9b",
-            "passAtKConfig": "suite-b.json",
-            "passAt1Rate": 0.0,
-        },
-    }
-
-    delta = run_eval_regression.compare_reports(current, baseline)
-
-    assert delta["qualityComparable"] is False
-    assert not any("Pass@1" in item for item in delta["regressions"])
-    assert delta["warnings"]
-
-
-def test_agent_delete_file_requires_structured_deletion_plan() -> None:
-    server_js = _read("lmstudio-unreal-agent-mcp/src/server.js")
-
-    assert 'name: "propose_file_deletions"' in server_js
-    assert 'No files were deleted' in server_js
-    assert 'wait for explicit user approval' in server_js
-    assert 'approvalToken does not match this deletion explanation' in server_js
-    assert '["path", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted", "approvalToken"]' in server_js
-    assert "server auto-binds one active project task" in server_js
+    assert 'name: "propose_file_deletions"' in catalog_js
+    assert "userApproved=true" in catalog_js
+    assert "deletesNothing: true" in delete_js
+    assert 'envFlag(env, "ALLOW_SOURCE_DELETE", false)' in delete_js
+    assert 'failure("APPROVAL_SCOPE_MISMATCH"' in delete_js
+    assert 'failure("READ_CONFLICT"' in delete_js
+    assert "const trashPath = path.join(" in delete_js
+    assert '".agent-trash"' in delete_js
+    assert "fsp.rename(resolution.absolutePath, trashPath)" in delete_js

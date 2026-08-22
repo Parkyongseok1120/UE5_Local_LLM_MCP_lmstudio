@@ -17,9 +17,11 @@ class SearchOptions:
     mode: str = "auto"
     sources: list[str] = field(default_factory=list)
     projects: list[str] = field(default_factory=list)
+    project_roots: list[str] = field(default_factory=list)
     layers: list[str] = field(default_factory=list)
     doc_types: list[str] = field(default_factory=list)
     genres: list[str] = field(default_factory=list)
     extensions: list[str] = field(default_factory=list)
     required_terms: list[str] = field(default_factory=list)
     candidate_limit: int = 120
+    evidence_only: bool = False

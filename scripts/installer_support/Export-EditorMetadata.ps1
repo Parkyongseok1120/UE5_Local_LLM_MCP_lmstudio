@@ -116,4 +116,4 @@ if ($IngestOnly -or (Read-Host "Sync exports into RAG index now? [y/N]") -match 
 }
 
 Write-Host ""
-Write-Host "Tip: set editorExportDir in unreal-workspace.json so sync-active-project and unreal_sync_editor_metadata auto-ingest."
+Write-Host "Tip: set editorExportDir in unreal-workspace.json, then run .\rag.ps1 refresh -RefreshScope editor_metadata."

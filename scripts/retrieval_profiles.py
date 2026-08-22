@@ -44,8 +44,6 @@ def apply_retrieval_layer_bonus(rows: list[dict[str, Any]], mode: str) -> list[d
             bonus = float(layers[layer_name].get("bonus") or 0.0)
         if layer_name in order_rank:
             bonus += (len(order) - order_rank[layer_name]) * 0.5
-        if source == "unreal_failure_memory":
-            bonus *= 0.15
         copy["rank_score"] = float(copy.get("rank_score") or 0.0) - bonus
         updated.append(copy)
     updated.sort(key=lambda r: (float(r.get("rank_score") or 0.0), float(r.get("score") or 0.0)))

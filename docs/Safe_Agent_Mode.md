@@ -1,5 +1,7 @@
 # Safe vs Agent Mode
 
+> **CURRENT DIRECT AUTHORITY SETTING.** Safe/Agent selects concrete process permissions; it is not a task workflow, planner mode, or Strict lifecycle. In Direct Mode these flags gate capabilities without requiring a task, route, checkpoint, static-validation certificate, or compactor state. The sole supported Strict lifecycle is the optional Node `strict_begin` entry; the old Python controller is unsupported and not packaged.
+
 Default install uses **Safe mode** (read-only unreal-agent):
 
 - `ALLOW_WRITE=0`

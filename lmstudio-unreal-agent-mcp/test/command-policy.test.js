@@ -36,21 +36,23 @@ test("shell metacharacter blocking still precedes the POSIX python3 allowlist", 
   }
 });
 
-test("Windows built-ins reject cmd expansion and escape syntax before dispatch", () => {
+test("generic commands with path operands are not exposed by the diagnostic allowlist", () => {
   for (const command of [
     "dir %CD%",
     "type !MCP_FILE!",
     "where node^&whoami",
     "findstr value\r\nwhoami",
+    "dir C:\\Outside",
+    "type C:\\Outside\\secret.txt",
+    "findstr secret C:\\Outside\\secret.txt",
+    "where node",
+    "cl Source\\Demo.cpp",
+    "msbuild C:\\Outside\\Project.sln",
+    "dotnet build C:\\Outside\\Project.csproj",
   ]) {
     assert.strictEqual(allowedCommandBase(command, "win32"), false);
     assert.strictEqual(parseAllowedCommand(command, "win32"), null);
   }
-  assert.deepStrictEqual(parseAllowedCommand("dir \"C:\\Safe Folder\"", "win32"), {
-    file: process.env.ComSpec || "cmd.exe",
-    args: ["/d", "/s", "/c", "dir \"C:\\Safe Folder\""],
-    shell: false,
-  });
 });
 
 test("Git allowlist rejects options and branch forms with side effects", () => {
@@ -58,6 +60,10 @@ test("Git allowlist rejects options and branch forms with side effects", () => {
     "git diff --output=outside.patch",
     "git diff --output outside.patch",
     "git diff --ext-diff",
+    "git diff --no-index C:\\Outside\\one.txt C:\\Outside\\two.txt",
+    "git log -- ..\\Outside\\secret.txt",
+    "git status --git-dir=C:\\Outside\\.git",
+    "git status --work-tree=/outside",
     "git show --textconv HEAD:file.bin",
     "git branch --edit-description",
     "git branch topic",

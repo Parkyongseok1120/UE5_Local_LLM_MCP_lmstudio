@@ -8,7 +8,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from project_controller import active_project_readiness, switch_active_project  # noqa: E402
-from project_switch_invalidate import read_cache_generation  # noqa: E402
 
 
 def test_project_status_without_active_project() -> None:
@@ -69,7 +68,7 @@ def test_switch_valid_project_keeps_config_on_cache_error(tmp_path: Path, monkey
     def _boom(*args, **kwargs):
         raise RuntimeError("cache failed")
 
-    monkeypatch.setattr("project_switch_invalidate.on_project_switch_invalidate", _boom)
+    monkeypatch.setattr(pc, "invalidate_direct_project_switch", _boom)
 
     payload = switch_active_project(tmp_path, project_path=str(uproject))
     assert payload["ok"] is True
@@ -79,7 +78,7 @@ def test_switch_valid_project_keeps_config_on_cache_error(tmp_path: Path, monkey
     assert Path(str(saved["activeProject"])).name == "Demo.uproject"
 
 
-def test_switch_valid_project_writes_cache_generation(tmp_path: Path, monkeypatch) -> None:
+def test_switch_valid_project_invalidates_only_direct_caches(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "Demo"
     project_dir.mkdir()
     uproject = project_dir / "Demo.uproject"
@@ -105,11 +104,27 @@ def test_switch_valid_project_writes_cache_generation(tmp_path: Path, monkeypatc
     monkeypatch.setattr(workspace_paths, "load_shared_config", _load)
     monkeypatch.setattr(workspace_paths, "save_shared_config", _save)
 
-    before = read_cache_generation(tmp_path)
+    observed: list[tuple[str | None, str | None]] = []
+
+    def _invalidate(previous, current):
+        observed.append((previous, str(current) if current is not None else None))
+        return {
+            "ok": True,
+            "previousProject": previous,
+            "newProject": str(current),
+            "cleared": ["project_context", "direct_rag_freshness"],
+            "cacheRefreshRequired": False,
+        }
+
+    monkeypatch.setattr(pc, "invalidate_direct_project_switch", _invalidate)
     payload = switch_active_project(tmp_path, project_path=str(uproject))
-    after = read_cache_generation(tmp_path)
     assert payload["ok"] is True
-    assert after > before
+    assert payload["switchResult"] == "switched"
+    assert observed == [(None, str(uproject.resolve()))]
+    assert payload["cacheInvalidation"]["cleared"] == [
+        "project_context",
+        "direct_rag_freshness",
+    ]
 
 
 def test_switch_same_exact_project_is_side_effect_free(tmp_path: Path, monkeypatch) -> None:
@@ -130,14 +145,7 @@ def test_switch_same_exact_project_is_side_effect_free(tmp_path: Path, monkeypat
         raise AssertionError("same-project no-op must not persist or invalidate")
 
     monkeypatch.setattr(pc, "save_shared_config", _unexpected)
-    monkeypatch.setattr(
-        "project_switch_invalidate.on_project_switch_invalidate",
-        _unexpected,
-    )
-    monkeypatch.setattr(
-        "on_active_project_changed.active_project_check_status",
-        _unexpected,
-    )
+    monkeypatch.setattr(pc, "invalidate_direct_project_switch", _unexpected)
 
     payload = switch_active_project(tmp_path, project_path=str(uproject))
     assert payload["ok"] is True

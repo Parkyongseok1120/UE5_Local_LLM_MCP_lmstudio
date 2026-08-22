@@ -12,9 +12,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 from build_rag_index import (  # noqa: E402
     apply_compact_profile_defaults,
-    doc_matches_replace_project,
+    metadata_fields,
     parse_args,
-    replace_project_enabled,
     resolve_chunk_params,
 )
 
@@ -65,104 +64,27 @@ def test_symbol_chunk_params_stay_symbol_sized():
     assert overlap_tokens == 60
 
 
-def test_module_graph_still_skips_text_chunking():
-    chunk_tokens, overlap_tokens = resolve_chunk_params(
-        "module_graph",
-        {},
-        default_chunk_tokens=720,
-        default_overlap_tokens=96,
-    )
+def test_project_root_is_canonicalized_for_storage(tmp_path: Path):
+    from workspace_paths import filesystem_path_identity
 
-    assert chunk_tokens is None
-    assert overlap_tokens is None
+    project_root = tmp_path / "Demo"
+    project_root.mkdir()
 
-
-def test_replace_project_flag_disabled_by_default(monkeypatch):
-    monkeypatch.delenv("ENABLE_REPLACE_PROJECT", raising=False)
-    assert replace_project_enabled() is False
-
-
-def test_doc_matches_replace_project_for_symbol_rows():
-    assert doc_matches_replace_project(
-        "unreal_symbol",
-        {"project": "DemoGame", "symbol_name": "UDemoActor"},
-        "DemoGame",
-    )
-    assert not doc_matches_replace_project(
-        "unreal_symbol",
-        {"project": "OtherGame"},
-        "DemoGame",
-    )
-
-
-def test_replace_project_explicit_mismatch_cannot_fall_through_to_path():
-    assert not doc_matches_replace_project(
-        "unreal_symbol",
-        {
-            "project": "OtherGame",
-            "relative_path": "Projects/DemoGame/Source/DemoGame/DemoActor.cpp",
-            "root": "/workspace/Projects/DemoGame",
-        },
-        "DemoGame",
-        host_platform="linux",
-    )
-
-
-def test_replace_project_fallback_requires_an_exact_project_segment():
-    assert doc_matches_replace_project(
+    fields = metadata_fields(
         "unreal_project_text",
-        {"relative_path": "Projects/Game/Source/Game/GameMode.cpp"},
-        "Game",
-        host_platform="linux",
+        "Demo.cpp",
+        "Demo.cpp",
+        {"project": "Demo", "project_root": str(project_root / ".")},
     )
-    assert not doc_matches_replace_project(
-        "unreal_project_text",
-        {"relative_path": "Projects/GameTools/Source/GameTools/Tool.cpp"},
-        "Game",
-        host_platform="linux",
-    )
-    assert not doc_matches_replace_project(
-        "unreal_symbol",
-        {"root": "/workspace/Projects/GameTools"},
-        "Game",
-        host_platform="linux",
+
+    assert fields["project_root"] == filesystem_path_identity(
+        project_root.resolve(),
+        strip_project_uri=False,
     )
 
 
-def test_replace_project_keeps_posix_unicode_names_distinct():
-    composed = "Caf\u00e9Game"
-    decomposed = "Cafe\u0301Game"
+def test_removed_replace_project_cli_is_rejected():
+    import pytest
 
-    assert not doc_matches_replace_project(
-        "unreal_symbol",
-        {"project": decomposed, "root": f"/workspace/{composed}"},
-        composed,
-        host_platform="linux",
-    )
-    assert not doc_matches_replace_project(
-        "unreal_symbol",
-        {"root": f"/workspace/{decomposed}"},
-        composed,
-        host_platform="linux",
-    )
-
-
-def test_replace_project_folds_ascii_case_only_on_windows():
-    assert doc_matches_replace_project(
-        "unreal_symbol",
-        {"project": "gAmE"},
-        "Game",
-        host_platform="win32",
-    )
-    assert doc_matches_replace_project(
-        "unreal_symbol",
-        {"root": r"C:\Projects\GAME"},
-        "Game",
-        host_platform="win32",
-    )
-    assert not doc_matches_replace_project(
-        "unreal_symbol",
-        {"project": "i\u0307Game"},
-        "\u0130Game",
-        host_platform="win32",
-    )
+    with pytest.raises(SystemExit):
+        parse_args(["--input", "dummy.jsonl", "--replace-project", "Demo"])

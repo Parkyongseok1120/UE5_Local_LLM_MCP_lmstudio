@@ -7,13 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from rag_semantic import split_identifier  # noqa: E402
 from target_resolver import resolve_symbol_target, target_tokens  # noqa: E402
-
-
-def test_split_identifier_uses_camel_segments_instead_of_zero_width_matches():
-    parts = split_identifier("UCPlayerCharacterAnimInstance")
-    assert {"Player", "Character", "Anim", "Instance"}.issubset(parts)
 
 
 def test_player_animinstance_phrase_resolves_unique_unreal_class():

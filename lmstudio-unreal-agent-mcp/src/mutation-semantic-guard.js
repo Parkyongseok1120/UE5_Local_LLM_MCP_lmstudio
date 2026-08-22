@@ -4,7 +4,9 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const cp = require("child_process");
-const { resolvePythonExe } = require("./validate-write");
+const { resolvePythonExe } = require("./python-executable");
+
+const SOURCE_GUARD_EXTENSIONS = new Set([".h", ".hpp", ".inl", ".cpp", ".c", ".cc", ".cxx"]);
 
 function candidateGuardScripts() {
   const candidates = [];
@@ -72,6 +74,54 @@ function validateMutationSemanticText(text) {
   }
 }
 
+function compactAdvisoryText(value, maxChars = 240) {
+  const text = String(value || "").replace(/\s+/gu, " ").trim();
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+function mutationSemanticAdvisory(targetPath, text, evaluator = validateMutationSemanticText) {
+  if (!SOURCE_GUARD_EXTENSIONS.has(path.extname(String(targetPath || "")).toLowerCase())) {
+    return null;
+  }
+  let result;
+  try {
+    result = evaluator(text);
+  } catch (error) {
+    result = {
+      ok: false,
+      infrastructureError: true,
+      reason: String(error?.message || error),
+      hits: [],
+    };
+  }
+  if (result?.ok === true || result?.skipped === true) return null;
+  const hits = Array.isArray(result?.hits) ? result.hits : [];
+  if (result?.infrastructureError === true || hits.length === 0) {
+    return {
+      code: "SEMANTIC_GUARD_UNAVAILABLE",
+      severity: "warning",
+      blocking: false,
+      source: "unreal_api_denylist",
+      message: compactAdvisoryText(
+        `Semantic advisory unavailable: ${result?.reason || "guard returned no usable result"}`,
+      ),
+    };
+  }
+  return {
+    code: "UNREAL_API_SEMANTIC_FINDINGS",
+    severity: "warning",
+    blocking: false,
+    source: "unreal_api_denylist",
+    findingCount: hits.length,
+    message: `${hits.length} non-blocking Unreal API semantic finding${hits.length === 1 ? "" : "s"}; review before relying on the edit.`,
+    findings: hits.slice(0, 3).map((hit) => ({
+      term: compactAdvisoryText(hit?.term || hit?.code || "semantic_finding", 80),
+      message: compactAdvisoryText(hit?.message || hit?.reason || "Review this API usage."),
+    })),
+  };
+}
+
 function probeMutationSemanticGuard() {
   const script = resolveGuardScript();
   if (!fs.existsSync(script)) {
@@ -114,6 +164,7 @@ function probeMutationSemanticGuard() {
 
 module.exports = {
   candidateGuardScripts,
+  mutationSemanticAdvisory,
   resolveGuardScript,
   validateMutationSemanticText,
   probeMutationSemanticGuard,

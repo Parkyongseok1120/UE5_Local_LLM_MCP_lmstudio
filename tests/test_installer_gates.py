@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -41,14 +40,12 @@ def test_resolve_rag_index_path_unreal57(tmp_path: Path) -> None:
     assert "unreal57" in ps.stdout
 
 
-def _run_activation_status(state_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run_activation_status(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             *powershell_prefix(),
             "-File",
             str(ROOT / "scripts" / "Test-ContextCompactorActivation.ps1"),
-            "-StateRoot",
-            str(state_root),
             *args,
         ],
         capture_output=True,
@@ -58,46 +55,83 @@ def _run_activation_status(state_root: Path, *args: str) -> subprocess.Completed
     )
 
 
-def test_context_compactor_status_rejects_install_only_state(tmp_path: Path) -> None:
-    status = _run_activation_status(tmp_path / "missing")
-    assert status.returncode == 2
-    assert "No context compactor proxy activation evidence" in status.stdout
-    assert "underlying Qwen/GPT model directly bypasses" in status.stdout
+def test_context_compactor_status_verifies_direct_source_layout() -> None:
+    status = _run_activation_status()
+    assert status.returncode == 0, status.stderr or status.stdout
+    assert "Transparent context-compactor source layout verified" in status.stdout
+    assert "actual LLM" in status.stdout
 
 
-def test_context_compactor_status_reports_runtime_route_and_compaction(tmp_path: Path) -> None:
-    session = tmp_path / "session-a"
-    session.mkdir()
-    measured_at = datetime.now(tz=timezone.utc).isoformat()
-    events = [
-        {
-            "type": "context_measurement",
-            "at": measured_at,
-            "proxyActive": True,
-            "targetModel": "test-qwen",
-            "inputTokens": 65000,
-            "contextLength": 70656,
-            "decision": {"action": "hard_compact"},
-        },
-        {
-            "type": "compaction_decision",
-            "at": measured_at,
-            "applied": True,
-            "postRemainingTokens": 21000,
-        },
-    ]
-    (session / "events.jsonl").write_text(
-        "".join(json.dumps(event) + "\n" for event in events),
-        encoding="utf-8",
+def test_context_compactor_status_does_not_fabricate_runtime_activation() -> None:
+    status = _run_activation_status("-Json", "-RequireRuntime")
+    assert status.returncode == 3, status.stderr or status.stdout
+    payload = json.loads(status.stdout)
+    assert payload["sourceLayoutVerified"] is True
+    assert payload["runtimeActivationProven"] is False
+    assert payload["modelOwner"] == "lmstudio_selected_model"
+
+
+def test_unreal_verifier_requires_and_hashes_the_direct_compactor_surface() -> None:
+    verifier = (ROOT / "scripts" / "installer_support" / "Verify-UnrealMcp.ps1").read_text(
+        encoding="utf-8"
+    )
+    for relative in (
+        r"src\index.ts",
+        r"src\prediction-loop.ts",
+        r"src\direct-compaction-core.js",
+        r"src\direct-config.ts",
+    ):
+        assert relative in verifier
+    assert r"dist\prediction-loop.js" in verifier
+    assert r"src\generator.ts" not in verifier
+    assert r"src\compaction-core.js" not in verifier
+    assert r"dist\generator.js" not in verifier
+    assert "Select unreal-context-compactor as the chat model" not in verifier
+
+
+def test_unreal_verifier_checks_current_direct_atomic_owners() -> None:
+    verifier = (ROOT / "scripts" / "installer_support" / "Verify-UnrealMcp.ps1").read_text(
+        encoding="utf-8"
+    )
+    for relative in (
+        r"src\runtime-state-root.js",
+        "direct-edit-bundle.js",
+        "direct-transaction-recovery.js",
+        "direct-transaction-store.js",
+        "direct-static-validation.js",
+    ):
+        assert relative in verifier
+    assert r"src\state-root.js" not in verifier
+    assert r"src\validate-write.js" not in verifier
+
+
+def test_unreal_verifier_uses_a_real_request_variable_and_no_archived_python_state_root() -> None:
+    verifier = (ROOT / "scripts" / "installer_support" / "Verify-UnrealMcp.ps1").read_text(
+        encoding="utf-8"
     )
 
-    status = _run_activation_status(tmp_path, "-Json", "-RequireCompaction")
-    assert status.returncode == 0, status.stderr or status.stdout
-    payload = json.loads(status.stdout)
-    assert payload["active"] is True
-    assert payload["targetModel"] == "test-qwen"
-    assert payload["compactionApplied"] is True
-    assert payload["postRemainingTokens"] == 21000
+    assert "$requests =" in verifier
+    assert "$input =" not in verifier
+    assert "scripts\\state_root.py" not in verifier
+
+
+def test_unreal_verifier_requires_independent_direct_and_agent_state_roots() -> None:
+    verifier = (ROOT / "scripts" / "installer_support" / "Verify-UnrealMcp.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'Check "mcp.json Direct RAG state root"' in verifier
+    assert (
+        '$cfg.mcpServers."unreal-rag".env.DIRECT_RAG_STATE_ROOT'
+        in verifier
+    )
+    assert "unreal-rag missing DIRECT_RAG_STATE_ROOT" in verifier
+    assert 'Check "mcp.json agent state root"' in verifier
+    assert '$cfg.mcpServers."unreal-agent".env.AGENT_STATE_ROOT' in verifier
+    assert "unreal-agent missing AGENT_STATE_ROOT" in verifier
+    assert "mcp.json AGENT_STATE_ROOT parity" not in verifier
+    assert '$cfg.mcpServers."unreal-rag".env.AGENT_STATE_ROOT' not in verifier
+    assert "AGENT_STATE_ROOT mismatch" not in verifier
 
 
 def test_sync_shared_workspace_drops_paths_from_another_pc(tmp_path: Path) -> None:

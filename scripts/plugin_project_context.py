@@ -228,8 +228,13 @@ def build_plugin_project_context(
     *,
     include_disabled_plugins: bool = False,
 ) -> PluginProjectContext:
-    root = Path(project_root)
-    uproject_files = list(root.glob("*.uproject"))
+    selected = Path(project_root)
+    if selected.is_file() and selected.suffix.casefold() == ".uproject":
+        root = selected.parent
+        uproject_files = [selected]
+    else:
+        root = selected
+        uproject_files = sorted(root.glob("*.uproject"))
     project_name = uproject_files[0].stem if uproject_files else root.name
     uproject = _read_json(uproject_files[0]) if uproject_files else {}
     disabled_plugins = {
@@ -340,14 +345,20 @@ def resolve_scan_roots(
     include_vendor: bool = False,
     include_disabled_plugins: bool = False,
 ) -> list[Path]:
+    selected = Path(project_root)
+    root = (
+        selected.parent
+        if selected.is_file() and selected.suffix.casefold() == ".uproject"
+        else selected
+    )
     ctx = build_plugin_project_context(
-        project_root,
+        selected,
         include_disabled_plugins=include_disabled_plugins,
     )
     roots = ctx.scan_roots(include_vendor=include_vendor)
     if roots:
         return roots
-    return fallback_scan_roots(project_root)
+    return fallback_scan_roots(root)
 
 
 def paired_header_for_cpp(cpp_path: Path, project_root: Path | str) -> Path | None:

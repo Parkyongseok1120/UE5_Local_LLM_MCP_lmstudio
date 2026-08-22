@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -77,16 +76,6 @@ AGENT_MODES = {
 API_LOOKUP_MODES = {"api_lookup", "codegen"}
 
 
-def _legacy_filter() -> bool:
-    return os.environ.get("UNREAL_RAG_LEGACY_PROJECT_FILTER", "").strip() == "1"
-
-
-def _routing_enabled() -> bool:
-    if _legacy_filter():
-        return False
-    return os.environ.get("UNREAL_RAG_PROJECT_ROUTING", "v1").strip().lower() in {"1", "true", "v1", "yes"}
-
-
 def classify_query_scope(
     query: str,
     mode: str = "auto",
@@ -96,8 +85,6 @@ def classify_query_scope(
     """Return engine | project | mixed."""
     if explicit_projects:
         return "project"
-    if not _routing_enabled():
-        return "project" if active_project_path else "engine"
 
     q = (query or "").lower()
     mode_l = (mode or "auto").lower()
@@ -147,7 +134,9 @@ def resolve_project_filters(
 ) -> tuple[list[str], str]:
     """Return (project filter list, resolved scope)."""
     if explicit_projects:
-        return explicit_projects, "project"
+        if scope == "engine":
+            return [], "engine"
+        return explicit_projects, "project" if scope == "auto" else scope
     if not use_active_project:
         return [], "engine"
 

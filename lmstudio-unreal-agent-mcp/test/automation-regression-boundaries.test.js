@@ -203,15 +203,15 @@ test("Epic UE 5.8 CQTest declarations register as Dir.Name without standalone me
   });
 });
 
-test("cached-read semantic anchors include CQTest roots but not TEST_METHOD as a root pattern", () => {
-  const serverSource = fs.readFileSync(path.join(__dirname, "..", "src", "server.js"), "utf8");
-  const anchorLine = serverSource.split(/\r?\n/).find((line) => (
-    line.includes("IMPLEMENT_[A-Z0-9_]*AUTOMATION_TEST")
-  ));
-  assert.ok(anchorLine);
-  assert.match(anchorLine, /TEST/);
-  assert.match(anchorLine, /_CLASS/);
-  assert.doesNotMatch(anchorLine, /TEST_METHOD/);
+test("automation discovery anchors include CQTest roots but not TEST_METHOD as a root pattern", () => {
+  const { AUTOMATION_DECLARATION_PATTERNS } = require("../src/automation-source-parser");
+  const declarationPatterns = AUTOMATION_DECLARATION_PATTERNS
+    .map((item) => item.pattern.source)
+    .join("\n");
+  assert.match(declarationPatterns, /IMPLEMENT_CUSTOM_/);
+  assert.match(declarationPatterns, /TEST\\s\*\\\(/);
+  assert.match(declarationPatterns, /TEST_CLASS/);
+  assert.doesNotMatch(declarationPatterns, /TEST_METHOD/);
 });
 
 test("maxFiles reports truncation when another source file remains in the same directory", () => {
@@ -388,13 +388,14 @@ test("dynamic Build.cs dependencies make scoped discovery incomplete instead of 
   });
 });
 
-test("Automation tool schema is wired to the same bounded filter maximum", () => {
+test("Direct Automation tool accepts one bounded filter instead of a controller-owned filter plan", () => {
   assert.strictEqual(MAX_AUTOMATION_FILTERS, 256);
-  const serverSource = fs.readFileSync(path.join(__dirname, "..", "src", "server.js"), "utf8");
-  assert.match(
-    serverSource,
-    /testFilters:\s*\{[\s\S]{0,300}?maxItems:\s*MAX_AUTOMATION_FILTERS/
+  const catalogSource = fs.readFileSync(
+    path.join(__dirname, "..", "src", "direct-tool-catalog.js"),
+    "utf8",
   );
+  assert.match(catalogSource, /testFilter:\s*\{\s*type:\s*"string"\s*\}/);
+  assert.doesNotMatch(catalogSource, /testFilters:\s*\{/);
 });
 
 test("Automation log persistence failure resolves as a bounded failure", async () => {

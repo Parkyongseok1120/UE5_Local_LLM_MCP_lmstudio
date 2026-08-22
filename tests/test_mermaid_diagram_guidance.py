@@ -13,12 +13,12 @@ def _read(relative: str) -> str:
 
 
 def test_prompt_guidance_requires_mermaid_before_ascii_fallback() -> None:
-    compact = _read("prompts/lmstudio_compact_mcp_base.md")
+    compact = _read("prompts/lmstudio_unreal_agent_system.md")
     system = _read("prompts/lmstudio_unreal_agent_system.md")
     assistant = _read("prompts/unreal_cpp_assistant.md")
 
-    assert "Mermaid code fence first" in compact
-    assert "Immediately after the Mermaid block" in compact
+    assert "compact Mermaid diagram first" in compact
+    assert "plain ASCII/text fallback" in compact
     assert "show a compact Mermaid diagram first" in system
     assert "Mermaid diagram first and a plain ASCII/text fallback second" in assistant
 
@@ -33,9 +33,8 @@ def test_docs_keep_mermaid_first_without_removing_fallback() -> None:
     assert "ASCII/text only after the Mermaid block" in discipline
 
 
-def test_unreal_render_report_mentions_mermaid_validation_without_new_tool() -> None:
-    mcp = _read("scripts/unreal_rag_mcp.py")
+def test_direct_catalog_does_not_add_a_server_owned_rendering_workflow() -> None:
+    manifest = _read("config/stable_tool_manifest.json")
 
-    assert '"unreal_render_report"' in mcp
-    assert "Mermaid fences are validated when present" in mcp
-    assert "unreal_validate_mermaid" not in mcp
+    assert "unreal_render_report" not in manifest
+    assert "unreal_validate_mermaid" not in manifest

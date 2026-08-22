@@ -168,13 +168,27 @@ if (-not (Test-Path $dataDir)) {
 }
 
 if (-not $SkipBuild) {
-    Write-Host "Next steps (manual or re-run without -SkipBuild after index exists):"
-    Write-Host "  cd $ragRoot"
-    Write-Host "  .\rag.ps1 update-engine"
-    Write-Host "  .\rag.ps1 doctor"
+    if (-not $selectedRoot) {
+        throw "Cannot build the index until defaultEngineRoot is configured. Re-run with -EpicGamesRoot or use -SkipBuild."
+    }
+    $engineSourceRoot = Join-Path $selectedRoot "Engine\Source"
+    if (-not (Test-Path -LiteralPath $engineSourceRoot -PathType Container)) {
+        throw "Licensed Unreal source directory is missing: $engineSourceRoot"
+    }
+    $ragCommand = Join-Path $ragRoot "rag.ps1"
+    Write-Host "Collecting licensed Unreal source from: $engineSourceRoot"
+    & $ragCommand collect-source -Root $engineSourceRoot
+    & $ragCommand collect-symbols -Root $engineSourceRoot -Tier public -SymbolScope engine
+    & $ragCommand build
+    & $ragCommand doctor
 }
 else {
-    Write-Host "Skipped build. Run .\rag.ps1 update-engine when ready."
+    $engineSourceRoot = if ($selectedRoot) { Join-Path $selectedRoot "Engine\Source" } else { "<UE root>\Engine\Source" }
+    Write-Host "Skipped collection and build. Run these commands when ready:"
+    Write-Host ('  .\rag.ps1 collect-source -Root "{0}"' -f $engineSourceRoot)
+    Write-Host ('  .\rag.ps1 collect-symbols -Root "{0}" -Tier public -SymbolScope engine' -f $engineSourceRoot)
+    Write-Host "  .\rag.ps1 build"
+    Write-Host "  .\rag.ps1 doctor"
 }
 
 Write-Host ""

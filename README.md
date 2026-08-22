@@ -30,7 +30,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 >
 > **Current product label: 1.3.0 RC3 (prerelease).** RC3 packages the verified recovery state machine, atomic mutation journal, canonical project/build proof, Automation scope hardening, and Windows/POSIX path identity from the post-RC2 Develop line. Apple Silicon physical FULL install is recorded as PASS; Windows physical install is still unverified, so stable distribution remains blocked and `releaseReady` stays false.
 >
-> RC3 exposes a clearer model-side bottleneck: once the server supplies an exact obligation, smaller local models must still retain long evidence/recovery state and emit the exact tool schema. That limitation is observed but not newly quantified. Do not reuse the v1.2.5 score as an RC3 result, and do not treat RC3 as stable until Windows validation and remaining gates close.
+> The current runtime defaults to **Direct Model Mode**: the selected LLM owns tool choice and sequencing, while the MCP servers provide stable capabilities and enforce filesystem, process, and build safety. The default path has no server-owned task, route, planner, or synthesis gate. The saved v1.2.5 measurements and RC3 control-plane validation remain historical evidence, not a new Direct-mode score. Do not treat RC3 as stable until Windows validation and the remaining release gates close.
 
 ## Documentation Hub
 
@@ -39,8 +39,6 @@ If this project has been useful to you, please consider sponsoring — it helps 
   <a href="docs/Release_Notes_1_3_0_RC3.md"><img alt="1.3.0 RC3 Notes" src="https://img.shields.io/badge/Release-1.3.0%20RC3-orange?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
-  <a href="docs/Roadmap_1_3_0.md"><img alt="v1.3.0 Roadmap" src="https://img.shields.io/badge/Roadmap-v1.3.0-orange?logo=gitbook"></a>
-  <a href="docs/Evaluation_Claim_Guardrail.md"><img alt="Evaluation Guardrail" src="https://img.shields.io/badge/Docs-Evaluation%20Guardrail-lightgrey?logo=gitbook"></a>
 </p>
 
 ## Latest Results
@@ -68,7 +66,7 @@ The 9B profile is the current **minimum floor**, not a reliability target. It is
 
 For autonomous multi-step Unreal work, prefer a **24B–27B instruction/tool-calling model**. Keep 9B for bounded, short tasks after the target file, symbol, and intended change are already known. For Korean-first use, validate the exact local checkpoint: Qwen3 advertises support for 100+ languages and tool calling, while coding-specialized models such as Devstral Small 2 may be stronger at codebase operations but should not be assumed to have the same Korean fluency. See the [Qwen3 model card](https://huggingface.co/Qwen/Qwen3-30B-A3B) and [Devstral Small 2 model card](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512).
 
-RC3's deterministic control plane removes ambiguous server handoffs, but it cannot make a model retain long evidence chains or produce an exact tool schema reliably. As server-side transition loops are closed, context retention, recovery judgment, and exact tool-call generation become a more visible model-side bottleneck.
+Historical RC3 workflow tests showed that deterministic handoffs cannot make a small model retain long evidence chains or produce exact tool calls reliably. That model-side limitation still matters, but the supported runtime no longer inserts the old Python task/route/planning/synthesis transitions. Their source remains only as unsupported historical/evaluation material and is omitted from the portable package.
 
 > `Harness average attempts=0.389` in the best run means many cases were solved by deterministic static autofix before an LLM edit attempt. It is not a general model reasoning-depth metric.
 
@@ -104,22 +102,44 @@ The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal a
 
 `INSTALL.bat` and `install.sh` are thin platform launchers for the same `install.py` implementation. There are no separate SAFE, AGENT, RAG, Cline, or context-compactor installers. Choose those options inside the integrated installer. `installer/` contains bootstrap runtime code and validated manifests; advanced maintenance tools live under `scripts/installer_support/`.
 
-> **Important — after install, select `unreal-context-compactor` as the chat model.**  
-> 1. Load your underlying LLM once (for example Qwen). Leave it loaded; do not pick it as the chat model if you want compaction.  
-> 2. **Create a new chat** (existing chats keep their old model selection).  
-> 3. In that chat’s **model dropdown**, choose **`unreal-context-compactor`**.  
-> Installation installs and pins the plugin, but it does **not** switch the model on existing chats. Selecting Qwen/GPT directly **bypasses** the proxy: multi-turn goal changes and long tool histories will not be compacted.
+### Direct Model Mode is the default
 
-Then load a model in LM Studio, start Local Server, enable `unreal-rag` / `unreal-agent`, and build your index. The installer also installs `unreal-context-compactor`. Keep exactly one underlying LLM loaded (or set its exact `targetModel` in the plugin settings). The proxy compacts only the model-facing history; the visible chat and the existing MCP servers remain unchanged.
+The normal `unreal-rag` and `unreal-agent` entries are capability providers. The model may search, read, edit, validate, build, or test in the order appropriate for the request. You do **not** start `unreal_task_start`, create a server plan, acquire route authorization, or commit synthesis before using a capability. Read/write containment, optimistic concurrency, command allowlists, explicit delete approval, and SAFE/AGENT authority still apply.
 
-After sending one message through that selection, verify actual routing—not just installed files—with:
+> **Important — select the real LLM as the chat model.**
+>
+> 1. Load and select the actual instruction/tool-calling model you want to use, such as Qwen, in LM Studio's **model dropdown**.
+> 2. Create or open the chat and enable **`codex/unreal-context-compactor`** in that chat's **plugin panel**.
+> 3. Keep the actual LLM selected. `unreal-context-compactor` is a chat plugin, not a model or proxy model, and it has no `targetModel` to configure.
+> 4. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
+
+The plugin measures pressure with the selected model and compacts only older model-facing chat history when needed. It does not choose the model, change sampling, filter MCP tools, or grant write/build authority. The installer makes the plugin available and pins its revision, but LM Studio does not currently expose durable proof that it is enabled for a particular chat; confirm the chat-level toggle in the plugin panel.
+
+This command verifies the installed plugin's source layout and compiled prediction-loop wiring. It does **not** prove chat-level activation:
 
 ```shell
 cd lmstudio-context-compactor-plugin
 npm run status
 ```
 
-The cross-platform checker only accepts fresh proxy telemetry; stale evidence from an older chat is rejected. In Beta3 the proxy is an LM Studio continuity aid, not a write-authority prerequisite: selecting Qwen/GPT directly remains AGENT-write capable. An administrator can explicitly opt into strict LM Studio-only routing with `MCP_REQUIRE_CONTEXT_COMPACTOR_ACTIVE=1`; Cline, CLI, Ollama, custom, and remote clients must use their own frontend-specific continuity proof instead of LM Studio proxy telemetry.
+The context plugin is a continuity aid, not a prerequisite for Direct MCP authority. Cline, CLI, Ollama, custom, and remote clients can use the MCP capability servers without the LM Studio chat plugin.
+
+### Multiple projects and Unreal versions
+
+One MCP installation can serve multiple Unreal projects and installed UE versions. `set_active_project` provides a convenient default, but Direct file, search, edit, log, command, build, and Automation tools accept an exact `.uproject` path or exact discovered project name through their advertised `project`, `projectRoot`, or `hint` field where applicable. A per-call project selector overrides the active project for that call only; it does not create route ownership or retarget another chat.
+
+Build and Automation calls resolve the selected project's engine association and may also accept an explicit `engineRoot`. This allows UE 5.x projects on different engine installations to share the same server. Prefer exact selectors: an ambiguous project name returns an error instead of silently choosing another project.
+
+### Strict is a separate manual opt-in
+
+Keep the installer-managed `unreal-rag` and `unreal-agent` entries unchanged. The only supported Strict surface is a separately named Node entry:
+
+- Copy `unreal-agent` to `unreal-agent-strict` and point it at `lmstudio-unreal-agent-mcp/src/strict-server.js`.
+- Node Strict owns a conversation-scoped lifecycle beginning with `strict_begin`; reads and searches remain task-free while mutations and long-running capabilities require that live Strict session.
+
+The removed Python controller is not a supported Strict entry and cannot authorize Node mutations. The portable package excludes its monolithic MCP entry and Strict manifest. Avoid exposing Node Strict beside the same Direct tool surface unless duplicate-name debugging is intentional.
+
+Node MCP transport cannot observe when the selected model emits its final chat answer. Therefore, immediately before the final answer, the model must call `strict_complete` explicitly (or `strict_fail` / `strict_cancel` for those outcomes). Connection/process shutdown, TTL expiry, and process restart make unfinished Node sessions `orphaned`; an orphan does not block Direct Mode, another conversation, or another project. `strict_resume` requires explicit user approval.
 
 ### Rider + Cline (optional)
 
@@ -131,16 +151,15 @@ python install.py --profile custom --components codex,lmstudio,unreal,cline --cl
 python install.py --profile custom --components codex,lmstudio,unreal,cline --cline-settings C:\path\to\cline_mcp_settings.json --enable-agent-mode --accept-agent-risk
 ```
 
-See [Rider_Cline_Smoke_Checklist.md](docs/Rider_Cline_Smoke_Checklist.md) and [cline_unreal_agent_system.md](prompts/cline_unreal_agent_system.md). Default workflow: `unreal_task_start` → plan → edit → Rider Build.
+See [Rider_Cline_Smoke_Checklist.md](docs/Rider_Cline_Smoke_Checklist.md) and [cline_unreal_agent_system.md](prompts/cline_unreal_agent_system.md). In Direct mode, use the same straightforward flow as LM Studio: select the exact project, inspect/search, read before editing, then validate and run the Rider/UBT build when useful.
 
 > **Required — disable LM Studio's built-in `js-code-sandbox` (JavaScript/TypeScript Code Sandbox).**  
-> In LM Studio, turn off or hide the default **JavaScript/TypeScript Code Sandbox** plugin for Unreal coding chats. That sandbox uses a different working directory and is **not** rooted at your active `.uproject`; letting the model use it for file I/O causes wrong paths, broken edits, and conflicts with `unreal-agent`. Use only `unreal-rag` + `unreal-agent` MCP tools (`read_file`, `replace_in_file`, `write_file` for new files). If auto-approval is enabled, remove `lmstudio/js-code-sandbox:*` from `%USERPROFILE%\.lmstudio\settings.json` `chat.skipToolConfirmationPatterns` and restart LM Studio. Details: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md).
+> In LM Studio, turn off or hide the default **JavaScript/TypeScript Code Sandbox** plugin for Unreal coding chats. That sandbox uses a different working directory and is **not** rooted at your active `.uproject`; letting the model use it for file I/O causes wrong paths, broken edits, and conflicts with `unreal-agent`. Use only `unreal-rag` + `unreal-agent` MCP tools (`read_file`, `replace_in_file`, `write_file` for new files). Remove `lmstudio/js-code-sandbox:*`, `mcp/unreal-agent:*`, and `mcp/unreal-rag:*` broad auto-approval patterns from `%USERPROFILE%\.lmstudio\settings.json` and restart LM Studio; the MCP wildcards would suppress host confirmation for deletion and explicitly authorized Editor launch. The installer and `scripts/patch_mcp_config.py` perform this cleanup while preserving unrelated settings. Details: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md).
 
 ```powershell
-.\rag.ps1 collect-source
-.\rag.ps1 collect-projects -CopyProjectText
-.\rag.ps1 collect-symbols
-.\rag.ps1 collect-module-graph
+.\rag.ps1 collect-source -Root C:\UE_5.6\Engine\Source
+.\rag.ps1 collect-projects -Root C:\Projects\MyGame
+.\rag.ps1 collect-symbols -Root C:\Projects\MyGame\Source -SymbolScope project -ProjectName MyGame
 .\rag.ps1 build
 ```
 
@@ -151,20 +170,17 @@ python install.py --profile standard --yes --enable-agent-mode --accept-agent-ri
 python install.py --profile standard --yes
 ```
 
-Ask a question:
-
-```powershell
-.\rag.ps1 lmstudio-models
-.\rag.ps1 ask -Question "Show me a C++ example of attaching a custom Component to an Actor"
-```
+Ask the selected LM Studio chat model and let it call `unreal_rag_search` or
+`unreal_symbol_lookup`. The portable `rag.ps1` is maintenance-only; it does not
+run a model, wrapper, planner, evaluation harness, or query-side controller.
 
 ## Real-Use Session Tips
 
-Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context grows with every tool result, build log, and retry. When `unreal-context-compactor` is selected as the chat model, it measures the underlying model's tokenizer budget and replaces only the model-facing old history with a deterministic checkpoint before the hard margin is exhausted.
+Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context grows with every tool result, build log, and retry. With the actual LLM selected and `codex/unreal-context-compactor` enabled for the chat, the plugin measures that model's tokenizer budget and replaces only older model-facing history with deterministic factual memory before the hard margin is exhausted. It does not preserve or generate task routes, required-next-tool commands, planner state, or synthesis gates.
 
 | Symptom in LM Studio logs | What to do |
 |---|---|
-| `request (...) exceeds the available context size (54272)` | Run `npm --prefix lmstudio-context-compactor-plugin run status` first. If it has no fresh route evidence, select `unreal-context-compactor` for this chat. If the proxy cannot meet the 8,000-token hard margin, use a larger context or start a new chat with a 5–10-line handoff. |
+| `request (...) exceeds the available context size (54272)` | Confirm that the actual LLM is selected and `codex/unreal-context-compactor` is enabled in this chat's plugin panel. `npm --prefix lmstudio-context-compactor-plugin run status` verifies installed source/build wiring only. If pressure remains too high, use a larger context or start a new chat with a 5–10-line factual handoff. |
 | `failed to restore kv cache` / `cache size limit reached` | Same as above — session memory is saturated. New chat is faster than raising context alone. |
 | `Model failed to generate a tool call` after a long edit loop | Stop, summarize changed files + remaining errors, new chat. |
 | `js-code-sandbox` appears in logs during Unreal work | Disable it (see Quick Install note above). |
@@ -175,9 +191,9 @@ Practical rules for day-to-day Unreal project work:
 - **Do not paste full UBT/linker logs** into chat. Use `read_unreal_logs`: `mode=tail` for recent failures, `mode=first_error` to scan from byte zero for the original cause, and `mode=range` with `cursorByte`/`nextCursorByte` for bounded traversal.
 - **Header-then-.cpp is normal.** `write_file` on a new header may show advisory `CPP_DEFINITION_MISSING` until the matching `.cpp` is written — that is expected, not a rollback trigger on its own.
 - **Avoid invented UE APIs** the model often hallucinates: `UCharacterMovementComponent::DisableGravity()`, `UWorld::GetURL()`, `SpawnActor(..., &FTransform)`, `GEngine->GetWorld()`. Prefer `GravityScale`, `GetMapName()` + `OpenLevel`/`ServerTravel`, `SpawnTransform` by value, and the owning actor/subsystem's `GetWorld()`.
-- **Compact tool responses (v1.2.5 baseline, retained in Beta3):** `build_unreal_project` returns a one-line summary + up to 40 likely errors + `.agent/logs/latest-build.log` path (not full stdout/stderr). `read_unreal_logs` defaults to the newest bounded tail and exposes whether the source was truncated. The context proxy preserves control fields such as the required next tool, modified files, diagnostics, and build state across compaction.
+- **Compact tool responses:** `build_unreal_project` returns a one-line summary + up to 40 likely errors + its timestamped `fullLogPath` under `.agent/logs` (not full stdout/stderr). `read_unreal_logs` defaults to the newest bounded tail and exposes whether the source was truncated. The chat plugin retains factual memory such as the latest real user request, observed/modified files, recent tool outcomes, and recent build/test state; it deliberately removes task/route/control/synthesis internals and required-next-tool directives.
 
-Automatic compaction extends a session but cannot shrink an oversized system prompt/tool schema or repair a saturated KV cache. If the proxy cannot restore its hard safety margin, use `write_session_handoff`, start a fresh chat, and resume from `.agent/handoff/latest.md`.
+Automatic compaction extends a session but cannot shrink an oversized system prompt/tool schema or repair a saturated KV cache. If it cannot restore the hard safety margin, start a fresh chat with a short factual handoff containing the exact project, current request, files already changed, and remaining build/test errors.
 
 Details: [LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md), [Troubleshooting.md](docs/Troubleshooting.md).
 
@@ -195,15 +211,8 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 | Model measurement results | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | Version performance history | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
 | 36-case holdout difficulty | [docs/Holdout_Case_Difficulty.md](docs/Holdout_Case_Difficulty.md) |
-| v1.3.0 roadmap | [docs/Roadmap_1_3_0.md](docs/Roadmap_1_3_0.md) |
-| Evaluation claims and guardrails | [docs/Evaluation_Claim_Guardrail.md](docs/Evaluation_Claim_Guardrail.md) |
-| Sonnet 5 gap plan | [docs/Sonnet5_Gap_Plan.md](docs/Sonnet5_Gap_Plan.md) |
-| Eval metrics / telemetry | [docs/Eval_Metrics_Sonnet5_Gap.md](docs/Eval_Metrics_Sonnet5_Gap.md) |
-| Holdout eval guide | [docs/Holdout_Eval_Guide.md](docs/Holdout_Eval_Guide.md) |
 | RAG setup reference | [docs/RAG_Setup.md](docs/RAG_Setup.md) |
-| Mac mini / Mac Studio remote setup | [docs/Mac_Remote_Setup.md](docs/Mac_Remote_Setup.md) |
 | Safe vs agent mode | [docs/Safe_Agent_Mode.md](docs/Safe_Agent_Mode.md) |
-| Live eval checklist | [docs/Live_Eval_Checklist.md](docs/Live_Eval_Checklist.md) |
 | Model profiles | [docs/Model_Profiles.md](docs/Model_Profiles.md) |
 | LM Studio MCP tool discipline | [docs/LMStudio_MCP_Tool_Discipline.md](docs/LMStudio_MCP_Tool_Discipline.md) |
 | Troubleshooting | [docs/Troubleshooting.md](docs/Troubleshooting.md) |
@@ -211,11 +220,11 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 ## Summary
 
-1.3.0 RC3 is a GitHub prerelease (`releaseReady` false). The new `v1.3.0-rc3` tag does not rewrite any earlier RC/Beta tag. Control transitions, recovery, atomic rollback, project proof, installer paths, and release hygiene remain guarded by automated checks; GUI E2E and a new paired live-model score are not claimed.
+1.3.0 RC3 is a GitHub prerelease (`releaseReady` false). The new `v1.3.0-rc3` tag does not rewrite any earlier RC/Beta tag. Legacy Strict transition/recovery behavior, atomic rollback, project proof, installer paths, and release hygiene remain guarded by automated checks; the default Direct entries do not invoke that task workflow. GUI E2E and a new paired live-model score are not claimed.
 
 For narrow UE 5.8 compile-fix work, the current community fine-tuned Qwen 3.6 27B local workflow is strong in live UBT validation (36/36 Pass@K, 36/36 Pass@1, 12/12 multifile Pass@1). Qwen 3.5 9B also has a saved compact-model result (35/36 Pass@K, 33/36 Pass@1). Treat these as internal workflow results, not general model equivalence to Claude or GPT-class systems.
 
-If you want local LLMs for Unreal C++ with less hallucination, search evidence first, then answer or patch. Improve RAG, routing, validation, and failure analysis first; use fine-tuning later only when the workflow is already measured on real project errors.
+If you want local LLMs for Unreal C++ with less hallucination, select the real model, search evidence first, read the exact project source, then answer or patch. Improve RAG, validation, safety boundaries, and failure analysis first; use fine-tuning later only when the workflow is already measured on real project errors.
 
 ---
 

@@ -27,7 +27,7 @@ function Resolve-StackLayout {
             throw "Unreal58-RAG/rag.ps1 not found under portable root: $portable"
         }
         $agentRoot = Join-Path $portable "lmstudio-unreal-agent-mcp"
-        if (-not (Test-Path (Join-Path $agentRoot "src\server.js"))) {
+        if (-not (Test-Path (Join-Path $agentRoot "src\direct-server.js"))) {
             throw "lmstudio-unreal-agent-mcp not found under: $portable"
         }
         return [ordered]@{
@@ -42,7 +42,7 @@ function Resolve-StackLayout {
     $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 
     if ((Test-Path (Join-Path $repoRoot "rag.ps1")) -and
-        (Test-Path (Join-Path $repoRoot "lmstudio-unreal-agent-mcp\src\server.js"))) {
+        (Test-Path (Join-Path $repoRoot "lmstudio-unreal-agent-mcp\src\direct-server.js"))) {
         return [ordered]@{
             Root         = $repoRoot
             RagRoot      = $repoRoot
@@ -55,7 +55,7 @@ function Resolve-StackLayout {
     if ((Split-Path $repoRoot -Leaf) -eq "Unreal58-RAG") {
         $grand = (Resolve-Path (Join-Path $repoRoot "..")).Path
         $agentRoot = Join-Path $grand "lmstudio-unreal-agent-mcp"
-        if (Test-Path (Join-Path $agentRoot "src\server.js")) {
+        if (Test-Path (Join-Path $agentRoot "src\direct-server.js")) {
             return [ordered]@{
                 Root         = $grand
                 RagRoot      = $repoRoot

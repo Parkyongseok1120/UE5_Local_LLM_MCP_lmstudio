@@ -7,11 +7,14 @@ const {
   asciiWindowsFold,
   filesystemPathIdentity,
 } = require("./filesystem-path-identity");
+const {
+  classifyDirectMutationRelativePath,
+  isDeniedMutationPath,
+  isProtectedMutationSegment,
+} = require("./direct-mutation-scope");
 
 const SOURCE_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs"]);
 const PATCH_ONLY_EXTENSIONS = new Set([".h", ".hpp", ".cpp", ".c", ".cc", ".cxx", ".cs", ".ini", ".uproject", ".uplugin"]);
-const DENY_PATH_SEGMENTS = new Set(["saved", "binaries", "intermediate", "deriveddatacache", ".git", ".vs"]);
-const ALLOWED_CREATE_DIR_SEGMENTS = new Set(["source", "content", "config"]);
 
 function isSourceLikeExt(ext) {
   return SOURCE_EXTENSIONS.has(String(ext || "").toLowerCase());
@@ -21,10 +24,7 @@ function isPatchOnlyExistingFile(filePath) {
   return PATCH_ONLY_EXTENSIONS.has(path.extname(String(filePath || "")).toLowerCase());
 }
 
-function isDeniedPath(absPath) {
-  const parts = String(absPath || "").split(/[\\/]/).map((part) => part.toLowerCase());
-  return parts.some((part) => DENY_PATH_SEGMENTS.has(part));
-}
+const isDeniedPath = isDeniedMutationPath;
 
 function isDefaultConfigIni(filePath) {
   const base = path.basename(String(filePath || "")).toLowerCase();
@@ -47,7 +47,7 @@ async function walkSourceFiles(sourceRoot, onFile) {
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (DENY_PATH_SEGMENTS.has(entry.name.toLowerCase())) {
+        if (isProtectedMutationSegment(entry.name)) {
           continue;
         }
         await walk(full);
@@ -138,17 +138,19 @@ function resolveProjectRootFromTarget(targetAbsPath, activeProjectPath) {
   return null;
 }
 
-function isAllowedCreateDir(parentAbsPath, workspaceRoot, activeProjectPath) {
-  const projectRoot = resolveProjectRootFromTarget(parentAbsPath, activeProjectPath);
+function isAllowedCreateTarget(targetAbsPath, activeProjectPath) {
+  const projectRoot = resolveProjectRootFromTarget(targetAbsPath, activeProjectPath);
   if (!projectRoot) {
     return false;
   }
-  const rel = path.relative(projectRoot, parentAbsPath);
+  const rel = path.relative(projectRoot, targetAbsPath);
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
     return false;
   }
-  const top = rel.split(/[\\/]/)[0]?.toLowerCase() || "";
-  return ALLOWED_CREATE_DIR_SEGMENTS.has(top);
+  return Boolean(classifyDirectMutationRelativePath(
+    rel,
+    path.basename(String(activeProjectPath || "")),
+  ));
 }
 
 async function validateWriteTarget({
@@ -209,10 +211,10 @@ async function validateWriteTarget({
 
   if (createDirs) {
     const parent = path.dirname(targetAbsPath);
-    if (!(await fileExists(parent)) && !isAllowedCreateDir(parent, workspaceRoot, activeProjectPath)) {
+    if (!(await fileExists(parent)) && !isAllowedCreateTarget(targetAbsPath, activeProjectPath)) {
       return {
         ok: false,
-        message: "createDirs blocked outside active project Source/Content/Config tree. Create directories under the active project only."
+        message: "createDirs blocked outside the Direct mutation scope (Source, Config, or plugin Source/descriptor)."
       };
     }
   }
@@ -239,9 +241,12 @@ function isDeleteAllowedPath(targetAbsPath, workspaceRoot, activeProjectPath) {
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
     return { ok: false, message: "delete blocked: path is outside active project." };
   }
-  const relLower = rel.replace(/\\/g, "/").toLowerCase();
-  if (!relLower.startsWith("source/")) {
-    return { ok: false, message: "delete blocked: only files under Source/ may be deleted." };
+  const scope = classifyDirectMutationRelativePath(
+    rel,
+    path.basename(String(activeProjectPath || "")),
+  );
+  if (!["project_source", "plugin_source"].includes(scope)) {
+    return { ok: false, message: "delete blocked: only source files under project or plugin Source/ may be deleted." };
   }
   const ext = path.extname(targetAbsPath).toLowerCase();
   if (!SOURCE_EXTENSIONS.has(ext)) {

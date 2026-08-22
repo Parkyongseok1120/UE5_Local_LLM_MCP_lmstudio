@@ -1,1059 +1,112 @@
 #!/usr/bin/env python
-"""Chunk collected documents and build a SQLite FTS RAG index."""
+"""Orchestrate a staged, validated SQLite FTS RAG index build."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import os
-import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+import uuid
 from pathlib import Path
 
-from workspace_paths import (
-    canonical_workspace_root,
-    filesystem_path_identity,
-    find_workspace_root,
-    normalize_locator,
-    resolve_engine_version,
-    resolve_index_dir,
+from rag_build_classification import infer_doc_type, infer_genre, infer_layer
+from rag_build_input import (
+    JsonlInputError,
+    approx_tokens,
+    chunk_text,
+    read_jsonl,
+    resolve_chunk_params,
 )
-
-TOKEN_RE = re.compile(r"\S+")
-
-REPLACE_PROJECT_SOURCES = frozenset({"unreal_project_text", "unreal_symbol"})
-
-
-def resolved_engine_version(workspace_root: Path) -> str:
-    """Prefer an explicit build override, then the active workspace selection."""
-
-    return os.environ.get("UNREAL_ENGINE_VERSION", "").strip() or resolve_engine_version(workspace_root)
-
-
-def replace_project_enabled() -> bool:
-    return os.environ.get("ENABLE_REPLACE_PROJECT", "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def approx_tokens(text: str) -> list[str]:
-    return TOKEN_RE.findall(text)
-
-
-def infer_doc_type(source: str, metadata: dict) -> str:
-    if source == "project_guideline":
-        return "guideline"
-    if source == "game_design_doc":
-        return "game_design"
-    if source == "unreal_symbol":
-        if str(metadata.get("scope") or "") == "project":
-            symbol_kind = str(metadata.get("symbol_kind") or "")
-            if symbol_kind == "module":
-                return "project_module_symbol"
-            return "project_symbol"
-        symbol_kind = str(metadata.get("symbol_kind") or "")
-        if symbol_kind == "module":
-            return "module_symbol"
-        if symbol_kind in {"module_dependency_graph", "include_owner", "include_edge"}:
-            return "module_graph"
-        if symbol_kind in {"class", "struct", "interface", "enum"}:
-            return "type_symbol"
-        if symbol_kind in {"function", "function_definition"}:
-            return "function_symbol"
-        if symbol_kind == "include_map":
-            return "include_symbol"
-        return "symbol"
-    if source == "module_graph":
-        symbol_kind = str(metadata.get("symbol_kind") or "")
-        if symbol_kind == "include_owner":
-            return "include_owner"
-        if symbol_kind == "include_edge":
-            return "include_edge"
-        return "module_graph"
-    if source == "project_profile":
-        return "project_profile"
-    if source == "project_architecture":
-        return "project_architecture"
-    if source == "build_log":
-        return "build_error"
-    if source == "epic_docs":
-        return "official_doc"
-    if source == "unreal_source":
-        return "source_code"
-    if source == "unreal_project_text":
-        return "project_text"
-    if source == "unreal_project_asset_path":
-        return "asset_path"
-    if source == "unreal_blueprint_metadata":
-        return "blueprint_metadata"
-    if source == "unreal_material_metadata":
-        return "material_metadata"
-    if source == "unreal_animation_metadata":
-        return "animation_metadata"
-    if source == "unreal_skeletal_mesh_metadata":
-        return "skeletal_mesh_metadata"
-    if source == "unreal_anim_blueprint_metadata":
-        return "anim_blueprint_metadata"
-    if source == "unreal_anim_montage_metadata":
-        return "anim_montage_metadata"
-    if source == "unreal_sequencer_metadata":
-        return "sequencer_metadata"
-    if source == "unreal_asset_registry":
-        return "asset_registry"
-    if source == "unreal_project_settings":
-        return "project_settings"
-    if source == "unreal_level_metadata":
-        return "level_metadata"
-    if source == "unreal_failure_memory":
-        return "failure_memory"
-    return source or "unknown"
-
-
-def infer_layer(source: str, title: str, metadata: dict) -> str:
-    if source == "epic_docs":
-        return "official_docs"
-    if source == "unreal_source":
-        return "unreal_source"
-    if source == "unreal_project_text":
-        return "project_text"
-    if source == "unreal_project_asset_path":
-        return "project_asset_path"
-    if source == "unreal_blueprint_metadata":
-        return "project_architecture"
-    if source == "unreal_material_metadata":
-        return "project_architecture"
-    if source in {
-        "unreal_animation_metadata",
-        "unreal_skeletal_mesh_metadata",
-        "unreal_anim_blueprint_metadata",
-        "unreal_anim_montage_metadata",
-        "unreal_sequencer_metadata",
-        "unreal_asset_registry",
-        "unreal_project_settings",
-        "unreal_level_metadata",
-    }:
-        return "project_architecture"
-    if source == "unreal_failure_memory":
-        return "failure_memory"
-    if source == "game_design_doc":
-        return "game_design"
-    if source == "unreal_symbol":
-        return "unreal_symbol"
-    if source == "module_graph":
-        symbol_kind = str(metadata.get("symbol_kind") or "")
-        if symbol_kind in {"include_owner", "include_edge"}:
-            return "module_fix"
-        return "module_symbol"
-    if source == "project_profile":
-        return "project_profile"
-    if source == "project_architecture":
-        return "project_architecture"
-    if source == "build_log":
-        return str(metadata.get("error_kind") or "build_log")
-    if source != "project_guideline":
-        return "unknown"
-
-    relative_path = str(metadata.get("relative_path") or "").replace("\\", "/")
-    if relative_path.startswith("Planning/"):
-        return "planning"
-    if relative_path.startswith("Genre_Gameplay/"):
-        return "genre"
-    if relative_path.startswith("Core_Architecture/"):
-        return "core_architecture"
-
-    lowered = f"{title} {relative_path}".lower()
-    if "unreal" in lowered or "damage" in lowered or "implementation" in lowered:
-        return "unreal_domain"
-    if "response" in lowered or "review" in lowered or "process" in lowered:
-        return "core_architecture"
-    return "project_rule"
-
-
-def infer_genre(title: str, metadata: dict) -> str:
-    value = f"{title} {metadata.get('relative_path') or ''}".lower()
-    genre_markers = {
-        "action_combat": ("action combat", "combat", "soulslike", "dmc"),
-        "shooter": ("shooter", "fps", "tps", "hitscan", "projectile"),
-        "battle_royale_extraction": ("battle royale", "extraction"),
-        "platformer": ("platformer",),
-        "puzzle": ("puzzle",),
-        "survival_crafting": ("survival", "crafting"),
-        "roguelike": ("roguelike",),
-        "deckbuilder": ("deckbuilder",),
-        "management_sim": ("management", "simulation"),
-        "strategy_tactics": ("strategy", "tactics"),
-        "stealth": ("stealth",),
-        "horror": ("horror",),
-        "narrative": ("narrative",),
-        "rhythm": ("rhythm",),
-        "racing": ("racing",),
-        "tower_defense": ("tower defense",),
-    }
-    for genre, markers in genre_markers.items():
-        if any(marker in value for marker in markers):
-            return genre
-    return ""
-
-
-def metadata_fields(source: str, title: str, locator: str, metadata: dict) -> dict[str, str]:
-    project = str(metadata.get("project") or "")
-    relative_path = str(metadata.get("relative_path") or "")
-    extension = str(metadata.get("extension") or Path(locator).suffix or "").lower()
-    path_only = "1" if metadata.get("path_only") else "0"
-    return {
-        "project": project,
-        "relative_path": relative_path,
-        "extension": extension,
-        "layer": infer_layer(source, title, metadata),
-        "doc_type": infer_doc_type(source, metadata),
-        "genre": str(metadata.get("genre") or infer_genre(title, metadata)) if source in {"project_guideline", "game_design_doc"} else "",
-        "path_only": path_only,
-        "symbol_name": str(metadata.get("symbol_name") or ""),
-        "symbol_kind": str(metadata.get("symbol_kind") or ""),
-        "module_name": str(metadata.get("module_name") or ""),
-        "error_code": str(metadata.get("error_code") or ""),
-        "error_file": str(metadata.get("error_file") or ""),
-    }
-
-
-def resolve_chunk_params(
-    source: str,
-    metadata: dict,
-    *,
-    default_chunk_tokens: int = 900,
-    default_overlap_tokens: int = 120,
-) -> tuple[int | None, int | None]:
-    if source == "module_graph":
-        return None, None
-    if source == "unreal_symbol":
-        return 300, 60
-    return default_chunk_tokens, default_overlap_tokens
-
-
-def chunk_text(text: str, chunk_tokens: int, overlap_tokens: int) -> list[str]:
-    tokens = approx_tokens(text)
-    if not tokens:
-        return []
-    if len(tokens) <= chunk_tokens:
-        return [" ".join(tokens)]
-
-    chunks: list[str] = []
-    start = 0
-    step = max(1, chunk_tokens - overlap_tokens)
-    while start < len(tokens):
-        end = min(start + chunk_tokens, len(tokens))
-        chunks.append(" ".join(tokens[start:end]))
-        if end == len(tokens):
-            break
-        start += step
-    return chunks
-
-
-def read_jsonl(paths: list[Path]):
-    for path in paths:
-        if not path.exists():
-            print(f"[skip] missing input: {path}")
-            continue
-        with path.open("r", encoding="utf-8") as handle:
-            for line_no, line in enumerate(handle, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    yield path, line_no, json.loads(line)
-                except json.JSONDecodeError as exc:
-                    print(f"[skip] {path}:{line_no} ({exc})")
-
-
-def create_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        drop table if exists chunks;
-        drop table if exists chunks_fts;
-        drop table if exists module_edges;
-        drop table if exists include_owners;
-
-        create table chunks (
-            chunk_id text primary key,
-            document_id text not null,
-            source text not null,
-            title text not null,
-            locator text not null,
-            project text not null default '',
-            relative_path text not null default '',
-            extension text not null default '',
-            layer text not null default '',
-            doc_type text not null default '',
-            genre text not null default '',
-            symbol_name text not null default '',
-            symbol_kind text not null default '',
-            module_name text not null default '',
-            error_code text not null default '',
-            error_file text not null default '',
-            path_only integer not null default 0,
-            chunk_index integer not null,
-            text text not null,
-            metadata_json text not null
-        );
-
-        create virtual table chunks_fts using fts5(
-            title,
-            locator,
-            symbol_name,
-            symbol_kind,
-            module_name,
-            error_code,
-            error_file,
-            text,
-            content='chunks',
-            content_rowid='rowid',
-            tokenize='unicode61'
-        );
-
-        create trigger chunks_ai after insert on chunks begin
-            insert into chunks_fts(rowid, title, locator, symbol_name, symbol_kind, module_name, error_code, error_file, text)
-            values (new.rowid, new.title, new.locator, new.symbol_name, new.symbol_kind, new.module_name, new.error_code, new.error_file, new.text);
-        end;
-
-        create trigger chunks_ad after delete on chunks begin
-            insert into chunks_fts(chunks_fts, rowid, title, locator, symbol_name, symbol_kind, module_name, error_code, error_file, text)
-            values('delete', old.rowid, old.title, old.locator, old.symbol_name, old.symbol_kind, old.module_name, old.error_code, old.error_file, old.text);
-        end;
-
-        create trigger chunks_au after update on chunks begin
-            insert into chunks_fts(chunks_fts, rowid, title, locator, symbol_name, symbol_kind, module_name, error_code, error_file, text)
-            values('delete', old.rowid, old.title, old.locator, old.symbol_name, old.symbol_kind, old.module_name, old.error_code, old.error_file, old.text);
-            insert into chunks_fts(rowid, title, locator, symbol_name, symbol_kind, module_name, error_code, error_file, text)
-            values (new.rowid, new.title, new.locator, new.symbol_name, new.symbol_kind, new.module_name, new.error_code, new.error_file, new.text);
-        end;
-
-        create index chunks_source_idx on chunks(source);
-        create index chunks_project_idx on chunks(project);
-        create index chunks_layer_idx on chunks(layer);
-        create index chunks_doc_type_idx on chunks(doc_type);
-        create index chunks_genre_idx on chunks(genre);
-        create index chunks_extension_idx on chunks(extension);
-        create index chunks_symbol_name_idx on chunks(symbol_name);
-        create index chunks_symbol_kind_idx on chunks(symbol_kind);
-        create index chunks_module_name_idx on chunks(module_name);
-        create index chunks_error_code_idx on chunks(error_code);
-        create index chunks_error_file_idx on chunks(error_file);
-        create index chunks_source_title_idx on chunks(source, title);
-        create index chunks_title_idx on chunks(title);
-
-        create table module_edges (
-            edge_id text primary key,
-            document_id text not null,
-            edge_kind text not null default '',
-            consumer_module text not null default '',
-            owner_module text not null default '',
-            include_path text not null default '',
-            consumer_file text not null default '',
-            dependency_visibility text not null default '',
-            dependency_status text not null default '',
-            title text not null default '',
-            text text not null default '',
-            metadata_json text not null
-        );
-
-        create table include_owners (
-            owner_id text primary key,
-            document_id text not null,
-            include_path text not null default '',
-            symbol_name text not null default '',
-            module_name text not null default '',
-            owner_modules_json text not null default '[]',
-            title text not null default '',
-            text text not null default '',
-            metadata_json text not null
-        );
-
-        create index module_edges_consumer_idx on module_edges(consumer_module);
-        create index module_edges_include_idx on module_edges(include_path);
-        create index module_edges_owner_idx on module_edges(owner_module);
-        create index module_edges_kind_idx on module_edges(edge_kind);
-        create index include_owners_path_idx on include_owners(include_path);
-        create index include_owners_symbol_idx on include_owners(symbol_name);
-        """
-    )
-
-
-def ingest_module_graph(conn: sqlite3.Connection, doc: dict) -> None:
-    metadata = doc.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    document_id = str(doc.get("id") or "")
-    title = str(doc.get("title") or document_id or "Untitled")
-    text = str(doc.get("text") or "").strip()
-    symbol_kind = str(metadata.get("symbol_kind") or "")
-    metadata_json = json.dumps(metadata, ensure_ascii=False)
-
-    if symbol_kind == "include_owner":
-        include_path = str(metadata.get("include_path") or metadata.get("symbol_name") or "")
-        owner_modules = metadata.get("owner_modules") or []
-        conn.execute(
-            """
-            insert or replace into include_owners(
-                owner_id,
-                document_id,
-                include_path,
-                symbol_name,
-                module_name,
-                owner_modules_json,
-                title,
-                text,
-                metadata_json
-            )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                document_id or stable_module_graph_id(symbol_kind, include_path, title),
-                document_id,
-                include_path,
-                str(metadata.get("symbol_name") or include_path),
-                str(metadata.get("module_name") or ""),
-                json.dumps(owner_modules, ensure_ascii=False),
-                title,
-                text,
-                metadata_json,
-            ),
-        )
-        return
-
-    if symbol_kind == "include_edge":
-        owner_modules = [str(value) for value in metadata.get("owner_modules") or [] if value]
-        primary_owner = owner_modules[0] if owner_modules else ""
-        conn.execute(
-            """
-            insert or replace into module_edges(
-                edge_id,
-                document_id,
-                edge_kind,
-                consumer_module,
-                owner_module,
-                include_path,
-                consumer_file,
-                dependency_visibility,
-                dependency_status,
-                title,
-                text,
-                metadata_json
-            )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                document_id or stable_module_graph_id(symbol_kind, str(metadata.get("include_path") or ""), title),
-                document_id,
-                symbol_kind,
-                str(metadata.get("consumer_module") or metadata.get("module_name") or ""),
-                primary_owner,
-                str(metadata.get("include_path") or metadata.get("symbol_name") or ""),
-                str(metadata.get("consumer_file") or ""),
-                str(metadata.get("dependency_visibility") or ""),
-                str(metadata.get("dependency_status") or ""),
-                title,
-                text,
-                metadata_json,
-            ),
-        )
-        return
-
-    if symbol_kind == "module_dependency_graph":
-        module_name = str(metadata.get("module_name") or metadata.get("symbol_name") or "")
-        conn.execute(
-            """
-            insert or replace into module_edges(
-                edge_id,
-                document_id,
-                edge_kind,
-                consumer_module,
-                owner_module,
-                include_path,
-                consumer_file,
-                dependency_visibility,
-                dependency_status,
-                title,
-                text,
-                metadata_json
-            )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                document_id or stable_module_graph_id(symbol_kind, module_name, title),
-                document_id,
-                symbol_kind,
-                module_name,
-                "",
-                "",
-                "",
-                "",
-                "",
-                title,
-                text,
-                metadata_json,
-            ),
-        )
-        return
-
-    conn.execute(
-        """
-        insert or replace into module_edges(
-            edge_id,
-            document_id,
-            edge_kind,
-            consumer_module,
-            owner_module,
-            include_path,
-            consumer_file,
-            dependency_visibility,
-            dependency_status,
-            title,
-            text,
-            metadata_json
-        )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            document_id or stable_module_graph_id(symbol_kind, title, text[:80]),
-            document_id,
-            symbol_kind or "module_graph",
-            str(metadata.get("module_name") or ""),
-            "",
-            str(metadata.get("include_path") or ""),
-            str(metadata.get("consumer_file") or ""),
-            str(metadata.get("dependency_visibility") or ""),
-            str(metadata.get("dependency_status") or ""),
-            title,
-            text,
-            metadata_json,
-        ),
-    )
-
-
-def stable_module_graph_id(symbol_kind: str, key: str, title: str) -> str:
-    return hashlib.sha1(f"{symbol_kind}:{key}:{title}".encode("utf-8")).hexdigest()
-
-
-def _path_has_project_segment(
-    value: object,
-    project_name: str,
-    host_platform: str | None = None,
-) -> bool:
-    candidate = filesystem_path_identity(
-        value,
-        host_platform,
-        trim_outer_slashes=True,
-        strip_project_uri=False,
-    )
-    project = filesystem_path_identity(
-        project_name,
-        host_platform,
-        trim_outer_slashes=True,
-        strip_project_uri=False,
-    )
-    if not candidate or not project:
-        return False
-    return f"/{project}/" in f"/{candidate}/"
-
-
-def doc_matches_replace_project(
-    source: str,
-    metadata: dict,
-    project_name: str,
-    *,
-    host_platform: str | None = None,
-) -> bool:
-    if source not in REPLACE_PROJECT_SOURCES:
-        return False
-    project = str(metadata.get("project") or "").strip()
-    if project:
-        return filesystem_path_identity(
-            project,
-            host_platform,
-            trim_outer_slashes=True,
-            strip_project_uri=False,
-        ) == filesystem_path_identity(
-            project_name,
-            host_platform,
-            trim_outer_slashes=True,
-            strip_project_uri=False,
-        )
-    relative_path = str(metadata.get("relative_path") or metadata.get("path") or "").replace("\\", "/")
-    if _path_has_project_segment(relative_path, project_name, host_platform):
-        return True
-    root = str(metadata.get("root") or "")
-    return _path_has_project_segment(root, project_name, host_platform)
-
-
-def delete_project_chunks(conn: sqlite3.Connection, project_name: str) -> int:
-    placeholders = ",".join("?" for _ in REPLACE_PROJECT_SOURCES)
-    cursor = conn.execute(
-        f"""
-        delete from chunks
-        where project = ?
-          and source in ({placeholders})
-        """,
-        (project_name, *sorted(REPLACE_PROJECT_SOURCES)),
-    )
-    return int(cursor.rowcount)
-
-
-def rebuild_fts_index(conn: sqlite3.Connection) -> None:
-    conn.execute("insert into chunks_fts(chunks_fts) values('rebuild')")
-
-
-def _ingest_document_chunks(
-    conn: sqlite3.Connection,
-    chunks_file,
-    doc: dict,
-    *,
-    workspace_root: Path,
-    chunk_tokens: int,
-    overlap_tokens: int,
-    document_id_counts: dict[str, int],
-    insert_batch: list[tuple],
-    batch_size: int = 500,
-) -> int:
-    source = str(doc.get("source") or "unknown")
-    metadata = doc.get("metadata") or {}
-    if isinstance(metadata, dict):
-        metadata = dict(metadata)
-    else:
-        metadata = {}
-
-    if source == "module_graph":
-        ingest_module_graph(conn, doc)
-        return 0
-
-    text = str(doc.get("text") or "").strip()
-    if not text:
-        return 0
-
-    base_document_id = str(doc.get("id") or "")
-    document_id_count = document_id_counts.get(base_document_id, 0)
-    document_id_counts[base_document_id] = document_id_count + 1
-    document_id = base_document_id if document_id_count == 0 else f"{base_document_id}:{document_id_count}"
-    title = str(doc.get("title") or document_id or "Untitled")
-    locator = normalize_locator(str(doc.get("url") or doc.get("path") or document_id), workspace_root)
-    for key in ("root", "relative_path", "path", "source_path"):
-        if metadata.get(key):
-            metadata[key] = normalize_locator(str(metadata[key]), workspace_root)
-    fields = metadata_fields(source, title, locator, metadata)
-    resolved_chunk_tokens, resolved_overlap_tokens = resolve_chunk_params(
-        source,
-        metadata,
-        default_chunk_tokens=chunk_tokens,
-        default_overlap_tokens=overlap_tokens,
-    )
-    if resolved_chunk_tokens is None or resolved_overlap_tokens is None:
-        return 0
-
-    added = 0
-    for index, chunk in enumerate(chunk_text(text, resolved_chunk_tokens, resolved_overlap_tokens)):
-        chunk_id = f"{document_id}:{index}"
-        item = {
-            "chunk_id": chunk_id,
-            "document_id": document_id,
-            "source": source,
-            "title": title,
-            "locator": locator,
-            "chunk_index": index,
-            "text": chunk,
-            "metadata": metadata,
-            **fields,
-        }
-        chunks_file.write(json.dumps(item, ensure_ascii=False) + "\n")
-        insert_batch.append(
-            (
-                chunk_id,
-                document_id,
-                source,
-                title,
-                locator,
-                fields["project"],
-                fields["relative_path"],
-                fields["extension"],
-                fields["layer"],
-                fields["doc_type"],
-                fields["genre"],
-                fields["symbol_name"],
-                fields["symbol_kind"],
-                fields["module_name"],
-                fields["error_code"],
-                fields["error_file"],
-                int(fields["path_only"]),
-                index,
-                chunk,
-                json.dumps(metadata, ensure_ascii=False),
-            )
-        )
-        if len(insert_batch) >= batch_size:
-            conn.executemany(
-                """
-                insert into chunks(
-                    chunk_id, document_id, source, title, locator, project, relative_path, extension,
-                    layer, doc_type, genre, symbol_name, symbol_kind, module_name, error_code, error_file,
-                    path_only, chunk_index, text, metadata_json
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                insert_batch,
-            )
-            insert_batch.clear()
-        added += 1
-    return added
-
-
-def rewrite_chunks_jsonl(
-    chunks_path: Path,
-    *,
-    project_name: str,
-    new_lines: list[str],
-) -> None:
-    kept: list[str] = []
-    if chunks_path.exists():
-        for line in chunks_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError:
-                kept.append(line)
-                continue
-            source = str(item.get("source") or "")
-            project = str(item.get("project") or "")
-            if source in REPLACE_PROJECT_SOURCES and project == project_name:
-                continue
-            kept.append(line)
-    chunks_path.write_text("\n".join(kept + new_lines) + ("\n" if kept or new_lines else ""), encoding="utf-8")
-
-
-def build_replace_project(args: argparse.Namespace) -> None:
-    project_name = str(args.replace_project or "").strip()
-    if not project_name:
-        raise ValueError("replace-project name is required")
-    if not replace_project_enabled():
-        print(
-            "warning: --replace-project ignored because ENABLE_REPLACE_PROJECT is not set; "
-            "falling back to full rebuild",
-            flush=True,
-        )
-        build(args)
-        return
-
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    chunks_path = out_dir / "chunks.jsonl"
-    sqlite_path = out_dir / "rag.sqlite"
-    workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else find_workspace_root()
-    input_paths = [Path(value) for value in args.input]
-
-    if not sqlite_path.exists():
-        print("warning: index missing; falling back to full rebuild", flush=True)
-        build(args)
-        return
-
-    conn: sqlite3.Connection | None = None
-    try:
-        conn = sqlite3.connect(sqlite_path)
-        deleted = delete_project_chunks(conn, project_name)
-
-        new_jsonl_lines: list[str] = []
-        total_chunks = 0
-        document_id_counts: dict[str, int] = {}
-        insert_batch: list[tuple] = []
-
-        class _LineWriter:
-            def write(self, line: str) -> None:
-                new_jsonl_lines.append(line.rstrip("\n"))
-
-        writer = _LineWriter()
-        for _, _, doc in read_jsonl(input_paths):
-            source = str(doc.get("source") or "unknown")
-            metadata = doc.get("metadata") or {}
-            if not isinstance(metadata, dict):
-                metadata = {}
-            if not doc_matches_replace_project(source, metadata, project_name):
-                continue
-            total_chunks += _ingest_document_chunks(
-                conn,
-                writer,
-                doc,
-                workspace_root=workspace_root,
-                chunk_tokens=args.chunk_tokens,
-                overlap_tokens=args.overlap_tokens,
-                document_id_counts=document_id_counts,
-                insert_batch=insert_batch,
-            )
-
-        if insert_batch:
-            conn.executemany(
-                """
-                insert into chunks(
-                    chunk_id, document_id, source, title, locator, project, relative_path, extension,
-                    layer, doc_type, genre, symbol_name, symbol_kind, module_name, error_code, error_file,
-                    path_only, chunk_index, text, metadata_json
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                insert_batch,
-            )
-
-        if total_chunks <= 0:
-            raise RuntimeError(
-                f"replace-project produced zero searchable chunks for {project_name}; "
-                "existing project chunks were preserved"
-            )
-        rebuild_fts_index(conn)
-        conn.execute("select count(*) from chunks_fts").fetchone()
-        conn.commit()
-        conn.close()
-        conn = None
-        rewrite_chunks_jsonl(chunks_path, project_name=project_name, new_lines=new_jsonl_lines)
-
-        manifest_path = out_dir / "build_manifest.json"
-        manifest = {}
-        if manifest_path.exists():
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                manifest = {}
-        manifest.update(
-            {
-                "workspaceRoot": str(canonical_workspace_root(workspace_root)),
-                "engineVersion": resolved_engine_version(workspace_root),
-                "builtAt": datetime.now(timezone.utc).isoformat(),
-                "replaceProject": project_name,
-                "replacedChunkDeletes": deleted,
-                "replacedChunkInserts": total_chunks,
-            }
-        )
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"done: replace-project {project_name} deleted={deleted} inserted={total_chunks}")
-        print(f"sqlite: {sqlite_path}")
-    except sqlite3.DatabaseError as exc:
-        if conn is not None:
-            conn.rollback()
-            conn.close()
-            conn = None
-        print(f"warning: incremental replace-project failed ({exc}); falling back to full rebuild", flush=True)
-        build(args)
-    except BaseException:
-        if conn is not None:
-            conn.rollback()
-            conn.close()
-        raise
+from rag_build_metadata import metadata_fields
+from rag_build_outputs import (
+    BuildOutputPaths,
+    promote_outputs,
+    resolved_engine_version,
+    write_manifest,
+)
+from rag_build_schema import create_schema
+from rag_build_writer import ChunkIndexWriter
+from workspace_config import find_workspace_root
+from workspace_index_paths import resolve_index_dir
+
+__all__ = [
+    "JsonlInputError",
+    "apply_compact_profile_defaults",
+    "approx_tokens",
+    "build",
+    "chunk_text",
+    "create_schema",
+    "infer_doc_type",
+    "infer_genre",
+    "infer_layer",
+    "metadata_fields",
+    "parse_args",
+    "read_jsonl",
+    "resolve_chunk_params",
+    "resolved_engine_version",
+]
 
 
 def build(args: argparse.Namespace) -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    chunks_path = out_dir / "chunks.jsonl"
-    sqlite_path = out_dir / "rag.sqlite"
-    manifest_path = out_dir / "build_manifest.json"
-    build_id = f"{os.getpid()}"
-    chunks_staging_path = out_dir / f"chunks.building.{build_id}.jsonl"
-    sqlite_staging_path = out_dir / f"rag.building.{build_id}.sqlite"
-    manifest_staging_path = out_dir / f"build_manifest.building.{build_id}.json"
-    workspace_root = Path(args.workspace_root).resolve() if args.workspace_root else find_workspace_root()
-
+    workspace_root = (
+        Path(args.workspace_root).resolve()
+        if args.workspace_root
+        else find_workspace_root()
+    )
     input_paths = [Path(value) for value in args.input]
-
+    generation_id = uuid.uuid4().hex
+    paths = BuildOutputPaths.create(out_dir, f"{os.getpid()}-{generation_id}")
     conn: sqlite3.Connection | None = None
-
-    total_chunks = 0
-    module_edge_count = 0
-    include_owner_count = 0
-    document_id_counts: dict[str, int] = {}
-    _INSERT_BATCH_SIZE = 500
-    _insert_batch: list[tuple] = []
-
-    def _flush_batch() -> None:
-        if not _insert_batch:
-            return
-        if conn is None:
-            raise RuntimeError("RAG index connection is not available")
-        conn.executemany(
-            """
-            insert into chunks(
-                chunk_id, document_id, source, title, locator, project, relative_path, extension,
-                layer, doc_type, genre, symbol_name, symbol_kind, module_name, error_code, error_file,
-                path_only, chunk_index, text, metadata_json
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            _insert_batch,
-        )
-        _insert_batch.clear()
-
+    writer: ChunkIndexWriter | None = None
     try:
-        conn = sqlite3.connect(sqlite_staging_path)
+        conn = sqlite3.connect(paths.staged_sqlite)
         create_schema(conn)
-        with chunks_staging_path.open("w", encoding="utf-8") as chunks_file:
-            for _, _, doc in read_jsonl(input_paths):
-                source = str(doc.get("source") or "unknown")
-                metadata = doc.get("metadata") or {}
-                if isinstance(metadata, dict):
-                    metadata = dict(metadata)
-                else:
-                    metadata = {}
-
-                if source == "module_graph":
-                    ingest_module_graph(conn, doc)
-                    symbol_kind = str(metadata.get("symbol_kind") or "")
-                    if symbol_kind == "include_owner":
-                        include_owner_count += 1
-                    else:
-                        module_edge_count += 1
-                    continue
-
-                text = str(doc.get("text") or "").strip()
-                if not text:
-                    continue
-
-                base_document_id = str(doc.get("id") or "")
-                document_id_count = document_id_counts.get(base_document_id, 0)
-                document_id_counts[base_document_id] = document_id_count + 1
-                document_id = (
-                    base_document_id
-                    if document_id_count == 0
-                    else f"{base_document_id}:{document_id_count}"
-                )
-                title = str(doc.get("title") or document_id or "Untitled")
-                locator = normalize_locator(
-                    str(doc.get("url") or doc.get("path") or document_id),
-                    workspace_root,
-                )
-                for key in ("root", "relative_path", "path", "source_path"):
-                    if metadata.get(key):
-                        metadata[key] = normalize_locator(str(metadata[key]), workspace_root)
-                fields = metadata_fields(source, title, locator, metadata)
-                chunk_tokens, overlap_tokens = resolve_chunk_params(
-                    source,
-                    metadata,
-                    default_chunk_tokens=args.chunk_tokens,
-                    default_overlap_tokens=args.overlap_tokens,
-                )
-                if chunk_tokens is None or overlap_tokens is None:
-                    continue
-
-                for index, chunk in enumerate(chunk_text(text, chunk_tokens, overlap_tokens)):
-                    chunk_id = f"{document_id}:{index}"
-                    item = {
-                        "chunk_id": chunk_id,
-                        "document_id": document_id,
-                        "source": source,
-                        "title": title,
-                        "locator": locator,
-                        "chunk_index": index,
-                        "text": chunk,
-                        "metadata": metadata,
-                        **fields,
-                    }
-                    chunks_file.write(json.dumps(item, ensure_ascii=False) + "\n")
-                    _insert_batch.append(
-                        (
-                            chunk_id,
-                            document_id,
-                            source,
-                            title,
-                            locator,
-                            fields["project"],
-                            fields["relative_path"],
-                            fields["extension"],
-                            fields["layer"],
-                            fields["doc_type"],
-                            fields["genre"],
-                            fields["symbol_name"],
-                            fields["symbol_kind"],
-                            fields["module_name"],
-                            fields["error_code"],
-                            fields["error_file"],
-                            int(fields["path_only"]),
-                            index,
-                            chunk,
-                            json.dumps(metadata, ensure_ascii=False),
-                        )
-                    )
-                    if len(_insert_batch) >= _INSERT_BATCH_SIZE:
-                        _flush_batch()
-                    total_chunks += 1
-
-        _flush_batch()
-        if total_chunks <= 0:
-            raise RuntimeError(
-                "RAG build produced zero searchable chunks; existing index was preserved"
+        conn.execute(
+            "insert into index_meta(key, value) values ('generation_id', ?)",
+            (generation_id,),
+        )
+        with paths.staged_chunks.open("w", encoding="utf-8") as chunks_file:
+            writer = ChunkIndexWriter(
+                conn,
+                chunks_file,
+                workspace_root,
+                chunk_tokens=args.chunk_tokens,
+                overlap_tokens=args.overlap_tokens,
             )
+            for _, _, document in read_jsonl(input_paths):
+                writer.add(document)
+            writer.finish()
         conn.commit()
-        stored_chunks = int(conn.execute("select count(*) from chunks").fetchone()[0])
-        if stored_chunks != total_chunks:
-            raise RuntimeError(
-                f"RAG build validation failed: expected {total_chunks} chunks, stored {stored_chunks}"
-            )
         conn.close()
         conn = None
     except BaseException:
         if conn is not None:
             conn.rollback()
             conn.close()
-        for staging_path in (sqlite_staging_path, chunks_staging_path):
-            try:
-                staging_path.unlink()
-            except OSError:
-                pass
+        paths.discard_staged()
         raise
 
-    manifest = {
-        "workspaceRoot": str(canonical_workspace_root(workspace_root)),
-        "engineVersion": resolved_engine_version(workspace_root),
-        "builtAt": datetime.now(timezone.utc).isoformat(),
-        "chunkCount": total_chunks,
-        "moduleEdgeCount": module_edge_count,
-        "includeOwnerCount": include_owner_count,
-        "inputs": [
-            {
-                "path": str(path.resolve()),
-                "exists": path.exists(),
-                "sizeBytes": path.stat().st_size if path.exists() else 0,
-                "modifiedAt": datetime.fromtimestamp(
-                    path.stat().st_mtime, timezone.utc
-                ).isoformat()
-                if path.exists()
-                else None,
-            }
-            for path in input_paths
-        ],
-        "outputs": {
-            "chunksJsonl": str(chunks_path.resolve()),
-            "sqlite": str(sqlite_path.resolve()),
-        },
-    }
-    manifest_staging_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    if writer is None:  # pragma: no cover - construction precedes all input work
+        raise RuntimeError("RAG build writer was not initialized")
+    write_manifest(
+        paths,
+        args=args,
+        workspace_root=workspace_root,
+        generation_id=generation_id,
+        input_paths=input_paths,
+        total_chunks=writer.total_chunks,
+        engine_evidence_chunks=writer.engine_evidence_chunks,
+        project_evidence_chunks=writer.project_evidence_chunks,
     )
+    promote_outputs(paths, replace=os.replace)
 
-    try:
-        os.replace(sqlite_staging_path, sqlite_path)
-    except OSError as exc:
-        raise RuntimeError(
-            "RAG build completed but could not atomically promote its validated index; "
-            f"the existing index was left in place. Staging index: {sqlite_staging_path}"
-        ) from exc
-
-    try:
-        os.replace(chunks_staging_path, chunks_path)
-        os.replace(manifest_staging_path, manifest_path)
-    except OSError as exc:
-        raise RuntimeError(
-            "The validated RAG index was promoted, but a companion output could not be "
-            "promoted. Inspect the remaining staging chunks or manifest before rebuilding."
-        ) from exc
-
-    print(f"done: wrote {total_chunks} chunks")
-    print(f"module graph side tables: {module_edge_count} module_edges, {include_owner_count} include_owners")
+    print(f"done: wrote {writer.total_chunks} chunks")
     print(f"workspace: {workspace_root}")
-    print(f"chunks: {chunks_path}")
-    print(f"sqlite: {sqlite_path}")
+    print(f"chunks: {paths.chunks}")
+    print(f"sqlite: {paths.sqlite}")
 
 
 def _explicit_option_names(argv: list[str]) -> set[str]:
@@ -1070,30 +123,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--input", nargs="+", required=True)
     parser.add_argument("--out-dir", default="", help="Output directory (default: configured RAG data directory).")
     parser.add_argument("--workspace-root", default="", help="Normalize legacy locators to this workspace root.")
+    parser.add_argument("--engine-version", default="", help="Exact engine version provenance for this generation.")
+    parser.add_argument("--engine-association", default="", help="Exact project EngineAssociation provenance, when applicable.")
+    parser.add_argument(
+        "--indexing-tier",
+        choices=("lite", "standard", "full"),
+        default="",
+        help="Indexing tier provenance for this generation.",
+    )
     parser.add_argument("--chunk-tokens", type=int, default=900)
     parser.add_argument("--overlap-tokens", type=int, default=120)
     parser.add_argument(
         "--compact-profile-scale",
         type=float,
         default=0.80,
-        help="Scale applied by --compact-profile when chunk/overlap sizes are not explicitly set.",
+        help="Scale used by --compact-profile when chunk sizes were not explicit.",
     )
     parser.add_argument(
         "--compact-profile",
         action="store_true",
-        help=(
-            "Reduce chunk size to 80%% of default for compact (9B-class) model profiles. "
-            "Produces more, smaller chunks that fit within tight context windows. "
-            "Equivalent to --chunk-tokens 720 --overlap-tokens 96 unless overridden."
-        ),
-    )
-    parser.add_argument(
-        "--replace-project",
-        default="",
-        help=(
-            "Replace chunks for one project in unreal_project_text/unreal_symbol only. "
-            "Requires ENABLE_REPLACE_PROJECT=1; falls back to full rebuild on FTS failure or when disabled."
-        ),
+        help="Scale default chunks to 720/96 for context-constrained local models.",
     )
     args = parser.parse_args(raw_args)
     if not args.out_dir:
@@ -1103,7 +152,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def apply_compact_profile_defaults(args: argparse.Namespace) -> None:
-    """Scale down chunk/overlap tokens for compact model profiles unless explicitly set."""
+    """Scale chunk defaults without overriding explicit caller choices."""
     if not getattr(args, "compact_profile", False):
         return
     explicit = set(getattr(args, "_explicit_args", set()))
@@ -1114,13 +163,13 @@ def apply_compact_profile_defaults(args: argparse.Namespace) -> None:
         args.overlap_tokens = max(0, int(args.overlap_tokens * scale))
     if args.overlap_tokens >= args.chunk_tokens:
         args.overlap_tokens = max(0, args.chunk_tokens // 8)
-    print(f"[compact-profile] chunk_tokens={args.chunk_tokens} overlap_tokens={args.overlap_tokens}")
+    print(
+        f"[compact-profile] chunk_tokens={args.chunk_tokens} "
+        f"overlap_tokens={args.overlap_tokens}"
+    )
 
 
 if __name__ == "__main__":
     _args = parse_args()
     apply_compact_profile_defaults(_args)
-    if str(_args.replace_project or "").strip():
-        build_replace_project(_args)
-    else:
-        build(_args)
+    build(_args)

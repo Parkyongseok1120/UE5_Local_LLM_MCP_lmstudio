@@ -38,6 +38,34 @@ def test_cli_missing_source_returns_exit_code_2(tmp_path: Path) -> None:
     assert result.returncode == 2
 
 
+def test_cli_rejects_retired_module_graph_option(tmp_path: Path) -> None:
+    project = tmp_path / "Demo"
+    (project / "Source" / "Demo").mkdir(parents=True)
+    retired_graph = tmp_path / "raw_module_graph.jsonl"
+    retired_graph.write_text("{}\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "validate_project_sources.py"),
+            "--project-root",
+            str(project),
+            "--module-graph",
+            str(retired_graph),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "unrecognized arguments: --module-graph" in result.stderr
+    source = (SCRIPTS / "validate_project_sources.py").read_text(encoding="utf-8")
+    assert "raw_module_graph.jsonl" not in source
+    assert "resolve_index_dir" not in source
+
+
 def test_cli_scans_plugin_only_project_without_game_source(tmp_path: Path) -> None:
     project = tmp_path / "ContentProject"
     project.mkdir()

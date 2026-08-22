@@ -222,6 +222,63 @@ test("resolveBuildPlan keeps relative project and config roots workspace-relativ
   }
 });
 
+test("association-free build prefers workspace default engine before shared fallback", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-default-engine-precedence-"));
+  const workspaceRoot = path.join(root, "workspace");
+  const projectPath = createProject(workspaceRoot, "AssociationFreeGame", "");
+  const localEngine = createEngine(root, "WorkspaceEngine");
+  const sharedEngine = createEngine(root, "SharedEngine");
+  const sharedConfig = path.join(root, "unreal-workspace.json");
+  const localConfig = path.join(root, "agent-mcp.json");
+  fs.writeFileSync(
+    sharedConfig,
+    JSON.stringify({ defaultEngineRoot: sharedEngine }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    localConfig,
+    JSON.stringify({ defaultEngineRoot: localEngine }),
+    "utf8",
+  );
+
+  const previousSharedConfig = process.env.SHARED_UNREAL_CONFIG;
+  const previousEngineRoot = process.env.UNREAL_ENGINE_ROOT;
+  const previousEngineAssociation = process.env.UNREAL_ENGINE_ROOT_ASSOCIATION;
+  process.env.SHARED_UNREAL_CONFIG = sharedConfig;
+  delete process.env.UNREAL_ENGINE_ROOT;
+  delete process.env.UNREAL_ENGINE_ROOT_ASSOCIATION;
+  try {
+    const localResult = await resolveBuildPlan(workspaceRoot, localConfig, {
+      project: projectPath,
+    });
+    assert.strictEqual(localResult.ok, true, JSON.stringify(localResult));
+    assert.strictEqual(localResult.build.engineAssociation, null);
+    assert.strictEqual(localResult.build.engineRoot, path.resolve(localEngine));
+    assert.notStrictEqual(localResult.build.engineRoot, path.resolve(sharedEngine));
+    assert.strictEqual(localResult.build.engineSource, "config.defaultEngineRoot");
+
+    fs.writeFileSync(localConfig, "{}", "utf8");
+    const sharedFallback = await resolveBuildPlan(workspaceRoot, localConfig, {
+      project: projectPath,
+    });
+    assert.strictEqual(sharedFallback.ok, true, JSON.stringify(sharedFallback));
+    assert.strictEqual(sharedFallback.build.engineAssociation, null);
+    assert.strictEqual(sharedFallback.build.engineRoot, path.resolve(sharedEngine));
+    assert.strictEqual(sharedFallback.build.engineSource, "config.defaultEngineRoot");
+  } finally {
+    if (previousSharedConfig === undefined) delete process.env.SHARED_UNREAL_CONFIG;
+    else process.env.SHARED_UNREAL_CONFIG = previousSharedConfig;
+    if (previousEngineRoot === undefined) delete process.env.UNREAL_ENGINE_ROOT;
+    else process.env.UNREAL_ENGINE_ROOT = previousEngineRoot;
+    if (previousEngineAssociation === undefined) {
+      delete process.env.UNREAL_ENGINE_ROOT_ASSOCIATION;
+    } else {
+      process.env.UNREAL_ENGINE_ROOT_ASSOCIATION = previousEngineAssociation;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("resolveBuildPlan never substitutes discovery for a missing explicit project path", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-missing-explicit-build-"));
   const workspaceRoot = path.join(root, "workspace");
