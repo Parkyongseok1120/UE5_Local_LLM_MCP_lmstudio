@@ -88,7 +88,7 @@ async function applyDirectEditBundle(bundle, resolvePath, options = {}) {
           rollbackIncomplete: false,
         };
       }
-      acquired.push(target.absolutePath);
+      acquired.push(lock);
     }
 
     try {
@@ -149,7 +149,7 @@ async function applyDirectEditBundle(bundle, resolvePath, options = {}) {
       };
     }
   } finally {
-    for (const absolutePath of acquired.reverse()) releasePathLock(absolutePath);
+    for (const lock of acquired.reverse()) releasePathLock(lock);
   }
 }
 

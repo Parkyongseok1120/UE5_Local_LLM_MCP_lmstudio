@@ -5,7 +5,7 @@ This repository uses **independent version numbers** per component. They are not
 | Component | Version | Location | Meaning |
 |-----------|---------|----------|---------|
 | **Product** | 1.3.0 | [`installer/manifest.json`](../installer/manifest.json), [`README.md`](../README.md) | User-facing release label and installable product metadata |
-| **Node agent MCP** | 0.3.19 | [`lmstudio-unreal-agent-mcp/package.json`](../lmstudio-unreal-agent-mcp/package.json) | npm package semver for the agent server |
+| **Node agent MCP** | 0.3.20 | [`lmstudio-unreal-agent-mcp/package.json`](../lmstudio-unreal-agent-mcp/package.json) | npm package semver for the agent server |
 | **Context compactor plugin** | 0.4.48 / revision 95 | [`lmstudio-context-compactor-plugin/package.json`](../lmstudio-context-compactor-plugin/package.json), [`manifest.json`](../lmstudio-context-compactor-plugin/manifest.json) | LM Studio generator plugin behavior, continuity memory, and installed revision |
 | **Portable manifest** | 2.1.9 | [`installer/manifest.json`](../installer/manifest.json) | Portable ZIP bundle metadata (layout + required files) |
 
@@ -20,7 +20,7 @@ This repository uses **independent version numbers** per component. They are not
 
 For every prerelease or stable tag, record all component versions in the release notes. They may differ. The immutable `v1.3.0-rc2` snapshot contains product 1.3.0 RC2, node 0.3.15, context compactor 0.4.39/revision 85, and portable manifest 2.1.3. The stable `v1.3.0` line aligns product 1.3.0, node 0.3.19, context compactor 0.4.47/revision 94, and portable manifest 2.1.8.
 
-Post-release `main` carries context compactor 0.4.48/revision 95 and portable manifest 2.1.9. The installer does not activate the host-owned chat plugin, and the transparent-compaction opt-in defaults OFF. The portable bump records the added single-responsibility LM Studio plugin-install helper. This does not change the immutable `v1.3.0` tag snapshot or publish a new product release.
+Post-release `main` carries Node agent MCP 0.3.20, context compactor 0.4.48/revision 95, and portable manifest 2.1.9. Node 0.3.20 bounds model-facing edits to focused receipt-chained regions while preserving the existing CAS and two-file atomic transaction owners. The installer does not activate the host-owned chat plugin, and the transparent-compaction opt-in defaults OFF. The portable bump records the added single-responsibility LM Studio plugin-install helper. This does not change the immutable `v1.3.0` tag snapshot or publish a new product release.
 
 The human-facing label is `1.3.0`, published with the distinct tag `v1.3.0`. **Do not force-move** any existing RC/Beta tag. `portablePackage.releaseReady: true` means that the automated release, package, installer, safety, and cross-platform gates are required to pass for publication. It does not claim a clean-machine physical installer lifecycle on every host or universal compatibility across Unreal projects, engine builds, plugins, and editor runtimes. Repository release notes retain the exact evidence boundary.
 

@@ -65,7 +65,7 @@ function writeConfig(project, name, value) {
   return file;
 }
 
-test("snapshot scenario 1: read then expectedHash-less same-session patch", async (t) => {
+test("snapshot scenario 1: same-session mutation still requires explicit version evidence", async (t) => {
   const { runtime, first } = fixture(t);
   const target = writeConfig(first, "One.ini", "alpha");
   const owner = { sessionId: "conversation-a" };
@@ -74,14 +74,25 @@ test("snapshot scenario 1: read then expectedHash-less same-session patch", asyn
   }, owner));
   assert.match(read.fileVersionReceipt, /^fvr1_[A-Za-z0-9_-]+$/u);
 
-  const patch = payloadOf(await runtime.callTool("replace_in_file", {
+  const missing = payloadOf(await runtime.callTool("replace_in_file", {
     path: "project://Config/One.ini",
     oldText: "Value=alpha",
     newText: "Value=beta",
     expectedOccurrences: 1,
   }, owner));
+  assert.equal(missing.ok, false);
+  assert.equal(missing.errorCode, "FILE_SNAPSHOT_REQUIRED");
+  assert.match(fs.readFileSync(target, "utf8"), /Value=alpha/u);
+
+  const patch = payloadOf(await runtime.callTool("replace_in_file", {
+    path: "project://Config/One.ini",
+    oldText: "Value=alpha",
+    newText: "Value=beta",
+    expectedOccurrences: 1,
+    fileVersionReceipt: read.fileVersionReceipt,
+  }, owner));
   assert.equal(patch.ok, true);
-  assert.equal(patch.hashSource, "server_snapshot");
+  assert.equal(patch.hashSource, "file_version_receipt");
   assert.match(patch.fileVersionReceipt, /^fvr1_/u);
   assert.match(fs.readFileSync(target, "utf8"), /Value=beta/u);
 });
@@ -106,30 +117,33 @@ test("snapshot scenario 2: range read receipt supports a hashless stdio-style pa
   assert.match(fs.readFileSync(target, "utf8"), /Value=two/u);
 });
 
-test("snapshot scenario 3: malformed hash falls back only to a safe session snapshot", async (t) => {
+test("snapshot scenario 3: malformed hash never falls back to same-session state", async (t) => {
   const { runtime, first } = fixture(t);
   const target = writeConfig(first, "Malformed.ini", "before");
   const owner = { sessionId: "conversation-malformed" };
-  await runtime.callTool("read_file", { path: "project://Config/Malformed.ini" }, owner);
-  const accepted = payloadOf(await runtime.callTool("replace_in_file", {
+  const read = payloadOf(await runtime.callTool("read_file", {
+    path: "project://Config/Malformed.ini",
+  }, owner));
+  const rejected = payloadOf(await runtime.callTool("replace_in_file", {
     path: "project://Config/Malformed.ini",
     oldText: "Value=before",
     newText: "Value=after",
     expectedOccurrences: 1,
     expectedHash: "55-character-model-transcription",
   }, owner));
-  assert.equal(accepted.ok, true);
-  assert.equal(accepted.hashSource, "server_snapshot");
-
-  const rejected = payloadOf(await runtime.callTool("replace_in_file", {
-    path: "project://Config/Malformed.ini",
-    oldText: "Value=after",
-    newText: "Value=unsafe",
-    expectedOccurrences: 1,
-    expectedHash: "still-malformed",
-  }, { sessionId: "unrelated-conversation" }));
   assert.equal(rejected.ok, false);
   assert.equal(rejected.errorCode, "FILE_SNAPSHOT_REQUIRED");
+  assert.match(fs.readFileSync(target, "utf8"), /Value=before/u);
+
+  const accepted = payloadOf(await runtime.callTool("replace_in_file", {
+    path: "project://Config/Malformed.ini",
+    oldText: "Value=before",
+    newText: "Value=after",
+    expectedOccurrences: 1,
+    fileVersionReceipt: read.fileVersionReceipt,
+  }, owner));
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.hashSource, "file_version_receipt");
   assert.match(fs.readFileSync(target, "utf8"), /Value=after/u);
 });
 
@@ -137,13 +151,16 @@ test("snapshot scenario 4: external modification produces FILE_VERSION_CONFLICT"
   const { runtime, first } = fixture(t);
   const target = writeConfig(first, "Conflict.ini", "read");
   const owner = { sessionId: "conversation-conflict" };
-  await runtime.callTool("read_file", { path: "project://Config/Conflict.ini" }, owner);
+  const read = payloadOf(await runtime.callTool("read_file", {
+    path: "project://Config/Conflict.ini",
+  }, owner));
   fs.writeFileSync(target, "[Snapshot]\nValue=external\n", "utf8");
   const conflict = payloadOf(await runtime.callTool("replace_in_file", {
     path: "project://Config/Conflict.ini",
     oldText: "Value=read",
     newText: "Value=patched",
     expectedOccurrences: 1,
+    fileVersionReceipt: read.fileVersionReceipt,
   }, owner));
   assert.equal(conflict.ok, false);
   assert.equal(conflict.errorCode, "FILE_VERSION_CONFLICT");
@@ -154,26 +171,42 @@ test("snapshot scenario 5: two consecutive edits need no intervening read", asyn
   const { runtime, first } = fixture(t);
   const target = writeConfig(first, "Consecutive.ini", "zero");
   const owner = { sessionId: "conversation-consecutive" };
-  await runtime.callTool("read_file", { path: "project://Config/Consecutive.ini" }, owner);
+  const read = payloadOf(await runtime.callTool("read_file", {
+    path: "project://Config/Consecutive.ini",
+  }, owner));
   const firstPatch = payloadOf(await runtime.callTool("replace_in_file", {
     path: "project://Config/Consecutive.ini",
     oldText: "Value=zero",
     newText: "Value=one",
     expectedOccurrences: 1,
+    fileVersionReceipt: read.fileVersionReceipt,
+  }, owner));
+  const staleReuse = payloadOf(await runtime.callTool("replace_in_file", {
+    path: "project://Config/Consecutive.ini",
+    oldText: "Value=one",
+    newText: "Value=unsafe",
+    expectedOccurrences: 1,
+    fileVersionReceipt: read.fileVersionReceipt,
   }, owner));
   const secondPatch = payloadOf(await runtime.callTool("replace_in_file", {
     path: "project://Config/Consecutive.ini",
     oldText: "Value=one",
     newText: "Value=two",
     expectedOccurrences: 1,
+    fileVersionReceipt: firstPatch.fileVersionReceipt,
   }, owner));
   assert.equal(firstPatch.ok, true);
+  assert.equal(staleReuse.ok, false);
+  assert.equal(staleReuse.errorCode, "FILE_VERSION_CONFLICT");
   assert.equal(secondPatch.ok, true);
-  assert.equal(secondPatch.hashSource, "server_snapshot");
+  assert.equal(firstPatch.hashSource, "file_version_receipt");
+  assert.equal(secondPatch.hashSource, "file_version_receipt");
+  assert.notEqual(firstPatch.fileVersionReceipt, read.fileVersionReceipt);
+  assert.notEqual(secondPatch.fileVersionReceipt, firstPatch.fileVersionReceipt);
   assert.match(fs.readFileSync(target, "utf8"), /Value=two/u);
 });
 
-test("snapshot scenario 6: receipt and latest lookup are conversation-isolated", async (t) => {
+test("snapshot scenario 6: explicit receipts are conversation-isolated", async (t) => {
   const { runtime, first } = fixture(t);
   const target = writeConfig(first, "Conversation.ini", "alpha");
   const read = payloadOf(await runtime.callTool("read_file", {
@@ -218,8 +251,12 @@ test("snapshot scenario 8: one stale file aborts an edit bundle before any write
   const firstTarget = writeConfig(first, "BundleA.ini", "a0");
   const secondTarget = writeConfig(first, "BundleB.ini", "b0");
   const owner = { sessionId: "bundle-conversation" };
-  await runtime.callTool("read_file", { path: "project://Config/BundleA.ini" }, owner);
-  await runtime.callTool("read_file", { path: "project://Config/BundleB.ini" }, owner);
+  const firstRead = payloadOf(await runtime.callTool("read_file", {
+    path: "project://Config/BundleA.ini",
+  }, owner));
+  const secondRead = payloadOf(await runtime.callTool("read_file", {
+    path: "project://Config/BundleB.ini",
+  }, owner));
   fs.writeFileSync(secondTarget, "[Snapshot]\nValue=external\n", "utf8");
   const result = payloadOf(await runtime.callTool("apply_edit_bundle", {
     patches: [
@@ -227,13 +264,15 @@ test("snapshot scenario 8: one stale file aborts an edit bundle before any write
         path: "project://Config/BundleA.ini",
         oldText: "Value=a0",
         newText: "Value=a1",
-        expectedOccurrences: 1
+        expectedOccurrences: 1,
+        fileVersionReceipt: firstRead.fileVersionReceipt,
       },
       {
         path: "project://Config/BundleB.ini",
         oldText: "Value=b0",
         newText: "Value=b1",
-        expectedOccurrences: 1
+        expectedOccurrences: 1,
+        fileVersionReceipt: secondRead.fileVersionReceipt,
       }
     ]
   }, owner));
@@ -249,7 +288,9 @@ test("snapshot scenario 9: active-project switch cannot reuse the previous proje
   writeConfig(first, "Switch.ini", "first");
   const secondTarget = writeConfig(second, "Switch.ini", "second");
   const owner = { sessionId: "switch-conversation" };
-  await runtime.callTool("read_file", { path: "project://Config/Switch.ini" }, owner);
+  const read = payloadOf(await runtime.callTool("read_file", {
+    path: "project://Config/Switch.ini",
+  }, owner));
   const switched = payloadOf(await runtime.callTool("set_active_project", {
     projectPath: second.projectFile,
   }, owner));
@@ -259,8 +300,9 @@ test("snapshot scenario 9: active-project switch cannot reuse the previous proje
     oldText: "Value=second",
     newText: "Value=wrong",
     expectedOccurrences: 1,
+    fileVersionReceipt: read.fileVersionReceipt,
   }, owner));
-  assert.equal(rejected.errorCode, "FILE_SNAPSHOT_REQUIRED");
+  assert.equal(rejected.errorCode, "FILE_SNAPSHOT_SCOPE_MISMATCH");
   assert.match(fs.readFileSync(secondTarget, "utf8"), /Value=second/u);
 });
 

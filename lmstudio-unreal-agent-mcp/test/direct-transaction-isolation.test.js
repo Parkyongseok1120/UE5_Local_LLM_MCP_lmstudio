@@ -11,6 +11,7 @@ const { createDirectRuntime } = require("../src/direct-server");
 const { createStrictRuntime } = require("../src/strict-server");
 const { applyDirectEditBundle, validateBundleLimits } = require("../src/direct-edit-bundle");
 const { sha256Text } = require("../src/safe-write");
+const { releasePathLock, tryAcquirePathLock } = require("../src/write-locks");
 const {
   createRuntimeTransaction,
   runtimeTransactionPaths,
@@ -171,7 +172,7 @@ test("Direct transaction schema and bundle API reject legacy workflow metadata",
     );
     await assert.rejects(
       () => applyDirectEditBundle(
-        { files: [{ path: "Config/NeverWritten.ini", content: "x" }], patches: [] },
+        { patches: [] },
         async () => ({
           ok: true,
           absolutePath: path.join(value.projectRoot, "Config", "NeverWritten.ini"),
@@ -193,8 +194,13 @@ test("Direct transaction schema and bundle API reject legacy workflow metadata",
   );
   assert.throws(
     () => validateBundleLimits({
-      files: [{ path: "Config/New.ini", content: "x" }],
-      patches: [],
+      patches: [{
+        path: "Config/Metadata.ini",
+        oldText: "before",
+        newText: "after",
+        expectedOccurrences: 1,
+        expectedHash: sha256Text("before"),
+      }],
       checkpointRequired: true,
     }),
     /unsupported field: checkpointRequired/u,
@@ -215,7 +221,7 @@ test("Direct transaction schema and bundle API reject legacy workflow metadata",
     "deferFinalization",
   ]) {
     const rejected = payloadOf(await runtime.callTool("apply_edit_bundle", {
-      files: [{ path: "project://Config/NeverWritten.ini", content: "x" }],
+      patches: [],
       [field]: true,
     }));
     assert.equal(rejected.errorCode, "INVALID_ARGUMENT");
@@ -224,6 +230,30 @@ test("Direct transaction schema and bundle API reject legacy workflow metadata",
   assert.equal(fs.existsSync(path.join(value.stateRoot, "direct-transactions")), true);
   assert.equal(fs.readdirSync(runtimeTransactionPaths(value.stateRoot, "direct").pending).length, 1);
   assert.equal(fs.existsSync(path.join(value.projectRoot, "Config", "NeverWritten.ini")), false);
+});
+
+test("public bundle create payload is rejected before transaction hooks or journals", async (t) => {
+  const value = fixture(t);
+  let hookCalls = 0;
+  const runtime = createDirectRuntime({
+    stateRoot: value.stateRoot,
+    workspaceRoot: value.root,
+    configPath: path.join(value.root, "agent-mcp.json"),
+    env: { AGENT_STATE_ROOT: value.stateRoot, ALLOW_WRITE: "1" },
+    getActiveProject: () => value.projectPath,
+    transactionHooks: {
+      afterWriteAhead: async () => { hookCalls += 1; },
+    },
+  });
+  const target = path.join(value.projectRoot, "Config", "NeverCreate.ini");
+  const result = payloadOf(await runtime.callTool("apply_edit_bundle", {
+    files: [{ path: "project://Config/NeverCreate.ini", content: "Value=1\n" }],
+  }));
+  assert.equal(result.errorCode, "INVALID_ARGUMENT");
+  assert.match(result.message, /unsupported argument\(s\): files/u);
+  assert.equal(hookCalls, 0);
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(fs.existsSync(path.join(value.stateRoot, "direct-transactions")), false);
 });
 
 test("Direct edit bundle commits in only the Direct owner store", async (t) => {
@@ -415,6 +445,191 @@ test("Direct bundle CAS failure never overwrites a concurrent external change", 
   assert.deepEqual(fs.readFileSync(pendingPath), journalBytes);
 });
 
+test("Direct bundle rejects a parent junction swap before canonical target freeze", async (t) => {
+  const value = fixture(t);
+  const sourceDir = path.join(value.projectRoot, "Source");
+  const movedSource = path.join(value.projectRoot, "Source.original");
+  const outsideDir = path.join(value.root, "Outside");
+  const target = path.join(sourceDir, "A.cpp");
+  const originalTarget = path.join(movedSource, "A.cpp");
+  const outsideTarget = path.join(outsideDir, "A.cpp");
+  const before = "before\n";
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.mkdirSync(outsideDir, { recursive: true });
+  fs.writeFileSync(target, before, "utf8");
+  fs.writeFileSync(outsideTarget, before, "utf8");
+
+  const originalNativeRealpath = fs.realpathSync.native;
+  const targetIdentity = process.platform === "win32"
+    ? path.resolve(target).toLowerCase()
+    : path.resolve(target);
+  let swapped = false;
+  let linkError = null;
+
+  function restoreTopology() {
+    try {
+      if (fs.lstatSync(sourceDir).isSymbolicLink()) fs.unlinkSync(sourceDir);
+    } catch {
+      // The swap may have failed before the junction/symlink was created.
+    }
+    if (fs.existsSync(movedSource) && !fs.existsSync(sourceDir)) {
+      fs.renameSync(movedSource, sourceDir);
+    }
+  }
+
+  t.after(() => {
+    fs.realpathSync.native = originalNativeRealpath;
+    restoreTopology();
+  });
+
+  fs.realpathSync.native = (...args) => {
+    const candidate = process.platform === "win32"
+      ? path.resolve(String(args[0])).toLowerCase()
+      : path.resolve(String(args[0]));
+    if (!swapped && candidate === targetIdentity) {
+      swapped = true;
+      fs.renameSync(sourceDir, movedSource);
+      try {
+        fs.symlinkSync(
+          outsideDir,
+          sourceDir,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      } catch (error) {
+        linkError = error;
+        throw error;
+      }
+    }
+    return originalNativeRealpath(...args);
+  };
+
+  const runtime = createDirectRuntime({
+    stateRoot: value.stateRoot,
+    workspaceRoot: value.root,
+    configPath: path.join(value.root, "agent-mcp.json"),
+    env: { AGENT_STATE_ROOT: value.stateRoot, ALLOW_WRITE: "1" },
+    getActiveProject: () => value.projectPath,
+  });
+  const result = payloadOf(await runtime.callTool("apply_edit_bundle", {
+    patches: [{
+      path: "project://Source/A.cpp",
+      oldText: "before",
+      newText: "after",
+      expectedOccurrences: 1,
+      expectedHash: sha256Text(before),
+    }],
+  }));
+  if (linkError && ["EACCES", "EPERM", "ENOTSUP"].includes(linkError.code)) {
+    restoreTopology();
+    t.skip(`symlink/junction creation is unavailable: ${linkError.code}`);
+    return;
+  }
+
+  assert.equal(swapped, true);
+  assert.equal(result.errorCode, "BUNDLE_FAILED");
+  assert.match(result.message, /target identity changed before lock acquisition/u);
+  assert.equal(fs.readFileSync(outsideTarget, "utf8"), before);
+  assert.equal(fs.readFileSync(originalTarget, "utf8"), before);
+  const paths = runtimeTransactionPaths(value.stateRoot, "direct");
+  assert.equal(fs.existsSync(paths.pending) ? fs.readdirSync(paths.pending).length : 0, 0);
+  const locksDir = path.join(value.stateRoot, "locks");
+  assert.deepEqual(
+    fs.existsSync(locksDir)
+      ? fs.readdirSync(locksDir).filter((name) => name.endsWith(".lock"))
+      : [],
+    [],
+  );
+
+  fs.realpathSync.native = originalNativeRealpath;
+  restoreTopology();
+  const reacquired = tryAcquirePathLock(target, "bundle-pre-freeze-identity-regression", {
+    stateRoot: value.stateRoot,
+  });
+  assert.equal(reacquired.ok, true);
+  releasePathLock(reacquired);
+  assert.deepEqual(
+    fs.readdirSync(locksDir).filter((name) => name.endsWith(".lock")),
+    [],
+  );
+});
+
+test("Direct bundle rejects a parent junction swap after write-ahead and before CAS", async (t) => {
+  const value = fixture(t);
+  const configDir = path.join(value.projectRoot, "Config");
+  const movedConfig = path.join(value.projectRoot, "Config.original");
+  const outsideDir = path.join(value.root, "Outside");
+  const target = path.join(configDir, "Junction.ini");
+  const originalTarget = path.join(movedConfig, "Junction.ini");
+  const outsideTarget = path.join(outsideDir, "Junction.ini");
+  const before = "Value=before\n";
+  fs.writeFileSync(target, before, "utf8");
+  let hookCalls = 0;
+  let linkError = null;
+  const runtime = createDirectRuntime({
+    stateRoot: value.stateRoot,
+    workspaceRoot: value.root,
+    configPath: path.join(value.root, "agent-mcp.json"),
+    env: { AGENT_STATE_ROOT: value.stateRoot, ALLOW_WRITE: "1" },
+    getActiveProject: () => value.projectPath,
+    transactionHooks: {
+      afterWriteAhead: async () => {
+        hookCalls += 1;
+        fs.renameSync(configDir, movedConfig);
+        fs.mkdirSync(outsideDir, { recursive: true });
+        fs.writeFileSync(outsideTarget, before, "utf8");
+        try {
+          fs.symlinkSync(
+            outsideDir,
+            configDir,
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        } catch (error) {
+          linkError = error;
+          throw error;
+        }
+      },
+    },
+  });
+  const result = payloadOf(await runtime.callTool("apply_edit_bundle", {
+    patches: [{
+      path: "project://Config/Junction.ini",
+      oldText: "Value=before",
+      newText: "Value=outside-write",
+      expectedOccurrences: 1,
+      expectedHash: sha256Text(before),
+    }],
+  }));
+  if (linkError && ["EACCES", "EPERM", "ENOTSUP"].includes(linkError.code)) {
+    t.skip(`symlink/junction creation is unavailable: ${linkError.code}`);
+    return;
+  }
+  assert.equal(result.errorCode, "BUNDLE_FAILED");
+  assert.match(result.message, /target identity changed before commit/u);
+  assert.equal(hookCalls, 1);
+  assert.equal(fs.readFileSync(outsideTarget, "utf8"), before);
+  assert.equal(fs.readFileSync(originalTarget, "utf8"), before);
+  const paths = runtimeTransactionPaths(value.stateRoot, "direct");
+  assert.equal(fs.readdirSync(paths.pending).length, 0);
+  assert.equal(fs.readdirSync(paths.archive).length, 1);
+  const archived = path.join(paths.archive, fs.readdirSync(paths.archive)[0]);
+  assert.equal(JSON.parse(fs.readFileSync(archived, "utf8")).status, "aborted");
+  assert.deepEqual(
+    fs.readdirSync(path.join(value.stateRoot, "locks")).filter((name) => name.endsWith(".lock")),
+    [],
+  );
+  fs.unlinkSync(configDir);
+  fs.renameSync(movedConfig, configDir);
+  const reacquired = tryAcquirePathLock(target, "bundle-identity-regression", {
+    stateRoot: value.stateRoot,
+  });
+  assert.equal(reacquired.ok, true);
+  releasePathLock(reacquired);
+  assert.deepEqual(
+    fs.readdirSync(path.join(value.stateRoot, "locks")).filter((name) => name.endsWith(".lock")),
+    [],
+  );
+});
+
 test("Direct deletion still requires exact approval and moves source to recoverable trash", async (t) => {
   const value = fixture(t);
   const target = path.join(value.projectRoot, "Source", "Project", "Obsolete.cpp");
@@ -470,6 +685,74 @@ test("Direct deletion still requires exact approval and moves source to recovera
   assert.equal(deleted.recoverable, true);
   assert.equal(fs.existsSync(target), false);
   assert.equal(fs.readFileSync(deleted.restorePath, "utf8"), content);
+});
+
+test("deletion tools reject array-wrapped primitives before proposal state or rename", async (t) => {
+  const value = fixture(t);
+  const target = path.join(value.projectRoot, "Source", "Project", "TypedDelete.cpp");
+  const content = "void TypedDelete() {}\n";
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content, "utf8");
+  const runtime = createDirectRuntime({
+    stateRoot: value.stateRoot,
+    workspaceRoot: value.root,
+    configPath: path.join(value.root, "agent-mcp.json"),
+    env: {
+      AGENT_STATE_ROOT: value.stateRoot,
+      ALLOW_WRITE: "1",
+      ALLOW_SOURCE_DELETE: "1",
+    },
+    getActiveProject: () => value.projectPath,
+  });
+  const details = {
+    completedEditsSummary: "Typed deletion proposal",
+    reason: "obsolete typed fixture",
+    ifNotDeleted: "fixture remains",
+    ifDeleted: "fixture moves to recoverable trash",
+  };
+  const proposalItem = {
+    path: "project://Source/Project/TypedDelete.cpp",
+    reason: details.reason,
+    ifNotDeleted: details.ifNotDeleted,
+    ifDeleted: details.ifDeleted,
+  };
+  for (const malformed of [
+    { completedEditsSummary: [details.completedEditsSummary], files: [proposalItem] },
+    { completedEditsSummary: details.completedEditsSummary, files: [{ ...proposalItem, reason: [details.reason] }] },
+    { completedEditsSummary: details.completedEditsSummary, files: [proposalItem], project: [value.projectPath] },
+  ]) {
+    const result = payloadOf(await runtime.callTool("propose_file_deletions", malformed));
+    assert.equal(result.errorCode, "INVALID_ARGUMENT");
+    assert.equal(fs.readFileSync(target, "utf8"), content);
+  }
+
+  const proposal = payloadOf(await runtime.callTool("propose_file_deletions", {
+    completedEditsSummary: details.completedEditsSummary,
+    files: [proposalItem],
+  }));
+  const baseDelete = {
+    path: proposalItem.path,
+    approvalToken: proposal.proposals[0].approvalToken,
+    fileVersionReceipt: proposal.proposals[0].fileVersionReceipt,
+    userApproved: true,
+    ...details,
+  };
+  for (const malformed of [
+    { ...baseDelete, approvalToken: [baseDelete.approvalToken] },
+    { ...baseDelete, fileVersionReceipt: [baseDelete.fileVersionReceipt] },
+    { ...baseDelete, fileVersionReceipt: undefined, expectedHash: [proposal.proposals[0].sha256] },
+    { ...baseDelete, completedEditsSummary: [details.completedEditsSummary] },
+    { ...baseDelete, reason: [details.reason] },
+    { ...baseDelete, ifNotDeleted: [details.ifNotDeleted] },
+    { ...baseDelete, path: [proposalItem.path] },
+    { ...baseDelete, userApproved: [true] },
+  ]) {
+    const result = payloadOf(await runtime.callTool("delete_file", malformed));
+    assert.equal(result.errorCode, "INVALID_ARGUMENT");
+    assert.equal(fs.readFileSync(target, "utf8"), content);
+    assert.equal(fs.existsSync(path.join(value.projectRoot, ".agent-trash")), false);
+    assert.equal(fs.existsSync(value.stateRoot), false);
+  }
 });
 
 test("Direct and Strict source closures exclude every legacy mutation workflow owner", () => {

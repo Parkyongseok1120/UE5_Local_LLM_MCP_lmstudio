@@ -15,8 +15,8 @@ do not own a task, route, plan, write gate, or synthesis phase.
    use `search_files`, `read_file_range`, or `read_file` for the source of truth.
 3. Before changing an existing file, read the current content and retain the
    returned `fileVersionReceipt`. Use `replace_in_file` with a unique match and
-   that receipt. A valid raw `expectedHash` remains compatible, and a reliable
-   same-session latest snapshot may resolve automatically. A successful mutation
+   that receipt, or pass a valid raw `expectedHash`. Same-session evidence is
+   never selected automatically. A successful mutation
    returns a new receipt for a consecutive edit. Use `write_file` only for a new
    file; re-read on `FILE_VERSION_CONFLICT` or `FILE_SNAPSHOT_*`.
 4. Treat `static_validate_project` as advisory. Fix useful findings, but do not

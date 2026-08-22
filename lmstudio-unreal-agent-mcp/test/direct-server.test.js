@@ -118,6 +118,79 @@ test("Direct catalog is static capability surface without task/control schemas",
   }
 });
 
+test("mutation schemas expose focused per-round edit bounds", () => {
+  const tools = toolDefinitions();
+  const write = tools.find((tool) => tool.name === "write_file");
+  const replace = tools.find((tool) => tool.name === "replace_in_file");
+  const bundle = tools.find((tool) => tool.name === "apply_edit_bundle");
+  const proposeDelete = tools.find((tool) => tool.name === "propose_file_deletions");
+  const deleteFile = tools.find((tool) => tool.name === "delete_file");
+  assert.ok(write);
+  assert.ok(replace);
+  assert.ok(bundle);
+  assert.ok(proposeDelete);
+  assert.ok(deleteFile);
+
+  assert.strictEqual(write.inputSchema.properties.path.minLength, 1);
+  assert.strictEqual(write.inputSchema.properties.content.maxLength, 12_000);
+  assert.match(write.description, /apply_edit_bundle never creates files/u);
+
+  const replaceProperties = replace.inputSchema.properties;
+  assert.deepStrictEqual(
+    {
+      minLength: replaceProperties.oldText.minLength,
+      maxLength: replaceProperties.oldText.maxLength,
+    },
+    { minLength: 1, maxLength: 1_200 },
+  );
+  assert.strictEqual(replaceProperties.newText.maxLength, 2_800);
+  assert.deepStrictEqual(
+    {
+      type: replaceProperties.expectedOccurrences.type,
+      const: replaceProperties.expectedOccurrences.const,
+    },
+    { type: "integer", const: 1 },
+  );
+  assert.strictEqual(replaceProperties.expectedHash.pattern, "^[A-Fa-f0-9]{64}$");
+  assert.strictEqual(replaceProperties.fileVersionReceipt.minLength, 1);
+  assert.deepStrictEqual(replace.inputSchema.anyOf, [
+    { required: ["fileVersionReceipt"] },
+    { required: ["expectedHash"] },
+  ]);
+  assert.match(replace.description, /Emit this tool call immediately/u);
+  assert.match(replace.description, /4000 combined characters/u);
+  assert.match(replace.description, /next prediction round/u);
+  assert.match(replace.description, /no same-session evidence is selected automatically/u);
+
+  const patches = bundle.inputSchema.properties.patches;
+  assert.deepStrictEqual(bundle.inputSchema.required, ["patches"]);
+  assert.strictEqual(Object.hasOwn(bundle.inputSchema.properties, "files"), false);
+  assert.strictEqual(patches.minItems, 1);
+  assert.strictEqual(patches.maxItems, 2);
+  assert.strictEqual(patches.items.properties.oldText.maxLength, 1_200);
+  assert.strictEqual(patches.items.properties.newText.maxLength, 2_800);
+  assert.strictEqual(patches.items.properties.expectedOccurrences.const, 1);
+  assert.deepStrictEqual(patches.items.anyOf, [
+    { required: ["fileVersionReceipt"] },
+    { required: ["expectedHash"] },
+  ]);
+  assert.match(patches.description, /server-enforced because JSON Schema cannot express them/u);
+  assert.match(bundle.description, /at most 2 distinct existing files/u);
+  assert.match(bundle.description, /server additionally enforces unique normalized paths/u);
+  assert.match(bundle.description, /at most 64 aggregate changed lines/u);
+  assert.match(bundle.description, /next prediction round/u);
+  assert.match(bundle.description, /New files are created only with standalone write_file/u);
+
+  const deletionFiles = proposeDelete.inputSchema.properties.files;
+  assert.strictEqual(deletionFiles.minItems, 1);
+  assert.strictEqual(deletionFiles.maxItems, 32);
+  assert.strictEqual(deletionFiles.items.properties.reason.minLength, 1);
+  assert.deepStrictEqual(deleteFile.inputSchema.anyOf, [
+    { required: ["fileVersionReceipt"] },
+    { required: ["expectedHash"] },
+  ]);
+});
+
 test("foreign persistent task files cannot block Direct reads", async (t) => {
   const { runtime } = fixture(t);
   const result = await runtime.callTool("read_file", {

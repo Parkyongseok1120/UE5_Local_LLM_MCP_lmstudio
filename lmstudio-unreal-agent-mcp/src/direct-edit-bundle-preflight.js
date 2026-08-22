@@ -1,10 +1,12 @@
 "use strict";
 
+const { normalizedBundlePath } = require("./direct-edit-bundle-plan");
+
 function initialExpectedHashes(bundle) {
   const hashes = new Map();
   for (const patch of bundle.patches || []) {
-    const relativePath = String(patch.path || "").replace(/\\/g, "/");
-    const expectedHash = String(patch.expectedHash || "").toLowerCase();
+    const relativePath = normalizedBundlePath(patch, "patch");
+    const expectedHash = patch.expectedHash.toLowerCase();
     if (!hashes.has(relativePath)) hashes.set(relativePath, expectedHash);
   }
   return hashes;

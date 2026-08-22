@@ -107,7 +107,6 @@ test("a failing semantic analyzer cannot block an atomic bundle or weaken its CA
   };
 
   const applied = payloadOf(await runtime.callTool("apply_edit_bundle", {
-    files: [],
     patches: [patch],
   }));
   assert.strictEqual(applied.ok, true);
@@ -120,7 +119,6 @@ test("a failing semantic analyzer cannot block an atomic bundle or weaken its CA
   analyzerFails = false;
   const current = fs.readFileSync(sourcePath, "utf8");
   const findingApplied = payloadOf(await runtime.callTool("apply_edit_bundle", {
-    files: [],
     patches: [{
       ...patch,
       oldText: "return 3;",
@@ -134,7 +132,6 @@ test("a failing semantic analyzer cannot block an atomic bundle or weaken its CA
   assert.match(fs.readFileSync(sourcePath, "utf8"), /return 4;/u);
 
   const stale = payloadOf(await runtime.callTool("apply_edit_bundle", {
-    files: [],
     patches: [{ ...patch, oldText: "return 4;", newText: "return 5;" }],
   }));
   assert.strictEqual(stale.ok, false);

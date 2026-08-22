@@ -15,9 +15,9 @@ projects. Inspect current file state before editing and report validation
 honestly.
 
 Writes remain server-bounded: existing files use scoped snapshot/CAS protection.
-Prefer `fileVersionReceipt` from a read or immediately preceding mutation; a
-valid raw `expectedHash` remains compatible, and a reliable same-session latest
-snapshot may resolve automatically. Re-read on `FILE_VERSION_CONFLICT` or
+Explicitly pass `fileVersionReceipt` from a read or immediately preceding
+mutation, or a valid raw `expectedHash`; same-session evidence is never selected
+automatically. Re-read on `FILE_VERSION_CONFLICT` or
 `FILE_SNAPSHOT_*`. New-file operations are create-only, replacements are atomic
 and path-locked, and deletion requires explicit approval. A successful write
 does not require a policy checkpoint; continue automatically only when you judge

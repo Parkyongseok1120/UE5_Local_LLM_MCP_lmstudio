@@ -48,6 +48,7 @@ function fixture(t) {
     contents,
     projectPath,
     projectRoot,
+    root,
     runtime: createDirectRuntime({
       workspaceRoot: root,
       stateRoot,
@@ -133,7 +134,6 @@ test("replace and atomic bundle reject protected plugin, Content, and .git paths
 
     const sourceContent = fs.readFileSync(path.join(projectRoot, "Source", "Allowed.cpp"), "utf8");
     const bundled = payloadOf(await runtime.callTool("apply_edit_bundle", {
-      files: [],
       patches: [
         {
           path: "Source/Allowed.cpp",
@@ -179,6 +179,35 @@ test("replace and atomic bundle reject protected plugin, Content, and .git paths
   assert.strictEqual(proposed.errorCode, "INVALID_ARGUMENT");
 });
 
+test("standalone write_file rejects an existing symlink or junction ancestor", async (t) => {
+  const { projectRoot, root, runtime } = fixture(t);
+  const outside = path.join(root, "OutsideWriteTarget");
+  const linkedParent = path.join(projectRoot, "Source", "LinkedOutside");
+  fs.mkdirSync(outside, { recursive: true });
+  try {
+    fs.symlinkSync(
+      outside,
+      linkedParent,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  } catch (error) {
+    if (["EACCES", "EPERM", "ENOTSUP"].includes(error.code)) {
+      t.skip(`symlink/junction creation is unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
+  }
+  const result = payloadOf(await runtime.callTool("write_file", {
+    path: "project://Source/LinkedOutside/Escape.cpp",
+    content: "void MustStayInsideProject() {}\n",
+    createDirs: true,
+  }));
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, "INVALID_ARGUMENT");
+  assert.match(result.message, /symlink\/junction|outside the selected Unreal project/u);
+  assert.equal(fs.existsSync(path.join(outside, "Escape.cpp")), false);
+});
+
 test("Source, Config, plugin Source/descriptors, and active descriptor remain writable", async (t) => {
   const { projectPath, projectRoot, runtime } = fixture(t);
   for (const [relativePath, oldText, newText] of [
@@ -214,7 +243,6 @@ test("Source, Config, plugin Source/descriptors, and active descriptor remain wr
   const sourceBeforeBundle = fs.readFileSync(pluginSource, "utf8");
   const descriptorBeforeBundle = fs.readFileSync(pluginDescriptor, "utf8");
   const bundle = payloadOf(await runtime.callTool("apply_edit_bundle", {
-    files: [],
     patches: [
       {
         path: "Plugins/P/Source/P/Allowed.cpp",

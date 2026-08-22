@@ -131,7 +131,7 @@ One MCP installation can serve multiple Unreal projects and installed UE version
 
 Build and Automation calls resolve the selected project's engine association and may also accept an explicit `engineRoot`. This allows UE 5.x projects on different engine installations to share the same server. Prefer exact selectors: an ambiguous project name returns an error instead of silently choosing another project.
 
-RAG generations are engine-bound sibling shards. An exact project selector routes to the matching shard, and one call never merges evidence from projects bound to different engines. Existing-file reads and successful mutations return an opaque `fileVersionReceipt`; prefer it for later edits, while a valid raw `expectedHash` remains compatible. A reliable same-session latest snapshot may resolve automatically, and external changes fail closed with `FILE_VERSION_CONFLICT`.
+RAG generations are engine-bound sibling shards. An exact project selector routes to the matching shard, and one call never merges evidence from projects bound to different engines. Existing-file reads and successful mutations return an opaque `fileVersionReceipt`; every later edit must explicitly pass that receipt or a valid raw `expectedHash`. Same-session evidence is never selected automatically, and external changes fail closed with `FILE_VERSION_CONFLICT`.
 
 For portable builds, `target=Editor` resolves the selected project's canonical, configured preferred, or sole discovered custom Editor target; an explicit non-Editor target is unchanged. Build and Automation share the bounded process runner and timeout process-tree termination.
 

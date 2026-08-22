@@ -13,6 +13,7 @@ const { validateWriteTarget } = require("./write-guards");
 const { withPathLock } = require("./write-locks");
 const { readStableTextFile } = require("./direct-file-snapshot");
 const { textLineCount } = require("./direct-mutation-limits");
+const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
 const { failure, success } = require("./direct-response");
 const {
@@ -25,6 +26,80 @@ const {
   envFlag,
   statOrNull,
 } = require("./direct-runtime-shared");
+
+const WRITE_FILE_FIELDS = new Set(["path", "project", "content", "createDirs"]);
+const REPLACE_FILE_FIELDS = new Set([
+  "path",
+  "project",
+  "oldText",
+  "newText",
+  "expectedOccurrences",
+  "expectedHash",
+  "fileVersionReceipt",
+]);
+
+function mutationArgumentError(args, allowedFields, label) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return `${label} arguments must be an object.`;
+  }
+  const unsupported = Object.keys(args).find((key) => !allowedFields.has(key));
+  return unsupported ? `${label} contains unsupported field: ${unsupported}` : "";
+}
+
+function requiredStringError(args, field, { allowEmpty = false } = {}) {
+  if (typeof args[field] !== "string") return `${field} must be a string.`;
+  if (!allowEmpty && !args[field].trim()) return `${field} must be a non-empty string.`;
+  return "";
+}
+
+function optionalStringError(args, field) {
+  return args[field] === undefined || typeof args[field] === "string"
+    ? ""
+    : `${field} must be a string when provided.`;
+}
+
+function writeFileArgumentError(args) {
+  return mutationArgumentError(args, WRITE_FILE_FIELDS, "write_file")
+    || requiredStringError(args, "path")
+    || requiredStringError(args, "content", { allowEmpty: true })
+    || optionalStringError(args, "project")
+    || (args.createDirs === undefined || typeof args.createDirs === "boolean"
+      ? ""
+      : "createDirs must be a boolean when provided.");
+}
+
+function replaceFileArgumentError(args) {
+  return mutationArgumentError(args, REPLACE_FILE_FIELDS, "replace_in_file")
+    || requiredStringError(args, "path")
+    || requiredStringError(args, "oldText")
+    || requiredStringError(args, "newText", { allowEmpty: true })
+    || optionalStringError(args, "project")
+    || optionalStringError(args, "expectedHash")
+    || optionalStringError(args, "fileVersionReceipt")
+    || (Number.isInteger(args.expectedOccurrences) && args.expectedOccurrences === 1
+      ? ""
+      : "expectedOccurrences must be the integer 1 for a focused replacement.");
+}
+
+function frozenMutationTarget(resolution) {
+  const identity = (value) => canonicalAbsolutePathIdentity(
+    value,
+    process.platform,
+    { realpath: false },
+  );
+  return {
+    absolutePath: identity(resolution.absolutePath),
+    realPath: identity(resolution.realPath),
+    allowedRealRoot: identity(resolution.allowedRealRoot),
+  };
+}
+
+function sameMutationTarget(initialIdentity, refreshed) {
+  const refreshedIdentity = frozenMutationTarget(refreshed);
+  return refreshedIdentity.absolutePath === initialIdentity.absolutePath
+    && refreshedIdentity.realPath === initialIdentity.realPath
+    && refreshedIdentity.allowedRealRoot === initialIdentity.allowedRealRoot;
+}
 
 function createFileMutationCapabilities(context) {
   const {
@@ -42,7 +117,14 @@ function createFileMutationCapabilities(context) {
     if (!writesAllowed()) {
       return failure("WRITE_DISABLED", "Writes are disabled. Start the MCP with ALLOW_WRITE=1 to enable project mutations.");
     }
-    const content = String(args.content ?? "");
+    const argumentError = writeFileArgumentError(args);
+    if (argumentError) {
+      return failure("INVALID_ARGUMENT", argumentError, {
+        retryAllowed: true,
+        retryMode: "different_arguments",
+      });
+    }
+    const content = args.content;
     if (content.length > limits.maxNewFileChars
       || textLineCount(content) > limits.maxNewFileLines) {
       return failure(
@@ -55,6 +137,7 @@ function createFileMutationCapabilities(context) {
       );
     }
     const resolution = await mutationResolution(args.path, args.project);
+    const targetIdentity = frozenMutationTarget(resolution);
     const guard = await validateWriteTarget({
       targetAbsPath: resolution.absolutePath,
       workspaceRoot,
@@ -69,12 +152,34 @@ function createFileMutationCapabilities(context) {
       content,
       options.validateMutationSemanticText,
     );
-    const locked = await withPathLock(resolution.absolutePath, `${context.runtimeOwner}_write_file`, async () => {
-      if (args.createDirs === true) {
-        await fsp.mkdir(path.dirname(resolution.absolutePath), { recursive: true });
-      }
-      return createExclusive(resolution.absolutePath, content);
-    }, { stateRoot });
+    let locked;
+    try {
+      locked = await withPathLock(resolution.absolutePath, `${context.runtimeOwner}_write_file`, async () => {
+        const refreshed = await mutationResolution(args.path, args.project);
+        if (!sameMutationTarget(targetIdentity, refreshed)) {
+          throw new Error("write_file real target or containment root changed during locked revalidation");
+        }
+        const refreshedGuard = await validateWriteTarget({
+          targetAbsPath: refreshed.absolutePath,
+          workspaceRoot,
+          activeProjectPath: refreshed.activeProject,
+          createDirs: args.createDirs === true,
+          fileExists: async (target) => Boolean(await statOrNull(target)),
+          allowExistingWrite: false,
+        });
+        if (!refreshedGuard.ok) throw new Error(refreshedGuard.message);
+        if (args.createDirs === true) {
+          await fsp.mkdir(path.dirname(refreshed.absolutePath), { recursive: true });
+        }
+        return createExclusive(refreshed.absolutePath, content);
+      }, { stateRoot });
+    } catch (error) {
+      return failure(
+        "WRITE_TARGET_BLOCKED",
+        `write_file locked containment revalidation failed: ${String(error.message || error)}`,
+        { retryAllowed: true, retryMode: "after_state_change" },
+      );
+    }
     if (locked.locked) {
       return failure("WRITE_LOCKED", "Another write is in progress for this path.", {
         retryAllowed: true,
@@ -100,18 +205,27 @@ function createFileMutationCapabilities(context) {
     if (!writesAllowed()) {
       return failure("WRITE_DISABLED", "Writes are disabled. Start the MCP with ALLOW_WRITE=1 to enable project mutations.");
     }
-    const oldText = String(args.oldText ?? "");
-    const newText = String(args.newText ?? "");
-    if (!oldText) return failure("INVALID_ARGUMENT", "oldText must be non-empty", { retryAllowed: true });
-    if (oldText.length + newText.length > limits.maxPatchChars
+    const argumentError = replaceFileArgumentError(args);
+    if (argumentError) {
+      return failure("INVALID_ARGUMENT", argumentError, {
+        retryAllowed: true,
+        retryMode: "different_arguments",
+      });
+    }
+    const oldText = args.oldText;
+    const newText = args.newText;
+    if (oldText.length > limits.maxPatchOldTextChars
+      || newText.length > limits.maxPatchNewTextChars
+      || oldText.length + newText.length > limits.maxPatchChars
       || textLineCount(newText) > limits.maxPatchLines) {
       return failure(
         "PATCH_TOO_LARGE",
-        `Patch exceeds ${limits.maxPatchChars} characters or ${limits.maxPatchLines} changed lines. Split it into exact regions.`,
+        `Patch exceeds the focused-region limits: oldText ${limits.maxPatchOldTextChars} characters, newText ${limits.maxPatchNewTextChars} characters, ${limits.maxPatchChars} combined characters, or ${limits.maxPatchLines} newText lines. Apply one exact region, then use the returned fileVersionReceipt in the next prediction round.`,
         { retryAllowed: true },
       );
     }
     const resolution = await mutationResolution(args.path, args.project);
+    const targetIdentity = frozenMutationTarget(resolution);
     const version = resolveVersionEvidence(context, resolution, args, requestContext);
     if (!version.ok) {
       return versionEvidenceFailure(version, {
@@ -135,7 +249,7 @@ function createFileMutationCapabilities(context) {
       priorContent: read.buffer,
       oldText,
       newText,
-      expectedOccurrences: Number(args.expectedOccurrences),
+      expectedOccurrences: args.expectedOccurrences,
     });
     if (!prospective.ok) {
       return failure(
@@ -155,16 +269,29 @@ function createFileMutationCapabilities(context) {
       prospective.updated,
       options.validateMutationSemanticText,
     );
-    const locked = await withPathLock(resolution.absolutePath, `${context.runtimeOwner}_replace`, async () => (
-      replaceWithCAS({
-        targetPath: resolution.absolutePath,
-        priorContent: read.buffer,
-        oldText,
-        newText,
-        expectedOccurrences: Number(args.expectedOccurrences),
-        readHash: version.expectedHash,
-      })
-    ), { stateRoot });
+    let locked;
+    try {
+      locked = await withPathLock(resolution.absolutePath, `${context.runtimeOwner}_replace`, async () => {
+        const refreshed = await mutationResolution(args.path, args.project);
+        if (!sameMutationTarget(targetIdentity, refreshed)) {
+          throw new Error("replace_in_file real target or containment root changed during locked revalidation");
+        }
+        return replaceWithCAS({
+          targetPath: refreshed.absolutePath,
+          priorContent: read.buffer,
+          oldText,
+          newText,
+          expectedOccurrences: args.expectedOccurrences,
+          readHash: version.expectedHash,
+        });
+      }, { stateRoot });
+    } catch (error) {
+      return failure(
+        "WRITE_TARGET_BLOCKED",
+        `replace_in_file locked containment revalidation failed: ${String(error.message || error)}`,
+        { retryAllowed: true, retryMode: "after_state_change" },
+      );
+    }
     if (locked.locked) {
       return failure("WRITE_LOCKED", "Another write is in progress for this path.", {
         retryAllowed: true,

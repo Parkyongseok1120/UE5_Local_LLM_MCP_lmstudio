@@ -86,9 +86,9 @@ unreal_get_active_project (or an exact project selector)
 Rules:
 
 - Existing `.h`, `.hpp`, `.cpp`, `.c`, `.cc`, `.cxx`, and `.cs` files are
-  patch-only. Prefer the `fileVersionReceipt` returned by a read or immediately
-  preceding mutation; a valid raw `expectedHash` remains compatible, and a
-  reliable same-session latest snapshot may be resolved automatically. Re-read
+  patch-only. Explicitly pass the `fileVersionReceipt` returned by a read or
+  immediately preceding mutation, or a valid raw `expectedHash`; same-session
+  evidence is never selected automatically. Re-read
   after `FILE_VERSION_CONFLICT`, a `FILE_SNAPSHOT_*` error, or uncertain external
   state instead of overwriting another change.
 - Use a unique replacement and exact project-relative path. If it does not

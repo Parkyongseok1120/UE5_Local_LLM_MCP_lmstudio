@@ -39,8 +39,8 @@ The runtime retains:
 - exact selected-project containment and normalized path resolution;
 - source/config/plugin-source mutation allowlists and protected-directory denial;
 - bounded reads, responses, process output, and mutation size/file limits;
-- receipt-first scoped snapshot/CAS for existing files, with compatible raw
-  `expectedHash` and reliable same-session latest-snapshot fallback;
+- explicit receipt-first scoped snapshot/CAS for every existing-file mutation,
+  with compatible valid raw `expectedHash` and no automatic session fallback;
 - create-only new-file writes, per-path locks, atomic replacement, and recoverable
   multi-file transaction journals;
 - explicit source-delete proposal, proposal receipt/hash confirmation,

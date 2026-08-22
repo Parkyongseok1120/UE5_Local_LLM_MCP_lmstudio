@@ -31,9 +31,9 @@ read, log, mutation, static-validation, build, Automation, and command
 capabilities under the configured SAFE/AGENT authority.
 
 Reads and mutations issue scoped `fileVersionReceipt` values for existing-file
-CAS. Prefer the receipt for a later edit; valid raw `expectedHash` remains
-compatible, and a reliable same-session latest snapshot can be resolved
-automatically. Build and Automation share one bounded process runner, and
+CAS. Every later edit explicitly passes that receipt or a valid raw
+`expectedHash`; same-session evidence is never selected automatically. Build
+and Automation share one bounded process runner, and
 `target=Editor` resolves the selected project's canonical, configured preferred,
 or sole discovered custom Editor target without rewriting an explicit non-Editor
 target.

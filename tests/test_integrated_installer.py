@@ -69,8 +69,8 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert manifest["safety"]["contextCompactionEnabledByDefault"] is False
     assert "contextCompactorEnabledByDefault" not in manifest["safety"]
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
-    assert node_package["version"] == node_lock["version"] == "0.3.19"
-    assert node_lock["packages"][""]["version"] == "0.3.19"
+    assert node_package["version"] == node_lock["version"] == "0.3.20"
+    assert node_lock["packages"][""]["version"] == "0.3.20"
     assert compactor_package["version"] == compactor_lock["version"] == "0.4.48"
     assert compactor_lock["packages"][""]["version"] == "0.4.48"
     assert compactor_manifest["revision"] == 95

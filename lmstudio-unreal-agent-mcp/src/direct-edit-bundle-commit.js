@@ -5,7 +5,6 @@ const fsp = fs.promises;
 const { atomicWriteText } = require("./atomic-io");
 const {
   calculateReplacement,
-  createExclusive,
   replaceWithCAS,
   sha256Text,
 } = require("./safe-write");
@@ -14,6 +13,31 @@ const {
   transactionBackupPath,
   updateRuntimeTransactionEntry,
 } = require("./direct-transaction-store");
+const { normalizedBundlePath } = require("./direct-edit-bundle-plan");
+const { canonicalLockKey } = require("./write-locks");
+
+function currentCanonicalTargetKey(target) {
+  const currentRealPath = fs.realpathSync.native
+    ? fs.realpathSync.native(target.absolutePath)
+    : fs.realpathSync(target.absolutePath);
+  return canonicalLockKey(currentRealPath);
+}
+
+function assertTargetIdentityUnchanged(target, relativePath, journal, stateRoot) {
+  let currentKey = "";
+  try {
+    currentKey = currentCanonicalTargetKey(target);
+  } catch {
+    // A missing or temporarily unresolvable existing-file target is a changed identity.
+  }
+  if (currentKey === target.canonicalKey) return;
+  updateRuntimeTransactionEntry(journal, {
+    relativePath,
+    writeStarted: false,
+    writeCompleted: false,
+  }, stateRoot);
+  throw new Error(`Bundle target identity changed before commit: ${relativePath}`);
+}
 
 async function captureBundleBaseline(targets, journal, stateRoot) {
   const baseline = new Map();
@@ -76,7 +100,7 @@ function patchFailure(result, relativePath, item) {
           : "PATCH_CAS_FAILED"
     ),
     relativePath,
-    expectedOccurrences: Number(item?.expectedOccurrences ?? 1),
+    expectedOccurrences: item?.expectedOccurrences ?? 1,
   };
   return error;
 }
@@ -104,16 +128,16 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
   journal.status = "committing";
   saveRuntimeTransaction(journal, stateRoot);
   for (const item of bundle.patches || []) {
-    const relativePath = String(item.path).replace(/\\/g, "/");
+    const relativePath = normalizedBundlePath(item, "patch");
     const target = targets.get(relativePath);
     const original = baseline.get(relativePath);
     if (!target || !original) throw new Error(`Unknown patch path: ${relativePath}`);
     const priorContent = await fsp.readFile(target.absolutePath, "utf8");
     const planned = calculateReplacement({
       priorContent,
-      oldText: String(item.oldText || ""),
-      newText: String(item.newText || ""),
-      expectedOccurrences: Number(item.expectedOccurrences ?? 1),
+      oldText: item.oldText,
+      newText: item.newText,
+      expectedOccurrences: item.expectedOccurrences,
     });
     if (!planned.ok) throw patchFailure(planned, relativePath, item);
     const priorHash = sha256Text(priorContent);
@@ -136,13 +160,14 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
       postHash,
       journal,
     });
+    assertTargetIdentityUnchanged(target, relativePath, journal, stateRoot);
 
     const result = await replaceWithCAS({
       targetPath: target.absolutePath,
       priorContent,
-      oldText: String(item.oldText || ""),
-      newText: String(item.newText || ""),
-      expectedOccurrences: Number(item.expectedOccurrences ?? 1),
+      oldText: item.oldText,
+      newText: item.newText,
+      expectedOccurrences: item.expectedOccurrences,
       readHash: patchedPaths.has(relativePath)
         ? priorHash
         : (item.expectedHash || original.preHash || null),
@@ -166,55 +191,6 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
     }, stateRoot);
     postWriteHashes[relativePath] = postHash;
     patchedPaths.add(relativePath);
-    if (!writtenSet.has(target.absolutePath)) {
-      writtenSet.add(target.absolutePath);
-      writtenAbsolutePaths.push(target.absolutePath);
-    }
-  }
-
-  for (const item of bundle.files || []) {
-    const relativePath = String(item.path).replace(/\\/g, "/");
-    const target = targets.get(relativePath);
-    const original = baseline.get(relativePath);
-    if (!target || !original) throw new Error(`Unknown file path: ${relativePath}`);
-    if (original.existedBefore) {
-      throw new Error(`files[] cannot overwrite existing file ${relativePath}; use patches`);
-    }
-    const content = String(item.content || "");
-    const postHash = sha256Text(content);
-    updateRuntimeTransactionEntry(journal, {
-      relativePath,
-      operation: "create",
-      postHash,
-      intendedPostHashes: intendedHashes(journal, relativePath, postHash),
-      writeStarted: true,
-      writeCompleted: false,
-      restored: false,
-    }, stateRoot);
-    stageIndex += 1;
-    await callHook(hooks, "afterWriteAhead", {
-      operation: "create",
-      relativePath,
-      stageIndex,
-      priorHash: "",
-      postHash,
-      journal,
-    });
-    await createExclusive(target.absolutePath, content);
-    await callHook(hooks, "afterDiskWrite", {
-      operation: "create",
-      relativePath,
-      stageIndex,
-      priorHash: "",
-      postHash,
-      journal,
-    });
-    updateRuntimeTransactionEntry(journal, {
-      relativePath,
-      postHash,
-      writeCompleted: true,
-    }, stateRoot);
-    postWriteHashes[relativePath] = postHash;
     if (!writtenSet.has(target.absolutePath)) {
       writtenSet.add(target.absolutePath);
       writtenAbsolutePaths.push(target.absolutePath);

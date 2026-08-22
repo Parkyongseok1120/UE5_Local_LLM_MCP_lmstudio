@@ -31,6 +31,25 @@ def test_direct_system_prompt_leaves_workflow_and_finality_with_selected_model()
         assert forbidden not in text
 
 
+def test_direct_system_prompt_splits_noncontiguous_edits_across_tool_result_rounds() -> None:
+    text = read_text("prompts/lmstudio_direct_model_system.md")
+
+    for required in (
+        "emit one focused `replace_in_file` tool call immediately",
+        "Do not serialize future patches",
+        "reasoning or prose",
+        "new `fileVersionReceipt`",
+        "next prediction round",
+        "one or two existing-file patches",
+        "at most one focused patch per distinct file",
+        "bounded standalone skeleton",
+        "never creates files",
+        "never selects same-session evidence automatically",
+    ):
+        assert required in text
+    assert "wait for the user to say continue" not in text.lower()
+
+
 def test_every_supported_sampling_profile_selects_only_the_direct_prompt() -> None:
     config = json.loads(read_text("config/lmstudio_sampling.json"))
     prompts = {

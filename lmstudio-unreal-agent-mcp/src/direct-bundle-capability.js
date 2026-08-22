@@ -2,9 +2,10 @@
 
 const path = require("node:path");
 const { calculateReplacement } = require("./safe-write");
-const { validateWriteTarget } = require("./write-guards");
 const { applyDirectEditBundle, validateBundleLimits } = require("./direct-edit-bundle");
+const { normalizedBundlePath } = require("./direct-edit-bundle-plan");
 const { readStableTextFile } = require("./direct-file-snapshot");
+const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
 const { failure, success } = require("./direct-response");
 const {
@@ -13,8 +14,23 @@ const {
 } = require("./direct-file-version-policy.js");
 const {
   envFlag,
-  statOrNull,
 } = require("./direct-runtime-shared");
+
+const APPLY_EDIT_BUNDLE_FIELDS = new Set(["project", "patches"]);
+
+function frozenBundleTargetIdentity(resolution) {
+  const identity = (value) => canonicalAbsolutePathIdentity(
+    value,
+    process.platform,
+    { realpath: false },
+  );
+  return {
+    absolutePath: identity(resolution.absolutePath),
+    realPath: identity(resolution.realPath),
+    lexicalRoot: identity(resolution.projectDir),
+    allowedRealRoot: identity(resolution.allowedRealRoot),
+  };
+}
 
 function createBundleCapability(context) {
   const {
@@ -25,7 +41,6 @@ function createBundleCapability(context) {
     resolveCallProject,
     runtimeOwner,
     stateRoot,
-    workspaceRoot,
   } = context;
 
   function validationError(code, message) {
@@ -34,62 +49,56 @@ function createBundleCapability(context) {
     return error;
   }
 
+  function publicBundle(args) {
+    if (!args || typeof args !== "object" || Array.isArray(args)) {
+      throw validationError("INVALID_ARGUMENT", "apply_edit_bundle arguments must be an object");
+    }
+    const unsupported = Object.keys(args).find((key) => !APPLY_EDIT_BUNDLE_FIELDS.has(key));
+    if (unsupported) {
+      throw validationError(
+        "INVALID_ARGUMENT",
+        `apply_edit_bundle contains unsupported field: ${unsupported}`,
+      );
+    }
+    if (args.project !== undefined && typeof args.project !== "string") {
+      throw validationError("INVALID_ARGUMENT", "apply_edit_bundle.project must be a string when provided");
+    }
+    validateBundleLimits({ patches: args.patches }, limits);
+    return {
+      patches: args.patches.map((item) => ({
+        ...item,
+        path: normalizedBundlePath(item, "patch"),
+      })),
+    };
+  }
+
   async function validateProspective(bundle, projectSelector, requestContext) {
     validateBundleLimits(bundle, limits);
     const resolutions = new Map();
+    const targetIdentities = new Map();
     const prospective = new Map();
-    for (const file of bundle.files || []) {
-      const resolution = await mutationResolution(file.path, projectSelector);
-      resolutions.set(file.path, resolution);
-      const content = String(file.content ?? "");
-      const guard = await validateWriteTarget({
-        targetAbsPath: resolution.absolutePath,
-        workspaceRoot,
-        activeProjectPath: resolution.activeProject,
-        createDirs: true,
-        fileExists: async (target) => Boolean(await statOrNull(target)),
-        allowExistingWrite: false,
-      });
-      if (!guard.ok) throw new Error(guard.message);
-      prospective.set(file.path, { content, initialHash: "" });
-    }
-    for (const patch of bundle.patches || []) {
-      const resolution = resolutions.get(patch.path)
-        || await mutationResolution(patch.path, projectSelector);
+    for (const patch of bundle.patches) {
+      const resolution = await mutationResolution(patch.path, projectSelector);
       resolutions.set(patch.path, resolution);
-      let state = prospective.get(patch.path);
-      if (!state) {
-        const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
-        if (!read.ok) throw new Error(read.message);
-        const version = resolveVersionEvidence(context, resolution, patch, requestContext);
-        if (!version.ok) {
-          throw validationError(version.errorCode, `${patch.path}: ${version.message}`);
-        }
-        if (read.hash.toLowerCase() !== version.expectedHash) {
-          throw validationError("FILE_VERSION_CONFLICT", `${patch.path} changed after the selected read snapshot`);
-        }
-        patch.expectedHash = version.expectedHash;
-        state = { content: read.content, initialHash: read.hash, version };
-      } else if (state.initialHash) {
-        const carriesEvidence = String(patch.expectedHash || "").trim()
-          || String(patch.fileVersionReceipt || "").trim();
-        if (carriesEvidence) {
-          const version = resolveVersionEvidence(context, resolution, patch, requestContext);
-          if (!version.ok) throw validationError(version.errorCode, `${patch.path}: ${version.message}`);
-          if (state.initialHash.toLowerCase() !== version.expectedHash) {
-            throw validationError("FILE_VERSION_CONFLICT", `Version evidence differs between patches for ${patch.path}`);
-          }
-        }
-        patch.expectedHash = state.initialHash;
+      targetIdentities.set(patch.path, frozenBundleTargetIdentity(resolution));
+      const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
+      if (!read.ok) throw new Error(read.message);
+      const version = resolveVersionEvidence(context, resolution, patch, requestContext);
+      if (!version.ok) {
+        throw validationError(version.errorCode, `${patch.path}: ${version.message}`);
       }
+      if (read.hash.toLowerCase() !== version.expectedHash) {
+        throw validationError("FILE_VERSION_CONFLICT", `${patch.path} changed after the selected read snapshot`);
+      }
+      patch.expectedHash = version.expectedHash;
       const next = calculateReplacement({
-        priorContent: state.content,
+        priorContent: read.content,
         oldText: patch.oldText,
         newText: patch.newText,
-        expectedOccurrences: Number(patch.expectedOccurrences),
+        expectedOccurrences: patch.expectedOccurrences,
       });
       if (!next.ok) throw new Error(`${patch.path}: ${next.error}`);
-      prospective.set(patch.path, { ...state, content: next.updated });
+      prospective.set(patch.path, { content: next.updated, initialHash: read.hash, version });
     }
     const semanticAdvisories = [];
     for (const [relativePath, state] of prospective) {
@@ -102,17 +111,23 @@ function createBundleCapability(context) {
         semanticAdvisories.push({ ...advisory, path: `project://${relativePath}` });
       }
     }
-    return { resolutions, semanticAdvisories };
+    return { resolutions, semanticAdvisories, targetIdentities };
   }
 
   async function applyEditBundle(args, requestContext = {}) {
     if (!envFlag(env, "ALLOW_WRITE", false)) {
       return failure("WRITE_DISABLED", "Writes are disabled. Start the MCP with ALLOW_WRITE=1 to enable project mutations.");
     }
-    const bundle = {
-      files: Array.isArray(args.files) ? args.files.map((item) => ({ ...item })) : [],
-      patches: Array.isArray(args.patches) ? args.patches.map((item) => ({ ...item })) : [],
-    };
+    let bundle;
+    try {
+      bundle = publicBundle(args);
+    } catch (error) {
+      return failure(
+        error.code || "BUNDLE_VALIDATION_FAILED",
+        String(error.message || error),
+        { retryAllowed: true, retryMode: "different_arguments" },
+      );
+    }
     let validation;
     try {
       validation = await validateProspective(bundle, args.project, requestContext);
@@ -124,21 +139,35 @@ function createBundleCapability(context) {
         { retryAllowed: true, retryMode: "different_arguments" },
       );
     }
-    const { resolutions, semanticAdvisories } = validation;
+    const { resolutions, semanticAdvisories, targetIdentities } = validation;
     const firstResolution = resolutions.values().next().value;
     const activeProject = firstResolution?.activeProject || await resolveCallProject(args.project);
-    const result = await applyDirectEditBundle(bundle, async (relativePath) => {
-      const resolution = resolutions.get(relativePath)
-        || await mutationResolution(relativePath, args.project);
-      return { ok: true, absolutePath: resolution.absolutePath };
-    }, {
-      mutationLimits: limits,
-      projectRoot: path.dirname(path.resolve(activeProject)),
-      projectPath: activeProject,
-      runtimeOwner,
-      stateRoot,
-      transactionHooks: options.transactionHooks,
-    });
+    let result;
+    try {
+      result = await applyDirectEditBundle(bundle, async (relativePath) => {
+        const resolution = resolutions.get(relativePath)
+          || await mutationResolution(relativePath, args.project);
+        return {
+          ok: true,
+          absolutePath: resolution.absolutePath,
+          expectedIdentity: targetIdentities.get(relativePath)
+            || frozenBundleTargetIdentity(resolution),
+        };
+      }, {
+        mutationLimits: limits,
+        projectRoot: path.dirname(path.resolve(activeProject)),
+        projectPath: activeProject,
+        runtimeOwner,
+        stateRoot,
+        transactionHooks: options.transactionHooks,
+      });
+    } catch (error) {
+      return failure(
+        "BUNDLE_FAILED",
+        `Atomic edit bundle target validation failed: ${String(error.message || error)}`,
+        { retryAllowed: true, retryMode: "after_state_change" },
+      );
+    }
     if (!result.ok) {
       return failure(
         result.rollbackIncomplete

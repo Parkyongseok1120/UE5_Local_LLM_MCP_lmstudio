@@ -58,16 +58,16 @@ intentional choice.
   alternative.
 - [ ] A deliberately stale receipt or hash is rejected with
   `FILE_VERSION_CONFLICT` without overwriting the file.
-- [ ] Revert the smoke edit with the receipt returned by the first mutation. A
-  reliable same-session latest snapshot may be used automatically; an avoidable
-  re-read is not required between successful consecutive edits.
+- [ ] Revert the smoke edit by explicitly passing the receipt returned by the
+  first mutation; the server never selects same-session evidence automatically,
+  and an avoidable re-read is not required between successful consecutive edits.
 - [ ] A missing, expired, or wrong-scope receipt fails closed with
   `FILE_SNAPSHOT_REQUIRED`, `FILE_SNAPSHOT_INVALID`, or
   `FILE_SNAPSHOT_SCOPE_MISMATCH` as applicable.
 
-Atomic bundles are available for bounded multi-file edits; they are optional and
-must preflight each existing file's receipt, compatible raw hash, or reliable
-same-session snapshot before committing, preserving atomic CAS and rollback
+Atomic bundles are available for one or two bounded existing-file patches; they
+are optional and must preflight each patch's explicit receipt or compatible raw
+hash before committing, preserving atomic CAS and rollback
 guarantees. A deletion proposal returns its own short-lived approval token and
 `fileVersionReceipt`; deletion requires those values (or a compatible raw hash),
 the enabled source-deletion switch, and explicit user approval.

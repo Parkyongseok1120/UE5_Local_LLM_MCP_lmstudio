@@ -30,7 +30,9 @@ optional Node strict-server.js
 
 ## Direct workflow
 
-A common implementation flow is exact project selection, focused search/inspection, exact target reads that issue `fileVersionReceipt`, the smallest receipt/CAS-safe edit, and a relevant build/test diagnostic. A valid raw `expectedHash` remains compatible; a reliable same-session latest snapshot may resolve automatically, and successful mutations issue a new receipt for consecutive edits. This is model-selected work, not a server-owned sequence. Direct has no planner, route owner, required-next-tool instruction, handoff state, or synthesis acknowledgement.
+A common implementation flow is exact project selection, focused search/inspection, exact target reads that issue `fileVersionReceipt`, the smallest receipt/CAS-safe edit, and a relevant build/test diagnostic. Every existing-file mutation explicitly passes that receipt or a valid raw `expectedHash`; same-session evidence is never selected automatically, and successful mutations issue a new receipt for consecutive edits. This is model-selected work, not a server-owned sequence. Direct has no planner, route owner, required-next-tool instruction, handoff state, or synthesis acknowledgement.
+
+Standalone creates, replacements, and recoverable deletes re-resolve their lexical target, canonical real target, and containment root under the cooperative path lock; deletion also verifies the real trash ancestor before directory creation and the real trash parent afterward. Atomic bundle patches recheck their frozen canonical target immediately after write-ahead and before CAS. These checks close deterministic in-process path swaps, but path-based OS I/O still has a post-revalidation window. They are not an OS handle-relative `no-follow` guarantee against a hostile same-user process changing filesystem topology after the last revalidation.
 
 Build and Automation dispatch through one bounded process owner that retains head
 and tail output, reports omitted bytes, persists the same bounded projection, and

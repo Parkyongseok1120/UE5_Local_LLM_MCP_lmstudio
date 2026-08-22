@@ -67,9 +67,9 @@ active project의 유일한 저장소는 `SHARED_UNREAL_CONFIG`가 가리키는 
 
 - 쓰기: `ALLOW_WRITE=1` 필요
 - 새 파일: create-only; 기존 파일 덮어쓰기 금지
-- 기존 파일 변경: 읽기 또는 직전 변경에서 받은 `fileVersionReceipt`를 우선 사용. 유효한 raw `expectedHash`도 호환되며 신뢰 가능한 동일 session에서는 최신 snapshot을 자동 사용할 수 있음. 외부 변경은 `FILE_VERSION_CONFLICT`, 누락·만료·scope 불일치는 `FILE_SNAPSHOT_*`로 fail-closed
-- 연속 파일 변경: 성공한 mutation이 반환한 새 receipt 또는 신뢰 가능한 동일-session snapshot을 사용하며, 충돌이나 외부 상태가 불확실할 때 다시 읽음
-- 여러 파일 변경: 각 기존 파일의 receipt/raw hash/same-session snapshot을 commit 전에 모두 확인하는 transaction journal과 rollback을 갖춘 atomic bundle
+- 기존 파일 변경: 매 호출마다 읽기 또는 직전 변경에서 받은 `fileVersionReceipt`나 유효한 raw `expectedHash`를 명시적으로 전달. 동일 session의 최신 snapshot을 서버가 자동 선택하지 않음. 외부 변경은 `FILE_VERSION_CONFLICT`, 누락·만료·scope 불일치는 `FILE_SNAPSHOT_*`로 fail-closed
+- 연속 파일 변경: `replace_in_file` 한 호출은 정확히 한 구간(`expectedOccurrences=1`, `oldText` 1,200자, `newText` 2,800자, 합계 4,000자, `newText` 32줄)을 수정함. 성공한 mutation의 새 receipt를 다음 prediction round에 사용하며, 뒤 구간의 전체 인자를 reasoning/prose에 미리 직렬화하지 않음. 충돌이나 외부 상태가 불확실할 때 다시 읽음
+- 여러 파일 변경: `patches[]`에 기존 파일 patch 1~2개만 허용하고 합계 변경 줄 수는 최대 64줄. 정규화된 patch path 중복은 서버에서 금지하며, 서로 다른 두 파일의 작은 구간 하나씩은 각 explicit receipt/raw hash를 commit 전에 확인하는 transaction journal과 rollback으로 원자 적용. bundle은 파일을 생성하지 않으며 새 파일은 단독 `write_file`로만 생성
 - 삭제: `ALLOW_SOURCE_DELETE=1`, Source 경로, proposal이 반환한 receipt(또는 호환 raw hash), 만료되는 승인 토큰, `userApproved=true`가 모두 필요하며 recoverable trash로 이동
 - 빌드·Automation: `ALLOW_UNREAL_BUILD=1` 필요
 - 명령: `ALLOW_COMMANDS=1` 및 진단 allowlist 필요

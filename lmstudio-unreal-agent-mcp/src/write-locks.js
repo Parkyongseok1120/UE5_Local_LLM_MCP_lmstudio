@@ -246,8 +246,11 @@ function tryAcquireCrossProcessLock(absPath, label = "write", stateRoot = resolv
   }
 }
 
-function releaseCrossProcessLock(absPath) {
-  const key = canonicalLockKey(absPath);
+function releaseCrossProcessLock(pathOrHandle) {
+  const key = pathOrHandle && typeof pathOrHandle === "object"
+    ? pathOrHandle.key
+    : canonicalLockKey(pathOrHandle);
+  if (typeof key !== "string" || !key) return;
   const meta = pendingPaths.get(key);
   if (!meta) {
     return;
@@ -286,8 +289,8 @@ function tryAcquirePathLock(absPath, label = "write", options = {}) {
   return acquired;
 }
 
-function releasePathLock(absPath) {
-  releaseCrossProcessLock(absPath);
+function releasePathLock(pathOrHandle) {
+  releaseCrossProcessLock(pathOrHandle);
 }
 
 function isPathLocked(absPath) {
@@ -307,7 +310,7 @@ async function withPathLock(absPath, label, fn, options = {}) {
   try {
     return { locked: false, result: await fn() };
   } finally {
-    releasePathLock(absPath);
+    releasePathLock(acquired);
   }
 }
 

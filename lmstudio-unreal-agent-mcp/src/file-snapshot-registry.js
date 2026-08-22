@@ -8,7 +8,7 @@ const { statSignature } = require("./direct-runtime-shared.js");
 const SHA256_PATTERN = /^[a-f0-9]{64}$/iu;
 
 function validSha256(value) {
-  return SHA256_PATTERN.test(String(value || "").trim());
+  return typeof value === "string" && SHA256_PATTERN.test(value.trim());
 }
 
 function requestOwner(requestContext = {}) {
@@ -35,7 +35,6 @@ class FileSnapshotRegistry {
     this.now = typeof options.now === "function" ? options.now : () => Date.now();
     this.randomBytes = typeof options.randomBytes === "function" ? options.randomBytes : crypto.randomBytes;
     this.entries = new Map();
-    this.latestByOwnerPath = new Map();
     this.version = 0;
   }
 
@@ -52,18 +51,8 @@ class FileSnapshotRegistry {
     };
   }
 
-  latestKey(owner, identity) {
-    const key = ownerKey(owner);
-    return key ? `${key}\n${identity.pathKey}` : "";
-  }
-
   deleteReceipt(receipt) {
-    const entry = this.entries.get(receipt);
-    if (!entry) return;
     this.entries.delete(receipt);
-    if (entry.latestKey && this.latestByOwnerPath.get(entry.latestKey) === receipt) {
-      this.latestByOwnerPath.delete(entry.latestKey);
-    }
   }
 
   prune(now = this.now()) {
@@ -101,7 +90,6 @@ class FileSnapshotRegistry {
       this.deleteReceipt(this.entries.keys().next().value);
     }
     const receipt = `fvr1_${this.randomBytes(16).toString("base64url")}`;
-    const latestKey = this.latestKey(owner, identity);
     const entry = {
       receipt,
       version: ++this.version,
@@ -118,10 +106,8 @@ class FileSnapshotRegistry {
       expiresAt: now + this.ttlMs,
       lastAccessedAt: now,
       owner,
-      latestKey,
     };
     this.entries.set(receipt, entry);
-    if (latestKey) this.latestByOwnerPath.set(latestKey, receipt);
     return { entry: { ...entry }, ...this.publicSnapshot(entry) };
   }
 
@@ -153,7 +139,23 @@ class FileSnapshotRegistry {
     fileVersionReceipt,
     requestContext = {},
   }) {
-    const rawHash = String(expectedHash || "").trim();
+    if (expectedHash !== undefined && typeof expectedHash !== "string") {
+      return {
+        ok: false,
+        errorCode: "FILE_SNAPSHOT_REQUIRED",
+        message: "expectedHash must be a string when provided.",
+        malformedExpectedHash: true,
+      };
+    }
+    if (fileVersionReceipt !== undefined && typeof fileVersionReceipt !== "string") {
+      return {
+        ok: false,
+        errorCode: "FILE_SNAPSHOT_REQUIRED",
+        message: "fileVersionReceipt must be a string when provided.",
+        malformedExpectedHash: false,
+      };
+    }
+    const rawHash = (expectedHash || "").trim();
     if (validSha256(rawHash)) {
       return {
         ok: true,
@@ -163,9 +165,17 @@ class FileSnapshotRegistry {
       };
     }
     const malformedExpectedHash = Boolean(rawHash);
+    if (malformedExpectedHash) {
+      return {
+        ok: false,
+        errorCode: "FILE_SNAPSHOT_REQUIRED",
+        message: "expectedHash must be a valid 64-character SHA-256, or omit it and pass fileVersionReceipt.",
+        malformedExpectedHash: true,
+      };
+    }
     const identity = this.canonicalIdentity(projectPath, filePath);
     const owner = requestOwner(requestContext);
-    const receipt = String(fileVersionReceipt || "").trim();
+    const receipt = (fileVersionReceipt || "").trim();
     if (receipt) {
       const resolved = this.entryForReceipt(receipt, identity, owner);
       if (!resolved.ok) return { ...resolved, malformedExpectedHash };
@@ -177,28 +187,10 @@ class FileSnapshotRegistry {
         snapshot: this.publicSnapshot(resolved.entry),
       };
     }
-    const latestKey = this.latestKey(owner, identity);
-    if (latestKey) {
-      const latestReceipt = this.latestByOwnerPath.get(latestKey);
-      if (latestReceipt) {
-        const resolved = this.entryForReceipt(latestReceipt, identity, owner);
-        if (resolved.ok) {
-          return {
-            ok: true,
-            expectedHash: resolved.entry.hash,
-            hashSource: "server_snapshot",
-            malformedExpectedHash,
-            snapshot: this.publicSnapshot(resolved.entry),
-          };
-        }
-      }
-    }
     return {
       ok: false,
       errorCode: "FILE_SNAPSHOT_REQUIRED",
-      message: malformedExpectedHash
-        ? "expectedHash was malformed and no safe same-session snapshot or fileVersionReceipt was available."
-        : "Read the file first and pass its fileVersionReceipt. Automatic lookup is available only when the MCP transport supplies a reliable session ID.",
+      message: "Pass the explicit fileVersionReceipt returned by a read or immediately preceding mutation, or a valid raw expectedHash.",
       malformedExpectedHash,
     };
   }
@@ -214,7 +206,6 @@ class FileSnapshotRegistry {
     this.prune();
     return {
       entries: this.entries.size,
-      latestSessionPaths: this.latestByOwnerPath.size,
       maxEntries: this.maxEntries,
       ttlMs: this.ttlMs,
     };

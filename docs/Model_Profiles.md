@@ -48,9 +48,9 @@ chat.
 
 `writeSafety` cannot authorize a write. Direct MCP write tools independently
 enforce path scope, receipt-first snapshot/CAS checks, atomic replacement,
-locks, deletion approval, and output bounds. A valid raw `expectedHash` remains
-compatible, and a reliable same-session latest snapshot may resolve
-automatically.
+locks, deletion approval, and output bounds. Every existing-file mutation must
+explicitly pass its receipt or a valid raw `expectedHash`; session state is not
+selected automatically.
 
 The following controller surfaces are intentionally absent:
 

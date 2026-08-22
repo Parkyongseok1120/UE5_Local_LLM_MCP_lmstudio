@@ -81,10 +81,10 @@ Direct Mode has no task lease or checkpoint to recover. Re-establish observable 
 4. Recompute the smallest applicable patch; do not retry stale arguments.
 5. Run `build_unreal_project` immediately when compile diagnosis is needed.
 
-Within an uninterrupted reliable session, a successful mutation returns a new
-receipt and the latest same-session snapshot may resolve automatically for the
-next edit. After a process restart, receipt expiry/eviction, a version conflict,
-or uncertain external activity, re-read instead of assuming continuity.
+A successful mutation returns a new receipt; explicitly pass it to the next
+edit. The server never selects the latest same-session snapshot automatically.
+After a process restart, receipt expiry/eviction, a version conflict, or
+uncertain external activity, re-read instead of assuming continuity.
 
 If task lease/checkpoint errors appear, remove the unsupported legacy Python entry or stale process and reinstall the current Direct entries. Those errors are not part of the default Direct or Node Strict contract.
 
@@ -93,7 +93,7 @@ If task lease/checkpoint errors appear, remove the unsupported legacy Python ent
 | Error | Meaning and recovery |
 |-------|----------------------|
 | `FILE_VERSION_CONFLICT` | The current whole-file SHA no longer matches the resolved snapshot. Re-read the exact file, reconcile the external change, and patch the current text. |
-| `FILE_SNAPSHOT_REQUIRED` | No valid raw `expectedHash`, explicit receipt, or reliable same-session latest snapshot was available. Read the file and pass its `fileVersionReceipt`. |
+| `FILE_SNAPSHOT_REQUIRED` | No explicit valid raw `expectedHash` or `fileVersionReceipt` was supplied. Read the file and pass its returned receipt. |
 | `FILE_SNAPSHOT_INVALID` | The receipt expired, was evicted, or was not issued by this runtime. Re-read; do not reconstruct or persist opaque receipts across runtime restarts. |
 | `FILE_SNAPSHOT_SCOPE_MISMATCH` | The receipt belongs to another project, path, or reliable conversation/session owner. Select and read the exact target; never transfer receipts across those scopes. |
 

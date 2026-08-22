@@ -54,7 +54,7 @@ def test_compatibility_prompt_is_direct_not_a_second_controller() -> None:
     assert "lmstudio_direct_model_system.md" in lowered
     assert "there is no mandatory" in lowered
     assert "fileversionreceipt" in lowered
-    assert "same-session latest" in lowered
+    assert "same-session evidence is never selected" in lowered
     assert "create-only" in lowered
 
 
@@ -72,6 +72,25 @@ def test_tool_discipline_documents_concrete_write_and_build_boundaries() -> None
     assert "immediate diagnostic/execution capability" in lowered
     assert "target=editor" in lowered
     assert "build and automation share one bounded process owner" in lowered
+
+
+def test_tool_discipline_documents_focused_receipt_chained_edit_rounds() -> None:
+    text = _read(TOOL_DISCIPLINE)
+
+    for required in (
+        "expectedOccurrences=1",
+        "1,200 `oldText` characters",
+        "2,800 `newText` characters",
+        "4,000 combined characters",
+        "32 `newText` lines",
+        "next LM Studio prediction round",
+        "one or two existing-file patches",
+        "64 aggregate changed-line cap",
+        "distinct normalized patch paths",
+        "Standalone `write_file` is the only public create path",
+        "not an OS handle-relative `no-follow` guarantee",
+    ):
+        assert required in text
 
 
 def test_tool_discipline_documents_direct_repetition_without_forced_recovery() -> None:

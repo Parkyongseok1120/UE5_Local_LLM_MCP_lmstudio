@@ -140,6 +140,7 @@ def test_direct_agent_delete_file_requires_scoped_approval_and_current_hash() ->
     assert 'failure("APPROVAL_SCOPE_MISMATCH"' in delete_js
     assert "versionConflict(version" in delete_js
     assert 'failure(\n    "FILE_VERSION_CONFLICT"' in version_policy_js
-    assert "const trashPath = path.join(" in delete_js
+    assert "trashPath = path.join(" in delete_js
     assert '".agent-trash"' in delete_js
-    assert "fsp.rename(resolution.absolutePath, trashPath)" in delete_js
+    assert "nearestExistingAncestorRealPath(trashParent)" in delete_js
+    assert "fsp.rename(refreshed.absolutePath, trashPath)" in delete_js

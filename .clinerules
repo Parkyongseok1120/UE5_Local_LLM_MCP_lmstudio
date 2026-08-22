@@ -22,15 +22,16 @@ and do not hard-code an Unreal version or installation.
 
 - Treat current project files and build/log output as the source of truth; do
   not invent Unreal APIs.
-- Read an existing file before changing it. Prefer its `fileVersionReceipt` for
-  an exact, uniquely matching patch; a valid raw `expectedHash` remains
-  compatible, and a reliable same-session latest snapshot may resolve
-  automatically. Use the new receipt returned by a successful mutation for a
+- Read an existing file before changing it. Explicitly pass its
+  `fileVersionReceipt` for an exact, uniquely matching patch, or pass a valid
+  raw `expectedHash`; same-session evidence is never selected automatically.
+  Use the new receipt returned by a successful mutation for a
   consecutive edit. On `FILE_VERSION_CONFLICT` or `FILE_SNAPSHOT_*`, re-read
   instead of overwriting.
 - `write_file` is for a new file. Multi-file edits are allowed only through the
   bounded atomic bundle capability and each existing-file patch still needs its
-  current receipt, compatible raw hash, or reliable same-session snapshot.
+  explicit current receipt or compatible valid raw hash. The bundle never
+  creates files.
 - Keep project-root containment, path normalization, size/output limits, atomic
   writes, per-path locks, recoverable-delete approval, and command allowlists.
 - Static validation is advisory. A requested build may run immediately when

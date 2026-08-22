@@ -42,9 +42,9 @@ or profile-controlled retry loop.
 
 Smaller models do not weaken the MCP safety boundary. Direct writes still use
 path scope, receipt-first snapshot/CAS checks, atomic replacement, locks,
-recoverable deletion approval, size limits, and bounded responses. A valid raw
-`expectedHash` remains compatible, and a reliable same-session latest snapshot
-may be resolved automatically. Semantic denylist results are non-blocking
+recoverable deletion approval, size limits, and bounded responses. Every
+existing-file mutation explicitly passes its receipt or a valid raw
+`expectedHash`; session state is never selected automatically. Semantic denylist results are non-blocking
 advisories, including when the analyzer is unavailable. Builds are immediate
 diagnostic operations when enabled; they are not a completion gate.
 
