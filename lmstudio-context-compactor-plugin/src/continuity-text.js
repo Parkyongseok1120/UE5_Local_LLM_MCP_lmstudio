@@ -1,10 +1,23 @@
 "use strict";
 
+const { sanitizeDurableText } = require("./durable-memory-sanitizer.js");
+
 function clip(value, maxChars, { trim = true } = {}) {
   const raw = String(value ?? "");
   const text = trim ? raw.trim() : raw;
   if (text.length <= maxChars) return text;
   return `${text.slice(0, Math.max(0, maxChars - 18))} …[truncated]`;
+}
+
+function clipHeadTail(value, maxChars, { trim = true } = {}) {
+  const raw = String(value ?? "");
+  const text = trim ? raw.trim() : raw;
+  if (text.length <= maxChars) return text;
+  const marker = " …[middle truncated]… ";
+  if (maxChars <= marker.length + 2) return clip(text, maxChars, { trim: false });
+  const available = maxChars - marker.length;
+  const headLength = Math.ceil(available / 2);
+  return `${text.slice(0, headLength)}${marker}${text.slice(-(available - headLength))}`;
 }
 
 function sentenceCandidates(text) {
@@ -32,7 +45,7 @@ function recentConversationTail(messages, previousTail = [], options = {}) {
     if (!item || !["user", "assistant"].includes(String(item.role || ""))) continue;
     combined.push({
       role: String(item.role),
-      text: clip(item.text, maxTextChars, { trim: false }),
+      text: clip(sanitizeDurableText(item.text), maxTextChars, { trim: false }),
       source: "prior_checkpoint",
     });
   }
@@ -40,7 +53,7 @@ function recentConversationTail(messages, previousTail = [], options = {}) {
     if (!message || !["user", "assistant"].includes(message.role) || !message.text) continue;
     combined.push({
       role: message.role,
-      text: clip(message.text, maxTextChars, { trim: false }),
+      text: clip(sanitizeDurableText(message.text), maxTextChars, { trim: false }),
       messageIndex: message.index,
       source: "current_history",
     });
@@ -56,6 +69,7 @@ function recentConversationTail(messages, previousTail = [], options = {}) {
 
 module.exports = {
   clip,
+  clipHeadTail,
   looksElliptical,
   normalizedTextKey,
   recentConversationTail,

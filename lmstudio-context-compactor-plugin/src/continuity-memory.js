@@ -2,13 +2,24 @@
 
 const { buildObjectiveContinuity } = require("./continuity-objectives.js");
 const {
+  coalesceFileObservations,
+  migratePriorFileObservations,
+  projectRoot,
+} = require("./continuity-file-observations.js");
+const {
+  sanitizeDurableText,
+  sanitizeDurableValue,
+} = require("./durable-memory-sanitizer.js");
+const {
   clip,
   normalizedTextKey,
   recentConversationTail,
   sentenceCandidates,
 } = require("./continuity-text.js");
 
-const CONTINUITY_MARKER = "[Direct continuity state v1]";
+const CONTINUITY_MARKER = "[Direct continuity state v2]";
+const LEGACY_CONTINUITY_MARKER = "[Direct continuity state v1]";
+const CONTINUITY_MARKERS = Object.freeze([CONTINUITY_MARKER, LEGACY_CONTINUITY_MARKER]);
 
 function extractJsonObject(text, startAt) {
   const start = text.indexOf("{", startAt);
@@ -38,13 +49,18 @@ function extractPriorContinuityState(messages) {
   for (const message of [...messages].reverse()) {
     if (message.role !== "system") continue;
     const text = String(message.text || "");
-    const markerAt = text.indexOf(CONTINUITY_MARKER);
-    if (markerAt < 0) continue;
-    const json = extractJsonObject(text, markerAt + CONTINUITY_MARKER.length);
+    const marker = CONTINUITY_MARKERS
+      .map((value) => ({ value, index: text.indexOf(value) }))
+      .filter((candidate) => candidate.index >= 0)
+      .sort((left, right) => left.index - right.index)[0];
+    if (!marker) continue;
+    const json = extractJsonObject(text, marker.index + marker.value.length);
     if (!json) continue;
     try {
       const parsed = JSON.parse(json);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return sanitizeDurableValue(parsed);
+      }
     } catch {
       // A clipped or corrupt checkpoint is not continuity evidence.
     }
@@ -61,7 +77,7 @@ function lastAssistantUpdate(messages, minimumIndex = -1) {
   if (!message) return null;
   return {
     messageIndex: message.index,
-    text: clip(message.text, 2400, { trim: false }),
+    text: clip(sanitizeDurableText(message.text), 2400, { trim: false }),
     source: "assistant_history",
   };
 }
@@ -80,7 +96,7 @@ function pendingAssistantItems(messages, activeObjective, maxItems = 8) {
     if (message.role !== "assistant" || message.index < activeIndex) continue;
     for (const sentence of sentenceCandidates(message.text)) {
       if (!patterns.some((pattern) => pattern.test(sentence))) continue;
-      const text = clip(sentence, 800);
+      const text = clip(sanitizeDurableText(sentence), 800);
       const key = normalizedTextKey(text);
       if (!key || seen.has(key)) continue;
       seen.add(key);
@@ -118,6 +134,26 @@ function buildContinuityMemory(messages, facts, options = {}) {
     : -1;
   const samePriorObjective = normalizedTextKey(previousState?.activeObjective?.text)
     === normalizedTextKey(objective.activeObjective?.text);
+  const activeProjectExplicitlyCleared = facts.activeProject?.cleared === true;
+  const activeProjectCandidate = activeProjectExplicitlyCleared
+    ? null
+    : (facts.activeProject || previousState?.activeProject || null);
+  const activeProject = activeProjectCandidate ? {
+    ...activeProjectCandidate,
+    ...(activeProjectCandidate.descriptor ? {
+      root: activeProjectCandidate.root || projectRoot(activeProjectCandidate.descriptor),
+    } : {}),
+  } : null;
+  const previousFileObservations = migratePriorFileObservations(
+    previousWork.modifiedOrObservedFiles || [],
+    previousState,
+    12,
+  );
+  const currentFileObservations = coalesceFileObservations(
+    facts.modifiedOrObservedFiles || [],
+    12,
+    String(facts.activeProject?.descriptor || ""),
+  );
   const currentWorkStatus = {
     lastAssistantUpdate: lastAssistantUpdate(messages, activeIndex)
       || (samePriorObjective ? previousWork.lastAssistantUpdate : null),
@@ -125,22 +161,22 @@ function buildContinuityMemory(messages, facts, options = {}) {
       ...(previousWork.recentToolOutcomes || []),
       ...(facts.recentOlderToolOutcomes || []),
     ].slice(-6),
-    modifiedOrObservedFiles: [
-      ...(previousWork.modifiedOrObservedFiles || []),
-      ...(facts.modifiedOrObservedFiles || []),
-    ].slice(-12),
+    modifiedOrObservedFiles: coalesceFileObservations(
+      [...previousFileObservations, ...currentFileObservations],
+      12,
+    ),
     recentBuildOrTestState: [
       ...(previousWork.recentBuildOrTestState || []),
       ...(facts.recentBuildOrTestState || []),
     ].slice(-4),
   };
-  return {
-    schemaVersion: 1,
+  return sanitizeDurableValue({
+    schemaVersion: 2,
     authority: "factual_memory_only",
     latestUserMessage: objective.latestUserMessage,
     activeObjective: objective.activeObjective,
     continuationAntecedent: objective.continuationAntecedent,
-    activeProject: facts.activeProject || previousState?.activeProject || null,
+    activeProject,
     currentWorkStatus,
     unresolvedItems: mergeUnresolved(
       previousState,
@@ -154,11 +190,13 @@ function buildContinuityMemory(messages, facts, options = {}) {
       samePriorObjective ? previousState?.recentRawTail : [],
       { maxItems: options.recentRawTailItems || 8, maxTextChars: options.recentRawTailTextChars || 2000 },
     ),
-  };
+  });
 }
 
 module.exports = {
   CONTINUITY_MARKER,
+  CONTINUITY_MARKERS,
+  LEGACY_CONTINUITY_MARKER,
   buildContinuityMemory,
   extractPriorContinuityState,
 };

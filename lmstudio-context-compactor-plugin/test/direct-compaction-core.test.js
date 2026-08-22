@@ -10,6 +10,14 @@ function message(role, text, extra = {}) {
   return { role, text, hasFiles: false, toolRequests: [], toolResults: [], ...extra };
 }
 
+function assertNoDurableFileCapability(result) {
+  const durable = `${JSON.stringify(result.memory)}\n${result.checkpoint}`;
+  assert.doesNotMatch(
+    durable,
+    /fvr1_|fileVersionReceipt|snapshotVersion|current valid receipt|retry with this receipt|receipt for this file/iu,
+  );
+}
+
 test("latest real user request stays authoritative without promoting an older objective", () => {
   const old = "Implement the old combat feature";
   const latest = "시네마틱 C++ 구조만 분석해. 파일은 수정하지 마.";
@@ -126,6 +134,8 @@ test("older tool outcomes retain file/build facts but strip workflow control", (
           ok: true,
           operation: "replaced",
           path: "project://Source/Foo.cpp",
+          absolutePath: "C:\\Work\\Game\\Source\\Foo.cpp",
+          activeProject: "C:\\Work\\Game\\Game.uproject",
           sha256: "a".repeat(64),
           control: { requiredTool: "static_validate_project", allowedTools: ["static_validate_project"] },
           taskAuthorization: { ownerCapability: "secret" },
@@ -215,6 +225,7 @@ test("bundle mutation results retain each modified path and hash", () => {
         content: JSON.stringify({
           ok: true,
           operation: "bundle_applied",
+          activeProject: "C:\\Work\\BundleGame\\BundleGame.uproject",
           files: [
             { path: "project://Source/A.cpp", sha256: "a".repeat(64) },
             { path: "project://Source/B.h", sha256: "b".repeat(64) },
@@ -230,7 +241,1127 @@ test("bundle mutation results retain each modified path and hash", () => {
     "project://Source/A.cpp",
     "project://Source/B.h",
   ]);
-  assert.equal(result.memory.modifiedOrObservedFiles[1].sha256, "b".repeat(64));
+  assert.equal(result.memory.modifiedOrObservedFiles[1].sha256AtObservation, "b".repeat(64));
+  assert.equal(result.memory.modifiedOrObservedFiles[1].mutationSnapshotState, "fresh_read_required");
+});
+
+test("hard compaction drops a top-level file receipt and keeps only non-actionable file facts", () => {
+  const project = "C:\\Users\\sster\\Documents\\Github\\Project_MJS\\Project_MJS.uproject";
+  const absolutePath = "C:\\Users\\sster\\Documents\\Github\\Project_MJS\\Source\\Project_MJS\\Private\\Character\\SharedComponent\\HealthComponent.cpp";
+  const result = core.buildCheckpoint([
+    message("user", "Project_MJS의 사망 및 부활 파이프라인 구현을 계속해."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      operation: "replaced",
+      path: "project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp",
+      absolutePath,
+      activeProject: project,
+      sha256: "a".repeat(64),
+      fileVersionReceipt: "fvr1_health_cpp_live_capability",
+      snapshotVersion: 12,
+      snapshotCapturedAt: "2026-08-22T01:23:45.000Z",
+    }) }] }),
+    message("assistant", "HealthComponent.cpp was updated. Use receipt fvr1_health_cpp_live_capability for the next edit."),
+    message("user", "좋아, 계속 진행해."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, [{
+    canonicalProject: project,
+    canonicalProjectRoot: "C:\\Users\\sster\\Documents\\Github\\Project_MJS",
+    canonicalPath: absolutePath,
+    path: "project://Source/Project_MJS/Private/Character/SharedComponent/HealthComponent.cpp",
+    observationState: "modified",
+    sha256AtObservation: "a".repeat(64),
+    lastObservedAt: "2026-08-22T01:23:45.000Z",
+    mutationSnapshotState: "fresh_read_required",
+  }]);
+});
+
+test("nested bundle results cannot preserve receipts or registry ordering counters", () => {
+  const project = "C:\\Work\\CloneA\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "두 파일 변경을 이어서 완료해."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      operation: "bundle_applied",
+      activeProject: project,
+      files: [
+        {
+          path: "project://Source/A.cpp",
+          sha256: "a".repeat(64),
+          fileVersionReceipt: "fvr1_bundle_a",
+          snapshotVersion: 31,
+          snapshotCapturedAt: "2026-08-22T02:00:00.000Z",
+        },
+        {
+          path: "project://Source/B.h",
+          sha256: "b".repeat(64),
+          FILE_VERSION_RECEIPT: "fvr1_bundle_b",
+          snapshot_version: 32,
+        },
+      ],
+    }) }] }),
+    message("user", "계속해."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  assert.equal(result.memory.modifiedOrObservedFiles.length, 2);
+  assert.deepEqual(
+    result.memory.modifiedOrObservedFiles.map((item) => item.mutationSnapshotState),
+    ["fresh_read_required", "fresh_read_required"],
+  );
+});
+
+test("assistant progress text loses executable receipt instructions without losing the completed fact", () => {
+  const result = core.buildCheckpoint([
+    message("user", "Implement the death pipeline."),
+    message("assistant", "HealthComponent.cpp is implemented; retry with this receipt fvr1_retry_me for the header. The build has not run yet."),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  const update = result.memory.currentWorkStatus.lastAssistantUpdate.text;
+  assert.match(update, /HealthComponent\.cpp is implemented/iu);
+  assert.match(update, /fresh file snapshot required before mutation/iu);
+  assert.match(update, /build has not run yet/iu);
+});
+
+test("mixed assistant prose cannot carry a receipt instruction across hard compaction", () => {
+  const result = core.buildCheckpoint([
+    message("user", "Implement the death pipeline."),
+    message("assistant", "Diagnose the failure, then retry with the previous receipt for the header."),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+  const durable = JSON.stringify(result.memory);
+
+  assert.match(durable, /fresh file snapshot required before mutation/iu);
+  assert.doesNotMatch(durable, /retry with the previous receipt/iu);
+  assertNoDurableFileCapability(result);
+});
+
+test("a prior raw tail is sanitized before it is inherited", () => {
+  const prior = {
+    schemaVersion: 1,
+    authority: "factual_memory_only",
+    latestUserMessage: "Implement the death pipeline.",
+    activeObjective: { kind: "user_request", status: "active", text: "Implement the death pipeline.", source: "current_history" },
+    currentWorkStatus: {},
+    unresolvedItems: [],
+    recentRawTail: [{ role: "assistant", text: "The current valid receipt is fvr1_prior_tail. Use it now." }],
+  };
+  const result = core.buildCheckpoint([
+    message("system", `[Direct continuity state v1]\n${JSON.stringify(prior)}`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  assert.match(JSON.stringify(result.memory.recentRawTail), /fresh file snapshot required before mutation/iu);
+  assert.equal(result.memory.schemaVersion, 2);
+  assert.match(result.checkpoint, /\[Direct continuity state v2\]/u);
+});
+
+test("prior unresolved items and assistant pending evidence cannot replay a receipt", () => {
+  const prior = {
+    schemaVersion: 1,
+    authority: "factual_memory_only",
+    latestUserMessage: "Implement the death pipeline.",
+    activeObjective: { kind: "user_request", status: "active", text: "Implement the death pipeline.", source: "current_history" },
+    currentWorkStatus: {
+      lastAssistantUpdate: { text: "Use fvr1_prior_update in the next mutation.", source: "assistant_history" },
+    },
+    unresolvedItems: [{ kind: "assistant_progress_evidence", text: "Need to retry with this receipt fvr1_prior_pending." }],
+    recentRawTail: [],
+  };
+  const result = core.buildCheckpoint([
+    message("system", `[Direct continuity state v1]\n${JSON.stringify(prior)}`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  assert.match(JSON.stringify(result.memory.unresolvedItems), /fresh file snapshot required before mutation/iu);
+});
+
+test("three hard compactions preserve the objective while never reviving an old receipt", () => {
+  const objective = "Project_MJS의 사망, 피격, 부활 파이프라인을 끝까지 구현하고 빌드해.";
+  const compact = (history) => {
+    const result = core.buildCheckpoint(history, { recentCompleteTurns: 0, maxCheckpointChars: 16000 });
+    const retained = new Set(result.retainedIndexes);
+    return {
+      result,
+      history: [
+        ...history.filter((item, index) => item.role === "system" && retained.has(index)),
+        message("system", result.checkpoint),
+        ...history.filter((item, index) => item.role !== "system" && retained.has(index)),
+      ],
+    };
+  };
+
+  let history = [
+    message("user", objective),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      path: "project://Source/HealthComponent.h",
+      operation: "observed",
+      sha256: "c".repeat(64),
+      fileVersionReceipt: "fvr1_health_header_v1",
+      snapshotVersion: 1,
+    }) }] }),
+    message("assistant", "I will use fvr1_health_header_v1 for HealthComponent.h next."),
+    message("user", "계속 진행해."),
+  ];
+  const first = compact(history);
+  assertNoDurableFileCapability(first.result);
+  assert.doesNotMatch(JSON.stringify(first.result.memory), /\b(?:use|reuse|pass)\b[^.!?]{0,100}ephemeral file capability omitted/iu);
+  assert.match(JSON.stringify(first.result.memory), /fresh file snapshot required before mutation/iu);
+  history = [...first.history, message("assistant", "The receipt for this file is fvr1_after_first; retry with this receipt."), message("user", "계속해.")];
+  const second = compact(history);
+  assertNoDurableFileCapability(second.result);
+  history = [...second.history, message("assistant", "Current valid receipt: fvr1_after_second."), message("user", "진행해.")];
+  const third = compact(history);
+  assertNoDurableFileCapability(third.result);
+
+  for (const round of [first, second, third]) {
+    assert.equal(round.result.memory.activeObjective.text, objective);
+  }
+});
+
+test("emergency-size checkpoint also removes receipts from every compressed surface", () => {
+  const result = core.buildCheckpoint([
+    message("user", `Implement the combat pipeline ${"goal ".repeat(5000)}`),
+    message("assistant", `Use receipt fvr1_emergency_capability for this file. ${"progress ".repeat(5000)}`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0, maxCheckpointChars: 2000 });
+
+  assertNoDurableFileCapability(result);
+  const marker = result.checkpoint.indexOf("[Direct continuity state v2]");
+  assert.doesNotThrow(() => JSON.parse(result.checkpoint.slice(result.checkpoint.indexOf("{", marker))));
+});
+
+test("receipt-safety diagnosis remains the active objective through an emergency continuation", () => {
+  const objective = [
+    "Diagnose why receipt reuse crosses same-name clones and fix canonical project/path association.",
+    "Retain the exact project facts while preserving the current objective through hard compaction.",
+    "CRITICAL: preserve canonical file observations and never redesign the server/controller.",
+  ].join(" ");
+  const result = core.buildCheckpoint([
+    message("user", objective),
+    message("assistant", `Evidence gathered. ${"progress ".repeat(5000)}`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0, maxCheckpointChars: 2000 });
+  const marker = result.checkpoint.indexOf("[Direct continuity state v2]");
+  const parsed = JSON.parse(result.checkpoint.slice(result.checkpoint.indexOf("{", marker)));
+
+  assert.deepEqual(result.retainedIndexes, [2]);
+  assert.equal(result.memory.activeObjective.text, objective);
+  assert.equal(parsed.activeObjective.text, objective);
+  assert.match(parsed.activeObjective.text, /CRITICAL: preserve canonical file observations/u);
+  assert.ok(result.checkpoint.length <= 2000, result.checkpoint.length);
+});
+
+test("emergency rendering budgets canonical observations instead of imposing a two-file cap", () => {
+  const project = "C:\\Work\\Emergency\\Emergency.uproject";
+  const reads = Array.from({ length: 6 }, (_, index) => message("tool", "", {
+    toolResults: [{ content: JSON.stringify({
+      ok: true,
+      activeProject: project,
+      path: `project://Source/File${index}.cpp`,
+      absolutePath: `C:\\Work\\Emergency\\Source\\File${index}.cpp`,
+      sha256: String(index).repeat(64),
+      fileVersionReceipt: `fvr1_emergency_${index}`,
+      snapshotVersion: index + 1,
+    }) }],
+  }));
+  const result = core.buildCheckpoint([
+    message("user", "Keep the active objective and as many exact canonical file observations as fit."),
+    ...reads,
+    message("assistant", `Analysis complete. ${"large progress ".repeat(5000)}`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0, maxCheckpointChars: 4000 });
+  const marker = result.checkpoint.indexOf("[Direct continuity state v2]");
+  const parsed = JSON.parse(result.checkpoint.slice(result.checkpoint.indexOf("{", marker)));
+
+  assert.ok(parsed.currentWorkStatus.modifiedOrObservedFiles.length > 2);
+  assert.ok(parsed.currentWorkStatus.modifiedOrObservedFiles.every((item) => (
+    item.canonicalProject === project && item.mutationSnapshotState === "fresh_read_required"
+  )));
+  assert.ok(result.checkpoint.length <= 4000, result.checkpoint.length);
+});
+
+test("emergency rendering keeps its hard size bound with an oversized inherited project descriptor", () => {
+  const descriptor = `C:\\${"VeryLongProjectSegment\\".repeat(120)}Game.uproject`;
+  const prior = {
+    schemaVersion: 2,
+    authority: "factual_memory_only",
+    latestUserMessage: "Inspect the project.",
+    activeObjective: { kind: "user_request", status: "active", text: "Inspect the project.", source: "prior_checkpoint" },
+    activeProject: { descriptor, root: descriptor.slice(0, -"Game.uproject".length), source: "tool_result_fact" },
+    currentWorkStatus: { recentToolOutcomes: [], modifiedOrObservedFiles: [], recentBuildOrTestState: [] },
+    unresolvedItems: [],
+    completedOrArchivedObjectives: [],
+    recentRawTail: [],
+  };
+  const result = core.buildCheckpoint([
+    message("system", `[Direct continuity state v2]\n${JSON.stringify(prior)}`),
+    message("assistant", "Continue the exact objective."),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0, maxCheckpointChars: 2000 });
+  const marker = result.checkpoint.indexOf("[Direct continuity state v2]");
+  const parsed = JSON.parse(result.checkpoint.slice(result.checkpoint.indexOf("{", marker)));
+
+  assert.ok(result.checkpoint.length <= 2000, result.checkpoint.length);
+  assert.equal(parsed.activeObjective.text, "Inspect the project.");
+  assert.equal(parsed.activeProject, null);
+});
+
+test("same-name clones remain distinct factual observations and neither is mutation-authoritative", () => {
+  const gitProject = "C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Project_MJS.uproject";
+  const githubProject = "C:\\Users\\sster\\Documents\\Github\\Project_MJS\\Project_MJS.uproject";
+  const readResult = (activeProject, absolutePath, receipt, hash) => message("tool", "", {
+    toolResults: [{ content: JSON.stringify({
+      ok: true,
+      path: "project://Source/Project_MJS/Public/Character/SharedComponent/HealthComponent.h",
+      absolutePath,
+      activeProject,
+      sha256: hash,
+      fileVersionReceipt: receipt,
+      snapshotVersion: 1,
+      snapshotCapturedAt: "2026-08-22T03:00:00.000Z",
+    }) }],
+  });
+  const result = core.buildCheckpoint([
+    message("user", "두 checkout의 관찰 사실을 구분해."),
+    readResult(githubProject, "C:\\Users\\sster\\Documents\\Github\\Project_MJS\\Source\\Project_MJS\\Public\\Character\\SharedComponent\\HealthComponent.h", "fvr1_github", "a".repeat(64)),
+    readResult(gitProject, "C:\\Users\\sster\\Documents\\Git\\Project_MJS\\Source\\Project_MJS\\Public\\Character\\SharedComponent\\HealthComponent.h", "fvr1_git", "b".repeat(64)),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  assert.equal(result.memory.modifiedOrObservedFiles.length, 2);
+  assert.deepEqual(
+    new Set(result.memory.modifiedOrObservedFiles.map((item) => item.canonicalProject)),
+    new Set([githubProject, gitProject]),
+  );
+  assert.ok(result.memory.modifiedOrObservedFiles.every((item) => item.mutationSnapshotState === "fresh_read_required"));
+  assert.equal(result.memory.activeProject.root, "C:\\Users\\sster\\Documents\\Git\\Project_MJS");
+});
+
+test("a per-call exact project keeps a write on that clone without changing the active clone", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Create one file in Clone B while Clone A remains active."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      activeProject: cloneA,
+      path: "project://Source/Existing.cpp",
+      absolutePath: "C:\\Work\\CloneA\\Source\\Existing.cpp",
+      sha256: "a".repeat(64),
+    }) }] }),
+    message("assistant", "", { toolRequests: [{
+      id: "write-clone-b",
+      type: "function",
+      name: "write_file",
+      arguments: { project: cloneB, path: "Source/New.cpp", content: "// new" },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "write-clone-b",
+      content: JSON.stringify({
+        ok: true,
+        operation: "created",
+        path: "project://Source/New.cpp",
+        sha256: "b".repeat(64),
+      }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  const created = result.memory.modifiedOrObservedFiles.find((item) => item.path.endsWith("New.cpp"));
+  assert.equal(result.memory.activeProject.descriptor, cloneA);
+  assert.equal(created.canonicalProject, cloneB);
+  assert.equal(created.canonicalPath, "C:\\Work\\CloneB\\Source\\New.cpp");
+  assert.equal(created.mutationSnapshotState, "fresh_read_required");
+});
+
+test("a per-call read cannot change active project or retarget the next unscoped write", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Read Clone B once, then create the next file in still-active Clone A."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ ok: true, activeProject: cloneA }) }] }),
+    message("assistant", "", { toolRequests: [{
+      id: "read-clone-b",
+      type: "function",
+      name: "read_file",
+      arguments: { project: cloneB, path: "project://Source/B.cpp" },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "read-clone-b",
+      content: JSON.stringify({
+        ok: true,
+        activeProject: cloneB,
+        resolvedRootType: "active_project",
+        path: "project://Source/B.cpp",
+        absolutePath: "C:\\Work\\CloneB\\Source\\B.cpp",
+        sha256: "b".repeat(64),
+      }),
+    }] }),
+    message("assistant", "", { toolRequests: [{
+      id: "write-active-a",
+      type: "function",
+      name: "write_file",
+      arguments: { path: "Source/NewA.cpp", content: "// active clone" },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "write-active-a",
+      content: JSON.stringify({
+        ok: true,
+        operation: "created",
+        path: "project://Source/NewA.cpp",
+        sha256: "a".repeat(64),
+      }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  const byPath = new Map(result.memory.modifiedOrObservedFiles.map((item) => [item.path, item]));
+  assert.equal(result.memory.activeProject.descriptor, cloneA);
+  assert.equal(byPath.get("project://Source/B.cpp").canonicalProject, cloneB);
+  assert.equal(byPath.get("project://Source/NewA.cpp").canonicalProject, cloneA);
+  assert.equal(byPath.get("project://Source/NewA.cpp").canonicalPath, "C:\\Work\\CloneA\\Source\\NewA.cpp");
+});
+
+test("set_active_project remains the explicit owner of a durable active-project transition", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Switch the selected project to Clone B."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ ok: true, activeProject: cloneA }) }] }),
+    message("assistant", "", { toolRequests: [{
+      id: "select-clone-b",
+      type: "function",
+      name: "set_active_project",
+      arguments: { projectPath: cloneB },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "select-clone-b",
+      content: JSON.stringify({ ok: true, activeProject: cloneB, selected: true }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.activeProject.descriptor, cloneB);
+  assert.equal(result.memory.activeProject.root, "C:\\Work\\CloneB");
+});
+
+test("a successful explicit project clear cannot revive the previous active project", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Clear the selected Unreal project."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ ok: true, activeProject: cloneA }) }] }),
+    message("assistant", "", { toolRequests: [{
+      id: "clear-active-project",
+      type: "function",
+      name: "set_active_project",
+      arguments: { clear: true },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "clear-active-project",
+      content: JSON.stringify({ ok: true, activeProject: null, selected: false }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.activeProject, null);
+});
+
+test("an unresolved or mismatched per-call project is never guessed from the active clone", () => {
+  const active = "C:\\Work\\CloneA\\Game.uproject";
+  const base = message("tool", "", { toolResults: [{ content: JSON.stringify({
+    ok: true,
+    activeProject: active,
+    path: "project://Source/Existing.cpp",
+    absolutePath: "C:\\Work\\CloneA\\Source\\Existing.cpp",
+    sha256: "a".repeat(64),
+  }) }] });
+  const request = message("assistant", "", { toolRequests: [{
+    id: "named-project-call",
+    type: "function",
+    name: "write_file",
+    arguments: { project: "Game", path: "Source/Ambiguous.cpp", content: "// ambiguous" },
+  }] });
+  const result = core.buildCheckpoint([
+    message("user", "Do not guess a clone for unresolved request evidence."),
+    base,
+    request,
+    message("tool", "", { toolResults: [{
+      toolCallId: "different-call-id",
+      content: JSON.stringify({
+        ok: true,
+        operation: "created",
+        path: "project://Source/Ambiguous.cpp",
+        sha256: "b".repeat(64),
+      }),
+    }] }),
+    message("assistant", "", { toolRequests: [{
+      id: "named-project-call-2",
+      type: "function",
+      name: "write_file",
+      arguments: { project: "Game", path: "Source/Ambiguous2.cpp", content: "// ambiguous" },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "named-project-call-2",
+      content: JSON.stringify({
+        ok: true,
+        operation: "created",
+        path: "project://Source/Ambiguous2.cpp",
+        sha256: "c".repeat(64),
+      }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.equal(result.memory.activeProject.descriptor, active);
+  assert.equal(
+    result.memory.modifiedOrObservedFiles.some((item) => item.path.endsWith("Ambiguous.cpp")),
+    false,
+  );
+  assert.equal(
+    result.memory.modifiedOrObservedFiles.some((item) => item.path.endsWith("Ambiguous2.cpp")),
+    false,
+  );
+});
+
+test("an unmatched request cannot scope a later ID-less write to another clone", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Edit the active clone safely."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ ok: true, activeProject: cloneA }) }] }),
+    message("assistant", "", { toolRequests: [{
+      id: "read-b",
+      name: "read_file",
+      arguments: { project: cloneB, path: "project://Source/B.cpp" },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "wrong-id",
+      content: JSON.stringify({
+        ok: true,
+        path: "project://Source/B.cpp",
+        absolutePath: "C:\\Work\\CloneB\\Source\\B.cpp",
+        sha256: "b".repeat(64),
+      }),
+    }] }),
+    message("assistant", "", { toolRequests: [{
+      id: "write-a",
+      name: "write_file",
+      arguments: { path: "Source/New.cpp", content: "x" },
+    }] }),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      operation: "created",
+      path: "project://Source/New.cpp",
+      sha256: "c".repeat(64),
+    }) }] }),
+  ], { recentCompleteTurns: 0 });
+
+  const created = result.memory.modifiedOrObservedFiles.find((item) => item.path.endsWith("New.cpp"));
+  assert.equal(result.memory.activeProject.descriptor, cloneA);
+  assert.equal(created.canonicalProject, cloneA);
+  assert.equal(created.canonicalPath, "C:\\Work\\CloneA\\Source\\New.cpp");
+  assert.equal(
+    result.memory.modifiedOrObservedFiles.some((item) => item.path.endsWith("B.cpp")),
+    false,
+  );
+});
+
+test("duplicate tool-call IDs cannot choose one of two clone scopes", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Do not guess between duplicate request IDs."),
+    message("assistant", "", { toolRequests: [
+      { id: "duplicate", name: "write_file", arguments: { project: cloneA, path: "Source/A.cpp" } },
+      { id: "duplicate", name: "write_file", arguments: { project: cloneB, path: "Source/B.cpp" } },
+    ] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "duplicate",
+      content: JSON.stringify({
+        ok: true,
+        operation: "created",
+        path: "project://Source/A.cpp",
+        sha256: "a".repeat(64),
+      }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.equal(result.memory.activeProject, null);
+});
+
+test("reverse ID-less results from different clone scopes are omitted as ambiguous", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Do not infer ordering for optional tool-call IDs."),
+    message("assistant", "", { toolRequests: [
+      { id: "write-a", name: "write_file", arguments: { project: cloneA, path: "Source/A.cpp" } },
+      { id: "write-b", name: "write_file", arguments: { project: cloneB, path: "Source/B.cpp" } },
+    ] }),
+    message("tool", "", { toolResults: [
+      { content: JSON.stringify({ ok: true, operation: "created", path: "project://Source/B.cpp", sha256: "b".repeat(64) }) },
+      { content: JSON.stringify({ ok: true, operation: "created", path: "project://Source/A.cpp", sha256: "a".repeat(64) }) },
+    ] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.equal(result.memory.activeProject, null);
+});
+
+test("unique exact IDs remain correlatable when one request batch returns in multiple tool messages", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Observe both exact clones."),
+    message("assistant", "", { toolRequests: [
+      { id: "read-a", name: "read_file", arguments: { project: cloneA, path: "Source/A.cpp" } },
+      { id: "read-b", name: "read_file", arguments: { project: cloneB, path: "Source/B.cpp" } },
+    ] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "read-a",
+      content: JSON.stringify({ ok: true, path: "project://Source/A.cpp", sha256: "a".repeat(64) }),
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "read-b",
+      content: JSON.stringify({ ok: true, path: "project://Source/B.cpp", sha256: "b".repeat(64) }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.deepEqual(
+    result.memory.modifiedOrObservedFiles.map((item) => item.canonicalProject),
+    [cloneA, cloneB],
+  );
+});
+
+test("an ambiguous ID-less result does not prevent a later exact ID from retaining its own scope", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Retain only results with proven correlation."),
+    message("assistant", "", { toolRequests: [
+      { id: "read-a", name: "read_file", arguments: { project: cloneA, path: "Source/A.cpp" } },
+      { id: "read-b", name: "read_file", arguments: { project: cloneB, path: "Source/B.cpp" } },
+    ] }),
+    message("tool", "", { toolResults: [{
+      content: JSON.stringify({ ok: true, path: "project://Source/Unknown.cpp", sha256: "0".repeat(64) }),
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "read-b",
+      content: JSON.stringify({ ok: true, path: "project://Source/B.cpp", sha256: "b".repeat(64) }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.deepEqual(result.memory.modifiedOrObservedFiles.map((item) => item.path), ["project://Source/B.cpp"]);
+  assert.equal(result.memory.modifiedOrObservedFiles[0].canonicalProject, cloneB);
+});
+
+test("a conflicting per-call result project is omitted instead of crossing clone scope", () => {
+  const cloneA = "C:\\Work\\CloneA\\Game.uproject";
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Keep exact per-call clone scope."),
+    message("assistant", "", { toolRequests: [{
+      id: "read-b",
+      name: "read_file",
+      arguments: { project: cloneB, path: "Source/B.cpp" },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "read-b",
+      content: JSON.stringify({
+        ok: true,
+        activeProject: cloneA,
+        path: "project://Source/B.cpp",
+        absolutePath: "C:\\Work\\CloneA\\Source\\B.cpp",
+        sha256: "b".repeat(64),
+      }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.equal(result.memory.activeProject, null);
+  assert.match(JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes), /omitted_inconsistent_project_scope/u);
+});
+
+test("bundle bare relative paths become canonical only under the proven exact project", () => {
+  const project = "C:\\Work\\Game\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Apply the focused header and implementation bundle."),
+    message("assistant", "", { toolRequests: [{
+      id: "bundle-call",
+      type: "function",
+      name: "apply_edit_bundle",
+      arguments: { project, patches: [] },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "bundle-call",
+      content: JSON.stringify({
+        ok: true,
+        operation: "bundle_applied",
+        files: [
+          { path: "Source/A.cpp", previousSha256: "1".repeat(64), sha256: "2".repeat(64) },
+          { path: "Plugins/P/Source/P/B.cpp", previousSha256: "3".repeat(64), sha256: "4".repeat(64) },
+        ],
+      }),
+    }] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.deepEqual(
+    result.memory.modifiedOrObservedFiles.map((item) => item.canonicalPath),
+    ["C:\\Work\\Game\\Source\\A.cpp", "C:\\Work\\Game\\Plugins\\P\\Source\\P\\B.cpp"],
+  );
+  assert.ok(result.memory.modifiedOrObservedFiles.every((item) => item.canonicalProject === project));
+});
+
+test("workspace and outside absolute paths are never attached to an active project observation", () => {
+  const project = "C:\\Work\\Game\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Keep only canonical project-contained file observations."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      activeProject: project,
+      resolvedRootType: "workspace",
+      path: "workspace://README.md",
+      absolutePath: "C:\\Repo\\README.md",
+      workspaceRelativePath: "README.md",
+      sha256: "1".repeat(64),
+    }) }] }),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      activeProject: project,
+      resolvedRootType: "active_project",
+      path: "project://../CloneB/Bad.cpp",
+      absolutePath: "C:\\Work\\CloneB\\Bad.cpp",
+      sha256: "2".repeat(64),
+    }) }] }),
+  ], { recentCompleteTurns: 0 });
+  const durableOutcomes = JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes);
+
+  assert.equal(result.memory.activeProject.descriptor, project);
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.doesNotMatch(durableOutcomes, /workspace:\/\/README|C:\\\\Repo\\\\README|CloneB\\\\Bad/iu);
+  assert.match(durableOutcomes, /omitted_non_project_scope/u);
+});
+
+test("workspace paths are removed from durable tool outcomes even without an active project", () => {
+  const result = core.buildCheckpoint([
+    message("user", "Inspect only exact project files."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      resolvedRootType: "workspace",
+      path: "workspace://README.md",
+      absolutePath: "C:\\Repo\\README.md",
+      sha256: "1".repeat(64),
+    }) }] }),
+  ], { recentCompleteTurns: 0 });
+  const durableOutcomes = JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes);
+
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.doesNotMatch(durableOutcomes, /workspace:\/\/README|C:\\\\Repo\\\\README|"sha256"/iu);
+  assert.match(durableOutcomes, /omitted_non_project_scope/u);
+});
+
+test("path-only workspace errors cannot survive as rootless durable file identity", () => {
+  const result = core.buildCheckpoint([
+    message("user", "Inspect only canonical project files."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: false,
+      errorCode: "NOT_FOUND",
+      resolvedRootType: "workspace",
+      path: "workspace://README.md",
+    }) }] }),
+  ], { recentCompleteTurns: 0 });
+  const durableOutcomes = JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes);
+
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.doesNotMatch(durableOutcomes, /workspace:\/\/README/iu);
+  assert.match(durableOutcomes, /omitted_non_project_scope/u);
+});
+
+test("bounded tool display never discards extracted bundle file facts", () => {
+  const project = "C:\\LongProjectSegment\\Game\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Apply bundle."),
+    message("assistant", "", { toolRequests: [{
+      id: "bundle",
+      name: "apply_edit_bundle",
+      arguments: { project, patches: [] },
+    }] }),
+    message("tool", "", { toolResults: [{
+      toolCallId: "bundle",
+      content: JSON.stringify({
+        ok: true,
+        operation: "bundle_applied",
+        files: [
+          {
+            path: "Source/VeryLongModuleName/Private/Subsystem/AComponent.cpp",
+            previousSha256: "1".repeat(64),
+            sha256: "2".repeat(64),
+          },
+          {
+            path: "Plugins/VeryLongPluginName/Source/VeryLongPluginName/Private/BComponent.cpp",
+            previousSha256: "3".repeat(64),
+            sha256: "4".repeat(64),
+          },
+        ],
+      }),
+    }] }),
+  ], { recentCompleteTurns: 0, maxToolResultChars: 1200 });
+
+  assert.equal(result.memory.modifiedOrObservedFiles.length, 2);
+  assert.ok(result.memory.modifiedOrObservedFiles.every((item) => item.canonicalProject === project));
+  assert.ok(result.memory.currentWorkStatus.recentToolOutcomes.every((outcome) => {
+    assert.ok(outcome.length <= 1200, outcome.length);
+    return Boolean(JSON.parse(outcome));
+  }));
+});
+
+test("production receipt continuation prose is absent from every durable surface", () => {
+  const guidance = "apply_edit_bundle: duplicate patches[] paths are not allowed; use one focused region per file and continue with the returned receipt in the next prediction round";
+  const result = core.buildCheckpoint([
+    message("user", "Fix both regions safely."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: false,
+      errorCode: "INVALID_ARGUMENT",
+      message: guidance,
+    }) }] }),
+    message("assistant", "I still need to fix the second region."),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+  const durable = `${JSON.stringify(result.memory)}\n${result.checkpoint}`;
+
+  assert.doesNotMatch(durable, /continue with the returned receipt/iu);
+  assert.match(durable, /fresh file snapshot required before mutation/iu);
+});
+
+test("a legacy observation stays with its prior exact clone when another clone becomes active", () => {
+  const oldProject = "C:\\Work\\Git\\Project_MJS\\Project_MJS.uproject";
+  const newProject = "C:\\Work\\Github\\Project_MJS\\Project_MJS.uproject";
+  const prior = {
+    schemaVersion: 1,
+    authority: "factual_memory_only",
+    latestUserMessage: "Inspect the health component.",
+    activeObjective: { kind: "user_request", status: "active", text: "Inspect the health component.", source: "current_history" },
+    activeProject: { descriptor: oldProject, source: "tool_result_fact" },
+    currentWorkStatus: {
+      modifiedOrObservedFiles: [{
+        path: "project://Source/HealthComponent.h",
+        activeProject: oldProject,
+        sha256: "1".repeat(64),
+        fileVersionReceipt: "fvr1_legacy_rootless",
+        snapshotVersion: 4,
+      }],
+    },
+    modifiedOrObservedFiles: [{
+      path: "project://Source/HealthComponent.h",
+      activeProject: oldProject,
+      sha256: "1".repeat(64),
+      fileVersionReceipt: "fvr1_legacy_rootless_top",
+    }],
+    unresolvedItems: [],
+    recentRawTail: [],
+  };
+  const result = core.buildCheckpoint([
+    message("system", `[Direct continuity state v1]\n${JSON.stringify(prior)}`),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      activeProject: newProject,
+      path: "project://Source/HealthComponent.h",
+      absolutePath: "C:\\Work\\Github\\Project_MJS\\Source\\HealthComponent.h",
+      sha256: "2".repeat(64),
+      fileVersionReceipt: "fvr1_new_clone_live",
+      snapshotVersion: 1,
+    }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  assert.deepEqual(
+    result.memory.modifiedOrObservedFiles.map((item) => item.canonicalProject),
+    [oldProject, newProject],
+  );
+  assert.deepEqual(
+    result.memory.currentWorkStatus.modifiedOrObservedFiles.map((item) => item.canonicalProject),
+    [oldProject, newProject],
+  );
+  assert.equal(result.memory.modifiedOrObservedFiles[0].sha256AtObservation, "1".repeat(64));
+  assert.equal(result.memory.modifiedOrObservedFiles[1].sha256AtObservation, "2".repeat(64));
+});
+
+test("an unambiguous v1 project-relative observation migrates to canonical v2 facts", () => {
+  const project = "C:\\Work\\Game\\Game.uproject";
+  const legacyFile = {
+    path: "project://Source/A.cpp",
+    activeProject: project,
+    operation: "observed",
+    sha256: "5".repeat(64),
+    fileVersionReceipt: "fvr1_legacy_only",
+    snapshotVersion: 19,
+  };
+  const prior = {
+    schemaVersion: 1,
+    authority: "factual_memory_only",
+    latestUserMessage: "Inspect A.cpp.",
+    activeObjective: { kind: "user_request", status: "active", text: "Inspect A.cpp.", source: "current_history" },
+    activeProject: { descriptor: project, source: "tool_result_fact" },
+    currentWorkStatus: { modifiedOrObservedFiles: [legacyFile] },
+    modifiedOrObservedFiles: [legacyFile],
+    unresolvedItems: [],
+    recentRawTail: [],
+  };
+  const result = core.buildCheckpoint([
+    message("system", `[Direct continuity state v1]\n${JSON.stringify(prior)}`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  assert.equal(result.memory.schemaVersion, 2);
+  assert.equal(result.memory.modifiedOrObservedFiles[0].canonicalProject, project);
+  assert.equal(result.memory.modifiedOrObservedFiles[0].canonicalPath, "C:\\Work\\Game\\Source\\A.cpp");
+  assert.equal(result.memory.modifiedOrObservedFiles[0].sha256AtObservation, "5".repeat(64));
+  assert.equal(result.memory.currentWorkStatus.modifiedOrObservedFiles[0].canonicalPath, "C:\\Work\\Game\\Source\\A.cpp");
+});
+
+test("a rootless v1 observation is omitted when the final active clone cannot prove its origin", () => {
+  const cloneB = "C:\\Work\\CloneB\\Game.uproject";
+  const rootless = { path: "project://Source/Legacy.cpp", sha256: "1".repeat(64) };
+  const prior = {
+    schemaVersion: 1,
+    authority: "factual_memory_only",
+    latestUserMessage: "Continue.",
+    activeObjective: { kind: "user_request", status: "active", text: "Continue.", source: "current_history" },
+    activeProject: { descriptor: cloneB, source: "tool_result_fact" },
+    currentWorkStatus: { modifiedOrObservedFiles: [rootless] },
+    modifiedOrObservedFiles: [rootless],
+  };
+  const result = core.buildCheckpoint([
+    message("system", `[Direct continuity state v1]\n${JSON.stringify(prior)}`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.deepEqual(result.memory.currentWorkStatus.modifiedOrObservedFiles, []);
+});
+
+test("nested workspace files inherit parent scope and cannot become project observations", () => {
+  const project = "C:\\Work\\CloneA\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Keep workspace files outside project continuity."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      activeProject: project,
+      resolvedRootType: "workspace",
+      path: "workspace://",
+      absolutePath: "C:\\Repo",
+      operation: "observed",
+      files: [{
+        path: "README.md",
+        absolutePath: "C:\\Repo\\README.md",
+        sha256: "1".repeat(64),
+      }],
+    }) }] }),
+  ], { recentCompleteTurns: 0 });
+
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.doesNotMatch(JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes), /README\.md|C:\\\\Repo/iu);
+});
+
+test("mutation-context receipt synonyms become a fresh-snapshot fact", () => {
+  for (const text of [
+    "Supply the previous receipt to replace_in_file for the next mutation.",
+    "Submit the current receipt with the next edit.",
+    "Provide the previous receipt to replace_in_file.",
+    "Set fileVersionReceipt to the prior value and mutate the file.",
+  ]) {
+    const result = core.buildCheckpoint([
+      message("user", "Continue safely."),
+      message("assistant", text),
+      message("user", "Continue."),
+    ], { recentCompleteTurns: 0 });
+    const durable = `${JSON.stringify(result.memory)}\n${result.checkpoint}`;
+    assert.match(durable, /fresh file snapshot required before mutation/iu);
+    assert.doesNotMatch(durable, /\b(?:supply|submit|provide|set)\b[^.!?]{0,120}(?:receipt|file-mutation capability)/iu);
+  }
+});
+
+test("JSON-escaped receipt capabilities cannot survive hard compaction", () => {
+  const result = core.buildCheckpoint([
+    message("user", "Edit safely."),
+    message("assistant", String.raw`Supply \u0066vr1_live_capability to replace_in_file now.`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+  const durable = `${JSON.stringify(result.memory)}\n${result.checkpoint}`;
+
+  assert.doesNotMatch(durable, /fvr1_|\\u0066vr1|u0066vr1/iu);
+  assert.doesNotMatch(durable, /\bsupply\b[^.!?]{0,120}(?:receipt|capability omitted)/iu);
+  assert.match(durable, /fresh file snapshot required before mutation/iu);
+});
+
+test("registry registration order is discarded even when an unchanged hash is observed repeatedly", () => {
+  const project = "C:\\Work\\Game\\Game.uproject";
+  const file = "C:\\Work\\Game\\Source\\HealthComponent.h";
+  const tool = (version) => message("tool", "", { toolResults: [{ content: JSON.stringify({
+    ok: true,
+    path: "project://Source/HealthComponent.h",
+    absolutePath: file,
+    activeProject: project,
+    sha256: "d".repeat(64),
+    fileVersionReceipt: `fvr1_same_hash_${version}`,
+    snapshotVersion: version,
+  }) }] });
+  const result = core.buildCheckpoint([
+    message("user", "파일 변경 여부를 관찰 SHA로만 기억해."),
+    tool(1),
+    tool(8),
+    tool(24),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  assert.equal(result.memory.modifiedOrObservedFiles.length, 1);
+  assert.equal(result.memory.modifiedOrObservedFiles[0].sha256AtObservation, "d".repeat(64));
+  assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+});
+
+test("partial independent mutation outcomes stay factual without preserving the reused capability", () => {
+  const result = core.buildCheckpoint([
+    message("user", "HealthComponent 선언과 구현을 일치시켜."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: false,
+      errorCode: "FILE_SNAPSHOT_SCOPE_MISMATCH",
+      message: "fileVersionReceipt belongs to a different path: fvr1_wrong_mapping",
+      path: "project://Source/HealthComponent.h",
+      activeProject: "C:\\Work\\Project_MJS\\Project_MJS.uproject",
+    }) }] }),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      operation: "replaced",
+      path: "project://Source/HealthComponent.cpp",
+      activeProject: "C:\\Work\\Project_MJS\\Project_MJS.uproject",
+      previousSha256: "e".repeat(64),
+      sha256: "f".repeat(64),
+      fileVersionReceipt: "fvr1_wrong_mapping",
+      snapshotVersion: 13,
+    }) }] }),
+    message("user", "계속해."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(result);
+  assert.match(JSON.stringify(result.memory.recentOlderToolOutcomes), /FILE_SNAPSHOT_SCOPE_MISMATCH/u);
+  assert.equal(result.memory.modifiedOrObservedFiles[0].observationState, "modified");
+  assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+});
+
+test("the raw latest user message stays separate while its durable copy cannot carry a capability", () => {
+  const latest = "Diagnose fvr1_user_supplied but never persist fileVersionReceipt in durable memory.";
+  const result = core.buildCheckpoint([message("user", latest)], { recentCompleteTurns: 0 });
+
+  assert.equal(result.latestUserVerbatim, latest);
+  assertNoDurableFileCapability(result);
+  assert.match(result.memory.currentUserRequestVerbatim, /ephemeral file capability omitted/iu);
+  assert.match(result.memory.currentUserRequestVerbatim, /never persist ephemeral file-mutation capability/iu);
+});
+
+test("a receipt in a retained recent tool result remains live only outside the durable checkpoint", () => {
+  const receipt = "fvr1_recent_uncompressed_round";
+  const messages = [
+    message("user", "Implement the first file."),
+    message("assistant", "The first edit is complete."),
+    message("user", "Read the next exact region and edit it."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      path: "project://Source/Next.cpp",
+      activeProject: "C:\\Work\\Recent\\Recent.uproject",
+      absolutePath: "C:\\Work\\Recent\\Source\\Next.cpp",
+      sha256: "9".repeat(64),
+      fileVersionReceipt: receipt,
+      snapshotVersion: 41,
+    }) }] }),
+  ];
+  const result = core.buildCheckpoint(messages, { recentCompleteTurns: 1 });
+
+  assert.equal(result.retainedIndexes.includes(3), true);
+  assert.match(messages[3].toolResults[0].content, new RegExp(receipt, "u"));
+  assertNoDurableFileCapability(result);
+  assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+});
+
+test("a simulated MCP restart inherits facts and objective but no prior runtime receipt", () => {
+  const firstRuntime = core.buildCheckpoint([
+    message("user", "Implement and build the death pipeline."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: true,
+      activeProject: "C:\\Work\\Project_MJS\\Project_MJS.uproject",
+      absolutePath: "C:\\Work\\Project_MJS\\Source\\HealthComponent.h",
+      path: "project://Source/HealthComponent.h",
+      sha256: "7".repeat(64),
+      fileVersionReceipt: "fvr1_runtime_one_only",
+      snapshotVersion: 3,
+    }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+  const secondRuntime = core.buildCheckpoint([
+    message("system", firstRuntime.checkpoint),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({
+      ok: false,
+      errorCode: "FILE_SNAPSHOT_INVALID",
+      message: "fileVersionReceipt was not issued by this runtime: fvr1_runtime_one_only",
+    }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(firstRuntime);
+  assertNoDurableFileCapability(secondRuntime);
+  assert.equal(secondRuntime.memory.activeObjective.text, "Implement and build the death pipeline.");
+  assert.equal(secondRuntime.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+  assert.match(JSON.stringify(secondRuntime.memory.recentOlderToolOutcomes), /FILE_SNAPSHOT_INVALID/u);
+});
+
+test("the minimized 5,692-line Qwen transcript replay keeps canonical facts through three compactions", () => {
+  const fixture = JSON.parse(fs.readFileSync(
+    path.join(__dirname, "fixtures", "qwen-receipt-path-confusion.json"),
+    "utf8",
+  ));
+  const fromFixture = (item) => message(item.role, item.text || "", { toolResults: item.toolResults || [] });
+  const compact = (history) => {
+    const result = core.buildCheckpoint(history, { recentCompleteTurns: 0, maxCheckpointChars: 16000 });
+    const retained = new Set(result.retainedIndexes);
+    return {
+      result,
+      history: [
+        ...history.filter((item, index) => item.role === "system" && retained.has(index)),
+        message("system", result.checkpoint),
+        ...history.filter((item, index) => item.role !== "system" && retained.has(index)),
+      ],
+    };
+  };
+
+  const first = compact(fixture.initialMessages.map(fromFixture));
+  const second = compact([...first.history, ...fixture.afterFirstCompaction.map(fromFixture)]);
+  const third = compact([...second.history, ...fixture.afterSecondCompaction.map(fromFixture)]);
+
+  for (const round of [first, second, third]) {
+    assertNoDurableFileCapability(round.result);
+    assert.equal(round.result.memory.activeObjective.text, fixture.objective);
+    assert.equal(round.result.memory.activeProject.descriptor, fixture.canonicalProject);
+    assert.ok(round.result.memory.modifiedOrObservedFiles.every((item) => (
+      item.canonicalProject === fixture.canonicalProject
+      && item.canonicalPath.startsWith("C:\\Users\\sster\\Documents\\Github\\Project_MJS\\")
+      && item.mutationSnapshotState === "fresh_read_required"
+    )));
+  }
+  const finalFiles = third.result.memory.modifiedOrObservedFiles;
+  assert.match(finalFiles.map((item) => item.canonicalPath).join("\n"), /Public\\Animation\\CPlayerCharacterAnimInstance\.h/u);
+  assert.equal(
+    finalFiles.find((item) => item.path.endsWith("HealthComponent.cpp")).sha256AtObservation,
+    "2a47".padEnd(64, "0"),
+  );
+  assert.doesNotMatch(
+    finalFiles.map((item) => item.canonicalPath).join("\n"),
+    /Character\\Player\\AnimInstance/u,
+  );
 });
 
 test("system messages, latest turn, and file-bearing messages are retained individually", () => {
@@ -340,12 +1471,24 @@ test("emergency checkpoint compaction always emits parseable continuity JSON", (
     message("assistant", `진행 상황 ${"나".repeat(30000)}`),
     message("user", "좋아, 계속 진행해"),
   ], { maxCheckpointChars: 2000 });
-  const marker = result.checkpoint.indexOf("[Direct continuity state v1]");
+  const marker = result.checkpoint.indexOf("[Direct continuity state v2]");
   const jsonStart = result.checkpoint.indexOf("{", marker);
   const parsed = JSON.parse(result.checkpoint.slice(jsonStart));
 
-  assert.equal(parsed.schemaVersion, 1);
+  assert.equal(parsed.schemaVersion, 2);
   assert.equal(parsed.authority, "factual_memory_only");
   assert.equal(parsed.latestUserMessageVerbatimRetainedSeparately, true);
   assert.match(parsed.activeObjective.text, /^긴 요청/u);
+});
+
+test("escape-heavy emergency text cannot exceed the hard checkpoint bound", () => {
+  const result = core.buildCheckpoint([
+    message("user", `Implement ${String.fromCharCode(0).repeat(30000)}`),
+  ], { recentCompleteTurns: 0, maxCheckpointChars: 2000 });
+  const marker = result.checkpoint.indexOf("[Direct continuity state v2]");
+  const jsonStart = result.checkpoint.indexOf("{", marker);
+  const parsed = JSON.parse(result.checkpoint.slice(jsonStart));
+
+  assert.equal(parsed.schemaVersion, 2);
+  assert.ok(result.checkpoint.length <= 2000, result.checkpoint.length);
 });

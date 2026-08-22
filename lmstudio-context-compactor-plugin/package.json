@@ -1,13 +1,13 @@
 {
   "name": "unreal-context-compactor",
-  "version": "0.4.48",
+  "version": "0.4.49",
   "private": true,
   "main": "dist/index.js",
   "scripts": {
     "dev": "lms dev",
     "clean": "node scripts/clean-dist.cjs",
     "build": "npm run clean && tsc -p tsconfig.json",
-    "test": "npm run build && node --test test/direct-compaction-core.test.js test/prediction-loop.test.cjs test/status.test.cjs",
+    "test": "npm run build && node --test test/direct-compaction-core.test.js test/durable-memory-sanitizer.test.js test/prediction-loop.test.cjs test/status.test.cjs",
     "test:active": "npm run build && node scripts/status.cjs --require-runtime",
     "status": "node scripts/status.cjs"
   },

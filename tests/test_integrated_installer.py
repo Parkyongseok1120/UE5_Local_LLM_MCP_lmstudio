@@ -63,7 +63,7 @@ def test_installer_profiles_are_manifest_driven() -> None:
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.0"
-    assert manifest["version"] == "2.1.9"
+    assert manifest["version"] == "2.1.10"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
     assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is False
     assert manifest["safety"]["contextCompactionEnabledByDefault"] is False
@@ -71,9 +71,9 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
     assert node_package["version"] == node_lock["version"] == "0.3.20"
     assert node_lock["packages"][""]["version"] == "0.3.20"
-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.48"
-    assert compactor_lock["packages"][""]["version"] == "0.4.48"
-    assert compactor_manifest["revision"] == 95
+    assert compactor_package["version"] == compactor_lock["version"] == "0.4.49"
+    assert compactor_lock["packages"][""]["version"] == "0.4.49"
+    assert compactor_manifest["revision"] == 96
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
@@ -785,6 +785,17 @@ def test_context_compactor_installation_is_included_for_lmstudio_profiles() -> N
         resolved_profile, components = module._resolve_components(args)
         assert resolved_profile == profile
         assert "context_compactor" in components
+    sys.modules.pop("integrated_install", None)
+
+
+def test_custom_context_compactor_only_selection_remains_a_plugin_only_repair() -> None:
+    module = _load_installer_module()
+    args = module.build_parser().parse_args(
+        ["--profile", "custom", "--components", "context_compactor", "--yes"]
+    )
+    resolved_profile, components = module._resolve_components(args)
+    assert resolved_profile == "custom"
+    assert components == {"context_compactor"}
     sys.modules.pop("integrated_install", None)
 
 

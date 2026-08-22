@@ -12,18 +12,25 @@ settings, filter MCP tools, or interpret Unreal workflow state. The existing
 providers. Because compaction is limited to chat history, the same plugin can be
 used across Unreal Engine versions and projects.
 
-Version 0.4.48 defaults to disabled mode. The top-level LM Studio chat-plugin switch
+Version 0.4.49 defaults to disabled mode. The top-level LM Studio chat-plugin switch
 and the nested `Enable transparent compaction` switch are independent, and both must
 be explicitly enabled for compaction to run. `observeOnly` can be enabled in the
 plugin settings to measure pressure without changing the model-facing history. Soft
 compaction retains recent complete turns. Hard compaction keeps the current user
-turn separately and emits bounded `[Direct continuity state v1]` factual memory:
+turn separately and emits bounded `[Direct continuity state v2]` factual memory:
 the active objective, continuation antecedent for an elliptical follow-up, active
 project, current work status, unresolved items, archived objectives, recent tool
-outcomes, and relevant file/build facts including `fileVersionReceipt`. This state
-cannot plan, route, authorize tools, require a next call, or declare the request
-complete. If exact token measurement is unavailable, a message-count threshold
-provides a conservative fallback.
+outcomes, and relevant file/build facts. File observations are keyed by canonical
+project descriptor/root plus canonical path and retain the observed SHA-256, time,
+and operation. Every compacted observation is marked
+`mutationSnapshotState: fresh_read_required`. Runtime-local
+`fileVersionReceipt` values, snapshot registration counters, and executable
+receipt instructions are removed from current and inherited checkpoints. A receipt
+may remain usable only in a recent, uncompressed tool result from the live runtime;
+it never becomes durable continuity memory. This state cannot plan, route,
+authorize tools, require a next call, or declare the request complete. If exact
+token measurement is unavailable, a message-count threshold provides a
+conservative fallback.
 
 ## Use in LM Studio
 

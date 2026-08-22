@@ -337,6 +337,55 @@ test("snapshot scenario 10: registry applies bounded LRU eviction and TTL expiry
   assert.equal(registry.stats().entries, 0);
 });
 
+test("snapshot scenario 11: a new MCP runtime rejects the prior runtime receipt", async (t) => {
+  const { runtime, workspaceRoot, first } = fixture(t);
+  const target = writeConfig(first, "Restart.ini", "before");
+  const read = payloadOf(await runtime.callTool("read_file", {
+    path: "project://Config/Restart.ini",
+  }));
+  const restartedStateRoot = path.join(workspaceRoot, "state-restarted");
+  const restarted = createDirectRuntime({
+    workspaceRoot,
+    configPath: path.join(workspaceRoot, "agent-mcp-restarted.json"),
+    stateRoot: restartedStateRoot,
+    env: {
+      AGENT_STATE_ROOT: restartedStateRoot,
+      ALLOW_WRITE: "1",
+      ALLOW_SOURCE_DELETE: "0",
+      ALLOW_COMMANDS: "0",
+      ALLOW_UNREAL_BUILD: "0",
+    },
+    getActiveProject: () => first.projectFile,
+    setActiveProject: async () => ({ ok: true, activeProject: first.projectFile }),
+  });
+  const rejected = payloadOf(await restarted.callTool("replace_in_file", {
+    path: "project://Config/Restart.ini",
+    oldText: "Value=before",
+    newText: "Value=unsafe",
+    expectedOccurrences: 1,
+    fileVersionReceipt: read.fileVersionReceipt,
+  }));
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.errorCode, "FILE_SNAPSHOT_INVALID");
+  assert.match(fs.readFileSync(target, "utf8"), /Value=before/u);
+
+  const fresh = payloadOf(await restarted.callTool("read_file_range", {
+    path: "project://Config/Restart.ini",
+    startLine: 1,
+    endLine: 2,
+  }));
+  const accepted = payloadOf(await restarted.callTool("replace_in_file", {
+    path: "project://Config/Restart.ini",
+    oldText: "Value=before",
+    newText: "Value=after",
+    expectedOccurrences: 1,
+    fileVersionReceipt: fresh.fileVersionReceipt,
+  }));
+  assert.equal(accepted.ok, true);
+  assert.notEqual(fresh.fileVersionReceipt, read.fileVersionReceipt);
+  assert.match(fs.readFileSync(target, "utf8"), /Value=after/u);
+});
+
 test("recoverable delete accepts the proposal's opaque snapshot receipt", async (t) => {
   const { runtime, first } = fixture(t, { allowDelete: true });
   const target = path.join(first.projectRoot, "Source", "FirstProject", "Delete.cpp");

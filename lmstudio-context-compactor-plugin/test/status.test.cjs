@@ -21,6 +21,12 @@ test("status verifies every direct prediction-loop source and its index wiring",
     "src/index.ts",
     "src/prediction-loop.ts",
     "src/direct-compaction-core.js",
+    "src/compaction-tool-memory.js",
+    "src/continuity-file-observations.js",
+    "src/continuity-memory.js",
+    "src/continuity-objectives.js",
+    "src/continuity-text.js",
+    "src/durable-memory-sanitizer.js",
     "src/direct-config.ts",
   ]);
 });

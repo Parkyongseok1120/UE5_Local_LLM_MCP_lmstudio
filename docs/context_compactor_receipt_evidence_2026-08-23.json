@@ -1,0 +1,479 @@
+{
+  "mode": "codegen",
+  "scope": "LM Studio Context Compactor durable continuity only; Unreal MCP production safety boundary intentionally unchanged",
+  "baseline": {
+    "repositoryHead": "61b081873619e433f7b210b73ecb96592e2166a6",
+    "branch": "main",
+    "upstream": "origin/main",
+    "qwenTranscriptSha256": "E0081436419DAAAEC0B954AA41AF4A30DF66685B8E8A43C488E317983B053041",
+    "qwenTranscriptLines": 5692
+  },
+  "claims": [
+    {
+      "claim": "Before this change, hard-compaction surfaces could retain runtime-local file receipts and executable receipt-reuse prose; the MCP registry then correctly rejected reconstructed or cross-file capabilities.",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "claimType": "data_flow",
+      "unknowns": [
+        "The transcript does not prove the process-lifetime cause of the earliest FUTr/Zv0 invalid receipts."
+      ],
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "attachment 510df4c6-0afe-4357-88e0-f6d33f66578e/pasted-text.txt",
+          "observation": "The requested invariant forbids durable fileVersionReceipt, raw fvr1 values, snapshotVersion authority, and actionable receipt reuse."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/fixtures/qwen-receipt-path-confusion.json and test/direct-compaction-core.test.js",
+          "observation": "The minimized 5,692-line Qwen replay fixes the observed cross-file receipt/path confusion and verifies three successive hard compactions."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/file-snapshot-flow.test.js",
+          "observation": "MCP snapshot scenarios retain fail-closed scope, hash, TTL/runtime, and new-runtime rejection behavior; the server did not accept the mis-scoped capability."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "Qwen transcript tool results",
+          "symbol": "read_file result fileVersionReceipt"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "legacy durable compaction path",
+          "symbol": "unfiltered retained factual fields"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "Qwen transcript mutation attempts",
+          "symbol": "FILE_SNAPSHOT_SCOPE_MISMATCH / FILE_SNAPSHOT_INVALID"
+        }
+      ]
+    },
+    {
+      "claim": "Every newly composed or inherited durable continuity value now passes through a recursive, bounded, idempotent sanitizer that removes ephemeral capability keys, raw and JSON-escaped fvr1 tokens, and executable reuse guidance.",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "claimType": "data_flow",
+      "unknowns": [],
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/durable-memory-sanitizer.js:9",
+          "observation": "The focused sanitizer strips ephemeral keys, canonicalizes reversible JSON Unicode escapes, removes raw capability tokens, and neutralizes mutation-coupled receipt clauses."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/durable-memory-sanitizer.test.js",
+          "observation": "Recursive, inherited JSON, Markdown-adjacent, encoded-token, English/Korean, meta-safety, non-mutation, idempotence, array, and depth cases pass."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/direct-compaction-core.test.js",
+          "observation": "Top-level, nested bundle, assistant progress, unresolved, raw-tail, emergency, restart, and three-compaction surfaces assert absence of durable capabilities."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/direct-compaction-core.test.js:1270",
+          "observation": "The original uncompressed recent tool message still owns its live receipt outside the generated durable checkpoint."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-memory.js:43",
+          "symbol": "extractPriorContinuityState"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/direct-compaction-core.js:346",
+          "symbol": "sanitizeDurableValue"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/direct-compaction-core.js:373",
+          "symbol": "checkpoint"
+        }
+      ]
+    },
+    {
+      "claim": "Durable file facts are retained only when an exact project descriptor and a canonical contained project path are provable; same-name clones stay distinct, while ambiguous v1 and workspace/outside observations fail closed.",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "claimType": "data_flow",
+      "unknowns": [],
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:35",
+          "observation": "canonicalFilePath requires project containment and rejects workspace, traversal, foreign schemes, rootless absolute paths, and outside paths."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:115",
+          "observation": "v1 migration accepts item-local project evidence or a contained item-local absolute path and omits ambiguous rootless project:// facts."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/direct-compaction-core.test.js",
+          "observation": "Same-name clone, per-call scope, duplicate/missing ID, active-project transition, workspace, traversal, nested workspace, v1 migration, and conflicting result/request project regressions pass."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/direct-compaction-core.test.js:1090",
+          "observation": "An unambiguous v1 item carrying its own exact activeProject is migrated and retains its observation SHA."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:200",
+          "symbol": "toolOutcomeRecords"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:35",
+          "symbol": "canonicalFilePath"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:76",
+          "symbol": "fileObservation"
+        }
+      ]
+    },
+    {
+      "claim": "The durable representation stores observation SHA and fresh_read_required state but never treats snapshotVersion or a prior receipt as mutation authority; tool display clipping is valid JSON and cannot erase separately extracted file facts.",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "claimType": "state_transition",
+      "unknowns": [],
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:76",
+          "observation": "fileObservation emits sha256AtObservation, previousSha256AtObservation, canonical identities, and mutationSnapshotState=fresh_read_required only."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:325",
+          "observation": "Structured outcome records feed state extraction before a separate bounded valid-JSON display serialization."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/direct-compaction-core.test.js",
+          "observation": "Unchanged hashes with increasing registry counters coalesce correctly, long bundle facts survive a 1,200-character display bound, and emergency checkpoints stay parseable and within their hard bound."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/file-snapshot-flow.test.js",
+          "observation": "The live MCP still requires a current receipt and CAS-compatible snapshot for each mutation; durable SHA alone does not authorize writes."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:200",
+          "symbol": "toolOutcomeRecords"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:373",
+          "symbol": "stateMemory"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:325",
+          "symbol": "serializeToolOutcome"
+        }
+      ]
+    },
+    {
+      "claim": "Active objective, latest user message, continuation antecedent, and canonical file facts survive repeated and emergency hard compaction without adding planner, task, route, gate, or required-next-tool authority.",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "claimType": "behavior",
+      "unknowns": [],
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/direct-compaction-core.js:163",
+          "observation": "Emergency rendering budgets objective, canonical observations, and optional evidence while guaranteeing valid bounded JSON."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/direct-compaction-core.test.js",
+          "observation": "Three-compaction Qwen fixtures, multi-hop continuation, semantic safety objectives, six-file emergency memory, oversized inherited fields, and escape-heavy text all pass."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "static_analysis",
+          "location": "git diff -- lmstudio-context-compactor-plugin/src",
+          "observation": "No task engine, planner, route owner, workflow gate, public snapshot refresh tool, or requiredNextTool implementation is introduced; control-shaped inherited keys are removed."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-memory.js:124",
+          "symbol": "buildContinuityMemory"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/direct-compaction-core.js:163",
+          "symbol": "emergencyContinuityMemory"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/direct-compaction-core.js:273",
+          "symbol": "renderCheckpoint"
+        }
+      ]
+    },
+    {
+      "claim": "The Unreal MCP production implementation and its CAS, receipt, owner, TTL/LRU, path-scope, and atomic-write boundaries are unchanged; only a restart regression was added under the MCP package.",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "StaticVerified",
+      "claimType": "architecture",
+      "unknowns": [],
+      "evidence": [
+        {
+          "kind": "static_analysis",
+          "location": "git diff --exit-code -- lmstudio-unreal-agent-mcp/src",
+          "observation": "The production source diff is empty."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/file-snapshot-flow.test.js",
+          "observation": "Snapshot scenario 11 proves a new MCP runtime rejects a prior runtime receipt."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src",
+          "observation": "The existing live server continues to issue and validate fileVersionReceipt values during an uncompressed runtime; those capabilities were intentionally not removed from the MCP."
+        }
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "The focused custom installer path now performs a real context-compactor-only repair instead of silently reducing the selected component set to empty.",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "claimType": "wiring",
+      "unknowns": [],
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "install.py:1160",
+          "observation": "The selection guard retains context_compactor as a valid LM Studio stack component without forcing unrelated components."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_installer.py:791",
+          "observation": "The custom context_compactor-only profile remains exactly a plugin-only repair."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "install.py:1120",
+          "symbol": "resolve_components"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "install.py:1160",
+          "symbol": "_enforce_context_compactor_installation"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "present",
+          "location": "install.py:2055",
+          "symbol": "_install_context_compactor"
+        }
+      ]
+    },
+    {
+      "claim": "A native LM Studio GUI generation/compaction/restart run is not mechanically provable in this session because the D3D UI exposes no semantic chat, model, plugin, toggle, or input controls to Windows UI Automation.",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "RuntimeVerified",
+      "claimType": "behavior",
+      "unknowns": [
+        "Actual chat-level plugin activation after LM Studio reload remains host-owned and requires a user-observable native GUI run."
+      ],
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "native LM Studio 0.4.21+2 process and HWND 527482 UIA/Win32 inspection",
+          "observation": "Only window chrome and a D3D pane were exposed; no semantically addressable chat or plugin controls were available, so coordinate clicking would be unsafe and unverifiable."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/direct-compaction-core.test.js",
+          "observation": "Transcript replay, three hard compactions, restart inheritance, same-name clone isolation, emergency rendering, and receipt-scope fixtures provide deterministic fallback evidence."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "native LM Studio main window",
+          "symbol": "running process / HWND 527482"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "unknown",
+          "location": "native LM Studio D3D renderer",
+          "symbol": "chat-level context compactor activation"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "unknown",
+          "location": "native LM Studio chat UI",
+          "symbol": "post-reload hard-compaction outcome"
+        }
+      ]
+    },
+    {
+      "claim": "The explicitly selected Project_MJS Unreal 5.8 editor target completes the Direct MCP build path while Git-visible user-source evidence remains unchanged.",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "BuildVerified",
+      "claimType": "behavior",
+      "unknowns": [
+        "The successful build was up to date and executed zero compile actions, so it proves target resolution and current build health rather than a clean recompilation of every translation unit."
+      ],
+      "evidence": [
+        {
+          "kind": "build",
+          "location": "C:/Users/sster/Documents/.agent/logs/2026-08-22T18-17-18-444Z-Project_MJS-build.log",
+          "observation": "UE 5.8 Project_MJSEditor Win64 Development build returned exit 0 with proofLevel BuiltStale, upToDate true, and actionsExecuted 0."
+        },
+        {
+          "kind": "static_analysis",
+          "location": "Project_MJS pre/post Git-visible baseline comparison",
+          "observation": "HEAD, branch, tracked diff SHA-256 D12A01E1D0E3907F4647114079491EA33792EF98BE9E13241DED3E381E46593C, and untracked inventory SHA-256 D2C277A8A3EB6300098272649A45C14A5DFB555C5B4280CAFAB05E86D17C0CEB were identical before and after."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "Direct MCP build request",
+          "symbol": "explicit C:/Users/sster/Documents/Git/Project_MJS/Project_MJS.uproject"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "C:/Program Files/Epic Games/UE_5.8",
+          "symbol": "Project_MJSEditor Win64 Development"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "Direct MCP build result",
+          "symbol": "exitCode=0; upToDate=true; actionsExecuted=0"
+        }
+      ]
+    }
+  ],
+  "invariants": [
+    "Serialized durable continuity contains no raw fvr1 capability and does not inherit receipt authority from any prior checkpoint.",
+    "Only exact canonical project roots and contained canonical paths are retained as file facts; all retained mutation state is fresh_read_required.",
+    "Ambiguous legacy, workspace, outside-root, traversal, mismatched request/result, and unresolved same-name clone facts fail closed.",
+    "Active objective, latest user message, continuation meaning, observation SHA, and bounded canonical file evidence survive repeated hard compaction.",
+    "The existing Unreal MCP CAS, receipt, runtime-owner, TTL/LRU, path-scope, and atomic-write boundaries remain unchanged.",
+    "No task engine, planner, route owner, workflow gate, requiredNextTool, proxy model, public snapshot refresh tool, or server workflow is added."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin durable memory composition, inheritance, emergency rendering, and status closure",
+    "focused context-compactor-only integrated installer selection and package verification",
+    "test-only Unreal MCP runtime-restart receipt regression",
+    "current-version documentation and version metadata"
+  ],
+  "validationPlan": [
+    "Run the complete context-compactor npm build/test suite.",
+    "Run the complete Unreal MCP Node test suite and verify the production-source diff remains empty.",
+    "Run the complete repository pytest suite.",
+    "Run TypeScript build, node --check over all JS/CJS files, compileall over all Python files, PowerShell parser validation, and git diff --check.",
+    "Install only the tested context compactor, compare source/installed hashes and status closure, and leave host-owned chat activation off.",
+    "Verify the existing explicit Unreal build evidence and Project_MJS pre/post Git-visible hashes.",
+    "Commit the reviewed source, require a clean tree, build the integrated package, verify its inventory/forbidden-file checks, and publish the SHA-256 without pushing."
+  ],
+  "independentReview": [
+    {
+      "reviewer": "independent_final_review",
+      "scope": "fresh-context request/result scope, objective semantics, legacy migration, emergency sizing, and workspace containment",
+      "result": "All accepted counterexamples were fixed and encoded as regression tests before the user froze further hypothesis exploration."
+    },
+    {
+      "reviewer": "final_counterexample_audit",
+      "scope": "fresh-context durable capability, canonical clone/path, JSON clipping/escaping, nested scope, and fail-closed edge cases",
+      "result": "All accepted counterexamples were fixed and encoded as regression tests before the user froze further hypothesis exploration."
+    }
+  ],
+  "validationResults": {
+    "contextCompactor": "79 passed, 0 failed, 0 skipped",
+    "unrealMcpNode": "243 passed, 0 failed, 1 Windows/POSIX-only skipped",
+    "python": "953 passed, 0 failed, 11 skipped",
+    "javascriptSyntax": "134/134 passed",
+    "pythonCompileall": "612/612 passed",
+    "powerShellParser": "29/29 passed",
+    "evidencePacket": "9 claims, 0 errors, 0 warnings",
+    "gitDiffCheck": "passed; no whitespace errors"
+  },
+  "installationValidation": {
+    "installedRevision": 96,
+    "installedVersion": "0.4.49",
+    "productionBundleBytes": 266817,
+    "sourceAndBuildFilesHashMatched": 23,
+    "criticalHashMismatches": 0,
+    "sourceLayoutVerified": true,
+    "installedSourceComplete": true,
+    "settingsSha256Unchanged": true,
+    "hostGeneratedEntry": "LM Studio generated .lmstudio/entry.ts during lms dev install; it is present but intentionally differs from the repository development entry",
+    "runtimeActivation": "not_machine_verifiable",
+    "runtimeActivationProven": false,
+    "activationPolicy": "top-level chat plugin switch OFF and nested transparent-compaction switch OFF by default"
+  }
+}

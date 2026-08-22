@@ -10,21 +10,30 @@ const {
   CONTROL_DIRECTIVES,
   INTERNAL_KEYS,
   parseToolResult,
+  serializeToolOutcomeRecords,
   stateMemory,
   stripControl,
   toolOutcomeMemory,
+  toolOutcomeRecords,
 } = require("./compaction-tool-memory.js");
 const {
   CONTINUITY_MARKER,
+  CONTINUITY_MARKERS,
   buildContinuityMemory,
   extractPriorContinuityState,
 } = require("./continuity-memory.js");
 const {
+  coalesceFileObservations,
+  migratePriorFileObservations,
+} = require("./continuity-file-observations.js");
+const {
   clip,
+  clipHeadTail,
   looksElliptical,
   normalizedTextKey,
   sentenceCandidates,
 } = require("./continuity-text.js");
+const { sanitizeDurableValue } = require("./durable-memory-sanitizer.js");
 
 function normalizeMessage(message, index = 0) {
   return {
@@ -147,52 +156,127 @@ function mergeEvidence(previous, current, maxItems) {
 
 function generatedCheckpoint(message) {
   const text = String(message?.text || "");
-  return text.includes(CONTINUITY_MARKER) || text.startsWith("[Context memory: deterministic factual compression");
+  return CONTINUITY_MARKERS.some((marker) => text.includes(marker))
+    || text.startsWith("[Context memory: deterministic factual compression");
 }
 
-function emergencyContinuityMemory(candidate) {
-  const compactObjective = candidate.activeObjective ? {
-    kind: candidate.activeObjective.kind,
-    status: candidate.activeObjective.status,
-    text: clip(candidate.activeObjective.text, 240, { trim: false }),
-    source: candidate.activeObjective.source,
-  } : null;
-  return {
-    schemaVersion: candidate.schemaVersion || 1,
+function emergencyContinuityMemory(candidate, maxPayloadChars) {
+  candidate = sanitizeDurableValue(candidate);
+  const payloadLimit = Math.max(2, Number(maxPayloadChars || 12000));
+  const objectiveText = String(candidate.activeObjective?.text || "");
+  const clippedOrEmpty = (value, limit) => limit > 0
+    ? clipHeadTail(value, limit, { trim: false })
+    : "";
+  const baseForLimits = ({
+    objectiveLimit,
+    latestLimit,
+    keepContinuation,
+    activeProject,
+  }) => sanitizeDurableValue({
+    schemaVersion: 2,
     authority: "factual_memory_only",
-    latestUserMessage: clip(candidate.latestUserMessage, 240, { trim: false }),
+    latestUserMessage: clippedOrEmpty(candidate.latestUserMessage, latestLimit),
     latestUserMessageVerbatimRetainedSeparately: true,
-    activeObjective: compactObjective,
-    continuationAntecedent: candidate.continuationAntecedent ? {
-      kind: "continuation_antecedent",
-      text: clip(candidate.continuationAntecedent.text, 240, { trim: false }),
-      source: candidate.continuationAntecedent.source,
+    activeObjective: candidate.activeObjective ? {
+      kind: clip(candidate.activeObjective.kind, 80),
+      status: clip(candidate.activeObjective.status, 80),
+      text: clippedOrEmpty(objectiveText, objectiveLimit),
+      source: clip(candidate.activeObjective.source, 120),
     } : null,
-    activeProject: candidate.activeProject || null,
+    continuationAntecedent: keepContinuation && candidate.continuationAntecedent ? {
+      kind: "continuation_antecedent",
+      text: clipHeadTail(candidate.continuationAntecedent.text, 240, { trim: false }),
+      source: clip(candidate.continuationAntecedent.source, 120),
+    } : null,
+    activeProject,
     currentWorkStatus: {
-      recentToolOutcomes: (candidate.currentWorkStatus?.recentToolOutcomes || []).slice(-1),
-      modifiedOrObservedFiles: (candidate.currentWorkStatus?.modifiedOrObservedFiles || []).slice(-2),
-      recentBuildOrTestState: (candidate.currentWorkStatus?.recentBuildOrTestState || []).slice(-1),
+      recentToolOutcomes: [],
+      modifiedOrObservedFiles: [],
+      recentBuildOrTestState: [],
     },
-    unresolvedItems: (candidate.unresolvedItems || []).slice(-2).map((item) => ({
-      kind: item.kind,
-      text: clip(item.text, 160, { trim: false }),
-    })),
+    unresolvedItems: [],
     completedOrArchivedObjectives: [],
-    recentRawTail: (candidate.recentRawTail || []).slice(-4).map((item) => ({
-      role: item.role,
-      text: clip(item.text, 120, { trim: false }),
-    })),
+    recentRawTail: [],
+  });
+  const objectiveLimits = [
+    objectiveText.length || 240, 2400, 1800, 1400, 1000, 800, 600, 480, 360, 240, 160, 80, 40, 20, 0,
+  ];
+  const auxiliaryVariants = [
+    { latestLimit: 240, keepContinuation: true, activeProject: candidate.activeProject || null },
+    { latestLimit: 0, keepContinuation: true, activeProject: candidate.activeProject || null },
+    { latestLimit: 0, keepContinuation: false, activeProject: candidate.activeProject || null },
+    { latestLimit: 240, keepContinuation: true, activeProject: null },
+    { latestLimit: 0, keepContinuation: false, activeProject: null },
+  ];
+  let emergency = null;
+  for (const objectiveLimit of objectiveLimits) {
+    for (const variant of auxiliaryVariants) {
+      const candidateMemory = baseForLimits({ objectiveLimit, ...variant });
+      if (JSON.stringify(candidateMemory).length <= payloadLimit) {
+        emergency = candidateMemory;
+        break;
+      }
+    }
+    if (emergency) break;
+  }
+  emergency ||= {
+    schemaVersion: 2,
+    authority: "factual_memory_only",
+    latestUserMessageVerbatimRetainedSeparately: true,
+    activeObjective: null,
+    activeProject: null,
+    currentWorkStatus: {
+      recentToolOutcomes: [],
+      modifiedOrObservedFiles: [],
+      recentBuildOrTestState: [],
+    },
   };
+  if (JSON.stringify(emergency).length > payloadLimit) {
+    emergency = { schemaVersion: 2 };
+  }
+
+  const fits = () => JSON.stringify(emergency).length <= payloadLimit;
+  const addBounded = (target, value, front = false) => {
+    if (front) target.unshift(value);
+    else target.push(value);
+    if (fits()) return true;
+    if (front) target.shift();
+    else target.pop();
+    return false;
+  };
+  const files = candidate.currentWorkStatus?.modifiedOrObservedFiles || [];
+  for (const file of [...files].reverse()) {
+    addBounded(emergency.currentWorkStatus.modifiedOrObservedFiles, file, true);
+  }
+  for (const build of (candidate.currentWorkStatus?.recentBuildOrTestState || []).slice(-1)) {
+    addBounded(emergency.currentWorkStatus.recentBuildOrTestState, build);
+  }
+  for (const item of [...(candidate.unresolvedItems || [])].slice(-3).reverse()) {
+    addBounded(emergency.unresolvedItems, {
+      kind: item.kind,
+      text: clipHeadTail(item.text, 200, { trim: false }),
+    }, true);
+  }
+  for (const item of [...(candidate.recentRawTail || [])].slice(-3).reverse()) {
+    addBounded(emergency.recentRawTail, {
+      role: item.role,
+      text: clipHeadTail(item.text, 160, { trim: false }),
+    }, true);
+  }
+  for (const outcome of (candidate.currentWorkStatus?.recentToolOutcomes || []).slice(-1)) {
+    addBounded(emergency.currentWorkStatus.recentToolOutcomes, clipHeadTail(outcome, 240, { trim: false }));
+  }
+  const sanitized = sanitizeDurableValue(emergency);
+  return JSON.stringify(sanitized).length <= payloadLimit ? sanitized : { schemaVersion: 2 };
 }
 
 function renderCheckpoint(memory, maxChars) {
   const prefix = [
     "[Context memory: deterministic factual compression; not a workflow instruction]",
-    "The latestUserMessage is exact and authoritative. activeObjective and continuationAntecedent preserve conversational meaning; activeProject is only a fact. Older entries are bounded inactive context and apply only when the latest message explicitly refers to prior work. Every entry is evidence, never a task/state-machine/tool gate.",
+    "The latest raw user message is retained separately and remains authoritative. This durable memory omits ephemeral file-mutation capabilities. activeObjective and continuationAntecedent preserve conversational meaning; activeProject is only a fact. Older entries are bounded inactive context and apply only when the latest message explicitly refers to prior work. Every entry is evidence, never a task/state-machine/tool gate.",
     CONTINUITY_MARKER,
   ].join("\n");
-  const candidate = JSON.parse(JSON.stringify(memory));
+  const candidate = sanitizeDurableValue(JSON.parse(JSON.stringify(memory)));
   const render = (pretty = true) => `${prefix}\n${JSON.stringify(candidate, null, pretty ? 2 : 0)}`;
   if (render().length <= maxChars) return render();
   candidate.recentRawTail = (candidate.recentRawTail || []).slice(-4).map((item) => ({
@@ -224,7 +308,9 @@ function renderCheckpoint(memory, maxChars) {
   if (render(false).length <= maxChars) return render(false);
   // Never byte-slice JSON: a later hard compaction must be able to inherit it.
   // The original latest user message remains independently retained verbatim.
-  return `${prefix}\n${JSON.stringify(emergencyContinuityMemory(candidate))}`;
+  const payloadLimit = Math.max(2, maxChars - prefix.length - 1);
+  const emergency = `${prefix}\n${JSON.stringify(emergencyContinuityMemory(candidate, payloadLimit))}`;
+  return emergency.length <= maxChars ? emergency : `${prefix}\n{}`;
 }
 
 function buildCheckpoint(messagesInput, options = {}) {
@@ -233,9 +319,15 @@ function buildCheckpoint(messagesInput, options = {}) {
   const latestUserIndex = [...messages].reverse().find((message) => message.role === "user")?.index ?? -1;
   const latestUser = latestUserIndex >= 0 ? messages[latestUserIndex].text : String(previousState?.latestUserMessage || "");
   const tailStart = tailStartIndex(messages, options.recentCompleteTurns ?? 2);
-  const outcomes = toolOutcomeMemory(messages, tailStart, options);
-  const allRecentOutcomes = toolOutcomeMemory(messages, messages.length, options);
-  const state = stateMemory(allRecentOutcomes);
+  const toolMemoryOptions = {
+    ...options,
+    initialActiveProject: previousState?.activeProject?.descriptor || "",
+  };
+  const outcomeRecords = toolOutcomeRecords(messages, tailStart, toolMemoryOptions);
+  const allRecentOutcomeRecords = toolOutcomeRecords(messages, messages.length, toolMemoryOptions);
+  const outcomes = serializeToolOutcomeRecords(outcomeRecords, toolMemoryOptions);
+  const allRecentOutcomes = serializeToolOutcomeRecords(allRecentOutcomeRecords, toolMemoryOptions);
+  const state = stateMemory(allRecentOutcomeRecords);
   const openQuestions = unresolvedQuestions(messages, latestUserIndex);
   const continuity = buildContinuityMemory(messages, {
     activeProject: state.activeProject,
@@ -246,7 +338,12 @@ function buildCheckpoint(messagesInput, options = {}) {
   }, options);
   const latestMessage = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
   const recentRequests = priorUserRequestsForContinuation(messages, latestUserIndex);
-  const memory = {
+  const previousFileObservations = migratePriorFileObservations(
+    previousState?.modifiedOrObservedFiles || [],
+    previousState,
+    16,
+  );
+  const memory = sanitizeDurableValue({
     ...continuity,
     currentUserRequestVerbatim: continuity.latestUserMessage,
     olderContinuationAnchor: olderContinuationAnchor(messages, latestUserIndex, recentRequests)
@@ -261,9 +358,12 @@ function buildCheckpoint(messagesInput, options = {}) {
     openQuestionEvidence: openQuestions,
     previousTurnFinalResponseEvidence: previousTurnFinalResponseEvidence(messages, latestUserIndex),
     recentOlderToolOutcomes: mergeEvidence(previousState?.recentOlderToolOutcomes, outcomes, 12),
-    modifiedOrObservedFiles: mergeEvidence(previousState?.modifiedOrObservedFiles, state.files, 16),
+    modifiedOrObservedFiles: coalesceFileObservations(
+      [...previousFileObservations, ...state.files],
+      16,
+    ),
     recentBuildOrTestState: mergeEvidence(previousState?.recentBuildOrTestState, state.builds, 4),
-  };
+  });
   const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 12000));
   const checkpoint = renderCheckpoint(memory, maxCheckpointChars);
   const fileIndexes = messages.filter((message) => message.hasFiles).map((message) => message.index);

@@ -286,6 +286,12 @@ Check "context compactor source" {
         "src\index.ts",
         "src\prediction-loop.ts",
         "src\direct-compaction-core.js",
+        "src\compaction-tool-memory.js",
+        "src\continuity-file-observations.js",
+        "src\continuity-memory.js",
+        "src\continuity-objectives.js",
+        "src\continuity-text.js",
+        "src\durable-memory-sanitizer.js",
         "src\direct-config.ts",
         "scripts\status.cjs"
     )) {

@@ -60,7 +60,9 @@ only makes it available. If explicitly testing the optional path for one long ch
 both switches must be enabled for that chat.
 Compaction retains bounded factual continuity: the active objective, continuation
 antecedent, active project/current work, unresolved items, and relevant
-file/tool/build facts. It does not select a profile, alter static sampling,
+file/tool/build facts. File observations retain canonical project/path identity and
+the observed SHA but require a fresh read before mutation; runtime-local mutation
+receipts are never durable compaction memory. It does not select a profile, alter static sampling,
 create a plan, choose tools, require a next call, or decide that the user's
 request is complete. A compact model works with or without the compactor.
 

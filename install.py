@@ -1158,8 +1158,8 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
 
 
 def _enforce_context_compactor_installation(components: set[str], args: argparse.Namespace) -> None:
-    """Install context_compactor with LM Studio without implying chat activation."""
-    needs_compactor = "lmstudio" in components or "unreal" in components
+    """Keep an explicit compactor repair or add it to LM Studio profiles."""
+    needs_compactor = bool({"lmstudio", "unreal", "context_compactor"} & components)
     if not needs_compactor:
         components.discard("context_compactor")
         return
