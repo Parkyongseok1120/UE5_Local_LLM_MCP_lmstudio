@@ -16,6 +16,12 @@ const { textLineCount } = require("./direct-mutation-limits");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
 const { failure, success } = require("./direct-response");
 const {
+  registerCurrentVersion,
+  resolveVersionEvidence,
+  versionConflict,
+  versionEvidenceFailure,
+} = require("./direct-file-version-policy.js");
+const {
   envFlag,
   statOrNull,
 } = require("./direct-runtime-shared");
@@ -32,7 +38,7 @@ function createFileMutationCapabilities(context) {
   } = context;
   const writesAllowed = () => envFlag(env, "ALLOW_WRITE", false);
 
-  async function writeFile(args) {
+  async function writeFile(args, requestContext = {}) {
     if (!writesAllowed()) {
       return failure("WRITE_DISABLED", "Writes are disabled. Start the MCP with ALLOW_WRITE=1 to enable project mutations.");
     }
@@ -75,11 +81,14 @@ function createFileMutationCapabilities(context) {
         retryMode: "after_state_change",
       });
     }
+    const hash = sha256Text(content);
+    const snapshot = await registerCurrentVersion(context, resolution, hash, requestContext);
     return success({
       operation: "created",
       path: `project://${resolution.relativePath}`,
       bytesWritten: Buffer.byteLength(content, "utf8"),
-      sha256: sha256Text(content),
+      sha256: hash,
+      ...snapshot,
       advisory: "Build or validate when useful; neither is required before the other.",
       ...(semanticAdvisory ? {
         semanticAdvisories: [{ ...semanticAdvisory, path: `project://${resolution.relativePath}` }],
@@ -87,7 +96,7 @@ function createFileMutationCapabilities(context) {
     });
   }
 
-  async function replaceInFile(args) {
+  async function replaceInFile(args, requestContext = {}) {
     if (!writesAllowed()) {
       return failure("WRITE_DISABLED", "Writes are disabled. Start the MCP with ALLOW_WRITE=1 to enable project mutations.");
     }
@@ -102,20 +111,20 @@ function createFileMutationCapabilities(context) {
         { retryAllowed: true },
       );
     }
-    if (!/^[a-f0-9]{64}$/iu.test(String(args.expectedHash || ""))) {
-      return failure(
-        "EXPECTED_HASH_REQUIRED",
-        "expectedHash must be the 64-character SHA-256 returned by read_file/read_file_range.",
-        { retryAllowed: true },
-      );
-    }
     const resolution = await mutationResolution(args.path, args.project);
+    const version = resolveVersionEvidence(context, resolution, args, requestContext);
+    if (!version.ok) {
+      return versionEvidenceFailure(version, {
+        suggestion: {
+          tool: "read_file_range",
+          args: projectScopedSuggestionArgs(args, { path: args.path, startLine: 1, endLine: 300 }),
+        },
+      });
+    }
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) return failure(read.errorCode, read.message);
-    if (read.hash.toLowerCase() !== String(args.expectedHash).toLowerCase()) {
-      return failure("READ_CONFLICT", "The file changed after it was read. Re-read the target and recompute the patch.", {
-        retryAllowed: true,
-        retryMode: "after_state_change",
+    if (read.hash.toLowerCase() !== version.expectedHash) {
+      return versionConflict(version, read.hash, {
         suggestion: {
           tool: "read_file_range",
           args: projectScopedSuggestionArgs(args, { path: args.path, startLine: 1, endLine: 300 }),
@@ -153,7 +162,7 @@ function createFileMutationCapabilities(context) {
         oldText,
         newText,
         expectedOccurrences: Number(args.expectedOccurrences),
-        readHash: String(args.expectedHash),
+        readHash: version.expectedHash,
       })
     ), { stateRoot });
     if (locked.locked) {
@@ -163,17 +172,25 @@ function createFileMutationCapabilities(context) {
       });
     }
     if (!locked.result.ok) {
+      if (locked.result.errorCode === "READ_HASH_CAS_MISMATCH") {
+        const current = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
+        return versionConflict(version, current.ok ? current.hash : "unavailable");
+      }
       return failure(locked.result.errorCode || "PATCH_FAILED", locked.result.error, {
         retryAllowed: true,
         retryMode: "after_state_change",
       });
     }
+    const nextHash = sha256Text(locked.result.updated);
+    const snapshot = await registerCurrentVersion(context, resolution, nextHash, requestContext);
     return success({
       operation: "replaced",
       path: `project://${resolution.relativePath}`,
       occurrences: locked.result.occurrences,
       previousSha256: read.hash,
-      sha256: sha256Text(locked.result.updated),
+      sha256: nextHash,
+      hashSource: version.hashSource,
+      ...snapshot,
       advisory: "The edit is complete. Static validation and build remain independent diagnostics.",
       ...(semanticAdvisory ? {
         semanticAdvisories: [{ ...semanticAdvisory, path: `project://${resolution.relativePath}` }],

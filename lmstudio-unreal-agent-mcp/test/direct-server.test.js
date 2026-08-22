@@ -242,7 +242,7 @@ test("Direct exact patch succeeds without plan/task and stale hash is rejected",
   });
   const conflict = payloadOf(conflictResult);
   assert.strictEqual(conflictResult.isError, true);
-  assert.strictEqual(conflict.errorCode, "READ_CONFLICT");
+  assert.strictEqual(conflict.errorCode, "FILE_VERSION_CONFLICT");
   assert.deepStrictEqual(conflict.retry, {
     allowed: true,
     mode: "after_state_change",

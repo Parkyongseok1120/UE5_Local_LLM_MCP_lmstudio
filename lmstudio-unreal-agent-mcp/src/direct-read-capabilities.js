@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const { assertReadChildContained, displayPath, pathMetadata } = require("./read-path-resolver.js");
 const { readStableFileWindow, readStableTextFile } = require("./direct-file-snapshot.js");
 const { success, failure } = require("./direct-response.js");
+const { registerReadSnapshot } = require("./direct-read-snapshot.js");
 const {
   clamp,
   isBinary,
@@ -30,6 +31,7 @@ const TEXT_EXTENSIONS = new Set([
 function createReadCapabilities(context) {
   const {
     dedupe,
+    fileSnapshots,
     fitUtf8Prefix,
     limits,
     payloadFits,
@@ -157,7 +159,7 @@ function createReadCapabilities(context) {
     return dedupe("search_files", args, `${resolution.activeProject || ""}|${treeState}`, payload);
   }
 
-  async function readFile(args) {
+  async function readFile(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
     const maxBytes = clamp(args.maxBytes, limits.maxReadBytes, 1024, 2 * 1024 * 1024);
     const offset = clamp(args.offsetBytes, 0, 0, Number.MAX_SAFE_INTEGER);
@@ -177,6 +179,7 @@ function createReadCapabilities(context) {
       return failure(stableRead.errorCode, stableRead.message, { retryAllowed: true, retryMode: "after_state_change" });
     }
     if (isBinary(stableRead.buffer)) return failure("BINARY_FILE", `File appears binary: ${args.path}`);
+    const version = registerReadSnapshot(fileSnapshots, resolution, stableRead, requestContext);
     const makePayload = (slice, byteLength, decoded) => {
       const nextOffsetBytes = offset + byteLength;
       return success({
@@ -189,6 +192,7 @@ function createReadCapabilities(context) {
         nextOffsetBytes,
         hasMore: nextOffsetBytes < stableRead.stat.size,
         truncated: nextOffsetBytes < stableRead.stat.size,
+        ...version,
       });
     };
     const fitted = fitUtf8Prefix(stableRead.buffer, makePayload);
@@ -203,7 +207,7 @@ function createReadCapabilities(context) {
     );
   }
 
-  async function readFileRange(args) {
+  async function readFileRange(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) {
@@ -218,6 +222,7 @@ function createReadCapabilities(context) {
     const start = clamp(args.startLine, 1, 1, Math.max(1, lines.length));
     const requestedEnd = clamp(args.endLine, start, start, Math.max(start, lines.length));
     const maximumEnd = Math.min(requestedEnd, start + 3999, lines.length);
+    const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
     const makePayload = (end) => success({
       path: displayPath(resolution),
       ...pathMetadata(resolution),
@@ -228,6 +233,7 @@ function createReadCapabilities(context) {
       sha256: read.hash,
       truncated: end < requestedEnd || end < lines.length,
       nextStartLine: end < lines.length ? end + 1 : null,
+      ...version,
     });
     let low = start;
     let high = maximumEnd;
@@ -260,7 +266,7 @@ function createReadCapabilities(context) {
     return dedupe("read_file_range", args, `${resolution.activeProject || ""}|${statSignature(read.stat)}`, payload);
   }
 
-  async function readSymbol(args) {
+  async function readSymbol(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) return failure(read.errorCode, read.message);
@@ -320,6 +326,7 @@ function createReadCapabilities(context) {
       endLine: end,
       totalLines: allLines.length,
       sha256: read.hash,
+      ...registerReadSnapshot(fileSnapshots, resolution, read, requestContext),
     });
     return dedupe("read_symbol", args, `${resolution.activeProject || ""}|${statSignature(read.stat)}`, payload);
   }

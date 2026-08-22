@@ -10,6 +10,11 @@ const { withPathLock } = require("./write-locks");
 const { readStableTextFile } = require("./direct-file-snapshot");
 const { failure, success } = require("./direct-response");
 const { envFlag, nowStamp } = require("./direct-runtime-shared");
+const {
+  resolveVersionEvidence,
+  versionConflict,
+  versionEvidenceFailure,
+} = require("./direct-file-version-policy.js");
 
 function createDeleteCapabilities(context) {
   const {
@@ -32,7 +37,7 @@ function createDeleteCapabilities(context) {
     });
   }
 
-  async function proposeFileDeletions(args) {
+  async function proposeFileDeletions(args, requestContext = {}) {
     const files = Array.isArray(args.files) ? args.files : [];
     if (!files.length) {
       return failure("INVALID_ARGUMENT", "files must contain at least one deletion candidate", {
@@ -50,6 +55,15 @@ function createDeleteCapabilities(context) {
         resolution.activeProject,
       );
       if (!allowed.ok) return failure("DELETE_TARGET_BLOCKED", `${item.path}: ${allowed.message}`);
+      const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
+      if (!read.ok) return failure(read.errorCode, read.message);
+      const snapshot = context.fileSnapshots.register({
+        projectPath: resolution.activeProject,
+        filePath: resolution.absolutePath,
+        hash: read.hash,
+        stat: read.stat,
+        requestContext,
+      });
       const token = crypto.randomBytes(24).toString("hex");
       proposals.set(token, {
         identity: proposalIdentity(args.completedEditsSummary, item, resolution.absolutePath),
@@ -61,6 +75,9 @@ function createDeleteCapabilities(context) {
         path: `project://${resolution.relativePath}`,
         approvalToken: token,
         expiresAt: new Date(expiresAt).toISOString(),
+        sha256: read.hash,
+        fileVersionReceipt: snapshot.fileVersionReceipt,
+        snapshotVersion: snapshot.snapshotVersion,
       });
     }
     for (const [token, proposal] of proposals) {
@@ -70,11 +87,11 @@ function createDeleteCapabilities(context) {
       deletesNothing: true,
       candidateCount: payload.length,
       proposals: payload,
-      instruction: "Show this exact plan to the user. Call delete_file only after explicit approval, with userApproved=true and the current file hash.",
+      instruction: "Show this exact plan to the user. After explicit approval, call delete_file with userApproved=true and this fileVersionReceipt; raw expectedHash remains compatible.",
     });
   }
 
-  async function deleteFile(args) {
+  async function deleteFile(args, requestContext = {}) {
     if (!envFlag(env, "ALLOW_WRITE", false)) {
       return failure("WRITE_DISABLED", "Writes are disabled. Start the MCP with ALLOW_WRITE=1.");
     }
@@ -99,16 +116,11 @@ function createDeleteCapabilities(context) {
       || path.resolve(resolution.absolutePath) !== path.resolve(proposal.absolutePath)) {
       return failure("APPROVAL_SCOPE_MISMATCH", "Deletion arguments do not exactly match the approved proposal.");
     }
+    const version = resolveVersionEvidence(context, resolution, args, requestContext);
+    if (!version.ok) return versionEvidenceFailure(version);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) return failure(read.errorCode, read.message);
-    if (!/^[a-f0-9]{64}$/iu.test(String(args.expectedHash || ""))
-      || read.hash.toLowerCase() !== String(args.expectedHash).toLowerCase()) {
-      return failure(
-        "READ_CONFLICT",
-        "The file hash differs from the approved/read version. Re-read and propose again.",
-        { retryAllowed: false },
-      );
-    }
+    if (read.hash.toLowerCase() !== version.expectedHash) return versionConflict(version, read.hash);
     const trashPath = path.join(
       resolution.projectDir,
       ".agent-trash",
@@ -117,7 +129,7 @@ function createDeleteCapabilities(context) {
     );
     const locked = await withPathLock(resolution.absolutePath, `${runtimeOwner}_delete`, async () => {
       const currentHash = sha256Buffer(await fsp.readFile(resolution.absolutePath));
-      if (currentHash !== read.hash) return { ok: false };
+      if (currentHash !== version.expectedHash) return { ok: false, currentHash };
       await fsp.mkdir(path.dirname(trashPath), { recursive: true });
       await fsp.rename(resolution.absolutePath, trashPath);
       return { ok: true };
@@ -129,13 +141,15 @@ function createDeleteCapabilities(context) {
       });
     }
     if (!locked.result.ok) {
-      return failure("READ_CONFLICT", "The file changed while deletion was being committed.");
+      return versionConflict(version, locked.result.currentHash || "unavailable");
     }
     proposals.delete(token);
+    context.fileSnapshots.invalidatePath(resolution.activeProject, resolution.absolutePath);
     return success({
       operation: "moved_to_trash",
       path: `project://${resolution.relativePath}`,
       sha256: read.hash,
+      hashSource: version.hashSource,
       recoverable: true,
       restorePath: trashPath,
     });

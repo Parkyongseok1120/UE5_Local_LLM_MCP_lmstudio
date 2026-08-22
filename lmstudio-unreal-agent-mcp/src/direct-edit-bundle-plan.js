@@ -18,6 +18,7 @@ const PATCH_FIELDS = new Set([
   "newText",
   "expectedOccurrences",
   "expectedHash",
+  "fileVersionReceipt",
 ]);
 
 function assertFields(item, allowed, label) {

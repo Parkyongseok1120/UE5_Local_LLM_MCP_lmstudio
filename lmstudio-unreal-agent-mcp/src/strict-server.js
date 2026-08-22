@@ -94,7 +94,7 @@ function createStrictRuntime(options = {}) {
   const projectBinding = createStrictProjectBinding(direct);
   const tools = [...lifecycleToolDefinitions(), ...capabilities.tools];
 
-  async function callTool(name, rawArgs = {}) {
+  async function callTool(name, rawArgs = {}, requestContext = {}) {
     const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? { ...rawArgs } : {};
     try {
       let session;
@@ -122,13 +122,13 @@ function createStrictRuntime(options = {}) {
           name,
           async (ownedSession) => {
             await projectBinding.bindToolArguments(name, args, ownedSession.project);
-            return direct.callTool(name, args);
+            return direct.callTool(name, args, { ...requestContext, conversationId });
           },
         );
         result = operation.result;
         session = operation.session;
       } else {
-        result = await direct.callTool(name, args);
+        result = await direct.callTool(name, args, requestContext);
       }
       const payload = {
         ...result.structuredContent,

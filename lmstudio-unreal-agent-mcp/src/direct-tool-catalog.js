@@ -81,6 +81,19 @@ function repeatable(properties = {}) {
   };
 }
 
+function fileVersionArguments() {
+  return {
+    expectedHash: {
+      type: "string",
+      description: "Optional raw 64-character SHA-256 from a preceding read. A valid value has priority over receipts.",
+    },
+    fileVersionReceipt: {
+      type: "string",
+      description: "Preferred opaque receipt from read_file/read_file_range/read_symbol or the immediately preceding mutation. Required when the transport has no reliable session ID and expectedHash is omitted.",
+    },
+  };
+}
+
 function toolDefinitions() {
   const definitions = [
     {
@@ -145,7 +158,7 @@ function toolDefinitions() {
     },
     {
       name: "read_file",
-      description: "Read a bounded UTF-8 file and return its SHA-256 hash for conflict-safe edits.",
+      description: "Read a bounded UTF-8 file and register its whole-file version. Returns a SHA-256 and a shorter opaque fileVersionReceipt for conflict-safe edits.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
@@ -155,7 +168,7 @@ function toolDefinitions() {
     },
     {
       name: "read_file_range",
-      description: "Read an inclusive line range and return the whole-file SHA-256 hash for conflict-safe edits.",
+      description: "Read an inclusive line range, register the whole-file version, and return its SHA-256 plus opaque fileVersionReceipt for conflict-safe edits.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
@@ -165,7 +178,7 @@ function toolDefinitions() {
     },
     {
       name: "read_symbol",
-      description: "Read one C/C++ function body with a small context window.",
+      description: "Read one C/C++ function body with a small context window and return whole-file version evidence.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
@@ -199,19 +212,19 @@ function toolDefinitions() {
     },
     {
       name: "replace_in_file",
-      description: `Replace exact text in selected-project Source, Config, plugin Source, the exact plugin descriptor, or the active project descriptor with SHA-256 optimistic concurrency and an atomic write. Content and protected generated/state directories are not writable. oldText + newText is limited to ${HARD_MUTATION_LIMITS.maxPatchChars} characters and newText to ${HARD_MUTATION_LIMITS.maxPatchLines} lines. Semantic denylist findings are advisory and never authorize or block the write.`,
+      description: `Replace exact text in selected-project Source, Config, plugin Source, the exact plugin descriptor, or the active project descriptor with server-owned snapshot concurrency and an atomic write. Pass fileVersionReceipt from the read; raw expectedHash remains compatible. With a reliable MCP session, a same-session latest snapshot may be used automatically. Content and protected generated/state directories are not writable. oldText + newText is limited to ${HARD_MUTATION_LIMITS.maxPatchChars} characters and newText to ${HARD_MUTATION_LIMITS.maxPatchLines} lines. Semantic denylist findings are advisory and never authorize or block the write.`,
       inputSchema: schema({
         path: { type: "string" },
         project: projectArgument(),
         oldText: { type: "string" },
         newText: { type: "string" },
         expectedOccurrences: { type: "number" },
-        expectedHash: { type: "string", description: "SHA-256 returned by a preceding read." },
-      }, ["path", "oldText", "newText", "expectedOccurrences", "expectedHash"]),
+        ...fileVersionArguments(),
+      }, ["path", "oldText", "newText", "expectedOccurrences"]),
     },
     {
       name: "apply_edit_bundle",
-      description: `Atomically create/patch at most ${HARD_MUTATION_LIMITS.maxFilesPerEdit} files in the same bounded Source, Config, plugin Source, or exact descriptor scopes. Content and protected generated/state directories are not writable. Each patch requires the SHA-256 observed before the bundle; semantic denylist findings are returned as non-blocking advisories.`,
+      description: `Atomically create/patch at most ${HARD_MUTATION_LIMITS.maxFilesPerEdit} files in the same bounded Source, Config, plugin Source, or exact descriptor scopes. Content and protected generated/state directories are not writable. Each existing file needs a valid raw expectedHash, fileVersionReceipt, or reliable same-session snapshot; semantic denylist findings are returned as non-blocking advisories.`,
       inputSchema: schema({
         project: projectArgument(),
         files: {
@@ -224,9 +237,9 @@ function toolDefinitions() {
             type: "object",
             properties: {
               path: { type: "string" }, oldText: { type: "string" }, newText: { type: "string" },
-              expectedOccurrences: { type: "number" }, expectedHash: { type: "string" },
+              expectedOccurrences: { type: "number" }, ...fileVersionArguments(),
             },
-            required: ["path", "oldText", "newText", "expectedOccurrences", "expectedHash"],
+            required: ["path", "oldText", "newText", "expectedOccurrences"],
             additionalProperties: false,
           },
         },
@@ -234,7 +247,7 @@ function toolDefinitions() {
     },
     {
       name: "propose_file_deletions",
-      description: "Create short-lived per-file approval tokens. This tool does not delete anything.",
+      description: "Create short-lived per-file approval tokens and fileVersionReceipts. This tool does not delete anything.",
       inputSchema: schema({
         completedEditsSummary: { type: "string" },
         project: projectArgument(),
@@ -251,13 +264,13 @@ function toolDefinitions() {
     },
     {
       name: "delete_file",
-      description: "Move an approved source-like file under project Source or plugin Source to recoverable project trash. Requires explicit userApproved=true, ALLOW_WRITE=1, and ALLOW_SOURCE_DELETE=1.",
+      description: "Move an approved source-like file under project Source or plugin Source to recoverable project trash. Use the proposal's fileVersionReceipt; raw expectedHash remains compatible. Requires explicit userApproved=true, ALLOW_WRITE=1, and ALLOW_SOURCE_DELETE=1.",
       inputSchema: schema({
         path: { type: "string" }, approvalToken: { type: "string" }, userApproved: { type: "boolean" },
         project: projectArgument(),
-        expectedHash: { type: "string" }, completedEditsSummary: { type: "string" }, reason: { type: "string" },
+        ...fileVersionArguments(), completedEditsSummary: { type: "string" }, reason: { type: "string" },
         ifNotDeleted: { type: "string" }, ifDeleted: { type: "string" },
-      }, ["path", "approvalToken", "userApproved", "expectedHash", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted"]),
+      }, ["path", "approvalToken", "userApproved", "completedEditsSummary", "reason", "ifNotDeleted", "ifDeleted"]),
     },
     {
       name: "static_validate_project",
@@ -271,7 +284,7 @@ function toolDefinitions() {
     },
     {
       name: "build_unreal_project",
-      description: "Immediately resolve and run UBT/UHT for the selected project/version. Requires ALLOW_UNREAL_BUILD=1.",
+      description: "Immediately resolve and run UBT/UHT for the selected project/version. Omit target for the preferred project target, or use the portable Editor alias for the selected project's editor target. Requires ALLOW_UNREAL_BUILD=1.",
       inputSchema: schema({
         hint: { type: "string" }, project: { type: "string" }, engineRoot: { type: "string" },
         target: { type: "string" }, platform: { type: "string" }, configuration: { type: "string" },

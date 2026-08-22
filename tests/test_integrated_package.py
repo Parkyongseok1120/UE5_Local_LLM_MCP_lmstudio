@@ -299,6 +299,10 @@ def test_package_builder_requires_the_direct_compactor_runtime_surface() -> None
         "lmstudio-context-compactor-plugin/src/index.ts",
         "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
         "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
+        "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+        "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+        "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
+        "lmstudio-context-compactor-plugin/src/continuity-text.js",
         "lmstudio-context-compactor-plugin/src/direct-config.ts",
     } <= required
     assert {
@@ -741,6 +745,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "direct_rag_build_steps.py",
         "manifest.json",
         "runtime-manifest.json",
+        "unreal_engine_binding.py",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.3.0 RC3"

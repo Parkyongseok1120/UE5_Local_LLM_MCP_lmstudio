@@ -131,13 +131,15 @@ def test_node_install_command_available_via_cmd_on_windows() -> None:
 def test_direct_agent_delete_file_requires_scoped_approval_and_current_hash() -> None:
     catalog_js = _read("lmstudio-unreal-agent-mcp/src/direct-tool-catalog.js")
     delete_js = _read("lmstudio-unreal-agent-mcp/src/direct-delete-capabilities.js")
+    version_policy_js = _read("lmstudio-unreal-agent-mcp/src/direct-file-version-policy.js")
 
     assert 'name: "propose_file_deletions"' in catalog_js
     assert "userApproved=true" in catalog_js
     assert "deletesNothing: true" in delete_js
     assert 'envFlag(env, "ALLOW_SOURCE_DELETE", false)' in delete_js
     assert 'failure("APPROVAL_SCOPE_MISMATCH"' in delete_js
-    assert 'failure("READ_CONFLICT"' in delete_js
+    assert "versionConflict(version" in delete_js
+    assert 'failure(\n    "FILE_VERSION_CONFLICT"' in version_policy_js
     assert "const trashPath = path.join(" in delete_js
     assert '".agent-trash"' in delete_js
     assert "fsp.rename(resolution.absolutePath, trashPath)" in delete_js

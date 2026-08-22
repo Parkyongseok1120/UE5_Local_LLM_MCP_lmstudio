@@ -8,6 +8,10 @@ const { readStableTextFile } = require("./direct-file-snapshot");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
 const { failure, success } = require("./direct-response");
 const {
+  registerCurrentVersion,
+  resolveVersionEvidence,
+} = require("./direct-file-version-policy.js");
+const {
   envFlag,
   statOrNull,
 } = require("./direct-runtime-shared");
@@ -24,7 +28,13 @@ function createBundleCapability(context) {
     workspaceRoot,
   } = context;
 
-  async function validateProspective(bundle, projectSelector) {
+  function validationError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+
+  async function validateProspective(bundle, projectSelector, requestContext) {
     validateBundleLimits(bundle, limits);
     const resolutions = new Map();
     const prospective = new Map();
@@ -51,16 +61,26 @@ function createBundleCapability(context) {
       if (!state) {
         const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
         if (!read.ok) throw new Error(read.message);
-        if (!/^[a-f0-9]{64}$/iu.test(String(patch.expectedHash || ""))) {
-          throw new Error(`expectedHash is required for ${patch.path}`);
+        const version = resolveVersionEvidence(context, resolution, patch, requestContext);
+        if (!version.ok) {
+          throw validationError(version.errorCode, `${patch.path}: ${version.message}`);
         }
-        if (read.hash.toLowerCase() !== String(patch.expectedHash).toLowerCase()) {
-          throw new Error(`READ_CONFLICT: ${patch.path} changed after it was read`);
+        if (read.hash.toLowerCase() !== version.expectedHash) {
+          throw validationError("FILE_VERSION_CONFLICT", `${patch.path} changed after the selected read snapshot`);
         }
-        state = { content: read.content, initialHash: read.hash };
-      } else if (state.initialHash
-        && state.initialHash.toLowerCase() !== String(patch.expectedHash || "").toLowerCase()) {
-        throw new Error(`expectedHash differs between patches for ${patch.path}`);
+        patch.expectedHash = version.expectedHash;
+        state = { content: read.content, initialHash: read.hash, version };
+      } else if (state.initialHash) {
+        const carriesEvidence = String(patch.expectedHash || "").trim()
+          || String(patch.fileVersionReceipt || "").trim();
+        if (carriesEvidence) {
+          const version = resolveVersionEvidence(context, resolution, patch, requestContext);
+          if (!version.ok) throw validationError(version.errorCode, `${patch.path}: ${version.message}`);
+          if (state.initialHash.toLowerCase() !== version.expectedHash) {
+            throw validationError("FILE_VERSION_CONFLICT", `Version evidence differs between patches for ${patch.path}`);
+          }
+        }
+        patch.expectedHash = state.initialHash;
       }
       const next = calculateReplacement({
         priorContent: state.content,
@@ -85,21 +105,21 @@ function createBundleCapability(context) {
     return { resolutions, semanticAdvisories };
   }
 
-  async function applyEditBundle(args) {
+  async function applyEditBundle(args, requestContext = {}) {
     if (!envFlag(env, "ALLOW_WRITE", false)) {
       return failure("WRITE_DISABLED", "Writes are disabled. Start the MCP with ALLOW_WRITE=1 to enable project mutations.");
     }
     const bundle = {
-      files: Array.isArray(args.files) ? args.files : [],
-      patches: Array.isArray(args.patches) ? args.patches : [],
+      files: Array.isArray(args.files) ? args.files.map((item) => ({ ...item })) : [],
+      patches: Array.isArray(args.patches) ? args.patches.map((item) => ({ ...item })) : [],
     };
     let validation;
     try {
-      validation = await validateProspective(bundle, args.project);
+      validation = await validateProspective(bundle, args.project, requestContext);
     } catch (error) {
       const message = String(error.message || error);
       return failure(
-        message.includes("READ_CONFLICT") ? "READ_CONFLICT" : "BUNDLE_VALIDATION_FAILED",
+        error.code || "BUNDLE_VALIDATION_FAILED",
         message,
         { retryAllowed: true, retryMode: "different_arguments" },
       );
@@ -121,7 +141,11 @@ function createBundleCapability(context) {
     });
     if (!result.ok) {
       return failure(
-        result.rollbackIncomplete ? "ROLLBACK_INCOMPLETE" : "BUNDLE_FAILED",
+        result.rollbackIncomplete
+          ? "ROLLBACK_INCOMPLETE"
+          : result.mutationFailure?.errorCode === "FILE_VERSION_CONFLICT"
+            ? "FILE_VERSION_CONFLICT"
+            : "BUNDLE_FAILED",
         result.error || "Atomic edit bundle failed",
         {
           details: { transactionId: result.transactionId, rollback: result.rollback },
@@ -130,13 +154,17 @@ function createBundleCapability(context) {
         },
       );
     }
+    const files = [];
+    for (const [filePath, hash] of Object.entries(result.postWriteHashes || {})) {
+      const resolution = resolutions.get(filePath)
+        || await mutationResolution(filePath, args.project);
+      const snapshot = await registerCurrentVersion(context, resolution, hash, requestContext);
+      files.push({ path: filePath, sha256: hash, ...snapshot });
+    }
     return success({
       operation: "bundle_applied",
       transactionId: result.transactionId,
-      files: Object.entries(result.postWriteHashes || {}).map(([filePath, hash]) => ({
-        path: filePath,
-        sha256: hash,
-      })),
+      files,
       advisory: "The atomic edit committed. Build can run immediately; static validation is optional diagnostic evidence.",
       ...(semanticAdvisories.length ? { semanticAdvisories } : {}),
     });

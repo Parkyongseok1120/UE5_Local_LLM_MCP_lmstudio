@@ -138,6 +138,6 @@ test("a failing semantic analyzer cannot block an atomic bundle or weaken its CA
     patches: [{ ...patch, oldText: "return 4;", newText: "return 5;" }],
   }));
   assert.strictEqual(stale.ok, false);
-  assert.strictEqual(stale.errorCode, "READ_CONFLICT");
+  assert.strictEqual(stale.errorCode, "FILE_VERSION_CONFLICT");
   assert.match(fs.readFileSync(sourcePath, "utf8"), /return 4;/u);
 });

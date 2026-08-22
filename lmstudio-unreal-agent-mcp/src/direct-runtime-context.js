@@ -15,6 +15,7 @@ const { resolveMutationLimits } = require("./direct-mutation-limits.js");
 const { assertDirectMutationScope } = require("./direct-mutation-scope.js");
 const { resolveAgentStateRoot } = require("./runtime-state-root.js");
 const { normalizeRuntimeOwner } = require("./direct-transaction-store.js");
+const { FileSnapshotRegistry } = require("./file-snapshot-registry.js");
 
 function createDirectRuntimeContext(options = {}) {
   const env = options.env || process.env;
@@ -25,6 +26,11 @@ function createDirectRuntimeContext(options = {}) {
   const repeatCache = options.repeatCache || new DirectRepeatCache({
     maxEntries: clamp(env.DIRECT_REPEAT_CACHE_ENTRIES, 256, 8, 4096),
     ttlMs: clamp(env.DIRECT_REPEAT_CACHE_TTL_MS, 10 * 60 * 1000, 1000, 60 * 60 * 1000),
+  });
+  const fileSnapshots = options.fileSnapshots || new FileSnapshotRegistry({
+    maxEntries: clamp(env.DIRECT_FILE_SNAPSHOT_ENTRIES, 512, 8, 4096),
+    ttlMs: clamp(env.DIRECT_FILE_SNAPSHOT_TTL_MS, 30 * 60 * 1000, 1000, 24 * 60 * 60 * 1000),
+    hostPlatform: options.hostPlatform || process.platform,
   });
   const limits = {
     ...resolveMutationLimits(env),
@@ -141,6 +147,7 @@ function createDirectRuntimeContext(options = {}) {
     dedupe,
     directResult,
     env,
+    fileSnapshots,
     fitUtf8Prefix,
     getActive,
     limits,

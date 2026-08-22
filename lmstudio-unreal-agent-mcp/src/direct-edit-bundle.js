@@ -6,6 +6,7 @@ const {
 } = require("./direct-edit-bundle-plan");
 const { constrainMutationLimits } = require("./direct-mutation-limits");
 const { captureBundleBaseline, commitBundle } = require("./direct-edit-bundle-commit");
+const { validateBundleBaselineHashes } = require("./direct-edit-bundle-preflight.js");
 const { rollbackRuntimeTransaction } = require("./direct-transaction-recovery");
 const {
   archiveRuntimeTransaction,
@@ -92,6 +93,7 @@ async function applyDirectEditBundle(bundle, resolvePath, options = {}) {
 
     try {
       const baseline = await captureBundleBaseline(targets, journal, stateRoot);
+      validateBundleBaselineHashes(bundle, baseline);
       const committed = await commitBundle(
         bundle,
         targets,

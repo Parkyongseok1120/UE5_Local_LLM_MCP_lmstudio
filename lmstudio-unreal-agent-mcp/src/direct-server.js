@@ -39,7 +39,7 @@ function createDirectRuntime(options = {}) {
   const missingHandlers = tools.map((tool) => tool.name).filter((name) => typeof handlers[name] !== "function");
   if (missingHandlers.length) throw new Error(`Direct catalog has no handler: ${missingHandlers.join(", ")}`);
 
-  async function callTool(name, rawArgs = {}) {
+  async function callTool(name, rawArgs = {}, requestContext = {}) {
     const args = cleanArgs(rawArgs);
     try {
       const handler = handlers[name];
@@ -54,7 +54,7 @@ function createDirectRuntime(options = {}) {
         ));
       }
       const payload = handler
-        ? await handler(args)
+        ? await handler(args, requestContext)
         : failure("UNKNOWN_TOOL", `Unknown tool: ${name}`);
       return context.directResult(name, payload);
     } catch (error) {
@@ -69,6 +69,7 @@ function createDirectRuntime(options = {}) {
     configPath: context.configPath,
     stateRoot: context.stateRoot,
     limits: context.limits,
+    fileSnapshots: context.fileSnapshots,
     tools,
     callTool,
     resolveProject: (selector) => context.resolveCallProject(selector),
@@ -89,7 +90,11 @@ async function serveRuntime(runtime, serverName) {
     { capabilities: { tools: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: runtime.tools }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => runtime.callTool(request.params.name, request.params.arguments || {}));
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => runtime.callTool(
+    request.params.name,
+    request.params.arguments || {},
+    extra?.sessionId ? { sessionId: extra.sessionId } : {},
+  ));
   const transport = new StdioServerTransport();
   const priorClose = transport.onclose;
   transport.onclose = () => {
