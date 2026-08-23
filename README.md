@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0
+# UE5_Local_LLM_MCP_lmstudio 1.3.1
 
-> **Stable v1.3.0 release:** Direct Model Mode is the supported default, and `releaseReady: true` records automated release/package readiness. The portable reasoning skill, LM Studio MCP, context plugin, and Node/Python adapters install through one integrated workflow on Windows, Ubuntu Linux, and Apple Silicon macOS; Intel macOS remains limited to custom Codex/portable-rule/Cline-only installs. Apple Silicon has a recorded physical FULL-install pass. A prior native Windows LM Studio GUI session exercised RAG/MCP tools and a real UBT invocation, but a clean-machine physical installer lifecycle and universal project/engine/plugin compatibility are not claimed. Host **Python 3.10+** is required before `./install.sh` can start. See the [1.3.0 release notes](docs/Release_Notes_1_3_0.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **Stable v1.3.1 release:** Direct Model Mode remains the supported default. This release hardens receipt-chained file mutations, removes runtime-local file receipts from durable context continuity, preserves ordinary receipt-domain language, keeps context compaction opt-in, and consolidates the cross-platform CI suites. The stack is designed for multiple Unreal Engine versions and projects. Host **Python 3.10+** is required before `./install.sh` can start. See the [1.3.1 release notes](docs/Release_Notes_1_3_1.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -28,50 +28,26 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — August 2026**
 >
-> **Current product label: 1.3.0 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, and bounded build/Automation processes. The optional context-continuity plugin is not chat-activated by the installer and its internal compaction opt-in defaults OFF. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
+> **Current product label: 1.3.1 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and provenance-aware durable continuity. The optional context-continuity plugin is not chat-activated by the installer and its internal compaction opt-in defaults OFF. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
 >
-> Post-release `main` component metadata is Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, and portable manifest 2.1.11. The Compactor removes runtime-local file-mutation capabilities from durable memory while preserving user-authored domain language such as payment `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, and `리시트`; ordinary receipt language is not interpreted as mutation authority.
+> v1.3.1 component metadata is Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, and portable manifest 2.1.11. The Compactor removes runtime-local file-mutation capabilities from durable memory while preserving user-authored domain language such as payment `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, and `리시트`; ordinary receipt language is not interpreted as mutation authority.
 >
-> Automated source, package, installer, safety, and cross-platform gates define release readiness. Apple Silicon physical FULL-install evidence and a native Windows LM Studio GUI/RAG/UBT workflow record are retained, while clean-machine installer certification for every host and universal Unreal project/engine/plugin/editor-runtime compatibility remain outside the claim. The saved v1.2.5 measurements and RC control-plane validation remain historical evidence, not a new 1.3.0 Direct-mode score.
+> Automated source, package, installer, safety, and cross-platform gates define release readiness. A passing release gate is not a universal compatibility claim for every host, Unreal project, engine build, plugin, or editor-runtime combination.
 
 ## Documentation Hub
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0.md"><img alt="1.3.0 Notes" src="https://img.shields.io/badge/Release-1.3.0-blue?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_1.md"><img alt="1.3.1 Notes" src="https://img.shields.io/badge/Release-1.3.1-blue?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
 </p>
 
-## Latest Results
+## Model Guidance
 
-These are the latest saved **v1.2.5 live-model baselines**. A paired 1.3.0 Direct-mode live rerun has not been completed yet.
+**Qwen 3.8 27B is the primary currently recommended and validated operating model for this stack.** Muse Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5, community Qwen 3.6 27B checkpoints, and GPT-OSS are not currently recommended.
 
-| Model / run | Pass@K | Pass@1 | Artifact |
-|---|---:|---:|---|
-| Qwen 3.6 27B community fine-tune | 36/36 | 36/36 | `20260709-144441-pass1-target` |
-| Qwen 3.5 9B | 35/36 | 33/36 | `20260709-153021-qwen35-9b` |
-
-| Model / run | Live wall-clock time |
-|---|---:|
-| Qwen 3.6 27B community fine-tune | ~33m 37s |
-| Qwen 3.5 9B | ~27m 22s |
-
-<p>
-  <a href="docs/Holdout_Case_Difficulty.md"><img alt="Holdout Difficulty" src="https://img.shields.io/badge/Docs-36%20Case%20Difficulty-red?logo=gitbook"></a>
-</p>
-
-These are historical internal UE 5.8 RAG/MCP/UBT workflow measurements, not public standardized model benchmarks or current model recommendations.
-
-### Model-size and language caveat
-
-**Qwen 3.8 27B is the primary currently recommended and validated operating model for this stack.** That statement reflects current operating validation; no paired 1.3.0 score for it is claimed in the historical benchmark tables above. Muse Glimmer is under testing and is not yet a validated recommendation.
-
-Qwen 3.5, the community fine-tuned Qwen 3.6 27B checkpoint, and GPT-OSS are not currently recommended. Their saved rows and numbers remain historical evidence only. Smaller models can still be useful for bounded work, but they should not be inferred to provide the same autonomous tool-use reliability as the current operating recommendation.
-
-Historical RC3 workflow tests showed that deterministic handoffs cannot make a small model retain long evidence chains or produce exact tool calls reliably. That model-side limitation still matters, but the supported runtime no longer inserts the old Python task/route/planning/synthesis transitions. Their source remains only as unsupported historical/evaluation material and is omitted from the portable package.
-
-> `Harness average attempts=0.389` in the best run means many cases were solved by deterministic static autofix before an LLM edit attempt. It is not a general model reasoning-depth metric.
+Historical live-test scores and timing records are intentionally omitted from this README. See [Model Measurement Results](docs/Model_Measurement_Results.md) only when historical measurement evidence is needed; those archived results are not current model recommendations or a v1.3.1 quality score.
 
 > **BYOI** = Bring Your Own Index. This repo ships **tooling only**: not Epic source, not a pre-built `rag.sqlite`.
 
@@ -209,11 +185,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 | Topic | File |
 |---|---|
-| 1.3.0 release notes | [docs/Release_Notes_1_3_0.md](docs/Release_Notes_1_3_0.md) |
-| 1.3.0 RC3 release notes (historical) | [docs/Release_Notes_1_3_0_RC3.md](docs/Release_Notes_1_3_0_RC3.md) |
-| 1.3.0 RC2 release notes | [docs/Release_Notes_1_3_0_RC2.md](docs/Release_Notes_1_3_0_RC2.md) |
-| 1.3.0 Beta5 release notes (was RC2) | [docs/Release_Notes_1_3_0_Beta5.md](docs/Release_Notes_1_3_0_Beta5.md) |
-| 1.3.0 Beta4 release notes (was RC1) | [docs/Release_Notes_1_3_0_Beta4.md](docs/Release_Notes_1_3_0_Beta4.md) |
+| 1.3.1 release notes | [docs/Release_Notes_1_3_1.md](docs/Release_Notes_1_3_1.md) |
 | Detailed project overview | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | Model measurement results | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | Version performance history | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -227,9 +199,9 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 ## Summary
 
-1.3.0 is the stable Direct Model Mode release (`releaseReady: true` for automated release/package readiness). The `v1.3.0` tag does not rewrite any earlier RC/Beta tag. Scoped SHA-256 file-version receipts, bounded process execution, RAG provenance, context continuity, installer paths, and package hygiene are guarded by automated checks. Historical GUI evidence includes a native Windows LM Studio RAG/MCP session and real UBT invocation, but a clean-machine Windows installer lifecycle, universal physical compatibility, GUI coverage for the final Direct runtime, and a new paired live-model score are not claimed.
+1.3.1 is the current stable Direct Model Mode release. Scoped SHA-256 file-version receipts, receipt-chained edits, bounded process execution, RAG provenance, durable continuity sanitization, installer paths, and package hygiene are guarded by automated checks. The optional context compactor remains OFF by default and does not inherit file-mutation authority through compacted history.
 
-For narrow UE 5.8 compile-fix work, historical community fine-tuned Qwen 3.6 27B and Qwen 3.5 9B runs recorded 36/36 Pass@K with 36/36 Pass@1 and 35/36 Pass@K with 33/36 Pass@1, respectively. Those checkpoints and GPT-OSS are not current recommendations; the values remain historical internal workflow evidence, not general model equivalence to Claude or GPT-class systems. Qwen 3.8 27B is the current primary recommended and validated operating model, without a claimed paired 1.3.0 score. Muse Glimmer remains under testing and is not yet a validated recommendation.
+Qwen 3.8 27B is the primary current operating recommendation. Muse Glimmer remains under testing. Qwen 3.5, community Qwen 3.6 27B checkpoints, and GPT-OSS are not currently recommended.
 
 If you want local LLMs for Unreal C++ with less hallucination, select the real model, search evidence first, read the exact project source, then answer or patch. Improve RAG, validation, safety boundaries, and failure analysis first; use fine-tuning later only when the workflow is already measured on real project errors.
 

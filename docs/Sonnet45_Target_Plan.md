@@ -4,7 +4,7 @@
 > retained as a point-in-time design record, not current model recommendations.
 > The current primary recommendation is Qwen 3.8 27B; see
 > [Model Profiles](Model_Profiles.md) and
-> [Release Notes 1.3.0](Release_Notes_1_3_0.md). Qwen 3.5, the community
+> [Release Notes 1.3.1](Release_Notes_1_3_1.md). Qwen 3.5, the community
 > fine-tuned Qwen 3.6 27B track, and GPT-OSS are historical and are not currently
 > recommended. Muse Glimmer is under testing and is not yet a validated or
 > recommended model.

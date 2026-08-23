@@ -4,7 +4,7 @@
 
 ## English
 
-This page summarizes the evolution from v1.0.0 through stable 1.3.0. The test suites changed over time, so numbers should be read as saved milestone evidence, not as a perfectly controlled apples-to-apples benchmark.
+This page summarizes the evolution from v1.0.0 through stable 1.3.1. The test suites changed over time, so numbers should be read as saved milestone evidence, not as a perfectly controlled apples-to-apples benchmark.
 
 ## Visual Scorecards
 
@@ -28,6 +28,7 @@ The charts below intentionally avoid using Pass@K/Pass@1 as the cross-version sc
 | 1.3.0 RC2 | Not rescored | Control-plane centralization, idempotence, transition replay, and CI portability fixes; model-side bottleneck is observed but not measured by a paired live-model rerun. |
 | 1.3.0 RC3 | Not rescored | Recovery, atomic rollback, canonical proof, Automation scope, and host-path identity hardening; no paired live-model rerun. |
 | 1.3.0 | Not rescored | Stable Direct Model Mode, provenance, scoped file-version receipts, bounded process execution, context continuity, and release packaging landed without a new paired live-model run. Release readiness is based on engineering gates, not a reused model score. |
+| 1.3.1 | Not rescored | Receipt-chained mutation bounds, capability-free durable continuity, ordinary receipt-domain preservation, opt-in compaction defaults, and consolidated CI landed without a new paired live-model run. Release readiness remains based on engineering gates. |
 
 ```mermaid
 xychart-beta
@@ -76,6 +77,7 @@ xychart-beta
 | 1.3.0 RC2 | Control-plane stabilization prerelease | Automated transition replay, epoch/idempotence/parity contracts, runtime identity, pytest/Node/installer/OSS/CI gates. | Server-owned next-obligation publication closes the known transition-loop class; exact required-tool recovery is explicit across the late pipeline. | No GUI E2E or fresh paired live-model score; long-context retention and exact schema emission remain increasingly visible model-side risks; Windows physical install remains pending. |
 | 1.3.0 RC3 | Recovery and portability hardening prerelease | Frozen-tree ten-round verification plus successful Windows/Ubuntu/macOS CI, package, atomic journal, transition, hardening, and domain gates. | Persisted recovery, crash-convergent mutation journals, canonical project/build proof, exact Automation scope, and host-aware path identity across control and evidence surfaces. | No GUI E2E or fresh paired live-model score; Windows physical install remains pending and every physical project/engine combination is not claimed. |
 | 1.3.0 | Stable Direct Model Mode and release hardening | Automated source, package, installer, safety, and cross-platform release gates; retained Apple Silicon FULL-install evidence and a prior native Windows LM Studio GUI/RAG/UBT workflow record. | Direct capability ownership, provenance-bound RAG generations, scoped SHA-256 file-version receipts, bounded Build/Automation processes, and hard-compaction continuity. | No paired 1.3.0 Direct-mode score, no clean-machine installer-lifecycle claim for every host, and no universal project/engine/plugin/editor-runtime compatibility claim. |
+| 1.3.1 | Receipt-safe continuity and CI closure | Automated Direct MCP, Compactor, Python, static, PowerShell, package, and cross-platform CI gates. | Focused receipt-chained mutations; raw file capabilities excluded from durable continuity; user receipt-domain language preserved; canonical clone-safe file facts; context compaction remains OFF by default; one CI suite owner. | No paired 1.3.1 Direct-mode score and no universal physical-host or Unreal project/engine/plugin/editor-runtime compatibility claim. |
 
 ## Field-Level Notes
 
@@ -87,15 +89,15 @@ xychart-beta
 | UHT / reflection | 4/4 Pass@1 in both measured runs | Strong with deterministic blueprint/native event autofixes. |
 | Single-file compile fix | 9/9 Pass@1 on Qwen 3.6 27B; 8/9 Pass@1 and 9/9 Pass@K on Qwen 3.5 9B (20260711); 6/9 Pass@1 on prior 9B baseline | Compact gap narrowed; remaining Pass@1 miss is one include-registration retry case. |
 
-## 1.3.0 Stable Status
+## 1.3.1 Stable Status
 
-v1.2.5 remains the historical compile-fix performance baseline. The 1.3.0 Beta/RC milestones and stable Direct release expand the workflow and release surface, but they do not replace those saved model results with an unmeasured score.
+v1.2.5 remains the historical compile-fix performance baseline. The 1.3.0 milestones and stable 1.3.1 engineering changes expand the workflow and release surface, but they do not replace those saved model results with an unmeasured score.
 
-Qwen 3.8 27B is the primary currently recommended and validated operating model for this stack, but it does not yet have a paired 1.3.0 benchmark score on this page. Qwen 3.5, the community fine-tuned Qwen 3.6 27B, and GPT-OSS are not current recommendations; their saved values remain historical evidence only. Muse Glimmer is under testing and is not yet a validated recommendation. Any future model-quality claim must publish separate scorecards for compile-fix, semantic refactor, runtime debug, negative control, and advanced Unreal C++ capability rather than collapsing them into one headline score.
+Qwen 3.8 27B is the primary currently recommended and validated operating model for this stack, but it does not yet have a paired 1.3.1 benchmark score on this page. Qwen 3.5, the community fine-tuned Qwen 3.6 27B, and GPT-OSS are not current recommendations; their saved values remain historical evidence only. Muse Glimmer is under testing and is not yet a validated recommendation. Any future model-quality claim must publish separate scorecards for compile-fix, semantic refactor, runtime debug, negative control, and advanced Unreal C++ capability rather than collapsing them into one headline score.
 
 ## Korean
 
-이 문서는 v1.0.0부터 stable 1.3.0까지의 발전 과정을 정리합니다. 중간에 테스트 suite가 바뀌었기 때문에, 수치는 완전히 동일 조건의 벤치마크가 아니라 저장된 milestone 근거로 읽어야 합니다.
+이 문서는 v1.0.0부터 stable 1.3.1까지의 발전 과정을 정리합니다. 중간에 테스트 suite가 바뀌었기 때문에, 수치는 완전히 동일 조건의 벤치마크가 아니라 저장된 milestone 근거로 읽어야 합니다.
 
 ## 시각화 점수표
 
@@ -119,6 +121,7 @@ Qwen 3.8 27B is the primary currently recommended and validated operating model 
 | 1.3.0 RC2 | 재채점하지 않음 | control-plane 중앙화, 멱등 처리, transition replay, CI 호환성 수정. 모델측 병목은 관찰됐지만 paired live-model run으로 측정하지 않음. |
 | 1.3.0 RC3 | 재채점하지 않음 | recovery, atomic rollback, canonical proof, Automation 범위, host-path identity 강화. paired live-model 재측정 없음. |
 | 1.3.0 | 재채점하지 않음 | Stable Direct Model Mode, provenance, scoped file-version receipt, bounded process 실행, context continuity, release packaging을 반영했지만 새 paired live-model run은 없습니다. Release readiness는 기존 모델 점수 재사용이 아니라 engineering gate를 기준으로 합니다. |
+| 1.3.1 | 재채점하지 않음 | Receipt 연쇄 mutation 제한, capability-free durable continuity, 일반 영수증 문맥 보존, compaction opt-in 기본값, 통합 CI를 반영했지만 새 paired live-model run은 없습니다. Release readiness는 engineering gate를 기준으로 합니다. |
 
 ```mermaid
 xychart-beta
@@ -167,6 +170,7 @@ xychart-beta
 | 1.3.0 RC2 | control-plane 안정화 프리릴리스 | transition replay, epoch/idempotence/parity contract, runtime identity, pytest/Node/installer/OSS/CI gate. | 서버 소유 next-obligation으로 알려진 transition-loop 계열을 구조적으로 차단. | GUI E2E와 새 paired score 없음. 긴 문맥 유지와 정확한 schema 생성은 모델측 위험으로 더 뚜렷해졌고 Windows 실기는 대기 중. |
 | 1.3.0 RC3 | recovery·portability 강화 프리릴리스 | 동결 트리 10회 검증과 Windows/Ubuntu/macOS CI, package, atomic journal, transition, hardening, domain gate. | persisted recovery, crash 수렴 mutation journal, canonical project/build proof, exact Automation 범위, host-aware path identity. | GUI E2E와 새 paired score 없음. Windows 실기 설치와 모든 물리 project/engine 조합 검증은 대기 중. |
 | 1.3.0 | Stable Direct Model Mode와 release hardening | 자동 source·package·installer·safety·cross-platform release gate, Apple Silicon FULL-install 근거, 과거 native Windows LM Studio GUI/RAG/UBT workflow 기록. | Direct capability ownership, provenance-bound RAG generation, scoped SHA-256 file-version receipt, bounded Build/Automation process, hard-compaction continuity. | 1.3.0 Direct-mode paired score 없음. 모든 host의 clean-machine installer lifecycle이나 모든 project/engine/plugin/editor-runtime 조합의 보편적 호환성은 주장하지 않음. |
+| 1.3.1 | Receipt-safe continuity와 CI closure | Direct MCP, Compactor, Python, 정적 검사, PowerShell, package, cross-platform CI 자동 gate. | 작은 receipt 연쇄 mutation, durable continuity의 raw file capability 제거, 사용자 영수증 문맥 보존, canonical clone-safe file fact, compaction 기본 OFF, 단일 CI suite owner. | 1.3.1 Direct-mode paired score 없음. 모든 물리 host와 Unreal project/engine/plugin/editor-runtime 조합의 보편적 호환성은 주장하지 않음. |
 
 ## 분야별 메모
 
@@ -178,8 +182,8 @@ xychart-beta
 | UHT / reflection | 두 측정 run 모두 4/4 Pass@1 | blueprint/native event deterministic autofix 경로가 강함. |
 | Single-file compile fix | Qwen 3.6 27B는 9/9 Pass@1; Qwen 3.5 9B (20260711)는 8/9 Pass@1, 9/9 Pass@K; 이전 9B baseline은 6/9 Pass@1 | compact gap 축소; 남은 Pass@1 miss는 include-registration retry 1건. |
 
-## 1.3.0 Stable 상태
+## 1.3.1 Stable 상태
 
-v1.2.5는 historical compile-fix 성능 baseline으로 유지됩니다. 1.3.0 Beta/RC milestone과 stable Direct 릴리스는 workflow와 release surface를 확장하지만, 저장된 모델 결과를 측정되지 않은 새 점수로 대체하지 않습니다.
+v1.2.5는 historical compile-fix 성능 baseline으로 유지됩니다. 1.3.0 milestone과 stable 1.3.1 engineering 변경은 workflow와 release surface를 확장하지만, 저장된 모델 결과를 측정되지 않은 새 점수로 대체하지 않습니다.
 
-Qwen 3.8 27B는 이 stack의 현재 주 권장·검증 operating model이지만, 이 문서에는 아직 paired 1.3.0 benchmark 점수가 없습니다. Qwen 3.5, community fine-tuned Qwen 3.6 27B, GPT-OSS는 현재 추천 대상이 아니며 저장된 값은 historical evidence로만 유지합니다. Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다. 향후 모델 품질 주장은 compile-fix, semantic refactor, runtime debug, negative control, advanced Unreal C++ capability를 분리된 scorecard로 공개해야 하며 하나의 headline 점수로 합치면 안 됩니다.
+Qwen 3.8 27B는 이 stack의 현재 주 권장·검증 operating model이지만, 이 문서에는 아직 paired 1.3.1 benchmark 점수가 없습니다. Qwen 3.5, community fine-tuned Qwen 3.6 27B, GPT-OSS는 현재 추천 대상이 아니며 저장된 값은 historical evidence로만 유지합니다. Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다. 향후 모델 품질 주장은 compile-fix, semantic refactor, runtime debug, negative control, advanced Unreal C++ capability를 분리된 scorecard로 공개해야 하며 하나의 headline 점수로 합치면 안 됩니다.

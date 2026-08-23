@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.0
+# UE5_Local_LLM_MCP_lmstudio 1.3.1
 
-> **Stable v1.3.0 릴리스:** Direct Model Mode가 기본 지원 경로이며 `releaseReady: true`는 자동 릴리스·패키지 준비 완료를 뜻합니다. portable reasoning skill, LM Studio MCP, context plugin, Node/Python adapter는 Windows·Ubuntu Linux·Apple Silicon macOS에서 하나의 통합 workflow로 설치합니다. Intel macOS는 custom Codex/portable-rule/Cline-only 설치만 지원합니다. Apple Silicon은 실기 FULL 설치 PASS 기록이 있습니다. Windows에서는 과거 native LM Studio GUI 세션으로 RAG/MCP tool과 실제 UBT 호출을 확인했지만, clean-machine physical installer lifecycle과 모든 project/engine/plugin 조합의 호환성은 주장하지 않습니다. `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.0 릴리스 노트](docs/Release_Notes_1_3_0.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
+> **Stable v1.3.1 릴리스:** Direct Model Mode가 기본 지원 경로입니다. 이번 릴리스는 receipt 연쇄 파일 수정, durable continuity의 runtime-local file receipt 제거, 일반 영수증 문맥 보존, context compaction opt-in 기본값, cross-platform CI suite를 강화했습니다. 여러 Unreal Engine 버전과 여러 프로젝트에서 재사용할 수 있도록 설계되었습니다. `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.1 릴리스 노트](docs/Release_Notes_1_3_1.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
@@ -28,9 +28,11 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 > **프로젝트 현황 — 2026년 8월**
 >
-> **현재 제품 라벨은 stable 1.3.0입니다.** 지원 runtime은 Direct Model Mode, scoped file-version receipt, provenance-bound RAG generation, bounded Build/Automation process를 사용합니다. 선택적 context-continuity plugin은 installer가 채팅에서 활성화하지 않으며 내부 compaction opt-in 기본값도 OFF입니다. MCP 서버는 capability와 파일시스템·프로세스·빌드·프로젝트 안전 경계를 제공하며 모델의 task plan이나 tool 순서를 소유하지 않습니다.
+> **현재 제품 라벨은 stable 1.3.1입니다.** 지원 runtime은 Direct Model Mode, scoped file-version receipt, provenance-bound RAG generation, bounded Build/Automation process, provenance-aware durable continuity를 사용합니다. 선택적 context-continuity plugin은 installer가 채팅에서 활성화하지 않으며 내부 compaction opt-in 기본값도 OFF입니다. MCP 서버는 capability와 파일시스템·프로세스·빌드·프로젝트 안전 경계를 제공하며 모델의 task plan이나 tool 순서를 소유하지 않습니다.
 >
-> 자동 source·package·installer·safety·cross-platform gate가 release readiness를 정의합니다. Apple Silicon physical FULL-install 근거와 native Windows LM Studio GUI/RAG/UBT workflow 기록은 보존하지만, 모든 host의 clean-machine installer 인증이나 모든 Unreal project/engine/plugin/editor-runtime 조합의 호환성은 주장하지 않습니다. 저장된 v1.2.5 측정과 RC control-plane 검증은 과거 근거이며 새 1.3.0 Direct-mode 점수가 아닙니다.
+> v1.3.1 component metadata는 Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, portable manifest 2.1.11입니다. Compactor는 runtime-local 파일 변경 capability를 durable memory에서 제거하면서 결제 `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, `리시트` 같은 사용자 작성 domain 언어를 보존합니다.
+>
+> 자동 source·package·installer·safety·cross-platform gate가 release readiness를 정의합니다. Gate 통과는 모든 host, Unreal project, engine build, plugin, editor-runtime 조합에 대한 보편적 호환성 주장이 아닙니다.
 
 ---
 
@@ -38,40 +40,16 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_0.md"><img alt="1.3.0 Notes" src="https://img.shields.io/badge/Release-1.3.0-blue?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_1.md"><img alt="1.3.1 Notes" src="https://img.shields.io/badge/Release-1.3.1-blue?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
 </p>
 
-## 최신 결과
+## 모델 권고
 
-아래 수치는 최신 저장 **v1.2.5 live-model baseline**입니다. 1.3.0 Direct-mode paired live 재측정은 아직 완료되지 않았습니다.
+**Qwen 3.8 27B가 이 stack의 현재 주 권장·검증 operating model입니다.** Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다. Qwen 3.5, community Qwen 3.6 27B checkpoint, GPT-OSS는 현재 추천하지 않습니다.
 
-| 모델 / run | Pass@K | Pass@1 | Artifact |
-|---|---:|---:|---|
-| Qwen 3.6 27B community fine-tune | 36/36 | 36/36 | `20260709-144441-pass1-target` |
-| Qwen 3.5 9B | 35/36 | 33/36 | `20260709-153021-qwen35-9b` |
-
-| 모델 / run | Live 측정 시간 |
-|---|---:|
-| Qwen 3.6 27B community fine-tune | 약 33분 37초 |
-| Qwen 3.5 9B | 약 27분 22초 |
-
-<p>
-  <a href="docs/Holdout_Case_Difficulty.md"><img alt="Holdout Difficulty" src="https://img.shields.io/badge/Docs-36%20Case%20Difficulty-red?logo=gitbook"></a>
-</p>
-
-이 수치는 historical UE 5.8 RAG/MCP/UBT 내부 workflow 측정 결과입니다. 공개 표준 모델 벤치마크나 현재 모델 추천이 아닙니다.
-
-### 모델 크기와 한국어 사용상의 한계
-
-**Qwen 3.8 27B가 이 stack의 현재 주 권장·검증 operating model입니다.** 이는 현재 운용 검증을 뜻하며, 위 historical benchmark 표에는 이 모델의 paired 1.3.0 점수를 주장하지 않습니다. Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다.
-
-Qwen 3.5, community fine-tuned Qwen 3.6 27B checkpoint, GPT-OSS는 현재 추천 대상이 아닙니다. 저장된 행과 수치는 historical evidence로만 유지합니다. 작은 모델도 범위가 제한된 작업에 사용할 수 있지만, 현재 운용 권장 모델과 같은 수준의 자율 tool-use 안정성을 제공한다고 추론하면 안 됩니다.
-
-과거 RC3 workflow 검증에서는 deterministic handoff가 작은 모델에게 긴 근거 기억이나 정확한 tool call 생성을 보장하지 못한다는 점이 드러났습니다. 이 모델측 한계는 여전히 중요하지만 지원 runtime은 예전 Python task/route/planning/synthesis transition을 더 이상 삽입하지 않습니다. 해당 source는 지원되지 않는 과거 평가 자료로만 남고 portable package에서는 제외됩니다.
-
-> 최고 run의 `Harness average attempts=0.389`는 많은 케이스가 LLM 편집 시도 전에 deterministic static autofix로 해결되었다는 뜻입니다. 일반적인 모델 reasoning-depth 지표가 아닙니다.
+과거 live-test 점수와 실행 시간 기록은 README에서 의도적으로 제거했습니다. 과거 측정 근거가 필요할 때만 [모델 측정 결과](docs/Model_Measurement_Results.md)를 참고하세요. 보관된 결과는 현재 모델 추천이나 v1.3.1 품질 점수가 아닙니다.
 
 > **BYOI** = Bring Your Own Index. 이 저장소는 **tooling만** 제공합니다. Epic source, 사전 빌드된 `rag.sqlite`는 포함하지 않습니다.
 
@@ -190,11 +168,7 @@ hard compaction의 bounded continuity state는 최신 사용자 요청, active o
 
 | 주제 | 파일 |
 |---|---|
-| 1.3.0 릴리스 노트 | [docs/Release_Notes_1_3_0.md](docs/Release_Notes_1_3_0.md) |
-| 1.3.0 RC3 릴리스 노트 (과거 기록) | [docs/Release_Notes_1_3_0_RC3.md](docs/Release_Notes_1_3_0_RC3.md) |
-| 1.3.0 RC2 릴리스 노트 | [docs/Release_Notes_1_3_0_RC2.md](docs/Release_Notes_1_3_0_RC2.md) |
-| 1.3.0 Beta5 릴리스 노트 (과거 RC2) | [docs/Release_Notes_1_3_0_Beta5.md](docs/Release_Notes_1_3_0_Beta5.md) |
-| 1.3.0 Beta4 릴리스 노트 (과거 RC1) | [docs/Release_Notes_1_3_0_Beta4.md](docs/Release_Notes_1_3_0_Beta4.md) |
+| 1.3.1 릴리스 노트 | [docs/Release_Notes_1_3_1.md](docs/Release_Notes_1_3_1.md) |
 | 상세 프로젝트 개요 | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | 모델 측정 결과 | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | 버전별 성능 이력 | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -208,9 +182,9 @@ hard compaction의 bounded continuity state는 최신 사용자 요청, active o
 
 ## 요약
 
-1.3.0은 stable Direct Model Mode 릴리스입니다(`releaseReady: true`는 자동 릴리스·패키지 준비 상태). `v1.3.0` 태그는 기존 RC/Beta 태그를 이동하지 않습니다. Scoped SHA-256 file-version receipt, bounded process 실행, RAG provenance, context continuity, installer 경로, package hygiene는 자동 검증으로 보호합니다. 과거 GUI 근거에는 native Windows LM Studio RAG/MCP 세션과 실제 UBT 호출이 포함되지만 clean-machine Windows installer lifecycle, 보편적 physical compatibility, 최종 Direct runtime의 GUI coverage, 새 paired live-model 점수는 주장하지 않습니다.
+1.3.1은 현재 stable Direct Model Mode 릴리스입니다. Scoped SHA-256 file-version receipt, receipt 연쇄 수정, bounded process 실행, RAG provenance, durable continuity sanitization, installer 경로, package hygiene는 자동 검증으로 보호합니다. 선택적 context compactor는 기본 OFF이며 압축된 history를 통해 파일 변경 권한을 재상속하지 않습니다.
 
-좁은 UE 5.8 compile-fix 작업에서 과거 community fine-tuned Qwen 3.6 27B와 Qwen 3.5 9B run은 각각 36/36 Pass@K·36/36 Pass@1, 35/36 Pass@K·33/36 Pass@1을 기록했습니다. 이 checkpoint들과 GPT-OSS는 현재 추천 대상이 아니며, 수치는 Claude/GPT 계열과의 일반 모델 동등성 주장이 아닌 historical 내부 workflow evidence로만 유지합니다. Qwen 3.8 27B가 현재 주 권장·검증 operating model이지만 paired 1.3.0 점수는 아직 주장하지 않습니다. Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다.
+Qwen 3.8 27B가 현재 주 권장 operating model입니다. Muse Glimmer는 테스트 중입니다. Qwen 3.5, community Qwen 3.6 27B checkpoint, GPT-OSS는 현재 추천하지 않습니다.
 
 로컬 LLM으로 Unreal C++ hallucination을 줄이고 싶다면 실제 모델을 직접 선택하고 근거를 검색한 뒤 정확한 프로젝트 source를 읽고 답변하거나 patch하세요. RAG, validation, safety boundary, failure analysis를 먼저 개선하고 fine-tuning은 workflow가 실제 프로젝트 error에서 측정된 뒤에 적용하는 것이 좋습니다.
 
