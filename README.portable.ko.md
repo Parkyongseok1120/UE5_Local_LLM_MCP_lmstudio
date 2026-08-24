@@ -9,6 +9,9 @@ source나 사전 빌드된 인덱스는 포함하지 않으므로 자신의 프�
 
 - Windows: `INSTALL.bat`
 - Ubuntu Linux 또는 Apple Silicon macOS: `./install.sh`
+- 지원되는 새 host에는 Python이 미리 없어도 됩니다. launcher가 pin된 uv
+  seed의 SHA-256을 검증하고 사용자 state-home에 managed Python 3.12를
+  설치하며 system-wide Python이나 PATH는 바꾸지 않습니다.
 - 설치된 MCP 설정이 이 runtime tree의 파일을 직접 실행하므로 압축을 푼
   디렉터리를 안정적인 위치에 유지하세요.
 

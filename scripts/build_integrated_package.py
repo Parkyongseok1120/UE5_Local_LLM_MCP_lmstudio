@@ -187,6 +187,8 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 REQUIRED_RUNTIME_FILES = (
     "config/retrieval_profiles.json",
     "config/stable_tool_manifest.json",
+    "installer/bootstrap_python.ps1",
+    "installer/bootstrap_python.sh",
         "prompts/lmstudio_direct_model_system.md",
         "prompts/cline_unreal_agent_system.md",
     "scripts/unreal_rag_direct.py",
@@ -739,20 +741,23 @@ def _write_launchers(staging: Path) -> None:
         staged_template = staging / source_name
         if staged_template.exists():
             staged_template.unlink()
-    target = staging / "install.sh"
-    # A Windows checkout may materialize the tracked shell launcher with CRLF.
-    # Normalize the portable artifact so its shebang remains executable after
-    # the ZIP is moved to Linux or macOS, regardless of the packaging host.
-    launcher = (ROOT / "install.sh").read_bytes()
-    target.write_bytes(launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
-    target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    # A Windows checkout may materialize tracked shell files with CRLF.
+    # Normalize both POSIX bootstrap stages before the ZIP moves to Linux or
+    # macOS, regardless of the packaging host.
+    for relative in ("install.sh", "installer/bootstrap_python.sh"):
+        target = staging / relative
+        source = (ROOT / relative).read_bytes()
+        target.write_bytes(source.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
+        target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     (staging / "PORTABLE-INSTALL.md").write_text(
         "# Integrated portable installer\n\n"
         "## Prerequisites\n\n"
-        "- **Python 3.10+ must already be installed and on PATH** (or set `PYTHON=/path/to/python3.12`) "
-        "before `./install.sh` can start. The installer then bootstraps managed Python 3.12.\n"
-        "- Node.js 20+/npm is downloaded only for Unreal/context components and PowerShell 7 "
-        "(`pwsh`) only for an opt-in RAG build. Runtime archives are pinned by SHA-256 and safely "
+        "- `INSTALL.bat` / `install.sh` use Python 3.10+ when available. On a clean supported "
+        "host they automatically download SHA-256-verified uv, install managed Python 3.12 in "
+        "the selected user state-home, and continue without a system-wide Python install. "
+        "Direct `python3 install.py` use still requires host Python 3.10+.\n"
+        "- Node.js 20+/npm is downloaded only for Unreal/context components. PowerShell 7 "
+        "(`pwsh`) is only for optional manual `rag.ps1` maintenance. Runtime archives are pinned by SHA-256 and safely "
         "extracted for the host CPU architecture (arm64/x64).\n"
         "- Context-compactor installation requires the LM Studio `lms` CLI. The plugin is installed "
         "for availability but never chat-activated by the installer; verify the host-owned toggle is OFF.\n\n"
@@ -776,7 +781,7 @@ def _write_launchers(staging: Path) -> None:
         "The installer asks for SAFE, STANDARD, FULL, or CUSTOM. All profiles remain "
         "read-only unless agent mode and its separate risk acknowledgement are both supplied.\n"
         "Run `python3 install.py --help` for automation flags. Generated indexes and machine "
-        "configuration are not bundled by default. RAG indexing uses the bootstrapped `pwsh`; "
+        "configuration are not bundled by default. Installer RAG indexing uses managed Python directly; "
         "custom Unreal installs can be supplied with `--engine-root` or `UNREAL_ENGINE_ROOT`.\n\n"
         "## Portable RAG maintenance\n\n"
         "The packaged `rag.ps1` is intentionally limited to factual collection, index build, "
@@ -919,7 +924,7 @@ def _manifest(
         "portable": True,
         "supportedHosts": ["windows", "linux", "macos-apple-silicon"],
         "hostNotes": {
-            "macos-apple-silicon": "Physical FULL install PASS on darwin-arm64; signing/notarization not claimed; Python 3.10+ required to bootstrap",
+            "macos-apple-silicon": "Physical FULL install PASS on darwin-arm64; signing/notarization not claimed; Python-free seed path is automated but not part of that historical physical run",
             "macos-intel": "LM Studio configuration unsupported; custom/Cline-only allowed",
             "windows": "Automated CI/fixture paths and a prior native LM Studio GUI/RAG/UBT workflow are evidenced; clean-machine installer lifecycle and universal compatibility are not claimed",
         },

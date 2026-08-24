@@ -63,7 +63,7 @@ def test_installer_profiles_are_manifest_driven() -> None:
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.1"
-    assert manifest["version"] == "2.1.11"
+    assert manifest["version"] == "2.1.12"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
     assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is False
     assert manifest["safety"]["contextCompactionEnabledByDefault"] is False
@@ -80,6 +80,13 @@ def test_installer_profiles_are_manifest_driven() -> None:
         if name != "custom"
     }
     assert manifest["requires"]["linuxBaseline"] == "Ubuntu 22.04/24.04 (glibc)"
+    assert manifest["launcherBootstrap"] == {
+        "hostPythonRequired": False,
+        "managedPythonDefinition": "installer/runtime-manifest.json#runtimes.python",
+        "seedRuntime": "uv",
+        "systemWideInstall": False,
+        "skipFlag": "--skip-runtime-bootstrap",
+    }
     assert manifest["portablePackage"]["runtimeArchiveIntegrity"] == "pinned-sha256"
     assert manifest["portablePackage"]["supportedHosts"] == [
         "windows",

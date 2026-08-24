@@ -40,6 +40,7 @@ SUITES: dict[str, tuple[str, ...]] = {
         "tests/test_integrated_package.py",
         "tests/test_package_forbidden_filters.py",
         "tests/test_install_sh_python_launcher.py",
+        "tests/test_python_seed_bootstrap.py",
         "tests/test_patch_mcp_config.py",
         "tests/test_verify_release.py",
         "tests/test_evidence_first_mcp.py",

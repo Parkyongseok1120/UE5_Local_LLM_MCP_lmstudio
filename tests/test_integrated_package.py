@@ -763,6 +763,8 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     assert {path.name for path in (output / "installer").iterdir()} == {
         "README.md",
         "__init__.py",
+        "bootstrap_python.ps1",
+        "bootstrap_python.sh",
         "bootstrap_runtimes.py",
         "direct_rag_build.py",
         "direct_rag_build_model.py",
@@ -776,7 +778,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.3.1"
-    assert packaged_installer_manifest["version"] == "2.1.11"
+    assert packaged_installer_manifest["version"] == "2.1.12"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
     assert (output / "docs" / "Release_Notes_1_3_1.md").is_file()
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
@@ -784,13 +786,18 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     expected_launcher = source_launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     assert (output / "install.sh").read_bytes() == expected_launcher
     assert b"\r" not in (output / "install.sh").read_bytes()
+    source_seed = (ROOT / "installer" / "bootstrap_python.sh").read_bytes()
+    expected_seed = source_seed.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    assert (output / "installer" / "bootstrap_python.sh").read_bytes() == expected_seed
+    assert b"\r" not in (output / "installer" / "bootstrap_python.sh").read_bytes()
     windows_launcher = (output / "INSTALL.bat").read_text(encoding="utf-8")
     posix_launcher = (output / "install.sh").read_text(encoding="utf-8")
     assert "pause >nul" in windows_launcher
-    assert "Python 3.10 or newer" in windows_launcher
-    assert "Python 3.10+" in posix_launcher
+    assert "Bootstrapping managed Python 3.12" in windows_launcher
+    assert "Bootstrapping managed Python 3.12" in posix_launcher
+    assert (output / "installer" / "bootstrap_python.ps1").is_file()
+    assert (output / "installer" / "bootstrap_python.sh").is_file()
     assert "python3.10" in posix_launcher
-    assert "sudo apt-get install -y python3 ca-certificates" in posix_launcher
     if os.name != "nt":
         launcher_help = subprocess.run(
             [str(output / "install.sh"), "--help"],
@@ -804,6 +811,9 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     portable_help = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
     assert "Ubuntu 22.04/24.04 with glibc" in portable_help
     assert "pinned by SHA-256" in portable_help
+    assert "automatically download SHA-256-verified uv" in portable_help
+    assert "Installer RAG indexing uses managed Python directly" in portable_help
+    assert "RAG indexing uses the bootstrapped `pwsh`" not in portable_help
     assert "contains no planner, wrapper, evaluation, task, or route controller" in portable_help
     assert "Get-Help ./scripts/portable_rag.ps1 -Detailed" in portable_help
     assert "Get-Help ./rag.ps1 -Detailed" not in portable_help

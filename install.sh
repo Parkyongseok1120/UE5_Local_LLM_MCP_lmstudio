@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Requires host Python 3.10+ on PATH (or PYTHON=/path/to/python3.12) before bootstrap.
-# On a clean macOS install, system /usr/bin/python3 is often 3.9 and is not enough.
+# Uses host Python 3.10+ when available. Otherwise a small POSIX helper verifies
+# pinned uv and provisions managed Python 3.12 before launching install.py.
 set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INSTALL_PY="$SCRIPT_DIR/install.py"
@@ -123,7 +123,18 @@ if [ -n "$HOME_DIR" ]; then
   done
 fi
 
-echo "Python 3.10+ was not found." >&2
+python_seed=${PYTHON_SEED_SH:-$SCRIPT_DIR/installer/bootstrap_python.sh}
+if [ "${_INSTALL_SH_TEST_HERMETIC:-0}" != "1" ] || [ -n "${PYTHON_SEED_SH:-}" ]; then
+  if [ ! -f "$python_seed" ]; then
+    echo "Python 3.10+ was not found, and the Python bootstrap helper is missing: $python_seed" >&2
+    echo "Re-extract the complete package and retry." >&2
+    exit 127
+  fi
+  echo "Python 3.10+ was not found. Bootstrapping managed Python 3.12..." >&2
+  exec /bin/sh "$python_seed" "$INSTALL_PY" "$@"
+fi
+
+echo "Python 3.10+ was not found, and automatic bootstrap was disabled by the hermetic test environment." >&2
 echo "" >&2
 echo "Checked:${CHECKED_REPORT}" >&2
 echo "" >&2
@@ -133,8 +144,6 @@ echo "" >&2
 echo "If Python 3.10+ is installed outside PATH:" >&2
 echo "  PYTHON=/path/to/python3.12 \"$0\"" >&2
 echo "" >&2
-echo "macOS:" >&2
-echo "  install Python 3.12+ from https://www.python.org/downloads/" >&2
-echo "  or (when Homebrew exists): brew install python@3.12" >&2
-echo "Ubuntu: sudo apt-get update && sudo apt-get install -y python3 ca-certificates" >&2
+echo "The normal launcher automatically downloads a SHA-256-verified managed Python." >&2
+echo "Manual fallback: install Python 3.12+ from https://www.python.org/downloads/" >&2
 exit 127

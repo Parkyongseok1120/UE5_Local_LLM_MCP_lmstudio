@@ -3,7 +3,7 @@
 
 # UE5_Local_LLM_MCP_lmstudio 1.3.1
 
-> **Stable v1.3.1 릴리스:** Direct Model Mode가 기본 지원 경로입니다. 이번 릴리스는 receipt 연쇄 파일 수정, durable continuity의 runtime-local file receipt 제거, 일반 영수증 문맥 보존, context compaction opt-in 기본값, cross-platform CI suite를 강화했습니다. 여러 Unreal Engine 버전과 여러 프로젝트에서 재사용할 수 있도록 설계되었습니다. `./install.sh` 실행 전 호스트에 **Python 3.10+**가 필요합니다. [1.3.1 릴리스 노트](docs/Release_Notes_1_3_1.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
+> **Stable v1.3.1 릴리스:** Direct Model Mode가 기본 지원 경로입니다. 이번 릴리스는 receipt 연쇄 파일 수정, durable continuity의 runtime-local file receipt 제거, 일반 영수증 문맥 보존, context compaction opt-in 기본값, cross-platform CI suite를 강화했습니다. 여러 Unreal Engine 버전과 여러 프로젝트에서 재사용할 수 있도록 설계되었습니다. 현재 `main`은 지원되는 새 PC에 사용 가능한 Python이 없을 때 platform launcher가 managed Python 3.12를 자동으로 준비하도록 추가 개선했으며, 게시된 v1.3.1 artifact는 변경하지 않습니다. [1.3.1 릴리스 노트](docs/Release_Notes_1_3_1.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
@@ -30,7 +30,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 >
 > **현재 제품 라벨은 stable 1.3.1입니다.** 지원 runtime은 Direct Model Mode, scoped file-version receipt, provenance-bound RAG generation, bounded Build/Automation process, provenance-aware durable continuity를 사용합니다. 선택적 context-continuity plugin은 installer가 채팅에서 활성화하지 않으며 내부 compaction opt-in 기본값도 OFF입니다. MCP 서버는 capability와 파일시스템·프로세스·빌드·프로젝트 안전 경계를 제공하며 모델의 task plan이나 tool 순서를 소유하지 않습니다.
 >
-> v1.3.1 component metadata는 Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, portable manifest 2.1.11입니다. Compactor는 runtime-local 파일 변경 capability를 durable memory에서 제거하면서 결제 `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, `리시트` 같은 사용자 작성 domain 언어를 보존합니다.
+> Stable v1.3.1 component metadata는 Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, portable manifest 2.1.11입니다. 현재 `main`은 Python-free seed helper를 위해 post-release portable manifest만 2.1.12로 올립니다. Compactor는 runtime-local 파일 변경 capability를 durable memory에서 제거하면서 결제 `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, `리시트` 같은 사용자 작성 domain 언어를 보존합니다.
 >
 > 자동 source·package·installer·safety·cross-platform gate가 release readiness를 정의합니다. Gate 통과는 모든 host, Unreal project, engine build, plugin, editor-runtime 조합에 대한 보편적 호환성 주장이 아닙니다.
 
@@ -69,9 +69,14 @@ cd UE5_Local_LLM_MCP_lmstudio
 .\rag.ps1 doctor
 ```
 
+포맷 직후의 지원 host에서도 위 launcher는 pin된 uv seed를 내려받아 SHA-256을
+검증한 뒤, 선택한 사용자 state-home 아래에 managed Python 3.12를 설치하고
+계속 진행합니다. Python을 system-wide로 등록하거나 system PATH를 바꾸지는
+않습니다. `python3 install.py`를 직접 실행할 때만 host Python 3.10+가 필요합니다.
+
 ### 설치 진입점은 하나입니다
 
-Windows에서는 루트의 `INSTALL.bat`, Linux와 macOS에서는 `install.sh`를 실행합니다. 둘 다 같은 `install.py`를 호출합니다. SAFE/AGENT/RAG/Cline/컨텍스트 압축기별 설치 파일은 없으며, 통합 설치 화면에서 선택합니다. Unreal 어댑터가 포함되면 `SAFE` 또는 `AGENT` 권한을 번호로 고르고, AGENT는 위험 확인을 한 번 더 거친 뒤 최종 설치 요약에서 다시 확인할 수 있습니다. `installer/`에는 bootstrap runtime 코드와 검증 가능한 매니페스트를 두고, 고급 유지보수·검증 도구는 `scripts/installer_support/`로 분리했습니다.
+Windows에서는 루트의 `INSTALL.bat`, Linux와 macOS에서는 `install.sh`를 실행합니다. 둘 다 같은 `install.py`를 호출합니다. 작은 pre-Python helper는 새 PC를 해당 구현에 연결하는 역할만 하며 profile·component·실제 설치 로직을 복제하지 않습니다. SAFE/AGENT/RAG/Cline/컨텍스트 압축기별 설치 파일은 없으며, 통합 설치 화면에서 선택합니다. Unreal 어댑터가 포함되면 `SAFE` 또는 `AGENT` 권한을 번호로 고르고, AGENT는 위험 확인을 한 번 더 거친 뒤 최종 설치 요약에서 다시 확인할 수 있습니다. `installer/`에는 bootstrap runtime 코드와 검증 가능한 매니페스트를 두고, 고급 유지보수·검증 도구는 `scripts/installer_support/`로 분리했습니다.
 
 ### Direct Model Mode가 기본입니다
 

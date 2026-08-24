@@ -3,7 +3,7 @@
 
 # UE5_Local_LLM_MCP_lmstudio 1.3.1
 
-> **Stable v1.3.1 release:** Direct Model Mode remains the supported default. This release hardens receipt-chained file mutations, removes runtime-local file receipts from durable context continuity, preserves ordinary receipt-domain language, keeps context compaction opt-in, and consolidates the cross-platform CI suites. The stack is designed for multiple Unreal Engine versions and projects. Host **Python 3.10+** is required before `./install.sh` can start. See the [1.3.1 release notes](docs/Release_Notes_1_3_1.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **Stable v1.3.1 release:** Direct Model Mode remains the supported default. This release hardens receipt-chained file mutations, removes runtime-local file receipts from durable context continuity, preserves ordinary receipt-domain language, keeps context compaction opt-in, and consolidates the cross-platform CI suites. The stack is designed for multiple Unreal Engine versions and projects. Current `main` additionally lets the platform launchers bootstrap managed Python 3.12 when a clean supported host has no usable Python; the published v1.3.1 artifact remains immutable. See the [1.3.1 release notes](docs/Release_Notes_1_3_1.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -30,7 +30,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 >
 > **Current product label: 1.3.1 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and provenance-aware durable continuity. The optional context-continuity plugin is not chat-activated by the installer and its internal compaction opt-in defaults OFF. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
 >
-> v1.3.1 component metadata is Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, and portable manifest 2.1.11. The Compactor removes runtime-local file-mutation capabilities from durable memory while preserving user-authored domain language such as payment `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, and `리시트`; ordinary receipt language is not interpreted as mutation authority.
+> Stable v1.3.1 component metadata is Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, and portable manifest 2.1.11. Current `main` advances only the post-release portable manifest to 2.1.12 for the Python-free seed helpers. The Compactor removes runtime-local file-mutation capabilities from durable memory while preserving user-authored domain language such as payment `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, and `리시트`; ordinary receipt language is not interpreted as mutation authority.
 >
 > Automated source, package, installer, safety, and cross-platform gates define release readiness. A passing release gate is not a universal compatibility claim for every host, Unreal project, engine build, plugin, or editor-runtime combination.
 
@@ -75,11 +75,17 @@ cd UE5_Local_LLM_MCP_lmstudio
 # Ubuntu Linux/macOS: ./install.sh
 ```
 
+On a freshly installed supported host, these launchers download a pinned,
+SHA-256-verified uv seed and install managed Python 3.12 under the selected
+user state-home before continuing. They do not register Python system-wide or
+modify the system PATH. Running `python3 install.py` directly still requires a
+host Python 3.10+ interpreter.
+
 The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal adapter is included, it presents a numbered SAFE/AGENT authority choice and shows the final authority in a confirmation summary. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. All LM Studio/Unreal profiles install and pin the context compactor so it is available, but never chat-activate it; the plugin's internal compaction opt-in defaults OFF. FULL remains read-only unless AGENT authority is explicitly confirmed. See [Integrated Installer](docs/Integrated_Installer.md).
 
 ### One installer, two platform launchers
 
-`INSTALL.bat` and `install.sh` are thin platform launchers for the same `install.py` implementation. There are no separate SAFE, AGENT, RAG, Cline, or context-compactor installers. Choose those options inside the integrated installer. `installer/` contains bootstrap runtime code and validated manifests; advanced maintenance tools live under `scripts/installer_support/`.
+`INSTALL.bat` and `install.sh` are platform launchers for the same `install.py` implementation. Their small pre-Python helpers only bridge a clean machine into that implementation; they do not duplicate profile, component, or installation logic. There are no separate SAFE, AGENT, RAG, Cline, or context-compactor installers. Choose those options inside the integrated installer. `installer/` contains bootstrap runtime code and validated manifests; advanced maintenance tools live under `scripts/installer_support/`.
 
 ### Direct Model Mode is the default
 

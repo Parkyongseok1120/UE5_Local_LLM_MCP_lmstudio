@@ -9,6 +9,9 @@ projects.
 
 - Windows: run `INSTALL.bat`.
 - Ubuntu Linux or Apple Silicon macOS: run `./install.sh`.
+- A clean supported host does not need Python preinstalled: the launcher
+  downloads a pinned, SHA-256-verified uv seed and installs managed Python 3.12
+  in the user state-home without changing the system-wide Python or PATH.
 - Keep the extracted directory at a stable path after installation because the
   MCP configuration launches files from this runtime tree.
 

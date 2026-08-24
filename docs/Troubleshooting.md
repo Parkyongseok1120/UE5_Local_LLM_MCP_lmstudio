@@ -9,8 +9,18 @@ effect.
 
 ## Python not found
 
-Install Python 3.10+, set `PYTHON_EXE`, or run the integrated installer so the
-portable launcher can resolve its managed Python runtime.
+Run the root `INSTALL.bat` (Windows) or `./install.sh` (Ubuntu/macOS) instead of
+invoking `install.py` directly. When no usable Python exists, the launcher
+downloads pinned uv, verifies its SHA-256, installs managed Python 3.12 under the
+selected user state-home, and continues without a system-wide install.
+
+If that first bootstrap fails, keep the complete extracted package together and
+check HTTPS access to GitHub Releases. On minimal Ubuntu, install
+`ca-certificates curl tar coreutils`; on Windows, Windows PowerShell must be
+available. `--skip-runtime-bootstrap` intentionally disables this recovery.
+Only as a manual fallback, install Python 3.12 or set
+`PYTHON=/path/to/python3.12` for `install.sh`. `PYTHON_EXE` is for installed MCP
+runtime resolution and does not replace the launcher's initial interpreter.
 
 ## Generic API queries return only project chunks
 
