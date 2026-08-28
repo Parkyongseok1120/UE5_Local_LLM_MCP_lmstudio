@@ -1098,7 +1098,8 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
     if interactive:
         print(
             "\nLM Studio context compactor will be installed and pinned, but the installer "
-            "does not activate it for chats; its internal compaction opt-in defaults off."
+            "does not activate it for chats. Its single host-owned chat toggle defaults off; "
+            "enable that toggle only for a long chat that needs compaction."
         )
         if _prompt_yes_no("Install a rule into another coding agent?", False):
             components.add("portable_rule")

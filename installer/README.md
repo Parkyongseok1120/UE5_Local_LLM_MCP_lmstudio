@@ -8,10 +8,13 @@ The supported user entry points are intentionally limited to:
 - Ubuntu Linux and macOS: `install.sh`
 - Any operating system or automation: `install.py`
 
-`install.py` is the only installer implementation. Modules in this directory
-bootstrap pinned runtimes and construct the staged Python-only Direct RAG build;
-they are support code, not alternative installation choices. Optional Unreal
-maintenance and verification wrappers live under `scripts/installer_support/`.
+`install.py` is the only installer implementation. `bootstrap_python.ps1` and
+`bootstrap_python.sh` only bridge a Python-free host into that implementation;
+they contain no profile, component, configuration, RAG, or project workflow.
+Other modules in this directory bootstrap pinned runtimes and construct the
+staged Python-only Direct RAG build; they are support code, not alternative
+installation choices. Optional Unreal maintenance and verification wrappers
+live under `scripts/installer_support/`.
 
 During an interactive STANDARD, FULL, or compatible CUSTOM installation, the
 installer presents independent RAG-indexing and Unreal-authority choices. RAG
@@ -49,9 +52,9 @@ After installation, select the actual LLM you want to use in LM Studio and leave
 top-level `codex/unreal-context-compactor` switch OFF in the chat's plugin panel.
 Install/pin only makes the plugin available; it does not enable it for a chat. Chat
 activation is owned by LM Studio, so verify the top-level switch is OFF in every new
-or existing chat. The nested `Enable
-transparent compaction` setting is also OFF by default and is a separate internal
-opt-in. Enable both switches only when deliberately testing compaction for one chat.
+or existing chat. For a long chat that needs bounded continuity, enable that single
+top-level switch for the chat. Handler invocation activates compaction; there is no
+second enable setting. `Observe only` remains available for measurement-only use.
 
 On every supported host, `install.py --build-rag` invokes the managed Python
 collectors directly. It does not require PowerShell, start Unreal Editor, execute
@@ -72,11 +75,14 @@ PowerShell 7 (`pwsh`) is only for optional, manually invoked `rag.ps1` maintenan
 pwsh -NoProfile -File ./rag.ps1 refresh -RefreshScope project_source
 ```
 
-The launcher needs Python 3.10+ to start, then the installer establishes managed
-Python 3.12. Node/npm is bootstrapped only for Unreal or context-compactor
-components. All pinned runtime archives are SHA-256 verified and safely extracted.
-The Linux runtime baseline is Ubuntu 22.04/24.04 with glibc; musl/Alpine is rejected
-with an actionable error.
+The platform launchers use Python 3.10+ when available. On a Python-free
+supported host they first verify pinned uv and establish managed Python 3.12 in
+the selected user state-home; no system-wide Python or PATH registration is
+performed. Direct `python3 install.py` invocation still requires host Python
+3.10+. Node/npm is bootstrapped only for Unreal or context-compactor components.
+All pinned runtime archives are SHA-256 verified before extraction. The Linux
+runtime baseline is Ubuntu 22.04/24.04 with glibc; musl/Alpine is rejected with
+an actionable error.
 
 Cross-platform CI exercises installer, package, Direct MCP, collector, and shard
 behavior with controlled fixtures. The recorded physical FULL-install pass is

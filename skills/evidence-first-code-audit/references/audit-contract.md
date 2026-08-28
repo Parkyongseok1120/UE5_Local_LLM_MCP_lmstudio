@@ -48,6 +48,12 @@ Use one `claimType`:
 
 Do not use optional booleans to classify a claim. A required type prevents an unsupported framework or wiring claim from bypassing its gate.
 
+## Verdict and severity
+
+Use `Bug`, `ByDesign`, `Ambiguous`, or `NeedsRuntimeProof` with severity `P0`, `P1`, `P2`, or `P3` for causal, intent-bearing, uncertain, or runtime-dependent findings.
+
+Architecture mode also supports the exact pair `Confirmed` and `Info` for a verified neutral as-built fact. It may be used with any non-codegen claim type when the proof level is `SourceVerified`, `StaticVerified`, `BuildVerified`, `TestVerified`, or `RuntimeVerified`. It does not establish that the observed behavior was intentional. Do not combine either half of this pair with another verdict or severity, do not use it outside architecture mode, and do not use it with `Proposed` proof. An `unknown` behavior-path stage still requires `Ambiguous` or `NeedsRuntimeProof`.
+
 ## Evidence kinds
 
 - `requirement`: user request, specification, schema requirement, or acceptance criterion.
@@ -124,3 +130,4 @@ Order findings by user-visible failure, not by discovery order:
 - `P1`: major path is inconsistent, fragile, or predictably fails under common conditions.
 - `P2`: maintainability, extensibility, or lower-frequency correctness issue.
 - `P3`: style or optional improvement.
+- `Info`: a verified neutral as-built fact, valid only as the `Confirmed`/`Info` pair in architecture mode; it is not a defect severity.

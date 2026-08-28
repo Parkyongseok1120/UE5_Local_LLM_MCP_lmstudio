@@ -9,6 +9,9 @@ projects.
 
 - Windows: run `INSTALL.bat`.
 - Ubuntu Linux or Apple Silicon macOS: run `./install.sh`.
+- A clean supported host does not need Python preinstalled: the launcher
+  downloads a pinned, SHA-256-verified uv seed and installs managed Python 3.12
+  in the user state-home without changing the system-wide Python or PATH.
 - Keep the extracted directory at a stable path after installation because the
   MCP configuration launches files from this runtime tree.
 
@@ -44,10 +47,13 @@ merge projects owned by different engine shards. The optional context compactor
 retains bounded factual objective/work/file/tool/build continuity but never
 becomes a planner, router, tool authority, or completion authority. It is installed
 for availability without activating LM Studio's host-owned chat toggle; verify that
-toggle is OFF per chat. The nested `Enable transparent compaction` opt-in defaults OFF.
+toggle is OFF per chat. Enable that single toggle only for a long chat that needs
+bounded continuity; handler invocation is the activation boundary.
 
-Qwen 3.8 27B is the primary currently validated model recommendation. Muse
-Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5,
+Qwen 3.8 27B is the highly recommended primary validated model. Its v1.3.2
+live E2E run completed long real-project RAG/read/report work without the prior
+context truncation. Muse Glimmer is under testing and is not yet a validated
+recommendation. Qwen 3.5,
 Qwen 3.6 27B, and GPT-OSS references are historical compatibility/evaluation
 material, not current recommendations.
 

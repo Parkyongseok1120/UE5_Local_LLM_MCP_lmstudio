@@ -48,6 +48,17 @@ exit 0
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _write_fake_seed(path: Path, *, exit_code: int = 0) -> None:
+    script = f"""#!/bin/sh
+echo "SEEDED_INSTALL=$(basename \"$1\")"
+shift
+echo "SEEDED_ARGS=$*"
+exit {exit_code}
+"""
+    path.write_text(script, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def _run_launcher(fake_bin: Path, *, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     # Keep Python discovery hermetic even when a hosted runner adds newer
@@ -127,11 +138,51 @@ def test_no_usable_python_exits_127(tmp_path: Path) -> None:
     _write_fake_python(fake_bin / "python3", (3, 9, 18), fail=True)
     result = _run_launcher(fake_bin, env_extra={"HOME": str(tmp_path / "empty-home")})
     assert result.returncode == 127
-    assert "Python 3.10+ was not found." in result.stderr
+    assert "automatic bootstrap was disabled by the hermetic test environment" in result.stderr
     assert "Checked:" in result.stderr
     assert "python3: Python 3.9.18 (too old)" in result.stderr
-    assert "macOS:" in result.stderr
     assert "PYTHON=/path/to/python3.12" in result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX install.sh launcher")
+def test_no_usable_python_dispatches_to_seed_helper_with_original_arguments(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_python(fake_bin / "python3", (3, 9, 18), fail=True)
+    seed = tmp_path / "fake-seed.sh"
+    _write_fake_seed(seed)
+
+    result = _run_launcher(
+        fake_bin,
+        env_extra={
+            "HOME": str(tmp_path / "empty-home"),
+            "PYTHON_SEED_SH": str(seed),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Bootstrapping managed Python 3.12" in result.stderr
+    assert "SEEDED_INSTALL=install.py" in result.stdout
+    assert "SEEDED_ARGS=--help" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX install.sh launcher")
+def test_seed_helper_failure_is_the_launcher_exit_code(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    seed = tmp_path / "failing-seed.sh"
+    _write_fake_seed(seed, exit_code=73)
+
+    result = _run_launcher(
+        fake_bin,
+        env_extra={
+            "HOME": str(tmp_path / "empty-home"),
+            "PYTHON_SEED_SH": str(seed),
+        },
+    )
+
+    assert result.returncode == 73
+    assert "SEEDED_INSTALL=install.py" in result.stdout
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX install.sh launcher")

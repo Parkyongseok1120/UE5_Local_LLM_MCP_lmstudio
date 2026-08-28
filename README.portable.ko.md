@@ -9,6 +9,9 @@ source나 사전 빌드된 인덱스는 포함하지 않으므로 자신의 프�
 
 - Windows: `INSTALL.bat`
 - Ubuntu Linux 또는 Apple Silicon macOS: `./install.sh`
+- 지원되는 새 host에는 Python이 미리 없어도 됩니다. launcher가 pin된 uv
+  seed의 SHA-256을 검증하고 사용자 state-home에 managed Python 3.12를
+  설치하며 system-wide Python이나 PATH는 바꾸지 않습니다.
 - 설치된 MCP 설정이 이 runtime tree의 파일을 직접 실행하므로 압축을 푼
   디렉터리를 안정적인 위치에 유지하세요.
 
@@ -42,11 +45,14 @@ Automation, command capability를 제공합니다.
 프로젝트 shard를 합치지 않습니다. 선택적 context compactor는 제한된
 objective/work/file/tool/build continuity 사실을 보존하지만 planner, router, 도구
 권한 또는 완료 판단 주체가 되지 않습니다. 설치기는 LM Studio가 소유한 상단
-채팅 플러그인 토글을 활성화하지 않으므로 채팅별로 OFF인지 확인합니다. 내부
-`Enable transparent compaction` opt-in은 기본값이 OFF입니다.
+채팅 플러그인 토글을 활성화하지 않으므로 채팅별로 OFF인지 확인합니다. 제한된
+continuity가 필요한 긴 채팅에서만 그 단일 토글을 켭니다. handler 호출 자체가
+활성화 경계입니다.
 
-현재 검증된 주 추천 모델은 Qwen 3.8 27B입니다. Muse Glimmer는 시험 중이며 아직
-검증된 추천이 아닙니다. Qwen 3.5, Qwen 3.6 27B, GPT-OSS 언급은 historical
+현재 주 검증 모델인 Qwen 3.8 27B를 매우 추천합니다. v1.3.2 라이브 E2E에서
+실제 프로젝트의 장기 RAG/read/report 작업을 이전 context truncation 없이
+완료했습니다. Muse Glimmer는 시험 중이며 아직 검증된 추천이 아닙니다.
+Qwen 3.5, Qwen 3.6 27B, GPT-OSS 언급은 historical
 compatibility/evaluation 자료이며 현재 추천이 아닙니다.
 
 지원되는 Strict 구현은 별도 구성하는 Node `strict-server.js` 하나뿐입니다.

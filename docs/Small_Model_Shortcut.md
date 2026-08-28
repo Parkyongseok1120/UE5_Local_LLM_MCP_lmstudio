@@ -11,8 +11,10 @@ stopping, and the final answer.
 python scripts/load_sampling_preset.py --show-profile
 ```
 
-Qwen 3.8 27B is the primary currently validated recommendation. Muse Glimmer is
-under testing and is not yet a validated recommendation. Qwen 3.5, Qwen 3.6
+Qwen 3.8 27B is the highly recommended primary validated model. Its v1.3.2 live
+E2E run completed a long real-project RAG/read/report workflow without the prior
+context truncation. Muse Glimmer is under testing and is not yet a validated
+recommendation. Qwen 3.5, Qwen 3.6
 27B, and GPT-OSS profile names may still exist for historical compatibility or
 reproduction, but they are not current recommendations.
 
@@ -54,10 +56,10 @@ Direct MCP behavior.
 
 ## Optional compaction
 
-Keep the LM Studio context compactor's top-level chat toggle OFF by default, and
-keep the nested `Enable transparent compaction` switch OFF. Installation/pinning
-only makes it available. If explicitly testing the optional path for one long chat,
-both switches must be enabled for that chat.
+Keep the LM Studio context compactor's top-level chat toggle OFF by default.
+Installation/pinning only makes it available. For a long chat that needs bounded
+continuity, enable that single switch; handler invocation activates compaction.
+`Observe only` remains available for measurement without history rewriting.
 Compaction retains bounded factual continuity: the active objective, continuation
 antecedent, active project/current work, unresolved items, and relevant
 file/tool/build facts. File observations retain canonical project/path identity and

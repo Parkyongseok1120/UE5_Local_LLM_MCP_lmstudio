@@ -285,6 +285,7 @@ Check "context compactor source" {
         "package.json",
         "src\index.ts",
         "src\prediction-loop.ts",
+        "src\round-loop.ts",
         "src\direct-compaction-core.js",
         "src\compaction-tool-memory.js",
         "src\continuity-file-observations.js",
@@ -374,6 +375,17 @@ Check "installed context compactor" {
             throw "installed plugin does not match the local tested build"
         }
     }
+    $sourceRoundLoop = Join-Path $ragRoot "lmstudio-context-compactor-plugin\dist\round-loop.js"
+    $installedRoundLoop = Join-Path $installedRoot "dist\round-loop.js"
+    if (Test-Path -LiteralPath $sourceRoundLoop) {
+        if (-not (Test-Path -LiteralPath $installedRoundLoop)) {
+            throw "installed plugin round-loop bundle missing"
+        }
+        if ((Get-FileHash -LiteralPath $sourceRoundLoop -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $installedRoundLoop -Algorithm SHA256).Hash) {
+            throw "installed plugin round-loop does not match the local tested build"
+        }
+    }
 }
 $activationScript = Join-Path $ragRoot "lmstudio-context-compactor-plugin\scripts\status.cjs"
 if (-not (Test-Path -LiteralPath $activationScript)) {
@@ -399,7 +411,7 @@ else {
         $activationExit = $LASTEXITCODE
         if ($activationExit -eq 0) {
             Write-Host "[PASS] Context compactor direct source mode" -ForegroundColor Green
-            Warn "Default policy keeps the top-level chat-plugin switch and nested compaction switch OFF. Source verification does not inspect per-chat state."
+            Warn "Default policy keeps the single top-level chat-plugin switch OFF. Enable it only for a long chat that needs compaction. Source verification does not inspect per-chat state."
         }
         elseif ($requireRuntime -and $activationExit -eq 3) {
             Check "context compactor runtime activation evidence" {

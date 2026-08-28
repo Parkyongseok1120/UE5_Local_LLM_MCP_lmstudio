@@ -2,12 +2,12 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release label: **1.3.1**. The installer reports the same value with `python3 install.py --version`; the immutable stable `v1.3.0` snapshot uses portable manifest `2.1.8`, while stable `v1.3.1` uses `2.1.11`. `portablePackage.releaseReady: true` records automated release/package readiness, not universal physical-install certification.
+Product release label: **1.3.2**. The installer reports the same value with `python3 install.py --version`; the immutable stable `v1.3.0` snapshot uses portable manifest `2.1.8`, stable `v1.3.1` uses `2.1.11`, and stable `v1.3.2` uses `2.1.14` for the Python-free launcher seed path, compactor/evidence-contract repair, and current release-document closure. `portablePackage.releaseReady: true` records automated release/package readiness, not universal physical-install certification.
 
 ## Requirements
 
-- A host **Python 3.10+** is required to start `install.py` / `./install.sh`. On a clean Mac without 3.10+, the launcher exits with recovery instructions instead of starting. Set `PYTHON=/path/to/python3.12` when the interpreter is outside PATH.
-- The installer establishes managed **Python 3.12** first. It downloads **Node.js 20+/npm** for LM Studio context-compactor installs (required whenever LM Studio/Unreal components are selected). Direct `--build-rag` indexing runs the managed Python collectors directly and does not require or bootstrap PowerShell.
+- `INSTALL.bat` and `install.sh` use an existing host **Python 3.10+** when available. If none is usable, they automatically download the pinned uv asset for the host, verify its SHA-256, install managed **Python 3.12** under the selected user state-home, and launch the same `install.py`. No system-wide Python registration or PATH mutation is performed. Direct `python3 install.py` invocation still requires host Python 3.10+; `PYTHON=/path/to/python3.12 ./install.sh` remains available for an interpreter outside PATH.
+- After the pre-Python bridge, the installer keeps managed **Python 3.12** as the supported execution runtime. It downloads **Node.js 20+/npm** for LM Studio context-compactor installs (required whenever LM Studio/Unreal components are selected). Direct `--build-rag` indexing runs the managed Python collectors directly and does not require or bootstrap PowerShell.
 - Runtime archives are pinned by version and SHA-256 for x64/arm64 on Windows, Apple Silicon macOS, and Ubuntu/glibc. [`installer/runtime-manifest.json`](../installer/runtime-manifest.json) is the SSOT for URL, filename, platform, architecture, checksum, executable, and probe metadata. Extraction rejects traversal, unsafe links, encrypted ZIP members, special files, and archive bombs before writing the runtime cache.
 - **Intel macOS:** LM Studio / Unreal / context-compactor installs abort early. Custom Codex / portable_rule / Cline-only installs are allowed.
 - **Apple Silicon macOS:** physical FULL install verified on darwin-arm64 (runtimes, Context Compactor 45/45, LM Studio plugin installation/pinning, UE 5.8 auto-discovery, full RAG 88,829 chunks, evidence-first MCP smoke, installer `ok: true`). Chat-level activation was not durably proven. Separate limitations: Unreal Editor asset metadata headless export **FAIL**; LM Studio API server connectivity **UNVERIFIED** when the API server was not running; installer signing/notarization is **not claimed**. The repository release notes retain the detailed historical record.
@@ -24,15 +24,17 @@ Product release label: **1.3.1**. The installer reports the same value with `pyt
 
 | Host | Supported bootstrap baseline | Host-specific behavior |
 |---|---|---|
-| Windows 10/11 | x64 or arm64, Python 3.10+ launcher | Uses `INSTALL.bat`; Direct indexing runs through managed Python. Epic Launcher manifests and Program Files locations are scanned. |
-| macOS | Apple Silicon or Intel, Python 3.10+ launcher | Detects Apple Silicon even under Rosetta, selects a native runtime archive, clears quarantine on the managed runtime, and validates it by execution. |
+| Windows 10/11 | x64 or arm64; Windows PowerShell for a Python-free first launch | `INSTALL.bat` automatically seeds managed Python when necessary. Direct indexing runs through managed Python. Epic Launcher manifests and Program Files locations are scanned. |
+| macOS | Apple Silicon or Intel; POSIX `sh`, `curl`/`wget`, `tar`, and a SHA-256 utility for a Python-free first launch | Detects Apple Silicon even under Rosetta, selects a native runtime archive, clears quarantine on the managed runtime, and validates it by execution. |
 | Ubuntu Linux | Ubuntu 22.04/24.04, glibc, x64 or arm64 | This is the Linux baseline. musl/Alpine fails early because the pinned GNU runtimes are incompatible; other glibc distributions are best-effort and are identified during bootstrap. |
 
-Ubuntu bootstrap prerequisite:
+Ubuntu needs CA certificates and the standard download/archive utilities when no
+usable Python is already present. A normal desktop installation generally has
+these; minimal images can install them with:
 
 ```text
 sudo apt-get update
-sudo apt-get install -y python3 ca-certificates
+sudo apt-get install -y ca-certificates curl tar coreutils
 ```
 
 PowerShell 7 is not an installer or `--build-rag` dependency. It is needed only
@@ -52,6 +54,10 @@ Ubuntu Linux/macOS: ./install.sh
 Any OS:  python3 install.py
 ```
 
+The first two commands are the recommended clean-machine entry points because
+they can establish Python themselves. The third is an automation/developer entry
+point and therefore presumes Python 3.10+ already exists.
+
 Without `--yes`, the installer asks for a profile and optional components. If the Unreal adapter is included, it then shows a numbered authority selector:
 
 ```text
@@ -70,17 +76,16 @@ AGENT requires a second confirmation. Declining that confirmation continues safe
 
 Install profile and RAG indexing depth are independent. Use `--index-tier lite|standard|full`; selecting FULL does not select full indexing and never builds an index unless `--build-rag` is also supplied. Installed RAG data is owned by the stable `<state-home>/indexes/<namespace>/` directory (default `~/.evidence-first/indexes/`), never by a versioned package directory. An upgrade reuses a ready managed index or migrates the newest query-ready prior package index with hard links when possible and copies otherwise. Each generation is bound to one engine version or custom association. Standard/Full builds may include multiple compatible projects for that engine; incompatible projects use sibling namespaces, and one query never merges different engine shards.
 
-Every LM Studio / Unreal profile installs and pins the transparent context-compactor plugin, but does not enable it for a chat. The top-level `codex/unreal-context-compactor` switch is host-owned and must be verified OFF per chat; the nested `Enable transparent compaction` switch defaults OFF in plugin code. The plugin only compacts older model-facing chat history after an explicit two-switch, per-chat opt-in; it does not proxy the model, select tools, or grant write/build authority. The selected real model becomes write-capable only after AGENT authority is explicitly enabled. Cline, CLI, Ollama, custom, and remote frontends require their own continuity policy.
+Every LM Studio / Unreal profile installs and pins the transparent context-compactor plugin, but does not enable it for a chat. The top-level `codex/unreal-context-compactor` switch is host-owned and must be verified OFF per chat by default. For a long chat that needs bounded continuity, enable that single switch; invoking the handler activates compaction, and `Observe only` remains available for measurement without history rewriting. The plugin does not proxy the model, select tools, or grant write/build authority. The selected real model becomes write-capable only after AGENT authority is explicitly enabled. Cline, CLI, Ollama, custom, and remote frontends require their own continuity policy.
 
 The context-compactor **installation component** is required for every LM Studio / Unreal install profile. Interactive installs no longer offer an opt-out. `--skip-context-compactor` is blocked unless paired with `--allow-skip-context-compactor` (unsupported emergency bypass). On Windows, macOS, and Linux the installer resolves the `lms` CLI in this order: `LMSTUDIO_CLI`, `<lmstudio-home>/bin`, OS app/PATH candidates; runs `lms dev --install -y`; ensures the plugin exists under the managed `extensions/plugins/codex/unreal-context-compactor` (syncing from the host default LM Studio home or materializing from the repo when `lms` wrote elsewhere); and pins `codex/unreal-context-compactor` with `developer.allowDevelopmentPlugins=true` in that home's `settings.json`. Pinning only keeps the shortcut visible and is not activation.
 
 > **Important — select the real LLM and keep the compactor OFF by default.**
 > Installing/pinning the plugin only makes it available.
-> 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current primary validated recommendation; Muse Glimmer is under testing only.
+> 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current highly recommended, primary validated model; Muse Glimmer is under testing only.
 > 2. Create or open the chat and leave the top-level **`codex/unreal-context-compactor`** switch **OFF** in that chat's **plugin panel**. Existing chats retain their own state, so turn it off manually where necessary.
-> 3. Leave the nested **Enable transparent compaction** switch OFF. It is a separate internal opt-in and has no effect while the top-level switch is off.
-> 4. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
-> Enable both compactor switches only when deliberately testing the optional path for one chat. The installer does not rewrite LM Studio's private per-chat conversation storage.
+> 3. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
+> For a long chat that needs compaction, enable that single top-level switch for the chat. The installer does not rewrite LM Studio's private per-chat conversation storage.
 
 Interactive Unreal installs first restore the project-indexing picker. Choose a `.uproject` in the native file explorer to set the active project, or choose one or more folders to add project search roots. No typed path is required.
 
@@ -116,9 +121,9 @@ python3 install.py --profile standard --yes --enable-agent-mode --accept-agent-r
 
 SAFE rejects agent mode. FULL alone never enables it.
 
-`INSTALL.bat` and `install.sh` only select the host shell. Both launch the same `install.py`; `installer/` contains only its manifest and an explanation. Advanced maintenance tools are separated under `scripts/installer_support/`.
+`INSTALL.bat` and `install.sh` select the host shell and perform only the minimal pre-Python bridge when needed. The bridge reads (Windows) or is synchronization-tested against (POSIX) the pinned runtime manifest, verifies uv before execution, installs Python in the selected state-home, and dispatches the same `install.py`. Profile, component, configuration, RAG, and project logic remains owned by `install.py`; the seed helpers are not alternate installers. Advanced maintenance tools are separated under `scripts/installer_support/`.
 
-`install.sh` is POSIX `sh`, resolves its own directory safely, and launches the same installer with `python3`. The packaged launcher is copied from this canonical file and retains executable permissions.
+`install.sh` is POSIX `sh`, resolves its own directory safely, and launches the same installer with an existing or automatically seeded Python. The packaged launcher is copied from this canonical file and retains executable permissions.
 
 On Windows, `INSTALL.bat` keeps the console open after success or failure and waits for a key press. Set `INSTALL_NO_PAUSE=1` only for scripted automation that invokes the batch launcher.
 
@@ -137,6 +142,10 @@ fails before writing LM Studio MCP configuration when
 `@modelcontextprotocol/sdk/server/index.js` cannot be resolved; rerun without
 `--skip-deps` to execute the pinned `npm ci` installation. Portable ZIPs
 intentionally exclude `node_modules`.
+
+`--skip-runtime-bootstrap` is an expert/CI override. On a machine with no usable
+Python, the launchers fail instead of downloading a seed when this flag is
+present. On a fresh machine, omit it.
 
 For a Portable ZIP, the extracted package directory remains the installed RAG
 server and Unreal Agent **code** location referenced by `mcp.json`; it does not

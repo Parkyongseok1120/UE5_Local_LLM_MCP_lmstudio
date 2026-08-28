@@ -5,17 +5,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
+from evidence_packet_contract import (
+    MODES,
+    SCHEMA_VERSION,
+    contract_metadata,
+    packet_input_schema,
+    selected_mode,
+)
 from validate_evidence_packet import validate_packet
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 PORTABLE_RULE = SKILL_ROOT / "references" / "portable-rule.md"
-SERVER_VERSION = "1.0.0"
-MODES = {"audit", "architecture", "codegen"}
+SERVER_VERSION = SCHEMA_VERSION
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2024-11-05")
+MAX_ERROR_SHAPES = 16
+MAX_WARNING_SHAPES = 8
+MAX_DIAGNOSTIC_ITEM_CHARS = 320
+MAX_ERROR_DIAGNOSTIC_CHARS = 3600
+MAX_WARNING_DIAGNOSTIC_CHARS = 1200
+ARRAY_INDEX_PATTERN = re.compile(r"\[\d+\]")
 TOOL_ANNOTATIONS = {
     "readOnlyHint": True,
     "destructiveHint": False,
@@ -63,8 +76,10 @@ def tool_definitions() -> list[dict[str, Any]]:
             "inputSchema": _schema(
                 {
                     "packet": {
-                        "type": "object",
-                        "description": "Packet with mode, claims, and mode-specific obligations.",
+                        **packet_input_schema(),
+                        "description": (
+                            "Packet with exact nested claim, evidence, behavior-path, and mode-obligation shapes."
+                        ),
                     }
                 },
                 ["packet"],
@@ -82,55 +97,92 @@ def tool_definitions() -> list[dict[str, Any]]:
 
 
 def contract_payload(mode: str) -> dict[str, Any]:
-    selected_mode = mode if mode in MODES else "audit"
+    normalized_mode = selected_mode(mode)
     payload: dict[str, Any] = {
         "ok": True,
-        "mode": selected_mode,
+        "mode": normalized_mode,
         "readOnly": True,
         "portableRule": PORTABLE_RULE.read_text(encoding="utf-8"),
-        "requiredClaimFields": [
-            "claim",
-            "claimType",
-            "verdict",
-            "severity",
-            "proofLevel",
-            "evidence",
-            "behaviorPath",
-            "counterEvidence",
-            "unknowns",
-        ],
-        "behaviorStages": [
-            "entry",
-            "decision",
-            "dispatch",
-            "mutation",
-            "side_effect",
-            "observer",
-        ],
-        "stageStatuses": ["present", "expected_missing", "unknown"],
-        "proofEvidence": {
-            "SourceVerified": ["project_source", "framework_source", "official_docs"],
-            "StaticVerified": ["static_analysis"],
-            "BuildVerified": ["build"],
-            "TestVerified": ["test"],
-            "RuntimeVerified": ["runtime"],
-        },
-        "nextAction": "Produce a packet and call evidence_first_validate before the final answer.",
+        **contract_metadata(normalized_mode),
+        "nextAction": (
+            "Call evidence_first_validate before presenting causal P0/P1 findings or a multi-file "
+            "implementation plan; validation is optional for other final answers."
+        ),
     }
-    if selected_mode == "architecture":
-        payload["modeObligations"] = ["existing", "proposed", "doNotDuplicate"]
-    elif selected_mode == "codegen":
-        payload["modeObligations"] = ["invariants", "impactedSurfaces", "validationPlan"]
-    else:
-        payload["modeObligations"] = []
     return payload
+
+
+def _bounded_issues(
+    values: Any,
+    *,
+    max_shapes: int,
+    max_chars: int,
+) -> tuple[list[str], int, int]:
+    source = [str(value) for value in values] if isinstance(values, list) else []
+    groups: dict[str, int] = {}
+    for value in source:
+        shape = ARRAY_INDEX_PATTERN.sub("[]", value)
+        groups[shape] = groups.get(shape, 0) + 1
+
+    reported: list[str] = []
+    used_chars = 0
+    for shape, occurrences in groups.items():
+        suffix = f" ({occurrences} occurrences)" if occurrences > 1 else ""
+        available_shape_chars = max(0, MAX_DIAGNOSTIC_ITEM_CHARS - len(suffix))
+        if len(shape) > available_shape_chars:
+            if available_shape_chars > 3:
+                clipped = shape[: available_shape_chars - 3].rstrip() + "..."
+            else:
+                clipped = shape[:available_shape_chars]
+        else:
+            clipped = shape
+        clipped += suffix
+        if len(reported) >= max_shapes or used_chars + len(clipped) > max_chars:
+            continue
+        reported.append(clipped)
+        used_chars += len(clipped)
+    return reported, len(groups), max(0, len(groups) - len(reported))
+
+
+def bounded_validation_result(result: dict[str, Any]) -> dict[str, Any]:
+    errors = list(result.get("errors") or [])
+    warnings = list(result.get("warnings") or [])
+    bounded_errors, error_shapes, omitted_error_shapes = _bounded_issues(
+        errors,
+        max_shapes=MAX_ERROR_SHAPES,
+        max_chars=MAX_ERROR_DIAGNOSTIC_CHARS,
+    )
+    bounded_warnings, warning_shapes, omitted_warning_shapes = _bounded_issues(
+        warnings,
+        max_shapes=MAX_WARNING_SHAPES,
+        max_chars=MAX_WARNING_DIAGNOSTIC_CHARS,
+    )
+    projected = {
+        key: value
+        for key, value in result.items()
+        if key not in {"errors", "warnings"}
+    }
+    projected.update(
+        {
+            "schemaVersion": SCHEMA_VERSION,
+            "errorCount": len(errors),
+            "errorShapeCount": error_shapes,
+            "errors": bounded_errors,
+            "omittedErrorShapeCount": omitted_error_shapes,
+            "warningCount": len(warnings),
+            "warningShapeCount": warning_shapes,
+            "warnings": bounded_warnings,
+            "omittedWarningShapeCount": omitted_warning_shapes,
+        }
+    )
+    return projected
 
 
 def call_tool(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     if name == "evidence_first_contract":
         return contract_payload(str(arguments.get("mode") or "audit")), False
     if name == "evidence_first_validate":
-        result = validate_packet(arguments.get("packet"))
+        result = bounded_validation_result(validate_packet(arguments.get("packet")))
         return result, not bool(result.get("ok"))
     if name == "evidence_first_status":
         return {

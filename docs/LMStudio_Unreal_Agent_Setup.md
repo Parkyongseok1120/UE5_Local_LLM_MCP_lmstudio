@@ -56,12 +56,11 @@ Before the model sends its final answer in Node Strict, it must explicitly call 
 
 > **Select the real LLM; keep the compactor disabled by default.**
 >
-> 1. Load and select the actual model in the **model dropdown**. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation.
+> 1. Load and select the actual model in the **model dropdown**. Qwen 3.8 27B is the current highly recommended, primary validated model; Muse Glimmer is under testing and is not yet a validated recommendation.
 > 2. Create or open a chat.
 > 3. Leave the top-level **`codex/unreal-context-compactor`** switch **OFF** in that chat's **plugin panel**. Turn it off manually in an older chat that retained an opt-in.
-> 4. Leave the nested **Enable transparent compaction** switch OFF. It is separate from top-level activation.
 
-Installation pins the plugin for availability but does not activate it for a chat. The default Direct setup therefore uses the real LLM without the compactor. Only a deliberate two-switch, per-chat opt-in runs the prediction loop; that optional path passes the selected model's MCP tools through unchanged and may retain bounded factual continuity. It cannot plan, route, authorize a write/build, require a next tool, or declare completion.
+Installation pins the plugin for availability but does not activate it for a chat. The default Direct setup therefore uses the real LLM without the compactor. For a long chat that needs bounded continuity, enable the single top-level switch; handler invocation runs the prediction loop, while `Observe only` measures pressure without rewriting history. The optional path passes the selected model's MCP tools through unchanged. It cannot plan, route, authorize a write/build, require a next tool, or declare completion.
 
 This command verifies the installed source/build wiring, not chat-level activation:
 
@@ -74,7 +73,7 @@ npm run status
 
 Direct Mode uses [`prompts/lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). It leaves reasoning, tool selection, stopping, and the final answer with the LLM selected in LM Studio while asking for focused evidence, edits, and honest verification. Tool schemas describe their own arguments; do not add task, route, planner, gate, or required-next-tool instructions.
 
-Every current Direct profile uses the same [`lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). Qwen 3.8 27B is the primary validated recommendation. Muse Glimmer is under testing only; Qwen 3.5, Qwen 3.6 27B, and GPT-OSS profiles or scorecards are historical compatibility/evaluation material rather than current recommendations. Do not combine the Direct prompt with an older model-specific or `compact_mcp_base` prompt. Historical evaluation prompts encode removed planner/task gates, do not describe the Node `strict_begin` lifecycle, and are excluded from the portable Direct runtime.
+Every current Direct profile uses the same [`lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). Qwen 3.8 27B is the highly recommended primary validated model, with a successful v1.3.2 live E2E workflow. Muse Glimmer is under testing only; Qwen 3.5, Qwen 3.6 27B, and GPT-OSS profiles or scorecards are historical compatibility/evaluation material rather than current recommendations. Do not combine the Direct prompt with an older model-specific or `compact_mcp_base` prompt. Historical evaluation prompts encode removed planner/task gates, do not describe the Node `strict_begin` lifecycle, and are excluded from the portable Direct runtime.
 
 **Qwen / thinking models:** if visible reasoning causes prose instead of a requested tool call, turn thinking off for bounded edit/build turns. This is a model sampling choice, not a Direct MCP gate.
 

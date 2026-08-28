@@ -9,51 +9,32 @@ import sys
 from pathlib import Path
 from typing import Any
 
-VERDICTS = {"Bug", "ByDesign", "Ambiguous", "NeedsRuntimeProof"}
-SEVERITIES = {"P0", "P1", "P2", "P3"}
-PROOF_LEVELS = {
-    "Proposed",
-    "SourceVerified",
-    "StaticVerified",
-    "BuildVerified",
-    "TestVerified",
-    "RuntimeVerified",
-}
-EVIDENCE_KINDS = {
-    "requirement",
-    "project_source",
-    "framework_source",
-    "official_docs",
-    "static_analysis",
-    "build",
-    "test",
-    "runtime",
-    "generated_metadata",
-}
-BEHAVIORAL_STAGES = {"entry", "decision", "dispatch", "mutation", "side_effect", "observer"}
-PATH_STATUSES = {"present", "expected_missing", "unknown"}
-CLAIM_TYPES = {
-    "existence",
-    "behavior",
-    "framework_semantics",
-    "wiring",
-    "state_transition",
-    "data_flow",
-    "architecture",
-    "codegen",
-}
-BEHAVIORAL_CLAIM_TYPES = {"behavior", "wiring", "state_transition", "data_flow"}
-PROOF_EVIDENCE_REQUIREMENTS = {
-    "SourceVerified": {"project_source", "framework_source", "official_docs"},
-    "StaticVerified": {"static_analysis"},
-    "BuildVerified": {"build"},
-    "TestVerified": {"test"},
-    "RuntimeVerified": {"runtime"},
-}
+from evidence_packet_contract import (
+    BEHAVIORAL_CLAIM_TYPES,
+    BEHAVIORAL_STAGES,
+    CLAIM_TYPES,
+    EVIDENCE_KINDS,
+    MODE_OBLIGATIONS,
+    MODES,
+    NEUTRAL_EXCLUDED_CLAIM_TYPES,
+    NEUTRAL_MODE,
+    NEUTRAL_SEVERITY,
+    NEUTRAL_VERDICT,
+    PATH_STATUSES,
+    PROOF_EVIDENCE_REQUIREMENTS,
+    PROOF_LEVELS,
+    SEVERITIES,
+    VERDICTS,
+    VERIFIED_PROOF_LEVELS,
+)
 
 
 def _nonempty_list(value: Any) -> bool:
     return isinstance(value, list) and bool(value)
+
+
+def _nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _validate_evidence(entries: Any, path: str, errors: list[str]) -> set[str]:
@@ -71,10 +52,10 @@ def _validate_evidence(entries: Any, path: str, errors: list[str]) -> set[str]:
             errors.append(f"{item_path}.kind must be one of {sorted(EVIDENCE_KINDS)}")
         else:
             kinds.add(kind)
-        if not str(entry.get("location") or "").strip():
-            errors.append(f"{item_path}.location is required")
-        if not str(entry.get("observation") or "").strip():
-            errors.append(f"{item_path}.observation is required")
+        if not _nonempty_string(entry.get("location")):
+            errors.append(f"{item_path}.location must be a non-empty string")
+        if not _nonempty_string(entry.get("observation")):
+            errors.append(f"{item_path}.observation must be a non-empty string")
     return kinds
 
 
@@ -96,10 +77,10 @@ def _validate_behavior_path(entries: Any, path: str, errors: list[str]) -> set[s
         stage_status = str(entry.get("stageStatus") or "")
         if stage_status not in PATH_STATUSES:
             errors.append(f"{item_path}.stageStatus must be one of {sorted(PATH_STATUSES)}")
-        if not str(entry.get("location") or "").strip():
-            errors.append(f"{item_path}.location is required")
-        if not str(entry.get("symbol") or "").strip():
-            errors.append(f"{item_path}.symbol is required")
+        if not _nonempty_string(entry.get("location")):
+            errors.append(f"{item_path}.location must be a non-empty string")
+        if not _nonempty_string(entry.get("symbol")):
+            errors.append(f"{item_path}.symbol must be a non-empty string")
     return stages
 
 
@@ -135,7 +116,7 @@ def validate_packet(packet: Any) -> dict[str, Any]:
         return {"ok": False, "errors": ["packet must be a JSON object"], "warnings": []}
 
     mode = str(packet.get("mode") or "")
-    if mode not in {"audit", "architecture", "codegen"}:
+    if mode not in MODES:
         errors.append("mode must be audit, architecture, or codegen")
 
     claims = packet.get("claims")
@@ -148,8 +129,8 @@ def validate_packet(packet: Any) -> dict[str, Any]:
         if not isinstance(claim, dict):
             errors.append(f"{path} must be an object")
             continue
-        if not str(claim.get("claim") or "").strip():
-            errors.append(f"{path}.claim is required")
+        if not _nonempty_string(claim.get("claim")):
+            errors.append(f"{path}.claim must be a non-empty string")
         verdict = str(claim.get("verdict") or "")
         severity = str(claim.get("severity") or "")
         proof = str(claim.get("proofLevel") or "")
@@ -162,6 +143,25 @@ def validate_packet(packet: Any) -> dict[str, Any]:
             errors.append(f"{path}.proofLevel must be one of {sorted(PROOF_LEVELS)}")
         if claim_type not in CLAIM_TYPES:
             errors.append(f"{path}.claimType must be one of {sorted(CLAIM_TYPES)}")
+        neutral_verdict = verdict == NEUTRAL_VERDICT
+        neutral_severity = severity == NEUTRAL_SEVERITY
+        if neutral_verdict != neutral_severity:
+            errors.append(
+                f"{path} {NEUTRAL_VERDICT} verdict and {NEUTRAL_SEVERITY} severity "
+                "must be used together"
+            )
+        if neutral_verdict and (
+            mode != NEUTRAL_MODE or claim_type in NEUTRAL_EXCLUDED_CLAIM_TYPES
+        ):
+            errors.append(
+                f"{path} {NEUTRAL_VERDICT}/{NEUTRAL_SEVERITY} is limited to verified "
+                f"non-codegen facts in {NEUTRAL_MODE} mode"
+            )
+        if neutral_verdict and proof not in VERIFIED_PROOF_LEVELS:
+            errors.append(
+                f"{path} {NEUTRAL_VERDICT}/{NEUTRAL_SEVERITY} requires a verified "
+                "proofLevel, not Proposed"
+            )
         unknowns = claim.get("unknowns")
         if not isinstance(unknowns, list):
             errors.append(f"{path}.unknowns must be an array")
@@ -234,11 +234,13 @@ def validate_packet(packet: Any) -> dict[str, Any]:
             warnings.append(f"{path} should record unknowns for {verdict}")
 
     if mode == "architecture":
-        for field in ("existing", "proposed", "doNotDuplicate"):
-            if not _nonempty_list(packet.get(field)):
-                errors.append(f"architecture packet needs non-empty {field}")
+        if not _nonempty_list(packet.get("existing")):
+            errors.append("architecture packet needs non-empty existing")
+        for field in MODE_OBLIGATIONS["architecture"][1:]:
+            if not isinstance(packet.get(field), list):
+                errors.append(f"architecture packet needs {field} array; an empty array is allowed")
     if mode == "codegen":
-        for field in ("invariants", "impactedSurfaces", "validationPlan"):
+        for field in MODE_OBLIGATIONS["codegen"]:
             if not _nonempty_list(packet.get(field)):
                 errors.append(f"codegen packet needs non-empty {field}")
 

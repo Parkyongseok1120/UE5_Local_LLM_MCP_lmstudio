@@ -53,7 +53,7 @@
         "maxFilesPerEdit": 2,
         "preferPatchOverFullFile": true
       },
-      "notes": "64K is the practical baseline for the full Direct MCP tool schema; use the larger context only when hardware capacity has been verified."
+      "notes": "Highly recommended primary validated profile. The v1.3.2 live E2E workflow completed long real-project RAG/read/report work without the prior context truncation. 64K is the practical baseline for the full Direct MCP tool schema; use the larger context only when hardware capacity has been verified."
     },
     "qwen3_6_27b": {
       "contextLength": 32768,

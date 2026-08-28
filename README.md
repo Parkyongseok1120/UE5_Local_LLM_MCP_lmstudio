@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.1
+# UE5_Local_LLM_MCP_lmstudio 1.3.2
 
-> **Stable v1.3.1 release:** Direct Model Mode remains the supported default. This release hardens receipt-chained file mutations, removes runtime-local file receipts from durable context continuity, preserves ordinary receipt-domain language, keeps context compaction opt-in, and consolidates the cross-platform CI suites. The stack is designed for multiple Unreal Engine versions and projects. Host **Python 3.10+** is required before `./install.sh` can start. See the [1.3.1 release notes](docs/Release_Notes_1_3_1.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **Stable v1.3.2 release:** Direct Model Mode remains the supported default. This release keeps file mutation semantics and the existing receipt/CAS/atomic-write server boundaries unchanged while adding a complete tool-round boundary for long multi-round work, structurally excluding ephemeral capabilities from durable continuity, and consolidating Evidence packet validation. The platform launchers can bootstrap managed Python 3.12 when a clean supported host has no usable Python. The stack is designed for multiple Unreal Engine versions and projects. See the [1.3.2 release notes](docs/Release_Notes_1_3_2.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -28,9 +28,11 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — August 2026**
 >
-> **Current product label: 1.3.1 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and provenance-aware durable continuity. The optional context-continuity plugin is not chat-activated by the installer and its internal compaction opt-in defaults OFF. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
+> **Current product label: 1.3.2 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and provenance-aware durable continuity. The optional context-continuity plugin is not chat-activated by the installer, so its single host-owned chat toggle remains OFF by default. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
 >
-> v1.3.1 component metadata is Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, and portable manifest 2.1.11. The Compactor removes runtime-local file-mutation capabilities from durable memory while preserving user-authored domain language such as payment `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, and `리시트`; ordinary receipt language is not interpreted as mutation authority.
+> Stable v1.3.2 component metadata is Node agent MCP 0.3.20, Evidence-First MCP server 1.1.0, Context Compactor 0.4.51/revision 98, and portable manifest 2.1.14. The Compactor removes the redundant nested enable gate, rechecks context before each complete tool round, retains bounded validation-repair feedback, and continues to exclude runtime-local file-mutation capabilities from durable memory while preserving user-authored receipt-domain language.
+>
+> A release-operator live E2E run with Qwen 3.8 27B completed active-project discovery, repeated RAG/search/read rounds across a real Unreal project, a large architecture report, and follow-up continuity without reproducing the prior mid-session JSON truncation. This is a functional workflow check, not a benchmark score or universal host certification.
 >
 > Automated source, package, installer, safety, and cross-platform gates define release readiness. A passing release gate is not a universal compatibility claim for every host, Unreal project, engine build, plugin, or editor-runtime combination.
 
@@ -38,16 +40,16 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_1.md"><img alt="1.3.1 Notes" src="https://img.shields.io/badge/Release-1.3.1-blue?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_2.md"><img alt="1.3.2 Notes" src="https://img.shields.io/badge/Release-1.3.2-blue?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
 </p>
 
 ## Model Guidance
 
-**Qwen 3.8 27B is the primary currently recommended and validated operating model for this stack.** Muse Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5, community Qwen 3.6 27B checkpoints, and GPT-OSS are not currently recommended.
+**Qwen 3.8 27B is highly recommended as the primary validated operating model for this stack.** Its v1.3.2 live E2E run completed a long real-project RAG/read/report workflow without the prior context truncation. Muse Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5, community Qwen 3.6 27B checkpoints, and GPT-OSS are not currently recommended.
 
-Historical live-test scores and timing records are intentionally omitted from this README. See [Model Measurement Results](docs/Model_Measurement_Results.md) only when historical measurement evidence is needed; those archived results are not current model recommendations or a v1.3.1 quality score.
+Historical live-test scores and timing records are intentionally omitted from this README. See [Model Measurement Results](docs/Model_Measurement_Results.md) only when historical measurement evidence is needed; those archived results are not current model recommendations or a v1.3.2 quality score.
 
 > **BYOI** = Bring Your Own Index. This repo ships **tooling only**: not Epic source, not a pre-built `rag.sqlite`.
 
@@ -75,11 +77,17 @@ cd UE5_Local_LLM_MCP_lmstudio
 # Ubuntu Linux/macOS: ./install.sh
 ```
 
-The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal adapter is included, it presents a numbered SAFE/AGENT authority choice and shows the final authority in a confirmation summary. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. All LM Studio/Unreal profiles install and pin the context compactor so it is available, but never chat-activate it; the plugin's internal compaction opt-in defaults OFF. FULL remains read-only unless AGENT authority is explicitly confirmed. See [Integrated Installer](docs/Integrated_Installer.md).
+On a freshly installed supported host, these launchers download a pinned,
+SHA-256-verified uv seed and install managed Python 3.12 under the selected
+user state-home before continuing. They do not register Python system-wide or
+modify the system PATH. Running `python3 install.py` directly still requires a
+host Python 3.10+ interpreter.
+
+The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal adapter is included, it presents a numbered SAFE/AGENT authority choice and shows the final authority in a confirmation summary. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. All LM Studio/Unreal profiles install and pin the context compactor so it is available, but never chat-activate it; the host-owned chat toggle remains OFF until the user enables it for a long chat. FULL remains read-only unless AGENT authority is explicitly confirmed. See [Integrated Installer](docs/Integrated_Installer.md).
 
 ### One installer, two platform launchers
 
-`INSTALL.bat` and `install.sh` are thin platform launchers for the same `install.py` implementation. There are no separate SAFE, AGENT, RAG, Cline, or context-compactor installers. Choose those options inside the integrated installer. `installer/` contains bootstrap runtime code and validated manifests; advanced maintenance tools live under `scripts/installer_support/`.
+`INSTALL.bat` and `install.sh` are platform launchers for the same `install.py` implementation. Their small pre-Python helpers only bridge a clean machine into that implementation; they do not duplicate profile, component, or installation logic. There are no separate SAFE, AGENT, RAG, Cline, or context-compactor installers. Choose those options inside the integrated installer. `installer/` contains bootstrap runtime code and validated manifests; advanced maintenance tools live under `scripts/installer_support/`.
 
 ### Direct Model Mode is the default
 
@@ -87,12 +95,11 @@ The normal `unreal-rag` and `unreal-agent` entries are capability providers. The
 
 > **Important — select the real LLM as the chat model.**
 >
-> 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current primary validated recommendation.
+> 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current highly recommended, primary validated model.
 > 2. Leave the top-level **`codex/unreal-context-compactor`** switch **OFF** in that chat's **plugin panel**. The installer does not enable this host-owned switch; verify it is OFF in every new or existing chat.
-> 3. Keep the nested **Enable transparent compaction** switch OFF as well. It is a plugin-internal opt-in and does not activate the plugin while the top-level switch is off.
-> 4. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
+> 3. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
 
-The default setup does not run the compactor. Installation and pinning only make it available in the panel; they do not add it to a chat. If you deliberately test the experimental compaction path for one long chat, opt in to both switches for that chat. The plugin does not choose the model, change sampling, filter MCP tools, or grant write/build authority.
+The default setup does not run the compactor. Installation and pinning only make it available in the panel; they do not add it to a chat. For a long chat that needs bounded continuity, enable the single top-level `codex/unreal-context-compactor` switch for that chat. Handler invocation is the activation boundary; there is no second enable control. `Observe only` remains available for measurement without rewriting model-facing history. The plugin does not choose the model, change sampling, filter MCP tools, or grant write/build authority.
 
 This command verifies the installed plugin's source layout and compiled prediction-loop wiring. It does **not** prove chat-level activation:
 
@@ -158,11 +165,11 @@ run a model, wrapper, planner, evaluation harness, or query-side controller.
 
 ## Real-Use Session Tips
 
-Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context grows with every tool result, build log, and retry. Keep the context compactor's top-level chat switch OFF by default. Prefer a suitable context length or a fresh chat with a short factual handoff. The experimental compaction path is a deliberate per-chat, two-switch opt-in; when enabled, it replaces only older model-facing history with deterministic factual memory and never owns task routes, required-next-tool commands, planner state, or synthesis gates. Runtime-local file-version receipts are never durable compaction memory: a compacted file observation keeps its canonical project/path and observed SHA but requires a fresh read before mutation.
+Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context grows with every tool result, build log, and retry. Keep the context compactor's top-level chat switch OFF by default. When continuity is needed, enable that single switch for the affected chat; the handler then measures and compacts during multi-round tool work. It replaces only older model-facing history with deterministic factual memory and never owns task routes, required-next-tool commands, planner state, or synthesis gates. Runtime-local file-version receipts are never durable compaction memory: a compacted file observation keeps its canonical project/path and observed SHA but requires a fresh read before mutation.
 
 | Symptom in LM Studio logs | What to do |
 |---|---|
-| `request (...) exceeds the available context size (54272)` | Confirm that the actual LLM is selected. Keep `codex/unreal-context-compactor` OFF for the default setup, then use a suitable context length or start a new chat with a 5–10-line factual handoff. `npm --prefix lmstudio-context-compactor-plugin run status` verifies installed source/build wiring only. |
+| `request (...) exceeds the available context size (54272)` | Confirm that the actual LLM is selected. For a long chat, enable the single `codex/unreal-context-compactor` chat-plugin switch before context pressure becomes critical. If the request already exceeds the window, use a suitable context length or start a new chat with a 5–10-line factual handoff. `npm --prefix lmstudio-context-compactor-plugin run status` verifies installed source/build wiring only. |
 | `failed to restore kv cache` / `cache size limit reached` | Same as above — session memory is saturated. New chat is faster than raising context alone. |
 | `Model failed to generate a tool call` after a long edit loop | Stop, summarize changed files + remaining errors, new chat. |
 | `js-code-sandbox` appears in logs during Unreal work | Disable it (see Quick Install note above). |
@@ -185,7 +192,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 | Topic | File |
 |---|---|
-| 1.3.1 release notes | [docs/Release_Notes_1_3_1.md](docs/Release_Notes_1_3_1.md) |
+| 1.3.2 release notes | [docs/Release_Notes_1_3_2.md](docs/Release_Notes_1_3_2.md) |
 | Detailed project overview | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | Model measurement results | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | Version performance history | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -199,9 +206,9 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 ## Summary
 
-1.3.1 is the current stable Direct Model Mode release. Scoped SHA-256 file-version receipts, receipt-chained edits, bounded process execution, RAG provenance, durable continuity sanitization, installer paths, and package hygiene are guarded by automated checks. The optional context compactor remains OFF by default and does not inherit file-mutation authority through compacted history.
+1.3.2 is the current stable Direct Model Mode release. Scoped SHA-256 file-version receipts, receipt-chained edits, bounded process execution, RAG provenance, durable continuity sanitization, complete tool-round boundaries, installer paths, and package hygiene are guarded by automated checks. The optional context compactor remains OFF by default and does not inherit file-mutation authority through compacted history.
 
-Qwen 3.8 27B is the primary current operating recommendation. Muse Glimmer remains under testing. Qwen 3.5, community Qwen 3.6 27B checkpoints, and GPT-OSS are not currently recommended.
+Qwen 3.8 27B is the highly recommended primary operating model. Muse Glimmer remains under testing. Qwen 3.5, community Qwen 3.6 27B checkpoints, and GPT-OSS are not currently recommended.
 
 If you want local LLMs for Unreal C++ with less hallucination, select the real model, search evidence first, read the exact project source, then answer or patch. Improve RAG, validation, safety boundaries, and failure analysis first; use fine-tuning later only when the workflow is already measured on real project errors.
 

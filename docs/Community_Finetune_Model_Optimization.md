@@ -1,7 +1,9 @@
 # Community Model Profile Compatibility
 
 Community GGUF files can differ materially from their base family. Qwen 3.8 27B
-is the current primary validated recommendation. Muse Glimmer is under testing
+is the highly recommended primary validated model for the current Direct stack;
+its v1.3.2 live E2E workflow completed long real-project RAG/read/report work
+without the prior context truncation. Muse Glimmer is under testing
 and is not yet a validated recommendation. Qwen 3.5, community fine-tuned Qwen
 3.6 27B, and GPT-OSS profiles remain only for historical reproduction and
 existing-install compatibility; this guide does not recommend them for current
@@ -51,9 +53,10 @@ answer. There are no model-profile plan/critique/execute turns, compile-fix
 stages, tool-order rules, or per-retry sampling switches.
 
 The optional LM Studio context compactor is independent. It compacts history
-only after an explicit two-switch, per-chat opt-in. The installer does not enable
-the host-owned top-level chat toggle, which must be verified OFF per chat; the
-nested `Enable transparent compaction` switch defaults OFF. It does not
+only after the user enables its single top-level switch for a chat. The installer
+does not enable the host-owned toggle, which must be verified OFF per chat by
+default. Invoking the handler activates compaction; `Observe only` measures without
+rewriting history. It does not
 consume a model profile, choose a model, set sampling, or decide task completion.
 
 ## Hardware and model validation

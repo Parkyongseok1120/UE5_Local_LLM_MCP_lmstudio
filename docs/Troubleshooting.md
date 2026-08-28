@@ -9,8 +9,18 @@ effect.
 
 ## Python not found
 
-Install Python 3.10+, set `PYTHON_EXE`, or run the integrated installer so the
-portable launcher can resolve its managed Python runtime.
+Run the root `INSTALL.bat` (Windows) or `./install.sh` (Ubuntu/macOS) instead of
+invoking `install.py` directly. When no usable Python exists, the launcher
+downloads pinned uv, verifies its SHA-256, installs managed Python 3.12 under the
+selected user state-home, and continues without a system-wide install.
+
+If that first bootstrap fails, keep the complete extracted package together and
+check HTTPS access to GitHub Releases. On minimal Ubuntu, install
+`ca-certificates curl tar coreutils`; on Windows, Windows PowerShell must be
+available. `--skip-runtime-bootstrap` intentionally disables this recovery.
+Only as a manual fallback, install Python 3.12 or set
+`PYTHON=/path/to/python3.12` for `install.sh`. `PYTHON_EXE` is for installed MCP
+runtime resolution and does not replace the launcher's initial interpreter.
 
 ## Generic API queries return only project chunks
 
@@ -45,7 +55,7 @@ Rerun `python install.py --profile standard --yes` to restore SAFE read-only def
 
 ## AGENT write is blocked by compactor/task authority
 
-The default Direct MCP never uses context-compactor telemetry, a task, a route, a planner, or synthesis state as write authority. Select the real LLM in the model dropdown and keep the top-level `codex/unreal-context-compactor` chat-plugin switch OFF. Keep the nested `Enable transparent compaction` switch OFF too; it is a separate internal opt-in and does not control top-level activation. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5, Qwen 3.6 27B, and GPT-OSS references are historical rather than current recommendations. The plugin is optional factual continuity support and does not grant or revoke `ALLOW_WRITE`, `ALLOW_COMMANDS`, or `ALLOW_UNREAL_BUILD`.
+The default Direct MCP never uses context-compactor telemetry, a task, a route, a planner, or synthesis state as write authority. Select the real LLM in the model dropdown and keep the top-level `codex/unreal-context-compactor` chat-plugin switch OFF by default. For a long chat that needs bounded continuity, enable that single switch; handler invocation activates compaction. Qwen 3.8 27B is the current highly recommended, primary validated model; Muse Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5, Qwen 3.6 27B, and GPT-OSS references are historical rather than current recommendations. The plugin is optional factual continuity support and does not grant or revoke `ALLOW_WRITE`, `ALLOW_COMMANDS`, or `ALLOW_UNREAL_BUILD`.
 
 If a default chat returns `CONTEXT_COMPACTOR_NOT_ACTIVE`, `TASK_AUTH_*`, `TASK_ROUTE_*`, a required-next-tool recovery, or synthesis acknowledgement, an unsupported legacy Python entry or stale process is active. Re-run the installer, verify that `unreal-rag` launches `scripts/unreal_rag_direct.py` and `unreal-agent` launches `src/direct-server.js`, and fully restart LM Studio/MCP processes. The installer removes stale entries pointing at the removed monolithic Python server. Do not repair or invent task authorization for a Direct call. A separately named Node Strict entry returns `STRICT_SESSION_INVALID` for its own `strict_begin` lifecycle; it does not use Python task authorization.
 
@@ -56,9 +66,8 @@ Check that the chat plugin is disabled, then recover context without middleware:
 1. **Create a new chat.**
 2. Load and select the actual LLM in the model dropdown.
 3. Leave the top-level **`codex/unreal-context-compactor`** switch **OFF** in that chat's plugin panel. Turn it off manually in an existing chat that retained the old state.
-4. Leave the nested **Enable transparent compaction** switch OFF and keep the actual LLM selected.
 
-`npm --prefix lmstudio-context-compactor-plugin run status` verifies installed source/build wiring only; it does not activate the plugin or inspect a chat's top-level toggle. If the chat exceeds context, start a fresh chat with a short factual handoff containing the exact project, current request, observed/changed files, and remaining build/test errors. Enable both compactor switches only for a deliberate, per-chat experiment.
+`npm --prefix lmstudio-context-compactor-plugin run status` verifies installed source/build wiring only; it does not activate the plugin or inspect a chat's top-level toggle. For a long chat, enable the single top-level switch before context pressure becomes critical. If the chat already exceeds context, start a fresh chat with a short factual handoff containing the exact project, current request, observed/changed files, and remaining build/test errors.
 
 Successful Direct RAG searches and Node reads are condensed only when the current caller echoes the opaque, state-bound `repeatReceipt` from its preceding full result; without that receipt, even an identical call in the same process returns full content. Direct RAG does not issue pagination tokens; when evidence is truncated it returns only an actionable `nextDetailLevel`. Repeated Node failures may be automatically bounded but remain `ok=false`. In every case the duplicate marker is evidence, not a required-next-tool instruction.
 

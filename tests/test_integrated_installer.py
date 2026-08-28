@@ -62,8 +62,8 @@ def test_installer_profiles_are_manifest_driven() -> None:
     compactor_manifest = json.loads(
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
-    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.1"
-    assert manifest["version"] == "2.1.11"
+    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.2"
+    assert manifest["version"] == "2.1.14"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
     assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is False
     assert manifest["safety"]["contextCompactionEnabledByDefault"] is False
@@ -71,15 +71,22 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
     assert node_package["version"] == node_lock["version"] == "0.3.20"
     assert node_lock["packages"][""]["version"] == "0.3.20"
-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.50"
-    assert compactor_lock["packages"][""]["version"] == "0.4.50"
-    assert compactor_manifest["revision"] == 97
+    assert compactor_package["version"] == compactor_lock["version"] == "0.4.51"
+    assert compactor_lock["packages"][""]["version"] == "0.4.51"
+    assert compactor_manifest["revision"] == 98
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
         if name != "custom"
     }
     assert manifest["requires"]["linuxBaseline"] == "Ubuntu 22.04/24.04 (glibc)"
+    assert manifest["launcherBootstrap"] == {
+        "hostPythonRequired": False,
+        "managedPythonDefinition": "installer/runtime-manifest.json#runtimes.python",
+        "seedRuntime": "uv",
+        "systemWideInstall": False,
+        "skipFlag": "--skip-runtime-bootstrap",
+    }
     assert manifest["portablePackage"]["runtimeArchiveIntegrity"] == "pinned-sha256"
     assert manifest["portablePackage"]["supportedHosts"] == [
         "windows",

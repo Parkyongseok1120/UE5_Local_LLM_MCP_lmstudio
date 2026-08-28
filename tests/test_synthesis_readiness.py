@@ -47,12 +47,16 @@ def test_direct_catalog_exposes_no_synthesis_lifecycle_tools() -> None:
 def test_compactor_forwards_to_selected_model_without_finality_controller() -> None:
     plugin_root = ROOT / "lmstudio-context-compactor-plugin"
     entry = (plugin_root / ".lmstudio" / "entry.ts").read_text(encoding="utf-8")
-    loop = (plugin_root / "src" / "prediction-loop.ts").read_text(
+    orchestration = (plugin_root / "src" / "prediction-loop.ts").read_text(
         encoding="utf-8"
     )
+    round_loop = (plugin_root / "src" / "round-loop.ts").read_text(
+        encoding="utf-8"
+    )
+    direct_runtime = f"{orchestration}\n{round_loop}"
 
-    assert "tokenSource.act(" in loop
-    assert "startToolUseSession()" in loop
+    assert "tokenSource.act(" in round_loop
+    assert "startToolUseSession()" in orchestration
     assert "withGenerator() { throw" in entry
     for removed_owner in (
         "synthesis-readiness",
@@ -60,4 +64,4 @@ def test_compactor_forwards_to_selected_model_without_finality_controller() -> N
         "route-recovery-policy",
         "requiredNextTool",
     ):
-        assert removed_owner not in loop
+        assert removed_owner not in direct_runtime

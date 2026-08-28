@@ -69,7 +69,7 @@ def test_packaged_setup_docs_use_existing_installer_and_doctor_commands() -> Non
         assert source_checkout_only not in combined
 
 
-def test_current_docs_keep_context_compactor_off_by_default() -> None:
+def test_current_docs_keep_host_compactor_off_by_default_and_use_one_activation_switch() -> None:
     current_docs = (
         "README.md",
         "README.ko.md",
@@ -93,22 +93,12 @@ def test_current_docs_keep_context_compactor_off_by_default() -> None:
 
     for relative, document in documents.items():
         assert "OFF" in document, relative
-    for primary in (
-        "README.md",
-        "README.ko.md",
-        "installer/README.md",
-        "lmstudio-context-compactor-plugin/README.md",
-        "docs/Integrated_Installer.md",
-        "docs/LMStudio_Unreal_Agent_Setup.md",
-        "docs/LMStudio_MCP_Tool_Discipline.md",
-        "docs/Project_Overview.md",
-        "docs/Troubleshooting.md",
-    ):
-        assert re.search(r"Enable\s+transparent\s+compaction", documents[primary]), primary
-
-    assert "enable **`codex/unreal-context-compactor`**" not in combined
-    assert "Enable `codex/unreal-context-compactor`" not in combined
-    assert "`codex/unreal-context-compactor`** 를 활성화합니다" not in combined
+    assert "Enable transparent compaction" not in combined
+    assert "two-switch" not in combined.casefold()
+    assert "both switches" not in combined.casefold()
+    assert "nested compaction opt-in" not in combined.casefold()
+    assert re.search(r"enable\s+(?:that|the)\s+single\s+(?:top-level\s+)?switch", combined, re.I)
+    assert "단일" in documents["README.ko.md"]
     assert re.search(r"Installation/pinning\s+is\s+availability,\s+not\s+activation", combined)
     assert "New chats start OFF" not in combined
     assert "New chats start with no chat plugins enabled" not in combined
