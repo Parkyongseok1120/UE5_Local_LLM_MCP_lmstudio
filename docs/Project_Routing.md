@@ -13,6 +13,7 @@ MCP: `unreal_rag_search` accepts `scope: auto|engine|project|mixed`.
 Routing has one runtime policy:
 
 - `scope=auto` uses the classifier above.
+- API-looking queries can therefore resolve to engine evidence under `scope=auto`; use an exact `project` selector with `scope=project` when current project source is the intended corpus.
 - An explicit per-call `scope` overrides classification.
 - An explicit per-call `project` selector binds project evidence to that exact project.
 - `use_active_project=false` requests engine-only retrieval when no explicit project is supplied.

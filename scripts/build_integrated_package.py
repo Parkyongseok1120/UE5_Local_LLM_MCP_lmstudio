@@ -226,6 +226,7 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/direct_rag_index.py",
     "scripts/direct_rag_lexical.py",
     "scripts/direct_rag_limits.py",
+    "scripts/direct_rag_request_bounds.py",
     "scripts/direct_rag_projects.py",
     "scripts/direct_rag_project_cache.py",
     "scripts/direct_rag_probe.py",

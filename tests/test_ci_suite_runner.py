@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_all_declared_suites_validate_as_one_duplicate_free_selection() -> None:
     resolved = run_ci_suite.resolve_test_files(run_ci_suite.PRIMARY_SUITE_NAMES)
 
-    assert len(resolved) == 51
-    assert len({path.casefold() for path in resolved}) == 51
+    assert len(resolved) == 52
+    assert len({path.casefold() for path in resolved}) == 52
 
 
 def test_missing_test_file_fails_before_pytest(monkeypatch, tmp_path: Path) -> None:

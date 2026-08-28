@@ -6,11 +6,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol
 
-from direct_rag_result import CapabilityResult, failure
+from direct_rag_result import CapabilityResult, configured_result_limit, failure
 from direct_rag_generation_boundary import generation_transition_boundary
-from direct_rag_evidence import compact_match_refs, factual_rows, format_evidence_rows
+from direct_rag_evidence import (
+    compact_match_refs,
+    evidence_metadata_fits,
+    factual_rows,
+    fit_evidence_payload,
+    format_evidence_rows,
+)
 from direct_rag_freshness import project_freshness
 from direct_rag_limits import detail_limits, next_detail, resolve_detail
+from direct_rag_request_bounds import rag_request_bound_error
 from direct_rag_index_registry import resolve_request_index
 from direct_rag_selection import (
     exact_project_roots,
@@ -79,6 +86,22 @@ def symbol_lookup_capability(
     runtime: SymbolRuntime,
     arguments: dict[str, Any],
 ) -> CapabilityResult:
+    request_limits = detail_limits(str(arguments.get("detailLevel") or "compact"))
+    request_limit = min(
+        int(request_limits["max_tool_chars"]),
+        configured_result_limit(),
+    )
+    bound_error = rag_request_bound_error(
+        arguments,
+        capability="symbol",
+        transport_limit=request_limit,
+    )
+    if bound_error:
+        return failure(
+            "INVALID_TOOL_ARGUMENTS",
+            bound_error,
+            retry_allowed=True,
+        )
     query = str(arguments.get("query") or "").strip()
     if not query:
         return failure(
@@ -203,12 +226,18 @@ def symbol_lookup_capability(
         max_chars=int(limits["assembly_chars"]),
         max_chars_per_row=int(limits["row_chars"]),
     )
+    limit = min(int(limits["max_tool_chars"]), configured_result_limit())
+    match_refs = compact_match_refs(
+        rows,
+        max_chars=min(int(limits["match_chars"]), max(512, limit // 3)),
+    )
+    match_metadata_truncated = len(match_refs) < len(rows)
     payload: dict[str, Any] = {
         "ok": True,
         "query": query,
         "projects": selectors,
         "matchCount": len(rows),
-        "matches": compact_match_refs(rows),
+        "matches": match_refs,
         "evidence": context,
         "targetResolution": target_resolution,
         "detailLevel": detail,
@@ -217,7 +246,9 @@ def symbol_lookup_capability(
         "indexPath": str(index),
         "engineVersion": index_resolution.get("indexEngineVersion"),
     }
-    if truncated:
+    if match_metadata_truncated:
+        payload["matchMetadataTruncated"] = True
+    if truncated or match_metadata_truncated:
         payload["nextDetailLevel"] = next_detail(detail)
     if suppressed:
         payload["freshnessAdvisory"] = {
@@ -227,9 +258,25 @@ def symbol_lookup_capability(
                 "their source freshness could not be established."
             ),
         }
+    if not evidence_metadata_fits(payload, max_chars=limit):
+        return failure(
+            "INVALID_TOOL_ARGUMENTS",
+            (
+                "Query, project selectors, or requested match metadata exceed the selected "
+                "detail transport budget; shorten them or lower top_k."
+            ),
+            retry_allowed=True,
+        )
+    payload, envelope_truncated = fit_evidence_payload(payload, max_chars=limit)
+    if envelope_truncated:
+        payload["evidenceEnvelopeTruncated"] = True
+        next_level = next_detail(detail)
+        if next_level:
+            payload["nextDetailLevel"] = next_level
+        payload, _ = fit_evidence_payload(payload, max_chars=limit)
     return CapabilityResult(
         payload,
-        char_limit=int(limits["max_tool_chars"]),
+        char_limit=limit,
     )
 
 

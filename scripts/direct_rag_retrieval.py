@@ -193,13 +193,22 @@ def retrieve(
                 expected_generation=expected_generation,
             )
         )
-        seen = {str(row.get("chunk_id") or "") for row in local_rows}
-        rows = list(local_rows)
-        rows.extend(
-            row
-            for row in engine_rows
-            if str(row.get("chunk_id") or "") not in seen
-        )
+        seen: set[str] = set()
+        rows: list[dict[str, Any]] = []
+        for rank_index in range(max(len(local_rows), len(engine_rows))):
+            for group in (local_rows, engine_rows):
+                if rank_index >= len(group):
+                    continue
+                row = group[rank_index]
+                chunk_id = str(row.get("chunk_id") or "")
+                if chunk_id in seen:
+                    continue
+                seen.add(chunk_id)
+                rows.append(row)
+                if len(rows) >= top_k:
+                    break
+            if len(rows) >= top_k:
+                break
         context, truncated = format_evidence_rows(
             rows,
             max_chars=int(limits["assembly_chars"]),

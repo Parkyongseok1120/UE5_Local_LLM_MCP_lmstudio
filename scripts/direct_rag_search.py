@@ -8,9 +8,14 @@ from typing import Any, Protocol
 
 from direct_rag_delivery import deliver
 from direct_rag_generation_boundary import generation_transition_boundary
-from direct_rag_result import CapabilityResult, failure
-from direct_rag_evidence import compact_match_refs
+from direct_rag_result import CapabilityResult, configured_result_limit, failure
+from direct_rag_evidence import (
+    compact_match_refs,
+    evidence_metadata_fits,
+    fit_evidence_payload,
+)
 from direct_rag_limits import detail_limits, next_detail
+from direct_rag_request_bounds import rag_request_bound_error
 from direct_rag_index_registry import resolve_request_index
 from direct_rag_retrieval import retrieve
 from direct_rag_selection import project_selectors
@@ -68,6 +73,22 @@ def rag_search(
     runtime: SearchRuntime,
     arguments: dict[str, Any],
 ) -> CapabilityResult:
+    request_limits = detail_limits(str(arguments.get("detailLevel") or "compact"))
+    request_limit = min(
+        int(request_limits["max_tool_chars"]),
+        configured_result_limit(),
+    )
+    bound_error = rag_request_bound_error(
+        arguments,
+        capability="search",
+        transport_limit=request_limit,
+    )
+    if bound_error:
+        return failure(
+            "INVALID_TOOL_ARGUMENTS",
+            bound_error,
+            retry_allowed=True,
+        )
     query = str(arguments.get("query") or "").strip()
     if not query:
         return failure(
@@ -154,20 +175,29 @@ def rag_search(
         projects=explicit,
     )
     if preflight.get("suppressed"):
-        return CapabilityResult(
-            {
-                "ok": True,
-                "duplicate": True,
-                "status": "no_new_information",
-                "message": (
-                    "The supplied repeat receipt matches this query and current index state; "
-                    "the prior evidence is unchanged."
-                ),
-                "projects": explicit,
-                "repeatReceipt": repeat_receipt,
-            },
-            char_limit=2_000,
-        )
+        duplicate_payload = {
+            "ok": True,
+            "duplicate": True,
+            "status": "no_new_information",
+            "message": (
+                "The supplied repeat receipt matches this query and current index state; "
+                "the prior evidence is unchanged."
+            ),
+            "projects": explicit,
+            "repeatReceipt": repeat_receipt,
+        }
+        duplicate_limit = min(2_000, configured_result_limit())
+        if not evidence_metadata_fits(
+            duplicate_payload,
+            max_chars=duplicate_limit,
+            reserve_chars=0,
+        ):
+            return failure(
+                "INVALID_TOOL_ARGUMENTS",
+                "Project selectors exceed the duplicate response metadata budget.",
+                retry_allowed=True,
+            )
+        return CapabilityResult(duplicate_payload, char_limit=duplicate_limit)
 
     page = retrieve(
         index,
@@ -184,6 +214,45 @@ def rag_search(
             retry_allowed=True,
             projectRoots=page.selected_projects,
         )
+    limits = detail_limits(page.detail_level)
+    limit = min(int(limits["max_tool_chars"]), configured_result_limit())
+    match_refs = compact_match_refs(
+        page.rows,
+        max_chars=min(int(limits["match_chars"]), max(512, limit // 3)),
+    )
+    match_metadata_truncated = len(match_refs) < len(page.rows)
+    payload: dict[str, Any] = {
+        "ok": True,
+        "query": query,
+        "scope": page.resolved_scope,
+        "projects": page.explicit_projects,
+        "selectedProjects": page.selected_projects,
+        "matchCount": len(page.rows),
+        "matches": match_refs,
+        "evidence": page.context,
+        "detailLevel": page.detail_level,
+        "repeatReceipt": "0" * 32,
+        "indexStaleness": page.freshness,
+        "staleProjectRowsSuppressed": page.stale_rows_suppressed,
+        "indexPath": str(index),
+        "engineVersion": index_resolution.get("indexEngineVersion"),
+    }
+    if match_metadata_truncated:
+        payload["matchMetadataTruncated"] = True
+    if page.truncated or match_metadata_truncated:
+        payload["nextDetailLevel"] = next_detail(page.detail_level)
+    advisory = _freshness_advisory(page)
+    if advisory:
+        payload["freshnessAdvisory"] = advisory
+    if not evidence_metadata_fits(payload, max_chars=limit):
+        return failure(
+            "INVALID_TOOL_ARGUMENTS",
+            (
+                "Query, project selectors, or requested match metadata exceed the selected "
+                "detail transport budget; shorten them or lower top_k."
+            ),
+            retry_allowed=True,
+        )
     delivery = deliver(
         tool="unreal_rag_search",
         active_project=active,
@@ -198,28 +267,14 @@ def rag_search(
         repeat_receipt=repeat_receipt,
         projects=explicit,
     )
-    payload: dict[str, Any] = {
-        "ok": True,
-        "query": query,
-        "scope": page.resolved_scope,
-        "projects": page.explicit_projects,
-        "selectedProjects": page.selected_projects,
-        "matchCount": len(page.rows),
-        "matches": compact_match_refs(page.rows),
-        "evidence": page.context,
-        "detailLevel": page.detail_level,
-        "repeatReceipt": delivery.get("repeatReceipt"),
-        "indexStaleness": page.freshness,
-        "staleProjectRowsSuppressed": page.stale_rows_suppressed,
-        "indexPath": str(index),
-        "engineVersion": index_resolution.get("indexEngineVersion"),
-    }
-    if page.truncated:
-        payload["nextDetailLevel"] = next_detail(page.detail_level)
-    advisory = _freshness_advisory(page)
-    if advisory:
-        payload["freshnessAdvisory"] = advisory
-    limit = int(detail_limits(page.detail_level)["max_tool_chars"])
+    payload["repeatReceipt"] = delivery.get("repeatReceipt")
+    payload, envelope_truncated = fit_evidence_payload(payload, max_chars=limit)
+    if envelope_truncated:
+        payload["evidenceEnvelopeTruncated"] = True
+        next_level = next_detail(page.detail_level)
+        if next_level:
+            payload["nextDetailLevel"] = next_level
+        payload, _ = fit_evidence_payload(payload, max_chars=limit)
     return CapabilityResult(
         payload,
         char_limit=limit,

@@ -5,10 +5,34 @@ from __future__ import annotations
 
 CODE_DETAIL_ORDER = ("compact", "medium", "large", "full")
 CODE_DETAIL_LIMITS = {
-    "compact": (10_000, 3_000, 6, 10_000),
-    "medium": (18_000, 5_000, 8, 18_000),
-    "large": (40_000, 8_000, 12, 40_000),
-    "full": (80_000, 12_000, 16, 80_000),
+    "compact": {
+        "assembly_chars": 6_000,
+        "row_chars": 2_400,
+        "top_k": 6,
+        "match_chars": 2_600,
+        "max_tool_chars": 10_000,
+    },
+    "medium": {
+        "assembly_chars": 11_000,
+        "row_chars": 4_200,
+        "top_k": 8,
+        "match_chars": 4_500,
+        "max_tool_chars": 18_000,
+    },
+    "large": {
+        "assembly_chars": 28_000,
+        "row_chars": 7_000,
+        "top_k": 12,
+        "match_chars": 8_000,
+        "max_tool_chars": 40_000,
+    },
+    "full": {
+        "assembly_chars": 56_000,
+        "row_chars": 10_000,
+        "top_k": 16,
+        "match_chars": 12_000,
+        "max_tool_chars": 80_000,
+    },
 }
 
 
@@ -19,13 +43,7 @@ def resolve_detail(value: str | None) -> str:
 
 def detail_limits(value: str | None) -> dict[str, int]:
     detail = resolve_detail(value)
-    assembly, row, top_k, tool = CODE_DETAIL_LIMITS[detail]
-    return {
-        "assembly_chars": assembly,
-        "row_chars": row,
-        "top_k": top_k,
-        "max_tool_chars": tool,
-    }
+    return dict(CODE_DETAIL_LIMITS[detail])
 
 
 def next_detail(value: str | None) -> str | None:

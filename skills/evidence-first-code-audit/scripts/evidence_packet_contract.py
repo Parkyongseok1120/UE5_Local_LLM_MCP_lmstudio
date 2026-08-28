@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.1.1"
 MODES = ("audit", "architecture", "codegen")
 NEUTRAL_VERDICT = "Confirmed"
 NEUTRAL_SEVERITY = "Info"

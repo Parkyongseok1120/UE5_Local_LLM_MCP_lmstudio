@@ -19,6 +19,16 @@ sys.path.insert(0, str(SCRIPTS))
 from direct_rag_contract import (  # noqa: E402
     DIRECT_RAG_TOOL_NAMES,
     direct_rag_tool_definitions,
+    validate_tool_arguments,
+)
+from direct_rag_request_bounds import (  # noqa: E402
+    MAX_FILTER_ITEMS,
+    MAX_FILTER_VALUE_CHARS,
+    MAX_PROJECT_SELECTOR_CHARS,
+    MAX_PROJECT_SELECTORS,
+    MAX_QUERY_CHARS,
+    MAX_REPEAT_RECEIPT_CHARS,
+    MAX_SYMBOL_HINT_CHARS,
 )
 from direct_rag_result import CapabilityResult, to_mcp_tool_result  # noqa: E402
 from direct_rag_server import DirectRagServer, compose_handlers  # noqa: E402
@@ -44,6 +54,54 @@ def test_direct_catalog_is_exactly_eight_capabilities() -> None:
     assert "unreal_task_" not in serialized
     assert "continuationToken" not in serialized
     assert "sessionId" not in serialized
+
+
+def test_rag_search_schema_keeps_discovery_optional_and_explains_mode_and_scope() -> None:
+    search = next(
+        tool
+        for tool in direct_rag_tool_definitions()
+        if tool["name"] == "unreal_rag_search"
+    )
+    properties = search["inputSchema"]["properties"]
+
+    assert "not a preflight" in search["description"]
+    assert "direct source reads are authoritative" in search["description"]
+    assert "review for architecture/code review" in properties["mode"]["description"]
+    assert "auto when unsure" in properties["mode"]["description"]
+    assert "do not invent mode names" in properties["mode"]["description"]
+    assert "API-looking queries to engine evidence" in properties["scope"]["description"]
+    assert "exact project selector" in properties["scope"]["description"]
+
+
+def test_retrieval_input_bounds_are_public_and_transport_validated() -> None:
+    tools = {tool["name"]: tool for tool in direct_rag_tool_definitions()}
+    search = tools["unreal_rag_search"]
+    symbol = tools["unreal_symbol_lookup"]
+    search_properties = search["inputSchema"]["properties"]
+    symbol_properties = symbol["inputSchema"]["properties"]
+    project = search_properties["project"]["oneOf"]
+
+    assert search_properties["query"]["maxLength"] == MAX_QUERY_CHARS
+    assert project[0]["maxLength"] == MAX_PROJECT_SELECTOR_CHARS
+    assert project[1]["maxItems"] == MAX_PROJECT_SELECTORS
+    assert project[1]["items"]["maxLength"] == MAX_PROJECT_SELECTOR_CHARS
+    assert "never clipped" in search_properties["project"]["description"]
+    assert search_properties["source"]["maxItems"] == MAX_FILTER_ITEMS
+    assert search_properties["source"]["items"]["maxLength"] == MAX_FILTER_VALUE_CHARS
+    assert search_properties["repeatReceipt"]["maxLength"] == MAX_REPEAT_RECEIPT_CHARS
+    assert symbol_properties["query"]["maxLength"] == MAX_QUERY_CHARS
+    assert symbol_properties["symbol_kind"]["maxLength"] == MAX_SYMBOL_HINT_CHARS
+
+    assert validate_tool_arguments(search, {"query": "q" * MAX_QUERY_CHARS}) is None
+    assert validate_tool_arguments(search, {"query": "q" * (MAX_QUERY_CHARS + 1)})
+    assert validate_tool_arguments(
+        search,
+        {"query": "q", "source": ["s" * (MAX_FILTER_VALUE_CHARS + 1)]},
+    )
+    assert validate_tool_arguments(
+        symbol,
+        {"query": "q", "project": "p" * (MAX_PROJECT_SELECTOR_CHARS + 1)},
+    )
 
 
 def test_project_switch_schema_has_no_resume_or_prepare_controller_inputs() -> None:

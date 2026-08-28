@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from direct_rag_request_bounds import (
+    MAX_QUERY_CHARS, MAX_REPEAT_RECEIPT_CHARS, MAX_SYMBOL_HINT_CHARS,
+    bounded_filter_schema, bounded_string_schema, project_selector_schema,
+)
 from rag_modes import MODE_ENUM
 
 DIRECT_RAG_TOOL_NAMES: tuple[str, ...] = (
@@ -38,42 +42,24 @@ def _schema(
 def direct_rag_tool_definitions() -> list[dict[str, Any]]:
     """Return a fresh, process-stable Direct catalog."""
 
-    project_selector = {
-        "oneOf": [
-            {"type": "string", "minLength": 1},
-            {
-                "type": "array",
-                "items": {"type": "string", "minLength": 1},
-                "minItems": 1,
-                "maxItems": 16,
-            },
-        ],
-        "description": (
-            "Exact project name/path selector(s) for this call. When supplied, "
-            "the active project is not substituted."
-        ),
-    }
+    project_selector = project_selector_schema()
     detail_level = {
         "type": "string",
         "enum": ["compact", "medium", "large", "full"],
         "default": "compact",
-        "description": "Requested evidence budget. Compact is the portable default.",
+        "description": "Compact is the portable default; request nextDetailLevel only after reported truncation.",
     }
     definitions = [
         {
             "name": "unreal_get_active_project",
             "title": "Get Active Unreal Project",
-            "description": (
-                "Return the shared active .uproject identity and resolved project paths."
-            ),
+            "description": "Return the shared active .uproject identity and resolved project paths.",
             "inputSchema": _schema({}),
         },
         {
             "name": "unreal_set_active_project",
             "title": "Set Active Unreal Project",
-            "description": (
-                "Set one exact existing .uproject path, or clear the shared selection."
-            ),
+            "description": "Set one exact existing .uproject path, or clear the shared selection.",
             "inputSchema": _schema(
                 {
                     "projectPath": {
@@ -92,40 +78,52 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
             "name": "unreal_rag_search",
             "title": "Search Unreal RAG",
             "description": (
-                "Search the local Unreal evidence index with lexical or hybrid retrieval. "
+                "Optionally search when indexed discovery or cross-source evidence helps. If the exact current file "
+                "is known, direct source reads are authoritative and RAG is not a preflight. "
                 "Returns ranked evidence, project scope, freshness metadata, and duplicate status."
             ),
             "inputSchema": _schema(
                 {
-                    "query": {"type": "string", "minLength": 1},
+                    "query": bounded_string_schema(MAX_QUERY_CHARS, min_length=1),
                     "top_k": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 16,
                         "default": 6,
+                        "description": "Requested maximum matches. Start small; compact caps results at 6.",
                     },
                     "mode": {
                         "type": "string",
                         "enum": list(MODE_ENUM),
                         "default": "auto",
+                        "description": (
+                            "Retrieval-ranking hint only; it grants no authority or workflow. Use review for architecture/code "
+                            "review and auto when unsure. "
+                            "Use only one of the listed values; do not invent mode names."
+                        ),
                     },
                     "hybrid": {"type": "boolean", "default": False},
-                    "source": {"type": "array", "items": {"type": "string"}},
+                    "source": bounded_filter_schema(),
                     "project": project_selector,
-                    "layer": {"type": "array", "items": {"type": "string"}},
-                    "doc_type": {"type": "array", "items": {"type": "string"}},
-                    "genre": {"type": "array", "items": {"type": "string"}},
-                    "extension": {"type": "array", "items": {"type": "string"}},
-                    "required_term": {"type": "array", "items": {"type": "string"}},
+                    "layer": bounded_filter_schema(),
+                    "doc_type": bounded_filter_schema(),
+                    "genre": bounded_filter_schema(),
+                    "extension": bounded_filter_schema(),
+                    "required_term": bounded_filter_schema(),
                     "scope": {
                         "type": "string",
                         "enum": ["auto", "engine", "project", "mixed"],
                         "default": "auto",
+                        "description": (
+                            "auto may route API-looking queries to engine evidence. For current project source, use "
+                            "scope=project with an exact project selector; "
+                            "use mixed only when both project and engine evidence are useful."
+                        ),
                     },
                     "use_active_project": {"type": "boolean", "default": True},
                     "detailLevel": detail_level,
                     "repeatReceipt": {
-                        "type": "string",
+                        **bounded_string_schema(MAX_REPEAT_RECEIPT_CHARS),
                         "description": (
                             "Opaque receipt returned by a prior identical full result. "
                             "Echo it only when a concise repeat acknowledgement is desired."
@@ -144,17 +142,17 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
             ),
             "inputSchema": _schema(
                 {
-                    "query": {"type": "string", "minLength": 1},
+                    "query": bounded_string_schema(MAX_QUERY_CHARS, min_length=1),
                     "top_k": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 16,
                         "default": 8,
                     },
-                    "symbol_kind": {"type": "string"},
+                    "symbol_kind": bounded_string_schema(MAX_SYMBOL_HINT_CHARS),
                     "project": project_selector,
-                    "expectedBaseType": {"type": "string"},
-                    "directoryDomain": {"type": "string"},
+                    "expectedBaseType": bounded_string_schema(MAX_SYMBOL_HINT_CHARS),
+                    "directoryDomain": bounded_string_schema(MAX_SYMBOL_HINT_CHARS),
                     "detailLevel": detail_level,
                 },
                 ("query",),
@@ -163,17 +161,13 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "unreal_rag_health",
             "title": "Unreal RAG Index Health",
-            "description": (
-                "Return index readability, chunk counts, embedding status, and project binding."
-            ),
+            "description": "Return index readability, chunk counts, embedding status, and project binding.",
             "inputSchema": _schema({}),
         },
         {
             "name": "unreal_rag_rebuild_status",
             "title": "Unreal RAG Rebuild Status",
-            "description": (
-                "Compare raw-input and index timestamps and report whether a rebuild is useful."
-            ),
+            "description": "Compare raw-input and index timestamps and report whether a rebuild is useful.",
             "inputSchema": _schema({}),
         },
         {
@@ -207,9 +201,7 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "unreal_rag_capabilities",
             "title": "Unreal RAG Capability Summary",
-            "description": (
-                "Return the Direct RAG server boundary, catalog, and current index availability."
-            ),
+            "description": "Return the Direct RAG server boundary, catalog, and current index availability.",
             "inputSchema": _schema({}),
         },
     ]
@@ -259,6 +251,8 @@ def _value_matches_schema(value: Any, schema: dict[str, Any]) -> bool:
         if not isinstance(value, str):
             return False
         if len(value) < int(schema.get("minLength") or 0):
+            return False
+        if "maxLength" in schema and len(value) > int(schema["maxLength"]):
             return False
     elif expected == "boolean":
         if not isinstance(value, bool):

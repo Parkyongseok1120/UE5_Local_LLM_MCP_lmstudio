@@ -116,6 +116,12 @@ test("Direct catalog is static capability surface without task/control schemas",
   for (const tool of tools) {
     assert.strictEqual(tool.inputSchema.additionalProperties, false);
   }
+  const workspaceInfo = tools.find((tool) => tool.name === "get_workspace_info");
+  const search = tools.find((tool) => tool.name === "search_files");
+  assert.match(workspaceInfo.description, /useful early authority check when the current flags are unknown/u);
+  assert.match(workspaceInfo.description, /does not own tool order/u);
+  assert.match(search.description, /directly reusable uri/u);
+  assert.match(search.description, /exact activeProject/u);
 });
 
 test("mutation schemas expose focused per-round edit bounds", () => {
@@ -161,6 +167,7 @@ test("mutation schemas expose focused per-round edit bounds", () => {
   assert.match(replace.description, /4000 combined characters/u);
   assert.match(replace.description, /next prediction round/u);
   assert.match(replace.description, /no same-session evidence is selected automatically/u);
+  assert.match(replace.description, /Requires ALLOW_WRITE=1/u);
 
   const patches = bundle.inputSchema.properties.patches;
   assert.deepStrictEqual(bundle.inputSchema.required, ["patches"]);
@@ -180,6 +187,7 @@ test("mutation schemas expose focused per-round edit bounds", () => {
   assert.match(bundle.description, /at most 64 aggregate changed lines/u);
   assert.match(bundle.description, /next prediction round/u);
   assert.match(bundle.description, /New files are created only with standalone write_file/u);
+  assert.match(bundle.description, /Requires ALLOW_WRITE=1/u);
 
   const deletionFiles = proposeDelete.inputSchema.properties.files;
   assert.strictEqual(deletionFiles.minItems, 1);
@@ -247,6 +255,25 @@ test("one Direct process can address multiple Unreal projects per call without c
   assert.strictEqual(read.activeProject, secondProject);
   assert.match(read.content, /Value=two/);
 
+  const search = payloadOf(await runtime.callTool("search_files", {
+    project: secondProject,
+    path: "project://Config",
+    query: "Second.ini",
+    matchFileNames: true,
+    maxResults: 5,
+  }));
+  assert.strictEqual(search.path, "project://Config");
+  assert.strictEqual(search.displayPath, "project://Config");
+  assert.strictEqual(search.projectRelativePath, "Config");
+  assert.strictEqual(search.activeProject, secondProject);
+  assert.strictEqual(search.results[0].path, "Second.ini");
+  assert.strictEqual(search.results[0].uri, "project://Config/Second.ini");
+  const searchRead = payloadOf(await runtime.callTool("read_file", {
+    project: search.activeProject,
+    path: search.results[0].uri,
+  }));
+  assert.match(searchRead.content, /Value=two/);
+
   const patched = payloadOf(await runtime.callTool("replace_in_file", {
     project: secondProject,
     path: "project://Config/Second.ini",
@@ -284,6 +311,51 @@ test("one Direct process can address multiple Unreal projects per call without c
   for (const name of ["list_directory", "search_files", "read_file", "read_file_range", "read_symbol", "write_file", "replace_in_file", "apply_edit_bundle"] ) {
     assert.ok(runtime.tools.find((tool) => tool.name === name).inputSchema.properties.project, `${name} must support a per-call project selector`);
   }
+});
+
+test("search_files URIs retain root identity and exact-project pairing", async (t) => {
+  const { runtime, workspaceRoot, projectFile } = fixture(t);
+  const cloneRoot = path.join(workspaceRoot, "SameNameClone", "DirectFixture");
+  const cloneProject = path.join(cloneRoot, "DirectFixture.uproject");
+  const cloneConfig = path.join(cloneRoot, "Config", "DirectTest.ini");
+  fs.mkdirSync(path.dirname(cloneConfig), { recursive: true });
+  fs.writeFileSync(cloneProject, JSON.stringify({ FileVersion: 3, Modules: [{ Name: "DirectFixture", Type: "Runtime" }] }), "utf8");
+  fs.writeFileSync(cloneConfig, "[Direct]\nValue=clone\n", "utf8");
+
+  const original = payloadOf(await runtime.callTool("search_files", {
+    project: projectFile,
+    path: "project://Config",
+    query: "Value=",
+    maxResults: 5,
+  }));
+  const clone = payloadOf(await runtime.callTool("search_files", {
+    project: cloneProject,
+    path: "project://Config",
+    query: "Value=",
+    maxResults: 5,
+  }));
+  assert.strictEqual(original.results[0].uri, "project://Config/DirectTest.ini");
+  assert.strictEqual(clone.results[0].uri, original.results[0].uri);
+  assert.notStrictEqual(clone.activeProject, original.activeProject);
+  const cloneRead = payloadOf(await runtime.callTool("read_file", {
+    project: clone.activeProject,
+    path: clone.results[0].uri,
+  }));
+  assert.match(cloneRead.content, /Value=clone/);
+
+  const workspace = payloadOf(await runtime.callTool("search_files", {
+    path: "workspace://DirectFixture/Config",
+    query: "Value=",
+    maxResults: 5,
+  }));
+  assert.strictEqual(workspace.results[0].uri, "workspace://DirectFixture/Config/DirectTest.ini");
+  const singleFile = payloadOf(await runtime.callTool("search_files", {
+    path: "project://Config/DirectTest.ini",
+    query: "Value=",
+    maxResults: 5,
+  }));
+  assert.strictEqual(singleFile.results[0].path, ".");
+  assert.strictEqual(singleFile.results[0].uri, "project://Config/DirectTest.ini");
 });
 
 test("Direct exact patch succeeds without plan/task and stale hash is rejected", async (t) => {
