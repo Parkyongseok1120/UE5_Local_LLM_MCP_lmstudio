@@ -39,7 +39,7 @@ conservative fallback.
 
 ## Use in LM Studio
 
-1. Load and select the actual LLM. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation.
+1. Load and select the actual LLM. Qwen 3.8 27B is the current highly recommended, primary validated model; its v1.3.2 live E2E workflow passed. Muse Glimmer is under testing and is not yet a validated recommendation.
 2. Leave the top-level `codex/unreal-context-compactor` switch OFF for the default
    setup. The installer does not enable this LM Studio-owned state; verify it is OFF
    in every new or existing chat.

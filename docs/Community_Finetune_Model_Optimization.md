@@ -1,7 +1,9 @@
 # Community Model Profile Compatibility
 
 Community GGUF files can differ materially from their base family. Qwen 3.8 27B
-is the current primary validated recommendation. Muse Glimmer is under testing
+is the highly recommended primary validated model for the current Direct stack;
+its v1.3.2 live E2E workflow completed long real-project RAG/read/report work
+without the prior context truncation. Muse Glimmer is under testing
 and is not yet a validated recommendation. Qwen 3.5, community fine-tuned Qwen
 3.6 27B, and GPT-OSS profiles remain only for historical reproduction and
 existing-install compatibility; this guide does not recommend them for current

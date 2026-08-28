@@ -50,8 +50,10 @@ for availability without activating LM Studio's host-owned chat toggle; verify t
 toggle is OFF per chat. Enable that single toggle only for a long chat that needs
 bounded continuity; handler invocation is the activation boundary.
 
-Qwen 3.8 27B is the primary currently validated model recommendation. Muse
-Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5,
+Qwen 3.8 27B is the highly recommended primary validated model. Its v1.3.2
+live E2E run completed long real-project RAG/read/report work without the prior
+context truncation. Muse Glimmer is under testing and is not yet a validated
+recommendation. Qwen 3.5,
 Qwen 3.6 27B, and GPT-OSS references are historical compatibility/evaluation
 material, not current recommendations.
 

@@ -30,7 +30,7 @@ No task lease, route owner, planner gate, required next tool, or synthesis ackno
 
 ## LM Studio context plugin
 
-Select the actual LLM in the model dropdown. Qwen 3.8 27B is the current validated recommendation; Muse Glimmer is under testing and is not yet a validated recommendation. Keep the top-level `codex/unreal-context-compactor` switch OFF in the chat's plugin panel by default. Installation/pinning is availability, not activation. For a long chat that needs bounded continuity, enable that single switch; handler invocation activates compaction. `Observe only` measures pressure without rewriting history. The compactor is an optional prediction-loop chat plugin, not a proxy model, MCP authority source, tool filter, or `targetModel` selector.
+Select the actual LLM in the model dropdown. Qwen 3.8 27B is the current highly recommended, primary validated model; its v1.3.2 live E2E run completed long real-project RAG/read/report work without the prior context truncation. Muse Glimmer is under testing and is not yet a validated recommendation. Keep the top-level `codex/unreal-context-compactor` switch OFF in the chat's plugin panel by default. Installation/pinning is availability, not activation. For a long chat that needs bounded continuity, enable that single switch; handler invocation activates compaction. `Observe only` measures pressure without rewriting history. The compactor is an optional prediction-loop chat plugin, not a proxy model, MCP authority source, tool filter, or `targetModel` selector.
 
 The optional path may replace older model-facing history with deterministic factual continuity state while retaining the latest real user request and recent complete turns. That bounded state can include the active objective, a continuation antecedent for elliptical follow-ups, active project, current work status, unresolved items, and relevant file/tool/build observations. Compacted file facts retain canonical project/path identity and the observed SHA, but are marked `fresh_read_required`; runtime-local `fileVersionReceipt` values and snapshot registration counters are removed from current and inherited checkpoints. It deliberately strips task/route/control/synthesis internals and required-tool directives and never becomes workflow authority. Installation and `npm run status` verify availability and source/build wiring only. Existing chats can retain an old top-level opt-in, so turn that switch off manually.
 
@@ -181,7 +181,7 @@ Historical model-specific planner prompts are not shipped. Direct profiles use [
 
 ## Model Selection Notes
 
-- **Qwen 3.8 27B** is the primary currently recommended and validated model for the Direct runtime.
+- **Qwen 3.8 27B** is the highly recommended primary validated model for the Direct runtime; the v1.3.2 live E2E workflow passed.
 - **Muse Glimmer** is under testing only. Do not present it as a validated recommendation until current Direct-mode evidence is published.
 - Qwen 3.5, Qwen 3.6 27B, and GPT-OSS references in saved scorecards are historical measurements, not current recommendations.
 - For `module_fix` / `GameplayTags` / `Build.cs` errors, read the full current `*.Build.cs` before patching and report the actual build evidence.

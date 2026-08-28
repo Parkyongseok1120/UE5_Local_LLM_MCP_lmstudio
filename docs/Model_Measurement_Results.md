@@ -6,9 +6,23 @@
 
 These results are internal UE 5.8 RAG/MCP/UBT workflow measurements. They are not public standardized model benchmarks and must not be described as general Claude, GPT, or Qwen model rankings.
 
-The current product is **1.3.1**, with Direct Model Mode as the supported default, but no paired 1.3.1 Direct-mode live-model rerun has been completed. Every score on this page remains a historical v1.2.5 baseline until a new measurement artifact is published. Do not attribute these values to the Beta/RC control-plane work or to the stable Direct-mode, provenance, file-version, build-process, and context-continuity changes. No score on this page measures those effects.
+The current product is **1.3.2**, with Direct Model Mode as the supported default. A release-operator live E2E workflow with Qwen 3.8 27B completed active-project discovery, repeated RAG/search/read rounds over a real Unreal project, a large architecture report, and follow-up continuity without reproducing the prior mid-session JSON truncation. That functional run is not a paired scoring artifact. Every score on this page remains a historical v1.2.5 baseline until a new measurement artifact is published. Do not attribute these values to the Beta/RC control-plane work or to the stable Direct-mode, provenance, file-version, build-process, and context-continuity changes. No score on this page measures those effects.
 
-Qwen 3.8 27B is the primary currently recommended and validated operating model for this stack, but it does not yet have a paired 1.3.1 score on this page. Qwen 3.5, the community fine-tuned Qwen 3.6 27B checkpoint, and GPT-OSS are not current recommendations; their saved values remain historical evidence only. Muse Glimmer is under testing and is not yet a validated recommendation.
+**Qwen 3.8 27B is highly recommended** as the primary validated operating model for this stack. It does not yet have a paired numeric 1.3.2 score on this page; the current basis is the qualitative live E2E result below. Qwen 3.5, the community fine-tuned Qwen 3.6 27B checkpoint, and GPT-OSS are not current recommendations; their saved values remain historical evidence only. Muse Glimmer is under testing and is not yet a validated recommendation.
+
+## v1.3.2 Qwen 3.8 27B live E2E result
+
+| Field | Observed result |
+|---|---|
+| Model | Qwen 3.8 27B in LM Studio |
+| Project | Real Unreal project selected through `unreal_get_active_project` |
+| Workload | Repeated RAG searches plus directory, file, range, and symbol reads over a large enemy-AI code surface |
+| Synthesis | Completed an exact FSM/architecture report and continued into a follow-up turn |
+| Recovery | Recovered from early invalid search-mode and model tool-call-generation attempts within the same session |
+| Context continuity | PASS — the prior mid-session break and `Unterminated string in JSON` symptom did not recur |
+| Recommendation | **Highly recommended** for the current Direct stack, subject to machine-specific quantization, context, and memory validation |
+
+This is release-operator functional evidence, not a standardized benchmark or a substitute for a controlled paired scorecard.
 
 The detailed 2026-07-11 post-stabilization write-up is retained only in the historical evaluation archive.
 
@@ -41,9 +55,23 @@ The detailed 2026-07-11 post-stabilization write-up is retained only in the hist
 
 이 결과는 UE 5.8 RAG/MCP/UBT 워크플로 내부 측정입니다. 공개 표준 벤치마크가 아니며, Claude/GPT/Qwen의 일반 성능 순위로 해석하면 안 됩니다.
 
-현재 제품은 Direct Model Mode를 기본 지원 경로로 사용하는 **1.3.1**이지만, 1.3.1 Direct-mode paired live-model 재측정은 아직 완료되지 않았습니다. 새로운 측정 artifact가 공개되기 전까지 이 문서의 모든 점수는 historical v1.2.5 baseline입니다. 이 값을 Beta/RC control-plane 작업이나 stable Direct-mode, provenance, file-version, build-process, context-continuity 변경의 품질 향상 수치로 사용하면 안 됩니다. 이 문서의 점수는 해당 효과를 측정하지 않습니다.
+현재 제품은 Direct Model Mode를 기본 지원 경로로 사용하는 **1.3.2**입니다. 릴리스 운영자가 Qwen 3.8 27B로 실제 Unreal 프로젝트의 active-project 탐지, 반복 RAG/search/read, 대규모 architecture 보고서, 후속 대화 연속성을 확인했으며 이전의 중간 JSON truncation은 재현되지 않았습니다. 이 기능 E2E는 paired scoring artifact가 아닙니다. 새로운 측정 artifact가 공개되기 전까지 이 문서의 모든 점수는 historical v1.2.5 baseline입니다. 이 값을 Beta/RC control-plane 작업이나 stable Direct-mode, provenance, file-version, build-process, context-continuity 변경의 품질 향상 수치로 사용하면 안 됩니다. 이 문서의 점수는 해당 효과를 측정하지 않습니다.
 
-Qwen 3.8 27B가 이 stack의 현재 주 권장·검증 operating model이지만 이 문서에는 아직 paired 1.3.1 점수가 없습니다. Qwen 3.5, community fine-tuned Qwen 3.6 27B checkpoint, GPT-OSS는 현재 추천 대상이 아니며 저장된 값은 historical evidence로만 유지합니다. Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다.
+**Qwen 3.8 27B를 이 stack의 현재 주 검증 operating model로 매우 추천합니다.** 아직 paired numeric 1.3.2 점수는 없으며 현재 근거는 아래의 정성적 라이브 E2E 결과입니다. Qwen 3.5, community fine-tuned Qwen 3.6 27B checkpoint, GPT-OSS는 현재 추천 대상이 아니며 저장된 값은 historical evidence로만 유지합니다. Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다.
+
+## v1.3.2 Qwen 3.8 27B 라이브 E2E 결과
+
+| 항목 | 확인 결과 |
+|---|---|
+| 모델 | LM Studio의 Qwen 3.8 27B |
+| 프로젝트 | `unreal_get_active_project`로 선택한 실제 Unreal 프로젝트 |
+| 작업량 | 대규모 적 AI 코드 영역에 대한 반복 RAG 검색과 directory/file/range/symbol 읽기 |
+| 종합 결과 | 정확한 FSM·architecture 보고서를 완료하고 후속 턴까지 연속 진행 |
+| 복구 | 초반의 잘못된 search mode와 모델 tool-call 생성 시도를 같은 세션에서 자체 복구 |
+| Context continuity | PASS — 이전의 중간 단절과 `Unterminated string in JSON` 증상이 재발하지 않음 |
+| 권고 | 실제 machine의 quantization·context·memory 검증을 전제로 현재 Direct stack에 **매우 추천** |
+
+이는 릴리스 운영자의 기능 확인 근거이며 표준화된 benchmark나 통제된 paired scorecard를 대체하지 않습니다.
 
 2026-07-11 stabilization 이후 상세 기록은 과거 평가 archive에만 보존합니다.
 

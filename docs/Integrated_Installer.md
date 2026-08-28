@@ -2,7 +2,7 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release label: **1.3.1**. The installer reports the same value with `python3 install.py --version`; the immutable stable `v1.3.0` snapshot uses portable manifest `2.1.8`, stable `v1.3.1` uses `2.1.11`, and current `main` uses post-release portable manifest `2.1.13` for the Python-free launcher seed path plus the compactor/evidence-contract repair. `portablePackage.releaseReady: true` records automated release/package readiness, not universal physical-install certification.
+Product release label: **1.3.2**. The installer reports the same value with `python3 install.py --version`; the immutable stable `v1.3.0` snapshot uses portable manifest `2.1.8`, stable `v1.3.1` uses `2.1.11`, and stable `v1.3.2` uses `2.1.14` for the Python-free launcher seed path, compactor/evidence-contract repair, and current release-document closure. `portablePackage.releaseReady: true` records automated release/package readiness, not universal physical-install certification.
 
 ## Requirements
 
@@ -82,7 +82,7 @@ The context-compactor **installation component** is required for every LM Studio
 
 > **Important — select the real LLM and keep the compactor OFF by default.**
 > Installing/pinning the plugin only makes it available.
-> 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current primary validated recommendation; Muse Glimmer is under testing only.
+> 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current highly recommended, primary validated model; Muse Glimmer is under testing only.
 > 2. Create or open the chat and leave the top-level **`codex/unreal-context-compactor`** switch **OFF** in that chat's **plugin panel**. Existing chats retain their own state, so turn it off manually where necessary.
 > 3. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
 > For a long chat that needs compaction, enable that single top-level switch for the chat. The installer does not rewrite LM Studio's private per-chat conversation storage.

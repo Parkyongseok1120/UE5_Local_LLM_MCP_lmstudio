@@ -49,8 +49,10 @@ objective/work/file/tool/build continuity 사실을 보존하지만 planner, rou
 continuity가 필요한 긴 채팅에서만 그 단일 토글을 켭니다. handler 호출 자체가
 활성화 경계입니다.
 
-현재 검증된 주 추천 모델은 Qwen 3.8 27B입니다. Muse Glimmer는 시험 중이며 아직
-검증된 추천이 아닙니다. Qwen 3.5, Qwen 3.6 27B, GPT-OSS 언급은 historical
+현재 주 검증 모델인 Qwen 3.8 27B를 매우 추천합니다. v1.3.2 라이브 E2E에서
+실제 프로젝트의 장기 RAG/read/report 작업을 이전 context truncation 없이
+완료했습니다. Muse Glimmer는 시험 중이며 아직 검증된 추천이 아닙니다.
+Qwen 3.5, Qwen 3.6 27B, GPT-OSS 언급은 historical
 compatibility/evaluation 자료이며 현재 추천이 아닙니다.
 
 지원되는 Strict 구현은 별도 구성하는 Node `strict-server.js` 하나뿐입니다.

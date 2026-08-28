@@ -11,8 +11,10 @@ stopping, and the final answer.
 python scripts/load_sampling_preset.py --show-profile
 ```
 
-Qwen 3.8 27B is the primary currently validated recommendation. Muse Glimmer is
-under testing and is not yet a validated recommendation. Qwen 3.5, Qwen 3.6
+Qwen 3.8 27B is the highly recommended primary validated model. Its v1.3.2 live
+E2E run completed a long real-project RAG/read/report workflow without the prior
+context truncation. Muse Glimmer is under testing and is not yet a validated
+recommendation. Qwen 3.5, Qwen 3.6
 27B, and GPT-OSS profile names may still exist for historical compatibility or
 reproduction, but they are not current recommendations.
 
