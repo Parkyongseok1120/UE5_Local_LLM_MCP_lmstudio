@@ -7,6 +7,7 @@ const path = require("node:path");
 const DIRECT_SOURCE_FILES = Object.freeze([
   "src/index.ts",
   "src/prediction-loop.ts",
+  "src/round-loop.ts",
   "src/direct-compaction-core.js",
   "src/compaction-tool-memory.js",
   "src/continuity-file-observations.js",
@@ -64,7 +65,7 @@ function main(argv = process.argv.slice(2)) {
   if (json) process.stdout.write(`${JSON.stringify(result)}\n`);
   else if (result.ok) {
     process.stdout.write("[PASS] Transparent context-compactor source layout verified.\n");
-    process.stdout.write("Default policy: keep the top-level chat-plugin switch and nested compaction switch OFF.\n");
+    process.stdout.write("Default policy: keep the top-level chat-plugin switch OFF. Enable that single switch only for a long chat that needs compaction; there is no nested compaction gate.\n");
   } else {
     process.stdout.write(`[FAIL] Context-compactor source verification failed: ${result.issues.join("; ")}\n`);
   }

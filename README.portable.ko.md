@@ -45,8 +45,9 @@ Automation, command capability를 제공합니다.
 프로젝트 shard를 합치지 않습니다. 선택적 context compactor는 제한된
 objective/work/file/tool/build continuity 사실을 보존하지만 planner, router, 도구
 권한 또는 완료 판단 주체가 되지 않습니다. 설치기는 LM Studio가 소유한 상단
-채팅 플러그인 토글을 활성화하지 않으므로 채팅별로 OFF인지 확인합니다. 내부
-`Enable transparent compaction` opt-in은 기본값이 OFF입니다.
+채팅 플러그인 토글을 활성화하지 않으므로 채팅별로 OFF인지 확인합니다. 제한된
+continuity가 필요한 긴 채팅에서만 그 단일 토글을 켭니다. handler 호출 자체가
+활성화 경계입니다.
 
 현재 검증된 주 추천 모델은 Qwen 3.8 27B입니다. Muse Glimmer는 시험 중이며 아직
 검증된 추천이 아닙니다. Qwen 3.5, Qwen 3.6 27B, GPT-OSS 언급은 historical

@@ -51,9 +51,10 @@ answer. There are no model-profile plan/critique/execute turns, compile-fix
 stages, tool-order rules, or per-retry sampling switches.
 
 The optional LM Studio context compactor is independent. It compacts history
-only after an explicit two-switch, per-chat opt-in. The installer does not enable
-the host-owned top-level chat toggle, which must be verified OFF per chat; the
-nested `Enable transparent compaction` switch defaults OFF. It does not
+only after the user enables its single top-level switch for a chat. The installer
+does not enable the host-owned toggle, which must be verified OFF per chat by
+default. Invoking the handler activates compaction; `Observe only` measures without
+rewriting history. It does not
 consume a model profile, choose a model, set sampling, or decide task completion.
 
 ## Hardware and model validation

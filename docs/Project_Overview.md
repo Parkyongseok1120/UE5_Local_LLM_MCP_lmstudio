@@ -30,8 +30,8 @@ not create a task, plan, route, required-next-tool obligation, or synthesis gate
   canonical project/path identity and the observed SHA, require a fresh read before
   mutation, and never retain runtime-local file-version receipts. It is not a model, proxy model,
   tool router, planner, or authority source. It is installed for availability without
-  activating the host-owned chat toggle, which must be verified OFF per chat; its
-  nested compaction opt-in defaults OFF.
+  activating the host-owned chat toggle, which must be verified OFF per chat by
+  default. Enabling that single toggle invokes the compaction handler.
 
 ## Safety that remains authoritative
 
@@ -73,8 +73,8 @@ are unchanged.
 
 1. Load and select the real instruction/tool-calling model in LM Studio.
 2. Leave the top-level `codex/unreal-context-compactor` switch OFF in the chat's
-   plugin panel, and leave its nested `Enable transparent compaction` switch OFF.
-   Existing chats can retain an old opt-in, so turn it off manually per chat.
+   plugin panel by default. Existing chats can retain an old opt-in, so turn it off
+   manually per chat. Enable this single switch only when a long chat needs compaction.
 3. Start Local Server and enable the `unreal-rag` and `unreal-agent` MCP entries.
 4. Keep SAFE/read-only authority unless writes, commands, or builds are actually
    required. Enable AGENT authority explicitly when they are.
@@ -110,8 +110,8 @@ context compactor는 active objective, continuation antecedent, 현재 프로젝
 있습니다. 압축된 파일 관찰은 canonical 프로젝트/경로와 관찰 SHA만 보존하고
 수정 전 fresh read가 필요한 상태가 되며, runtime-local file receipt는 보존하지
 않습니다. plan, route, 권한, 다음 도구, 완료 판단도 소유하지 않습니다. 기본
-운용에서는 상단 채팅 플러그인 토글과 내부 `Enable transparent compaction`
-토글을 모두 OFF로 유지하며, 기존 채팅의 활성화 상태는 채팅별로 직접 끕니다.
+운용에서는 단일 상단 채팅 플러그인 토글을 OFF로 유지하며, 기존 채팅의 활성화
+상태는 채팅별로 직접 끕니다. 긴 채팅에 압축이 필요할 때만 그 토글을 켭니다.
 
 Direct가 제거한 것은 서버의 작업 판단권입니다. 프로젝트 경로 제한, 보호 폴더
 차단, 크기 제한, `fileVersionReceipt` 우선 snapshot/CAS(raw `expectedHash` 호환),

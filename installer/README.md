@@ -52,9 +52,9 @@ After installation, select the actual LLM you want to use in LM Studio and leave
 top-level `codex/unreal-context-compactor` switch OFF in the chat's plugin panel.
 Install/pin only makes the plugin available; it does not enable it for a chat. Chat
 activation is owned by LM Studio, so verify the top-level switch is OFF in every new
-or existing chat. The nested `Enable
-transparent compaction` setting is also OFF by default and is a separate internal
-opt-in. Enable both switches only when deliberately testing compaction for one chat.
+or existing chat. For a long chat that needs bounded continuity, enable that single
+top-level switch for the chat. Handler invocation activates compaction; there is no
+second enable setting. `Observe only` remains available for measurement-only use.
 
 On every supported host, `install.py --build-rag` invokes the managed Python
 collectors directly. It does not require PowerShell, start Unreal Editor, execute

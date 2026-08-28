@@ -28,9 +28,9 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — August 2026**
 >
-> **Current product label: 1.3.1 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and provenance-aware durable continuity. The optional context-continuity plugin is not chat-activated by the installer and its internal compaction opt-in defaults OFF. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
+> **Current product label: 1.3.1 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and provenance-aware durable continuity. The optional context-continuity plugin is not chat-activated by the installer, so its single host-owned chat toggle remains OFF by default. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
 >
-> Stable v1.3.1 component metadata is Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, and portable manifest 2.1.11. Current `main` advances only the post-release portable manifest to 2.1.12 for the Python-free seed helpers. The Compactor removes runtime-local file-mutation capabilities from durable memory while preserving user-authored domain language such as payment `receipt`, `ReceiptActor`, `FPaymentReceipt`, `영수증`, and `리시트`; ordinary receipt language is not interpreted as mutation authority.
+> Stable v1.3.1 component metadata remains Node agent MCP 0.3.20, Context Compactor 0.4.50/revision 97, and portable manifest 2.1.11. Current `main` uses Evidence-First MCP server 1.1.0, Context Compactor 0.4.51/revision 98, and post-release portable manifest 2.1.13. The Compactor removes the redundant nested enable gate, rechecks context during multi-round tool work, retains bounded validation-repair feedback, and continues to exclude runtime-local file-mutation capabilities from durable memory while preserving user-authored receipt-domain language.
 >
 > Automated source, package, installer, safety, and cross-platform gates define release readiness. A passing release gate is not a universal compatibility claim for every host, Unreal project, engine build, plugin, or editor-runtime combination.
 
@@ -81,7 +81,7 @@ user state-home before continuing. They do not register Python system-wide or
 modify the system PATH. Running `python3 install.py` directly still requires a
 host Python 3.10+ interpreter.
 
-The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal adapter is included, it presents a numbered SAFE/AGENT authority choice and shows the final authority in a confirmation summary. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. All LM Studio/Unreal profiles install and pin the context compactor so it is available, but never chat-activate it; the plugin's internal compaction opt-in defaults OFF. FULL remains read-only unless AGENT authority is explicitly confirmed. See [Integrated Installer](docs/Integrated_Installer.md).
+The unified installer asks for SAFE, STANDARD, FULL, or CUSTOM. When an Unreal adapter is included, it presents a numbered SAFE/AGENT authority choice and shows the final authority in a confirmation summary. SAFE installs the generic coding-reasoning layer and LM Studio integration without a project adapter. STANDARD adds read-only Unreal adapters. All LM Studio/Unreal profiles install and pin the context compactor so it is available, but never chat-activate it; the host-owned chat toggle remains OFF until the user enables it for a long chat. FULL remains read-only unless AGENT authority is explicitly confirmed. See [Integrated Installer](docs/Integrated_Installer.md).
 
 ### One installer, two platform launchers
 
@@ -95,10 +95,9 @@ The normal `unreal-rag` and `unreal-agent` entries are capability providers. The
 >
 > 1. Load and select the actual instruction/tool-calling model in LM Studio's **model dropdown**. Qwen 3.8 27B is the current primary validated recommendation.
 > 2. Leave the top-level **`codex/unreal-context-compactor`** switch **OFF** in that chat's **plugin panel**. The installer does not enable this host-owned switch; verify it is OFF in every new or existing chat.
-> 3. Keep the nested **Enable transparent compaction** switch OFF as well. It is a plugin-internal opt-in and does not activate the plugin while the top-level switch is off.
-> 4. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
+> 3. Start Local Server and enable the default `unreal-rag` and `unreal-agent` MCP entries.
 
-The default setup does not run the compactor. Installation and pinning only make it available in the panel; they do not add it to a chat. If you deliberately test the experimental compaction path for one long chat, opt in to both switches for that chat. The plugin does not choose the model, change sampling, filter MCP tools, or grant write/build authority.
+The default setup does not run the compactor. Installation and pinning only make it available in the panel; they do not add it to a chat. For a long chat that needs bounded continuity, enable the single top-level `codex/unreal-context-compactor` switch for that chat. Handler invocation is the activation boundary; there is no second enable control. `Observe only` remains available for measurement without rewriting model-facing history. The plugin does not choose the model, change sampling, filter MCP tools, or grant write/build authority.
 
 This command verifies the installed plugin's source layout and compiled prediction-loop wiring. It does **not** prove chat-level activation:
 
@@ -164,11 +163,11 @@ run a model, wrapper, planner, evaluation harness, or query-side controller.
 
 ## Real-Use Session Tips
 
-Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context grows with every tool result, build log, and retry. Keep the context compactor's top-level chat switch OFF by default. Prefer a suitable context length or a fresh chat with a short factual handoff. The experimental compaction path is a deliberate per-chat, two-switch opt-in; when enabled, it replaces only older model-facing history with deterministic factual memory and never owns task routes, required-next-tool commands, planner state, or synthesis gates. Runtime-local file-version receipts are never durable compaction memory: a compacted file observation keeps its canonical project/path and observed SHA but requires a fresh read before mutation.
+Holdout evals run in fresh, bounded turns. In **long LM Studio chats**, context grows with every tool result, build log, and retry. Keep the context compactor's top-level chat switch OFF by default. When continuity is needed, enable that single switch for the affected chat; the handler then measures and compacts during multi-round tool work. It replaces only older model-facing history with deterministic factual memory and never owns task routes, required-next-tool commands, planner state, or synthesis gates. Runtime-local file-version receipts are never durable compaction memory: a compacted file observation keeps its canonical project/path and observed SHA but requires a fresh read before mutation.
 
 | Symptom in LM Studio logs | What to do |
 |---|---|
-| `request (...) exceeds the available context size (54272)` | Confirm that the actual LLM is selected. Keep `codex/unreal-context-compactor` OFF for the default setup, then use a suitable context length or start a new chat with a 5–10-line factual handoff. `npm --prefix lmstudio-context-compactor-plugin run status` verifies installed source/build wiring only. |
+| `request (...) exceeds the available context size (54272)` | Confirm that the actual LLM is selected. For a long chat, enable the single `codex/unreal-context-compactor` chat-plugin switch before context pressure becomes critical. If the request already exceeds the window, use a suitable context length or start a new chat with a 5–10-line factual handoff. `npm --prefix lmstudio-context-compactor-plugin run status` verifies installed source/build wiring only. |
 | `failed to restore kv cache` / `cache size limit reached` | Same as above — session memory is saturated. New chat is faster than raising context alone. |
 | `Model failed to generate a tool call` after a long edit loop | Stop, summarize changed files + remaining errors, new chat. |
 | `js-code-sandbox` appears in logs during Unreal work | Disable it (see Quick Install note above). |

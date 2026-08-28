@@ -90,7 +90,8 @@ python scripts/load_sampling_preset.py --sampling-profile qwen3_8_27b --show-pro
 Changing sampling in LM Studio remains a user choice. The MCP and optional
 compactor do not rewrite these values during a chat. Sampling profiles also do
 not activate the host-owned chat plugin: verify its top-level switch is OFF per
-chat, while the nested `Enable transparent compaction` opt-in defaults OFF.
+chat by default. Enable that single switch only when a long chat needs bounded
+continuity; handler invocation is the compaction activation boundary.
 
 Historical Pass@K and model-comparison results, where still useful, are kept in
 [`Model_Measurement_Results.md`](Model_Measurement_Results.md). They describe

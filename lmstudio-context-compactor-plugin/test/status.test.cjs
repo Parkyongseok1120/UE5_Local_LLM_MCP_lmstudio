@@ -20,6 +20,7 @@ test("status verifies every direct prediction-loop source and its index wiring",
   assert.deepEqual(DIRECT_SOURCE_FILES, [
     "src/index.ts",
     "src/prediction-loop.ts",
+    "src/round-loop.ts",
     "src/direct-compaction-core.js",
     "src/compaction-tool-memory.js",
     "src/continuity-file-observations.js",

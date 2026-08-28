@@ -36,7 +36,7 @@ Read [references/lmstudio.md](references/lmstudio.md) when installing or validat
 - Compare symmetric paths when they should behave alike, such as player/enemy, client/server, success/failure, and start/recovery.
 - Trace declared data to runtime readers before calling it functional.
 - Close state transitions across entry, exit, recovery, cancellation, re-entry, overlap, and object destruction.
-- Label claims `Bug`, `ByDesign`, `Ambiguous`, or `NeedsRuntimeProof`.
+- Label causal or intent-bearing claims `Bug`, `ByDesign`, `Ambiguous`, or `NeedsRuntimeProof`. In architecture mode only, use the paired `Confirmed` verdict and `Info` severity for a verified, neutral, non-codegen as-built fact; this pair does not establish design intent and cannot use `Proposed` proof.
 - Label proof `Proposed`, `SourceVerified`, `StaticVerified`, `BuildVerified`, `TestVerified`, or `RuntimeVerified`, and match it to evidence of that kind. Build success alone does not prove runtime behavior.
 
 ## Keep the core portable
@@ -51,7 +51,7 @@ Store the audit packet as JSON and run:
 python scripts/validate_evidence_packet.py audit.json
 ```
 
-The validator rejects unsupported critical findings, incomplete behavioral paths, framework claims without framework evidence, wiring claims without a mutation stage, and code-generation plans without invariants or validation obligations.
+The validator rejects unsupported critical findings, incomplete behavioral paths, framework claims without framework evidence, wiring claims without a mutation stage, and code-generation plans without invariants or validation obligations. Validation is required before causal P0/P1 findings and multi-file implementation plans; it is optional for other final answers.
 
 Install the skill cross-platform with a preview first:
 

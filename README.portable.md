@@ -47,7 +47,8 @@ merge projects owned by different engine shards. The optional context compactor
 retains bounded factual objective/work/file/tool/build continuity but never
 becomes a planner, router, tool authority, or completion authority. It is installed
 for availability without activating LM Studio's host-owned chat toggle; verify that
-toggle is OFF per chat. The nested `Enable transparent compaction` opt-in defaults OFF.
+toggle is OFF per chat. Enable that single toggle only for a long chat that needs
+bounded continuity; handler invocation is the activation boundary.
 
 Qwen 3.8 27B is the primary currently validated model recommendation. Muse
 Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5,

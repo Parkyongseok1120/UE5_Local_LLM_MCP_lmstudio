@@ -316,6 +316,7 @@ def test_package_builder_requires_the_direct_compactor_runtime_surface() -> None
     assert {
         "lmstudio-context-compactor-plugin/src/index.ts",
         "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+        "lmstudio-context-compactor-plugin/src/round-loop.ts",
         "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
         "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
         "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
@@ -415,6 +416,9 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "skills/evidence-first-code-audit/SKILL.md",
         "skills/evidence-first-code-audit/assets/lmstudio-evidence-first.preset.json",
         "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py",
+        "skills/evidence-first-code-audit/scripts/evidence_packet_contract.py",
+        "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
+        "skills/evidence-first-code-audit/scripts/validate_evidence_packet.py",
         "docs/ARCHITECTURE.md",
         "docs/Integrated_Installer.md",
         "docs/LMStudio_MCP_Tool_Discipline.md",
@@ -453,7 +457,8 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     ):
         packaged_readme = (output / language_readme).read_text(encoding="utf-8")
         assert packaged_readme == (ROOT / source_template).read_text(encoding="utf-8")
-        assert re.search(r"Enable\s+transparent\s+compaction", packaged_readme)
+        assert "Enable transparent compaction" not in packaged_readme
+        assert "single" in packaged_readme or "단일" in packaged_readme
         assert "OFF" in packaged_readme
     portable_install = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
     assert "never chat-activated by the installer" in portable_install
@@ -778,7 +783,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.3.1"
-    assert packaged_installer_manifest["version"] == "2.1.12"
+    assert packaged_installer_manifest["version"] == "2.1.13"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
     assert (output / "docs" / "Release_Notes_1_3_1.md").is_file()
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()

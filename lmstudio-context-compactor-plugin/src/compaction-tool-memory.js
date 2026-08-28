@@ -71,6 +71,14 @@ function sanitizeRetainedStructureString(value) {
   return sanitizeRawCapabilityText(value);
 }
 
+function retainedDiagnosticList(value, maxItems = 8, maxChars = 320) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, Math.max(0, maxItems))
+    .map((item) => sanitizeRetainedString(item, maxChars))
+    .filter(Boolean);
+}
+
 function exactProjectIdentity(value) {
   const descriptor = String(value || "");
   const pathApi = pathApiFor(descriptor);
@@ -171,16 +179,22 @@ function parseToolResult(content) {
     const source = stripControl(JSON.parse(text));
     const out = {};
     for (const key of [
-      "ok", "status", "summary", "message", "errorCode", "path", "operation",
+      "ok", "status", "summary", "message", "errorCode", "path", "operation", "mode",
       "sha256", "previousSha256", "size", "truncated", "hasMore",
       "startLine", "endLine", "totalLines", "filesScanned", "findingCount",
       "validationOk", "blocksBuild", "exitCode", "likelyErrors", "fullLogPath",
       "upToDate", "actionsExecuted", "proofLevel", "failedCount", "succeededCount",
+      "claimCount", "errorCount", "warningCount", "errorShapeCount", "warningShapeCount",
+      "omittedErrorShapeCount", "omittedWarningShapeCount", "schemaVersion",
       "activeProject", "projectPath", "project", "engineAssociation", "resolvedEngineVersion",
       "requestedEngineAssociation", "resolvedRootType", "projectRelativePath", "workspaceRelativePath",
       "hashSource", "canonicalProject", "canonicalPath",
     ]) {
       if (source[key] !== undefined) out[key] = source[key];
+    }
+    for (const key of ["errors", "warnings"]) {
+      const diagnostics = retainedDiagnosticList(source[key]);
+      if (diagnostics.length) out[key] = diagnostics;
     }
     const descriptor = projectDescriptor(source);
     if (descriptor && out.canonicalProject === undefined) out.canonicalProject = descriptor;
@@ -208,6 +222,9 @@ function parseToolResult(content) {
 
 function toolOutcomeRecords(messages, beforeIndex, options = {}) {
   const maxItems = Math.max(1, Number(options.maxItems || 12));
+  const includeMessageIndexes = options.includeMessageIndexes instanceof Set
+    ? options.includeMessageIndexes
+    : null;
   const outcomes = [];
   let activeProject = String(options.initialActiveProject || "");
   const requestsById = new Map();
@@ -284,7 +301,7 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     if (resultId) requestsById.delete(resultId);
     return record;
   };
-  const retain = (content, requestScope = null) => {
+  const retain = (content, requestScope = null, includeOutcome = true) => {
     const parsed = parseToolResult(content);
     const explicitProject = projectDescriptor(parsed);
     const activeProjectCleared = requestScope?.clearsActiveProject === true && parsed.ok !== false;
@@ -302,12 +319,13 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
       && requestIdentity
       && resultIdentity
       && requestIdentity !== resultIdentity;
-    outcomes.push(scopeToolOutcome(parsed, fallbackProject, {
+    const scopedOutcome = scopeToolOutcome(parsed, fallbackProject, {
       fallbackSource,
       perCallProject: requestOwnsScope,
       activeProjectCleared,
       inconsistentProjectScope,
-    }));
+    });
+    if (includeOutcome) outcomes.push(scopedOutcome);
   };
   for (const message of messages.slice(0, beforeIndex)) {
     if ((message.toolRequests || []).length) {
@@ -318,11 +336,13 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
       acceptsIdlessResults = true;
     }
     if (message.role !== "tool") continue;
+    const includeOutcome = includeMessageIndexes === null
+      || includeMessageIndexes.has(message.index);
     for (const result of message.toolResults) {
-      retain(result?.content ?? result, projectHintFor(result));
+      retain(result?.content ?? result, projectHintFor(result), includeOutcome);
     }
     if (!message.toolResults.length && message.text) {
-      retain(message.text, projectHintFor(null));
+      retain(message.text, projectHintFor(null), includeOutcome);
     }
     // Only exact unique IDs may correlate across multiple tool messages. An
     // ID-less result is accepted only in the immediate result message.
@@ -331,23 +351,78 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
   return outcomes.slice(-maxItems);
 }
 
+const DERIVED_BUILD_FIELDS = new Set([
+  "exitCode",
+  "proofLevel",
+  "upToDate",
+  "actionsExecuted",
+  "likelyErrors",
+  "fullLogPath",
+]);
+
+const DERIVED_FILE_FIELDS = new Set([
+  "path",
+  "canonicalPath",
+  "canonicalProject",
+  "canonicalProjectRoot",
+  "projectRelativePath",
+  "sha256",
+  "previousSha256",
+  "lastObservedAt",
+  "mutationSnapshotState",
+  "files",
+]);
+
+function outcomeDisplayRecord(record) {
+  const display = { ...record };
+  const hasBuildState = record.exitCode !== undefined
+    || record.proofLevel
+    || record.fullLogPath
+    || record.likelyErrors;
+  const hasFileState = Array.isArray(record.files)
+    || (record.path && (
+      (record.ok !== false && (record.operation || record.sha256 || record.previousSha256))
+      || record.errorCode === "FILE_VERSION_CONFLICT"
+    ));
+  if (hasBuildState) {
+    for (const key of DERIVED_BUILD_FIELDS) delete display[key];
+  }
+  if (hasFileState) {
+    for (const key of DERIVED_FILE_FIELDS) delete display[key];
+  }
+  return display;
+}
+
 function serializeToolOutcome(record, maxChars) {
-  const serialized = JSON.stringify(record);
+  const displayRecord = outcomeDisplayRecord(record);
+  const serialized = JSON.stringify(displayRecord);
   if (serialized.length <= maxChars) return serialized;
 
   const bounded = {};
   for (const key of [
-    "ok", "status", "operation", "errorCode", "proofLevel", "exitCode", "upToDate",
+    "ok", "status", "operation", "errorCode", "mode", "proofLevel", "exitCode", "upToDate",
     "actionsExecuted", "failedCount", "succeededCount", "activeProjectCleared",
+    "claimCount", "errorCount", "warningCount", "errorShapeCount", "warningShapeCount",
+    "omittedErrorShapeCount", "omittedWarningShapeCount", "schemaVersion",
     "canonicalProject", "canonicalProjectSource", "fileObservationState",
   ]) {
-    if (record[key] !== undefined) bounded[key] = record[key];
+    if (displayRecord[key] !== undefined) bounded[key] = displayRecord[key];
   }
   if (Array.isArray(record.files)) {
     bounded.fileFactCount = record.files.length;
     bounded.fileFactsExtractedSeparately = true;
   }
   bounded.outcomeDisplayState = "bounded_after_factual_extraction";
+  for (const key of ["errors", "warnings"]) {
+    if (!Array.isArray(displayRecord[key])) continue;
+    const retained = [];
+    for (const diagnostic of displayRecord[key]) {
+      const candidate = { ...bounded, [key]: [...retained, diagnostic] };
+      if (JSON.stringify(candidate).length > maxChars) break;
+      retained.push(diagnostic);
+    }
+    if (retained.length) bounded[key] = retained;
+  }
   const compact = JSON.stringify(bounded);
   if (compact.length <= maxChars) return compact;
   return JSON.stringify({ outcomeDisplayState: "bounded_after_factual_extraction" });

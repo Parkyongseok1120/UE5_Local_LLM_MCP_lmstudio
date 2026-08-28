@@ -1,11 +1,13 @@
 import {
   Chat,
   type ChatMessage,
+  type LLMTool,
   type PredictionLoopHandler,
   type PredictionLoopHandlerController,
   type ToolCallRequest,
 } from "@lmstudio/sdk";
 import { directConfigSchematics } from "./direct-config";
+import { runOneToolRound } from "./round-loop";
 
 // The deterministic core is CommonJS so it can also be exercised directly by
 // Node's test runner without booting an LM Studio plugin host.
@@ -38,7 +40,6 @@ export type ContextMeasurement = {
 };
 
 type DirectConfig = {
-  enabled: boolean;
   observeOnly: boolean;
   softRemainingTokens: number;
   hardRemainingTokens: number;
@@ -53,7 +54,7 @@ type DirectConfig = {
 
 type RemoteToolLike = {
   name: string;
-  pluginIdentifier: string;
+  pluginIdentifier?: string;
 };
 
 function numeric(value: unknown, fallback: number, min: number, max: number): number {
@@ -65,7 +66,6 @@ function numeric(value: unknown, fallback: number, min: number, max: number): nu
 function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
   const config = ctl.getPluginConfig(directConfigSchematics);
   return {
-    enabled: config.get("enabled") === true,
     observeOnly: config.get("observeOnly") === true,
     softRemainingTokens: numeric(config.get("softRemainingTokens"), 14000, 0, 1_000_000),
     hardRemainingTokens: numeric(config.get("hardRemainingTokens"), 8000, 0, 1_000_000),
@@ -93,27 +93,41 @@ async function measureContext(
   tokenSource: unknown,
   history: Chat,
   config: DirectConfig,
+  tools: Array<RemoteToolLike & { description?: string; parametersJsonSchema?: unknown }> = [],
 ): Promise<ContextMeasurement> {
   const source = tokenSource as {
     getContextLength?: () => Promise<number>;
-    applyPromptTemplate?: (chat: Chat) => Promise<string>;
+    applyPromptTemplate?: (chat: Chat, opts?: { toolDefinitions?: Array<LLMTool> }) => Promise<string>;
     countTokens?: (text: string) => Promise<number>;
   };
+  const toolDefinitions: Array<LLMTool> = tools.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      ...(tool.description ? { description: tool.description } : {}),
+      ...(tool.parametersJsonSchema
+        ? { parameters: tool.parametersJsonSchema as LLMTool["function"]["parameters"] }
+        : {}),
+    },
+  }));
   let contextLength = config.assumedContextLength;
-  let inputTokens = Math.ceil(history.toString().length / 4);
+  let inputTokens = Math.ceil(
+    (history.toString().length + JSON.stringify(toolDefinitions).length) / 4,
+  );
   let exact = false;
   try {
     if (typeof source.getContextLength === "function") {
       contextLength = numeric(await source.getContextLength(), config.assumedContextLength, 2048, 4_000_000);
     }
     if (typeof source.applyPromptTemplate === "function" && typeof source.countTokens === "function") {
-      const prompt = await source.applyPromptTemplate(history);
+      const prompt = await source.applyPromptTemplate(history, { toolDefinitions });
       inputTokens = numeric(await source.countTokens(prompt), inputTokens, 0, 4_000_000);
       exact = true;
     }
   } catch {
     // A selected generator or experimental model handle may not expose token
-    // measurement. Character estimation remains advisory and never routes.
+    // measurement. Character estimation remains conservative, and the
+    // configured message-count fallback independently protects this path.
   }
   return {
     contextLength,
@@ -128,6 +142,7 @@ function buildCompactedHistory(
   history: Chat,
   recentCompleteTurns: number,
   config: DirectConfig,
+  checkpointOptions: Record<string, unknown> = {},
 ): { history: Chat; checkpoint: CheckpointResult } {
   const messages = history.getMessagesArray();
   const normalized = normalizeHistory(history);
@@ -135,6 +150,7 @@ function buildCompactedHistory(
     recentCompleteTurns,
     maxCheckpointChars: config.maxCheckpointChars,
     maxToolResultChars: config.maxToolResultChars,
+    ...checkpointOptions,
   });
   if (checkpoint.omittedMessageCount <= 0) return { history, checkpoint };
   const retained = new Set(checkpoint.retainedIndexes);
@@ -163,11 +179,21 @@ function createMessageEmitter(
   tools: Array<RemoteToolLike>,
 ) {
   const callIdsByToolRequestId = new Map<string, number>();
+  const registeredCallIds = new Set<number>();
   const unidentifiedRequestCallIds: Array<number> = [];
   const unidentifiedResultCallIds: Array<number> = [];
   let fallbackCallId = 1_000_000;
 
+  const beginRound = () => {
+    callIdsByToolRequestId.clear();
+    registeredCallIds.clear();
+    unidentifiedRequestCallIds.length = 0;
+    unidentifiedResultCallIds.length = 0;
+  };
+
   const registerRequest = (callId: number, request: ToolCallRequest) => {
+    if (registeredCallIds.has(callId)) return;
+    registeredCallIds.add(callId);
     if (request.id) callIdsByToolRequestId.set(request.id, callId);
     else unidentifiedRequestCallIds.push(callId);
   };
@@ -207,7 +233,7 @@ function createMessageEmitter(
     }
   };
 
-  return { emit, registerRequest };
+  return { beginRound, emit, registerRequest };
 }
 
 export const handlePredictionLoop: PredictionLoopHandler = async (ctl) => {
@@ -219,56 +245,96 @@ export const handlePredictionLoop: PredictionLoopHandler = async (ctl) => {
     throw new Error("Select the actual Qwen/LLM in LM Studio. The context compactor is middleware, not a chat model.");
   }
 
-  const before = await measureContext(tokenSource, originalHistory, config);
-  let modelHistory = originalHistory;
-  let compacted = false;
-  if (core.shouldCompact(before, config)) {
-    const hard = before.remainingTokens <= config.hardRemainingTokens;
-    let candidate = buildCompactedHistory(originalHistory, hard ? 0 : config.recentCompleteTurns, config);
-    if (candidate.history !== originalHistory) {
-      const afterFirst = await measureContext(tokenSource, candidate.history, config);
-      if (!hard && afterFirst.remainingTokens <= config.hardRemainingTokens) {
-        candidate = buildCompactedHistory(originalHistory, 0, config);
-      }
-      modelHistory = candidate.history;
-      compacted = modelHistory !== originalHistory;
-    }
-  }
-  if (config.observeOnly || !config.enabled) modelHistory = originalHistory;
-
-  ctl.debug({
-    event: "direct_context_measurement",
-    compacted,
-    observeOnly: config.observeOnly,
-    exactMeasurement: before.exact,
-    messageCount: before.messageCount,
-    inputTokens: before.inputTokens,
-    remainingTokens: before.remainingTokens,
-  });
-  ctl.guardAbort();
-
   const toolSession = await ctl.startToolUseSession();
   const emitter = createMessageEmitter(ctl, toolSession.tools);
+  let workingHistory = originalHistory;
+  let roundIndex = 0;
   try {
-    await tokenSource.act(modelHistory, toolSession.tools, {
-      signal: ctl.abortSignal,
-      onToolCallRequestFinalized: (_roundIndex, callId, info) => {
-        emitter.registerRequest(callId, info.toolCallRequest);
-      },
-      guardToolCall: async (_roundIndex, callId, controller) => {
-        const request = controller.toolCallRequest;
-        const decision = await ctl.requestConfirmToolCall({
-          callId,
-          pluginIdentifier: toolPluginIdentifier(toolSession.tools, request.name),
-          name: request.name,
-          parameters: request.arguments || {},
-        });
-        if (decision.type === "deny") controller.deny(decision.denyReason);
-        else if (decision.toolArgsOverride) controller.allowAndOverrideParameters(decision.toolArgsOverride);
-        else controller.allow();
-      },
-      onMessage: emitter.emit,
-    });
+    while (true) {
+      ctl.guardAbort();
+      const before = await measureContext(tokenSource, workingHistory, config, toolSession.tools);
+      let modelHistory = workingHistory;
+      let compacted = false;
+      if (core.shouldCompact(before, config)) {
+        const hard = before.remainingTokens <= config.hardRemainingTokens;
+        let candidate = buildCompactedHistory(
+          workingHistory,
+          hard ? 0 : config.recentCompleteTurns,
+          config,
+          hard ? { maxCurrentTurnMessages: 2 } : {},
+        );
+        if (!hard) {
+          let needsBoundedCurrentTurn = candidate.history === workingHistory;
+          if (!needsBoundedCurrentTurn) {
+            const afterFirst = await measureContext(tokenSource, candidate.history, config, toolSession.tools);
+            needsBoundedCurrentTurn = core.shouldCompact(afterFirst, config);
+          }
+          if (needsBoundedCurrentTurn) {
+            candidate = buildCompactedHistory(
+              workingHistory,
+              0,
+              config,
+              { maxCurrentTurnMessages: 2 },
+            );
+          }
+        }
+        if (candidate.history !== workingHistory) {
+          modelHistory = candidate.history;
+          compacted = modelHistory !== workingHistory;
+        }
+      }
+      workingHistory = modelHistory;
+
+      ctl.debug({
+        event: "direct_context_measurement",
+        roundIndex,
+        compacted,
+        observeOnly: config.observeOnly,
+        exactMeasurement: before.exact,
+        messageCount: before.messageCount,
+        inputTokens: before.inputTokens,
+        remainingTokens: before.remainingTokens,
+      });
+      ctl.guardAbort();
+
+      // SDK call IDs are guaranteed unique only within one .act invocation.
+      // Clear correlation state after the prior round's captured messages have
+      // been emitted, while keeping guard/finalized registration idempotent.
+      emitter.beginRound();
+      const captured = await runOneToolRound(
+        tokenSource,
+        workingHistory,
+        toolSession.tools,
+        ctl.abortSignal,
+        {
+          onToolCallRequestFinalized: (_roundIndex, callId, info) => {
+            emitter.registerRequest(callId, info.toolCallRequest);
+          },
+          guardToolCall: async (_roundIndex, callId, controller) => {
+            const request = controller.toolCallRequest;
+            // The SDK does not invoke onToolCallRequestFinalized for denied
+            // calls, so register the stable call ID at the confirmation edge.
+            emitter.registerRequest(callId, request);
+            const decision = await ctl.requestConfirmToolCall({
+              callId,
+              pluginIdentifier: toolPluginIdentifier(toolSession.tools, request.name),
+              name: request.name,
+              parameters: request.arguments || {},
+            });
+            if (decision.type === "deny") controller.deny(decision.denyReason);
+            else if (decision.toolArgsOverride) controller.allowAndOverrideParameters(decision.toolArgsOverride);
+            else controller.allow();
+          },
+        },
+      );
+      for (const message of captured.messages) {
+        workingHistory.append(message);
+        emitter.emit(message);
+      }
+      if (captured.failure !== undefined) throw captured.failure;
+      if (!captured.continueAfterTools) break;
+      roundIndex += 1;
+    }
   } finally {
     toolSession[Symbol.dispose]();
   }

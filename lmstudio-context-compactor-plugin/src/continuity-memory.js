@@ -198,6 +198,20 @@ function mergeUnresolved(previousState, activeObjective, openQuestions, pendingI
   }).slice(-10);
 }
 
+function mergeRecentDistinct(previous, current, maxItems) {
+  const combined = [...(previous || []), ...(current || [])];
+  const retained = [];
+  const seen = new Set();
+  for (let index = combined.length - 1; index >= 0 && retained.length < maxItems; index -= 1) {
+    const item = combined[index];
+    const key = typeof item === "string" ? item : JSON.stringify(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    retained.unshift(item);
+  }
+  return retained;
+}
+
 function buildContinuityMemory(messages, facts, options = {}) {
   const previousState = extractPriorContinuityState(messages);
   const objective = buildObjectiveContinuity(messages, previousState, options);
@@ -232,18 +246,20 @@ function buildContinuityMemory(messages, facts, options = {}) {
   const currentWorkStatus = {
     lastAssistantUpdate: lastAssistantUpdate(messages, activeIndex)
       || (samePriorObjective ? previousWork.lastAssistantUpdate : null),
-    recentToolOutcomes: [
-      ...(previousWork.recentToolOutcomes || []),
-      ...(facts.recentOlderToolOutcomes || []),
-    ].slice(-6),
+    recentToolOutcomes: mergeRecentDistinct(
+      previousWork.recentToolOutcomes,
+      facts.recentOlderToolOutcomes,
+      6,
+    ),
     modifiedOrObservedFiles: coalesceFileObservations(
       [...previousFileObservations, ...currentFileObservations],
       12,
     ),
-    recentBuildOrTestState: [
-      ...(previousWork.recentBuildOrTestState || []),
-      ...(facts.recentBuildOrTestState || []),
-    ].slice(-4),
+    recentBuildOrTestState: mergeRecentDistinct(
+      previousWork.recentBuildOrTestState,
+      facts.recentBuildOrTestState,
+      4,
+    ),
   };
   return sanitizeStructuredDurableValue({
     schemaVersion: 2,

@@ -435,6 +435,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/write-lock-reclaim-bridge.py",
     "lmstudio-context-compactor-plugin/src/index.ts",
     "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/round-loop.ts",
     "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
     "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
     "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
@@ -454,7 +455,12 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/test/fixtures/qwen-receipt-path-confusion.json",
     "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
     "lmstudio-context-compactor-plugin/test/status.test.cjs",
+    "lmstudio-context-compactor-plugin/test/validation-repair-memory.test.cjs",
     "lmstudio-context-compactor-plugin/tsconfig.json",
+    "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py",
+    "skills/evidence-first-code-audit/scripts/evidence_packet_contract.py",
+    "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
+    "skills/evidence-first-code-audit/scripts/validate_evidence_packet.py",
 )
 
 # Portable builds are an explicitly reviewed product surface, not a mirror of

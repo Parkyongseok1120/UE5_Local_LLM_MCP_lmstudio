@@ -12,10 +12,11 @@ settings, filter MCP tools, or interpret Unreal workflow state. The existing
 providers. Because compaction is limited to chat history, the same plugin can be
 used across Unreal Engine versions and projects.
 
-Version 0.4.50 defaults to disabled mode. The top-level LM Studio chat-plugin switch
-and the nested `Enable transparent compaction` switch are independent, and both must
-be explicitly enabled for compaction to run. `observeOnly` can be enabled in the
-plugin settings to measure pressure without changing the model-facing history. Soft
+Version 0.4.51 keeps the host-owned top-level LM Studio chat-plugin switch OFF by
+default, and the installer never enables it. For a long chat that needs bounded
+continuity, enable that single switch; invoking the handler activates compaction.
+The redundant nested enable gate has been removed. `observeOnly` can be enabled in
+the plugin settings to measure pressure without changing the model-facing history. Soft
 compaction retains recent complete turns. Hard compaction keeps the current user
 turn separately and emits bounded `[Direct continuity state v2]` factual memory:
 the active objective, continuation antecedent for an elliptical follow-up, active
@@ -42,10 +43,9 @@ conservative fallback.
 2. Leave the top-level `codex/unreal-context-compactor` switch OFF for the default
    setup. The installer does not enable this LM Studio-owned state; verify it is OFF
    in every new or existing chat.
-3. Leave the nested `Enable transparent compaction` switch OFF. It does not control
-   top-level chat activation and has no effect while the top-level switch is off.
-4. Only for a deliberate per-chat compaction test, enable both switches and keep
-   using the actual LLM as the chat model.
+3. For a long chat that needs compaction, enable that single top-level switch and
+   keep using the actual LLM as the chat model. There is no second enable control.
+4. Use `Observe only` when you need pressure telemetry without history rewriting.
 
 The integrated installer installs and pins the plugin so it remains available, but
 does not activate it for a chat. It deliberately avoids rewriting LM Studio's private

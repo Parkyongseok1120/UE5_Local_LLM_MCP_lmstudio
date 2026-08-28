@@ -54,10 +54,10 @@ Direct MCP behavior.
 
 ## Optional compaction
 
-Keep the LM Studio context compactor's top-level chat toggle OFF by default, and
-keep the nested `Enable transparent compaction` switch OFF. Installation/pinning
-only makes it available. If explicitly testing the optional path for one long chat,
-both switches must be enabled for that chat.
+Keep the LM Studio context compactor's top-level chat toggle OFF by default.
+Installation/pinning only makes it available. For a long chat that needs bounded
+continuity, enable that single switch; handler invocation activates compaction.
+`Observe only` remains available for measurement without history rewriting.
 Compaction retains bounded factual continuity: the active objective, continuation
 antecedent, active project/current work, unresolved items, and relevant
 file/tool/build facts. File observations retain canonical project/path identity and

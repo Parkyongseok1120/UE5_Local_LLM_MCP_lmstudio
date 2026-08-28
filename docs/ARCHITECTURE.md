@@ -26,7 +26,7 @@ optional Node strict-server.js
 |--------|------|
 | **unreal-rag** | Eight factual capabilities: active project get/set, search, symbol lookup, health, rebuild status, synchronous refresh, and inventory |
 | **unreal-agent** | Twenty Direct project/file/log/edit/build/test/allowlisted-command capabilities, including scoped receipt/CAS mutation and the shared bounded process runner |
-| **context compactor** | Installed/pinned for availability; the installer never enables host-owned chat activation, and the inner compaction opt-in defaults OFF; canonical file observations become `fresh_read_required` and runtime-local mutation receipts are not durable, while user-authored payment-receipt and code-symbol language is preserved; no planner, router, tool authority, or completion authority |
+| **context compactor** | Installed/pinned for availability; the installer never enables host-owned chat activation, so the single top-level toggle defaults OFF; invoking the handler activates compaction and `Observe only` remains measurement-only; canonical file observations become `fresh_read_required` and runtime-local mutation receipts are not durable, while user-authored payment-receipt and code-symbol language is preserved; no planner, router, tool authority, or completion authority |
 | **unreal-agent-strict** | Optional Node-only conversation lifecycle around the Node capability surface |
 
 ## Direct workflow

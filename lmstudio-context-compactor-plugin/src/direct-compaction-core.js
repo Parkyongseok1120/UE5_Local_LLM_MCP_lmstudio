@@ -23,10 +23,6 @@ const {
   extractPriorContinuityState,
 } = require("./continuity-memory.js");
 const {
-  coalesceFileObservations,
-  migratePriorFileObservations,
-} = require("./continuity-file-observations.js");
-const {
   clip,
   clipHeadTail,
   looksElliptical,
@@ -149,6 +145,67 @@ function tailStartIndex(messages, recentCompleteTurns = 2) {
   if (!userIndexes.length) return Math.max(0, messages.length - 4);
   const keepUsers = Math.max(1, Math.trunc(Number(recentCompleteTurns || 0)) + 1);
   return userIndexes[Math.max(0, userIndexes.length - keepUsers)];
+}
+
+function boundedCurrentTurnIndexes(messages, latestUserIndex, maxMessages) {
+  const cap = Math.max(0, Math.min(256, Math.trunc(Number(maxMessages) || 0)));
+  const groups = [];
+  let index = Math.max(0, latestUserIndex + 1);
+  while (index < messages.length) {
+    const message = messages[index];
+    if (message.role === "assistant" && message.toolRequests.length > 0) {
+      const requestIds = message.toolRequests.map((request) => String(request.id || "")).filter(Boolean);
+      const hasExactIds = requestIds.length === message.toolRequests.length;
+      const remainingIds = new Set(requestIds);
+      let remainingIdlessResults = message.toolRequests.length;
+      let end = index + 1;
+      while (end < messages.length && messages[end].role === "tool") {
+        const results = messages[end].toolResults;
+        if (results.length === 0) break;
+        if (hasExactIds) {
+          const resultIds = results.map((result) => String(result.toolCallId || ""));
+          if (resultIds.some((resultId) => !resultId || !remainingIds.has(resultId))) break;
+          for (const resultId of resultIds) remainingIds.delete(resultId);
+        } else {
+          remainingIdlessResults -= results.length;
+        }
+        end += 1;
+        if (hasExactIds ? remainingIds.size === 0 : remainingIdlessResults <= 0) break;
+      }
+      const completeToolExchange = hasExactIds
+        ? remainingIds.size === 0
+        : remainingIdlessResults <= 0;
+      groups.push({
+        start: index,
+        end,
+        completeToolExchange,
+        retainable: completeToolExchange,
+      });
+      index = end;
+      continue;
+    }
+    groups.push({
+      start: index,
+      end: index + 1,
+      completeToolExchange: false,
+      retainable: message.role !== "tool",
+    });
+    index += 1;
+  }
+
+  const newestUnreadExchange = [...groups].reverse().find((group) => group.completeToolExchange) || null;
+  const retained = new Set();
+  let retainedCount = 0;
+  for (const group of [...groups].reverse()) {
+    const mustRetain = group === newestUnreadExchange;
+    const groupSize = group.end - group.start;
+    if (!mustRetain && (!group.retainable || retainedCount + groupSize > cap)) continue;
+    for (let messageIndex = group.start; messageIndex < group.end; messageIndex += 1) {
+      retained.add(messageIndex);
+    }
+    retainedCount += groupSize;
+  }
+  return retained;
 }
 
 function mergeEvidence(previous, current, maxItems) {
@@ -284,6 +341,14 @@ function renderCheckpoint(memory, maxChars) {
     CONTINUITY_MARKER,
   ].join("\n");
   const candidate = sanitizeStructuredDurableValue(JSON.parse(JSON.stringify(memory)));
+  if (candidate.currentWorkStatus) {
+    // These legacy top-level mirrors remain on the in-process result for
+    // compatibility, but serializing them would duplicate the canonical
+    // currentWorkStatus facts in the next model input.
+    delete candidate.recentOlderToolOutcomes;
+    delete candidate.modifiedOrObservedFiles;
+    delete candidate.recentBuildOrTestState;
+  }
   const render = (pretty = true) => `${prefix}\n${JSON.stringify(candidate, null, pretty ? 2 : 0)}`;
   if (render().length <= maxChars) return render();
   candidate.recentRawTail = (candidate.recentRawTail || []).slice(-4).map((item) => ({
@@ -292,8 +357,6 @@ function renderCheckpoint(memory, maxChars) {
   }));
   candidate.completedOrArchivedObjectives = (candidate.completedOrArchivedObjectives || []).slice(-4);
   candidate.historicalUserConstraintEvidence = (candidate.historicalUserConstraintEvidence || []).slice(-6);
-  candidate.recentOlderToolOutcomes = (candidate.recentOlderToolOutcomes || []).slice(-4);
-  candidate.modifiedOrObservedFiles = (candidate.modifiedOrObservedFiles || []).slice(-8);
   candidate.unresolvedItems = (candidate.unresolvedItems || []).slice(-6);
   if (candidate.currentWorkStatus?.lastAssistantUpdate?.text) {
     candidate.currentWorkStatus.lastAssistantUpdate.text = clip(
@@ -326,30 +389,45 @@ function buildCheckpoint(messagesInput, options = {}) {
   const latestUserIndex = [...messages].reverse().find((message) => message.role === "user")?.index ?? -1;
   const latestUser = latestUserIndex >= 0 ? messages[latestUserIndex].text : String(previousState?.latestUserMessage || "");
   const tailStart = tailStartIndex(messages, options.recentCompleteTurns ?? 2);
+  const boundedCurrentTurn = options.maxCurrentTurnMessages !== undefined;
+  const currentTurnIndexes = boundedCurrentTurn
+    ? boundedCurrentTurnIndexes(messages, latestUserIndex, options.maxCurrentTurnMessages)
+    : null;
+  const fileIndexes = messages.filter((message) => (
+    message.hasFiles
+    && (!boundedCurrentTurn || message.role === "system" || message.role === "user")
+  )).map((message) => message.index);
+  const retainedIndexes = new Set(messages.filter((message) => (
+    (message.role === "system" && !generatedCheckpoint(message))
+    || (boundedCurrentTurn ? currentTurnIndexes.has(message.index) : message.index >= tailStart)
+  )).map((message) => message.index));
+  for (const index of fileIndexes) retainedIndexes.add(index);
+  if (latestUserIndex >= 0) retainedIndexes.add(latestUserIndex);
+  const omittedToolMessageIndexes = new Set(messages.filter((message) => (
+    message.role === "tool" && !retainedIndexes.has(message.index)
+  )).map((message) => message.index));
   const toolMemoryOptions = {
     ...options,
     initialActiveProject: previousState?.activeProject?.descriptor || "",
   };
-  const outcomeRecords = toolOutcomeRecords(messages, tailStart, toolMemoryOptions);
+  const outcomeRecords = toolOutcomeRecords(messages, messages.length, {
+    ...toolMemoryOptions,
+    includeMessageIndexes: omittedToolMessageIndexes,
+  });
   const allRecentOutcomeRecords = toolOutcomeRecords(messages, messages.length, toolMemoryOptions);
   const outcomes = serializeToolOutcomeRecords(outcomeRecords, toolMemoryOptions);
-  const allRecentOutcomes = serializeToolOutcomeRecords(allRecentOutcomeRecords, toolMemoryOptions);
   const state = stateMemory(allRecentOutcomeRecords);
+  const durableState = stateMemory(outcomeRecords);
   const openQuestions = unresolvedQuestions(messages, latestUserIndex);
   const continuity = buildContinuityMemory(messages, {
     activeProject: state.activeProject,
-    recentOlderToolOutcomes: allRecentOutcomes,
-    modifiedOrObservedFiles: state.files,
-    recentBuildOrTestState: state.builds,
+    recentOlderToolOutcomes: outcomes,
+    modifiedOrObservedFiles: durableState.files,
+    recentBuildOrTestState: durableState.builds,
     openQuestionEvidence: openQuestions,
   }, options);
   const latestMessage = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
   const recentRequests = priorUserRequestsForContinuation(messages, latestUserIndex);
-  const previousFileObservations = migratePriorFileObservations(
-    previousState?.modifiedOrObservedFiles || [],
-    previousState,
-    16,
-  );
   const memory = sanitizeStructuredDurableValue({
     ...continuity,
     currentUserRequestVerbatim: continuity.latestUserMessage,
@@ -364,21 +442,12 @@ function buildCheckpoint(messagesInput, options = {}) {
     ),
     openQuestionEvidence: openQuestions,
     previousTurnFinalResponseEvidence: previousTurnFinalResponseEvidence(messages, latestUserIndex),
-    recentOlderToolOutcomes: mergeEvidence(previousState?.recentOlderToolOutcomes, outcomes, 12),
-    modifiedOrObservedFiles: coalesceFileObservations(
-      [...previousFileObservations, ...state.files],
-      16,
-    ),
-    recentBuildOrTestState: mergeEvidence(previousState?.recentBuildOrTestState, state.builds, 4),
+    recentOlderToolOutcomes: continuity.currentWorkStatus?.recentToolOutcomes || [],
+    modifiedOrObservedFiles: continuity.currentWorkStatus?.modifiedOrObservedFiles || [],
+    recentBuildOrTestState: continuity.currentWorkStatus?.recentBuildOrTestState || [],
   });
   const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 12000));
   const checkpoint = renderCheckpoint(memory, maxCheckpointChars);
-  const fileIndexes = messages.filter((message) => message.hasFiles).map((message) => message.index);
-  const retainedIndexes = new Set(messages.filter((message) => (
-    (message.role === "system" && !generatedCheckpoint(message)) || message.index >= tailStart
-  )).map((message) => message.index));
-  for (const index of fileIndexes) retainedIndexes.add(index);
-  if (latestUserIndex >= 0) retainedIndexes.add(latestUserIndex);
   return {
     checkpoint,
     memory,
@@ -391,11 +460,12 @@ function buildCheckpoint(messagesInput, options = {}) {
 }
 
 function shouldCompact(measurement, options = {}) {
-  if (options.enabled !== true || options.observeOnly === true) return false;
+  if (options.observeOnly === true) return false;
   const messageCount = Number(measurement.messageCount || 0);
   const remaining = Number(measurement.remainingTokens);
   const softRemaining = Math.max(0, Number(options.softRemainingTokens || 14000));
   const fallbackCount = Math.max(4, Number(options.compactAboveMessageCount || 24));
+  if (measurement.exact === false && messageCount >= fallbackCount) return true;
   if (Number.isFinite(remaining)) return remaining <= softRemaining;
   return messageCount >= fallbackCount;
 }

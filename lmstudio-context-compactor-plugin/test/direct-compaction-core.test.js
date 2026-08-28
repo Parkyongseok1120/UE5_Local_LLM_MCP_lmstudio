@@ -508,6 +508,13 @@ test("emergency rendering budgets canonical observations instead of imposing a t
   assert.ok(parsed.currentWorkStatus.modifiedOrObservedFiles.every((item) => (
     item.canonicalProject === project && item.mutationSnapshotState === "fresh_read_required"
   )));
+  for (const legacyMirror of [
+    "recentOlderToolOutcomes",
+    "modifiedOrObservedFiles",
+    "recentBuildOrTestState",
+  ]) {
+    assert.equal(Object.hasOwn(parsed, legacyMirror), false);
+  }
   assert.ok(result.checkpoint.length <= 4000, result.checkpoint.length);
 });
 
@@ -556,6 +563,7 @@ test("same-name clones remain distinct factual observations and neither is mutat
     message("user", "두 checkout의 관찰 사실을 구분해."),
     readResult(githubProject, "C:\\Projects\\GithubClone\\Project_MJS\\Source\\Project_MJS\\Public\\Character\\SharedComponent\\HealthComponent.h", "fvr1_github", "a".repeat(64)),
     readResult(gitProject, "C:\\Projects\\GitClone\\Project_MJS\\Source\\Project_MJS\\Public\\Character\\SharedComponent\\HealthComponent.h", "fvr1_git", "b".repeat(64)),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
 
   assertNoDurableFileCapability(result);
@@ -595,6 +603,7 @@ test("a per-call exact project keeps a write on that clone without changing the 
         sha256: "b".repeat(64),
       }),
     }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
 
   const created = result.memory.modifiedOrObservedFiles.find((item) => item.path.endsWith("New.cpp"));
@@ -642,6 +651,7 @@ test("a per-call read cannot change active project or retarget the next unscoped
         sha256: "a".repeat(64),
       }),
     }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
 
   const byPath = new Map(result.memory.modifiedOrObservedFiles.map((item) => [item.path, item]));
@@ -780,6 +790,7 @@ test("an unmatched request cannot scope a later ID-less write to another clone",
       path: "project://Source/New.cpp",
       sha256: "c".repeat(64),
     }) }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
 
   const created = result.memory.modifiedOrObservedFiles.find((item) => item.path.endsWith("New.cpp"));
@@ -852,6 +863,7 @@ test("unique exact IDs remain correlatable when one request batch returns in mul
       toolCallId: "read-b",
       content: JSON.stringify({ ok: true, path: "project://Source/B.cpp", sha256: "b".repeat(64) }),
     }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
 
   assert.deepEqual(
@@ -876,6 +888,7 @@ test("an ambiguous ID-less result does not prevent a later exact ID from retaini
       toolCallId: "read-b",
       content: JSON.stringify({ ok: true, path: "project://Source/B.cpp", sha256: "b".repeat(64) }),
     }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
 
   assert.deepEqual(result.memory.modifiedOrObservedFiles.map((item) => item.path), ["project://Source/B.cpp"]);
@@ -902,6 +915,7 @@ test("a conflicting per-call result project is omitted instead of crossing clone
         sha256: "b".repeat(64),
       }),
     }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
 
   assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
@@ -930,6 +944,7 @@ test("bundle bare relative paths become canonical only under the proven exact pr
         ],
       }),
     }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
 
   assert.deepEqual(
@@ -960,6 +975,7 @@ test("workspace and outside absolute paths are never attached to an active proje
       absolutePath: "C:\\Work\\CloneB\\Bad.cpp",
       sha256: "2".repeat(64),
     }) }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
   const durableOutcomes = JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes);
 
@@ -979,6 +995,7 @@ test("workspace paths are removed from durable tool outcomes even without an act
       absolutePath: "C:\\Repo\\README.md",
       sha256: "1".repeat(64),
     }) }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
   const durableOutcomes = JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes);
 
@@ -996,6 +1013,7 @@ test("path-only workspace errors cannot survive as rootless durable file identit
       resolvedRootType: "workspace",
       path: "workspace://README.md",
     }) }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
   const durableOutcomes = JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes);
 
@@ -1032,6 +1050,7 @@ test("bounded tool display never discards extracted bundle file facts", () => {
         ],
       }),
     }] }),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0, maxToolResultChars: 1200 });
 
   assert.equal(result.memory.modifiedOrObservedFiles.length, 2);
@@ -1240,6 +1259,7 @@ test("registry registration order is discarded even when an unchanged hash is ob
     tool(1),
     tool(8),
     tool(24),
+    message("user", "Continue with the proven facts only."),
   ], { recentCompleteTurns: 0 });
 
   assertNoDurableFileCapability(result);
@@ -1287,7 +1307,7 @@ test("the durable user copy strips raw capability payloads but keeps diagnostic 
   assert.match(result.memory.currentUserRequestVerbatim, /never persist fileVersionReceipt/iu);
 });
 
-test("a receipt in a retained recent tool result remains live only outside the durable checkpoint", () => {
+test("a retained file result stays raw and becomes durable only after it is omitted", () => {
   const receipt = "fvr1_recent_uncompressed_round";
   const messages = [
     message("user", "Implement the first file."),
@@ -1308,7 +1328,29 @@ test("a receipt in a retained recent tool result remains live only outside the d
   assert.equal(result.retainedIndexes.includes(3), true);
   assert.match(messages[3].toolResults[0].content, new RegExp(receipt, "u"));
   assertNoDurableFileCapability(result);
-  assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.doesNotMatch(result.checkpoint, /Next\.cpp|fresh_read_required|9999999999999999/u);
+
+  const retained = new Set(result.retainedIndexes);
+  const agedResult = core.buildCheckpoint([
+    message("system", result.checkpoint),
+    ...messages.filter((item, index) => item.role !== "system" && retained.has(index)),
+    message("user", "Continue with the proven facts only."),
+  ], { recentCompleteTurns: 0 });
+
+  assertNoDurableFileCapability(agedResult);
+  assert.equal(agedResult.memory.modifiedOrObservedFiles.length, 1);
+  assert.equal(agedResult.memory.modifiedOrObservedFiles[0].path, "project://Source/Next.cpp");
+  assert.equal(agedResult.memory.modifiedOrObservedFiles[0].sha256AtObservation, "9".repeat(64));
+  assert.equal(agedResult.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+  const agedCheckpoint = JSON.parse(agedResult.checkpoint.slice(agedResult.checkpoint.indexOf("{")));
+  assert.equal(Object.hasOwn(agedCheckpoint, "modifiedOrObservedFiles"), false);
+  assert.equal(agedCheckpoint.currentWorkStatus.modifiedOrObservedFiles.length, 1);
+  const agedOutcomes = agedResult.memory.currentWorkStatus.recentToolOutcomes;
+  assert.doesNotMatch(JSON.stringify(agedOutcomes), /Next\.cpp|9999999999999999/u);
+  assert.ok(agedOutcomes.every((outcome) => (
+    !Object.hasOwn(JSON.parse(outcome), "canonicalProjectRoot")
+  )));
 });
 
 test("a simulated MCP restart inherits facts and objective but no prior runtime receipt", () => {
@@ -1400,6 +1442,108 @@ test("system messages, latest turn, and file-bearing messages are retained indiv
   assert.equal(result.omittedMessageCount, 1);
 });
 
+test("bounded current-turn retention keeps the newest unread tool exchange complete", () => {
+  const result = core.buildCheckpoint([
+    message("system", "system"),
+    message("user", "inspect the project and report"),
+    message("assistant", "reading the older file", {
+      toolRequests: [{ id: "old-read", type: "function", name: "read_file", arguments: { path: "Old.cpp" } }],
+    }),
+    message("tool", "", {
+      toolResults: [{
+        toolCallId: "old-read",
+        content: JSON.stringify({ ok: true, noise: `${"OLD_ALREADY_READ ".repeat(2000)}OLD_ALREADY_READ_END` }),
+      }],
+    }),
+    message("assistant", "reading the newest file", {
+      toolRequests: [{ id: "new-read", type: "function", name: "read_file", arguments: { path: "New.cpp" } }],
+    }),
+    message("tool", "", {
+      toolResults: [{
+        toolCallId: "new-read",
+        content: JSON.stringify({ ok: true, noise: `${"NEW_UNREAD ".repeat(2000)}NEW_UNREAD_END` }),
+      }],
+    }),
+    message("tool", "", {
+      toolResults: [{
+        toolCallId: "orphan-result",
+        content: JSON.stringify({ ok: true, noise: "ORPHAN_RESULT_MUST_NOT_SURVIVE" }),
+      }],
+    }),
+  ], {
+    recentCompleteTurns: 0,
+    maxCurrentTurnMessages: 2,
+  });
+
+  assert.deepEqual(result.retainedIndexes, [0, 1, 4, 5]);
+  assert.equal(result.omittedMessageCount, 3);
+  assert.equal(result.memory.latestUserMessage, "inspect the project and report");
+  assert.equal(result.memory.activeObjective.text, "inspect the project and report");
+  assert.doesNotMatch(result.checkpoint, /OLD_ALREADY_READ_END|NEW_UNREAD_END|ORPHAN_RESULT_MUST_NOT_SURVIVE/);
+  assertNoDurableFileCapability(result);
+});
+
+test("successive bounded compactions serialize each tool outcome exactly once", () => {
+  let history = [message("user", "Inspect every file, then report.")];
+  let lastResult = null;
+  const labels = ["OUTCOME_A", "OUTCOME_B", "OUTCOME_C", "OUTCOME_D", "OUTCOME_E"];
+
+  for (const [index, label] of labels.entries()) {
+    const requestId = `read-${index}`;
+    history.push(
+      message("assistant", `Reading file ${index}.`, {
+        toolRequests: [{ id: requestId, type: "function", name: "read_file", arguments: { path: `File${index}.cpp` } }],
+      }),
+      message("tool", "", {
+        toolResults: [{
+          toolCallId: requestId,
+          content: JSON.stringify({
+            ok: true,
+            summary: label,
+            exitCode: 0,
+            proofLevel: "TestVerified",
+            upToDate: true,
+            fullLogPath: "C:\\Logs\\shared-build.log",
+          }),
+        }],
+      }),
+    );
+    lastResult = core.buildCheckpoint(history, {
+      recentCompleteTurns: 0,
+      maxCurrentTurnMessages: 2,
+    });
+    const retained = new Set(lastResult.retainedIndexes);
+    history = [
+      ...history.filter((item, messageIndex) => item.role === "system" && retained.has(messageIndex)),
+      message("system", lastResult.checkpoint),
+      ...history.filter((item, messageIndex) => item.role !== "system" && retained.has(messageIndex)),
+    ];
+  }
+
+  assert.ok(lastResult);
+  const modelFacing = history.map((item) => (
+    `${item.text}\n${item.toolResults.map((result) => result.content).join("\n")}`
+  )).join("\n");
+  for (const label of labels) {
+    assert.equal(modelFacing.split(label).length - 1, 1, `${label} should appear exactly once`);
+  }
+  const durableOutcomes = lastResult.memory.currentWorkStatus.recentToolOutcomes;
+  assert.equal(durableOutcomes.length, 4);
+  assert.equal(new Set(durableOutcomes).size, durableOutcomes.length);
+  assert.equal(lastResult.memory.currentWorkStatus.recentBuildOrTestState.length, 1);
+  assert.equal(
+    lastResult.memory.currentWorkStatus.recentBuildOrTestState[0].fullLogPath,
+    "C:\\Logs\\shared-build.log",
+  );
+  assert.ok(durableOutcomes.every((outcome) => (
+    !outcome.includes("fullLogPath")
+    && !outcome.includes("proofLevel")
+    && !outcome.includes("exitCode")
+    && !outcome.includes("upToDate")
+  )));
+  assert.doesNotMatch(lastResult.checkpoint, /OUTCOME_E/u);
+});
+
 test("an old attachment does not pin every later turn and disable compaction", () => {
   const messages = [message("system", "system"), message("user", "attachment", { hasFiles: true })];
   for (let index = 0; index < 50; index += 1) {
@@ -1423,17 +1567,19 @@ test("previous final response is recorded as evidence without claiming objective
   assert.doesNotMatch(result.checkpoint, /commit|ack|route|planner|synthesis/i);
 });
 
-test("token pressure is the only normal compaction decision", () => {
-  assert.equal(core.shouldCompact({ remainingTokens: 100, messageCount: 100 }), false);
-  assert.equal(core.shouldCompact({ remainingTokens: 13999, messageCount: 3 }, { enabled: true, softRemainingTokens: 14000 }), true);
-  assert.equal(core.shouldCompact({ remainingTokens: 14001, messageCount: 100 }, { enabled: true, softRemainingTokens: 14000 }), false);
-  assert.equal(core.shouldCompact({ remainingTokens: 100, messageCount: 100 }, { enabled: false, softRemainingTokens: 14000 }), false);
-  assert.equal(core.shouldCompact({ remainingTokens: 100, messageCount: 100 }, { enabled: true, observeOnly: true, softRemainingTokens: 14000 }), false);
+test("token pressure is the only normal compaction decision once the handler is active", () => {
+  assert.equal(core.shouldCompact({ remainingTokens: 100, messageCount: 100 }), true);
+  assert.equal(core.shouldCompact({ remainingTokens: 13999, messageCount: 3 }, { softRemainingTokens: 14000 }), true);
+  assert.equal(core.shouldCompact({ remainingTokens: 14001, messageCount: 100 }, { softRemainingTokens: 14000 }), false);
+  assert.equal(core.shouldCompact({ remainingTokens: 100, messageCount: 100 }, { enabled: false, softRemainingTokens: 14000 }), true);
+  assert.equal(core.shouldCompact({ remainingTokens: 100, messageCount: 100 }, { observeOnly: true, softRemainingTokens: 14000 }), false);
 });
 
 test("fallback message threshold applies only when remaining token measurement is unavailable", () => {
-  assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 24 }, { enabled: true, compactAboveMessageCount: 24 }), true);
-  assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 23 }, { enabled: true, compactAboveMessageCount: 24 }), false);
+  assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 24 }, { compactAboveMessageCount: 24 }), true);
+  assert.equal(core.shouldCompact({ remainingTokens: Number.NaN, messageCount: 23 }, { compactAboveMessageCount: 24 }), false);
+  assert.equal(core.shouldCompact({ exact: false, remainingTokens: 27000, messageCount: 24 }, { compactAboveMessageCount: 24 }), true);
+  assert.equal(core.shouldCompact({ exact: false, remainingTokens: 27000, messageCount: 23 }, { compactAboveMessageCount: 24 }), false);
 });
 
 test("actual Qwen E2E transcript keeps the cinematic objective through three hard compactions", () => {

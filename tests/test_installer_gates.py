@@ -61,6 +61,8 @@ def test_context_compactor_status_verifies_direct_source_layout() -> None:
     assert "Transparent context-compactor source layout verified" in status.stdout
     assert "top-level chat-plugin switch" in status.stdout
     assert "OFF" in status.stdout
+    assert "single switch" in status.stdout
+    assert "no nested compaction gate" in status.stdout
 
 
 def test_context_compactor_status_does_not_fabricate_runtime_activation() -> None:
@@ -79,11 +81,13 @@ def test_unreal_verifier_requires_and_hashes_the_direct_compactor_surface() -> N
     for relative in (
         r"src\index.ts",
         r"src\prediction-loop.ts",
+        r"src\round-loop.ts",
         r"src\direct-compaction-core.js",
         r"src\direct-config.ts",
     ):
         assert relative in verifier
     assert r"dist\prediction-loop.js" in verifier
+    assert r"dist\round-loop.js" in verifier
     assert r"src\generator.ts" not in verifier
     assert r"src\compaction-core.js" not in verifier
     assert r"dist\generator.js" not in verifier

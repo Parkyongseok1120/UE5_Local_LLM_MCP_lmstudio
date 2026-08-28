@@ -19,6 +19,8 @@ Produce three lists:
 - `Proposed`: the smallest delta needed for the requested outcome.
 - `DoNotDuplicate`: existing systems, data types, or services a later implementer must reuse.
 
+All three fields must be arrays. `existing` must be non-empty. For a no-change as-built report, represent the absence of a proposal explicitly with `proposed: []`; `doNotDuplicate` may also be an empty array. Do not invent a change merely to make either list non-empty.
+
 Treat a generated architecture map as inventory evidence, not behavioral proof. Verify ownership and data flow from source or runtime evidence.
 
 ## Codegen mode
