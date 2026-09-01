@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.2
+# UE5_Local_LLM_MCP_lmstudio 1.3.3
 
-> **Stable v1.3.2 릴리스:** Direct Model Mode가 기본 지원 경로입니다. 파일 변경 동작과 기존 receipt/CAS/atomic-write 서버 경계는 그대로 유지하면서 긴 multi-round 작업에 완결된 tool-round 경계를 추가하고, durable continuity에서 ephemeral capability를 구조적으로 제거했으며, Evidence packet 검증 계약을 통합했습니다. 지원되는 새 PC에 사용 가능한 Python이 없으면 platform launcher가 managed Python 3.12를 자동으로 준비합니다. 여러 Unreal Engine 버전과 여러 프로젝트에서 재사용할 수 있도록 설계되었습니다. [1.3.2 릴리스 노트](docs/Release_Notes_1_3_2.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
+> **Stable v1.3.3 릴리스:** Direct Model Mode가 기본 지원 경로입니다. 검색 결과를 정확한 프로젝트 identity와 함께 바로 재사용할 수 있게 하고, Direct RAG evidence를 serialized response envelope 안에서 제한하며, Evidence-First contract lookup은 tool-order authority가 아닌 선택적 조회임을 명확히 했습니다. 기존 receipt/CAS/atomic-write 경계와 context compactor 기본 OFF 정책은 그대로입니다. 여러 Unreal Engine 버전과 여러 프로젝트에서 재사용할 수 있도록 설계되었습니다. [1.3.3 릴리스 노트](docs/Release_Notes_1_3_3.md)와 [통합 설치 문서](docs/Integrated_Installer.md)를 참고하세요.
 
 LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 위한 **RAG + MCP stack**입니다.
 
@@ -28,9 +28,9 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 > **프로젝트 현황 — 2026년 8월**
 >
-> **현재 제품 라벨은 stable 1.3.2입니다.** 지원 runtime은 Direct Model Mode, scoped file-version receipt, provenance-bound RAG generation, bounded Build/Automation process, provenance-aware durable continuity를 사용합니다. 선택적 context-continuity plugin은 installer가 채팅에서 활성화하지 않으므로 LM Studio가 소유한 단일 채팅 토글은 기본 OFF입니다. MCP 서버는 capability와 파일시스템·프로세스·빌드·프로젝트 안전 경계를 제공하며 모델의 task plan이나 tool 순서를 소유하지 않습니다.
+> **현재 제품 라벨은 stable 1.3.3입니다.** 지원 runtime은 Direct Model Mode, scoped file-version receipt, provenance-bound RAG generation, bounded Build/Automation process, provenance-aware durable continuity를 사용합니다. 선택적 context-continuity plugin은 installer가 채팅에서 활성화하지 않으므로 LM Studio가 소유한 단일 채팅 토글은 기본 OFF입니다. MCP 서버는 capability와 파일시스템·프로세스·빌드·프로젝트 안전 경계를 제공하며 모델의 task plan이나 tool 순서를 소유하지 않습니다.
 >
-> Stable v1.3.2 component metadata는 Node agent MCP 0.3.20, Evidence-First MCP server 1.1.0, Context Compactor 0.4.51/revision 98, portable manifest 2.1.14입니다. Compactor는 중복된 내부 enable gate를 제거하고 각 완결된 tool round 전에 context를 재측정하며 제한된 validation 복구 정보를 보존합니다. runtime-local 파일 변경 capability는 durable memory에 남기지 않고 사용자 작성 receipt-domain 언어는 계속 보존합니다.
+> Stable v1.3.3 component metadata는 Node agent MCP 0.3.21, Evidence-First MCP server 1.1.1, Context Compactor 0.4.51/revision 98, portable manifest 2.1.16입니다. 검색 결과는 reusable scoped URI와 정확한 project identity를 함께 제공하고, Direct RAG는 serialized envelope와 match metadata를 제한하며, Evidence-First contract lookup은 routine preflight가 아닌 선택적 조회입니다.
 >
 > 릴리스 운영자가 Qwen 3.8 27B로 실제 Unreal 프로젝트에서 active-project 탐지, 반복 RAG/search/read, 대규모 architecture 보고서 작성, 후속 대화 연속성을 확인했습니다. 이전의 중간 JSON truncation은 재현되지 않았습니다. 이는 기능 E2E 확인이며 benchmark 점수나 모든 host의 보편적 인증은 아닙니다.
 >
@@ -42,7 +42,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_2.md"><img alt="1.3.2 Notes" src="https://img.shields.io/badge/Release-1.3.2-blue?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_3.md"><img alt="1.3.3 Notes" src="https://img.shields.io/badge/Release-1.3.3-blue?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
 </p>
@@ -51,7 +51,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 
 **Qwen 3.8 27B를 이 stack의 현재 주 검증 operating model로 매우 추천합니다.** v1.3.2 라이브 E2E에서 실제 프로젝트의 장기 RAG/read/report 작업을 이전 context truncation 없이 완료했습니다. Muse Glimmer는 테스트 중이며 아직 검증된 추천이 아닙니다. Qwen 3.5, community Qwen 3.6 27B checkpoint, GPT-OSS는 현재 추천하지 않습니다.
 
-과거 live-test 점수와 실행 시간 기록은 README에서 의도적으로 제거했습니다. 과거 측정 근거가 필요할 때만 [모델 측정 결과](docs/Model_Measurement_Results.md)를 참고하세요. 보관된 결과는 현재 모델 추천이나 v1.3.2 품질 점수가 아닙니다.
+과거 live-test 점수와 실행 시간 기록은 README에서 의도적으로 제거했습니다. 과거 측정 근거가 필요할 때만 [모델 측정 결과](docs/Model_Measurement_Results.md)를 참고하세요. 보관된 결과는 현재 모델 추천이나 v1.3.3 품질 점수가 아닙니다.
 
 > **BYOI** = Bring Your Own Index. 이 저장소는 **tooling만** 제공합니다. Epic source, 사전 빌드된 `rag.sqlite`는 포함하지 않습니다.
 
@@ -174,7 +174,7 @@ hard compaction의 bounded continuity state는 최신 사용자 요청, active o
 
 | 주제 | 파일 |
 |---|---|
-| 1.3.2 릴리스 노트 | [docs/Release_Notes_1_3_2.md](docs/Release_Notes_1_3_2.md) |
+| 1.3.3 릴리스 노트 | [docs/Release_Notes_1_3_3.md](docs/Release_Notes_1_3_3.md) |
 | 상세 프로젝트 개요 | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | 모델 측정 결과 | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | 버전별 성능 이력 | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -188,7 +188,7 @@ hard compaction의 bounded continuity state는 최신 사용자 요청, active o
 
 ## 요약
 
-1.3.2는 현재 stable Direct Model Mode 릴리스입니다. Scoped SHA-256 file-version receipt, receipt 연쇄 수정, bounded process 실행, RAG provenance, durable continuity sanitization, 완결된 tool-round 경계, installer 경로, package hygiene는 자동 검증으로 보호합니다. 선택적 context compactor는 기본 OFF이며 압축된 history를 통해 파일 변경 권한을 재상속하지 않습니다.
+1.3.3은 현재 stable Direct Model Mode 릴리스입니다. Scoped SHA-256 file-version receipt, receipt 연쇄 수정, bounded process 실행, RAG provenance, response-envelope budget, 정확한 project identity, durable continuity sanitization, installer 경로, package hygiene는 자동 검증으로 보호합니다. 선택적 context compactor는 기본 OFF이며 압축된 history를 통해 파일 변경 권한을 재상속하지 않습니다.
 
 Qwen 3.8 27B가 현재 매우 추천하는 주 operating model입니다. Muse Glimmer는 테스트 중입니다. Qwen 3.5, community Qwen 3.6 27B checkpoint, GPT-OSS는 현재 추천하지 않습니다.
 

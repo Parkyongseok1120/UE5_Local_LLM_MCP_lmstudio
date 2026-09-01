@@ -2,9 +2,9 @@
 
 > **Historical / superseded snapshot.** This page records the earlier Stable
 > Gate review and intentionally preserves its point-in-time findings. It is not
-> the current 1.3.2 Direct-mode release checklist: several “remaining” and
+> the current 1.3.3 Direct-mode release checklist: several “remaining” and
 > “v-next” items below were later implemented. Use
-> [Release Notes 1.3.2](Release_Notes_1_3_2.md),
+> [Release Notes 1.3.3](Release_Notes_1_3_3.md),
 > [Integrated Installer](Integrated_Installer.md), and the current CI workflow for
 > present behavior and gates.
 

@@ -62,8 +62,8 @@ def test_installer_profiles_are_manifest_driven() -> None:
     compactor_manifest = json.loads(
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
-    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.2"
-    assert manifest["version"] == "2.1.15"
+    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.3"
+    assert manifest["version"] == "2.1.16"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
     assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is False
     assert manifest["safety"]["contextCompactionEnabledByDefault"] is False
