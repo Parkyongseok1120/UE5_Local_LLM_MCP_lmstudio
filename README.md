@@ -30,7 +30,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 >
 > **Current product label: 1.3.3 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and provenance-aware durable continuity. The optional context-continuity plugin is not chat-activated by the installer, so its single host-owned chat toggle remains OFF by default. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
 >
-> Stable v1.3.3 component metadata is Node agent MCP 0.3.21, Evidence-First MCP server 1.1.1, Context Compactor 0.4.51/revision 98, and portable manifest 2.1.16. Search results pair reusable scoped URIs with exact project identity, Direct RAG reserves its serialized envelope and bounds match metadata, and Evidence-First contract lookup is optional rather than a routine preflight.
+> Stable v1.3.3 component metadata is Node agent MCP 0.3.22, Evidence-First MCP server 1.1.1, Context Compactor 0.4.51/revision 98, and portable manifest 2.1.17. Search results pair reusable scoped URIs with exact project identity, Direct RAG reserves its serialized envelope and bounds match metadata, and the Windows stale-lock identity probe tolerates loaded CI hosts without weakening live-lock safety.
 >
 > A release-operator live E2E run with Qwen 3.8 27B completed active-project discovery, repeated RAG/search/read rounds across a real Unreal project, a large architecture report, and follow-up continuity without reproducing the prior mid-session JSON truncation. This is a functional workflow check, not a benchmark score or universal host certification.
 >

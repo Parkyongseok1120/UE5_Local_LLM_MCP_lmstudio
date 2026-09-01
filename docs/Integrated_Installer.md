@@ -2,7 +2,7 @@
 
 The repository has one canonical installer for the portable evidence-first reasoning layer, LM Studio MCP integration, and optional Unreal adapters.
 
-Product release label: **1.3.3**. The installer reports the same value with `python3 install.py --version`; the immutable stable `v1.3.0` snapshot uses portable manifest `2.1.8`, stable `v1.3.1` uses `2.1.11`, stable `v1.3.2` uses `2.1.14`, and stable `v1.3.3` uses `2.1.16` for the scoped-URI, response-budget, Evidence-First contract, and release-document closure. `portablePackage.releaseReady: true` records automated release/package readiness, not universal physical-install certification.
+Product release label: **1.3.3**. The installer reports the same value with `python3 install.py --version`; the immutable stable `v1.3.0` snapshot uses portable manifest `2.1.8`, stable `v1.3.1` uses `2.1.11`, stable `v1.3.2` uses `2.1.14`, and stable `v1.3.3` uses `2.1.17` for the scoped-URI, response-budget, Evidence-First contract, Windows lock-probe, and release-document closure. `portablePackage.releaseReady: true` records automated release/package readiness, not universal physical-install certification.
 
 ## Requirements
 

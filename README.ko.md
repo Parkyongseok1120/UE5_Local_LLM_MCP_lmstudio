@@ -30,7 +30,7 @@ LM Studio의 로컬 LLM을 Unreal Engine 5.x C++ 보조 에이전트로 쓰기 �
 >
 > **현재 제품 라벨은 stable 1.3.3입니다.** 지원 runtime은 Direct Model Mode, scoped file-version receipt, provenance-bound RAG generation, bounded Build/Automation process, provenance-aware durable continuity를 사용합니다. 선택적 context-continuity plugin은 installer가 채팅에서 활성화하지 않으므로 LM Studio가 소유한 단일 채팅 토글은 기본 OFF입니다. MCP 서버는 capability와 파일시스템·프로세스·빌드·프로젝트 안전 경계를 제공하며 모델의 task plan이나 tool 순서를 소유하지 않습니다.
 >
-> Stable v1.3.3 component metadata는 Node agent MCP 0.3.21, Evidence-First MCP server 1.1.1, Context Compactor 0.4.51/revision 98, portable manifest 2.1.16입니다. 검색 결과는 reusable scoped URI와 정확한 project identity를 함께 제공하고, Direct RAG는 serialized envelope와 match metadata를 제한하며, Evidence-First contract lookup은 routine preflight가 아닌 선택적 조회입니다.
+> Stable v1.3.3 component metadata는 Node agent MCP 0.3.22, Evidence-First MCP server 1.1.1, Context Compactor 0.4.51/revision 98, portable manifest 2.1.17입니다. 검색 결과는 reusable scoped URI와 정확한 project identity를 함께 제공하고, Direct RAG는 serialized envelope와 match metadata를 제한하며, Windows stale-lock identity probe는 live-lock 안전성을 약화하지 않으면서 부하가 있는 CI host를 허용합니다.
 >
 > 릴리스 운영자가 Qwen 3.8 27B로 실제 Unreal 프로젝트에서 active-project 탐지, 반복 RAG/search/read, 대규모 architecture 보고서 작성, 후속 대화 연속성을 확인했습니다. 이전의 중간 JSON truncation은 재현되지 않았습니다. 이는 기능 E2E 확인이며 benchmark 점수나 모든 host의 보편적 인증은 아닙니다.
 >

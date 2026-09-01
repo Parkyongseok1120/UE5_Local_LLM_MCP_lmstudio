@@ -7,8 +7,8 @@
 | Component | Version |
 |---|---|
 | Product | 1.3.3 (`v1.3.3`) |
-| Portable manifest | 2.1.16 |
-| Node agent MCP | 0.3.21 |
+| Portable manifest | 2.1.17 |
+| Node agent MCP | 0.3.22 |
 | Evidence-First MCP server | 1.1.1 |
 | Context compactor | 0.4.51 / revision 98 |
 
@@ -25,6 +25,7 @@
 - `scope=auto` continues to classify API-looking queries as engine evidence when appropriate. Callers that require current-project source can pair an exact project selector with `scope=project`.
 - `evidence_first_contract` is an optional exact-schema lookup when obligations are absent or uncertain. It is not a routine preflight, permission check, or RAG/read/write/build sequencer. Validation remains required before causal P0/P1 findings or multi-file implementation plans.
 - Agent mutation descriptions now surface the existing `ALLOW_WRITE=1` requirement, and workspace status remains a useful advisory authority check without becoming a mandatory tool order.
+- Windows stale-lock recovery now allows the process-start identity probe up to the same bounded 10-second subprocess budget used by reclaim coordination. A probe that still cannot inspect a live process continues to fail safe and never steals its lock.
 
 ### Validation boundary
 
@@ -47,6 +48,7 @@ The GitHub release assets include the clean portable ZIP and its SHA-256 digest.
 - `scope=auto`는 API 형태의 query를 필요에 따라 engine evidence로 계속 분류합니다. 현재 project source가 필요한 호출자는 정확한 project selector와 `scope=project`를 함께 사용할 수 있습니다.
 - `evidence_first_contract`는 obligation이 없거나 불확실할 때 쓰는 선택적 exact-schema 조회입니다. Routine preflight, 권한 확인, RAG/read/write/build 순서 결정 주체가 아닙니다. Causal P0/P1 finding이나 multi-file implementation plan을 제시하기 전 validation 의무는 유지됩니다.
 - Agent mutation 설명에 기존 `ALLOW_WRITE=1` 요구사항을 명시하고, workspace status는 유용한 advisory authority check로 유지하되 필수 tool order로 만들지 않습니다.
+- Windows stale-lock 복구의 process-start identity probe는 reclaim coordination과 같은 10초 bounded subprocess budget을 사용합니다. 그래도 live process를 확인하지 못하면 기존 fail-safe 정책대로 lock을 회수하지 않습니다.
 
 ### 검증 경계
 

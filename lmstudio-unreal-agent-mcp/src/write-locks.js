@@ -13,6 +13,7 @@ const pendingPaths = new Map();
 const OWNER = `${process.pid}:${crypto.randomUUID()}`;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const LOCK_INITIALIZATION_GRACE_MS = 5_000;
+const PROCESS_IDENTITY_PROBE_TIMEOUT_MS = 10_000;
 let processIdentityCache;
 
 function canonicalLockKey(absPath, hostPlatform = process.platform) {
@@ -54,7 +55,7 @@ function probeProcessStartIdentity(pid) {
     const result = cp.spawnSync(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", script],
-      { encoding: "utf8", windowsHide: true, timeout: 2500 }
+      { encoding: "utf8", windowsHide: true, timeout: PROCESS_IDENTITY_PROBE_TIMEOUT_MS }
     );
     const value = String(result.stdout || "").trim();
     return result.status === 0 && /^\d+$/.test(value) ? `filetime:${value}` : "";
