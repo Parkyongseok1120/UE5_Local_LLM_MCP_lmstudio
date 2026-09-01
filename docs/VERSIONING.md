@@ -4,11 +4,11 @@ This repository uses **independent version numbers** per component. They are not
 
 | Component | Version | Location | Meaning |
 |-----------|---------|----------|---------|
-| **Product** | 1.3.2 | [`installer/manifest.json`](../installer/manifest.json), [`README.md`](../README.md) | User-facing release label and installable product metadata |
-| **Node agent MCP** | 0.3.20 | [`lmstudio-unreal-agent-mcp/package.json`](../lmstudio-unreal-agent-mcp/package.json) | npm package semver for the agent server |
-| **Evidence-First MCP server** | 1.1.0 | [`evidence_first_mcp.py`](../skills/evidence-first-code-audit/scripts/evidence_first_mcp.py) | Read-only audit contract, validation schema, and MCP protocol metadata |
+| **Product** | 1.3.3 | [`installer/manifest.json`](../installer/manifest.json), [`README.md`](../README.md) | User-facing release label and installable product metadata |
+| **Node agent MCP** | 0.3.21 | [`lmstudio-unreal-agent-mcp/package.json`](../lmstudio-unreal-agent-mcp/package.json) | npm package semver for the agent server |
+| **Evidence-First MCP server** | 1.1.1 | [`evidence_packet_contract.py`](../skills/evidence-first-code-audit/scripts/evidence_packet_contract.py), [`evidence_first_mcp.py`](../skills/evidence-first-code-audit/scripts/evidence_first_mcp.py) | Read-only audit contract, validation schema, and MCP protocol metadata |
 | **Context compactor plugin** | 0.4.51 / revision 98 | [`lmstudio-context-compactor-plugin/package.json`](../lmstudio-context-compactor-plugin/package.json), [`manifest.json`](../lmstudio-context-compactor-plugin/manifest.json) | LM Studio generator plugin behavior, continuity memory, and installed revision |
-| **Portable manifest** | 2.1.14 | [`installer/manifest.json`](../installer/manifest.json) | Portable ZIP bundle metadata (layout + required files) |
+| **Portable manifest** | 2.1.16 | [`installer/manifest.json`](../installer/manifest.json) | Portable ZIP bundle metadata (layout + required files) |
 
 ## When to bump
 
@@ -36,6 +36,17 @@ receipt/CAS/atomic-write boundaries remain unchanged. The installer never
 enables LM Studio's host-owned chat toggle. Published `v1.3.0` and `v1.3.1`
 tags and artifacts remain immutable.
 
-The human-facing label is `1.3.2`, published with the distinct tag `v1.3.2`. **Do not force-move** an existing stable, RC, or Beta tag. `portablePackage.releaseReady: true` means that the automated release, package, installer, safety, and cross-platform gates are required to pass for publication. It does not claim a clean-machine physical installer lifecycle on every host or universal compatibility across Unreal projects, engine builds, plugins, and editor runtimes. Repository release notes retain the exact evidence boundary.
+Stable `v1.3.3` aligns product 1.3.3, Node agent MCP 0.3.21, Evidence-First MCP
+server 1.1.1, context compactor 0.4.51/revision 98, and portable manifest
+2.1.16. Node search results pair reusable scoped URIs with exact project identity.
+Direct RAG reserves its serialized envelope, bounds mixed results and match
+references, and reports evidence trimming without returning malformed or partial
+JSON. Evidence-First contract lookup is optional rather than a routine Direct
+preflight, while causal P0/P1 and multi-file-plan validation remains required.
+The existing MCP receipt/CAS/atomic-write boundaries and default-OFF compactor
+policy remain unchanged. Published `v1.3.0`, `v1.3.1`, and `v1.3.2` tags and
+artifacts remain immutable.
+
+The human-facing label is `1.3.3`, published with the distinct tag `v1.3.3`. **Do not force-move** an existing stable, RC, or Beta tag. `portablePackage.releaseReady: true` means that the automated release, package, installer, safety, and cross-platform gates are required to pass for publication. It does not claim a clean-machine physical installer lifecycle on every host or universal compatibility across Unreal projects, engine builds, plugins, and editor runtimes. Repository release notes retain the exact evidence boundary.
 
 Evaluation history tied to product versions remains in the development repository and is intentionally excluded from the portable Direct package.

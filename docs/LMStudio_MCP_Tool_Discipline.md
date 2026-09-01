@@ -65,7 +65,7 @@ When reviewing gameplay/cinematic logic (not compile errors):
 1. Read the sibling `.h` UENUM / field comments **before** calling `read_symbol` / concluding a bug from `.cpp` alone.
 2. Label every finding `Bug` | `ByDesign` | `Ambiguous` | `NeedsRuntimeProof`.
 3. Intentional early returns that match header contracts (e.g. AuthoredWorld = keep asset transform) are **ByDesign**, not "missing logic".
-4. Cite the header/implementation evidence directly. If a separately configured evidence-first capability is available, it may be used as an optional audit aid, never as a Direct answer or build gate.
+4. Cite the header/implementation evidence directly. If a separately configured evidence-first capability is available, it may be used as an optional audit aid, never as a Direct answer or build gate. `evidence_first_contract` is an exact-schema lookup only when obligations are absent or uncertain; it is not a routine preflight or tool-order authority.
 
 ## Validate-on-write
 
@@ -143,6 +143,8 @@ Direct Mode has no required chat order. A common implementation flow is:
 
 The model may omit irrelevant steps, revisit a file after changed evidence, or call a build immediately for a build-diagnosis request. A tool suggestion is advisory. No `toolPolicy`, `writeGate`, checkpoint, or stop condition owns the sequence.
 
+`search_files` keeps each result's search-root-relative `path` for compatibility and also returns a directly reusable `uri`. A `project://` URI is scoped rather than globally unique: carry the response's exact `activeProject` into the next call's `project` argument. That pairing separates same-name clones without path guessing or a server-owned follow-up sequence.
+
 For edit tasks:
 
 - Do not write when `ALLOW_WRITE=0`, the user requested analysis only, or the target/scope is not established.
@@ -165,7 +167,7 @@ No MCP task bootstrap is required. Confirm the exact project and safety flags on
 
 Build and Automation share one bounded process owner. It keeps bounded head and tail captures for stdout and stderr, records omitted-byte metadata, terminates the process tree on timeout, and persists only that bounded projection when the process exceeds the capture budget. `build_unreal_project` is compact by default: it returns a one-line `summary`, up to 40 likely error lines, and the timestamped bounded process log path under `.agent/logs` as `fullLogPath`; `verboseOutput=true` returns the bounded captured streams, not guaranteed unbounded raw output. `read_unreal_logs` defaults to a bounded tail; use `mode=first_error` to scan from byte zero and `mode=range` with `cursorByte`/`nextCursorByte` when exact traversal is needed. Always inspect `truncated`/`hasMore` and process capture metadata.
 
-Direct responses are bounded and remain valid JSON; errors use a much smaller ceiling than successful evidence payloads. An oversized success is returned as retryable `OUTPUT_LIMIT_EXCEEDED` without partial evidence or a cursor; narrow the byte/line/detail/result arguments before retrying.
+Direct responses are bounded and remain valid JSON; errors use a much smaller ceiling than successful evidence payloads. Direct RAG reserves room for the serialized response envelope, hard-bounds match-reference metadata, and keeps mixed project/engine results within the effective `top_k`. If evidence must be trimmed to fit, the response reports truncation and may return `nextDetailLevel`. The generic retryable `OUTPUT_LIMIT_EXCEEDED` guard remains for pathological producer output that still cannot fit; narrow the byte/line/detail/result arguments before retrying.
 
 For long LM Studio chats, keep the actual LLM selected and leave `codex/unreal-context-compactor` OFF by default. When bounded continuity is needed, enable that single switch before context pressure becomes critical. Compaction never preserves or creates task routes, required tool commands, or workflow authority.
 

@@ -1,9 +1,9 @@
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
 
-# UE5_Local_LLM_MCP_lmstudio 1.3.2
+# UE5_Local_LLM_MCP_lmstudio 1.3.3
 
-> **Stable v1.3.2 release:** Direct Model Mode remains the supported default. This release keeps file mutation semantics and the existing receipt/CAS/atomic-write server boundaries unchanged while adding a complete tool-round boundary for long multi-round work, structurally excluding ephemeral capabilities from durable continuity, and consolidating Evidence packet validation. The platform launchers can bootstrap managed Python 3.12 when a clean supported host has no usable Python. The stack is designed for multiple Unreal Engine versions and projects. See the [1.3.2 release notes](docs/Release_Notes_1_3_2.md) and [Integrated Installer](docs/Integrated_Installer.md).
+> **Stable v1.3.3 release:** Direct Model Mode remains the supported default. This release makes search results directly reusable with exact project identity, bounds Direct RAG evidence inside its serialized response envelope, and clarifies that Evidence-First contract lookup is optional rather than a tool-order authority. Existing receipt/CAS/atomic-write boundaries and the default-OFF context compactor policy remain unchanged. The stack is designed for multiple Unreal Engine versions and projects. See the [1.3.3 release notes](docs/Release_Notes_1_3_3.md) and [Integrated Installer](docs/Integrated_Installer.md).
 
 Local **RAG + MCP stack** for using local LLMs in LM Studio as Unreal Engine 5.x C++ assistants.
 
@@ -28,9 +28,9 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 > **Project Status — August 2026**
 >
-> **Current product label: 1.3.2 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and provenance-aware durable continuity. The optional context-continuity plugin is not chat-activated by the installer, so its single host-owned chat toggle remains OFF by default. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
+> **Current product label: 1.3.3 (stable).** The supported runtime uses Direct Model Mode, scoped file-version receipts, provenance-bound RAG generations, bounded build/Automation processes, and provenance-aware durable continuity. The optional context-continuity plugin is not chat-activated by the installer, so its single host-owned chat toggle remains OFF by default. MCP servers provide capabilities and enforce filesystem, process, build, and project safety; they do not own the model's task plan or tool sequence.
 >
-> Stable v1.3.2 component metadata is Node agent MCP 0.3.20, Evidence-First MCP server 1.1.0, Context Compactor 0.4.51/revision 98, and portable manifest 2.1.14. The Compactor removes the redundant nested enable gate, rechecks context before each complete tool round, retains bounded validation-repair feedback, and continues to exclude runtime-local file-mutation capabilities from durable memory while preserving user-authored receipt-domain language.
+> Stable v1.3.3 component metadata is Node agent MCP 0.3.21, Evidence-First MCP server 1.1.1, Context Compactor 0.4.51/revision 98, and portable manifest 2.1.16. Search results pair reusable scoped URIs with exact project identity, Direct RAG reserves its serialized envelope and bounds match metadata, and Evidence-First contract lookup is optional rather than a routine preflight.
 >
 > A release-operator live E2E run with Qwen 3.8 27B completed active-project discovery, repeated RAG/search/read rounds across a real Unreal project, a large architecture report, and follow-up continuity without reproducing the prior mid-session JSON truncation. This is a functional workflow check, not a benchmark score or universal host certification.
 >
@@ -40,7 +40,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 <p>
   <a href="docs/Project_Overview.md"><img alt="Project Overview" src="https://img.shields.io/badge/Docs-Project%20Overview-blue?logo=gitbook"></a>
-  <a href="docs/Release_Notes_1_3_2.md"><img alt="1.3.2 Notes" src="https://img.shields.io/badge/Release-1.3.2-blue?logo=github"></a>
+  <a href="docs/Release_Notes_1_3_3.md"><img alt="1.3.3 Notes" src="https://img.shields.io/badge/Release-1.3.3-blue?logo=github"></a>
   <a href="docs/Model_Measurement_Results.md"><img alt="Model Results" src="https://img.shields.io/badge/Docs-Model%20Results-purple?logo=gitbook"></a>
   <a href="docs/Version_Performance_History.md"><img alt="Version Performance" src="https://img.shields.io/badge/Docs-Version%20Performance-green?logo=gitbook"></a>
 </p>
@@ -49,7 +49,7 @@ If this project has been useful to you, please consider sponsoring — it helps 
 
 **Qwen 3.8 27B is highly recommended as the primary validated operating model for this stack.** Its v1.3.2 live E2E run completed a long real-project RAG/read/report workflow without the prior context truncation. Muse Glimmer is under testing and is not yet a validated recommendation. Qwen 3.5, community Qwen 3.6 27B checkpoints, and GPT-OSS are not currently recommended.
 
-Historical live-test scores and timing records are intentionally omitted from this README. See [Model Measurement Results](docs/Model_Measurement_Results.md) only when historical measurement evidence is needed; those archived results are not current model recommendations or a v1.3.2 quality score.
+Historical live-test scores and timing records are intentionally omitted from this README. See [Model Measurement Results](docs/Model_Measurement_Results.md) only when historical measurement evidence is needed; those archived results are not current model recommendations or a v1.3.3 quality score.
 
 > **BYOI** = Bring Your Own Index. This repo ships **tooling only**: not Epic source, not a pre-built `rag.sqlite`.
 
@@ -192,7 +192,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 | Topic | File |
 |---|---|
-| 1.3.2 release notes | [docs/Release_Notes_1_3_2.md](docs/Release_Notes_1_3_2.md) |
+| 1.3.3 release notes | [docs/Release_Notes_1_3_3.md](docs/Release_Notes_1_3_3.md) |
 | Detailed project overview | [docs/Project_Overview.md](docs/Project_Overview.md) |
 | Model measurement results | [docs/Model_Measurement_Results.md](docs/Model_Measurement_Results.md) |
 | Version performance history | [docs/Version_Performance_History.md](docs/Version_Performance_History.md) |
@@ -206,7 +206,7 @@ Full requirements, Mac remote setup, model profiles, and security notes are in [
 
 ## Summary
 
-1.3.2 is the current stable Direct Model Mode release. Scoped SHA-256 file-version receipts, receipt-chained edits, bounded process execution, RAG provenance, durable continuity sanitization, complete tool-round boundaries, installer paths, and package hygiene are guarded by automated checks. The optional context compactor remains OFF by default and does not inherit file-mutation authority through compacted history.
+1.3.3 is the current stable Direct Model Mode release. Scoped SHA-256 file-version receipts, receipt-chained edits, bounded process execution, RAG provenance, response-envelope budgets, exact project identity, durable continuity sanitization, installer paths, and package hygiene are guarded by automated checks. The optional context compactor remains OFF by default and does not inherit file-mutation authority through compacted history.
 
 Qwen 3.8 27B is the highly recommended primary operating model. Muse Glimmer remains under testing. Qwen 3.5, community Qwen 3.6 27B checkpoints, and GPT-OSS are not currently recommended.
 

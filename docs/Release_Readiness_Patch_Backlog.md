@@ -2,8 +2,8 @@
 
 > **Historical / superseded snapshot.** This backlog describes an earlier Stable
 > Gate milestone. Status rows and deferred items below are retained as historical
-> facts and must not be read as the current 1.3.2 backlog. Use
-> [Release Notes 1.3.2](Release_Notes_1_3_2.md),
+> facts and must not be read as the current 1.3.3 backlog. Use
+> [Release Notes 1.3.3](Release_Notes_1_3_3.md),
 > [Integrated Installer](Integrated_Installer.md), and the current CI workflow for
 > the supported Direct-mode release contract.
 

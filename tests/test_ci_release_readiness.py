@@ -55,7 +55,7 @@ def test_workflow_invokes_only_existing_named_pytest_suites() -> None:
 
 def test_suite_manifest_preserves_pre_consolidation_unique_coverage() -> None:
     assert {name: len(SUITES[name]) for name in PRIMARY_SUITE_NAMES} == {
-        "portable_direct": 28,
+        "portable_direct": 29,
         "portable_release": 12,
         "windows_direct": 9,
         "windows_release": 2,
@@ -63,7 +63,7 @@ def test_suite_manifest_preserves_pre_consolidation_unique_coverage() -> None:
     paths = _all_suite_paths()
     normalized = [path.casefold() for path in paths]
 
-    assert len(paths) == 51
+    assert len(paths) == 52
     assert len(normalized) == len(set(normalized))
     assert all((ROOT / path).is_file() for path in paths)
     assert "tests/test_public_path_hygiene.py" in paths

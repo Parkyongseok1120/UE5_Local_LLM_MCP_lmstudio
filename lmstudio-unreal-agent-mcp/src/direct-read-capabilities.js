@@ -119,12 +119,14 @@ function createReadCapabilities(context) {
     const matchFileNames = args.matchFileNames !== undefined ? args.matchFileNames === true : inferredFileName;
     const needle = caseSensitive ? query : query.toLowerCase();
     const matchesText = (value) => matcher ? matcher.test(value) : (caseSensitive ? value : value.toLowerCase()).includes(needle);
+    const rootUri = displayPath(resolution);
+    const resultUri = (rel) => rel === "." ? rootUri : `${rootUri}${rootUri.endsWith("/") ? "" : "/"}${rel}`;
     const files = await collectSearchFiles(resolution, maxFiles);
     const results = [];
     for (const item of files) {
       const rel = relativeSlash(resolution.absolutePath, item.target);
       if (matchFileNames && matchesText(path.basename(item.target))) {
-        results.push({ path: rel, kind: "file_name" });
+        results.push({ path: rel, uri: resultUri(rel), kind: "file_name" });
         if (results.length >= maxResults) break;
       }
       if (item.stat.size > 2 * 1024 * 1024) continue;
@@ -140,7 +142,7 @@ function createReadCapabilities(context) {
       const lines = buffer.toString("utf8").split(/\r?\n/);
       for (let index = 0; index < lines.length; index += 1) {
         if (!matchesText(lines[index])) continue;
-        results.push({ path: rel, line: index + 1, text: lines[index].slice(0, 1200) });
+        results.push({ path: rel, uri: resultUri(rel), line: index + 1, text: lines[index].slice(0, 1200) });
         if (results.length >= maxResults) break;
       }
       if (results.length >= maxResults) break;
@@ -149,7 +151,8 @@ function createReadCapabilities(context) {
       .update(files.map(({ target, stat }) => `${relativeSlash(resolution.absolutePath, target)}:${statSignature(stat)}`).join("\n"))
       .digest("hex");
     const payload = success({
-      path: displayPath(resolution),
+      path: rootUri,
+      ...pathMetadata(resolution),
       query,
       results,
       filesScanned: files.length,

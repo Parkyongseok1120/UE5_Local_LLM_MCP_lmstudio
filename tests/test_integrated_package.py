@@ -594,6 +594,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "direct_rag_corpus.py",
         "direct_rag_lexical.py",
         "direct_rag_limits.py",
+        "direct_rag_request_bounds.py",
         "direct_rag_sql.py",
         "direct_rag_editor_snapshot.py",
         "direct_rag_engine_collection.py",
@@ -782,10 +783,10 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "unreal_engine_binding.py",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert packaged_installer_manifest["productVersion"] == "1.3.2"
-    assert packaged_installer_manifest["version"] == "2.1.14"
+    assert packaged_installer_manifest["productVersion"] == "1.3.3"
+    assert packaged_installer_manifest["version"] == "2.1.16"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
-    assert (output / "docs" / "Release_Notes_1_3_2.md").is_file()
+    assert (output / "docs" / "Release_Notes_1_3_3.md").is_file()
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
     source_launcher = (ROOT / "install.sh").read_bytes()
     expected_launcher = source_launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n")

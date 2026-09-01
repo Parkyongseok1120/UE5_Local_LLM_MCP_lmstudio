@@ -39,6 +39,25 @@ def test_generic_mcp_is_read_only_and_project_neutral() -> None:
     assert all(tool["annotations"]["destructiveHint"] is False for tool in module.tool_definitions())
 
 
+def test_contract_lookup_is_optional_and_never_sequences_project_tools() -> None:
+    module = _load_mcp()
+    tools = {tool["name"]: tool for tool in module.tool_definitions()}
+    description = tools["evidence_first_contract"]["description"]
+    preset = json.loads(
+        (ROOT / "skills" / "evidence-first-code-audit" / "assets" / "lmstudio-evidence-first.preset.json")
+        .read_text(encoding="utf-8")
+    )["operation"]["fields"][0]["value"]
+
+    assert "Optionally load" in description
+    assert "grants no authority" in description
+    assert "never sequences RAG, read, write, or build tools" in description
+    assert "Call FIRST" not in description
+    assert "optional exact-schema lookup" in preset
+    assert "never as a routine preflight" in preset
+    assert "call evidence_first_contract first" not in preset
+    assert "Call evidence_first_validate" in preset
+
+
 def test_protocol_version_negotiation_and_invalid_arguments() -> None:
     module = _load_mcp()
     sent = []

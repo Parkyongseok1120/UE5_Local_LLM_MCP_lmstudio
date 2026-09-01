@@ -130,7 +130,7 @@ function toolDefinitions() {
   const definitions = [
     {
       name: "get_workspace_info",
-      description: "Return Direct Model Mode status, safety flags, workspace, active Unreal project, and project browse roots.",
+      description: "Return Direct Model Mode status, safety flags, workspace, active Unreal project, and project browse roots. For an explicit mutation or build request, this is a useful early authority check when the current flags are unknown; it is advisory and does not own tool order.",
       inputSchema: schema(repeatable()),
     },
     {
@@ -176,7 +176,7 @@ function toolDefinitions() {
     },
     {
       name: "search_files",
-      description: "Search file contents or basenames below a workspace:// or project:// path. Results are bounded but never route-filtered.",
+      description: "Search file contents or basenames below a workspace:// or project:// path. Each result keeps its search-root-relative path and also returns a directly reusable uri. Pair project:// result URIs with the response's exact activeProject in the next call's project argument so same-name clones stay distinct. Results are bounded but never route-filtered.",
       inputSchema: schema(repeatable({
         query: { type: "string" },
         path: { type: "string", description: "Default workspace://." },
@@ -244,7 +244,7 @@ function toolDefinitions() {
     },
     {
       name: "replace_in_file",
-      description: `Atomically replace one focused exact-text region in selected-project Source, Config, plugin Source, the exact plugin descriptor, or the active project descriptor. Emit this tool call immediately instead of serializing future patches in reasoning or prose. Every call must pass an explicit fileVersionReceipt from a read or immediately preceding mutation, or a valid raw expectedHash; no same-session evidence is selected automatically. For another region in the same file, wait for this tool result and use its new fileVersionReceipt in the next prediction round. Limits: oldText ${HARD_MUTATION_LIMITS.maxPatchOldTextChars} characters, newText ${HARD_MUTATION_LIMITS.maxPatchNewTextChars} characters, ${HARD_MUTATION_LIMITS.maxPatchChars} combined characters, and a server-enforced ${HARD_MUTATION_LIMITS.maxPatchLines} newText lines. Content and protected generated/state directories are not writable; semantic denylist findings are advisory only.`,
+      description: `Atomically replace one focused exact-text region in selected-project Source, Config, plugin Source, the exact plugin descriptor, or the active project descriptor. Requires ALLOW_WRITE=1. Emit this tool call immediately instead of serializing future patches in reasoning or prose. Every call must pass an explicit fileVersionReceipt from a read or immediately preceding mutation, or a valid raw expectedHash; no same-session evidence is selected automatically. For another region in the same file, wait for this tool result and use its new fileVersionReceipt in the next prediction round. Limits: oldText ${HARD_MUTATION_LIMITS.maxPatchOldTextChars} characters, newText ${HARD_MUTATION_LIMITS.maxPatchNewTextChars} characters, ${HARD_MUTATION_LIMITS.maxPatchChars} combined characters, and a server-enforced ${HARD_MUTATION_LIMITS.maxPatchLines} newText lines. Content and protected generated/state directories are not writable; semantic denylist findings are advisory only.`,
       inputSchema: {
         ...schema({
           ...focusedPatchArguments(),
@@ -255,7 +255,7 @@ function toolDefinitions() {
     },
     {
       name: "apply_edit_bundle",
-      description: `Atomically patch one focused region in each of at most ${HARD_MUTATION_LIMITS.maxBundleOperations} distinct existing files. The schema enforces one or two patches; the server additionally enforces unique normalized paths, at most ${HARD_MUTATION_LIMITS.maxPatchLines} newText lines per patch, and at most ${HARD_MUTATION_LIMITS.maxBundleChangedLines} aggregate changed lines. Every patch must pass its explicit fileVersionReceipt or valid raw expectedHash. Do not bundle non-contiguous regions from the same file; use replace_in_file once, wait for its result, then continue with the returned receipt in the next prediction round. Each patch uses the same ${HARD_MUTATION_LIMITS.maxPatchOldTextChars}-character oldText, ${HARD_MUTATION_LIMITS.maxPatchNewTextChars}-character newText, and ${HARD_MUTATION_LIMITS.maxPatchChars}-character combined bounds as replace_in_file. New files are created only with standalone write_file. Content and protected generated/state directories are not writable; semantic denylist findings are non-blocking advisories.`,
+      description: `Atomically patch one focused region in each of at most ${HARD_MUTATION_LIMITS.maxBundleOperations} distinct existing files. Requires ALLOW_WRITE=1. The schema enforces one or two patches; the server additionally enforces unique normalized paths, at most ${HARD_MUTATION_LIMITS.maxPatchLines} newText lines per patch, and at most ${HARD_MUTATION_LIMITS.maxBundleChangedLines} aggregate changed lines. Every patch must pass its explicit fileVersionReceipt or valid raw expectedHash. Do not bundle non-contiguous regions from the same file; use replace_in_file once, wait for its result, then continue with the returned receipt in the next prediction round. Each patch uses the same ${HARD_MUTATION_LIMITS.maxPatchOldTextChars}-character oldText, ${HARD_MUTATION_LIMITS.maxPatchNewTextChars}-character newText, and ${HARD_MUTATION_LIMITS.maxPatchChars}-character combined bounds as replace_in_file. New files are created only with standalone write_file. Content and protected generated/state directories are not writable; semantic denylist findings are non-blocking advisories.`,
       inputSchema: schema({
         project: projectArgument(),
         patches: {

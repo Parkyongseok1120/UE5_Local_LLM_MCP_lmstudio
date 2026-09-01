@@ -226,6 +226,7 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/direct_rag_index.py",
     "scripts/direct_rag_lexical.py",
     "scripts/direct_rag_limits.py",
+    "scripts/direct_rag_request_bounds.py",
     "scripts/direct_rag_projects.py",
     "scripts/direct_rag_project_cache.py",
     "scripts/direct_rag_probe.py",
@@ -483,7 +484,7 @@ PORTABLE_CONTENT_FILES = frozenset(
         "docs/LMStudio_Unreal_Agent_Setup.md",
         "docs/Project_Routing.md",
         "docs/RAG_Setup.md",
-        "docs/Release_Notes_1_3_2.md",
+        "docs/Release_Notes_1_3_3.md",
         "docs/Rider_Cline_Smoke_Checklist.md",
         "docs/Safe_Agent_Mode.md",
         "docs/Troubleshooting.md",
@@ -773,7 +774,7 @@ def _write_launchers(staging: Path) -> None:
         "- **Apple Silicon macOS**: physical FULL install verified on darwin-arm64 "
         "(runtimes, context compactor, LM Studio plugin installation/pinning, Unreal auto-detect, "
         "full RAG, evidence-first MCP smoke). Signing/notarization is not claimed; "
-        "see docs/Release_Notes_1_3_2.md for the release boundary.\n"
+        "see docs/Release_Notes_1_3_3.md for the release boundary.\n"
         "- **Intel macOS (x86_64)**: LM Studio is not supported by LM Studio upstream. "
         "LM Studio / Unreal / context-compactor installs abort early. "
         "Custom Codex / portable-rule / Cline-only installs remain allowed.\n"

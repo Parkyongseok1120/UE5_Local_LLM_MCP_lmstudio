@@ -52,8 +52,9 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "evidence_first_contract",
             "title": "Load evidence-first reasoning contract",
             "description": (
-                "Call FIRST for code audit, architecture analysis, refactor planning, or code generation. "
-                "Returns the portable reasoning contract and exact output obligations. Read-only and project-neutral."
+                "Optionally load the exact machine-readable reasoning contract when its structured "
+                "obligations are needed and are not already available. This project-neutral read-only "
+                "lookup grants no authority and never sequences RAG, read, write, or build tools."
             ),
             "inputSchema": _schema(
                 {

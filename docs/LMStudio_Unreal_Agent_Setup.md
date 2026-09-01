@@ -89,6 +89,8 @@ No server-owned task bootstrap is required. A useful first pass is:
 
 These are practical suggestions, not a required server sequence. The selected model may omit irrelevant steps or call `build_unreal_project` immediately when the user asks only for a build diagnosis.
 
+`search_files` returns both its original root-relative result `path` and a directly reusable scoped `uri`. For `project://` results, pass the response's exact `activeProject` as the next call's `project` selector; the URI alone is intentionally not a global identity across same-name clones.
+
 Do not use `run_javascript`, `js-code-sandbox`, Deno file APIs, Node `fs`, or browser/code-sandbox tools for project file I/O. If LM Studio exposes the JavaScript/TypeScript Code Sandbox plugin, hide or disable it for Unreal coding chats.
 
 Do not paste saved N-turn/task templates into a Direct chat. They are historical evaluation inputs, not supported MCP instructions or portable runtime assets.
