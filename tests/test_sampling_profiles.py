@@ -126,10 +126,10 @@ def test_all_profiles_use_the_direct_model_authority_prompt():
         assert profile["recommendedSystemPrompt"] == expected, name
 
     direct_prompt = (ROOT / expected).read_text(encoding="utf-8")
-    assert "You own the reasoning" in direct_prompt
-    assert "choice and order" in direct_prompt
-    assert "decision to stop" in direct_prompt
-    assert "final answer" in direct_prompt
+    assert "사용자가 선택한 모델이 요청을 해석" in direct_prompt
+    assert "필요한 MCP 도구와 호출 순서" in direct_prompt
+    assert "중단 시점" in direct_prompt
+    assert "최종 답변" in direct_prompt
 
 
 def test_mode_turn_and_wrapper_retry_flags_are_true_no_ops():

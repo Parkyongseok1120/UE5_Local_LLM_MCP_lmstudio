@@ -26,7 +26,6 @@ SKIP_FILES = {
     ROOT / "CONTRIBUTING.md",
     ROOT / "SECURITY.md",
     ROOT / "tests" / "test_public_path_hygiene.py",
-    ROOT / "docs" / "Project_Overview.md",
 }
 
 HOME_PATH_MARKERS = (

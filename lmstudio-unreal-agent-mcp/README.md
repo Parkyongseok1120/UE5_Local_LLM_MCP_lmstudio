@@ -1,96 +1,52 @@
-# LM Studio Unreal Agent MCP
+# 언리얼 프로젝트 파일·빌드 서버
 
-UE 프로젝트를 읽고, 안전하게 수정하고, 빌드·진단하는 로컬 MCP 서버입니다. 기본 진입점은 `src/direct-server.js`이며 선택된 LM Studio 모델이 추론, 도구 순서, 중단, 최종 답변을 직접 결정합니다. 서버는 작업 계획, route, synthesis readiness, 다음 도구를 소유하지 않습니다.
+AI가 언리얼 프로젝트 파일을 읽고, 허용된 부분을 고치고, 빌드와 테스트를 실행하는 로컬 MCP 서버입니다. 기본 진입점은 `src/direct-server.js`입니다.
 
-이 디렉터리는 루트 통합 패키지 안에서 사용합니다. 프로젝트 선택은 저장소의 작은 `scripts/project_controller.py` 상태 기록기를 호출하므로 하위 디렉터리만 `npm pack`한 결과는 지원하지 않습니다. 이것은 workflow controller가 아니며 공유 active-project 값의 원자적 기록만 담당합니다.
+이 폴더만 따로 배포하지 말고 저장소 전체 또는 통합 배포본 안에서 사용해야 합니다. 기본 프로젝트 기록은 상위의 `scripts/project_controller.py`를 사용합니다.
 
-## 실행 모드
+## 실행 방식
 
-- Direct(기본): `npm start` 또는 `node src/direct-server.js`
-- Strict(명시적 선택): `npm run start:strict` 또는 `node src/strict-server.js`
+- 기본 `Direct`: `npm start` 또는 `node src/direct-server.js`
+- 별도 세션 관리 `Strict`: `npm run start:strict` 또는 `node src/strict-server.js`
 
-Strict는 Direct capability 위에 대화별 소형 lifecycle만 추가합니다. 읽기·검색은 세션 없이 가능하고, 변경·빌드처럼 상태를 바꾸거나 오래 걸리는 호출만 해당 대화의 살아 있는 Strict 세션을 요구합니다. 다른 대화나 프로젝트를 전역으로 잠그지 않습니다.
+Direct에서는 모델이 필요한 도구와 순서를 정합니다. Strict는 여기에 대화별 시작·종료를 추가합니다. 읽기·검색은 세션 없이 가능하며 변경·빌드 같은 호출에는 살아 있는 세션이 필요합니다. 다른 대화를 전역으로 잠그지는 않습니다.
 
-## Direct 도구
+## 제공 도구 목록
 
-프로젝트·환경:
+| 용도 | 이름 |
+|---|---|
+| 프로젝트·환경 확인 | `get_workspace_info`, `list_unreal_projects`, `get_active_project`, `set_active_project`, `detect_unreal_project` |
+| 읽기·검색 | `list_directory`, `search_files`, `read_file`, `read_file_range`, `read_symbol`, `read_unreal_logs` |
+| 수정·생성 | `replace_in_file`, `apply_edit_bundle`, `write_file` |
+| 승인된 삭제 | `propose_file_deletions`, `delete_file` |
+| 진단·실행 | `static_validate_project`, `build_unreal_project`, `run_unreal_automation_tests`, `run_command` |
 
-- `get_workspace_info`
-- `list_unreal_projects`
-- `get_active_project`
-- `set_active_project`
-- `detect_unreal_project`
+## 프로젝트 선택
 
-읽기·검색:
+공유 기본값은 `SHARED_UNREAL_CONFIG`가 가리키는 JSON에 저장합니다. 기본 위치는 `%USERPROFILE%\.lmstudio\config\unreal-workspace.json`입니다. 로컬 `config/agent-mcp.json`에 활성 프로젝트를 따로 기록하지 말아야 합니다.
 
-- `list_directory`
-- `search_files`
-- `read_file`
-- `read_file_range`
-- `read_symbol`
-- `read_unreal_logs`
+`set_active_project`로 정확한 `.uproject` 경로나 발견된 프로젝트 이름을 선택하고 `clear: true`로 해제합니다. 호출의 `project`를 직접 지정하면 공유 기본값을 바꾸지 않고 그 호출에만 적용됩니다.
 
-변경:
+`workspace://`는 작업 폴더 아래, `project://`는 선택한 프로젝트 아래를 뜻합니다. 이름이 같은 복사본은 전체 경로로 구분합니다. 엔진은 `.uproject`의 `EngineAssociation`과 설정을 기준으로 찾습니다.
 
-- `write_file`
-- `replace_in_file`
-- `apply_edit_bundle`
-- `propose_file_deletions`
-- `delete_file`
+## 수정 규칙
 
-진단·실행:
+`ALLOW_WRITE=1`이 있어야 수정할 수 있습니다. 기존 파일은 읽기 결과의 `fileVersionReceipt` 또는 유효한 `expectedHash`를 매번 직접 보내야 합니다. 자동 선택은 하지 않습니다. 수정 성공 후 새로 받은 값으로 다음 수정이 가능합니다.
 
-- `static_validate_project` — 빌드를 허가하거나 막지 않는 선택적 진단
-- `build_unreal_project` — plan/task/static-validation 선행 조건 없이 즉시 UBT/UHT 실행. `target=Editor`는 선택 프로젝트의 canonical, 설정된 preferred Editor, 또는 유일하게 발견된 custom `*Editor` target으로 해석되며 명시한 non-Editor target은 그대로 유지
-- `run_unreal_automation_tests` — build와 같은 bounded process owner 사용
-- `run_command` — 좁은 진단 allowlist만 허용
+`replace_in_file`은 한 구간만 고칩니다. `expectedOccurrences=1`, 기존 글 1,200자, 새 글 2,800자·32줄, 합계 4,000자가 한도입니다. `apply_edit_bundle`은 서로 다른 기존 파일 1~2개에서 한 구간씩, 합계 64줄까지만 허용합니다. 새 파일은 만들지 않습니다.
 
-## 프로젝트와 경로 소유권
+새 파일은 단독 `write_file`로 생성합니다. 기존 파일 덮어쓰기는 금지하며 12,000자·160줄 한도가 있습니다. 충돌이나 `FILE_SNAPSHOT_*` 오류가 나오면 현재 파일을 다시 읽어야 합니다.
 
-active project의 유일한 저장소는 `SHARED_UNREAL_CONFIG`가 가리키는 공유 JSON이며 기본 경로는 다음과 같습니다.
+삭제는 `ALLOW_SOURCE_DELETE=1`, 허용된 Source 경로, 제안 토큰, 파일 확인값, `userApproved=true`와 실제 사용자 승인이 필요합니다. 복구 가능한 보관 위치로 옮깁니다.
 
-```text
-%USERPROFILE%\.lmstudio\config\unreal-workspace.json
-```
+## 빌드와 결과
 
-`set_active_project`로 정확한 `.uproject` 경로나 정확한 프로젝트 이름을 선택하고 `clear: true`로 해제합니다. 로컬 `config/agent-mcp.json`에 `activeProject`를 직접 기록하지 마십시오. 그 파일은 검색 루트와 로컬 엔진 매핑 같은 비소유 설정에만 사용됩니다.
+`ALLOW_UNREAL_BUILD=1`이면 빌드·자동화 테스트를 실행할 수 있습니다. `target=Editor`는 선택한 프로젝트의 기본·설정된 우선·유일하게 발견된 사용자 지정 에디터 대상을 찾습니다. 별도 대상을 명시했다면 그대로 사용합니다.
 
-각 호출의 `project` 인자로 정확한 `.uproject` 경로나 정확한 발견 이름을 넘기면 active project를 바꾸지 않고 해당 호출에만 적용됩니다. 따라서 여러 Unreal 버전과 여러 프로젝트를 한 서버에서 다룰 수 있습니다. 엔진은 각 `.uproject`의 `EngineAssociation`과 명시적 매핑을 기준으로 독립 해석됩니다.
+빌드와 테스트는 같은 실행 관리 코드를 사용합니다. 시간이 초과되면 자식 프로세스까지 종료하고 출력은 앞뒤 일부만 남길 수 있습니다. `fullLogPath`와 함께 생략 정보를 확인해야 합니다.
 
-경로 scheme은 containment 경계를 명시합니다.
+`static_validate_project`는 참고용 코드 검사이며 빌드를 허가하거나 막지 않습니다. `run_command`는 `ALLOW_COMMANDS=1`일 때 허용 목록의 진단 명령만 실행합니다.
 
-- `workspace://...`는 `WORKSPACE_ROOT` 아래만 접근합니다.
-- `project://...`는 그 호출에서 선택한 Unreal 프로젝트 아래만 접근합니다. 프로젝트가 `WORKSPACE_ROOT` 밖에 있어도 선택된 프로젝트 경계 안에서는 읽을 수 있습니다.
-- 쓰기와 삭제는 선택된 프로젝트 경계 및 별도 쓰기 guard를 모두 통과해야 합니다.
+성공한 읽기는 원문을 반환합니다. 같은 대화가 앞선 `repeatReceipt`를 직접 보낸 경우에만 줄여서 반환합니다. 반복 실패는 줄여도 실패로 표시합니다.
 
-## 안전장치
-
-- 쓰기: `ALLOW_WRITE=1` 필요
-- 새 파일: create-only; 기존 파일 덮어쓰기 금지
-- 기존 파일 변경: 매 호출마다 읽기 또는 직전 변경에서 받은 `fileVersionReceipt`나 유효한 raw `expectedHash`를 명시적으로 전달. 동일 session의 최신 snapshot을 서버가 자동 선택하지 않음. 외부 변경은 `FILE_VERSION_CONFLICT`, 누락·만료·scope 불일치는 `FILE_SNAPSHOT_*`로 fail-closed
-- 연속 파일 변경: `replace_in_file` 한 호출은 정확히 한 구간(`expectedOccurrences=1`, `oldText` 1,200자, `newText` 2,800자, 합계 4,000자, `newText` 32줄)을 수정함. 성공한 mutation의 새 receipt를 다음 prediction round에 사용하며, 뒤 구간의 전체 인자를 reasoning/prose에 미리 직렬화하지 않음. 충돌이나 외부 상태가 불확실할 때 다시 읽음
-- 여러 파일 변경: `patches[]`에 기존 파일 patch 1~2개만 허용하고 합계 변경 줄 수는 최대 64줄. 정규화된 patch path 중복은 서버에서 금지하며, 서로 다른 두 파일의 작은 구간 하나씩은 각 explicit receipt/raw hash를 commit 전에 확인하는 transaction journal과 rollback으로 원자 적용. bundle은 파일을 생성하지 않으며 새 파일은 단독 `write_file`로만 생성
-- 삭제: `ALLOW_SOURCE_DELETE=1`, Source 경로, proposal이 반환한 receipt(또는 호환 raw hash), 만료되는 승인 토큰, `userApproved=true`가 모두 필요하며 recoverable trash로 이동
-- 빌드·Automation: `ALLOW_UNREAL_BUILD=1` 필요
-- 명령: `ALLOW_COMMANDS=1` 및 진단 allowlist 필요
-- 읽기·검색·로그·프로세스 출력: byte/line/result/time 경계 적용. Build와 Automation은 동일한 bounded runner로 stdout/stderr의 head+tail만 보존할 수 있고 timeout 시 process tree를 종료하며, `fullLogPath`도 capture budget을 넘은 원본 전체가 아니라 bounded projection일 수 있음
-- 반복된 동일 실패: 새 정보가 없음을 작은 비재시도 오류로 반환. 성공한 읽기는 새 채팅을 방해하지 않도록 항상 본문을 반환하며, 같은 대화가 앞선 `repeatReceipt`를 명시적으로 되돌려 준 경우에만 축약
-
-## 설치
-
-루트 저장소에서 통합 설치기를 실행합니다.
-
-```powershell
-cd $HOME\.lmstudio\UE5_Local_LLM_MCP_lmstudio
-.\INSTALL.bat
-```
-
-설치 후 LM Studio를 재시작하거나 MCP 목록을 새로고침하십시오. 템플릿은 `config/lmstudio-mcp-unreal-agent.json.template`, 검색·엔진 설정 템플릿은 `config/agent-mcp.json.template`입니다.
-
-기본 MCP 등록은 `src/direct-server.js`를 가리킵니다. Strict를 의도적으로 쓸 때만 별도 MCP 항목의 진입점을 `src/strict-server.js`로 지정하십시오. 환경변수로 Direct와 Strict를 암묵적으로 전환하지 않습니다.
-
-## 일반적인 사용
-
-모델은 고정된 workflow 없이 필요한 capability를 직접 고릅니다. 예를 들어 정확한 프로젝트를 지정해 파일을 읽고 receipt 기반 CAS 패치를 적용한 뒤 `target=Editor` alias로 바로 해당 프로젝트의 Editor target을 빌드할 수 있으며, static validation은 필요할 때만 별도로 호출합니다. 실패 응답은 사실, 제한된 재시도 정보, 선택적 단일 제안만 제공하고 다음 호출을 강제하지 않습니다.
-
-신뢰하지 않는 프롬프트에서는 쓰기, 명령, 빌드 환경변수를 활성화하지 마십시오.
+설치는 저장소 맨 위의 통합 설치기를 사용하고 LM Studio를 재시작해야 합니다. 자세한 조건은 [도구 사용 규칙](../docs/LMStudio_MCP_Tool_Discipline.md)에 있습니다.

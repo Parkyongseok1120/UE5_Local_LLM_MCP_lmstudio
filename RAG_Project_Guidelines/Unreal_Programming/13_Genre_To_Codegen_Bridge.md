@@ -1,32 +1,13 @@
-# Genre To Codegen Bridge (UE 5.8)
+# 장르별 설계의 초기 코드 구현
 
-## Purpose
+장르 이름만 보고 큰 시스템부터 만들지 말아야 합니다. 플레이어가 어떤 압박 속에서 어떤 행동을 반복하는지 정하고 그 한 부분을 구현합니다.
 
-Map **Genre Adapter** design constraints to **Unreal Domain** C++ recipes before writing code.
+| 장르 | 첫 구현 예시 |
+|---|---|
+| 슈팅 | 입력·조준·발사·피격 한 흐름 |
+| 근접 액션 | 공격 요청·타이밍·대상 반응 |
+| 플랫포머 | 이동·점프·착지 |
+| 로그라이크 | 한 판의 시작·선택·종료 |
+| 전략 | 한 차례의 행동·결과·다음 차례 |
 
-## Layer order
-
-1. Core architecture rules
-2. Unreal Domain recipes (02–15)
-3. Genre Adapter (Genre_Gameplay/*)
-4. Active project local patterns
-
-## Genre → first C++ unit
-
-| Genre | First compile unit | Domain recipes |
-|-------|-------------------|----------------|
-| Shooter / TPS | `UWeaponComponent` or PC input + trace | Enhanced Input, Camera/SpringArm |
-| Action combat | `UCombatComponent` | Damage flow, montage later |
-| Platformer | `UPlatformerMoveComponent` | CharacterMovement, jump |
-| Roguelike | `URunStateSubsystem` | SaveGame, tags |
-| Strategy | `UTurnManagerSubsystem` | minimal UI later |
-
-## Mixed genres
-
-Combine adapters (max 3). Example: Extraction = shooter + survival pressure. Prototype **one** pressure loop only.
-
-## Codegen guardrails
-
-- Includes: `GameFramework/`, never `Game/Framework/`
-- Input: `SetupInputComponent` on PC or owning pawn component
-- Damage: use project policy; see `15_Damage_Apply_Recipe.md` for compile-safe minimal API
+예시 클래스 이름을 그대로 복사하지 말고 현재 프로젝트의 소유자를 재사용합니다. 혼합 장르는 관련 기준을 함께 보되 첫 구현은 반복 가능한 흐름 하나로 제한해야 합니다. 포함 경로·입력 소유자·데미지 최종 판정은 실제 선언과 프로젝트 규칙으로 확인합니다.

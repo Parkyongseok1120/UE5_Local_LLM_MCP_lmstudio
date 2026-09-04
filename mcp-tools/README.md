@@ -1,29 +1,7 @@
-# mcp-tools
+# 시간 조회·원격 MCP 연결 보조 도구
 
-Optional supplementary MCP tool scripts (e.g. `current-datetime.js`, `mcp-remote`).
+현재 시간 조회나 원격 MCP 연결처럼 기본 언리얼 검색·파일 작업에 꼭 필요하지 않은 도구를 두는 폴더입니다. 파일이 없으면 설치기는 알림을 남기고 건너뜁니다.
 
-This folder is **optional**. The installer will skip tools it cannot find here and log a notice.
+`current-datetime.js`는 현재 날짜·시간을 반환하는 Node 도구입니다. `mcp-remote`는 원격 MCP 서버에 연결할 때 사용합니다. 필요할 때만 해당 패키지와 서버 설정을 준비해야 합니다.
 
-## current-datetime
-
-A minimal Node.js MCP server that returns the current date/time. If you want this tool:
-
-```bash
-cd mcp-tools
-npm init -y
-npm install @modelcontextprotocol/sdk
-# then place your current-datetime.js here
-```
-
-## mcp-remote
-
-Optional proxy for remote MCP servers (e.g. Tavily web search). Install with:
-
-```bash
-cd mcp-tools
-npm install mcp-remote
-```
-
-Then add your API key to `~/.lmstudio/mcp.json` under the `tavily-remote` entry.
-
-Neither tool is required for core RAG + agent functionality.
+API 키는 로컬 MCP 설정에만 넣고 저장소에 올리지 말아야 합니다. 기본 설치 방법은 [README](../README.md)에 있습니다.

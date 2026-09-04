@@ -54,12 +54,12 @@ def test_portable_rule_installer_dry_run_force_and_source_guard(tmp_path: Path) 
     assert not output.exists()
 
     installer.install(output)
-    assert "work evidence-first" in output.read_text(encoding="utf-8")
+    assert "근거부터 확인" in output.read_text(encoding="utf-8")
     with pytest.raises(FileExistsError):
         installer.install(output)
     output.write_text("stale", encoding="utf-8")
     installer.install(output, force=True)
-    assert "work evidence-first" in output.read_text(encoding="utf-8")
+    assert "근거부터 확인" in output.read_text(encoding="utf-8")
 
     source = SCRIPTS.parent / "references" / "portable-rule.md"
     with pytest.raises(ValueError):

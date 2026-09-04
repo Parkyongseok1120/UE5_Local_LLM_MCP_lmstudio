@@ -1,56 +1,13 @@
-# Unreal Tick Ordering And Lifecycle Contract
+# Tick 실행 순서와 수명
 
-## Keywords
+매 프레임 실행할 필요가 있는지부터 판단해야 합니다. 상태 변화 알림이나 타이머로 충분하면 Tick을 추가하지 않습니다. 필요한 경우에는 언제 켜고 끄는지 정합니다.
 
-Tick, TickComponent, PrimaryActorTick, PrimaryComponentTick, TickGroup, TG_PrePhysics, TG_DuringPhysics, TG_PostPhysics, TG_PostUpdateWork, tick prerequisite, AddTickPrerequisiteActor, AddTickPrerequisiteComponent, SetComponentTickEnabled, SetActorTickEnabled, bCanEverTick, bStartWithTickEnabled, tick order, tick dependency, per-frame update, timer vs tick, DeltaTime, order of operations, runtime behavior vs compile
+다른 객체가 갱신되기 전에 값을 읽는다면 단순 컴파일 문제가 아닙니다. 실제 프레임 순서와 의존성을 확인해야 합니다.
 
-Korean query aliases: 틱, 틱 순서, 틱 그룹, 틱 의존성, 선행 틱, 틱 활성화, 매 프레임 업데이트, 타이머 대 틱, 델타타임, 실행 순서, 컴파일은 되는데 동작이 이상함
+- `TickGroup`: 물리 전·중·후와 후반 갱신을 구분합니다. `TG_PrePhysics`, `TG_DuringPhysics`, `TG_PostPhysics`, `TG_PostUpdateWork`의 현재 엔진 의미를 확인합니다.
+- 선행 Tick: `AddTickPrerequisiteActor`, `AddTickPrerequisiteComponent`로 먼저 갱신되어야 하는 대상을 명시합니다. 관계가 끝나면 해제도 확인합니다.
+- 실행 여부: `bCanEverTick`, `bStartWithTickEnabled`, `SetActorTickEnabled`, `SetComponentTickEnabled`를 확인합니다.
 
-## Purpose
+물리 결과를 읽는 시점, 캐릭터 이동 뒤 카메라 갱신, 초기화가 끝나기 전에 접근하는지 확인해야 합니다. null 검사나 한 프레임 캐시로 원인을 덮지 않습니다.
 
-Use this document when code compiles but behaves wrong because of **when** it runs each frame: an actor reading another actor's transform before it updated, physics vs gameplay ordering, or a component that never ticks. Small local models tend to "solve" ordering bugs by adding tick to everything or by guessing an order. This contract gives the mechanical rules to cite.
-
-"Compiles" is not "runs as intended." A build that succeeds says nothing about tick order, and a `runtime_debug` answer must reason about the frame timeline, not just the API surface (see `05_Runtime_Debugging_Playbook.md` and `21_Edit_Verification_Proof_Levels.md`).
-
-## Default: prefer events/timers over Tick
-
-Per `12_Process_Ownership_Rules.md` and `11_Prototype_Component_Subsystem_Recipes.md`:
-
-- Tick is **off by default**. `PrimaryComponentTick.bCanEverTick = false` / `PrimaryActorTick.bCanEverTick = false` unless per-frame logic is genuinely required.
-- Prefer timers, delegates, latent/ability tasks, or explicit "active process" updates over per-frame polling.
-- If Tick is required: enable it only while the process is active, and disable it on stop/cancel/finish. State the enable/disable contract explicitly.
-- Subsystems should not use component-style Tick patterns; use timers/delegates or a world tick hook with a clear reason.
-
-## Tick ordering mechanics
-
-When order matters, do **not** guess. Control it explicitly:
-
-1. **TickGroup** decides the phase within a frame. Common groups in order:
-   - `TG_PrePhysics` — default gameplay tick; runs before physics simulation.
-   - `TG_DuringPhysics` — runs alongside physics (do not read post-physics results here).
-   - `TG_PostPhysics` — after physics; correct place to read simulated transforms.
-   - `TG_PostUpdateWork` — late, after most updates (e.g. camera that must see final poses).
-   Set via `PrimaryActorTick.TickGroup` / `PrimaryComponentTick.TickGroup`. Verify exact enum names before use.
-2. **Tick prerequisites** enforce "A ticks before B" within the same group:
-   - `AddTickPrerequisiteActor(OtherActor)` / `AddTickPrerequisiteComponent(OtherComp)` on the dependent object.
-   - Use this instead of hoping the default order is correct. Removing a prerequisite when the dependency ends avoids stale ordering.
-3. **Enable/disable at runtime** with `SetActorTickEnabled` / `SetComponentTickEnabled` and `bStartWithTickEnabled`. A component that "never runs" is often just never tick-enabled or its owner does not tick.
-
-## Common "compiles but wrong" tick bugs
-
-- **Reading another actor before it updated:** move the reader to a later TickGroup (`TG_PostPhysics`/`TG_PostUpdateWork`) or add a tick prerequisite on the producer. Do not add a frame of latency by caching last-frame values unless intentional.
-- **Physics results read too early:** reading `GetComponentTransform()` of a simulated body in `TG_PrePhysics` gives last frame's result. Read in `TG_PostPhysics`.
-- **Camera/spring-arm jitter:** camera logic must run after the followed target's movement — later TickGroup or prerequisite. See `16_TPS_Camera_SpringArm_Recipe.md`.
-- **Order-dependent init in Tick:** initialization that assumes another system is ready belongs in the correct lifecycle function (BeginPlay/OnRegister), not guarded per-frame in Tick.
-- **Everything ticks:** broad per-target Tick to drive a single active process. Use a timer or enable Tick only on the active object (see `11_AI_Review_Failure_Patterns.md` Failure Pattern 21).
-
-## Lifecycle boundary reminder
-
-Tick runs after BeginPlay. Do not resolve runtime dependencies in the constructor. If Tick reads something null, the fix is usually correct lifecycle placement or ordering, not a null guard that hides the timing bug (see `05_Runtime_Debugging_Playbook.md`).
-
-## Response contract
-
-1. State whether Tick is actually required, or whether a timer/event/prerequisite is the correct tool.
-2. If ordering is the issue, name the TickGroup and/or prerequisite that fixes it — verify enum/API names first.
-3. Give the enable/disable contract for any Tick you add.
-4. Distinguish "will compile" from "will run in the intended order"; keep proof level at `Proposed` until PIE-verified.
+서브시스템에 컴포넌트의 Tick 방식을 그대로 적용하지 말고 실제 제공되는 기능과 수명을 확인합니다. 순서 수정은 빌드 성공만으로 끝내지 말고 플레이나 로그로 확인해야 합니다.

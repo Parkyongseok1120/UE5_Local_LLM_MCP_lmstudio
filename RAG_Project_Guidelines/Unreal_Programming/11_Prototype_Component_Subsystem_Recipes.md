@@ -1,84 +1,15 @@
-# Prototype Recipes: Component and Subsystem
+# 프로토타입 컴포넌트·서브시스템 구현
 
-## Keywords
+먼저 기능 하나가 끝까지 동작하는 작은 단위를 만들어야 합니다. 필요 없는 관리자 클래스를 늘리지 않습니다. 헤더·구현과 필요한 경우의 `Build.cs` 변경부터 잡습니다.
 
-prototype component, prototype subsystem, UActorComponent, UWorldSubsystem, UGameInstanceSubsystem, BeginPlay, Initialize, Deinitialize, PrimaryComponentTick, BlueprintSpawnableComponent, minimal compiling skeleton
+`UActorComponent`는 특정 액터의 기능과 상태를 가집니다. 매 프레임 처리가 필요하지 않으면 Tick을 끕니다. `Components/ActorComponent.h`를 포함하고 입력 연결도 담당자 하나를 정합니다.
 
-Korean: 프로토타입 컴포넌트, 프로토타입 서브시스템, 새 컴포넌트, 월드 서브시스템, 게임인스턴스 서브시스템
+`UWorldSubsystem`은 월드 수명의 기능에 사용합니다. 초기화는 `Initialize()`, 종료 정리는 해당 엔진의 종료 순서를 확인해 배치합니다. 월드가 살아 있어야 하는 정리는 너무 늦은 `Deinitialize()`에만 의존하지 말고 제공되는 `OnWorldEndPlay(UWorld&)`, `PreDeinitialize()`의 실제 선언과 호출 시점을 확인해야 합니다. 없는 `OnWorldDestroyed` 오버라이드를 만들지 않습니다.
 
-## Purpose
+월드는 서브시스템·액터·컴포넌트의 `GetWorld()`나 명시적인 `UWorld*`에서 얻습니다. `GEngine->GetWorld()`나 `GEngine->GetGameInstance()`를 공통 접근점으로 쓰지 말아야 합니다.
 
-Use this document when the model must deliver **one compiling prototype unit** — either a single `UActorComponent` or a single Subsystem — not a framework or manager zoo.
+명령 표를 `static TMap`에 두면 여러 월드가 같은 상태를 공유할 수 있습니다. 월드별 서브시스템의 인스턴스 멤버로 보관하고 등록과 해제를 짝짓습니다. 콜백은 `TWeakObjectPtr`와 실행 시 유효성 검사를 사용합니다.
 
-## Prototype scope gate
+`UGameInstanceSubsystem`은 게임 인스턴스 전체에 필요한 기능에 사용합니다. 월드 이동 뒤에도 원래 `UWorld*`를 그대로 쥐고 있지 않도록 무효화 조건을 정해야 합니다.
 
-- One reflected type per request unless the user explicitly asks for two.
-- Maximum files in one turn: `.h`, `.cpp`, `Build.cs` touch only if a new module dependency is required.
-- Tick is off by default for Components unless the request needs per-frame logic.
-- Subsystems must not create subobjects with `CreateDefaultSubobject`.
-- Do not put `GetWorld()`, `GEngine`, or `SpawnActor` in constructors.
-
-## Recipe: Prototype UActorComponent
-
-Files:
-
-- `Source/<Module>/Public/<Feature>/<Name>Component.h`
-- `Source/<Module>/Private/<Feature>/<Name>Component.cpp`
-
-Rules:
-
-1. Include `Components/ActorComponent.h` before `*.generated.h`.
-2. `PrimaryComponentTick.bCanEverTick = false` unless tick is required.
-3. State that belongs to the actor feature lives in the Component, not duplicated on the Actor.
-4. Enhanced Input bindings belong in the Component or Controller — pick one owner and document it.
-
-## Recipe: Prototype UWorldSubsystem
-
-Use when state/logic is **world-scoped** and should survive across levels in the same world.
-
-Files:
-
-- `Source/<Module>/Public/<Feature>/<Name>Subsystem.h`
-- `Source/<Module>/Private/<Feature>/<Name>Subsystem.cpp`
-
-Rules:
-
-1. Base class: `UWorldSubsystem`.
-2. Override `ShouldCreateSubsystem` only when needed.
-3. Use `Initialize(FSubsystemCollectionBase&)` for setup — not `BeginPlay`. For teardown that must run while the world is still valid (unregistering from world-scoped delegates, stopping timers), use `OnWorldEndPlay(UWorld&)` and/or `PreDeinitialize()`; `Deinitialize()` alone can run after the world has already been torn down. There is no `OnWorldDestroyed` override on `UWorldSubsystem` — do not invent it.
-4. No `CreateDefaultSubobject`, no `AActor` members without clear lifetime rules.
-5. Do not use `Tick`; use timers, delegates, or world events.
-6. World access flows from the subsystem: use `GetWorld()` on the subsystem itself, never `GEngine->GetWorld()` / `GEngine->GetGameInstance()` (null or wrong world in PIE/multi-world).
-7. Registries (command maps, handler tables) are **instance members** of the subsystem, not `static` containers on a helper class. Register in `Initialize()`, unregister in `Deinitialize()`, and capture `TWeakObjectPtr` in lambdas so entries never outlive their world.
-
-Dispatcher pattern (dev console, command routing):
-
-- The dispatcher receives its world context from the owning `UWorldSubsystem` — either store the subsystem pointer or pass `UWorld*` per call. Command lambdas resolve world state from that context, never from globals.
-- A `static TMap<FString, TFunction<...>> Commands` shared across worlds is an anti-pattern: two PIE worlds overwrite each other's registrations and captured lambdas run against the wrong (or destroyed) world.
-
-## Recipe: Prototype UGameInstanceSubsystem
-
-Use when state must persist for the **game instance** (menus, session, account-level services).
-
-Rules:
-
-1. Base class: `UGameInstanceSubsystem`.
-2. Same lifecycle rules as World Subsystem.
-3. Do not store raw `UWorld*` across world transitions without `TWeakObjectPtr` and invalidation.
-
-## Build verification checklist
-
-- [ ] `*.generated.h` is last include in reflected headers
-- [ ] No reflected type inside a C++ namespace
-- [ ] Every new `.cpp` function is declared in the header
-- [ ] `Build.cs` lists modules for every non-Core include used in the header
-- [ ] UBT was run or the answer states the exact build command still needed
-
-## Common prototype failures
-
-| Symptom | Likely fix |
-|---------|------------|
-| UHT generated.h error | Move generated.h to last include |
-| Cannot open include | Add module to Build.cs |
-| Subsystem never runs | Wrong subsystem type for lifetime; check `ShouldCreateSubsystem` |
-| GC crash later | Add `UPROPERTY()` to UObject members |
+생성자에서 월드 조회·액터 생성에 의존하지 말고, 선언·구현·모듈을 확인한 뒤 실제 빌드 결과 또는 아직 못 한 검사를 적습니다.

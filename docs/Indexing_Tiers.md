@@ -1,117 +1,45 @@
-# Indexing tiers
+# 검색 자료 수집 범위 선택
 
-Three indexing tiers control installer and indexing-pipeline behavior. Shared
-selection settings live in `~/.lmstudio/config/unreal-workspace.json`
-(`%USERPROFILE%\.lmstudio\config\unreal-workspace.json` on Windows):
+수집 범위가 넓을수록 AI가 찾아볼 자료가 늘어나지만 만드는 시간과 디스크 사용량도 늘어납니다. 프로젝트 코드 위주로 쓴다면 보통 `standard`부터 확인하면 됩니다.
 
-- `indexingTier`: `lite` | `standard` | `full`
-- `editorExportDir`: compatibility override for standalone/manual helpers; Direct
-  refresh always uses `{ExactProjectRoot}/Saved/LmStudioMetadataExports`
+| 범위 | 수집하는 내용 | 쓸 때 |
+|---|---|---|
+| `lite` | 프로젝트 C++·설정 파일, 에셋 경로 | 작고 빠르게 프로젝트 텍스트만 찾을 때 |
+| `standard` | 위 내용에 엔진 공개 함수·클래스, 프로젝트 선언 정보와 구조 요약 추가 | 일반적인 코드 검토와 수정 |
+| `full` | 위 내용에 `Engine/Source` 전체 텍스트 추가 | 엔진 내부 구현까지 따라가야 할 때 |
 
-Generated index data does not live beside that settings file. Integrated installs
-default to `<state-home>/indexes/<namespace>/rag.sqlite`, where the default state
-home is `~/.evidence-first` and `--state-home` can relocate it. A user-supplied
-nonstandard external `indexPath` remains user-managed instead of being silently
-rewritten.
+`.uasset`와 `.umap` 경로를 모았다고 내부 노드를 읽은 건 아닙니다. 블루프린트와 머티리얼 내부는 [에디터 자료 내보내기](Editor_Metadata_Export.md)가 별도로 필요합니다.
 
-The interactive installer opens a native picker before tier selection. Selecting
-an exact `.uproject` sets `activeProject` and adds its folder as a search root;
-selecting a folder adds discovery input to `projectSearchRoots`. Before a Standard
-or Full build, discovery is resolved to a frozen set of exact existing
-descriptors. The active descriptor cannot be silently excluded, and every project
-in one build must resolve to the selected engine binding. Incompatible projects
-are excluded with reported reasons instead of being mixed into the shard.
+## 설치 구성과 수집 범위의 차이
 
-## Lite
-
-- Project C++ / config **text** (`collect-projects`)
-- `.uasset` / `.umap` **paths only**
-- Fastest, smallest index
-
-## Standard (recommended)
-
-Everything in Lite, plus:
-
-- **Engine API symbols** (`UCLASS`, modules, public headers)
-- **Project C++ symbols** (parsed from active project `Source/`)
-- Project profile + architecture brief
-
-## Full
-
-Everything in Standard, plus:
-
-- **Entire UE Engine source text** under `Engine/Source` (`collect-source`)
-- Large disk use (multi-GB). Use only when you need deep engine implementation lookup.
-
-When changing from Full to Standard or Lite, the pipeline removes `raw_source.jsonl` before rebuilding. Lite also removes stale engine-symbol and active-project profile inputs so a lower tier cannot silently retain higher-tier data. Legacy `raw_module_graph.jsonl` and module-graph reports are retired inputs and are pruned from every newly committed Direct generation.
-
-## Ownership and shard invariants
-
-Every project row carries the canonical descriptor parent as `project_root` and
-the descriptor stem as `project`. Those two fields form the owner identity, so
-same-name clones at different roots remain isolated. Legacy rows are upgraded
-only when path containment or a prior descriptor inventory proves one unique
-owner; ambiguous or incomplete legacy data fails provenance validation.
-
-Each committed generation also records its engine binding. Versioned or custom
-engine associations use separate sibling namespaces under the managed indexes
-root. The runtime can switch to one matching sibling shard for an exact project,
-but it never performs a cross-engine merged call. All exact project selectors in
-one call must resolve to the same engine-bound shard and immutable generation.
-
-## Blueprint / material internals
-
-Binary assets are not parsed from disk. `install.py --build-rag` does not launch
-Unreal Editor, run export scripts, install the graph exporter plugin, or mutate a
-`.uproject`. Produce Editor metadata explicitly, then ingest the existing exports
-with the no-launch command:
+`--profile full`은 설치 구성 이름입니다. 검색 자료 전체 수집을 뜻하지 않습니다. 자료를 만들려면 `--build-rag`, 깊이를 고르려면 `--index-tier`를 사용합니다.
 
 ```powershell
-pwsh -NoProfile -File .\rag.ps1 refresh -RefreshScope editor_metadata
+python install.py --profile standard --yes --build-rag --index-tier standard
 ```
 
-Only add `-AllowEditorLaunch` when starting Unreal Editor for that manual refresh
-is intentional:
+`install.py --build-rag`는 설치기가 관리하는 Python으로 수집과 검색 자료 생성을 직접 실행합니다. PowerShell 없이 가능합니다. 에디터를 실행하거나 프로젝트 플러그인을 설치하지 않습니다.
+
+## 프로젝트와 저장 위치
+
+설치 화면에서 `.uproject`를 선택하면 기본 프로젝트로 지정됩니다. 폴더를 선택하면 그 안에서 프로젝트를 찾습니다. `standard`와 `full`은 선택한 엔진과 맞는 프로젝트만 같은 자료에 넣습니다. 맞지 않는 프로젝트는 이유를 알리고 제외하며, 활성 프로젝트를 조용히 빼지는 않습니다.
+
+공유 설정은 `~/.lmstudio/config/unreal-workspace.json`에 저장합니다. `indexingTier`가 수집 범위입니다. 데이터베이스는 별도로 `~/.evidence-first/indexes/<namespace>/rag.sqlite`에 둡니다. `--state-home`으로 상위 위치를 바꿀 수 있습니다.
+
+같은 이름의 프로젝트도 실제 경로가 다르면 구분합니다. 엔진별 저장 폴더도 분리합니다. 예전 자료의 출처를 확인할 수 없으면 다시 수집해야 합니다.
+
+## 수집 범위 축소 시 기존 자료 정리
+
+`full`에서 낮추면 엔진 전체 소스 입력인 `raw_source.jsonl`을 제거하고 다시 만듭니다. `lite`로 낮추면 이전 엔진 선언 정보와 프로젝트 요약 입력도 정리합니다. 예전 모듈 그래프 입력은 새 검색 자료에서 사용하지 않습니다.
+
+## 검색 자료 갱신 명령
 
 ```powershell
-pwsh -NoProfile -File .\rag.ps1 refresh -RefreshScope editor_metadata -AllowEditorLaunch
+.\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
+.\rag.ps1 refresh -RefreshScope project_source
+.\rag.ps1 doctor
 ```
 
-## Commands
+에디터에서 이미 내보낸 자료만 읽으려면 `-RefreshScope editor_metadata`를 사용합니다. 에디터 실행까지 의도했을 때만 `-RefreshScope editor_metadata -AllowEditorLaunch`를 사용합니다.
 
-```powershell
-pwsh -NoProfile -File .\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
-pwsh -NoProfile -File .\rag.ps1 refresh
-pwsh -NoProfile -File .\rag.ps1 collect-symbols -Root C:\UE_5.6\Engine\Source -Tier public -SymbolScope engine
-pwsh -NoProfile -File .\rag.ps1 collect-source -Root C:\UE_5.6\Engine\Source
-pwsh -NoProfile -File .\rag.ps1 build-incremental
-pwsh -NoProfile -File .\rag.ps1 doctor
-```
-
-Use `set-project` plus `refresh -RefreshScope project_source` for project C++ and
-`Build.cs` changes. A low-level project-symbol invocation must provide both the
-project name and project root; the packaged launcher does not expose an unsafe
-name-only shortcut.
-
-The integrated installer itself is Python-only. On Ubuntu Linux/macOS, `pwsh` is
-used only if you choose to run the optional maintenance wrapper:
-
-```sh
-python3 install.py --profile standard --yes --build-rag --index-tier standard
-pwsh -NoProfile -File ./rag.ps1 refresh -RefreshScope editor_metadata
-```
-
-`install.py --build-rag` invokes its managed Python executable directly without a
-shell wrapper. Set `UNREAL_ENGINE_ROOT` or use installer `--engine-root` when the
-engine is outside the documented host common locations.
-
-## Validation boundary
-
-The Windows, Ubuntu, and macOS automation exercises installer, collector, path,
-and shard contracts with controlled fixtures. That is not the same as physical
-certification of every host, engine build, project, plugin, and Editor runtime.
-The recorded physical FULL-install pass is Apple Silicon with UE 5.8, subject to
-the documented Editor-export, LM Studio API-connectivity, and
-signing/notarization limitations. A prior native Windows session reached real RAG,
-MCP, and UBT activity, but is not a clean-machine installer-lifecycle proof. No
-physical Linux install claim or universal compatibility claim is made.
+Linux와 macOS에서 위 유지보수 명령을 쓸 때는 `pwsh`가 필요합니다. 설치 자체의 필수 조건은 아닙니다.

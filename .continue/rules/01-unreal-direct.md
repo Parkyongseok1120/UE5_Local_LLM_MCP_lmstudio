@@ -1,43 +1,21 @@
 ---
-name: Unreal Direct MCP
+name: 언리얼 기본 도구 사용 규칙
 alwaysApply: true
-description: Use Unreal MCP servers as bounded capabilities while the selected model owns the workflow.
+description: 모델이 작업 순서를 결정하고 언리얼 도구는 필요한 작업과 결과 확인을 담당합니다.
 ---
 
-# Unreal Direct MCP
+# 언리얼 기본 도구 사용 규칙
 
-The selected model owns interpretation, tool choice, call order, retry decisions,
-stopping, and the final answer. `unreal-rag` and `unreal-agent` provide bounded
-capabilities; their suggestions and advisories never force a next tool.
+기본 `Direct` 방식에서는 선택한 모델이 요청 해석, 도구 선택과 순서, 재시도, 중단, 최종 답변을 맡습니다. 도구 결과의 제안은 다음 호출을 강제하지 않습니다.
 
-- Use `unreal-rag` for exact project selection, indexed evidence, symbol lookup,
-  health, rebuild status, and explicitly requested refreshes.
-- Use `unreal-agent` for project discovery, bounded reads, CAS-safe edits,
-  advisory static validation, UBT/UHT builds, Automation tests, and logs.
-- There is no mandatory bootstrap, planner, task, route, compile loop, or
-  validation-before-build sequence. Choose only useful capabilities.
-- Resolve the exact `.uproject` when multiple projects are possible. Never
-  hard-code an Unreal version or installation.
-- Read an existing file before changing it and prefer its `fileVersionReceipt`
-  for an exact patch. A valid raw `expectedHash` remains compatible, and a
-  reliable same-session latest snapshot may resolve automatically. Use a
-  successful mutation's new receipt for a consecutive edit. Re-read on
-  `FILE_VERSION_CONFLICT` or `FILE_SNAPSHOT_*`; never overwrite a concurrent
-  change.
-- Use `write_file` only for new files. Use the bounded atomic bundle for
-  multi-file changes, with current version evidence for every existing file.
-  Keep path containment, size/output limits, per-path locks, atomic recovery,
-  delete confirmation, and command allowlists intact.
-- Semantic/static findings are advisory. A permitted build can run immediately,
-  and real UBT/UHT/compiler output is the authoritative diagnostic.
-- `target=Editor` resolves the selected project's canonical, configured
-  preferred, or sole discovered custom Editor target; explicit non-Editor
-  targets are unchanged. Build and Automation
-  share the bounded process runner, and `fullLogPath` may be a bounded head/tail
-  projection rather than unlimited raw output.
-- Do not add C++ namespaces unless the target Unreal project explicitly requires
-  them. Preserve Unreal reflection and `*.generated.h` rules.
-- Echo a `repeatReceipt` only when this conversation retained the prior full
-  result and deliberately wants a concise unchanged-result acknowledgement.
-- Report what was actually read, changed, built, or blocked. Do not manufacture
-  success or a compulsory next action.
+- `unreal-rag`는 프로젝트 선택, 자료 검색, 함수·클래스 조회, 검색 상태 확인과 요청한 갱신에 사용합니다.
+- `unreal-agent`는 프로젝트 확인, 파일·로그 읽기, 부분 수정, 보조 검사, 빌드와 자동화 테스트에 사용합니다.
+- 항상 거쳐야 하는 계획·작업 생성·빌드 전 검사 순서는 없습니다. 현재 요청에 필요한 기능만 써야 합니다.
+- 프로젝트가 여럿이면 정확한 `.uproject`로 구분하고 엔진 경로나 버전을 추측해 고정하지 말아야 합니다.
+- 기존 파일은 먼저 읽고 `fileVersionReceipt` 또는 유효한 현재 `expectedHash`를 매번 직접 전달합니다. 서버가 같은 대화의 값을 자동 선택하지 않습니다. 다음 수정에는 직전 성공 응답의 새 확인값을 사용합니다. `FILE_VERSION_CONFLICT`나 `FILE_SNAPSHOT_*`가 나오면 다시 읽습니다.
+- `write_file`은 새 파일용입니다. `apply_edit_bundle`은 서로 다른 기존 파일 1~2개에서 한 구간씩만 수정하며 각 파일의 현재 확인값이 필요합니다. 경로 확인, 크기 제한, 동시 수정 방지, 복구와 삭제 승인, 명령 허용 목록을 유지해야 합니다.
+- 정적 검사는 참고용입니다. 허용된 빌드는 바로 실행할 수 있으며 실제 UBT·UHT·컴파일러 출력을 기준으로 오류를 판단합니다.
+- `target=Editor`는 프로젝트의 기본 대상, 설정된 우선 대상, 또는 유일하게 찾은 사용자 지정 에디터 대상을 사용합니다. 다른 대상을 명시했다면 유지합니다. 빌드와 자동화 테스트의 `fullLogPath`에도 앞뒤 일부만 있을 수 있으니 출력 생략 정보를 확인해야 합니다.
+- 언리얼에서 네임스페이스는 웬만하면 새로 만들지 말아야 합니다. 언리얼 속성·함수 등록과 `*.generated.h` 규칙을 지킵니다.
+- `repeatReceipt`는 현재 대화에 원문이 남아 있고 같은 성공 결과를 짧게 확인할 때만 돌려줍니다.
+- 실제 읽고 바꾼 내용, 검사 결과와 막힌 이유를 한글로 설명합니다. 낯선 용어는 역할부터 풀어 쓰고 확인하지 않은 성공을 만들어내지 말아야 합니다.

@@ -1,231 +1,129 @@
-# LM Studio MCP Tool Discipline
+# AI 프로젝트 도구 사용 규칙
 
-Guide for **LM Studio chat** with the supported `unreal-rag` + `unreal-agent` MCP surfaces.
+기본 방식인 `Direct`에서는 선택한 AI가 필요한 도구와 호출 순서를 정합니다. 도구는 요청한 작업의 결과를 알려 주며, 그 결과가 다음 행동을 강제하는 지시가 되지는 않습니다.
 
-## Supported paths
+## 도구 역할
 
-| Path | Workflow owner | Enforcement |
-|------|----------------|-------------|
-| LM Studio chat, default MCP entries | Selected LLM | Direct capability schemas plus filesystem, process, concurrency, deletion, and authority safety |
-| Separately named Node Strict entry | Selected LLM within one Strict session | Conversation-scoped `strict_begin` lifecycle around mutation/long-running capabilities |
+`unreal-rag`는 프로젝트 선택, 검색, 함수·클래스 조회, 검색 자료 갱신과 상태 확인을 담당합니다. `unreal-agent`는 파일·로그 읽기, 부분 수정, 새 파일 생성, 승인된 삭제, 코드 진단, 빌드와 테스트를 담당합니다.
 
-The default chat path is **Direct Model Mode**. `unreal-rag` and `unreal-agent` do not import or reconstruct the legacy task controller. The model chooses which capability to call and whether another diagnostic is useful.
+기본 목록은 각각 8개와 20개입니다. 정확한 목록은 [stable_tool_manifest.json](../config/stable_tool_manifest.json)과 실행 중인 서버의 `tools/list`로 확인해야 합니다. 앞선 호출이 실패했다고 다른 도구가 목록에서 사라지는 구조는 아닙니다.
 
-## Stable Direct catalog
+## 작업 대상 프로젝트 확인
 
-`tools/list` is stable for the life of a Direct MCP process. It is not reduced by task state, route phase, `MCP_ESSENTIAL_TOOLS`, `MCP_EXTENDED_TOOLS`, a previous failure, or another chat. Direct schemas omit `taskAuthorization` and lifecycle tools such as `unreal_agent_plan` and `unreal_task_*`.
+프로젝트 이름만으로 모호하면 `.uproject` 전체 경로를 사용해야 합니다. 호출별 `project` 지정은 그 호출에만 적용됩니다. 공유 기본 프로젝트를 바꾸려는 경우에만 `set_active_project`를 사용합니다.
 
-`unreal-rag` exposes exactly eight factual RAG capabilities in `config/stable_tool_manifest.json`: active-project get/set, search, symbol lookup, health, rebuild status, synchronous refresh, and capability inventory. It does not expose graph planning, task state, route steering, architecture gates, code-sketch gates, or model-driving compile loops. `unreal-agent` exposes its 20 project discovery, bounded file/log read, conflict-safe edit, deletion approval, advisory static validation, build, Automation, and allowlisted-command capabilities. The manifest and live `tools/list` are the authoritative counts.
+`search_files` 결과에는 검색 위치 기준 `path`와 재사용할 수 있는 `uri`가 있습니다. `project://` 경로는 전역 고유 주소가 아니므로 응답의 정확한 `activeProject`를 다음 호출의 `project`에 같이 넣어야 합니다.
 
-Call-time boundaries in Direct mode are concrete safety checks:
+다른 프로젝트에서 얻은 경로·해시·읽기 표식·빌드 결과를 가져다 쓰지 말아야 합니다. 검색 자료도 해당 프로젝트의 엔진과 맞는 것을 선택하며 한 호출에서 다른 엔진의 자료를 합치지 않습니다.
 
-- `ALLOW_WRITE`, `ALLOW_COMMANDS`, and `ALLOW_UNREAL_BUILD` control mutation/process authority.
-- Project containment and exact per-call project resolution prevent cross-project writes.
-- Existing-file edits require explicit current version evidence on every call. Pass the opaque `fileVersionReceipt` returned by a read or the immediately preceding mutation, or a valid raw `expectedHash`; the server never selects same-session evidence automatically. External changes fail with `FILE_VERSION_CONFLICT`; missing, invalid, or scope-mismatched snapshot evidence fails closed with `FILE_SNAPSHOT_*` errors.
-- `write_file` is create-only; `replace_in_file` patches an existing file. A deletion proposal returns both its approval token and `fileVersionReceipt`; deletion accepts that receipt or a compatible raw hash plus explicit user approval and `ALLOW_SOURCE_DELETE=1`.
-- Build and Automation resolve the selected `.uproject` and matching installed engine/version before execution. For builds, the portable `Editor` target alias resolves the selected project's canonical `<ProjectName>Editor`, configured preferred Editor target, or sole discovered custom `*Editor` target; an explicit non-Editor target is unchanged.
-- Exact project selection also routes RAG to the compatible engine-bound index shard. A single RAG call does not merge projects that belong to different engine shards.
+## 기존 파일을 고치는 방법
 
-No task lease, route owner, planner gate, required next tool, or synthesis acknowledgement participates in those checks.
+파일을 읽으면 `fileVersionReceipt`가 반환됩니다. 어느 프로젝트의 어느 파일 상태를 읽었는지 확인하는 임시 표식입니다. 기존 파일 수정에는 매번 이 값이나 현재 SHA-256인 `expectedHash`를 직접 전달해야 합니다. 서버가 이전 대화 상태에서 자동으로 골라 주지는 않습니다.
 
-## LM Studio context plugin
+`replace_in_file`로 한 구간을 수정하고 결과를 받은 뒤, 새 `fileVersionReceipt`로 다음 구간을 고쳐야 합니다. 앞으로 할 수정의 `oldText`·`newText`를 설명이나 추론에 미리 길게 적지 말고 실제 도구 호출부터 진행합니다. 사용자가 매번 “계속”이라고 말할 필요는 없습니다.
 
-Select the actual LLM in the model dropdown. Qwen 3.8 27B is the current highly recommended, primary validated model; its v1.3.2 live E2E run completed long real-project RAG/read/report work without the prior context truncation. Muse Glimmer is under testing and is not yet a validated recommendation. Keep the top-level `codex/unreal-context-compactor` switch OFF in the chat's plugin panel by default. Installation/pinning is availability, not activation. For a long chat that needs bounded continuity, enable that single switch; handler invocation activates compaction. `Observe only` measures pressure without rewriting history. The compactor is an optional prediction-loop chat plugin, not a proxy model, MCP authority source, tool filter, or `targetModel` selector.
+| 한 번의 부분 수정 | 한도 |
+|---|---|
+| 바꿀 위치 수 | `expectedOccurrences=1` |
+| 기존 글 `oldText` | 1,200자 |
+| 새 글 `newText` | 2,800자, 최대 32줄 |
+| 두 글의 합계 | 4,000자 |
 
-The optional path may replace older model-facing history with deterministic factual continuity state while retaining the latest real user request and recent complete turns. That bounded state can include the active objective, a continuation antecedent for elliptical follow-ups, active project, current work status, unresolved items, and relevant file/tool/build observations. Compacted file facts retain canonical project/path identity and the observed SHA, but are marked `fresh_read_required`; runtime-local `fileVersionReceipt` values and snapshot registration counters are removed from current and inherited checkpoints. It deliberately strips task/route/control/synthesis internals and required-tool directives and never becomes workflow authority. Installation and `npm run status` verify availability and source/build wiring only. Existing chats can retain an old top-level opt-in, so turn that switch off manually.
+서로 의존하는 헤더와 구현 파일을 함께 고칠 때는 `apply_edit_bundle`을 사용할 수 있습니다. `patches[]`에 기존 파일 수정 1~2개만 넣고 서로 다른 파일마다 한 구간만 고칩니다. 합계 변경 줄 수는 64줄 이내이며, 같은 경로를 중복해서 넣을 수 없습니다. 각 파일의 현재 확인값을 먼저 검사한 뒤 적용합니다.
 
-## Direct duplicate behavior
+묶음 수정은 새 파일을 만들지 않습니다. 새 파일은 단독 `write_file`로만 생성하며 12,000자·160줄 이내입니다. 큰 새 파일은 작지만 완결된 뼈대를 만든 뒤 부분 수정으로 확장해야 합니다. `write_file`로 기존 파일을 덮어쓸 수는 없습니다.
 
-After updating the MCP or plugin runtime, fully restart the affected MCP process or LM Studio so the new source is actually loaded.
+따로 호출한 두 번의 수정은 별도로 저장됩니다. 두 번째가 실패해도 첫 번째 성공이 자동으로 취소된 것처럼 말하면 안 됩니다.
 
-A successful Direct RAG search or Node read is concise only when the caller echoes the opaque `repeatReceipt` from its own preceding full result and the query plus observable state still match. Without that receipt, identical success calls return their full evidence even inside one MCP process. A repeated failed Node call may still return a bounded failed duplicate.
+## 충돌과 중단 처리
+
+| 결과 | 할 일 |
+|---|---|
+| `FILE_VERSION_CONFLICT` | 읽은 뒤 다른 작업이 내용을 바꿉니다. 현재 파일을 다시 읽고 변경 내용을 반영해야 합니다. |
+| `FILE_SNAPSHOT_REQUIRED` | 확인값을 안 보냅니다. 파일을 읽고 반환값을 전달해야 합니다. |
+| `FILE_SNAPSHOT_INVALID` | 만료됐거나 현재 서버에서 유효하지 않은 값입니다. 다시 읽어야 합니다. |
+| `FILE_SNAPSHOT_SCOPE_MISMATCH` | 다른 프로젝트·경로·대화의 값입니다. 정확한 대상을 다시 읽어야 합니다. |
+| `write_file`에서 기존 파일이라고 나옵니다 | 같은 생성을 반복하지 말고 현재 내용을 읽어 부분 수정해야 합니다. |
+| 쓰기 시간 초과 | 성공 여부부터 확인해야 합니다. `list_directory`나 `read_file`로 확인하기 전 같은 쓰기를 반복하지 않습니다. 상태가 불분명하면 중단하고 설명합니다. |
+| `rollback skipped ... (conflict)` | 복구 중 다른 작업의 변경을 발견합니다. 현재 내용을 읽고 조정하기 전 덮어쓰지 말아야 합니다. |
+
+확인값은 다른 프로젝트나 대화로 옮기거나 서버 재시작 후 재사용하지 말아야 합니다. 임의로 만들어서도 안 됩니다.
+
+## 쓰기 권한과 보조 진단의 역할
+
+수정에는 `ALLOW_WRITE=1`이 필요합니다. 프로젝트 밖 경로, 보호된 경로, 오래된 확인값, 크기 한도 위반은 허용되지 않습니다. 읽기·수정에서 받은 표식 자체가 쓰기 권한을 주지는 않습니다.
+
+서버는 경로별 잠금 아래에서 실제 경로를 다시 확인하고, 저장 직전 내용이 그대로인지 비교합니다. 여러 파일 수정에는 복구 기록을 남깁니다. 다만 이 방식이 운영체제의 파일 핸들 기준 `no-follow` 보장처럼 같은 사용자 권한의 다른 프로세스가 마지막 확인 뒤 경로를 바꾸는 모든 경우까지 막지는 않습니다.
+
+`semanticAdvisory`는 의심되는 코드에 대한 참고 결과입니다. `static_validate_project`도 `advisory=true`, `blocksBuild=false`인 보조 검사입니다. 경고가 나왔다고 자동으로 수정이 취소되거나 빌드가 막히지 않습니다. 반대로 경고가 없다고 쓰기 권한이 생기는 것도 아닙니다. `VALIDATE_ON_WRITE`는 기본 Direct 작업에서 프로젝트 전체 검사를 실행하거나 빌드를 허가하는 조건이 아닙니다.
+
+삭제에는 `propose_file_deletions`로 받은 승인 토큰과 파일 확인값, `ALLOW_SOURCE_DELETE=1`, 실제 사용자 승인이 필요합니다. 삭제할 경로와 이유·영향을 먼저 정리해야 합니다. 승인된 삭제는 복구용 보관 위치로 옮깁니다.
+
+## 빌드와 로그
+
+`build_unreal_project`는 `ALLOW_UNREAL_BUILD=1`이고 프로젝트·엔진을 찾을 수 있으면 바로 실행할 수 있습니다. 계획이나 정적 검사 통과 증명서를 먼저 요구하지 않습니다.
+
+`target=Editor`는 선택한 프로젝트의 기본 에디터 대상, 설정된 우선 대상, 또는 유일하게 발견된 사용자 지정 에디터 대상으로 해석합니다. 다른 대상을 명시했다면 바꾸지 않습니다.
+
+빌드와 자동화 테스트는 같은 실행 관리 코드를 사용합니다. 시간 초과 시 자식 프로세스까지 종료합니다. 출력은 앞뒤 일부만 저장할 수 있으며 생략한 바이트 수를 알려줍니다. `fullLogPath`도 전체 원본을 보장하지 않습니다.
+
+빌드 기본 응답에는 `summary`, 주요 오류 최대 40줄, `.agent/logs` 아래의 로그 경로가 들어 있습니다. `verboseOutput=true`도 무제한 출력을 뜻하지 않습니다.
+
+- `read_unreal_logs mode=tail`: 최근 로그를 읽습니다.
+- `mode=first_error`: 앞에서부터 첫 유효 오류를 찾습니다.
+- `mode=range`, `cursorByte`, `nextCursorByte`: 정해진 범위를 이어서 읽습니다.
+
+`truncated`, `hasMore`, `sourceTruncated`와 출력 생략 정보를 확인해야 합니다. 일부 로그만 읽고 최초 원인까지 확인했다고 말하면 안 됩니다.
+
+## 중복 응답 처리와 원문 재조회
+
+성공한 검색·읽기 결과의 `repeatReceipt`를 다시 보내면 내용이 그대로인지 확인하고 짧게 답할 수 있습니다.
 
 ```json
 {"ok":true,"duplicate":true,"status":"no_new_information"}
 ```
 
-For a receipt-confirmed successful observation, this is a concise successful result, not a forced recovery or an instruction to call another tool. A repeated failure remains `ok=false` with a short non-retryable duplicate diagnostic. Reuse evidence only when it exists in the current chat; otherwise omit the receipt and the server returns the full result. Direct RAG does not advertise a fake pagination cursor: a truncated result exposes only its actionable `nextDetailLevel`. Direct responses expose at most one canonical retry object and one optional advisory suggestion; they do not expose required-next-tool chains.
+원문이 현재 채팅에 남아 있을 때만 이 값을 전달해야 합니다. `repeatReceipt`를 보내지 않으면 같은 성공 호출도 원문을 다시 반환합니다. 반복된 Node 실패는 짧게 줄일 수 있지만 여전히 `ok=false`인 실패입니다. 이 상태가 복구 도구를 반드시 호출하라는 뜻은 아닙니다.
 
-## Node Strict
+검색 응답이 너무 크면 본문과 출처 정보를 제한합니다. 일부를 줄였다면 이를 알리고 필요할 때 `nextDetailLevel`을 반환합니다. 기본 RAG는 페이지 이동 토큰을 주지 않습니다. `OUTPUT_LIMIT_EXCEEDED`가 나오면 줄 수·결과 수·상세 범위를 줄여 다시 요청해야 합니다.
 
-The sole supported Strict implementation is the optional, separately named Node entry `unreal-agent-strict`, which launches `src/strict-server.js`. It owns a small conversation-scoped lifecycle beginning with `strict_begin`; reads/searches remain task-free while mutations and long-running calls require the live session.
+## 에디터 실행과 채팅 압축
 
-There is no supported Python Strict entry and no cross-server pairing protocol. The old Python task/route/planner controller is an unsupported repository-local historical artifact and is omitted from the portable package. Do not configure it through `MCP_EXECUTION_MODE` or treat its task authorization as current MCP behavior.
+`unreal_rag_refresh`의 기본 범위는 프로젝트 소스이며 Unreal Editor를 실행하지 않습니다. `scope=editor_metadata` 또는 `all`도 기본은 기존 내보내기 자료만 읽습니다. 사용자가 에디터 실행까지 요청한 경우에만 `allowEditorLaunch=true`를 사용합니다.
 
-Node MCP transport cannot detect delivery of the model's final answer. The model must call `strict_complete` immediately before that final answer, or `strict_fail` / `strict_cancel` for those outcomes. Connection/process shutdown, TTL expiry, and process restart leave unfinished Node sessions `orphaned`; they never block Direct Mode, another conversation, or another project. Resuming an orphan requires `strict_resume` with explicit user approval.
+`codex/unreal-context-compactor`는 기본적으로 꺼두어야 합니다(`OFF`). 설치하고 목록에 고정하는 것과 채팅에서 켜는 것은 별개입니다. 긴 대화에서 필요할 때 단일 스위치만 켜면 됩니다. `Observe only`는 사용량만 측정합니다.
 
-A Direct caller must not invent or request the Node Strict protocol.
+압축 결과에는 현재 요청, 목표, 미해결 작업, 읽거나 바꾼 파일, 최근 검사 결과를 남길 수 있습니다. 파일의 임시 수정 표식은 장기 기억으로 남기지 않으며 오래된 파일 관찰은 `fresh_read_required`로 표시합니다. 압축기가 모델·권한·다음 도구·완료 여부를 고르지 않습니다.
 
-The model-driving Python workflow tools—`unreal_start_compile_loop`, `unreal_compile_loop_status`, `unreal_cancel_compile_loop`, and deprecated alias `unreal_generate_compile_loop`—are not part of any supported MCP catalog or portable runtime. Direct uses `build_unreal_project` for an immediate UBT/UHT diagnostic while the selected chat model remains in charge.
+이미 대화가 너무 커졌다면 정확한 프로젝트, 현재 요청, 바꾼 파일, 남은 오류를 짧게 적고 새 채팅에서 이어가야 합니다.
 
-## Logic review (false-bug guard)
+## 프로젝트 파일 작업에 사용할 도구
 
-When reviewing gameplay/cinematic logic (not compile errors):
+LM Studio의 `run_javascript`, `js-code-sandbox`, Deno 파일 함수, Node `fs`를 언리얼 프로젝트 파일 작업에 쓰지 말아야 합니다. 별도 작업 폴더를 사용하므로 MCP가 선택한 프로젝트와 일치한다고 볼 수 없습니다.
 
-1. Read the sibling `.h` UENUM / field comments **before** calling `read_symbol` / concluding a bug from `.cpp` alone.
-2. Label every finding `Bug` | `ByDesign` | `Ambiguous` | `NeedsRuntimeProof`.
-3. Intentional early returns that match header contracts (e.g. AuthoredWorld = keep asset transform) are **ByDesign**, not "missing logic".
-4. Cite the header/implementation evidence directly. If a separately configured evidence-first capability is available, it may be used as an optional audit aid, never as a Direct answer or build gate. `evidence_first_contract` is an exact-schema lookup only when obligations are absent or uncertain; it is not a routine preflight or tool-order authority.
+프로젝트 파일은 `read_file`, `read_file_range`, `replace_in_file`, 신규 파일용 `write_file`로 다룹니다. 설치기는 `chat.skipToolConfirmationPatterns`에서 다음 광역 자동 승인 항목을 정리합니다.
 
-## Validate-on-write
-
-`VALIDATE_ON_WRITE` is a legacy server setting. The default Direct `write_file`, `replace_in_file`, and `apply_edit_bundle` paths do not run project-wide static validation and do not require a validator certificate. They enforce their own hard mutation safety: project containment, target/create rules, size limits, scoped read/mutation snapshots, atomic/CAS writes, locks, and deletion approval. Narrow semantic denylist findings are advisory evidence only; a finding or unavailable analyzer never authorizes or blocks the mutation.
-
-`static_validate_project` is a separate **advisory** capability. It returns `validationOk`, findings, and scan metadata, but also reports `advisory=true` and `blocksBuild=false`. A model may run it before or after an edit, skip it, fix a relevant finding, or proceed directly to UBT/UHT. Its findings never authorize a write, roll back an edit, or close the build tool.
-
-`build_unreal_project` is an immediate diagnostic/execution capability. When `ALLOW_UNREAL_BUILD=1` and project/engine resolution succeeds, it runs without consulting a task, plan, code-sketch result, `VALIDATE_ON_WRITE`, or `static_validate_project`. Passing `target=Editor` selects the resolved project's canonical, configured preferred, or sole discovered custom Editor target; any explicit non-Editor target is preserved. Build output is the authoritative compile result; a static scan is useful supplementary evidence, not a prerequisite.
-
-## Write Safety and Flow
-
-### Direct write boundaries
-
-| Boundary | Example | Effect |
-|----------|---------|--------|
-| Authority | `ALLOW_WRITE=0` | Mutation is rejected before disk access |
-| Project/target safety | path escapes project, existing target passed to `write_file`, protected path | Mutation is rejected |
-| Concurrency | missing usable version evidence, stale receipt/hash, scope-mismatched receipt, occurrence mismatch, path lock | Mutation is rejected with `FILE_SNAPSHOT_REQUIRED`, `FILE_SNAPSHOT_INVALID`, `FILE_SNAPSHOT_SCOPE_MISMATCH`, `FILE_VERSION_CONFLICT`, or the applicable match/lock error; re-read when current evidence is unavailable or stale |
-| Prospective semantic denylist advisory | known unsafe Unreal API pattern or unavailable analyzer | Successful mutation reports a bounded non-blocking warning; build remains separately callable |
-| Advisory project scan | `static_validate_project` finding | No automatic rollback and no build block |
-
-**Advisory ≠ write permission:** validator warnings cannot bypass authority, containment, snapshot/CAS, target, or delete-approval checks.
-
-### Generation self-check (non-blocking)
-
-`unreal_code_sketch_claim_validate` and `unreal_architecture_reasoning` are not part of the supported MCP surface. Their repository-local implementations belong to the unsupported historical Python controller and are omitted from portable runtime packaging. Direct can inspect the same source with factual RAG and project reads, then use immediate build/test diagnostics without importing either gate.
-
-`write_file` is **create-only**. It creates brand-new files and refuses to overwrite any file that already exists (every extension, not just source). Direct Mode has no existing-file override for this tool; use `replace_in_file` with the current `fileVersionReceipt` (preferred) or a compatible raw `expectedHash`.
-
-Existing-file generation is deliberately round-bounded. One `replace_in_file` call may contain only one exact match (`expectedOccurrences=1`), with at most 1,200 `oldText` characters, 2,800 `newText` characters, 4,000 combined characters, and 32 `newText` lines. Emit that tool call before drafting later patch arguments. When the same file needs another non-contiguous change, wait for the result and use its new `fileVersionReceipt` in the next LM Studio prediction round; the user does not need to send a separate “continue” message. Separate `replace_in_file` calls commit independently: a later failure does not pretend that an earlier success rolled back. For a mutually dependent header/implementation pair, prefer `apply_edit_bundle` so both snapshots and exact replacements preflight before either write. This is model-selected advice, not a server gate. `apply_edit_bundle` requires a `patches[]` array with one or two existing-file patches. JSON Schema enforces that item count and each patch's string/integer/character/evidence shape; the server additionally enforces the 32-line per-patch cap, 64 aggregate changed-line cap, and distinct normalized patch paths because those relationships are not expressed portably by the public schema. This preserves the focused atomic header/implementation case—one small region in each of two distinct files—without allowing a many-region JSON bundle.
-
-`apply_edit_bundle` cannot create files. Standalone `write_file` is the only public create path and retains its create-only 12,000-character/160-line hard ceiling. For a large source file, prefer a small complete skeleton followed by focused receipt-chained replacements; this changes no existing-file CAS or transaction owner.
-
-Standalone creates, replacements, and recoverable deletes re-resolve lexical and real containment under the cooperative path lock; deletion checks the real trash ancestor before directory creation and the real trash parent afterward. Bundle patches recheck canonical target identity immediately after write-ahead and before CAS. These checks close deterministic in-process path-swap hooks. Subsequent path-based OS I/O still has a post-revalidation window, so this is not an OS handle-relative `no-follow` guarantee against a hostile same-user process.
-
-- If `write_file` returns `blocked because file already exists`: switch to `replace_in_file`. **Do not retry `write_file`** on that path.
-- On a tool timeout (`MCP error -32001`): never immediately retry the same write. First verify state with `list_directory` / `read_file`. If the file now exists, switch to `replace_in_file`; if the situation is unclear, stop and summarize for the user. A timeout is a hard-stop signal.
-- After a successful `write_file` / `replace_in_file`: report the changed file briefly, then choose the next useful diagnostic or edit. There is no server-required next step.
-- Pause for user direction on genuine risk or scope ambiguity: an uncertain timeout state, rollback failure, conflicting external edit, destructive approval, or a requested scope change. An advisory static finding alone is not a server stop signal.
-- If a write response says `rollback skipped ... (conflict)`: another operation changed the file. Stop, `read_file` the current content, and reconcile before editing again.
-- **Direct repetition:** successful Direct RAG searches and Node reads are condensed only when the caller echoes the state-bound `repeatReceipt` from its prior full result. Without it, identical calls return full content. Direct RAG has no pagination token; use `nextDetailLevel` only when returned. Repeated Node failures may be automatically bounded but remain failures. Do not interpret any duplicate status as a recovery gate. For consecutive edits, explicitly pass the `fileVersionReceipt` returned by the immediately preceding mutation. Reusing an older receipt fails stale CAS; re-read after `FILE_VERSION_CONFLICT`, after snapshot expiry/restart, or whenever external state is uncertain.
-
-## Forbidden Tools
-
-Do not use LM Studio's JavaScript/code sandbox for Unreal project file work:
-
-- `run_javascript`
-- `lmstudio/js-code-sandbox`
-- `Deno.readTextFile` / `Deno.writeTextFile`
-- Node `fs` / CommonJS `require`
-
-That sandbox has its own working directory and is not rooted at the active `.uproject`. Project file I/O must go through `unreal-agent`: `read_file_range`, `read_file`, `replace_in_file`, and `write_file` only for brand-new files.
-
-Remove these broad patterns from `%USERPROFILE%\.lmstudio\settings.json` `chat.skipToolConfirmationPatterns`:
-
-```json
-"lmstudio/js-code-sandbox:run_javascript",
-"lmstudio/js-code-sandbox:*",
-"mcp/unreal-agent:*",
-"mcp/unreal-rag:*"
+```text
+lmstudio/js-code-sandbox:run_javascript
+lmstudio/js-code-sandbox:*
+mcp/unreal-agent:*
+mcp/unreal-rag:*
 ```
 
-The MCP wildcards would also suppress the host confirmation needed for destructive deletion and explicitly authorized Editor launch. Re-running the supported installer removes all four patterns while preserving unrelated settings. Restart LM Studio after changing that setting. If the sandbox plugin is still shown to the model, hide or disable the JavaScript/TypeScript Code Sandbox plugin in LM Studio for Unreal coding chats.
+이 패턴은 삭제나 에디터 실행 확인까지 건너뛰게 할 수 있습니다. 설정을 바꾼 뒤 LM Studio를 재시작해야 합니다.
 
-## Practical Direct Flow
+## 검토 결과 설명
 
-Direct Mode has no required chat order. A common implementation flow is:
+버그라고 말하기 전에 헤더 선언과 주석, 실제 호출부까지 읽어야 합니다. 조기 반환이 있다는 이유만으로 빠진 로직이라고 단정하지 않습니다. 결과는 `Bug`(오류), `ByDesign`(의도된 동작), `Ambiguous`(판단 불명확), `NeedsRuntimeProof`(실행 확인 필요)로 구분할 수 있습니다.
 
-1. Select or pass the exact `.uproject`/project name for the current call.
-2. Search or inspect only the evidence relevant to the request.
-3. Read each exact target and retain its `fileVersionReceipt`; retain the SHA-256 only when a raw `expectedHash` is needed for compatibility.
-4. Patch one focused existing-file region with `replace_in_file`, always passing the explicit receipt or valid raw hash. Continue another region only after the result supplies the next receipt. Use `apply_edit_bundle` only to atomically pair at most one existing-file region in each of two distinct files; create a new file only with standalone `write_file`.
-5. Optionally run `static_validate_project` for supplementary findings.
-6. Run `build_unreal_project` or Automation whenever the user needs compile/runtime evidence.
+별도 근거 검토 도구가 있다면 `evidence_first_contract`는 필요한 형식이 불분명할 때만 조회합니다. 매번 해야 하는 준비 단계나 파일·빌드 권한 검사가 아닙니다.
 
-The model may omit irrelevant steps, revisit a file after changed evidence, or call a build immediately for a build-diagnosis request. A tool suggestion is advisory. No `toolPolicy`, `writeGate`, checkpoint, or stop condition owns the sequence.
+구조·의존성·호출 순서를 도식으로 보여줄 때는 Mermaid를 먼저 사용합니다. 이를 표시하지 못하는 환경용 ASCII 텍스트 도식은 Mermaid 블록 다음에 둡니다. 설명은 한글 자연어로 하고 파일명·함수명·설정 키만 정확한 원문을 유지해야 합니다.
 
-`search_files` keeps each result's search-root-relative `path` for compatibility and also returns a directly reusable `uri`. A `project://` URI is scoped rather than globally unique: carry the response's exact `activeProject` into the next call's `project` argument. That pairing separates same-name clones without path guessing or a server-owned follow-up sequence.
+## Strict 세션 관리 규칙
 
-For edit tasks:
+`unreal-agent-strict`는 `strict-server.js`를 실행하는 별도 항목입니다. 읽기·검색은 세션 없이 가능하고 변경·장시간 호출에는 `strict_begin`으로 시작한 세션이 필요합니다.
 
-- Do not write when `ALLOW_WRITE=0`, the user requested analysis only, or the target/scope is not established.
-- Read every existing target before its first `replace_in_file` and retain the returned receipt. A successful mutation issues a new receipt for a consecutive edit; re-read on a version conflict or when external state may have changed. For a new file, inspect the containing module/directory and confirm the path does not already exist before `write_file`.
-- Prefer `replace_in_file` with `expectedOccurrences=1` for existing files.
-- Use `write_file` only for brand-new files. Existing `.h`, `.hpp`, `.cpp`, `.c`, `.cc`, `.cxx`, and `.cs` files are patch-only.
-- Run `build_unreal_project` after C++ or `Build.cs` edits when compile proof is part of the requested outcome; it does not require a prior static validator.
-- If cleanup appears to require deleting files, finish all edits first, call `propose_file_deletions`, retain each proposal's `fileVersionReceipt`, report the count/path/file name/reason/if-not-deleted impact/if-deleted impact, and wait for explicit user approval plus the LM Studio tool-confirmation prompt before `delete_file`. Keep `ALLOW_SOURCE_DELETE=0` unless deletion is deliberately enabled for that session.
-- On UBT failure, inspect the bounded current error context, read the implicated source, and patch the smallest failing surface.
+최종 답변 직전에 `strict_complete`, 실패·취소에는 `strict_fail`·`strict_cancel`을 호출합니다. 연결 종료나 만료로 남은 세션은 `orphaned`가 됩니다. 다른 대화나 기본 Direct를 막지 않으며 사용자 승인 후에만 `strict_resume`으로 이어갑니다.
 
-## Diagram Output
-
-When the user asks for a diagram, or when explaining structure, dependencies, ownership, Blueprint or Material graph flow, shader pipeline, or runtime call order, show Mermaid first. Put ASCII/text only after the Mermaid block as a fallback for clients that do not render Mermaid.
-
-## Session Bootstrap
-
-No MCP task bootstrap is required. Confirm the exact project and safety flags only when they are relevant. Historical workflow bootstrap prompts are not part of the portable Direct product.
-
-## Context Budget and Session Handoff
-
-Build and Automation share one bounded process owner. It keeps bounded head and tail captures for stdout and stderr, records omitted-byte metadata, terminates the process tree on timeout, and persists only that bounded projection when the process exceeds the capture budget. `build_unreal_project` is compact by default: it returns a one-line `summary`, up to 40 likely error lines, and the timestamped bounded process log path under `.agent/logs` as `fullLogPath`; `verboseOutput=true` returns the bounded captured streams, not guaranteed unbounded raw output. `read_unreal_logs` defaults to a bounded tail; use `mode=first_error` to scan from byte zero and `mode=range` with `cursorByte`/`nextCursorByte` when exact traversal is needed. Always inspect `truncated`/`hasMore` and process capture metadata.
-
-Direct responses are bounded and remain valid JSON; errors use a much smaller ceiling than successful evidence payloads. Direct RAG reserves room for the serialized response envelope, hard-bounds match-reference metadata, and keeps mixed project/engine results within the effective `top_k`. If evidence must be trimmed to fit, the response reports truncation and may return `nextDetailLevel`. The generic retryable `OUTPUT_LIMIT_EXCEEDED` guard remains for pathological producer output that still cannot fit; narrow the byte/line/detail/result arguments before retrying.
-
-For long LM Studio chats, keep the actual LLM selected and leave `codex/unreal-context-compactor` OFF by default. When bounded continuity is needed, enable that single switch before context pressure becomes critical. Compaction never preserves or creates task routes, required tool commands, or workflow authority.
-
-If context/KV cache still saturates, start a fresh chat with a short factual handoff containing the exact project, current request, files already changed/observed, latest build/test result, open errors, and failed approaches. Direct Mode does not require a `write_session_handoff` artifact or a resume checkpoint.
-
-## Model and System Prompt
-
-| Profile / model | System prompt |
-|-----------------|---------------|
-| All default Direct profiles | [`lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md) |
-
-Historical model-specific planner prompts are not shipped. Direct profiles use [`prompts/lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md), which leaves reasoning, tool choice, stopping, and the final answer with the model selected in LM Studio.
-
-## Model Selection Notes
-
-- **Qwen 3.8 27B** is the highly recommended primary validated model for the Direct runtime; the v1.3.2 live E2E workflow passed.
-- **Muse Glimmer** is under testing only. Do not present it as a validated recommendation until current Direct-mode evidence is published.
-- Qwen 3.5, Qwen 3.6 27B, and GPT-OSS references in saved scorecards are historical measurements, not current recommendations.
-- For `module_fix` / `GameplayTags` / `Build.cs` errors, read the full current `*.Build.cs` before patching and report the actual build evidence.
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---------|-----|
-| Model answers without requested tool evidence | Ask it to call the relevant Direct capability; verify the default `unreal-rag` / `unreal-agent` entries are enabled |
-| Wrong paths (`Documents` vs project) | Pass the exact `.uproject`/project name on the call, or inspect/set the active project |
-| Write unexpectedly allowed on analysis-only request | Disable AGENT authority (`ALLOW_WRITE=0`) or restate the no-write scope; Direct has no planner write gate |
-| `CONTEXT_COMPACTOR_NOT_ACTIVE` / compactor authority error | A legacy Strict server/config is active. Default Direct never gates MCP authority on compactor telemetry. Keep the chat plugin OFF, restore the Direct MCP entries with the installer, and restart the stale processes |
-| `TASK_AUTH_*`, `TASK_ROUTE_*`, `requiredNextTool`, or synthesis recovery | An unsupported legacy Python process or stale config is active. Re-run the installer, verify `unreal-rag` launches `scripts/unreal_rag_direct.py`, and restart; do not invent authorization |
-| `STRICT_SESSION_INVALID` | A Node Strict session is absent, waiting, terminal, orphaned, owned by another connection, or bound to different arguments. Inspect `strict_status`; begin a new session or explicitly approve `strict_resume` for an orphan |
-| Model calls `run_javascript` / `js-code-sandbox` | Remove sandbox auto-approval, hide/disable that plugin, and restate that project I/O must use Direct `unreal-agent` tools |
-| Hallucinated analysis | Force `read_file` before claims or edits |
-| False logic bugs (early return = "missing") | Read sibling `.h` UENUM/field docs first, classify `ByDesign`/`Ambiguous`, and cite the actual contract; no claim-validator gate is required |
-| `status=no_new_information` | The caller echoed a successful Direct RAG/Node read's still-valid `repeatReceipt`, or a Node failure repeated. Reuse evidence only when it exists in this chat; otherwise omit the receipt for a full result. No recovery tool is required |
-| `FILE_VERSION_CONFLICT` or repeated/no-op patch | Another writer changed the file or the exact text no longer applies. Re-read, retain the new receipt, and patch only text that still exists with the exact occurrence count. |
-| `FILE_SNAPSHOT_REQUIRED`, `FILE_SNAPSHOT_INVALID`, or `FILE_SNAPSHOT_SCOPE_MISMATCH` | Read the exact file in the exact selected project and pass its new `fileVersionReceipt`. Do not transfer receipts across project, path, conversation/session owner, process restart, or expiry; a valid raw `expectedHash` remains compatible. |
-| Tool not in list | Confirm the Direct process is current. Removed task/planner/synthesis and Python compile-loop tools are not supported; Node lifecycle tools exist only in Node Strict |
-| `unreal_rag_refresh` times out | Re-run the same supported `python install.py --profile ... --yes` command used for this installation so the managed MCP entries and timeouts are regenerated, then restart LM Studio. Refresh is synchronous and defaults to `scope=project_source`, which never starts Unreal Editor. `scope=editor_metadata` or `all` ingests existing exports without launching Editor unless the caller explicitly sets `allowEditorLaunch=true`. |
-| Write target blocked | Existing files require `replace_in_file`; keep writes under the selected project's allowed roots and use `write_file` only for a new path |
-| `static_validate_project` reports errors | Treat findings as advisory. Fix relevant issues or run `build_unreal_project` immediately for authoritative UBT/UHT diagnostics |
-| Build seems blocked by missing validation/plan | An unsupported legacy process/stale config is active or `ALLOW_UNREAL_BUILD=0`. Direct build does not consult validation, task, or plan state |
-| RAG `scope=project_miss` / `projectMatchCount=0` / `freshnessAdvisory` | The selected project filter returned no current project rows; guideline/engine text is not project-code evidence. Direct may return one advisory `search_files` suggestion carrying the same project selector, while the model remains free to read that project's Source, change the query, or answer from other sufficient evidence. |
-| Inventory / "what's missing" loops on RAG only | Use `search_files` and direct Source reads; RAG absence alone is not proof of project absence |
-| `UHT_MACRO_IN_CONDITIONAL_BLOCK` on write | Reflection macros (`UCLASS`/`UPROPERTY`/`UFUNCTION`/`GENERATED_BODY`) sit inside a preprocessor conditional UHT cannot parse (e.g. `#if !UE_BUILD_SHIPPING`). Declare them unconditionally in the header; guard only the `.cpp` implementation. `WITH_EDITOR` / `WITH_EDITORONLY_DATA` blocks are allowed. |
-| `GENGINE_WORLD_CONTEXT` on write | Code resolves worlds via `GEngine->GetWorld()` / `GEngine->GetGameInstance()`. Use the owning subsystem/actor `GetWorld()` or an explicit `UWorld*` parameter; get the game instance from `World->GetGameInstance()`. |
-
-## Static LM Studio recommendations
-
-Sampling profiles contain only user-selected load/chat recommendations: context
-length, quantization, parallel requests, one static sampling object, the Direct
-system prompt, and two bounded write-safety preferences. They contain no task
-mode, turn preset, planner policy, required tool order, Strict prompt, or
-Compactor ownership setting. The selected model may issue one or several tool
-calls whenever its own tool-calling implementation supports that behavior.
-
-The installer writes the static LM Studio preset under
-`~/.lmstudio/config-presets/evidence-first-code-audit.preset.json`. Inspect that
-JSON when confirming the installed recommendations, run `./rag.ps1 doctor` for
-read-only index health, and use `unreal_rag_health` plus `get_workspace_info` for
-the live Direct MCP check. Repository-only sampling and benchmark helpers are
-not shipped in the portable package and are not part of the installed workflow.
+기본 Direct 호출에 이 절차를 억지로 적용하지 말아야 합니다. 기본 시스템 지시문은 [lmstudio_direct_model_system.md](../prompts/lmstudio_direct_model_system.md)입니다. 연결 오류는 [문제 해결](Troubleshooting.md)을 참고하면 됩니다.

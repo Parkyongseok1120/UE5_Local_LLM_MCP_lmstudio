@@ -1,52 +1,32 @@
-# Architecture and code-generation obligations
+# 구조 변경·코드 작성의 사전 확인 기준
 
-## Architecture mode
+## 기존 구조와 변경 제안 범위
 
-Map these relations before proposing a design:
+데이터를 누가 가지고 바꾸는지, 타이머·진행·재시도·취소를 누가 관리하는지부터 확인합니다. 호출부, 생성·종료 시점, 설정을 실제로 읽는 곳, 외부에 공개된 함수·저장 형식, 사건을 알리는 곳과 받는 곳, 모듈·스레드·프로세스·네트워크 경계를 함께 살펴봐야 합니다.
 
-- state owner and mutation API;
-- process owner for timers, progress, retries, and cancellation;
-- callers and consumers;
-- framework/lifecycle owner;
-- configuration declaration and runtime reader;
-- public API, schema, generated, and serialized surfaces;
-- event publisher and subscribers;
-- module, thread, process, or network boundary.
+- `existing`: 이미 있는 소유자와 기능을 적습니다. 비어 있으면 안 됩니다.
+- `proposed`: 요청을 만족하는 최소 변경을 적습니다. 변경이 필요 없으면 `[]`로 둡니다.
+- `doNotDuplicate`: 새로 만들지 말고 재사용해야 할 기능을 적습니다. 없으면 `[]`로 둘 수 있습니다.
 
-Produce three lists:
+세 항목은 모두 배열입니다. 목록을 채우려고 필요 없는 변경을 만들지 말아야 합니다. 자동 생성한 구조도는 위치를 찾는 자료이며 실제 동작은 소스나 실행 결과로 확인합니다.
 
-- `Existing`: owners and capabilities already present.
-- `Proposed`: the smallest delta needed for the requested outcome.
-- `DoNotDuplicate`: existing systems, data types, or services a later implementer must reuse.
+## 구현 조건과 검증 계획
 
-All three fields must be arrays. `existing` must be non-empty. For a no-change as-built report, represent the absence of a proposal explicitly with `proposed: []`; `doNotDuplicate` may also be an empty array. Do not invent a change merely to make either list non-empty.
+`invariants`에는 반드시 유지하거나 새로 만족해야 하는 조건을 적습니다. `impactedSurfaces`에는 선언·구현·호출부·테스트·설정·자동 생성 자료와 외부 사용처를 적습니다. `validationPlan`에는 필요한 정적 검사, 빌드, 동작 테스트, 실행 로그와 자료 이전 확인 방법을 적습니다. 일부 작업만 성공했을 때 어떻게 복구할지도 정해야 합니다.
 
-Treat a generated architecture map as inventory evidence, not behavioral proof. Verify ownership and data flow from source or runtime evidence.
+조건을 만족하는 가장 작은 변경을 작성합니다. 기존 담당자가 맡아도 되는 일을 위해 새 추상화 계층을 추가하지 말아야 합니다.
 
-## Codegen mode
+## 검증 수준과 근거
 
-Define before editing:
+| 값 | 확인한 범위 |
+|---|---|
+| `Proposed` | 제안이나 코드만 있고 아직 검사하지 않습니다. |
+| `SourceVerified` | 관련 규칙·소스·호출부를 읽습니다. |
+| `StaticVerified` | 형식·자료형·정적 검사를 통과합니다. |
+| `BuildVerified` | 컴파일·연결·묶음 생성에 성공합니다. |
+| `TestVerified` | 자동 테스트로 의도한 동작을 확인합니다. |
+| `RuntimeVerified` | 실제 실행 경로에서 동작을 관찰합니다. |
 
-- `invariants`: conditions the change must preserve or establish;
-- `impactedSurfaces`: declarations, implementations, callsites, tests, configuration, generated/reflected assets, and external consumers;
-- `validationPlan`: static checks, build checks, behavior tests, runtime logs/assertions, and migration checks;
-- rollback or failure behavior for partial operations.
+근거가 있는 가장 높은 수준을 쓰고 아직 확인하지 않은 부분도 적습니다. 빌드 성공은 실제 실행 확인과 다릅니다. 구조 변경은 컴파일 외에도 호출부, 저장 자료, 에셋, 배포 환경 검사가 필요할 수 있습니다.
 
-Generate the smallest change that satisfies the invariants. Do not add new abstractions when an existing owner can accept the capability without violating its contract.
-
-## Validation ladder
-
-Use the strongest available level and state what remains unproven:
-
-1. `Proposed`: design or code exists but has not been checked.
-2. `SourceVerified`: relevant contracts, paths, and callsites were inspected.
-3. `StaticVerified`: linters, type checks, schema checks, or static validators pass.
-4. `BuildVerified`: compilation, linking, bundling, or packaging succeeds.
-5. `TestVerified`: deterministic tests prove the intended behavior.
-6. `RuntimeVerified`: the real runtime path was observed.
-
-Do not collapse BuildVerified into RuntimeVerified. Architecture changes often require consumer, serialization, asset, or deployment validation beyond compilation.
-
-## Independent challenge
-
-For P0/P1 or broad architecture changes, use a fresh-context reviewer when available. Give it raw source artifacts and the task, but not the expected answer. Its job is to identify unsupported claims, missed higher-severity failures, and unintended impact surfaces.
+P0·P1이나 범위가 큰 구조 변경은 가능하면 별도 검토자가 원본 자료와 요청만 보고 확인하게 합니다. 예상 답을 먼저 주지 말고 근거 없는 결론, 더 큰 실패, 빠진 영향 범위를 찾도록 해야 합니다.

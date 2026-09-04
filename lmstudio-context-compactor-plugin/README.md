@@ -1,76 +1,39 @@
-# Unreal Context Compactor for LM Studio
+# LM Studio 대화 압축기
 
-This LM Studio plugin compacts chat context transparently while the model selected in
-LM Studio remains the reasoning, sampling, and tool-use owner. It measures context
-pressure with that selected model, keeps the latest real user request verbatim, and
-replaces older history with deterministic factual memory only when the remaining
-budget is low.
+긴 채팅에서는 코드·로그·도구 결과가 쌓여 모델이 한 번에 읽을 수 있는 양을 넘길 수 있습니다. 이 플러그인은 최신 사용자 요청과 최근 대화를 남기고 오래된 내용을 줄여 주는 보조 기능입니다.
 
-The plugin does not select a target model, replace the selected model's sampling
-settings, filter MCP tools, or interpret Unreal workflow state. The existing
-`mcp/unreal-agent` and `mcp/unreal-rag` integrations remain independent tool
-providers. Because compaction is limited to chat history, the same plugin can be
-used across Unreal Engine versions and projects.
+모델 선택, 생성 설정, 도구 목록, 파일 수정·빌드 권한은 바꾸지 않습니다. 여러 언리얼 버전과 프로젝트에서 같은 방식으로 사용할 수 있습니다.
 
-Version 0.4.51 keeps the host-owned top-level LM Studio chat-plugin switch OFF by
-default, and the installer never enables it. For a long chat that needs bounded
-continuity, enable that single switch; invoking the handler activates compaction.
-The redundant nested enable gate has been removed. `observeOnly` can be enabled in
-the plugin settings to measure pressure without changing the model-facing history. Soft
-compaction retains recent complete turns. Hard compaction keeps the current user
-turn separately and emits bounded `[Direct continuity state v2]` factual memory:
-the active objective, continuation antecedent for an elliptical follow-up, active
-project, current work status, unresolved items, archived objectives, recent tool
-outcomes, and relevant file/build facts. File observations are keyed by canonical
-project descriptor/root plus canonical path and retain the observed SHA-256, time,
-and operation. Every compacted observation is marked
-`mutationSnapshotState: fresh_read_required`. Runtime-local
-`fileVersionReceipt` values, snapshot registration counters, and executable
-receipt instructions are removed from current and inherited checkpoints. A receipt
-may remain usable only in a recent, uncompressed tool result from the live runtime;
-it never becomes durable continuity memory. Sanitization uses the field provenance
-known during continuity assembly: user-authored payment `receipt`, `ReceiptActor`,
-`FPaymentReceipt`, `영수증`, and `리시트` language remains intact, while operational
-assistant/tool prose that directs reuse of a file-mutation receipt is neutralized.
-Generic receipt vocabulary is not a capability. This state cannot plan, route,
-authorize tools, require a next call, or declare the request complete. If exact
-token measurement is unavailable, a message-count threshold provides a
-conservative fallback.
+## 채팅 압축 활성화 설정
 
-## Use in LM Studio
+1. LM Studio에서 실제 AI 모델을 불러오고 선택합니다.
+2. 기본 사용에서는 채팅의 `codex/unreal-context-compactor`를 꺼두어야 합니다(`OFF`).
+3. 긴 대화에서 필요할 때만 해당 채팅의 단일 스위치를 켭니다. 별도 활성화 설정은 없습니다.
+4. 대화는 그대로 두고 사용량만 보고 싶으면 `Observe only`를 사용합니다.
 
-1. Load and select the actual LLM. Qwen 3.8 27B is the current highly recommended, primary validated model; its v1.3.2 live E2E workflow passed. Muse Glimmer is under testing and is not yet a validated recommendation.
-2. Leave the top-level `codex/unreal-context-compactor` switch OFF for the default
-   setup. The installer does not enable this LM Studio-owned state; verify it is OFF
-   in every new or existing chat.
-3. For a long chat that needs compaction, enable that single top-level switch and
-   keep using the actual LLM as the chat model. There is no second enable control.
-4. Use `Observe only` when you need pressure telemetry without history rewriting.
+설치기는 파일을 설치하고 목록에 고정만 합니다. 채팅에서 켜지는지는 사용자가 확인해야 합니다. 예전 채팅에 켜져 있으면 직접 꺼야 합니다.
 
-The integrated installer installs and pins the plugin so it remains available, but
-does not activate it for a chat. It deliberately avoids rewriting LM Studio's private
-per-chat conversation storage, which is version-specific. Existing chat activation
-must therefore be turned off in that chat's plugin panel.
+## 압축 후 보존 정보와 파일 상태 처리
 
-## Status and development
+현재 요청·목표, 이어서 하는 작업의 대상, 활성 프로젝트, 미해결 항목, 최근 파일·도구·빌드 결과를 정해진 크기로 남깁니다. 토큰 수 측정이 안 되면 메시지 수를 기준으로 판단합니다.
 
-Run `npm run status` to verify that the direct prediction-loop source layout is
-complete and that `src/index.ts` registers the expected handler. This is a source
-verification only; it never reports runtime activation based on file presence.
-`npm run test:active` intentionally exits with code 3 while the current LM Studio
-hook cannot provide durable activation evidence.
+파일 관찰은 실제 프로젝트와 경로·해시·시간을 기록하되 `mutationSnapshotState: fresh_read_required`로 표시합니다. 오래된 기억만으로 수정하지 말고 다시 읽어야 한다는 뜻입니다. `fileVersionReceipt` 같은 실행 중 임시 표식은 오래 보관할 기억에서 제외합니다.
 
-For local development, run:
+사용자가 작성한 결제 영수증이나 `ReceiptActor`, `FPaymentReceipt` 같은 코드 이름까지 지우지는 않습니다. 파일 수정 표식을 재사용하라는 실행 지시와 일반 단어를 구분합니다.
+
+## 플러그인 설치와 개발 검증
+
+설치는 저장소 맨 위의 `INSTALL.bat` 또는 `install.sh`로 진행합니다. 플러그인만 복구할 때는 사용자 지정 구성의 `context_compactor`를 선택할 수 있습니다.
+
+이 폴더에서 실행합니다.
 
 ```text
+npm run status
 npm ci
 npm test
 npm run dev
 ```
 
-The supported installation path is the repository root `INSTALL.bat` on Windows or
-`install.sh` on macOS/Linux. Select a profile that includes `context_compactor`, or
-use that component in a CUSTOM installation for a plugin-only repair. The installer
-restores locked dependencies, runs the focused tests and TypeScript build, installs
-the plugin with `lms dev --install -y`, and verifies its owner/name/revision identity
-plus a non-empty compiled `.lmstudio/production.js` bundle.
+`npm run status`는 소스와 빌드 연결을 검사합니다. 실제 채팅 활성화를 증명하지는 않습니다. `npm run test:active`는 현재 연결 방식으로 지속적인 활성화 증거를 얻을 수 없어 종료 코드 3을 반환합니다.
+
+설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.51 / revision 98입니다.

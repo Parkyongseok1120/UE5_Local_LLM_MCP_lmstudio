@@ -1,57 +1,14 @@
-# Material Graph Porting Workflow
+# 셰이더 효과의 머티리얼 그래프 변환 기준
 
-## Purpose
+원래 화면 전체에 적용하던 효과를 표면 머티리얼에 그대로 옮길 수 있다고 가정하지 말아야 합니다. 어떤 입력이 필요한지 먼저 나눕니다.
 
-Use this workflow when a user asks to move a post-process shader, plugin shader, `.usf`, or `.ush` rendering path into Unreal Material Graph, Material Functions, Material Layers, Material Instances, or Material Parameter Collections. The goal is not a 1:1 rewrite. The goal is to separate what can run per surface from what only works after the scene has been rendered.
+- 바로 옮길 수 있는 것: 색·노멀·시선·명시적으로 받은 빛 방향·거칠기·텍스처 마스크처럼 표면 입력만 필요한 계산입니다.
+- 비슷하게 만들 수 있는 것: 프레넬·카메라 거리·매개변수로 근사하지만 화면 전체 효과와 차이가 나는 계산입니다.
+- 후처리에 남길 것: 최종 SceneColor, 화면 버퍼, 주변 깊이·스텐실 비교 등 해당 렌더링 단계가 필요한 처리입니다.
+- 함께 사용할 것: 표면 함수가 조정값을 제공하고 후처리가 최종 화면을 만드는 구조입니다.
 
-## Post Process To Material Boundary
+`WorldPosition.Z`를 카메라 거리로 쓰지 말아야 합니다. 일반 머티리얼에서 주 광원 방향이나 `ResolvedView.PreExposure`를 자동으로 얻는다고 주장하지 않습니다. 필요한 값은 확인된 프로젝트 연결이나 Material Parameter Collection 등으로 전달합니다.
 
-Classify every effect before proposing a graph structure:
+머티리얼 종류와 엔진 버전에 따라 가능한 입력이 다르므로 정확한 노드·코드를 확인합니다. 없는 `GetAttribute("DirectionalLightDirection")` 같은 이름을 지어내지 말아야 합니다.
 
-1. `Directly portable`: math that only needs BaseColor, NormalWS, ViewDirWS, LightDirWS, roughness, metallic, AO, vertex color, texture masks, or camera distance.
-2. `Portable with approximation`: effects that can be rebuilt with Fresnel, camera distance, per-material masks, MPC parameters, or material instance scalars but will not match screen-space behavior exactly.
-3. `Post-process only`: effects that require final SceneColor, GBuffer reads, CustomStencil classification, CustomDepth neighborhood tests, SceneDepth neighborhood tests, ResolvedView internals, or full-screen zone compositing.
-4. `Keep hybrid`: effects that should remain in post-process while per-material functions provide authoring-side support.
-
-## Unreal Material Graph Guardrails
-
-- Do not describe a surface material as reading and rewriting final `SceneColor` unless the material domain is explicitly Post Process.
-- Do not treat `ResolvedView.PreExposure` as a normal Material Graph input. Avoid PreExposure conversion in surface material designs unless there is engine-level evidence for the exact node or shader path.
-- Do not use `WorldPosition.Z` as camera distance. Use distance between `AbsoluteWorldPosition` and `CameraPositionWS`, or a documented engine node that returns camera depth/distance.
-- Do not claim a surface material can automatically read the active directional light direction. Prefer a `Material Parameter Collection` value such as `KeyLightDirectionWS` unless project code proves another path.
-- Do not claim a surface material can sample GBuffer, CustomStencil, CustomDepth, or neighborhood SceneDepth like a post-process shader. Mark those features as post-process only or approximated.
-- Do not invent Unreal APIs such as `GetAttribute("DirectionalLightDirection")`, `SceneColorExposure`, or `Standard Node output SceneColor` without exact engine or project evidence.
-- When using Custom nodes, prefer existing project `.ush` helpers intended for Material Graph, such as files named `*MaterialGraphCommon.ush`, before inventing new helper APIs.
-
-## Material Porting Response Contract
-
-Answer in this order:
-
-1. `portable_to_material_functions`: effects and helper functions that can move directly, with required inputs.
-2. `approximate_in_material`: effects that can be approximated, including visual differences from the post-process version.
-3. `keep_in_post_process`: effects that rely on screen-space buffers, stencil/depth compositing, or final scene color.
-4. `recommended_asset_structure`: Master Material, Material Functions, Material Instances, Material Parameter Collection, and optional remaining post-process material/shader.
-5. `parameter_mapping`: original shader parameters mapped to MPC, material instance parameters, static switches, vertex colors, or texture masks.
-6. `risk_checks`: exact Unreal constraints or project files that should be verified before implementation.
-
-## Recommended Asset Structure
-
-Prefer this structure unless the project already has a stronger pattern:
-
-- `MPC_GlobalStyle`: global light direction, environment grade parameters, haze distances, rim colors, debug toggles.
-- `MF_TSE_BaseColorGrade`: desaturation, contrast compression, cool/warm shift.
-- `MF_TSE_CelShadow`: normal/light banding using `NormalWS` and `KeyLightDirectionWS`.
-- `MF_TSE_Rim`: Fresnel or directional rim using `NormalWS`, `ViewDirWS`, and optional light mask.
-- `MF_TSE_HazeApprox`: camera-distance tint/fade approximation.
-- `MF_TSE_NormalFlatten`: tangent-space normal flattening by distance.
-- `MI_Terrain`, `MI_IndustrialMetal`, `MI_Concrete`, `MI_VFX`: material-class tuning via scalar/static switch parameters.
-
-## Failure Patterns
-
-Flag and correct these phrases when they appear in a porting answer:
-
-- `ResolvedView.PreExposure` as a Material Graph input.
-- `WorldPosition.Z` as camera distance.
-- `GetAttribute("DirectionalLightDirection")` or automatic main light direction in surface material.
-- `SceneColor -> StyleColor -> SceneColor` for ordinary surface materials.
-- GBuffer, CustomStencil, or CustomDepth sampling from a surface material without an explicit post-process/material-domain caveat.
+답변은 직접 이동할 계산, 근사와 시각적 차이, 후처리에 남길 부분, 에셋 구조, 매개변수 연결, 남은 확인 순으로 정리합니다. 기존 머티리얼 함수와 `.ush` 보조 코드를 먼저 재사용하고 예제 프로젝트의 에셋 이름을 새 규칙처럼 복사하지 않습니다.

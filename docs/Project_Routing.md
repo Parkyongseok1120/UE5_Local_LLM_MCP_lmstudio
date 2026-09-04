@@ -1,22 +1,16 @@
-# Project routing
+# 엔진·프로젝트 검색 범위 구분
 
-> **DIRECT RETRIEVAL SCOPE, NOT WORKFLOW AUTHORITY.** This classifier only chooses which RAG index evidence to search. It does not assign task ownership, restrict the visible Direct catalog, select the model's next tool, or authorize a file/build operation. Exact per-call project selectors remain authoritative for project capabilities.
+같은 질문이라도 언리얼 공통 기능을 묻는지, 내 프로젝트 코드를 묻는지에 따라 찾아볼 자료가 다릅니다. `unreal_rag_search`의 `scope`로 범위를 고를 수 있습니다.
 
-`scripts/project_routing.py` classifies queries:
+| 값 | 찾는 곳 |
+|---|---|
+| `auto` | 질문을 보고 자동으로 구분합니다. 기본값입니다. |
+| `engine` | 엔진 공통 기능·선언·규칙 |
+| `project` | 정확히 선택한 프로젝트 |
+| `mixed` | 엔진과 프로젝트 자료를 나눠서 함께 반환 |
 
-- **engine** — generic Unreal API / UHT / Build.cs rules (no activeProject filter)
-- **project** — local paths, agent edits, compile errors
-- **mixed** — both local and engine evidence (separate context sections)
+자동 구분 코드는 `scripts/project_routing.py`에 있습니다. 함수 이름처럼 보이는 질문은 엔진 자료로 분류될 수 있으므로, 내 코드가 필요하면 정확한 `project`와 `scope=project`를 함께 지정해야 합니다.
 
-MCP: `unreal_rag_search` accepts `scope: auto|engine|project|mixed`.
+호출에서 범위를 직접 지정하면 자동 구분보다 우선합니다. 프로젝트를 지정하지 않고 `use_active_project=false`를 사용하면 엔진 자료만 요청합니다. 환경변수로 이 구분 규칙을 끄거나 바꾸지는 않습니다.
 
-Routing has one runtime policy:
-
-- `scope=auto` uses the classifier above.
-- API-looking queries can therefore resolve to engine evidence under `scope=auto`; use an exact `project` selector with `scope=project` when current project source is the intended corpus.
-- An explicit per-call `scope` overrides classification.
-- An explicit per-call `project` selector binds project evidence to that exact project.
-- `use_active_project=false` requests engine-only retrieval when no explicit project is supplied.
-
-Environment variables cannot disable or replace this policy. This keeps one predictable
-classifier across LM Studio processes, projects, and Unreal Engine versions.
+이 기능은 검색할 자료만 고릅니다. AI의 다음 작업이나 파일 수정·빌드 권한을 정하지 않습니다.

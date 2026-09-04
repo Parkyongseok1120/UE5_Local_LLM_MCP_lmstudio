@@ -1,103 +1,39 @@
-# Blueprint, Material, Animation metadata
+# 블루프린트·머티리얼·애니메이션 분석 범위
 
-1. Export from Unreal Editor:
-   - `tools/ue_export/export_blueprint_metadata.py`
-   - `tools/ue_export/export_material_metadata.py`
-   - `tools/ue_export/export_animation_metadata.py`
-2. Ingest the exports and rebuild the index without starting Editor:
+이 문서는 에디터에서 내보낸 자료로 어디까지 확인할 수 있는지 설명합니다. 내보내는 방법은 [에디터 자료 내보내기](Editor_Metadata_Export.md)에 있습니다.
+
+## 블루프린트
+
+부모 클래스, 생성 클래스, 변수, 함수, 구현 인터페이스, 그래프 이름과 에셋 의존성을 확인할 수 있습니다. 노드 자료가 있다면 노드 종류·제목, 핀 방향·자료형·기본값과 연결 대상도 볼 수 있습니다.
+
+전체 노드·핀 연결에는 `LmStudioGraphExporter` 플러그인이 필요할 수 있습니다. 플러그인 없이 Python에서 읽은 결과에는 일부 정보가 빠질 수 있으므로 “내보낸 자료에 없습니다”과 “프로젝트에 없습니다”을 구분해야 합니다.
+
+## 머티리얼
+
+부모 머티리얼, 셰이딩·혼합 설정, 표현식과 매개변수를 확인합니다. 연결 자료는 `input_wires`, `graph_edges`, `root_outputs`에 기록됩니다. 인스턴스 자체에 표현식이 없으면 부모 그래프를 함께 확인해야 합니다.
+
+화면 캡처와 비교할 때는 보이는 노드·연결·값만 근거로 삼아야 합니다. 가려진 부분은 내보낸 자료나 원본에서 추가로 확인합니다.
+
+프로젝트의 `.usf`, `.ush`는 텍스트 수집 대상입니다. 변경 후에는 프로젝트 소스 범위로 갱신하면 됩니다.
+
+```powershell
+.\rag.ps1 refresh -RefreshScope project_source
+```
+
+## 애니메이션과 시퀀서
+
+스켈레탈 메시의 스켈레톤·머티리얼·물리 에셋 참조, 애니메이션 블루프린트의 클래스·그래프, 시퀀스와 몽타주의 알림·구간·슬롯, 레벨 시퀀스의 대상 연결과 트랙을 내보낼 수 있습니다. 실제 범위는 해당 엔진에서 제공하는 기능에 따라 달라집니다.
+
+수집 과정에서 `unreal_skeletal_mesh_metadata`, `unreal_anim_blueprint_metadata`, `unreal_anim_montage_metadata`, `unreal_animation_metadata`, `unreal_sequencer_metadata`로 구분합니다.
+
+## 수정과 갱신
+
+검색 자료는 구조를 읽기 위한 것입니다. 노드를 다시 연결하거나 `.uasset`를 바꾸는 작업은 에디터 Python·Editor Utility·전용 플러그인 등 에디터 안에서 처리해야 합니다.
+
+수정한 자료를 다시 내보낸 뒤 다음 명령으로 갱신합니다.
 
 ```powershell
 .\rag.ps1 refresh -RefreshScope editor_metadata
 ```
 
-To ask the launcher to produce fresh exports too, authorize that external
-Editor process explicitly:
-
-```powershell
-.\rag.ps1 refresh -RefreshScope editor_metadata -AllowEditorLaunch
-```
-
-See [Editor_Metadata_Export.md](Editor_Metadata_Export.md) for asset registry and project settings exports.
-Editor-side `.uasset` mutation is outside the portable Direct metadata contract.
-
-## Blueprint graph coverage
-
-Blueprint export records best-effort graph, node, and pin summaries. On UE 5.8, full node/pin coverage requires the `LmStudioGraphExporter` C++ editor plugin because Python cannot read protected `EdGraph.Nodes` directly.
-
-The integrated installer never installs or enables this plugin. With Unreal
-Editor closed, manually copy `tools/ue_plugins/LmStudioGraphExporter` into the
-exact selected project's `Plugins` folder, add/enable it in that project's
-`.uproject`, then reopen the Editor. If you do not deliberately make that project
-mutation, the project remains untouched and the exporter uses the Python
-fallback.
-
-With the plugin installed, Blueprint export records:
-
-- parent/generated class
-- variables, functions, implemented interfaces
-- Ubergraph/function/macro/delegate graphs
-- node class/title/name and pin direction/type
-- pin **links** with target **node** and **pin** names
-- flat **graph_links** list (`from_node.from_pin -> to_node.to_pin`)
-- pin default values/default objects when the Editor API exposes them
-- function, variable, event, and delegate references when the node exposes them
-- asset dependencies
-
-Without the plugin, the Python fallback still records graph names, parent class, variables, functions, and dependencies where Unreal exposes them, but node/pin links may be absent.
-
-## Material graph coverage
-
-Material export records best-effort expression and parameter summaries:
-
-- material/material instance class
-- parent material
-- blend mode and shading model when exposed by the Editor API
-- material expressions with **input_wires** (source expression per input socket)
-- **graph_edges** flat wire list (`from -> to.input`)
-- **root_outputs** (BaseColor, EmissiveColor, Opacity, etc.)
-- scalar/vector/texture/static switch parameter names and values
-- asset dependencies
-
-Material instances inherit the parent material graph when they have no local expressions.
-
-## Shader and screenshot analysis
-
-Project text collection already includes `.usf` and `.ush` files. Use:
-
-```powershell
-.\rag.ps1 set-project -ProjectFile C:\Projects\MyGame\MyGame.uproject
-.\rag.ps1 refresh -RefreshScope project_source
-```
-
-Then ask the chat model to call `unreal_rag_search` with a shader-focused query.
-
-For material screenshots, first run the material metadata export when possible, then ask the model to compare the visible screenshot facts with `unreal_material_metadata`:
-
-Run the Editor-metadata refresh above, then ask the chat model to search for the
-material asset and compare only observed screenshot and indexed metadata facts.
-
-For Blueprint function/variable call analysis:
-
-Run the Editor-metadata refresh above, then use `unreal_rag_search` for the
-Blueprint name, variables, calls, nodes, and pins.
-
-## Animation and Sequencer coverage
-
-Animation export records mixed asset metadata and the ingest step splits it into specific RAG sources:
-
-- `unreal_skeletal_mesh_metadata`
-- `unreal_anim_blueprint_metadata`
-- `unreal_anim_montage_metadata`
-- `unreal_animation_metadata`
-- `unreal_sequencer_metadata`
-
-The exporter covers SkeletalMesh skeleton/material/physics asset references, AnimBlueprint class/skeleton/graph names, AnimSequence and AnimMontage notifies/sections/slots, and LevelSequence bindings/tracks when those APIs are available.
-
-## Implementation boundary
-
-These exports make BP, Material, SkeletalMesh, AnimBP, Notify, Montage, and Sequencer relationships visible to RAG. Actual node rewiring or `.uasset` mutation must still be executed inside Unreal Editor through Editor Python, Editor Utility, or a dedicated plugin command; the repository-side index gives the agent the map it needs before making those Editor-side changes.
-
-Direct Editor ingest binds every row to the canonical selected project root plus
-its descriptor stem and commits it only to that project's engine-bound shard.
-Same-name project clones are not interchangeable, and a single query never merges
-Editor evidence across engine shards.
+기본은 기존 자료만 읽습니다. 에디터 실행까지 의도했다면 `-AllowEditorLaunch`를 추가합니다. 프로젝트 실제 경로와 엔진을 기준으로 자료를 구분하므로 다른 복사본의 내보내기 파일을 섞지 말아야 합니다.

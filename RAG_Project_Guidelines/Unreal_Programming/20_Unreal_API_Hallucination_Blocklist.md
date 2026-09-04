@@ -1,64 +1,44 @@
-# Unreal API Hallucination Blocklist
+# 언리얼 함수·속성의 존재 여부 확인과 오용 방지
 
-## Purpose
+현재 엔진 헤더·공식 자료·프로젝트 소스·에디터 내보내기 중 하나로 정확한 이름과 사용 형태를 확인해야 합니다. 함수가 있어도 다른 객체나 인자로 호출하면 맞는 코드가 아닙니다.
 
-Use this checklist when reviewing or generating Unreal Engine answers with small local models. The goal is to stop plausible but unevidenced Unreal API claims before they become code, Blueprint plans, or material/shader instructions.
+| 의심할 표현 | 확인할 방향 |
+|---|---|
+| `DisableGravity()` | 해당 이동 컴포넌트의 `GravityScale`이나 의도한 이동 모드 |
+| `UWorld::GetURL()` | 실제 레벨 이름 조회와 로컬·서버 이동 방식 |
+| `GEngine->GetWorld()` | 소유 객체의 월드 또는 명시적인 `UWorld*` |
+| `SpawnActor(..., &SpawnTransform, ...)` | 실제 선택한 오버로드와 인자형 |
+| `ReplicateVariable`, `SetReplicated` | `GetLifetimeReplicatedProps`, `DOREPLIFETIME` |
+| 인자 없는 `GiveAbility()` | 실제 AbilitySystemComponent의 멤버 호출 |
+| 소유자 없는 `CreateWidget()` | 실제 함수 선언과 UI 소유자 |
+| 실행 코드의 `GEditor`, `FEditorDelegates` | 에디터 전용 모듈·조건과 경계 |
+| `SetRestoreState`, `SetBindingTag`, `AddBindingOverride` | 실제 시퀀서 설정·바인딩 API |
+| 표면 머티리얼의 최종 `SceneColor` 변경 | 머티리얼 종류와 후처리 단계 |
+| `WorldPosition.Z`를 카메라 거리로 사용 | 실제 월드 위치와 카메라 위치의 관계 |
 
-## Blocked Unless Exact Evidence Exists
+`ResolvedView.PreExposure`, 자동 주 광원 방향, GBuffer·스텐실·주변 깊이 입력도 현재 머티리얼에서 가능한지 확인합니다. 추측한 화면 연결이나 일반 파일 도구로 `.uasset` 노드를 수정했다고 말하지 않습니다.
 
-Do not claim these are available unless a cited project file, engine symbol, official doc chunk, or exported metadata proves the exact path:
+프로젝트 자료형을 사용하기 전에 해당 헤더와 선언을 찾고 필요한 모듈만 추가합니다. 빌드·셰이더 컴파일·에디터 실행은 실제 결과가 있어야 성공이라고 적습니다.
 
-- Arbitrary `GetAttribute("...")` accessors in C++, shaders, or Material Graph.
-- Automatic main directional light direction inside ordinary surface materials.
-- Reading or rewriting final `SceneColor` from an ordinary surface material.
-- `ResolvedView.PreExposure` as a normal Material Graph value.
-- `WorldPosition.Z` as camera distance.
-- Surface material access to GBuffer, CustomStencil, CustomDepth, or neighbor SceneDepth like a post-process shader.
-- Direct `.uasset` Blueprint or Material graph mutation from filesystem write tools.
-- Blueprint node execution or pin links inferred only from asset/class/variable names.
-- Adding Build.cs module dependencies without include-owner evidence, symbol evidence, or a real compile/link/UHT error.
-- Claiming Editor, PIE, shader compile, or UBT success without the corresponding log or tool result.
-- Sequencer/MovieScene invented APIs: `bRestoreState` as a public player field, `SetRestoreState(...)`, `SetBindingTag(...)`, `AddBindingOverride(...)`, or treating `AActor::Tags` as a Sequencer binding tag. Restore-on-finish is a sequence/section Completion Mode (Restore State vs Keep State) plus `FMovieSceneSequencePlaybackSettings`; binding overrides use `FMovieSceneObjectBindingID`. Verify the exact symbol before use (see `23_Sequencer_Binding_And_Playback_Playbook.md`).
-- Tick ordering guesses: asserting a `TickGroup` value, prerequisite API (`AddTickPrerequisiteActor/Component`), or tick-enable call without confirming the enum/function name (see `24_Tick_Ordering_And_Lifecycle_Contract.md`).
-- `UCharacterMovementComponent::DisableGravity()` — this member does not exist. Prefer `MoveComp->GravityScale = 0.0f;` for gravity scaling, or deliberately select a movement mode such as `MoveComp->SetMovementMode(MOVE_Flying);` when that behavior is intended.
-- `UWorld::GetURL()` / `World->GetURL()` — `UWorld` does not expose this member. For a current level name use `UGameplayStatics::GetCurrentLevelName(World, true)` or `World->GetMapName()`. Restart with `UGameplayStatics::OpenLevel` for local/PIE flow or authority-aware `ServerTravel` when network travel is intended.
-- `GEngine->GetWorld()` / `GEngine->GetGameInstance()` — do not use the engine singleton as world context. Resolve `GetWorld()` from the owning actor/subsystem/component or pass an explicit `UWorld*`; then use `World->GetGameInstance()`.
-- `SpawnActor<T>(..., &SpawnTransform, ...)` copied into a typed overload without checking the signature. Prefer `World->SpawnActor<T>(Class, SpawnTransform, Params)` with an explicit `FTransform` and `FActorSpawnParameters`. A transform-pointer overload may exist, but selecting it accidentally is fragile and should not be assumed.
-- Project subsystem/component types used without their declaring header. Before `GetSubsystem<UMySubsystem>()` or a member call, include the matching project header and verify the type exists; do not create a placeholder API to silence the compiler.
-- Editor-only world access (`GEditor`, `GetEditorWorldContext`, `FEditorDelegates`) in runtime game/dev-console code. Keep editor APIs in editor modules or `WITH_EDITOR` code paths; runtime level operations must start from the caller's `UWorld*`.
-- Invented replication helpers (`ReplicateVariable`, `SetReplicated`) — use `GetLifetimeReplicatedProps` + `DOREPLIFETIME`.
-- **Context-sensitive (not token-only):** real UE APIs used in invalid shapes — free `GiveAbility()`, zero-arg `GetPlayerController()`, `CreateWidget()` without owner, unguarded `GEditor`/`FEditorDelegates` outside `WITH_EDITOR`. Valid member/static calls such as `ASC->GiveAbility(Spec)`, `UGameplayStatics::GetPlayerController(World, 0)`, and `Widget->AddToViewport()` are allowed.
-- Wrong physics helpers (`SetGravityEnabled`, `EnablePhysicsSimulation` on wrong types) — use component-specific APIs such as `SetSimulatePhysics` / `SetEnableGravity`.
+근거가 없으면 확인이 필요한 파일을 적고, 근사라면 원래 동작과의 차이를 설명해야 합니다. 아래 코드 형태도 현재 엔진과 프로젝트에서 다시 확인해야 합니다.
 
-## Verified Replacement Snippets
+## 코드 형태 예시
+
+아래 예시는 실제 프로젝트에서 빌드를 끝낸 결과가 아닙니다. 이름·모듈·엔진 선언을 확인해서 적용해야 합니다.
 
 ```cpp
-// Disable character gravity without inventing an API.
+// 실제 이동 컴포넌트의 값으로 캐릭터 중력을 끕니다.
 if (UCharacterMovementComponent* MoveComp = Character->GetCharacterMovement())
 {
     MoveComp->GravityScale = 0.0f;
 }
 
-// Restart the current local/PIE level from a known world.
+// 확인된 월드에서 현재 로컬·PIE 레벨을 다시 시작합니다.
 const FString LevelName = UGameplayStatics::GetCurrentLevelName(World, true);
 UGameplayStatics::OpenLevel(World, FName(*LevelName));
 
-// Spawn with the typed transform overload.
+// 대상 자료형과 Transform을 받는 생성 함수를 사용합니다.
 FActorSpawnParameters Params;
 AEnemyCharacter* Spawned = World->SpawnActor<AEnemyCharacter>(
     EnemyClass, SpawnTransform, Params);
 ```
-
-## Rewrite Pattern
-
-When a blocked claim appears, rewrite it into one of these forms:
-
-- `Evidence-backed`: cite the exact file, symbol, metadata export, or log line.
-- `Approximation`: explain what can be approximated and how behavior differs.
-- `Needs Editor export`: ask for Blueprint/Material metadata or screenshot evidence.
-- `Post-process only`: keep the feature in post-process/global shader code.
-- `Parameter-driven`: expose the missing runtime value through a Material Parameter Collection, DataAsset, config, or C++ binding.
-
-## Small Model Response Rule
-
-If evidence is missing, say what is missing. Do not fill the gap with a likely Unreal API name.

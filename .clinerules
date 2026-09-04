@@ -1,57 +1,21 @@
-# Unreal Direct MCP Rules for Cline + Rider
+# Cline과 Rider의 언리얼 작업 규칙
 
-The selected Cline model owns interpretation, tool choice, call order, retry
-decisions, stopping, and the final answer. `unreal-rag` and `unreal-agent` are
-bounded capability providers; tool results are facts and optional advice, not a
-server-owned workflow.
+기본 `Direct` 방식에서는 선택한 모델이 요청 해석, 도구 선택과 순서, 재시도, 중단과 최종 답변을 맡습니다. 도구 결과는 사실과 참고 의견이며 다음 행동을 강제하지 않습니다.
 
-## Capability roles
+`unreal-rag`는 정확한 프로젝트 선택과 자료 검색·갱신을 담당합니다. `unreal-agent`는 파일·로그 읽기, 안전한 부분 수정, 코드 진단, 빌드와 자동화 테스트를 담당합니다. Rider는 직접 소스를 찾고 빌드·디버깅할 때 사용합니다.
 
-- `unreal-rag`: exact active-project selection, indexed search, symbol lookup,
-  health, rebuild status, and explicit refresh.
-- `unreal-agent`: project/workspace inspection, bounded source reads, CAS-safe
-  mutations, advisory static validation, builds, Automation tests, and logs.
-- Rider: interactive navigation, builds, debugging, and developer inspection.
+## 파일 수정 전 확인 사항
 
-Choose only the capabilities useful for the current request. There is no
-mandatory bootstrap, validation-before-build sequence, or final-response gate.
-Resolve the exact project whenever ambiguity or cross-project work is possible,
-and do not hard-code an Unreal version or installation.
+- 정확한 프로젝트와 엔진을 확인해야 합니다. 경로나 엔진 버전을 추측해서 고정하지 않습니다. 현재 소스와 실제 로그를 근거로 쓰며 언리얼 함수를 지어내지 말아야 합니다.
+- 기존 파일은 먼저 읽고 `fileVersionReceipt` 또는 유효한 현재 `expectedHash`를 매번 직접 전달해 한 구간씩 수정합니다. 서버가 같은 대화의 값을 자동 선택하지 않습니다. 다음 수정에는 직전 성공 결과의 새 확인값을 사용합니다. `FILE_VERSION_CONFLICT`나 `FILE_SNAPSHOT_*`가 나오면 다시 읽어야 합니다.
+- `write_file`은 새 파일용입니다. `apply_edit_bundle`은 서로 다른 기존 파일 1~2개에서 한 구간씩만 수정합니다. 각 파일의 현재 확인값이 필요하며 새 파일은 만들지 않습니다.
+- 프로젝트 경계, 경로 검사, 크기·출력 한도, 동시 수정 방지, 저장 실패 복구, 삭제 승인과 명령 허용 목록을 유지합니다.
+- 정적 검사는 참고용이며 빌드를 먼저 막는 절차가 아닙니다. 빌드 실행이 허용돼 있으면 요청한 빌드를 바로 실행하고 실제 UBT·UHT·컴파일러 출력을 확인합니다.
+- `target=Editor`는 프로젝트의 기본 대상, 설정된 우선 대상, 또는 유일하게 찾은 사용자 지정 에디터 대상을 사용합니다. 명시된 다른 대상은 유지합니다. 빌드와 자동화 테스트는 같은 실행 관리 코드를 사용하며 `fullLogPath`가 전체 원본을 보장하지 않으니 출력 생략 정보도 확인해야 합니다.
+- 언리얼 C++에서 네임스페이스는 웬만하면 새로 만들지 말아야 합니다.
 
-## Source and mutation safety
+## 결과 보고 기준
 
-- Treat current project files and build/log output as the source of truth; do
-  not invent Unreal APIs.
-- Read an existing file before changing it. Explicitly pass its
-  `fileVersionReceipt` for an exact, uniquely matching patch, or pass a valid
-  raw `expectedHash`; same-session evidence is never selected automatically.
-  Use the new receipt returned by a successful mutation for a
-  consecutive edit. On `FILE_VERSION_CONFLICT` or `FILE_SNAPSHOT_*`, re-read
-  instead of overwriting.
-- `write_file` is for a new file. Multi-file edits are allowed only through the
-  bounded atomic bundle capability and each existing-file patch still needs its
-  explicit current receipt or compatible valid raw hash. The bundle never
-  creates files.
-- Keep project-root containment, path normalization, size/output limits, atomic
-  writes, per-path locks, recoverable-delete approval, and command allowlists.
-- Static validation is advisory. A requested build may run immediately when
-  build execution is enabled, and its real UBT/UHT/compiler output is the
-  authoritative diagnostic.
-- `target=Editor` resolves the selected project's canonical, configured
-  preferred, or sole discovered custom Editor target; preserve explicit
-  non-Editor targets. Build and Automation
-  share the bounded process runner, so inspect capture/omitted-byte metadata and
-  do not assume `fullLogPath` is unlimited raw output.
-- Avoid introducing C++ namespaces unless the target Unreal project requires
-  them.
+`repeatReceipt`는 현재 대화에 원문이 남아 있고 같은 성공 결과를 짧게 확인할 때만 돌려줍니다. 다른 대화로 옮기거나 임의로 만들지 말아야 합니다.
 
-## Results and repetition
-
-- Use the current result to decide whether another call is useful. Suggestions
-  never force a next tool.
-- Echo an opaque `repeatReceipt` only when this same conversation retained the
-  original successful content and deliberately wants a concise unchanged-result
-  acknowledgement. Never invent or transfer receipts between conversations.
-- Report verified outcomes and actual log paths. If verification was not run or
-  a safety boundary blocked the action, state that limitation directly; do not
-  manufacture a success or a compulsory next step.
+검증한 결과와 실제 로그 경로를 한글 자연어로 설명합니다. 낯선 용어는 무슨 역할인지 먼저 풀어 쓰고 명령어·함수명은 정확히 유지해야 합니다. 실행하지 않은 검사나 막힌 작업이 있으면 그대로 적습니다. 확인하지 않은 성공이나 반드시 해야 한다는 다음 단계를 만들어내지 말아야 합니다.

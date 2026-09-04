@@ -1,55 +1,17 @@
-# Versioning
+# 버전 관리
 
-This repository uses **independent version numbers** per component. They are not forced to match on every commit.
+제품 전체와 각 구성 요소는 별도 버전을 사용합니다. 같은 숫자로 억지로 맞출 필요는 없습니다.
 
-| Component | Version | Location | Meaning |
-|-----------|---------|----------|---------|
-| **Product** | 1.3.3 | [`installer/manifest.json`](../installer/manifest.json), [`README.md`](../README.md) | User-facing release label and installable product metadata |
-| **Node agent MCP** | 0.3.22 | [`lmstudio-unreal-agent-mcp/package.json`](../lmstudio-unreal-agent-mcp/package.json) | npm package semver for the agent server |
-| **Evidence-First MCP server** | 1.1.1 | [`evidence_packet_contract.py`](../skills/evidence-first-code-audit/scripts/evidence_packet_contract.py), [`evidence_first_mcp.py`](../skills/evidence-first-code-audit/scripts/evidence_first_mcp.py) | Read-only audit contract, validation schema, and MCP protocol metadata |
-| **Context compactor plugin** | 0.4.51 / revision 98 | [`lmstudio-context-compactor-plugin/package.json`](../lmstudio-context-compactor-plugin/package.json), [`manifest.json`](../lmstudio-context-compactor-plugin/manifest.json) | LM Studio generator plugin behavior, continuity memory, and installed revision |
-| **Portable manifest** | 2.1.17 | [`installer/manifest.json`](../installer/manifest.json) | Portable ZIP bundle metadata (layout + required files) |
+| 구성 | 현재 표시 | 기준 파일 |
+|---|---|---|
+| 제품 | 1.3.3 | [installer/manifest.json](../installer/manifest.json) |
+| Node 파일·실행 서버 | 0.3.22 | [package.json](../lmstudio-unreal-agent-mcp/package.json) |
+| 근거 검토 서버 | 1.1.1 | [evidence_packet_contract.py](../skills/evidence-first-code-audit/scripts/evidence_packet_contract.py), [evidence_first_mcp.py](../skills/evidence-first-code-audit/scripts/evidence_first_mcp.py) |
+| 대화 압축기 | 0.4.51 / revision 98 | [package.json](../lmstudio-context-compactor-plugin/package.json), [manifest.json](../lmstudio-context-compactor-plugin/manifest.json) |
+| 압축 배포 구성 | 2.1.17 | [installer/manifest.json](../installer/manifest.json) |
 
-## When to bump
+제품을 새로 배포할 때 제품 버전을 올립니다. 도구의 공개 입력·출력이나 동작이 바뀌면 해당 구성 요소 버전을 올립니다. 배포 파일 구성이나 설치 내용이 바뀌면 배포 구성 버전을 검토해야 합니다.
 
-- **Product**: Published user-visible release notes, holdout/eval milestones, beta/stable tags, or the next bundled product release. Post-release component fixes on `main` use their independent component version until the next product release is cut.
-- **Node package**: Breaking or notable agent MCP API/behavior changes.
-- **Evidence-First MCP server**: Public tool schema, contract semantics, validator protocol, or server metadata changes.
-- **Context compactor plugin**: Generator behavior, checkpoint schema, or installable plugin revision changes.
-- **Portable manifest**: Portable ZIP layout, bundled file set, or installable component payload/closure changes.
+릴리스에는 각 구성 요소 버전을 함께 적습니다. 이미 공개한 안정·시험 버전 태그를 강제로 옮기지 말아야 합니다. 예전 상태가 필요하면 Git 기록과 태그로 확인하면 됩니다.
 
-## Release alignment
-
-For every prerelease or stable tag, record all component versions in the release notes. They may differ. The immutable `v1.3.0-rc2` snapshot contains product 1.3.0 RC2, node 0.3.15, context compactor 0.4.39/revision 85, and portable manifest 2.1.3. The stable `v1.3.0` line aligns product 1.3.0, node 0.3.19, context compactor 0.4.47/revision 94, and portable manifest 2.1.8.
-
-Stable `v1.3.1` aligns product 1.3.1, Node agent MCP 0.3.20, context compactor 0.4.50/revision 97, and portable manifest 2.1.11. Node 0.3.20 bounds model-facing edits to focused receipt-chained regions while preserving the existing CAS and two-file atomic transaction owners. Context compactor 0.4.50 keeps runtime-local file receipts and snapshot registration counters out of durable checkpoints while selecting sanitizer policy from known field provenance: user-authored payment-receipt and code-symbol language remains verbatim, whereas assistant/tool-derived executable receipt-reuse prose is neutralized. Canonical file observations remain `fresh_read_required`, and the MCP receipt/CAS boundary is unchanged. Portable manifest 2.1.11 closes the provenance-aware sanitizer and its semantic-preservation regressions into the installable package. The installer does not activate the host-owned chat plugin, and the transparent-compaction opt-in defaults OFF. The immutable `v1.3.0` snapshot remains unchanged.
-
-Stable `v1.3.2` aligns product 1.3.2, Node agent MCP 0.3.20, Evidence-First MCP
-server 1.1.0, context compactor 0.4.51/revision 98, and portable manifest
-2.1.14. The portable payload keeps the Python-free launcher seed path, includes
-the current v1.3.2 release-document closure, and makes
-the validator's exact packet contract public. The compactor removes the
-redundant nested enable gate, rechecks pressure before each complete tool round,
-preserves bounded validation-repair feedback, and structurally excludes
-runtime-local file capabilities from serialized continuity. The existing MCP
-receipt/CAS/atomic-write boundaries remain unchanged. The installer never
-enables LM Studio's host-owned chat toggle. Published `v1.3.0` and `v1.3.1`
-tags and artifacts remain immutable.
-
-Stable `v1.3.3` aligns product 1.3.3, Node agent MCP 0.3.22, Evidence-First MCP
-server 1.1.1, context compactor 0.4.51/revision 98, and portable manifest
-2.1.17. Node search results pair reusable scoped URIs with exact project identity.
-Direct RAG reserves its serialized envelope, bounds mixed results and match
-references, and reports evidence trimming without returning malformed or partial
-JSON. Evidence-First contract lookup is optional rather than a routine Direct
-preflight, while causal P0/P1 and multi-file-plan validation remains required.
-The Windows process-start identity probe uses the same bounded 10-second budget
-as stale-reclaim coordination so loaded CI hosts do not strand a reused-PID lock;
-failed inspection still preserves the live-lock fail-safe policy.
-The existing MCP receipt/CAS/atomic-write boundaries and default-OFF compactor
-policy remain unchanged. Published `v1.3.0`, `v1.3.1`, and `v1.3.2` tags and
-artifacts remain immutable.
-
-The human-facing label is `1.3.3`, published with the distinct tag `v1.3.3`. **Do not force-move** an existing stable, RC, or Beta tag. `portablePackage.releaseReady: true` means that the automated release, package, installer, safety, and cross-platform gates are required to pass for publication. It does not claim a clean-machine physical installer lifecycle on every host or universal compatibility across Unreal projects, engine builds, plugins, and editor runtimes. Repository release notes retain the exact evidence boundary.
-
-Evaluation history tied to product versions remains in the development repository and is intentionally excluded from the portable Direct package.
+`portablePackage.releaseReady`는 자동 검사와 배포 준비 상태에 쓰는 값입니다. 모든 장비·엔진·프로젝트에서 실제 실행을 보장한다는 뜻은 아닙니다. 변경 내용은 [1.3.3 변경 사항](Release_Notes_1_3_3.md)에 있습니다.

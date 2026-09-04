@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 
@@ -17,9 +16,9 @@ def test_current_installer_docs_describe_python_only_rag_build() -> None:
     internal = _read("installer/README.md")
     combined = "\n".join((integrated, tiers, internal))
 
-    assert "Direct `--build-rag` indexing runs the managed Python collectors directly" in integrated
-    assert "`install.py --build-rag` invokes its managed Python executable directly" in tiers
-    assert "`install.py --build-rag` invokes the managed Python" in internal
+    assert "`--build-rag`는 설치기가 관리하는 Python으로 수집과 검색 자료 생성을 직접 실행합니다" in integrated
+    assert "`install.py --build-rag`는 설치기가 관리하는 Python으로 수집과 검색 자료 생성을 직접 실행합니다" in tiers
+    assert "`install.py --build-rag`는 설치기가 관리하는 Python" in internal
     assert "INSTALL-*-BUILD-RAG.bat" not in combined
     assert "opt-in indexing requires PowerShell" not in combined
     assert "PowerShell 7 (`pwsh`) only when `--build-rag`" not in combined
@@ -33,7 +32,7 @@ def test_current_docs_require_explicit_editor_metadata_side_effects() -> None:
     editor = _read("docs/Editor_Metadata_Export.md")
     combined = "\n".join((integrated, tiers, editor))
 
-    assert "The integrated installer does not copy or enable\nthis plugin" in editor
+    assert "통합 설치기는 이 플러그인을 복사하거나 활성화하지 않습니다" in editor
     assert "allowEditorLaunch=false" in editor
     assert "-RefreshScope editor_metadata -AllowEditorLaunch" in editor
     assert "tools/ue_export/run_all_exports.py" in editor
@@ -56,7 +55,7 @@ def test_packaged_setup_docs_use_existing_installer_and_doctor_commands() -> Non
     assert "./rag.ps1 doctor" in combined
     assert "unreal_rag_health" in combined
     assert "get_workspace_info" in combined
-    assert "only in the development repository" in setup
+    assert "개발 저장소에만 있습니다" in setup
     assert "patch_mcp_runtime_paths.ps1" not in combined
     assert "scripts/patch_mcp_config.py" not in combined
     for source_checkout_only in (
@@ -72,20 +71,15 @@ def test_packaged_setup_docs_use_existing_installer_and_doctor_commands() -> Non
 def test_current_docs_keep_host_compactor_off_by_default_and_use_one_activation_switch() -> None:
     current_docs = (
         "README.md",
-        "README.ko.md",
         "README.portable.md",
-        "README.portable.ko.md",
         "installer/README.md",
         "lmstudio-context-compactor-plugin/README.md",
         "docs/Integrated_Installer.md",
         "docs/LMStudio_Unreal_Agent_Setup.md",
         "docs/LMStudio_MCP_Tool_Discipline.md",
-        "docs/Project_Overview.md",
         "docs/Troubleshooting.md",
         "docs/Cline_Rider_Unreal_Agent_Setup.md",
-        "docs/Small_Model_Shortcut.md",
         "docs/ARCHITECTURE.md",
-        "docs/Community_Finetune_Model_Optimization.md",
         "docs/Model_Profiles.md",
     )
     documents = {relative: _read(relative) for relative in current_docs}
@@ -97,9 +91,9 @@ def test_current_docs_keep_host_compactor_off_by_default_and_use_one_activation_
     assert "two-switch" not in combined.casefold()
     assert "both switches" not in combined.casefold()
     assert "nested compaction opt-in" not in combined.casefold()
-    assert re.search(r"enable\s+(?:that|the)\s+single\s+(?:top-level\s+)?switch", combined, re.I)
-    assert "단일" in documents["README.ko.md"]
-    assert re.search(r"Installation/pinning\s+is\s+availability,\s+not\s+activation", combined)
+    assert "단일 스위치" in combined
+    assert "단일" in documents["README.md"]
+    assert "설치는 사용 가능한 파일을 준비할 뿐 채팅에서 활성화하지 않습니다" in combined
     assert "New chats start OFF" not in combined
     assert "New chats start with no chat plugins enabled" not in combined
     assert "새 채팅은 OFF로 시작" not in combined

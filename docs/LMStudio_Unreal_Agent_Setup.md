@@ -1,171 +1,75 @@
-# LM Studio Unreal Agent Setup
+# LM Studio 언리얼 프로젝트 연결 설정
 
-Use this guide for **LM Studio basic chat** with `unreal-rag` + `unreal-agent` MCP.
+먼저 [설치 안내](Integrated_Installer.md)대로 설치한 뒤 LM Studio를 재시작해야 합니다. 압축 배포본이라면 압축을 푼 폴더를 그대로 두어야 합니다.
 
-## 1. Prerequisites
+## 연결 확인
+
+설치 폴더에서 실행합니다.
 
 ```powershell
-# Run from the stable directory where this repository/portable ZIP was extracted.
-cd C:\path\to\UE5_Local_LLM_MCP_lmstudio
 .\rag.ps1 doctor
 ```
 
-The factual health payload should identify the configured index and project
-binding. The saved evaluation baseline uses UE 5.8, but the Direct MCP resolves
-the selected `.uproject` descriptor and supports multiple installed UE 5.x
-versions. Pass an exact per-call project selector and, when discovery cannot
-resolve a custom/source build, an explicit `engineRoot`. Exact project selection
-also chooses its compatible engine-bound RAG shard; one call does not merge
-projects owned by different engine shards.
+검색 자료와 선택한 프로젝트가 맞는지 확인하면 됩니다. LM Studio의 `~/.lmstudio/mcp.json`에는 다음 두 서버가 있어야 합니다.
 
-## 2. MCP configuration
+- `unreal-rag`: 검색 자료에서 코드·문서를 찾고 갱신합니다. 실행 파일은 `scripts/unreal_rag_direct.py`.
+- `unreal-agent`: 프로젝트 파일을 읽고, 허용된 수정·빌드 작업을 합니다. 실행 파일은 `src/direct-server.js`.
 
-File: `$HOME\.lmstudio\mcp.json`
-
-Required servers:
-
-- `unreal-rag` — active-project selection, factual search/symbol evidence, health, and index refresh/status
-- `unreal-agent` — read/write files, UBT build
-
-The normal entries run **Direct Model Mode**. Their catalog is stable and is not reduced by task state, route phase, or `MCP_ESSENTIAL_TOOLS`. Direct calls do not require `unreal_task_start`, `unreal_agent_plan`, `taskAuthorization`, a required-next-tool handoff, or synthesis acknowledgement. Filesystem containment, scoped snapshot/CAS checks, command allowlists, deletion approval, and SAFE/AGENT authority still apply. See [LMStudio_MCP_Tool_Discipline.md](LMStudio_MCP_Tool_Discipline.md).
-
-After path changes:
+설치 위치를 바꿨거나 연결이 깨졌다면 현재 폴더에서 같은 설치기를 다시 실행해야 합니다.
 
 ```powershell
-cd C:\path\to\UE5_Local_LLM_MCP_lmstudio
 python install.py --profile standard --yes
 .\rag.ps1 doctor
 ```
 
-Re-run the same installer profile/options originally used when Agent write/build
-authority was enabled; `standard` above is the read-only/default repair example.
+이 예시는 읽기 전용입니다. 원래 수정·빌드까지 허용했다면 같은 권한 옵션을 함께 지정해야 합니다. 재설치 후 LM Studio를 재시작해야 합니다. 배포본 사용법은 여기에 적힌 명령으로 충분하며, 추가 검증 도구 일부는 개발 저장소에만 있습니다.
 
-Restart LM Studio so MCP servers reload.
+## 모델과 채팅 설정
 
-## 2a. Node Strict (optional)
+1. 사용할 AI 모델을 불러오고 모델 선택 목록에서 직접 고릅니다.
+2. 채팅에서 `unreal-rag`, `unreal-agent`를 켭니다.
+3. 시스템 지시문에는 [lmstudio_direct_model_system.md](../prompts/lmstudio_direct_model_system.md)를 사용합니다.
+4. `codex/unreal-context-compactor`는 기본적으로 꺼두어야 합니다(`OFF`). 기존 채팅에 켜져 있으면 직접 끕니다.
+5. 언리얼 파일 작업에 `js-code-sandbox`를 사용하지 않도록 해당 플러그인을 끕니다.
 
-Do not change the installer-managed Direct entries in place. The sole supported Strict implementation is a separately named Node entry:
+현재 기본 방식은 `Direct`입니다. AI가 필요한 도구와 순서, 끝낼 시점과 최종 답변을 정합니다. 서버가 정해 준 계획을 먼저 시작할 필요는 없습니다.
 
-- Node Strict: copy `unreal-agent` to `unreal-agent-strict` and point it at `lmstudio-unreal-agent-mcp/src/strict-server.js`. Call `strict_begin` to create its conversation-scoped session. Reads/searches remain free; mutations and long-running tools require that session.
-
-The old Python task/route/planner controller is unsupported, is not an MCP configuration option, and is omitted from portable packages. `MCP_EXECUTION_MODE` does not select a supported Python mode. Node Strict has no Python peer, shared session, cross-server authorization, or automatic handoff. Avoid exposing Node Strict beside the same Direct tool names unless duplicate-name debugging is intentional.
-
-Before the model sends its final answer in Node Strict, it must explicitly call `strict_complete`, because MCP transport cannot observe final-answer delivery. Use `strict_fail` or `strict_cancel` for those outcomes. An unfinished session becomes nonblocking `orphaned` state on connection/process shutdown, TTL expiry, or restart; `strict_resume` requires explicit user approval.
-
-## 2b. Context compactor (multi-turn chats)
-
-> **Select the real LLM; keep the compactor disabled by default.**
->
-> 1. Load and select the actual model in the **model dropdown**. Qwen 3.8 27B is the current highly recommended, primary validated model; Muse Glimmer is under testing and is not yet a validated recommendation.
-> 2. Create or open a chat.
-> 3. Leave the top-level **`codex/unreal-context-compactor`** switch **OFF** in that chat's **plugin panel**. Turn it off manually in an older chat that retained an opt-in.
-
-Installation pins the plugin for availability but does not activate it for a chat. The default Direct setup therefore uses the real LLM without the compactor. For a long chat that needs bounded continuity, enable the single top-level switch; handler invocation runs the prediction loop, while `Observe only` measures pressure without rewriting history. The optional path passes the selected model's MCP tools through unchanged. It cannot plan, route, authorize a write/build, require a next tool, or declare completion.
-
-This command verifies the installed source/build wiring, not chat-level activation:
+압축기는 긴 대화를 줄여 주는 선택 기능입니다. 설치는 사용 가능한 파일을 준비할 뿐 채팅에서 활성화하지 않습니다. 필요할 때 해당 채팅의 단일 스위치만 켜면 됩니다. `Observe only`는 대화를 바꾸지 않고 사용량만 측정합니다.
 
 ```powershell
-cd <repo>\lmstudio-context-compactor-plugin
-npm run status
+npm --prefix lmstudio-context-compactor-plugin run status
 ```
 
-## 3. System prompt
+이 명령은 설치 파일과 빌드 연결 상태를 확인합니다. 채팅에서 실제로 켜졌는지 증명하는 명령은 아닙니다.
 
-Direct Mode uses [`prompts/lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). It leaves reasoning, tool selection, stopping, and the final answer with the LLM selected in LM Studio while asking for focused evidence, edits, and honest verification. Tool schemas describe their own arguments; do not add task, route, planner, gate, or required-next-tool instructions.
+## 프로젝트 조회 요청 예시
 
-Every current Direct profile uses the same [`lmstudio_direct_model_system.md`](../prompts/lmstudio_direct_model_system.md). Qwen 3.8 27B is the highly recommended primary validated model, with a successful v1.3.2 live E2E workflow. Muse Glimmer is under testing only; Qwen 3.5, Qwen 3.6 27B, and GPT-OSS profiles or scorecards are historical compatibility/evaluation material rather than current recommendations. Do not combine the Direct prompt with an older model-specific or `compact_mcp_base` prompt. Historical evaluation prompts encode removed planner/task gates, do not describe the Node `strict_begin` lifecycle, and are excluded from the portable Direct runtime.
+사용할 `.uproject` 전체 경로와 원하는 결과를 함께 적으면 됩니다. 예를 들어 “이 프로젝트의 이동 컴포넌트를 읽고 중복된 입력 처리가 있는지 확인해줘”처럼 범위를 정하면 됩니다.
 
-**Qwen / thinking models:** if visible reasoning causes prose instead of a requested tool call, turn thinking off for bounded edit/build turns. This is a model sampling choice, not a Direct MCP gate.
+필요하면 `unreal_get_active_project`로 기본 프로젝트를 확인하고, `unreal_rag_health`로 검색 상태, `get_workspace_info`로 파일 접근 범위와 권한을 확인합니다. 이 도구를 매번 정해진 순서로 호출해야 하는 건 아닙니다.
 
-## 4. Session start (every chat)
+같은 이름의 프로젝트가 여러 곳에 있으면 전체 경로를 써야 합니다. `search_files`가 준 `project://` 형식의 `uri`는 응답의 정확한 `activeProject`와 함께 다음 호출의 `project`로 전달해야 합니다.
 
-No server-owned task bootstrap is required. A useful first pass is:
+## 파일 수정과 검증
 
-1. `unreal_get_active_project`
-2. If it is not the requested project, pass the exact `.uproject`/project name on the call or use `unreal_set_active_project` / `set_active_project`.
-3. Check `unreal_rag_health` when RAG evidence is needed.
-4. Use `get_workspace_info` when you need the agent's roots and safety flags.
-5. Search or inspect, read the exact target, retain its `fileVersionReceipt`, then use `replace_in_file`; `write_file` is only for brand-new files.
+기존 파일은 `replace_in_file`로 필요한 부분만 고칩니다. `write_file`은 새 파일에만 사용합니다. 기존 파일을 바꾸기 전에 읽고, 반환된 `fileVersionReceipt`를 수정 호출에 직접 전달해야 합니다. 수정 성공 후에는 새로 받은 값을 다음 수정에 씁니다. `expectedHash`도 호환 입력으로 사용할 수 있습니다.
 
-These are practical suggestions, not a required server sequence. The selected model may omit irrelevant steps or call `build_unreal_project` immediately when the user asks only for a build diagnosis.
+서버가 같은 대화의 이전 읽기 결과를 자동으로 선택하지 않습니다. `FILE_VERSION_CONFLICT`나 `FILE_SNAPSHOT_*`가 나오면 정확한 프로젝트의 파일을 다시 읽고 수정안을 맞춰야 합니다.
 
-`search_files` returns both its original root-relative result `path` and a directly reusable scoped `uri`. For `project://` results, pass the response's exact `activeProject` as the next call's `project` selector; the URI alone is intentionally not a global identity across same-name clones.
+`static_validate_project`는 의심되는 코드를 알려 주는 보조 검사입니다. 이를 통과해야 빌드할 수 있는 구조는 아닙니다. 빌드 권한이 켜져 있으면 `build_unreal_project`를 바로 실행할 수 있습니다. 실제 빌드·테스트를 안 했다면 그 한계를 답변에 적어야 합니다.
 
-Do not use `run_javascript`, `js-code-sandbox`, Deno file APIs, Node `fs`, or browser/code-sandbox tools for project file I/O. If LM Studio exposes the JavaScript/TypeScript Code Sandbox plugin, hide or disable it for Unreal coding chats.
+큰 로그는 앞뒤 일부만 남을 수 있습니다. `fullLogPath`라는 이름만 보고 전체 원본이라고 판단하지 말고 생략 여부를 확인해야 합니다.
 
-Do not paste saved N-turn/task templates into a Direct chat. They are historical evaluation inputs, not supported MCP instructions or portable runtime assets.
+## 프로젝트 검색 오류 해결
 
-## 5. Standard loop
+내 코드가 필요한데 엔진 설명만 나오면 정확한 프로젝트와 `scope=project`를 함께 지정합니다. 검색에서 못 찾았다는 이유만으로 코드가 없다고 결론내리지 말고 파일 검색과 직접 읽기로 확인해야 합니다.
 
-```
-exact project -> search/inspect -> read + retain receipt -> replace_in_file -> optional static_validate_project -> build/test when useful
-```
+응답을 줄일 때 쓰는 `repeatReceipt`는 이 채팅에 원래 결과가 남아 있을 때만 전달합니다. 원문이 필요하면 이 값을 빼면 됩니다. 결과가 잘렸다면 반환된 `nextDetailLevel`로 범위를 조정할 수 있습니다.
 
-Rules:
+설정값 설명은 [모델 설정](Model_Profiles.md), 상세 오류는 [문제 해결](Troubleshooting.md), 수정 한도는 [도구 규칙](LMStudio_MCP_Tool_Discipline.md)에 있습니다.
 
-- Do **not** paste full `.cpp` in chat when MCP write is available.
-- Do not claim a successful build or test without its output. A source-only task may still finish without a build when that limitation is stated.
-- Existing source files are patch-only. `write_file` is for brand-new files; existing `.h`, `.cpp`, and `.cs` writes are blocked by default in `unreal-agent`.
-- Direct writes enforce containment, create-only/patch-only rules, scoped snapshot/CAS concurrency, size limits, atomicity, and locks. Every existing-file mutation explicitly passes its `fileVersionReceipt` or a valid raw `expectedHash`; session state is never selected automatically. Successful mutations return a new receipt for consecutive edits. Re-read after `FILE_VERSION_CONFLICT`, `FILE_SNAPSHOT_*`, or uncertain external state. Narrow semantic denylist findings are success-response advisories only; analyzer findings or unavailability never authorize or block a Direct write/build. `VALIDATE_ON_WRITE` does not run project-wide static validation or gate a Direct write/build.
-- `static_validate_project` is an independent advisory diagnostic. Its findings do not authorize, roll back, or block `build_unreal_project`.
-- `build_unreal_project` resolves and runs the selected project/version immediately when `ALLOW_UNREAL_BUILD=1`; no task, plan, code-sketch, or static-validation certificate is required. `target=Editor` resolves the selected project's canonical, configured preferred, or sole discovered custom Editor target, while an explicit non-Editor target is unchanged.
-- Build and Automation share a bounded process runner. Timeout terminates the process tree; stdout/stderr and the persisted `fullLogPath` can be bounded head/tail projections with omitted-byte metadata rather than complete raw output.
+## Strict 세션 관리 설정
 
-## 6. RAG query hints
+`Strict`를 의도적으로 쓸 때만 `unreal-agent`를 별도 이름인 `unreal-agent-strict`로 복사하고 `lmstudio-unreal-agent-mcp/src/strict-server.js`를 지정합니다. 기본 항목 자체를 바꾸지 말아야 합니다.
 
-| Need | Optional RAG hint | Notes |
-|------|----------|-------|
-| New component evidence | `prototype_component` | Prefer component-related engine/project examples |
-| Code evidence | `code_sketch` | Retrieval ranking hint only; it does not draft or validate a plan |
-| Compile error evidence | `compile_fix` | Include the diagnostic text in the query |
-| Runtime crash evidence | `runtime_debug` | Include the log or callstack in the query |
-| Refactor evidence | `refactor_r0`..`r4` | Historical ranking aliases only; they do not create stages or gate Direct tools |
-
-Use the single Direct system prompt for these requests. Historical fixed-order
-prototype/refactor presets are not shipped. They remain quarantined under
-`legacy_eval/prompts` only in the development repository because they referenced
-removed planner and validation-gate tools.
-
-## 7. Large codegen
-
-Default Direct exposes the immediate `build_unreal_project` diagnostic and does not expose a model-driving compile loop. The old `unreal_start_compile_loop`, `unreal_compile_loop_status`, `unreal_cancel_compile_loop`, and `unreal_generate_compile_loop` MCP tools are unsupported and are not shipped in the portable runtime. Keep the selected chat model in control of any subsequent read, edit, build, or test call.
-
-## 8. Troubleshooting
-
-| Symptom | Fix |
-|---------|-----|
-| RAG MCP fails to start | From the current checkout/package, re-run the same `python install.py --profile ... --yes` command used for installation, run `.\rag.ps1 doctor`, then restart LM Studio. Avoid WindowsApps Python. |
-| write blocked | `ALLOW_WRITE=1` in unreal-agent env |
-| `static_validate_project` reports findings | Treat them as advisory diagnostics; fix relevant findings or build immediately to obtain authoritative UBT/UHT output |
-| Direct call returns `status=no_new_information` | This chat echoed a still-valid `repeatReceipt` from a full Direct RAG/Node read, or a Node failure repeated. Omit an unknown receipt to receive full content. Direct RAG has no pagination token; use `nextDetailLevel` only when a result is truncated. |
-| Slow search | Use `hybrid=false` on search for faster FTS-only (Phase H tuning) |
-
-## 9. Rider + Cline (주력 IDE)
-
-Primary: **JetBrains Rider** for Unreal C++ build/debug.  
-Agent: **Cline** with MCP — see [`docs/Cline_Rider_Unreal_Agent_Setup.md`](Cline_Rider_Unreal_Agent_Setup.md).
-
-Install MCP into Cline:
-
-```powershell
-python install.py --profile custom --components codex,lmstudio,unreal,cline --cline-settings C:\path\to\cline_mcp_settings.json
-```
-
-## 10. Static model recommendations
-
-Choose and load the model in LM Studio itself. MCP servers do not select, switch, or retune the model by task, phase, retry, or turn.
-
-| Profile | Use |
-|---------|-----|
-| `qwen3_8_27b` | **Primary validated recommendation** — 64K context, Q4_K_M, parallel 1 |
-
-Muse Glimmer is under testing and has no validated recommendation yet. Legacy
-Qwen 3.5, Qwen 3.6 27B, and GPT-OSS entries may remain resolvable for historical
-compatibility, but this guide does not recommend them for current Direct use.
-
-Old N-turn prompts and post-build Python planner tools are historical evaluation fixtures, not supported Direct MCP behavior. Direct exposes immediate build/test diagnostics and leaves any subsequent inspection to the selected model.
-
-The portable `rag.ps1` contains no model evaluation or planner commands. Use it
-only for the documented collection, index, Direct project selection, refresh,
-and health operations; conduct model evaluation in a separate development
-checkout so it cannot become runtime authority.
+`strict_begin`으로 시작하고 답변 직전에 `strict_complete`로 종료합니다. 실패와 취소에는 `strict_fail`, `strict_cancel`을 사용합니다. 연결이 끊긴 세션은 `orphaned`가 되며 다른 대화나 기본 도구를 막지 않습니다. 이를 이어가려면 사용자 승인 후 `strict_resume`을 사용합니다.

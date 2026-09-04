@@ -412,7 +412,6 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "install.py",
         "rag.ps1",
         "README.md",
-        "README.ko.md",
         "skills/evidence-first-code-audit/SKILL.md",
         "skills/evidence-first-code-audit/assets/lmstudio-evidence-first.preset.json",
         "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py",
@@ -438,7 +437,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     explicitly_allowed = (
         set(builder.ALLOWED_ROOT_FILES)
         | set(builder.PORTABLE_FILE_ALLOWLIST)
-        | {"PORTABLE-INSTALL.md", "README.md", "README.ko.md", "rag.ps1"}
+        | {"PORTABLE-INSTALL.md", "README.md", "rag.ps1"}
     )
     unexpected = {
         relative
@@ -453,20 +452,20 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     assert len(inventory) == len(package_manifest["inventory"])
     for language_readme, source_template in (
         ("README.md", "README.portable.md"),
-        ("README.ko.md", "README.portable.ko.md"),
     ):
         packaged_readme = (output / language_readme).read_text(encoding="utf-8")
         assert packaged_readme == (ROOT / source_template).read_text(encoding="utf-8")
         assert "Enable transparent compaction" not in packaged_readme
-        assert "single" in packaged_readme or "단일" in packaged_readme
+        assert "단일 스위치" in packaged_readme
         assert "OFF" in packaged_readme
     portable_install = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
-    assert "never chat-activated by the installer" in portable_install
-    assert "LM Studio plugin installation/pinning, Unreal auto-detect" in portable_install
+    assert "설치기는 플러그인을 설치하고 목록에 고정하지만 채팅에서 켜지는 않습니다" in portable_install
+    assert "LM Studio 플러그인 설치·고정, 언리얼 자동 탐색" in portable_install
     assert "installation/pinning with the chat toggle OFF" not in portable_install
     assert _broken_local_markdown_links(output) == []
     assert not (output / "README.portable.md").exists()
     assert not (output / "README.portable.ko.md").exists()
+    assert not (output / "README.ko.md").exists()
     portable_rag = (output / "rag.ps1").read_text(encoding="utf-8")
     assert portable_rag == (ROOT / "scripts" / "portable_rag.ps1").read_text(encoding="utf-8")
     assert "AllowEditorLaunch" in portable_rag
@@ -815,12 +814,12 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         )
         assert launcher_help.returncode == 0, launcher_help.stderr or launcher_help.stdout
     portable_help = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
-    assert "Ubuntu 22.04/24.04 with glibc" in portable_help
-    assert "pinned by SHA-256" in portable_help
-    assert "automatically download SHA-256-verified uv" in portable_help
-    assert "Installer RAG indexing uses managed Python directly" in portable_help
+    assert "Ubuntu 22.04/24.04(glibc)" in portable_help
+    assert "SHA-256 확인값을 고정" in portable_help
+    assert "SHA-256으로 확인한 uv를 자동으로 내려받고" in portable_help
+    assert "설치기의 검색 자료 생성은 관리 중인 Python을 직접 사용합니다" in portable_help
     assert "RAG indexing uses the bootstrapped `pwsh`" not in portable_help
-    assert "contains no planner, wrapper, evaluation, task, or route controller" in portable_help
+    assert "과거 계획·평가·작업 관리 기능은 포함하지 않습니다" in portable_help
     assert "Get-Help ./scripts/portable_rag.ps1 -Detailed" in portable_help
     assert "Get-Help ./rag.ps1 -Detailed" not in portable_help
     forbidden = {".git", ".venv", "node_modules", "tests", "Reports", ".agent"}

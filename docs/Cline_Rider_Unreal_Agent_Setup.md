@@ -1,145 +1,47 @@
-# Cline + Rider Unreal Direct MCP Setup
+# Rider·Cline 연결 설정
 
-This setup supports multiple Unreal versions and multiple projects. Rider is
-the interactive C++ IDE; Cline chooses and sequences the bounded Direct MCP
-tools. Neither MCP server owns an agent task, plan, route, or final-answer phase.
+Rider는 코드 탐색·빌드·디버깅에 쓰고, Cline은 AI가 프로젝트 도구를 호출하는 데 씁니다. 기본 `Direct` 방식에서는 모델이 필요한 도구와 작업 순서를 정합니다.
 
-## 1. Prerequisites
+## 프로젝트와 MCP 연결 절차
 
-From this repository or the root of an installed portable package:
+1. Rider에서 대상 `.uproject`를 열고 맞는 엔진으로 연결됐는지 확인합니다.
+2. Cline의 MCP 설정에 `unreal-rag`, `unreal-agent`를 등록합니다.
+3. Cline에서 사용할 모델을 선택합니다. LM Studio를 모델 제공자로 쓰는 경우에만 해당 서버 주소를 설정합니다.
+4. 설정 변경 후 Cline을 재시작하고 도구 목록을 확인합니다.
 
-```powershell
-.\rag.ps1 doctor
-```
-
-In a development checkout, the additional repository-layout check is
-`.\scripts\installer_support\Verify-UnrealMcp.ps1`; portable packages do not
-need or ship that development-only verifier. Do not assume a fixed directory
-name or Unreal version. LM Studio is required only
-if it is the model provider selected in Cline; the MCP servers themselves do not
-proxy model inference.
-
-## 2. Rider role
-
-1. Open the target `.uproject` in Rider.
-2. Confirm that Rider resolved the intended Unreal engine association/toolchain.
-3. Use Rider for normal navigation, interactive builds, debugging, and project
-   structure inspection.
-4. Keep the MCP shared default aligned with
-   `rag.ps1 set-project -ProjectFile C:\path\Game.uproject` or
-   `unreal_set_active_project` when a default is useful. For cross-project work,
-   prefer an exact project selector on every project-scoped call.
-
-The tooling must not hard-code a particular Unreal version. Project association,
-registered engines, or an explicit selector determines the engine used to build.
-The exact project selector also chooses the compatible engine-bound RAG shard;
-one call does not combine projects from different engine shards.
-
-## 3. Cline MCP setup
-
-Template: [`config/cline_mcp_settings.template.json`](../config/cline_mcp_settings.template.json)
-
-### VS Code + Cline extension
-
-1. Open Cline > MCP Servers > Configure MCP Servers.
-2. Add `unreal-rag` and `unreal-agent` from the template.
-3. Select any Cline provider/model with reliable tool calling. If using LM
-   Studio, configure its local OpenAI-compatible endpoint.
-4. Restart Cline after changing the MCP configuration and verify both servers'
-   static tool catalogs.
-
-Common Windows settings path:
-
-`%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
-
-For Cline CLI:
-
-`%USERPROFILE%\.cline\data\settings\cline_mcp_settings.json`
-
-Install helper:
+[설정 템플릿](../config/cline_mcp_settings.template.json)을 참고하면 됩니다. 설치기로 설정을 넣을 수도 있습니다.
 
 ```powershell
 python install.py --profile custom --components codex,lmstudio,unreal,cline --cline-settings C:\path\to\cline_mcp_settings.json
+.\rag.ps1 doctor
 ```
 
-## 4. Project rules and prompt
+설정 파일 경로는 실제 경로로 바꿔야 합니다. 일반적인 위치는 다음과 같습니다.
 
-Cline reads workspace rules from [`.clinerules`](../.clinerules). Copy equivalent
-rules into each Unreal repository where the same patch discipline should apply.
-Use [`prompts/cline_unreal_agent_system.md`](../prompts/cline_unreal_agent_system.md)
-as the Direct MCP system prompt.
-Use the [Direct smoke checklist](Rider_Cline_Smoke_Checklist.md) after installation.
+- VS Code 확장: `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
+- Cline CLI: `%USERPROFILE%\.cline\data\settings\cline_mcp_settings.json`
 
-## 5. Direct workflow
+작업 규칙은 [`.clinerules`](../.clinerules), 시스템 지시문은 [Cline용 지시문](../prompts/cline_unreal_agent_system.md)을 사용합니다. 설치 후에는 [연결 점검](Rider_Cline_Smoke_Checklist.md)을 보면 됩니다.
 
-```text
-unreal_get_active_project (or an exact project selector)
-  -> unreal_rag_search / unreal_symbol_lookup
-  -> search_files / read_file_range / read_file
-  -> replace_in_file with current fileVersionReceipt/CAS, or write_file for a new file
-  -> optional advisory static_validate_project
-  -> Rider Build, or enabled build_unreal_project
-  -> inspect current output/logs
-  -> model writes the final answer
-```
+## 프로젝트 선택·파일 수정·빌드 규칙
 
-Rules:
+같은 이름의 프로젝트가 있다면 `.uproject` 전체 경로를 지정해야 합니다. 기본 프로젝트를 바꾸고 싶을 때만 `unreal_set_active_project`를 사용합니다. 엔진은 프로젝트 연결 정보로 선택하며 특정 버전으로 고정하지 않습니다.
 
-- Existing `.h`, `.hpp`, `.cpp`, `.c`, `.cc`, `.cxx`, and `.cs` files are
-  patch-only. Explicitly pass the `fileVersionReceipt` returned by a read or
-  immediately preceding mutation, or a valid raw `expectedHash`; same-session
-  evidence is never selected automatically. Re-read
-  after `FILE_VERSION_CONFLICT`, a `FILE_SNAPSHOT_*` error, or uncertain external
-  state instead of overwriting another change.
-- Use a unique replacement and exact project-relative path. If it does not
-  match, read a narrower range and derive a new patch from current content.
-- `static_validate_project` is an advisory diagnostic, not a write/build gate.
-- Build does not require a plan, validation token, task session, or synthesis
-  checkpoint. MCP build execution still requires its explicit safety enablement.
-  `target=Editor` resolves the selected project's canonical, configured
-  preferred, or sole discovered custom Editor target; explicit non-Editor
-  targets are unchanged.
-- Build and Automation share one bounded process runner. Timeout terminates the
-  process tree, and `fullLogPath` may contain the bounded head/tail projection
-  with omitted-byte metadata rather than unlimited raw output.
-- A `repeatReceipt` may be echoed only by the same conversation that retained the
-  original successful content. Calls without it receive full results.
-- Do not call historical workflow-controller, task-recovery, route-ownership,
-  or write-gate tools.
-- Avoid introducing C++ namespaces unless the target Unreal project requires
-  them.
-- Do not claim success without the current verification evidence appropriate to
-  the request.
+기존 파일을 읽고 `fileVersionReceipt`를 받은 뒤 `replace_in_file`로 필요한 부분을 수정합니다. 매번 확인값을 직접 전달하며 자동 선택은 하지 않습니다. 수정 성공 후 받은 새 값을 다음 수정에 씁니다. 충돌이나 `FILE_SNAPSHOT_*` 오류가 나면 다시 읽어야 합니다. 새 파일은 `write_file`로만 생성합니다.
 
-| Surface | Responsibility |
-|---------|----------------|
-| Rider | Interactive C++ editing, UBT builds, debugger, project structure |
-| Cline model | Tool selection, sequencing, retry decisions, final answer |
-| `unreal-rag` MCP | Project selection, retrieval, symbols, index health/refresh |
-| `unreal-agent` MCP | Bounded reads, searches, receipt/CAS-safe mutations, validation, builds, logs |
-| LM Studio (optional) | Cline model provider only; not an MCP control plane |
+`static_validate_project`는 보조 검사입니다. 빌드 권한이 켜져 있으면 이를 먼저 실행하지 않고도 `build_unreal_project`를 호출할 수 있습니다. 직접 빌드·디버깅하려면 Rider를 사용하면 됩니다.
 
-## 6. LM Studio Chat
+`target=Editor`는 선택한 프로젝트의 에디터 빌드 대상으로 해석합니다. 빌드·자동화 테스트는 시간과 출력량이 제한되며 `fullLogPath`도 앞뒤 일부만 담을 수 있습니다. 결과의 생략 여부를 확인해야 합니다.
 
-For direct LM Studio chat, use
-[`LMStudio_Unreal_Agent_Setup.md`](LMStudio_Unreal_Agent_Setup.md). The chat-level
-context-compactor toggle is host-owned and must be kept OFF per chat. The installer
-does not activate it. For a long LM Studio chat that needs bounded continuity, enable
-that single top-level switch for the chat; handler invocation is the activation boundary.
+원문이 현재 대화에 있을 때만 `repeatReceipt`를 되돌려 줍니다. 이 값을 빼면 같은 성공 호출도 원문을 받습니다.
 
-## 7. Troubleshooting
+언리얼 코드에서는 네임스페이스를 웬만하면 추가하지 말아야 합니다. 프로젝트 파일 작업에 일반 샌드박스나 별도 파일 접근을 섞지 말고 MCP 도구를 사용해야 합니다.
 
-| Issue | Fix |
-|-------|-----|
-| Cline MCP catalog is empty | Rerun the integrated installer with the Cline component, restart Cline, then inspect MCP stderr |
-| Wrong project | Pass the exact `.uproject` selector or deliberately update the shared default |
-| Slow search | Narrow project/path/query; use lexical-only search if the Direct tool exposes that option |
-| `FILE_VERSION_CONFLICT` | Re-read current content, retain its new receipt, and create a new bounded patch; do not force overwrite |
-| `FILE_SNAPSHOT_REQUIRED`, `FILE_SNAPSHOT_INVALID`, or `FILE_SNAPSHOT_SCOPE_MISMATCH` | Read the exact file under the exact project and pass that new `fileVersionReceipt`; do not transfer it across a project, path, owner/session, runtime restart, or expiry |
-| Static validation reports an issue | Treat it as advisory evidence, fix relevant findings, then run the real build |
-| Build is disabled | Build in Rider or explicitly enable the documented MCP build switch |
-| Model tries a generic sandbox | Cancel it and continue with the bounded MCP file tools |
-| A repeated call returns full content | Expected unless the same conversation echoed its valid opaque receipt |
+## 연결 및 실행 오류 해결
 
-Legacy Continue and workflow-controller documents are migration history, not the
-recommended Direct path.
+- 도구 목록이 비었으면 설치 설정을 다시 적용하고 Cline의 MCP 오류 출력을 확인합니다.
+- 프로젝트가 틀리면 정확한 경로를 호출에 전달합니다.
+- 수정이 막히면 [권한 설정](Safe_Agent_Mode.md)과 파일 충돌 여부를 확인합니다.
+- 빌드가 꺼져 있으면 Rider에서 실행하거나 설치 시 빌드 권한을 켭니다.
+
+LM Studio 채팅을 직접 쓴다면 [LM Studio 설정](LMStudio_Unreal_Agent_Setup.md)을 참고해야 합니다. 그 채팅의 대화 압축기는 기본 `OFF`이며 Cline의 대화를 자동으로 압축해 주는 기능은 아닙니다.

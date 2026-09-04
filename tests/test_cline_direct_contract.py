@@ -26,7 +26,7 @@ def test_all_advertised_cline_surfaces_use_the_direct_contract() -> None:
     for relative in CLINE_SURFACES:
         text = (ROOT / relative).read_text(encoding="utf-8")
         assert "Direct" in text, relative
-        assert "model" in text.lower(), relative
+        assert "모델" in text, relative
         for removed in REMOVED_WORKFLOW_TERMS:
             assert removed not in text, (relative, removed)
 

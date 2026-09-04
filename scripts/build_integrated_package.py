@@ -46,7 +46,6 @@ ALLOWED_ROOT_FILES = frozenset(
         "INSTALL.bat",
         "LICENSE",
         ".clinerules",
-        "README.portable.ko.md",
         "README.portable.md",
         "SECURITY.md",
         "install.py",
@@ -482,6 +481,7 @@ PORTABLE_CONTENT_FILES = frozenset(
         "docs/Integrated_Installer.md",
         "docs/LMStudio_MCP_Tool_Discipline.md",
         "docs/LMStudio_Unreal_Agent_Setup.md",
+        "docs/Model_Profiles.md",
         "docs/Project_Routing.md",
         "docs/RAG_Setup.md",
         "docs/Release_Notes_1_3_3.md",
@@ -742,7 +742,6 @@ def _write_launchers(staging: Path) -> None:
     shutil.copy2(ROOT / "scripts" / "portable_rag.ps1", staging / "rag.ps1")
     for source_name, target_name in (
         ("README.portable.md", "README.md"),
-        ("README.portable.ko.md", "README.ko.md"),
     ):
         shutil.copy2(ROOT / source_name, staging / target_name)
         staged_template = staging / source_name
@@ -757,46 +756,37 @@ def _write_launchers(staging: Path) -> None:
         target.write_bytes(source.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
         target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     (staging / "PORTABLE-INSTALL.md").write_text(
-        "# Integrated portable installer\n\n"
-        "## Prerequisites\n\n"
-        "- `INSTALL.bat` / `install.sh` use Python 3.10+ when available. On a clean supported "
-        "host they automatically download SHA-256-verified uv, install managed Python 3.12 in "
-        "the selected user state-home, and continue without a system-wide Python install. "
-        "Direct `python3 install.py` use still requires host Python 3.10+.\n"
-        "- Node.js 20+/npm is downloaded only for Unreal/context components. PowerShell 7 "
-        "(`pwsh`) is only for optional manual `rag.ps1` maintenance. Runtime archives are pinned by SHA-256 and safely "
-        "extracted for the host CPU architecture (arm64/x64).\n"
-        "- Context-compactor installation requires the LM Studio `lms` CLI. The plugin is installed "
-        "for availability but never chat-activated by the installer; verify the host-owned toggle is OFF.\n\n"
-        "## Host support\n\n"
-        "- **Windows**: supported for LM Studio and Unreal-integrated profiles.\n"
-        "- **Ubuntu 22.04/24.04 with glibc**: supported; musl/Alpine is not.\n"
-        "- **Apple Silicon macOS**: physical FULL install verified on darwin-arm64 "
-        "(runtimes, context compactor, LM Studio plugin installation/pinning, Unreal auto-detect, "
-        "full RAG, evidence-first MCP smoke). Signing/notarization is not claimed; "
-        "see docs/Release_Notes_1_3_3.md for the release boundary.\n"
-        "- **Intel macOS (x86_64)**: LM Studio is not supported by LM Studio upstream. "
-        "LM Studio / Unreal / context-compactor installs abort early. "
-        "Custom Codex / portable-rule / Cline-only installs remain allowed.\n"
-        "- **Windows**: automated fixture/CI installer and Direct MCP paths are exercised. "
-        "A prior native LM Studio GUI session observed RAG/MCP tool use and a real UBT "
-        "invocation. A clean-machine physical installer lifecycle and universal "
-        "project/engine/plugin coverage are not claimed.\n\n"
-        "## Launch\n\n"
-        "- Windows: `INSTALL.bat`\n"
-        "- Ubuntu Linux and Apple Silicon macOS: `./install.sh`\n\n"
-        "The installer asks for SAFE, STANDARD, FULL, or CUSTOM. All profiles remain "
-        "read-only unless agent mode and its separate risk acknowledgement are both supplied.\n"
-        "Run `python3 install.py --help` for automation flags. Generated indexes and machine "
-        "configuration are not bundled by default. Installer RAG indexing uses managed Python directly; "
-        "custom Unreal installs can be supplied with `--engine-root` or `UNREAL_ENGINE_ROOT`.\n\n"
-        "## Portable RAG maintenance\n\n"
-        "The packaged `rag.ps1` is intentionally limited to factual collection, index build, "
-        "Direct project selection, synchronous refresh, and health commands. It contains no "
-        "planner, wrapper, evaluation, task, or route controller. `refresh` defaults to "
-        "`project_source`; Editor launch requires both an Editor scope and the explicit "
-        "`-AllowEditorLaunch` switch. Run "
-        "`Get-Help ./scripts/portable_rag.ps1 -Detailed` for parameters.\n",
+        '# 압축 배포본 설치 안내\n'
+        '\n'
+        '압축을 푼 폴더에서 설치해야 합니다. 설치 후에도 이 폴더가 실행에 사용되므로 그대로 보관합니다. 자세한 설명은 [처음 사용하기](README.md)와 [통합 설치](docs/Integrated_Installer.md)에 있습니다.\n'
+        '\n'
+        '## 설치 환경과 실행 방법\n'
+        '\n'
+        '- Windows는 `INSTALL.bat`, Ubuntu와 Apple Silicon macOS는 `./install.sh`를 실행합니다.\n'
+        '- Python 3.10 이상이 없으면 SHA-256으로 확인한 uv를 자동으로 내려받고 선택한 사용자 상태 폴더에 Python 3.12를 설치합니다. `python3 install.py`를 직접 실행하려면 시스템 Python 3.10 이상이 필요합니다.\n'
+        '- 언리얼·채팅 압축 구성에 필요한 Node.js 20 이상과 npm도 내려받습니다. 실행 파일 묶음은 SHA-256 확인값을 고정하고 CPU 종류에 맞춰 설치합니다.\n'
+        '- SAFE, STANDARD, FULL, CUSTOM 중 필요한 범위를 선택합니다. 수정 기능과 별도 위험 확인을 모두 켜지 않으면 읽기 전용입니다. 명령행 옵션은 `python3 install.py --help`로 확인합니다.\n'
+        '- 설치기의 검색 자료 생성은 관리 중인 Python을 직접 사용합니다. 별도 엔진 위치는 `--engine-root` 또는 `UNREAL_ENGINE_ROOT`로 지정합니다. 검색 자료와 컴퓨터별 설정은 기본 배포본에 포함하지 않습니다.\n'
+        '- PowerShell 7(`pwsh`)은 선택적인 `rag.ps1` 수동 관리에 사용합니다.\n'
+        '\n'
+        '## 채팅 압축 설정\n'
+        '\n'
+        '설치에는 LM Studio의 `lms` 명령이 필요합니다. 설치기는 플러그인을 설치하고 목록에 고정하지만 채팅에서 켜지는 않습니다. 각 채팅의 단일 스위치가 기본 권장값인 OFF인지 확인하고 필요할 때만 켜야 합니다.\n'
+        '\n'
+        '## 지원 환경과 확인 범위\n'
+        '\n'
+        '- Windows: LM Studio·언리얼 구성을 지원합니다. 자동 설치 검사와 기존 GUI·도구·UBT 실행 확인 기록이 있습니다. 새 컴퓨터의 설치 전 과정과 모든 프로젝트 조합이 검증됐다는 뜻은 아닙니다.\n'
+        '- Ubuntu 22.04/24.04(glibc): 지원합니다. musl·Alpine은 지원하지 않습니다.\n'
+        '- Apple Silicon macOS: 실제 기기에서 FULL 설치, 실행 환경, 채팅 압축, LM Studio 플러그인 설치·고정, 언리얼 자동 탐색, 전체 검색 자료 생성과 MCP 기본 연결을 확인한 기록이 있습니다. 서명·공증 여부는 보장하지 않습니다.\n'
+        '- Intel macOS: LM Studio·언리얼·채팅 압축 설치는 초기에 중단됩니다. CUSTOM의 Codex·공통 규칙·Cline만 설치하는 구성은 가능합니다.\n'
+        '\n'
+        '확인 범위는 [1.3.3 변경 사항](docs/Release_Notes_1_3_3.md)에 정리합니다.\n'
+        '\n'
+        '## 검색 자료 관리\n'
+        '\n'
+        '배포본의 `rag.ps1`은 자료 수집, 검색 목록 생성, 프로젝트 선택, 갱신과 상태 확인만 담당합니다. 과거 계획·평가·작업 관리 기능은 포함하지 않습니다.\n'
+        '\n'
+        '`refresh`의 기본 범위는 `project_source`입니다. 에디터 실행에는 에디터 자료 범위와 명시적인 `-AllowEditorLaunch`가 모두 필요합니다. 인자는 `Get-Help ./scripts/portable_rag.ps1 -Detailed`로 확인해야 합니다.\n',
         encoding="utf-8",
     )
 

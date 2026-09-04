@@ -1,41 +1,18 @@
-# Edit Verification Proof Levels
+# 코드 수정의 검증 수준과 보고 기준
 
-## Purpose
+수정했다는 말과 동작을 확인했다는 말은 다릅니다. 실제로 도달한 수준만 보고해야 합니다.
 
-Use this workflow for C++, Blueprint, Material, shader, config, and asset-facing work. It keeps answers precise about what was proposed, patched, built, and actually verified in Unreal Editor or PIE.
+| 표시 값 | 뜻 |
+|---|---|
+| `Proposed` | 제안만 했으며 파일·에셋을 바꾸지 않습니다. |
+| `Patched` | 텍스트를 바꿨거나 에디터 변경 시도를 확인합니다. |
+| `StaticChecked` | 문법·정적 검사를 통과합니다. 실제 빌드는 별도로 확인해야 합니다. |
+| `Built` | 대상 UBT 빌드가 성공했고 필요한 컴파일 수행을 확인합니다. |
+| `BuiltStale` | `Target is up to date` 또는 `run 0 action(s)`만 나옵니다. 최근 수정의 재컴파일 근거는 부족합니다. |
+| `ShaderCompiled` | 셰이더 컴파일 완료를 확인합니다. |
+| `EditorVerified` | 관련 에셋을 에디터에서 열거나 저장하고 검증합니다. |
+| `PIEVerified` | 실제 플레이·재현·관련 실행 로그를 확인합니다. |
 
-## Proof Levels
+빌드 성공을 게임 동작 성공으로 확대하지 말아야 합니다. 자료 내보내기만 했으면 노드 실행까지 확인한 것도 아닙니다. `.uasset` 적용은 에디터 저장 결과가 있어야 합니다.
 
-Report the highest proof level reached:
-
-- `Proposed`: plan only; no file or asset mutation.
-- `Patched`: text files were changed, or an Editor-side command reported an attempted asset change.
-- `StaticChecked`: syntax/static validators passed, but Unreal Build Tool or Editor did not run.
-- `Built`: Unreal Build Tool completed successfully for the target with compile actions executed (`run N action(s)` where N > 0, or no up-to-date marker).
-- `BuiltStale`: UBT exit 0 but `Target is up to date` / `run 0 action(s)` — not proof recent edits were compiled.
-- `ShaderCompiled`: shader compile or editor shader recompile completed without reported errors.
-- `EditorVerified`: Unreal Editor loaded or saved the relevant asset and metadata was re-exported or validated.
-- `PIEVerified`: PIE/runtime smoke test or relevant log check passed.
-
-## Required Wording
-
-- `Edited` does not mean `Built`.
-- `Built` does not mean runtime behavior is correct.
-- `Runtime log clean` does not mean gameplay design is correct.
-- `Metadata exported` does not mean graph behavior is correct unless node links/pins are present.
-- `.uasset` work is only `Applied` when an Editor-side command reports save.
-- `.uasset` work is only `Verified` when Editor validation, metadata re-export, or PIE/runtime evidence confirms it.
-
-## Asset Mutation Boundary
-
-Filesystem tools may edit C++, config, text assets, scripts, and shader text files. Blueprint and Material graph mutation must run inside Unreal Editor through Editor Python, Editor Utility, commandlet, or a dedicated plugin command. Repository-side tools may plan asset changes, but must not report them as applied without Editor-side evidence.
-
-## Response Contract
-
-When answering after edits or verification, include:
-
-1. `proof_level`: the highest level reached.
-2. `changed_surface`: files/assets touched or planned.
-3. `verification`: exact build, shader compile, editor export, PIE, or log evidence.
-4. `remaining_risk`: what has not been checked.
-5. `next_check`: the smallest command/export/test that would raise the proof level.
+답변에는 확인 수준(`proof_level`), 바꾼 대상(`changed_surface`), 실제 검사(`verification`), 미확인 부분(`remaining_risk`), 필요한 다음 확인(`next_check`)을 상황에 맞게 적습니다. 일반 설명은 한글로 풀어서 쓰면 됩니다.

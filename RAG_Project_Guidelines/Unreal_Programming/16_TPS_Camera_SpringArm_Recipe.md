@@ -1,16 +1,16 @@
-# TPS Camera, SpringArm, and LineTrace Recipe (UE 5.8)
+# 3인칭 카메라·조준·무기 연결
 
-## Intent
+카메라가 캐릭터 뒤를 따라가고, 카메라 기준으로 이동하며, 화면 중앙에서 조준하는 작은 흐름부터 만듭니다.
 
-Third-person shooter prototype: camera behind character, camera-relative move, screen-center line trace, weapon attach.
+`USpringArmComponent`와 `UCameraComponent`의 소유자·부착 위치를 정합니다. 캐릭터 몸체는 이미 있는 `ACharacter::GetMesh()`를 우선 사용하고 같은 몸체 메시를 중복 생성하지 않습니다.
 
-## Keywords
+조준 판정은 카메라 시점을 기준으로 할 수 있지만 무기 외형은 손 소켓에 붙이는 식으로 역할을 구분합니다. 실제 소켓 이름과 트레이스 충돌 채널은 프로젝트에서 확인해야 합니다.
 
-SpringArm, CameraComponent, USpringArmComponent, UCameraComponent, third person, TPS, line trace, LineTraceSingleByChannel, weapon socket, attach component
+`GameFramework/Character.h`를 `Game/Framework/Character.h`로 잘못 적지 않습니다. 입력 연결은 올바른 입력 초기화 함수에서 처리합니다. 카메라가 흔들리면 대상 이동과 카메라 갱신 순서를 확인해야 합니다.
 
-Korean: 3인칭, 스프링암, 카메라, 라인트레이스, 조준, 무기 소켓
+## 코드 형태 예시
 
-## Minimal character setup
+아래 예시는 실제 프로젝트에서 빌드를 끝낸 결과가 아닙니다. 이름·모듈·엔진 선언을 확인해서 적용해야 합니다.
 
 ```cpp
 #include "GameFramework/Character.h"
@@ -26,10 +26,6 @@ UCameraComponent* Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera
 Camera->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
 ```
 
-Use `ACharacter::GetMesh()` for the skeletal mesh — do not create a second body mesh in TPS unless intentional.
-
-## Camera-relative movement
-
 ```cpp
 void AMyCharacter::Move(const FInputActionValue& Value)
 {
@@ -40,8 +36,6 @@ void AMyCharacter::Move(const FInputActionValue& Value)
     AddMovementInput(FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y), Axis.X);
 }
 ```
-
-## Line trace (screen center)
 
 ```cpp
 #include "Kismet/GameplayStatics.h"
@@ -56,25 +50,6 @@ if (PC && PC->PlayerCameraManager)
 }
 ```
 
-## Weapon attach
-
-Attach weapon mesh to character mesh socket (e.g. `hand_r`):
-
 ```cpp
 WeaponMesh->AttachToComponent(GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, TEXT("hand_r"));
 ```
-
-For TPS feel, attach trace origin to **camera**, weapon visual to **hand socket**.
-
-## Common mistakes
-
-| Mistake | Fix |
-|---------|-----|
-| `#include "Game/Framework/Character.h"` | `#include "GameFramework/Character.h"` |
-| Weapon on Camera for visual + hand | Visual on hand, trace from camera |
-| Input bind in BeginPlay on PC | `SetupInputComponent` |
-| Duplicate `USkeletalMeshComponent` body | Use `GetMesh()` |
-
-## RAG mode
-
-`prototype_component` + genre `shooter` for new TPS work; `compile_fix` for include errors.

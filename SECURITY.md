@@ -1,65 +1,35 @@
-# Security Policy
+# 보안과 로컬 자료 취급
 
-## Supported scope
+이 도구는 사용자의 컴퓨터에서 실행됩니다. 프로젝트 코드와 검색 자료도 로컬에 보관합니다.
 
-This stack runs **locally** on your machine. It is not a hosted service.
+## 공개 금지 자료
 
-## Never commit
+API 키가 들어 있는 MCP 설정, 개인 절대 경로, 비공개 프로젝트 코드·로그, 에디터 내보내기 자료, 검색 데이터베이스를 공개 이슈나 배포 파일에 넣지 말아야 합니다. 설정 예시는 `*.template.json`, `*.example.json`을 사용합니다.
 
-- `~/.lmstudio/mcp.json` or any file containing API keys (Tavily, cloud LLM keys, etc.)
-- `config/workspace.json`, `config/agent-mcp.json`, or other machine-specific paths
-- `data/` indexes, `*.sqlite`, build logs, or project snapshots from your Unreal projects
-- Personal absolute paths in shipped config or eval files (use `$HOME` / `{REPO_ROOT}` placeholders)
+기본 저장 위치인 `~/.evidence-first`와 별도 외부 검색 폴더에도 엔진·프로젝트 코드 일부가 들어갈 수 있습니다. 폴더 전체를 공유하지 말아야 합니다.
 
-Use the provided `*.template.json` and `*.example.json` files instead.
+## 파일 접근과 권한
 
-## MCP safety defaults
+기본은 읽기 전용입니다. `ALLOW_WRITE`, `ALLOW_COMMANDS`, `ALLOW_UNREAL_BUILD`를 켜야 각각 수정·명령·빌드가 가능합니다.
 
-The **unreal-agent** MCP server disables writes and commands unless explicitly
-enabled through `ALLOW_WRITE`, `ALLOW_COMMANDS`, and `ALLOW_UNREAL_BUILD`. Reads
-are contained to `WORKSPACE_ROOT` plus the exact selected project's root. An
-explicit existing `.uproject` may be selected outside configured discovery/search
-roots, but that authorizes only that exact project's containment boundary; it
-does not authorize a parent directory or a same-name clone.
+정확한 `.uproject`를 선택하면 설정된 검색 폴더 밖의 프로젝트도 읽을 수 있지만, 그 부모 폴더 전체나 같은 이름의 다른 복사본까지 허용되는 것은 아닙니다.
 
-Mutation scope is narrower than read scope: `Source/**`, `Config/**`, plugin
-source plus the exact plugin descriptor, and the exact selected `.uproject`.
-Generated/cache/VCS areas such as `Saved`, `Binaries`, `Intermediate`,
-`DerivedDataCache`, `.git`, and `.vs` are denied. Lexical and resolved-real-path
-checks reject `..`, symlink, and junction escapes.
+수정 범위는 더 좁습니다. 프로젝트 `Source`, `Config`, 플러그인 소스와 해당 설명 파일, 선택한 `.uproject` 등 허용된 위치만 다룹니다. `Saved`, `Binaries`, `Intermediate`, `DerivedDataCache`, `.git`, `.vs` 같은 생성·캐시·버전 관리 경로는 차단합니다. 경로 우회와 심볼릭 링크·정션을 통한 외부 접근도 검사합니다.
 
-File-version receipts are opaque compare-and-swap evidence, not authority. A
-receipt is scoped to the canonical selected project, canonical file, observed
-version, and reliable transport session (or Strict conversation where
-applicable), and expires or may be evicted. It cannot be replayed for another
-file, session, or same-name clone; those attempts fail with
-`FILE_SNAPSHOT_SCOPE_MISMATCH`. Missing, expired, evicted, or runtime-invalid
-evidence fails with `FILE_SNAPSHOT_INVALID`, while changed content fails with
-`FILE_VERSION_CONFLICT`. Callers may instead supply the exact current SHA-256.
-Ownerless transports do not receive an unsafe automatic "latest read" lookup.
-Delete additionally requires a matching proposal token and explicit approval.
+## 동시 수정과 덮어쓰기 방지
 
-Review `lmstudio-unreal-agent-mcp/README.md` before enabling write or build tools in production project trees.
+`fileVersionReceipt`는 파일을 읽은 상태를 확인하는 임시 표식입니다. 프로젝트·파일·버전·대화 범위에 묶이며 쓰기 권한 자체를 주지는 않습니다. 현재 SHA-256인 `expectedHash`를 대신 보낼 수도 있습니다.
 
-## RAG provenance and local data
+다른 파일이나 대화의 값은 `FILE_SNAPSHOT_SCOPE_MISMATCH`, 만료되거나 유효하지 않은 값은 `FILE_SNAPSHOT_INVALID`, 내용이 달라진 경우는 `FILE_VERSION_CONFLICT`로 거절합니다. 필요한 값을 안 보낸 경우는 `FILE_SNAPSHOT_REQUIRED`입니다. 삭제는 제안 토큰과 실제 사용자 승인도 필요합니다.
 
-Project-scoped RAG rows must carry the canonical `.uproject` parent
-(`project_root`) and descriptor stem (`project`). Same-name clones remain distinct,
-and legacy rows migrate only when prior path/descriptor evidence identifies one
-owner. Ambiguous or missing provenance fails closed. Index manifests bind each
-generation to one engine association/version; a call never merges sibling engine
-shards.
+자세한 조건은 [파일 작업 서버 안내](lmstudio-unreal-agent-mcp/README.md)에 있습니다.
 
-Managed indexes live under `<state-home>/indexes/<namespace>/` (default state
-home `~/.evidence-first`) and may contain excerpts from licensed Epic source or
-private project files. Treat the entire state home, custom external indexes,
-Editor exports, build logs, and generated receipts as local sensitive data; do
-not publish them as release assets or issue attachments.
+## 검색 자료 구분
 
-## Reporting issues
+프로젝트 자료는 실제 `.uproject` 폴더와 이름을 함께 기록합니다. 출처가 불명확한 예전 자료를 임의로 현재 프로젝트에 넣지 않습니다. 엔진별 자료도 분리하며 한 번의 검색에서 다른 엔진 자료를 합치지 않습니다.
 
-If you discover a security issue in this repository's tooling, open a private report to the maintainer or file a GitHub security advisory once the repo is public. Do not include proprietary Epic source or personal project code in public issues.
+## 보안 문제 제보
 
-## Pre-push check
+도구의 보안 문제는 유지보수자에게 비공개로 알리거나 저장소의 비공개 보안 제보 기능을 사용해야 합니다. 공개 이슈에는 엔진 원문이나 개인 프로젝트 코드를 넣지 않습니다.
 
-Run `scripts/installer_support/Verify-Oss-Ready.ps1` before your first public push.
+공개 전에는 `scripts/installer_support/Verify-Oss-Ready.ps1`로 민감한 파일과 경로가 섞이지 않았는지 확인해야 합니다.

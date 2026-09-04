@@ -1,36 +1,27 @@
-# Unreal Codegen Recipes: Core Types
+# 언리얼 자료형 선택과 구현 규칙
 
-## Keywords
+요청한 기능에 맞는 가장 작은 클래스를 만들어야 합니다. 파일 위치, 필요한 헤더와 모듈, 상태를 누가 보관할지 먼저 확인합니다. 네임스페이스는 웬만하면 추가하지 않으며 언리얼 선언 매크로가 있는 자료형을 새 네임스페이스로 감싸지 않습니다.
 
-Unreal C++ codegen, code generation, new class, create component, UActorComponent, AActor, UObject, UDataAsset, UGameInstanceSubsystem, UWorldSubsystem, UInterface, UCLASS, USTRUCT, UENUM, UFUNCTION, UPROPERTY, GENERATED_BODY, constructor, BeginPlay, Tick, Build.cs, include, module dependency
+## 헤더 공통 규칙
 
-Korean query aliases: 언리얼 코드 생성, 새 컴포넌트 만들기, 새 Actor 만들기, UObject 만들기, DataAsset 만들기, Subsystem 만들기, Interface 만들기, 헤더 include, 모듈 dependency, Build.cs
+`#pragma once` 뒤에 직접 사용하는 부모 클래스·자료형 헤더를 넣고 `*.generated.h`를 마지막 include로 둡니다. 선언에 맞는 매크로와 `GENERATED_BODY()`를 확인해야 합니다. 포인터·참조는 전방 선언을 검토하되 값으로 가진 구조체, 열거형, 부모 클래스, 인라인 구현에는 전체 정의가 필요한지 확인합니다.
 
-## Purpose
+## 자료형별 용도와 선택 기준
 
-Use this document when the model must generate Unreal C++ code before an exact project exists. The answer should prefer a small compiling skeleton, name the files to create, list required includes, list likely Build.cs modules, and call out UHT/reflection pitfalls.
+- `UActorComponent`: 특정 액터의 기능과 상태를 관리합니다. 해당 기능의 원본 상태를 액터와 중복 보관하지 않습니다.
+- `AActor`: 월드에 배치되는 객체입니다. 생성자에서는 기본값과 `CreateDefaultSubobject`를 다룹니다. 실행 중 객체 생성은 적절한 실행 시점에 합니다.
+- `UObject`: 보조 객체입니다. `NewObject<T>(Outer)`로 만들고 유지할 참조는 가비지 수집이 추적할 수 있게 보관합니다.
+- `UDataAsset`: 조정용 기본값과 설정을 보관합니다. 공유 에셋에 현재 체력 같은 실행 중 값을 쓰지 않습니다.
+- `UGameInstanceSubsystem`: 게임 인스턴스가 유지되는 동안 사용하는 기능입니다. `UWorldSubsystem`은 월드가 유지되는 동안 사용하는 기능입니다. 보통 엔진이 생성합니다.
+- `UInterface`: 다른 객체가 호출하는 데 필요한 최소한의 규칙을 정의합니다. 블루프린트만 구현한 객체도 고려하고 인터페이스 함수는 생성된 `Execute_함수명` 호출 규칙을 확인합니다.
 
-The default rule for this workspace is to avoid adding a C++ namespace unless the project already uses one and the symbol is not a reflected Unreal type. Reflected Unreal types with UCLASS, USTRUCT, UENUM, UINTERFACE, UFUNCTION, or UPROPERTY should not be wrapped in a new namespace by default.
+`BlueprintNativeEvent`는 C++ 기본 동작이 필요할 때 쓰며 `_Implementation`을 확인합니다. `BlueprintImplementableEvent`에는 같은 C++ 구현을 임의로 추가하지 말아야 합니다. 일반 클래스의 이벤트와 인터페이스 호출 규칙을 혼동하지 않습니다.
 
-## Universal Unreal Header Rules
+기본 모듈은 사용하는 자료형에 따라 `Core`, `CoreUObject`, `Engine`부터 확인합니다. 다른 모듈은 실제 사용 근거가 있을 때만 추가해야 합니다. 아래 코드는 형태 예시이며 현재 프로젝트의 이름·선언·엔진 버전으로 확인한 뒤 사용해야 합니다.
 
-1. Put `#pragma once` first.
-2. Include the direct base class or direct type dependencies before the generated header.
-3. Put `"MyType.generated.h"` as the last include in that header.
-4. Put `GENERATED_BODY()` as the first statement inside the reflected type body unless there is a local convention saying otherwise.
-5. Use forward declarations for pointer/reference UCLASS types when possible, but include full definitions for USTRUCT value members, UENUM properties, templates, inline methods, and base classes.
-6. If a header exposes a type from another module through a public property, function signature, or inherited type, check `PublicDependencyModuleNames`. If the type is only used in `.cpp`, check `PrivateDependencyModuleNames`.
+## 코드 형태 예시
 
-## Recipe: UActorComponent 새 컴포넌트 만들기
-
-Intent: `UActorComponent` new component create UCLASS GENERATED_BODY.
-
-Files:
-
-- `Source/<Module>/Public/<Feature>/<MyComponent>.h`
-- `Source/<Module>/Private/<Feature>/<MyComponent>.cpp`
-
-Header essentials:
+아래 예시는 실제 프로젝트에서 빌드를 끝낸 결과가 아닙니다. 이름·모듈·엔진 선언을 확인해서 적용해야 합니다.
 
 ```cpp
 #pragma once
@@ -55,8 +46,6 @@ public:
 };
 ```
 
-CPP essentials:
-
 ```cpp
 #include "Feature/MyComponent.h"
 
@@ -75,23 +64,6 @@ void UMyComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorCom
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 }
 ```
-
-Build.cs modules:
-
-- Usually `Core`, `CoreUObject`, `Engine`.
-- Add extra modules only when the component exposes or uses their types.
-
-Common failures:
-
-- `generated.h` error: generated header is not the last include.
-- UHT cannot find base/type: missing include or missing module dependency.
-- `LNK2019`: method declared but not defined, or definition signature does not match declaration.
-
-## Recipe: AActor 새 Actor 만들기
-
-Intent: `AActor` create actor UCLASS constructor BeginPlay Tick.
-
-Header essentials:
 
 ```cpp
 #pragma once
@@ -116,8 +88,6 @@ public:
 };
 ```
 
-CPP essentials:
-
 ```cpp
 #include "Actors/MyActor.h"
 
@@ -137,18 +107,6 @@ void AMyActor::Tick(float DeltaSeconds)
 }
 ```
 
-Advice:
-
-- Use `CreateDefaultSubobject` in the constructor for default components.
-- Do not spawn actors in constructors. Use `BeginPlay`, gameplay systems, or factory methods.
-- Use `UPROPERTY` for UObject references that must survive garbage collection.
-
-## Recipe: UObject Service Or Helper
-
-Intent: `UObject` helper object create UCLASS NewObject garbage collection.
-
-Header essentials:
-
 ```cpp
 #pragma once
 
@@ -165,18 +123,6 @@ public:
     void Initialize();
 };
 ```
-
-Advice:
-
-- Create with `NewObject<UMyService>(Outer)`.
-- Store the object in a `UPROPERTY` owner field if it must not be garbage collected.
-- Prefer a subsystem if lifetime should match GameInstance, World, Engine, or Editor.
-
-## Recipe: UDataAsset
-
-Intent: `UDataAsset` create data asset UCLASS asset type.
-
-Header essentials:
 
 ```cpp
 #pragma once
@@ -196,21 +142,6 @@ public:
 };
 ```
 
-Build.cs modules:
-
-- Usually `Engine` is enough beyond `Core` and `CoreUObject`.
-
-Advice:
-
-- Use `EditDefaultsOnly` for authored config data.
-- Avoid mutable runtime state inside shared DataAsset instances.
-
-## Recipe: GameInstance Or World Subsystem
-
-Intent: `UGameInstanceSubsystem` `UWorldSubsystem` initialize deinitialize subsystem.
-
-Header essentials:
-
 ```cpp
 #pragma once
 
@@ -228,19 +159,6 @@ public:
     virtual void Deinitialize() override;
 };
 ```
-
-Advice:
-
-- Use `UGameInstanceSubsystem` for game-session wide services.
-- Use `UWorldSubsystem` for world-specific state.
-- Use `UEngineSubsystem` or `UEditorSubsystem` only when that lifetime is intentional.
-- Subsystems are usually created by the engine, not by `NewObject` in gameplay code.
-
-## Recipe: UInterface
-
-Intent: Unreal interface create UINTERFACE IInterface BlueprintNativeEvent.
-
-Header essentials:
 
 ```cpp
 #pragma once
@@ -264,27 +182,3 @@ public:
     void Interact(AActor* InstigatorActor);
 };
 ```
-
-Advice:
-
-- Call BlueprintNativeEvent methods through `IMyInteractable::Execute_Interact(Object, InstigatorActor)`.
-- Do not assume the C++ interface pointer exists for Blueprint-only implementers.
-
-## Decision: BlueprintNativeEvent vs BlueprintImplementableEvent
-
-Intent: BlueprintNativeEvent BlueprintImplementableEvent choose event UFUNCTION default implementation.
-
-Both let Blueprints override a `UFUNCTION`. The difference is whether C++ also needs a default body:
-
-| Need | Use | C++ requirement |
-|---|---|---|
-| C++ has a default implementation that Blueprints may override | `BlueprintNativeEvent` | Must define `ClassName::FunctionName_Implementation(...)` in the `.cpp`. The plain `FunctionName` is never defined directly. |
-| C++ only declares the hook; only Blueprint (or nothing) implements it | `BlueprintImplementableEvent` | Must **not** define `FunctionName` or `FunctionName_Implementation` in C++ — UHT generates the dispatch, and a manual definition is a link/UHT error. |
-| C++ must call the function from C++ code | Either works, but call through `Execute_FunctionName(this, Args...)`, never the bare name | N/A |
-
-Common mistakes this table prevents:
-
-- Declaring `BlueprintNativeEvent` and forgetting the `_Implementation` definition → `CPP_DEFINITION_MISSING` / `LNK2019` at link time (see `25_LNK2019_Missing_Definition_Recipe.md`).
-- Declaring `BlueprintImplementableEvent` and then defining `FunctionName_Implementation` anyway (there is nothing to override; UHT already provides the implementation) — remove the manual definition.
-- Calling the bare `FunctionName(...)` on either kind from C++ instead of `Execute_FunctionName(...)` — the bare symbol either doesn't exist (`BlueprintImplementableEvent`) or skips the Blueprint override (`BlueprintNativeEvent`).
-

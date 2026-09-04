@@ -1,46 +1,14 @@
-# Unreal Codegen Accuracy Gates
+# 언리얼 코드 작성 후 검증 항목
 
-## Keywords
+그럴듯해 보이는 코드와 실제로 빌드한 코드를 구분해야 합니다. 현재 파일이나 엔진 선언에서 확인하지 못한 함수는 지어내지 않습니다.
 
-Unreal C++ code accuracy, compile-ready Unreal code, local model guardrails, constructor lifecycle, CreateDefaultSubobject, NewObject outer, TimerManager, RPC implementation, required includes, UHT, generated.h, Build.cs
+- 부모 클래스 헤더를 포함하고 `*.generated.h`를 마지막 include로 둡니다.
+- 언리얼 선언 매크로가 있는 자료형을 새 네임스페이스에 넣지 않습니다.
+- `.cpp`의 멤버 함수와 헤더 선언을 맞춥니다. RPC와 `BlueprintNativeEvent`는 필요한 `_Implementation`을 확인합니다.
+- `CreateDefaultSubobject`는 해당 클래스 생성자에서 사용합니다. 생성자에서 `SpawnActor`나 실행 중 월드 상태를 사용하지 않습니다.
+- `NewObject<T>(Outer)`의 소유자와 유지할 UObject 참조의 가비지 수집 추적을 확인합니다.
+- 컴포넌트 타이머는 유효한 월드의 `GetTimerManager()`를 사용하고 `FTimerHandle`에 필요한 헤더를 확인합니다.
+- `UGameplayStatics`는 `Kismet/GameplayStatics.h`, `ConstructorHelpers`는 `UObject/ConstructorHelpers.h`, `DOREPLIFETIME`는 `Net/UnrealNetwork.h`를 확인합니다.
+- GameplayTag 값은 `GameplayTagContainer.h`와 `GameplayTags` 모듈을 확인합니다.
 
-Korean query aliases: Unreal code accuracy, compile-ready UE code, CreateDefaultSubobject location, NewObject Outer, TimerManager, RPC Implementation, missing include, UHT error, generated.h, Build.cs
-
-## Purpose
-
-Use this document when the model is asked to write Unreal C++ that should compile, not merely illustrate a design.
-
-The goal is to reduce plausible but broken code from local 27B-class models by forcing a preflight checklist before output.
-
-## Hard Accuracy Gates
-
-Before returning compile-ready Unreal C++:
-
-1. Identify the exact base class and include its direct header in the reflected header.
-2. Keep `*.generated.h` as the last include in every reflected header.
-3. Do not put `UCLASS`, `USTRUCT`, `UINTERFACE`, or `UENUM` declarations inside a C++ namespace.
-4. If a `.cpp` defines `Class::Function`, verify the function is declared in that class header, except constructors, destructors, RPC `_Implementation`, RPC `_Validate`, BlueprintNativeEvent `_Implementation`, and local non-member helpers.
-5. If a header declares `UFUNCTION(Server)`, `UFUNCTION(Client)`, or `UFUNCTION(NetMulticast)`, the `.cpp` must define `FunctionName_Implementation`.
-6. Use `CreateDefaultSubobject` only in the owning class constructor.
-7. Do not call `SpawnActor` from a constructor.
-8. Use `NewObject<T>(Outer)` with an explicit owning object, and store retained UObject references in `UPROPERTY` or `TObjectPtr`.
-9. In `UActorComponent`, use `GetWorld()->GetTimerManager()` after checking `GetWorld()`, not `GetWorldTimerManager()`.
-10. If a header stores `FTimerHandle`, include `TimerManager.h`.
-11. If code uses `UGameplayStatics::`, include `Kismet/GameplayStatics.h` in the `.cpp`.
-12. If code uses `ConstructorHelpers::`, include `UObject/ConstructorHelpers.h` and keep the lookup in the constructor.
-13. If code uses `DOREPLIFETIME`, include `Net/UnrealNetwork.h`.
-14. If code exposes GameplayTag value types, include `GameplayTagContainer.h` and add `GameplayTags` to Build.cs.
-
-## Local Model Response Rule
-
-If any of the gates cannot be verified from the current files or RAG context, do not label the code compile-ready. Ask for the missing project file, module, asset, or build output instead.
-
-## Build Feedback Rule
-
-After a code edit:
-
-1. Run static validation first.
-2. Run UnrealBuildTool when available.
-3. Fix the first meaningful UHT/compiler/linker error.
-4. Rebuild.
-5. Stop only after the build output was inspected or after a concrete blocker is reported.
+보조 검사를 실행할지는 작업에 맞춰 정합니다. 빌드가 필요한 요청은 실제 UBT 결과로 확인하고 첫 유효 오류부터 수정해야 합니다. 빌드하지 않았다면 컴파일 성공이라고 표시하지 않습니다.

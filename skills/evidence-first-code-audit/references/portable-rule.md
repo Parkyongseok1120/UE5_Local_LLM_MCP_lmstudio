@@ -1,10 +1,13 @@
-# Portable agent rule
+# 다른 AI 작업 도구에 넣을 공통 규칙
 
-Use this compact rule as the shared source when configuring another coding agent:
+다른 코드 작업 도구를 설정할 때 아래 규칙을 공통 원문으로 사용합니다.
 
 ```text
-For code audit, architecture, or code generation, work evidence-first.
-Read contracts and direct framework semantics before causal claims. Trace each important behavior from entry through decisions to final mutation/side effect. Distinguish declared, constructed, registered, reachable, called, mutating, and observed. For every major claim choose one explicit claim type: existence, behavior, framework_semantics, wiring, state_transition, data_flow, architecture, or codegen. Report verdict, severity, typed evidence, behavior path, counterevidence, proof level, and unknowns. In architecture mode only, use Confirmed with Info for a verified neutral non-codegen as-built fact; this pair does not establish intent and cannot remain Proposed. Match SourceVerified, StaticVerified, BuildVerified, TestVerified, and RuntimeVerified to source, static-analysis, build, test, and runtime evidence respectively. Compare symmetric paths and challenge the leading cause once. Scan for a more severe failure before finalizing. Treat generated architecture maps and failure memory as hints, not behavioral proof. Do not modify files unless explicitly authorized. Do not claim runtime correctness from build success alone.
+코드 검토, 구조 분석, 코드 작성은 근거부터 확인해야 합니다.
+원인을 단정하기 전에 명시된 규칙과 외부 라이브러리의 실제 동작을 읽습니다. 주요 동작은 입력부터 분기·호출을 거쳐 최종 상태 변경이나 외부 결과까지 추적합니다. 선언, 생성, 등록, 도달 가능, 호출, 상태 변경, 실행 관찰을 구분합니다.
+주요 주장마다 claimType을 existence, behavior, framework_semantics, wiring, state_transition, data_flow, architecture, codegen 중 하나로 정합니다. 판단, 심각도, 종류별 근거, 실제 동작 경로, 반대 근거, 확인 수준과 모르는 점을 함께 적습니다.
+구조 검토에서 확인된 중립적 현재 사실에는 Confirmed와 Info를 함께 사용할 수 있습니다. 설계 의도는 증명하지 않으며 codegen이나 Proposed에는 사용하지 않습니다. SourceVerified, StaticVerified, BuildVerified, TestVerified, RuntimeVerified는 각각 소스, 정적 검사, 빌드, 테스트, 실행 근거와 맞춥니다.
+대응되는 경로를 비교하고 다른 원인도 한 번 검토합니다. 최종 판단 전에 더 심각한 실패를 찾아봐야 합니다. 자동 구조도와 이전 실패 기록은 참고 자료로 쓰며 동작 증명으로 간주하지 않습니다. 허용받은 범위에서만 파일을 수정하고 빌드 성공만으로 실제 동작까지 확인했다고 말하지 말아야 합니다.
 ```
 
-Keep project-specific facts in the repository's local instruction file. Keep this rule global so the same reasoning contract follows the agent across projects and computers.
+프로젝트에만 해당하는 사실은 저장소의 작업 지침에 둡니다. 이 공통 규칙은 프로젝트나 컴퓨터가 바뀌어도 같은 확인 기준을 유지하는 데 사용합니다.

@@ -1,119 +1,19 @@
-# Unreal Runtime Debugging Playbook
+# 빌드 성공 후 실행 오류 진단
 
-## Keywords
+실제 충돌·assert·ensure 로그와 프로젝트 호출 경로부터 읽어야 합니다. 빌드 성공은 실행 동작까지 확인한 결과가 아닙니다.
 
-Unreal runtime_debug, Editor log, crash, assert, ensure, access violation, callstack, UObject lifetime, garbage collection, null pointer, BeginPlay, Tick, replication debug, PIE, packaged build, async task, game thread
+## 객체와 초기화
 
-Korean query aliases: 런타임 디버깅, 에디터 로그 분석, 크래시 분석, assert 실패, ensure 실패, 널 포인터, UObject GC, BeginPlay 문제, Tick 문제, 리플리케이션 디버깅, 패키징 빌드 문제
+포인터가 비어 있으면 누가 만들고 보관하는지, 언제 파괴되는지, 기본 에셋이 지정됐는지 확인합니다. 단순히 null 검사를 추가해서 원인을 숨기지 말아야 합니다. 유지해야 하는 UObject 참조는 가비지 수집이 추적할 수 있게 보관합니다.
 
-## Purpose
+생성자는 기본값과 기본 구성 요소를 준비하는 곳입니다. 월드·플레이어·실행 중 객체가 필요한 일은 `BeginPlay` 등 적절한 시점으로 옮깁니다. 실행 중 만든 컴포넌트는 생성 주체·부착·등록·보관을 함께 확인합니다.
 
-Use this document when the code compiles but the game crashes, asserts, ensures, behaves incorrectly in PIE, or fails only at runtime. The answer should cite the log/callstack first, then connect it to lifecycle, ownership, replication, or threading rules.
+## 네트워크와 비동기 작업
 
-## Runtime Evidence Order
+서버가 상태를 확정하는지, RPC 호출자가 객체를 소유하는지, 복제 설정과 `GetLifetimeReplicatedProps`가 있는지 확인합니다. 로그에는 권한·소유자·실행 모드를 남깁니다.
 
-1. Exact fatal line, assert line, ensure line, or access violation line.
-2. Callstack frames inside the project module.
-3. The UObject/Actor/Component lifecycle point: constructor, PostInitProperties, OnRegister, BeginPlay, Tick, EndPlay, BeginDestroy.
-4. The owning object and whether it is valid, replicated, pending kill, or garbage collected.
-5. Recent code changes and config changes.
+비동기 콜백이 UObject를 만진다면 실행 스레드와 객체 수명을 확인합니다. 게임 스레드에서 처리하고 `TWeakObjectPtr`를 확인한 뒤 접근해야 합니다. 종료 뒤 도착한 콜백도 처리해야 합니다.
 
-## Playbook: Null UObject Or Access Violation
+## 에디터와 배포 환경의 실행 차이
 
-Likely causes:
-
-- UObject pointer was not stored in a `UPROPERTY`.
-- Actor/component was destroyed or pending kill.
-- Code runs before BeginPlay or before dependency initialization.
-- Asset reference is not assigned in defaults.
-- A Blueprint subclass overrides defaults unexpectedly.
-
-Fix sequence:
-
-1. Identify the first project frame in the callstack.
-2. Check pointer ownership and lifetime.
-3. If the pointer is a UObject reference that should be retained, store it in `UPROPERTY`.
-4. Add validity guards only after identifying why the pointer can be null.
-5. Prefer moving initialization to the correct lifecycle function rather than hiding the crash.
-
-## Playbook: Constructor Vs BeginPlay Bug
-
-Constructor should:
-
-- Create default subobjects.
-- Set default values.
-- Avoid accessing world, player controller, runtime assets, or spawned actors.
-
-BeginPlay should:
-
-- Resolve runtime dependencies.
-- Bind to runtime systems.
-- Start timers or gameplay behavior.
-
-Common advice:
-
-- If `GetWorld()` is null in a constructor, move the logic.
-- If spawned actors or player state are needed, use BeginPlay or later.
-
-## Playbook: Component Registration Or Attachment Bug
-
-Likely causes:
-
-- Runtime-created component was not registered.
-- Attachment was done before the root component existed.
-- Component was created with the wrong outer.
-
-Fix sequence:
-
-1. For default components, use `CreateDefaultSubobject` in the constructor.
-2. For runtime components, use `NewObject`, attach, then `RegisterComponent`.
-3. Store runtime components with `UPROPERTY` if they must persist.
-
-## Playbook: Replication Runtime Bug
-
-Likely causes:
-
-- Actor does not replicate.
-- RPC is called from a client that does not own the actor.
-- Property was not added to `GetLifetimeReplicatedProps`.
-- State is changed only on the client.
-- `OnRep` expectation is wrong.
-
-Fix sequence:
-
-1. Confirm server authority for state changes.
-2. Confirm ownership for Server RPC.
-3. Confirm `bReplicates`, replicated properties, and lifetime props.
-4. Use logs with role, authority, owner, and net mode.
-
-## Playbook: Async Or Threading Bug
-
-Likely causes:
-
-- UObject touched from a non-game thread.
-- Async callback captures a raw UObject pointer.
-- Object is destroyed before async work completes.
-
-Fix sequence:
-
-1. Identify which thread invokes the callback.
-2. Bounce UObject work back to the game thread.
-3. Capture `TWeakObjectPtr` and validate before use.
-4. Avoid doing gameplay state mutation in worker threads.
-
-## Playbook: PIE Works But Packaged Build Fails
-
-Likely causes:
-
-- Editor-only module or class used in runtime code.
-- Asset is referenced only by editor path and not cooked.
-- Config differs between PIE and packaged build.
-- Case-sensitive path issue.
-
-Fix sequence:
-
-1. Check module type: Runtime vs Editor.
-2. Check logs from packaged build, not only PIE.
-3. Verify assets are referenced or cooked.
-4. Remove Editor dependencies from Runtime modules.
-
+배포 실행 로그를 따로 읽고 에디터 전용 의존성, 에셋 포함 여부, 설정 차이, 경로 대소문자를 확인합니다. 큰 구조 변경보다 재현 조건과 로그·중단점으로 원인을 먼저 좁혀야 합니다.

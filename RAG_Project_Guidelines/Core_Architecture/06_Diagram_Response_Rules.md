@@ -1,150 +1,25 @@
-# Diagram Response Rules
+# 구조·호출 순서 도식 작성 기준
 
-## Purpose
+책임·의존성·노드 연결·호출 순서를 설명할 때 작은 도식이 도움이 되면 함께 보여주어야 합니다. 도식은 확인한 구조의 설명이며 실제 수정 증거는 아닙니다.
 
-When analyzing project structure, ownership, dependencies, graph nodes, Blueprint flow, material flow, shader pipeline, or runtime call order, include a compact diagram directly in the chat response.
+Mermaid를 먼저 사용합니다. 이를 표시하지 못하는 환경을 위한 ASCII 텍스트 도식은 Mermaid 블록 다음에 둡니다. 단순 사실 하나나 한 줄 수정에는 억지로 넣지 않습니다.
 
-Use diagrams to make structure visible to small local models and to the user. The diagram is evidence-backed explanation, not proof that code or assets were changed.
+구조는 `flowchart TD`, 시간 순서는 `sequenceDiagram`, 상속은 `classDiagram`, 명시적인 상태 전이는 `stateDiagram-v2`를 사용합니다. 보통 5~12개 노드로 줄이고 짧은 영문 식별자와 따옴표 안의 한글 설명을 사용합니다. 파일 경로를 식별자로 쓰지 말아야 합니다.
 
-Output in this order:
-
-1. A Mermaid diagram first, for clients that render Mermaid.
-2. A plain ASCII/text fallback second, so LM Studio or other non-rendering chat windows still show the structure immediately.
-
-## When To Include A Diagram
-
-Include a diagram when the answer contains any of these:
-
-- architecture or responsibility split
-- module/plugin dependency structure
-- Actor/Component/Subsystem ownership
-- Command/Query/Event flow
-- Blueprint graph or function-call analysis
-- material node graph or texture/parameter flow
-- shader/plugin/render pipeline setup
-- runtime sequence, event broadcast, replication, or async/render-thread flow
-
-Skip the diagram only when the answer is a tiny factual answer, a single compile error fix, or the user asks for text only.
-
-## Diagram Type Selection
-
-- Use `flowchart TD` for ownership, dependency, material graph, Blueprint node graph, and shader pipeline structure.
-- Use `sequenceDiagram` for request/call/event/runtime order.
-- Use `classDiagram` only for class/interface inheritance or API surface summaries.
-- Use `stateDiagram-v2` only for explicit state machines.
-
-## Mermaid Safety Rules
-
-- Keep diagrams small: 5 to 12 nodes by default.
-- Use short ASCII node IDs such as `Player`, `WeaponComp`, `DamageTarget`, `Material`, `Texture`.
-- Put Korean or long labels inside quoted Mermaid labels, for example `A["State Owner"]`.
-- Do not use raw file paths as node IDs. Put paths in labels or a text list below the diagram.
-- Do not show uncertain relationships as facts. Use dashed arrows for inferred or proposed relationships.
-- Always put the Mermaid block before the plain ASCII/text fallback. Do not rely on Mermaid rendering alone.
-- In `sequenceDiagram`, do not use Mermaid keywords such as `participant`, `actor`, or `end` as participant IDs. Use short IDs like `P`, `CinePart`, or `TargetActor`, and quote aliases with parentheses or slashes.
-
-## Plain Text Fallback Rules
-
-- Put the fallback immediately after the Mermaid block.
-- Use `text` fenced code or a short `Diagram:` block.
-- Keep it to 4 to 10 lines.
-- Use arrows such as `->`, `<-`, and `-- inferred -->`.
-- Keep the same node order as the Mermaid diagram.
-- Mark uncertain links as `-- inferred -->` or `-- proposed -->`.
-
-## Structure Diagram Template
+확인하지 않은 관계는 점선과 “추정”·“제안” 표시로 구분합니다. 순서 도식에서 `participant`, `actor`, `end` 같은 예약어를 참여자 식별자로 사용하지 않습니다.
 
 ```mermaid
 flowchart TD
-    User["User / Caller"] --> Request["Request API"]
-    Request --> Owner["State or Process Owner"]
-    Owner --> Result["Validated Result"]
-    Owner --> Event["Delegate / Event"]
-    Event --> Observers["UI / FX / Audio Observers"]
+    A["입력"] --> B["행동 요청"]
+    B --> C["상태 담당자 검증"]
+    C --> D["상태 변경"]
+    D --> E["변경 알림"]
+    E --> F["화면과 효과 갱신"]
 ```
 
 ```text
-User / Caller
-  -> Request API
-  -> State or Process Owner
-  -> Validated Result
-  -> Delegate / Event
-  -> UI / FX / Audio Observers
+입력 -> 행동 요청 -> 상태 담당자 검증
+     -> 상태 변경 -> 변경 알림 -> 화면과 효과 갱신
 ```
 
-## Sequence Diagram Template
-
-```mermaid
-sequenceDiagram
-    participant Caller
-    participant ProcessOwner
-    participant Target
-    participant Observer
-    Caller->>ProcessOwner: RequestX()
-    ProcessOwner->>Target: ApplyXAttempt()
-    Target-->>ProcessOwner: Result
-    ProcessOwner-->>Observer: OnXCompleted
-```
-
-```text
-Caller -> ProcessOwner: RequestX()
-ProcessOwner -> Target: ApplyXAttempt()
-Target -> ProcessOwner: Result
-ProcessOwner -> Observer: OnXCompleted
-```
-
-## Material Diagram Template
-
-```mermaid
-flowchart TD
-    UV["UV / Coordinates"] --> Texture["Texture Sample"]
-    Texture --> Mask["Mask / Channel Split"]
-    Mask --> Params["Scalar / Vector Parameters"]
-    Params --> Material["Material Outputs"]
-```
-
-```text
-UV / Coordinates
-  -> Texture Sample
-  -> Mask / Channel Split
-  -> Scalar / Vector Parameters
-  -> Material Outputs
-```
-
-## Blueprint Diagram Template
-
-```mermaid
-flowchart TD
-    Event["Event / Input"] --> Branch["Branch / Gate"]
-    Branch --> Call["Function Call"]
-    Call --> Variable["Variable Read/Write"]
-    Variable --> Output["Event / Return / Side Effect"]
-```
-
-```text
-Event / Input
-  -> Branch / Gate
-  -> Function Call
-  -> Variable Read/Write
-  -> Event / Return / Side Effect
-```
-
-## Response Contract
-
-For structure analysis, answer in this order:
-
-1. Short conclusion.
-2. Mermaid diagram.
-3. Plain text diagram fallback.
-4. Responsibility or dependency table.
-5. Risks or unstable edges.
-6. Evidence citations.
-
-For screenshot-based Material or Blueprint analysis, answer in this order:
-
-1. Visible facts.
-2. Mermaid diagram of the visible or exported graph.
-3. Plain text diagram fallback.
-4. Parameters, textures, variables, function calls.
-5. Unknown/cropped/unreadable nodes.
-6. Next metadata or file checks.
+도식 아래에는 필요한 책임표·위험·근거를 적습니다. 캡처를 설명한다면 보이는 연결만 그리고 가려진 노드와 필요한 추가 자료를 따로 적어야 합니다.

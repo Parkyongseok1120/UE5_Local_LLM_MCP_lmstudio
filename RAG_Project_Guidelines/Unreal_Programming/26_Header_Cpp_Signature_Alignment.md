@@ -1,46 +1,11 @@
-# Header/Cpp Signature Alignment
+# 헤더·구현 파일의 함수 선언 일치 기준
 
-## Keywords
+반환형, 함수의 `const`, 매개변수 수와 자료형·포인터·참조를 정확히 맞춰야 합니다. `FVector`와 `const FVector&`는 같은 선언이 아닙니다.
 
-signature mismatch, const mismatch, return type mismatch, parameter type mismatch, CPP_RETURN_TYPE_MISMATCH, CPP_FUNCTION_SIGNATURE_MISMATCH, header cpp drift, C2511, C2555
+기본 인자, `virtual`, `override`는 헤더 선언에 두고 `.cpp` 정의에 반복하지 않습니다. 델리게이트 콜백과 `Broadcast()`도 선언된 인자 개수·자료형과 맞춰야 합니다.
 
-Korean query aliases: 시그니처 불일치, const 불일치, 반환형 불일치, 파라미터 불일치, 헤더 cpp 시그니처, C2511, C2555
+함수 형태를 바꿨다면 헤더, 구현, 부모·인터페이스 선언, 모든 호출부와 델리게이트 연결을 함께 확인합니다. 헤더만 바꾸고 기존 호출을 남겨 두지 말아야 합니다.
 
-## Purpose
+관련 오류는 `CPP_RETURN_TYPE_MISMATCH`, `CPP_FUNCTION_SIGNATURE_MISMATCH`, `CALLBACK_FUNCTION_POINTER_MISMATCH`, `INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH`, `MULTIFILE_CALLSITE_DRIFT`입니다. 오류 이름만으로 결론내리지 말고 양쪽 선언을 직접 비교합니다.
 
-Use this document whenever a `.cpp` function definition must match a header declaration exactly, or when a static-validation finding names a signature drift (`CPP_RETURN_TYPE_MISMATCH`, `CPP_FUNCTION_SIGNATURE_MISMATCH`, `CALLBACK_FUNCTION_POINTER_MISMATCH`, `INTERFACE_IMPLEMENTER_SIGNATURE_MISMATCH`). A definition and its declaration are not "close enough" — the compiler treats a small mismatch as a completely different, undefined function, which is exactly how `LNK2019` shows up after code that otherwise looks correct.
-
-## What must match exactly
-
-| Element | Rule |
-|---|---|
-| Return type | Identical, including `const`, pointer/reference, and template arguments. `TArray<AActor*>` and `TArray<const AActor*>` are different types. |
-| `const` on the method | A `const` member function declared in the header must be defined `... FunctionName(...) const` in the `.cpp`. Dropping `const` in the definition (or adding it when the header doesn't have it) is a mismatch, not a style choice. |
-| Parameter types | Match exactly, including reference (`&`), pointer (`*`), and `const`. `FVector` vs `const FVector&` are different parameters even though both "take a vector." |
-| Parameter count | Every declared parameter must appear in the definition. Default arguments live only in the header declaration — repeating `= DefaultValue` in the `.cpp` definition is a compile error, not just redundant. |
-| `virtual` / `override` | These keywords belong on the header declaration. Do not repeat `virtual` on the `.cpp` definition; `override` never appears on a definition either. |
-| Delegate/callback signatures | A bound `UFUNCTION` handler's parameter list must match the delegate's declared payload exactly (see `DECLARE_DYNAMIC_MULTICAST_DELEGATE_*` arity). A `Broadcast()` call must pass exactly as many arguments as the delegate declares. |
-
-## Multi-file drift pattern
-
-When a header method's signature changes (return type, parameter type, or delegate payload), every one of these must be updated together in the same turn, not just the header:
-
-1. The header declaration itself.
-2. The matching `.cpp` definition.
-3. Any interface/base-class declaration this method implements or overrides.
-4. Every call site that invokes the function or binds it as a delegate handler.
-
-Updating only the header and leaving the `.cpp` (or a call site) on the old signature is the most common cause of `CPP_FUNCTION_SIGNATURE_MISMATCH` / `MULTIFILE_CALLSITE_DRIFT` findings and of `LNK2019` at link time (the linker sees two different symbols, not one changed one).
-
-## Fast self-check before claiming a signature edit is done
-
-1. Copy the header declaration's return type, name, and parameter list character-for-character into the `.cpp` definition, then remove only `virtual`, `override`, and default-argument values — nothing else.
-2. If this method implements an interface or overrides a base class, open that declaration too and repeat the same character-for-character comparison.
-3. Search the project for every call site and delegate binding of this function name; update any that still pass the old parameter list or count.
-4. Re-run static validation before claiming the signature is aligned — see `25_LNK2019_Missing_Definition_Recipe.md` for the matching missing-definition case.
-
-## Response contract
-
-1. Quote the exact header declaration and the exact `.cpp` definition side by side when reporting or fixing a mismatch.
-2. Name every file that needs to change, not just the one with the finding.
-3. State the proof level per `21_Edit_Verification_Proof_Levels.md` — a signature edit is only `Patched` until static validation or UBT raises it to `StaticChecked` / `Built`.
+답변에는 바뀌어야 하는 파일과 실제 검사 결과를 적습니다. 파일만 수정했다면 `Patched`이며 빌드 성공으로 올려 말하지 않습니다.

@@ -1,21 +1,15 @@
-# Epic Games / Unreal Engine Notice
+# 언리얼 엔진 자료에 관한 안내
 
-This repository contains **tooling only** for building a local retrieval index from **your own** licensed Unreal Engine installation.
+이 저장소는 본인이 사용할 권한이 있는 언리얼 엔진에서 로컬 검색 자료를 만드는 도구만 제공합니다. 엔진 소스 자체를 배포하는 저장소가 아닙니다.
 
-## What you may index locally
+엔진 소스·문서·프로젝트를 수집할 때는 본인에게 적용되는 [언리얼 엔진 이용 약관](https://www.unrealengine.com/eula)을 확인해야 합니다.
 
-You may run the collect/build scripts against Unreal Engine source, documentation, and project files that you are entitled to use under the [Unreal Engine EULA](https://www.unrealengine.com/eula).
+다음 자료는 이 저장소나 공개 배포본에 올리지 않습니다.
 
-## What must not be redistributed
+- 엔진 소스 조각이 들어간 `rag.sqlite`
+- 엔진 원문을 담은 `raw_source.jsonl` 등 수집 결과
+- 엔진 설치 폴더에서 꺼낸 Epic 소유 자료
 
-Do **not** commit, publish, or share:
+저장소를 받은 사용자는 본인의 엔진 설치본으로 [검색 자료를 직접 만들어야 합니다](docs/RAG_Setup.md).
 
-- Pre-built `rag.sqlite` indexes containing Epic Engine source chunks
-- `data/unreal*/raw_source.jsonl` or other exports of Epic proprietary source
-- Any Epic-owned content extracted from your engine install
-
-Clonees must run `scripts/installer_support/Configure-Knowledge.ps1` (or equivalent `collect-source` + `build`) on **their** machine with **their** UE install.
-
-## Trademarks
-
-Unreal Engine and Epic Games are trademarks of Epic Games, Inc. This project is not affiliated with or endorsed by Epic Games.
+Unreal Engine과 Epic Games는 Epic Games, Inc.의 상표입니다. 이 프로젝트는 Epic Games의 공식 프로젝트가 아니며 제휴나 보증을 받았다는 뜻도 아닙니다.

@@ -1,163 +1,26 @@
-# Design Validation Gates
+# 설계 검토 완료 기준
 
-## Purpose
+설명과 예시가 같은 규칙을 지키는지 확인해야 합니다. 점수가 높거나 말이 그럴듯해도 아래 문제가 남아 있으면 먼저 수정합니다.
 
-This document defines hard validation gates for Unreal Engine C++ design reviews and AI-generated code. If any gate fails, the answer must be corrected before presenting the design as safe.
+1. 검토 요청에 필요 없는 전체 구현을 붙이지 않았는지 확인합니다.
+2. 의사코드와 실제 구현을 구분하고 확인하지 않은 엔진 함수를 확정하지 않습니다.
+3. 헤더·구현·호출부의 이름과 선언을 맞춥니다. 없는 변수·델리게이트·타이머를 사용하지 않습니다.
+4. 인터페이스는 최소 요청·조회만 담고 상태 알림은 해당 담당자가 발행합니다.
+5. 특정 구현체의 방어막·약점·복구 기능을 모든 대상의 공통 계약에 넣지 않습니다.
+6. 진행률·타이머 담당자와 최종 상태 담당자를 구분합니다. 상태를 소유한다는 이유만으로 모든 진행을 넘기지 않습니다.
+7. 외부 요청과 내부 값 변경을 구분합니다. `SetX`를 `AddX`로 바꾸는 것만으로 안전해지지 않습니다.
+8. 과정이 끝났어도 대상의 현재 상태·저항·면역을 다시 확인합니다.
+9. 중복 요청·취소·실패·수행자 파괴·대상 변경·거리 이탈을 처리합니다.
+10. 선택 함수가 미구현일 때의 의미를 밝힙니다. 기본 false로 조용히 실패하게 만들지 않습니다.
+11. 입력용 임시 대상 참조를 근거 없이 거대한 관리자로 옮기지 않습니다.
+12. 진행 중이 아닌 모든 대상에 Tick을 켜지 않습니다.
+13. 일반 C++ 가상 함수와 블루프린트 인터페이스의 `Execute_` 호출 규칙을 섞지 않습니다.
+14. 나쁜 예시에도 핵심 위반 외의 가짜 함수나 선언 오류를 섞지 않습니다.
+15. 한 답변에서 같은 행동을 서로 다른 이름으로 부르지 않습니다.
+16. 상태를 변경하고 내부 값 범위와 결과를 정리한 뒤 알림을 발행합니다.
+17. 공격자가 대상의 체력·방어막·무적 상태를 직접 바꾸지 않습니다.
+18. 사용자 규칙을 공식 엔진 근거로 소개하지 않습니다.
+19. 실제로 읽은 파일과 실행한 검사만 근거로 적습니다.
+20. 질문만 나열하지 말고 현재 조건으로 가능한 최소안을 제시합니다.
 
-검색 키워드: validation gate, self contradiction, declaration consistency, interface event separation, generic setter ban, damage responsibility, RAG citation, source label, document section citation
-
-## 1. Self-Contradiction Gate
-
-The answer must not reintroduce a pattern it just banned.
-
-Hard rules:
-
-- If the answer says not to put Event/Delegate functions in an interface, the code example must not put `OnXChanged`, `OnXStarted`, `OnXCompleted`, `OnDamageApplied`, or similar notification functions in a UINTERFACE.
-- If the design says events are owned by the state owner, the code must broadcast from the state owner, not from an unrelated external object.
-- If the design says to use `ApplyDamage`, `ConsumeAmmo`, `ApplyActionAttempt`, or `ResolveActionAttempt`, the code must not silently switch to `SetHealth`, `SetAmmo`, or `SetIsHacked`.
-- If a rule is marked as prohibited, examples, pseudocode, and review suggestions must not use that prohibited pattern as the main path.
-
-## 2. Declaration Consistency Gate
-
-Every symbol used in code must be declared in the shown snippet or explicitly marked as project-specific/external.
-
-Before claiming `Compile-ready Unreal C++`, check:
-
-- Every called function was declared earlier or is a real Unreal/project API cited by RAG.
-- Every member variable used in `.cpp` exists in the `.h`.
-- Every Delegate type and Delegate member is declared before binding or broadcasting.
-- Every TimerHandle used by `GetWorldTimerManager()` is declared.
-- Every UFUNCTION referenced by BlueprintNativeEvent has the correct declaration and `_Implementation` body.
-- Every UPROPERTY used for GC, Blueprint, replication, or editor editing is declared with the intended specifiers.
-- Every include, forward declaration, and Build.cs dependency needed by the shown types is accounted for.
-
-If any item is omitted because the example is intentionally partial, label the block `Pseudocode only` or state `not implemented in this snippet`.
-
-## 3. Interface / Event Separation Gate
-
-Interface is a contract for asking or requesting something from a target. Delegate/Event is a notification that something already happened.
-
-Interface may contain:
-
-- `CanX`
-- `IsX`
-- `GetX`
-- `FindX`
-- `TryX`
-- `RequestX`
-- `ApplyX`
-
-Interface must not contain:
-
-- `OnXChanged`
-- `OnXStarted`
-- `OnXCompleted`
-- `OnXFailed`
-- `BroadcastX`
-- Delegate subscription functions unless there is a strong project-specific reason and ownership is explicitly reviewed.
-
-State change notifications belong to the state-owning object as Delegate/Event, Gameplay Message, or replication notification. UI, FX, Audio, and other observers bind to the owner event.
-
-## 4. Generic Setter Ban
-
-General gameplay setters are disallowed by default.
-
-Avoid:
-
-- `SetHealth(Value)`
-- `SetShield(Value)`
-- `SetAmmo(Value)`
-- `SetIsHacked(Value)`
-- `SetQuestState(Value)`
-
-Prefer intent-revealing mutation APIs:
-
-- `ApplyDamage`
-- `RestoreShield`
-- `ConsumeAmmo`
-- `ReloadMagazine`
-- `ApplyActionAttempt`
-- `ResolveActionAttempt`
-- `ApplyActionFailure`
-- `GrantReward`
-- `CompleteObjective`
-
-Debug or editor-only setters must be named as such:
-
-- `Debug_SetHealth`
-- `Debug_SetAmmo`
-- `EditorOnly_SetQuestState`
-
-These setters must not be presented as normal runtime gameplay APIs.
-
-## 5. Code Example Mode Gate
-
-Design review code examples default to `Pseudocode only`.
-
-Use `Compile-ready Unreal C++` only after checking:
-
-- `.h` and `.cpp` split
-- includes and forward declarations
-- `.generated.h` placement
-- `UPROPERTY` / `UFUNCTION` / `UINTERFACE` / Delegate declarations
-- TimerHandle declarations
-- BlueprintNativeEvent declaration and `_Implementation` rules
-- real Unreal API signatures
-- Build.cs module dependencies
-
-If the Unreal API signature is not certain, say `확인 필요` and keep the code as pseudocode.
-
-## 6. Damage Responsibility Gate
-
-Damage flow must preserve target ownership.
-
-WeaponComponent may handle:
-
-- fire request validation
-- ammo/resource consumption request
-- hit detection
-- base damage calculation
-- damage application request
-
-Target or target-owned components decide:
-
-- Shield handling
-- Armor handling
-- WeakPoint handling
-- Invincible/immune handling
-- actual Health reduction
-- death/knockback/state transitions
-- state change event broadcast
-
-WeaponComponent must not directly modify the target's internal Health, Shield, Armor, WeakPoint, or Invincible state. It sends an intent such as `ApplyDamage` or a damage request; the target owner resolves the result.
-
-## 7. RAG Citation Gate
-
-Do not cite RAG evidence as only `Source 1`, `Source 2`, or a bare index number.
-
-When citing, include:
-
-- evidence type: User RAG guideline, Epic official documentation, Unreal Engine source, or local project source
-- document/file name
-- section name when available
-- locator/path when useful
-
-Examples:
-
-- `User RAG guideline: Interface and API Design Rules > Critical Rule: Do Not Mix Interface and Event`
-- `User RAG guideline: Design Validation Gates > Damage Responsibility Gate`
-- `Unreal Engine source: LyraAttributeSet.h > ATTRIBUTE_ACCESSORS comment`
-- `Epic official documentation: [document title] > [section title]`
-
-Never present a user-authored RAG guideline as if it were Epic official documentation. User guidelines are project rules; Epic docs and engine source are engine evidence.
-
-## 8. State Change Event Gate
-
-State change event order:
-
-1. State owner receives a validated mutation request.
-2. State owner updates internal state.
-3. State owner restores internal consistency, clamps values, handles derived state, and records result.
-4. State owner broadcasts Delegate/Event or relies on OnRep/Gameplay Message.
-
-External objects must not directly broadcast another object's delegate. Observers react after the owner has completed the mutation.
+점수가 필요한 검토는 [평가 기준](Core_Architecture/05_Scoring_Rubric_With_Caps.md)을 참고합니다. 현재 도구의 쓰기·빌드 권한 조건은 별도이며 이 문서가 새 실행 단계를 만들지는 않습니다.

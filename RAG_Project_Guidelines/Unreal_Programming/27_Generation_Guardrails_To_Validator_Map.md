@@ -1,22 +1,17 @@
-# Generation Guardrails → Validator Map
+# 정적 검사 경고를 읽는 방법
 
-Maps common codegen mistakes to static-validator finding codes and fixes. All Tier C findings are **advisory** (warning only).
+아래 코드는 확인할 위치를 알려 주는 보조 경고입니다. 실제 문맥을 읽고 판단해야 합니다. 경고 자체가 쓰기·빌드 권한을 주거나 빼앗지 않습니다.
 
-| If you write… | Finding code | Fix |
-|---|---|---|
-| `TArray<UFoo*>` member without `UPROPERTY` | `UOBJECT_CONTAINER_WITHOUT_UPROPERTY` | Add `UPROPERTY()` on retained container members |
-| `TObjectPtr<T>` member without `UPROPERTY` | `TOBJECTPTR_WITHOUT_UPROPERTY` | Add `UPROPERTY()` |
-| Raw `UObject*` / `AActor*` member | `RAW_UOBJECT_MEMBER_WITHOUT_UPROPERTY` | Prefer `UPROPERTY(TObjectPtr<...>)` |
-| `AddDynamic` / `BindUObject` without teardown | `DELEGATE_BIND_WITHOUT_UNBIND` | `RemoveDynamic` / `RemoveAll` in `EndPlay` |
-| `SetTimer` without teardown | `TIMER_SET_WITHOUT_CLEAR` | `ClearTimer` / `ClearAllTimersForObject` |
-| Ignore `bInterrupted` / `bWasCancelled` | `INTERRUPT_PARAM_IGNORED` | Branch on interrupt flag in callback |
-| `Cast<T>()` then immediate `->` | `UNCHECKED_CAST_RESULT` | `if (IsValid(X))` before dereference |
-| `UPROPERTY(Replicated)` in `.h` only | `REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME` | Add `GetLifetimeReplicatedProps` + `DOREPLIFETIME` in `.cpp` |
-| `new UMyObject` / `delete` on UObject | `RAW_NEW_DELETE_UOBJECT` | `NewObject<>` with outer; no manual delete |
-| `GetWorld()` in `AActor` ctor | `ACTOR_CTOR_GETWORLD` | Defer to `BeginPlay` |
-| Sync `LoadObject` in `Tick`/`BeginPlay` | `SYNC_LOAD_IN_GAMEPLAY` | `TSoftObjectPtr` + `FStreamableManager` |
-| Hardcoded `"/Game/..."` path | `HARDCODED_ASSET_PATH` | Soft reference or `ConstructorHelpers` in ctor |
-| `FVector(1.0f, …)` literals | `FVECTOR_FLOAT_PRECISION` | Use double literals or `FVector3d` |
-| `UFUNCTION(BlueprintPure)` non-const | `BLUEPRINTPURE_MISSING_CONST` | Mark getter `const` |
+| 경고 코드 | 확인할 내용 |
+|---|---|
+| `UOBJECT_CONTAINER_WITHOUT_UPROPERTY`, `TOBJECTPTR_WITHOUT_UPROPERTY`, `RAW_UOBJECT_MEMBER_WITHOUT_UPROPERTY` | 유지할 객체 참조를 가비지 수집이 추적하는지 |
+| `DELEGATE_BIND_WITHOUT_UNBIND`, `TIMER_SET_WITHOUT_CLEAR` | 종료 때 연결·타이머를 정리하는지 |
+| `INTERRUPT_PARAM_IGNORED` | 중단·취소를 성공과 구분하는지 |
+| `UNCHECKED_CAST_RESULT` | 변환 실패 후 바로 접근하는지 |
+| `REPLICATED_UPROPERTY_WITHOUT_DOREPLIFETIME` | 복제할 값을 등록했는지 |
+| `RAW_NEW_DELETE_UOBJECT` | UObject에 일반 new·delete를 쓰는지 |
+| `ACTOR_CTOR_GETWORLD` | 생성자에서 실행 중 월드를 요구하는지 |
+| `SYNC_LOAD_IN_GAMEPLAY`, `HARDCODED_ASSET_PATH` | 반복 실행 중 동기 로딩·고정 경로가 필요한지 |
+| `FVECTOR_FLOAT_PRECISION`, `BLUEPRINTPURE_MISSING_CONST` | 자료형 정밀도와 조회 함수 선언이 의도와 맞는지 |
 
-See also: `28_Delegate_Lifecycle_Codegen_Recipe.md`, `29_Replication_RPC_Codegen_Recipe.md`, `33_Teardown_Symmetry_And_Lifecycle.md`.
+무조건 제안대로 바꾸지 말고 현재 소유자·수명·사용 범위를 확인합니다. 최종 컴파일·실행 결과는 별도 검증입니다.

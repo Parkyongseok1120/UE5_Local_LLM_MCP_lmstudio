@@ -1,45 +1,9 @@
-# Global File Edit Rules
+# 기존 파일 확인과 수정 규칙
 
-## Keywords
+최신 사용자 요청, 현재 파일, 현재 변경 내역을 기준으로 작업합니다. 예전 계획에 추가하라고 적혀 있어도 이미 들어 있으면 다시 추가하지 말아야 합니다.
 
-agent editing, current file state, current diff, duplicate edit prevention, stale plan prevention, Unreal file edits, header cpp consistency, Build.cs, Target.cs, config, plugin, test files
+헤더·구현·설정·플러그인·테스트 모두 같은 규칙을 적용합니다. 기존 include, 함수, 속성, 입력 연결, 모듈, 델리게이트, 타이머, 설정 키를 중복 생성하지 않습니다. “남은 부분”을 요청했다면 빠진 부분만 고칩니다.
 
-Korean query aliases: 파일 반복 수정 방지, 이미 수정한 코드 다시 수정하지 않기, 현재 파일 기준, 현재 diff 확인, 모든 파일 편집 규칙, 헤더 cpp 선언 일치, Build.cs 중복 추가 방지
+기본 Direct에서는 기존 파일을 읽고 `fileVersionReceipt`나 현재 `expectedHash`를 직접 전달해 부분 수정합니다. 성공한 수정의 새 값을 다음 수정에 사용하며 충돌하면 다시 읽습니다. 새 파일만 `write_file`로 생성합니다.
 
-## Purpose
-
-Use this document whenever an agent edits Unreal project files. The rule is global and is not limited to player character files.
-
-The model must treat the current filesystem, current diff, and latest user request as the source of truth. If an earlier plan conflicts with the current files, the current files win.
-
-## Required Edit Discipline
-
-1. Inspect the current target files before editing.
-2. Inspect the current diff or previous attempt feedback before editing again.
-3. Do not replay an old implementation plan after a file was already changed.
-4. Do not duplicate existing includes, UPROPERTY declarations, UFUNCTION declarations, member variables, input bindings, Build.cs dependencies, delegates, timer handles, helper functions, or config keys.
-5. If the user asks for the remaining part of a change, edit only the missing part.
-6. Return complete final content only for files that actually need a new change.
-7. If the current files already satisfy the request, return no file edits and explain the existing evidence.
-
-## Scope
-
-This applies to:
-
-- `.h`, `.hpp`, `.cpp`, `.c`, `.cc`
-- `.Build.cs`, `.Target.cs`
-- `.ini`, `.json`, `.uproject`, `.uplugin`
-- plugin source and descriptors
-- tests and fixtures
-- generated scratch project files created by the wrapper
-
-## Unreal Consistency Checks
-
-Before finalizing any file bundle:
-
-1. Every `.cpp` member function must have a matching declaration in the relevant header unless it is a constructor, destructor, static local helper, lambda, or non-member function.
-2. Every header declaration that needs a `.cpp` definition must either have that definition or be intentionally inline/pure virtual/BlueprintNativeEvent.
-3. Every reflected header must keep `*.generated.h` as the last include.
-4. Every new reflected type must have the correct macro and `GENERATED_BODY()`.
-5. Every new include from another module must have the right Build.cs dependency.
-6. Public headers that expose another module's type should use `PublicDependencyModuleNames`; private `.cpp` usage usually belongs in `PrivateDependencyModuleNames`.
+선언과 구현, 호출부, `generated.h`, 필요한 모듈을 함께 확인해야 합니다. 요청이 이미 충족됐다면 불필요한 수정 없이 해당 근거를 설명합니다.

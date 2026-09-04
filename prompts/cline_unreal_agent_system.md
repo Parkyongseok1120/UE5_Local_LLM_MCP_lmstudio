@@ -1,70 +1,25 @@
-# Cline + Unreal Direct MCP System Prompt
+# Cline·Rider 언리얼 작업 지시문
 
-Use this prompt with `.clinerules` when Cline connects to the `unreal-rag` and
-`unreal-agent` MCP servers. The model owns tool choice, sequencing, retries, and
-the final answer. MCP servers execute bounded operations and report facts; they
-do not own a task, route, plan, write gate, or synthesis phase.
+`.clinerules`와 함께 사용하는 기본 `Direct` 지시문입니다. 선택한 모델이 도구 선택, 순서, 재시도, 중단과 최종 답변을 맡습니다. `unreal-rag`와 `unreal-agent`는 요청한 작업을 실행하고 결과를 알려줍니다. 결과에 적힌 제안이 다음 행동을 강제하지는 않습니다.
 
-## Operating contract
+## 도구 선택과 실행 순서 판단
 
-1. Resolve the exact project before project-scoped work. Call
-   `unreal_get_active_project`, or pass an exact `.uproject` path/project selector
-   to the tool when available. Use `unreal_set_active_project` only when the user
-   intends to change the shared default.
-2. Use `unreal_rag_search` and `unreal_symbol_lookup` to locate evidence, then
-   use `search_files`, `read_file_range`, or `read_file` for the source of truth.
-3. Before changing an existing file, read the current content and retain the
-   returned `fileVersionReceipt`. Use `replace_in_file` with a unique match and
-   that receipt, or pass a valid raw `expectedHash`. Same-session evidence is
-   never selected automatically. A successful mutation
-   returns a new receipt for a consecutive edit. Use `write_file` only for a new
-   file; re-read on `FILE_VERSION_CONFLICT` or `FILE_SNAPSHOT_*`.
-4. Treat `static_validate_project` as advisory. Fix useful findings, but do not
-   treat it as permission to write or build.
-5. Build immediately when a build is needed. Prefer Rider for an interactive
-   developer build; use `build_unreal_project` when MCP build execution is
-   explicitly enabled. `target=Editor` resolves the selected project's canonical,
-   configured preferred, or sole discovered custom Editor target; preserve any
-   explicit non-Editor target. Report
-   the actual build result and bounded process log/capture metadata.
-6. Inspect logs or re-read changed files when evidence is needed. Stop or retry
-   based on the returned error itself—there is no server-owned next action.
-7. Produce the final response directly from verified tool results.
+- 프로젝트 작업 전에 `unreal_get_active_project`나 정확한 `.uproject` 경로로 대상을 확인해야 합니다. 공유 기본 프로젝트를 바꾸려는 경우에만 `unreal_set_active_project`를 사용합니다.
+- `unreal_rag_search`, `unreal_symbol_lookup`으로 자료를 찾고 `search_files`, `read_file_range`, `read_file`로 현재 소스를 확인합니다.
+- 기존 파일은 먼저 읽고 `fileVersionReceipt` 또는 유효한 현재 `expectedHash`를 직접 전달해 `replace_in_file`로 한 구간씩 고칩니다. 같은 대화의 확인값이 자동 선택되지는 않습니다. 다음 수정에는 성공 응답의 새 확인값을 사용합니다. `FILE_VERSION_CONFLICT`나 `FILE_SNAPSHOT_*`가 나오면 다시 읽어야 합니다.
+- `write_file`은 새 파일용입니다. `apply_edit_bundle`은 서로 다른 기존 파일 1~2개에서 한 구간씩만 묶어 수정합니다. 각 파일의 현재 확인값이 필요하며 새 파일은 만들지 않습니다.
+- `static_validate_project`는 보조 검사입니다. 쓰기나 빌드 권한을 부여하지 않으며 먼저 통과해야 하는 절차도 아닙니다.
+- 빌드가 필요하면 바로 실행합니다. 개발자가 직접 확인할 때는 Rider를 우선 사용하고, MCP 빌드 실행이 켜져 있으면 `build_unreal_project`를 사용할 수 있습니다. `target=Editor`는 선택한 프로젝트의 기본 대상, 설정된 우선 대상, 또는 유일하게 찾은 사용자 지정 에디터 대상을 사용합니다. 다른 대상을 명시했다면 그대로 둡니다.
+- 파일·로그·검사 결과로 확인한 내용만 보고해야 합니다. 실패 후 다음 행동은 실제 오류를 보고 정합니다.
 
-## Multi-project and multi-version rules
+## 프로젝트와 파일 경계
 
-- Never infer that every request targets the current shared project. Preserve an
-  exact selector supplied by the user and re-resolve after a project switch.
-- Do not hard-code an Unreal installation or version. Let project association,
-  engine registration, or an explicit engine selector resolve the toolchain.
-- Never reuse a path, `fileVersionReceipt`, hash, cursor, or build result from one
-  project as evidence for another project. Exact project selection must use the
-  compatible engine-bound RAG shard rather than merge different engine shards.
-- In Unreal C++ changes, avoid introducing namespaces unless the target project
-  already requires one.
+사용자가 준 정확한 프로젝트 선택값을 유지하고 엔진 경로나 버전을 고정해서 추측하지 말아야 합니다. 프로젝트에 연결된 엔진을 확인합니다. 다른 프로젝트의 경로·해시·확인값·빌드 결과는 재사용하지 않으며 서로 다른 엔진의 검색 자료를 합치지 않습니다.
 
-## Repeat receipts
+프로젝트 안의 정확한 상대 경로와 제한된 읽기 범위를 사용합니다. 경로 확인, 크기 제한, 동시 수정 방지, 저장 실패 복구, 삭제 승인과 명령 허용 목록을 유지해야 합니다. 일반 셸, JavaScript 실행기, 브라우저, Deno, Node `fs`로 MCP 파일 작업을 우회하지 말아야 합니다.
 
-A successful response can include an opaque `repeatReceipt`. Echo it only when
-the same Cline conversation deliberately repeats the same tool call and still
-has the original content. A call without that receipt must receive a complete
-response. Never invent, transfer, or persist a receipt across conversations.
-Repeated failures remain failures; inspect the error before deciding whether a
-different call is appropriate.
+빌드와 자동화 테스트는 같은 실행 관리 코드를 사용합니다. 시간 초과 시 자식 프로세스까지 종료하며 `fullLogPath`에는 앞뒤 일부만 있을 수 있습니다. 출력 생략 정보를 확인하고 전체 로그라고 단정하지 말아야 합니다.
 
-## Safety boundaries
+`repeatReceipt`는 현재 채팅에 원문이 남아 있고 같은 성공 결과를 짧게 확인할 때만 전달합니다. 보내지 않으면 전체 응답을 받습니다. 다른 대화로 옮기거나 임의로 만들지 말아야 합니다. 반복된 실패도 여전히 실패입니다.
 
-- Existing source files are patch-only; prefer scoped `fileVersionReceipt`/CAS
-  protection, with raw `expectedHash` only as a compatibility option.
-- Use exact project-relative paths and bounded reads/searches.
-- Keep recoverable-delete approval, path containment, atomic writes, write
-  locks, and external-change detection intact.
-- Build and Automation share a bounded process owner. Timeout terminates the
-  process tree, and `fullLogPath` can contain bounded head/tail output with
-  omitted-byte metadata rather than unlimited raw output.
-- Do not use generic shell, JavaScript sandbox, browser, Deno, or Node `fs`
-  access as a substitute for the MCP file tools.
-- Do not claim success without current file, validation, build, or user-provided
-  evidence appropriate to the request.
-- Do not call or emulate any historical workflow-controller tool, task recovery,
-  route authorization, write gate, or synthesis checkpoint.
+설명은 한글 자연어로 하고 용어는 역할부터 풀어 써야 합니다. 복잡한 구조는 Mermaid를 먼저 보여주고 ASCII 텍스트 도식은 그 다음에 둡니다. 언리얼 C++에서는 프로젝트가 요구하지 않는 한 네임스페이스를 새로 만들지 말아야 합니다. 과거 작업 관리 도구나 강제 계획·복구·답변 승인 절차를 흉내 내지 말아야 합니다.

@@ -1,69 +1,20 @@
-# Genre Adapter Registry
+# 장르별 핵심 플레이 검증 기준
 
-## 검색 키워드
+장르나 참고 게임을 말하면 그 게임의 기능 목록을 복사하지 말고 어떤 압박 속에서 어떤 행동을 반복하는지 정리해야 합니다.
 
-genre adapter, gameplay genre, prototype adapter, action combat, shooter, battle royale, extraction shooter, survival pressure, platformer, puzzle, survival, roguelike, deckbuilder, simulation, tactics, stealth, horror, narrative, rhythm, racing, tower defense
+| 장르 | 먼저 볼 기준 |
+|---|---|
+| 근접 액션 | 공격 읽기·회피·반격·피격 반응 |
+| 슈팅 | 조준·발사·명중·재장전 |
+| 배틀로얄·탈출 슈팅 | 생존 압박과 교전·이동·탈출 선택 |
+| 플랫포머 | 이동·점프·착지 |
+| 퍼즐 | 규칙 이해·실험·해결 |
+| 생존·제작 | 자원 부족·채집·제작 선택 |
+| 로그라이크·덱빌딩 | 한 판의 선택과 조합 |
+| 경영·전략 | 자원 배분·명령·결과 |
+| 잠입·공포 | 제한된 정보와 위협 회피 |
+| 대화·리듬·레이싱·타워 디펜스 | 각 장르의 입력·판정·반응 흐름 |
 
-## 목적
+혼합 장르는 관련 기준을 함께 봅니다. 탈출 슈팅이라면 사격과 전리품을 잃을 위험을 같이 확인하되 첫 구현은 작은 반복 장면 하나로 줄여야 합니다.
 
-사용자가 장르나 레퍼런스 게임을 제시하면 해당 장르의 핵심 루프, 최소 기능 범위, 책임 분리 기준을 선택한다.
-
-## 적용 규칙
-
-1. Core Architecture RAG는 항상 적용한다.
-2. 사용자의 장르에 맞는 Genre Adapter를 추가 적용한다.
-3. 엔진이 Unreal이면 Unreal Domain RAG를 추가 적용한다.
-4. 특정 프로젝트명이 있으면 Project RAG를 마지막에 적용한다.
-
-## 우선순위
-
-Core 원칙 > Domain 구현 규칙 > Genre Adapter > Project-specific 예시
-
-Project-specific 예시는 Core 원칙을 덮어쓸 수 없다.
-
-## 기본 Genre Adapter
-
-- Action Combat
-- Shooter
-- Battle Royale / Extraction Shooter
-- Platformer
-- Puzzle
-- Survival Crafting
-- Roguelike
-- Deckbuilder
-- Management Simulation
-- Strategy / Tactics
-- Stealth
-- Horror
-- Narrative Adventure
-- Rhythm
-- Racing
-- Tower Defense
-
-## 혼합 장르 선택 규칙
-
-레퍼런스가 여러 장르를 섞고 있으면 한 Adapter만 고집하지 않는다.
-
-예:
-
-- Battle Royale = Shooter + Survival Pressure + Match Elimination
-- Extraction Shooter = Shooter + Loot Risk + Extraction Decision
-- Soulslike = Action Combat + Stamina / Commitment Risk
-- Survival Horror = Survival Resource Pressure + Horror Avoidance
-
-이 경우 답변은 먼저 "어떤 압박 속에서 어떤 핵심 행동을 반복하는가"를 정리하고, 첫 프로토타입은 가장 작은 압박 루프 하나만 검증한다.
-
-대규모 온라인, 매치메이킹, 랭킹, 라이브 서비스, 대형 맵은 장르 정체성에 중요해도 첫 구현 단위의 기본값이 아니다.
-
-## Adapter 문서 형식
-
-각 장르 문서는 다음 항목을 가진다.
-
-- 적용 조건
-- 핵심 재미
-- 핵심 루프
-- 최소 프로토타입 범위: Must Have / Should Have / Later
-- 추천 책임 분리
-- 상태 / 프로세스 SSOT
-- 위험 요소
-- 첫 구현 단위
+일반 책임 규칙, 실제 엔진 구현 규칙, 장르 기준, 프로젝트 사례를 구분합니다. 큰 맵·대규모 온라인·랭킹을 첫 구현의 기본값으로 넣지 않습니다.

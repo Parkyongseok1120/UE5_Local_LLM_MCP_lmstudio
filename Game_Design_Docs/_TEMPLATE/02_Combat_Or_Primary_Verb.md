@@ -1,40 +1,38 @@
 ---
-title: Combat Or Primary Verb
+title: 핵심 행동과 전투
 genre: action_combat
 design_area: combat
 ---
 
-# Combat Or Primary Verb
+# 플레이어의 핵심 행동
 
-## Core Verb
+가장 자주 입력하고 판단할 행동을 적어야 합니다.
 
-플레이어가 가장 자주 누르고 판단하는 행동을 적는다.
-
-## Input And Timing
+## 입력·판정·취소 시점
 
 - 입력:
 - 선딜:
-- 활성 구간:
+- 판정 구간:
 - 후딜:
-- 취소 가능 여부:
+- 취소 조건:
 
-## Target Reaction
+## 대상 반응
 
 - 피격 반응:
-- 경직/스태거:
-- 사망/실패:
-- 피드백:
+- 경직:
+- 사망·실패:
+- 화면·소리 반응:
 
-## Responsibility Draft
+## 기능별 역할 분담 초안
 
-| System | Owns | Must Not Own |
+| 역할 | 맡을 일 | 맡기지 않을 일 |
 |---|---|---|
-| Player Character | movement and camera-facing control | final damage application |
-| Verb/Combat Component | request, timing, combo/process state | target health mutation |
-| Trace/Hit Component | hit detection and duplicate-hit record | final combat result |
-| Target State Component | health/stagger state and events | player input |
-| Feedback Component | VFX/SFX/hit stop/camera shake requests | combat rule judgment |
+| 캐릭터 | 이동과 시점 | 최종 데미지 판정 |
+| 행동·전투 기능 | 요청·타이밍·콤보 | 대상 체력 직접 변경 |
+| 명중 판정 | 맞은 대상과 중복 타격 기록 | 최종 전투 결과 |
+| 대상 상태 | 체력·경직·상태 알림 | 플레이어 입력 |
+| 표현 기능 | 화면·소리·타격 정지·카메라 반응 | 전투 규칙 |
 
-## First Test
+## 핵심 행동 반복 검증
 
-작은 맵에서 입력, 판정, 대상 반응, 피드백이 30초 안에 반복되는지 확인한다.
+작은 맵에서 입력·판정·대상 반응을 30초 안에 반복할 수 있는지 확인합니다.

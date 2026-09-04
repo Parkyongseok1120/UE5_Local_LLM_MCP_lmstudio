@@ -1,20 +1,20 @@
-# Unreal Codegen Recipes: Gameplay Systems
+# 입력·네트워크·태그·저장 기능 연결
 
-## Keywords
+아래 예시는 선언만 붙이는 것으로 끝내지 말고 누가 시작하고 끝내는지까지 확인해야 합니다.
 
-Unreal C++ gameplay codegen, delegate, dynamic multicast delegate, Enhanced Input, replication, replicated property, Server RPC, Client RPC, NetMulticast, GameplayTags, SaveGame, TimerManager, async task, module dependency, Build.cs, API lookup
+- 변경 알림은 상태 소유 객체가 발행합니다. 블루프린트 노출이 필요하면 동적 델리게이트, C++ 전용이면 해당 용도에 맞는 델리게이트를 선택합니다. 연결한 쪽은 종료 때 해제합니다.
+- Enhanced Input은 `EnhancedInput` 모듈과 관련 헤더를 확인합니다. `UEnhancedInputComponent`로 동작을 연결하고 `UEnhancedInputLocalPlayerSubsystem`의 입력 매핑도 확인합니다.
+- 네트워크 값은 서버의 원본과 클라이언트 표시를 구분합니다. 복제 대상 등록과 RPC 소유권을 확인하고 `OnRep`에서 보상을 중복 지급하지 않습니다.
+- Gameplay Tags는 `GameplayTagContainer.h`와 `GameplayTags` 모듈을 확인합니다. 태그 정의를 여러 곳에서 중복 관리하지 않습니다.
+- 타이머는 `FTimerHandle`과 콜백 선언을 맞추고 객체 종료 때 정리합니다. 객체가 먼저 사라질 수 있으면 약한 참조와 유효성 검사를 사용합니다.
+- 저장 파일에는 복원 가능한 값과 식별자를 넣습니다. 실행 중 객체 포인터 자체를 저장하지 않습니다.
+- 실행용 모듈과 에디터용 모듈은 분리합니다. 다른 모듈 자료형이 공개 헤더에 드러나는지에 따라 의존성 위치를 고릅니다.
 
-Korean query aliases: 델리게이트, Enhanced Input 연결, 입력 액션 바인딩, 리플리케이션, 서버 RPC, 클라이언트 RPC, GameplayTag 사용, SaveGame 저장, 타이머 사용, API 사용법, Build.cs 모듈 추가
+행동 요청에서는 현재 상태, 비용, 필요한 에셋과 대상, 실행 가능성을 확인합니다. 실행 성공 여부와 비용 차감·상태 변경·알림 순서를 분명히 하고 실패했는데 비용만 소비되는지 확인해야 합니다.
 
-## Purpose
+## 코드 형태 예시
 
-Use this document for common gameplay system snippets. The answer should include the minimum code shape, the include/module requirements, and the most likely compile or runtime failure.
-
-## Recipe: Delegate 선언과 바인딩
-
-Intent: delegate declare bind broadcast dynamic multicast.
-
-Header essentials:
+아래 예시는 실제 프로젝트에서 빌드를 끝낸 결과가 아닙니다. 이름·모듈·엔진 선언을 확인해서 적용해야 합니다.
 
 ```cpp
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnValueChanged, int32, NewValue);
@@ -23,27 +23,9 @@ UPROPERTY(BlueprintAssignable)
 FOnValueChanged OnValueChanged;
 ```
 
-Usage:
-
 ```cpp
 OnValueChanged.Broadcast(Value);
 ```
-
-Advice:
-
-- Use dynamic delegates when Blueprint exposure or serialization is needed.
-- Use native delegates for lower overhead C++ only paths.
-- UHT errors often mean the delegate declaration is in the wrong place, uses an unsupported reflected parameter type, or lacks a required include for the parameter type.
-
-## Recipe: Enhanced Input 연결
-
-Intent: Enhanced Input setup input action bind action UInputAction UEnhancedInputComponent.
-
-Build.cs modules:
-
-- Add `EnhancedInput` to the module dependencies.
-
-Common includes:
 
 ```cpp
 #include "EnhancedInputComponent.h"
@@ -51,8 +33,6 @@ Common includes:
 #include "InputAction.h"
 #include "InputMappingContext.h"
 ```
-
-Typical binding in a pawn or character:
 
 ```cpp
 void AMyCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -66,21 +46,6 @@ void AMyCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 }
 ```
 
-Advice:
-
-- Mapping contexts are usually added through `UEnhancedInputLocalPlayerSubsystem`.
-- Missing `EnhancedInput` dependency often appears as include failure, unresolved symbol, or unknown type.
-
-## Recipe: Replication 변수와 RPC
-
-Intent: replicated property GetLifetimeReplicatedProps Server RPC Client RPC NetMulticast.
-
-Build.cs modules:
-
-- Usually `Engine` and `NetCore` depending on APIs used.
-
-Header essentials:
-
 ```cpp
 UPROPERTY(ReplicatedUsing=OnRep_Health)
 float Health = 100.0f;
@@ -92,8 +57,6 @@ UFUNCTION(Server, Reliable)
 void ServerUseAbility();
 ```
 
-CPP essentials:
-
 ```cpp
 #include "Net/UnrealNetwork.h"
 
@@ -104,22 +67,6 @@ void AMyActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetime
 }
 ```
 
-Advice:
-
-- Set `bReplicates = true` for actors that must replicate.
-- Server RPCs must be called on an actor/component owned by the calling client.
-- `OnRep` runs on clients when the replicated value changes, not as a general setter replacement.
-
-## Recipe: Gameplay Tags
-
-Intent: GameplayTag FGameplayTag UPROPERTY Build.cs GameplayTags.
-
-Build.cs modules:
-
-- Add `GameplayTags`.
-
-Header essentials:
-
 ```cpp
 #include "GameplayTagContainer.h"
 
@@ -127,40 +74,16 @@ UPROPERTY(EditDefaultsOnly, BlueprintReadOnly)
 FGameplayTag AbilityTag;
 ```
 
-Advice:
-
-- Missing module dependency for GameplayTags often appears as `C1083`, UHT unknown type, or unresolved external symbol.
-- Prefer centralized tag definitions or config-driven tag lists once the project starts.
-
-## Recipe: TimerManager
-
-Intent: timer set timer clear timer FTimerHandle GetWorldTimerManager.
-
-Header essentials:
-
 ```cpp
 FTimerHandle CooldownTimerHandle;
 
 void FinishCooldown();
 ```
 
-CPP essentials:
-
 ```cpp
 GetWorldTimerManager().SetTimer(CooldownTimerHandle, this, &AMyActor::FinishCooldown, CooldownSeconds, false);
 GetWorldTimerManager().ClearTimer(CooldownTimerHandle);
 ```
-
-Advice:
-
-- Timer callbacks must match the expected signature.
-- Use weak object checks when timers interact with objects that may be destroyed.
-
-## Recipe: SaveGame
-
-Intent: USaveGame save slot load slot gameplay save data.
-
-Header essentials:
 
 ```cpp
 #include "GameFramework/SaveGame.h"
@@ -176,37 +99,3 @@ public:
     int32 Progress = 0;
 };
 ```
-
-Usage APIs:
-
-- `UGameplayStatics::CreateSaveGameObject`
-- `UGameplayStatics::SaveGameToSlot`
-- `UGameplayStatics::LoadGameFromSlot`
-
-Advice:
-
-- Store simple serializable state, not raw runtime pointers.
-- If a save class is referenced in a public header, ensure the module dependency is visible to that header.
-
-## Recipe: Runtime Module Or Plugin Module
-
-Intent: new module plugin Build.cs module dependency startup module shutdown module.
-
-Files:
-
-- `<Module>.Build.cs`
-- `Public/`
-- `Private/`
-- Optional module class implementing `IModuleInterface`
-
-Build.cs guidance:
-
-- Public dependency: types appear in public headers or exported API.
-- Private dependency: types used only inside private `.cpp` implementation.
-- Plugin modules should keep Runtime and Editor code in separate modules.
-
-Advice:
-
-- If Editor-only classes appear in a Runtime module, packaging or non-editor builds will fail.
-- If a public header includes a type from a Private dependency, downstream modules may compile fail.
-

@@ -1,94 +1,15 @@
-# Internal installer support
+# 설치 코드 안내
 
-Do not start installation from this directory.
+이 폴더에서 설치를 시작하지 말아야 합니다. 사용자는 맨 위의 `INSTALL.bat`, `install.sh`, `install.py`를 실행하면 됩니다. 선택 항목은 [설치 안내](../docs/Integrated_Installer.md)에 있습니다.
 
-The supported user entry points are intentionally limited to:
+`install.py`가 실제 설치를 담당합니다. `bootstrap_python.ps1`과 `bootstrap_python.sh`는 Python이 없는 장비에서 실행 환경을 준비한 뒤 같은 설치기로 넘기는 역할입니다. 설치 구성을 따로 구현하는 곳이 아닙니다.
 
-- Windows: `INSTALL.bat`
-- Ubuntu Linux and macOS: `install.sh`
-- Any operating system or automation: `install.py`
+`install.py --build-rag`는 설치기가 관리하는 Python으로 수집과 검색 자료 생성을 직접 실행합니다. PowerShell이나 에디터 실행 없이 동작해야 합니다. 그래프 내보내기 플러그인 설치와 `.uproject` 수정은 여기서 하지 않습니다.
 
-`install.py` is the only installer implementation. `bootstrap_python.ps1` and
-`bootstrap_python.sh` only bridge a Python-free host into that implementation;
-they contain no profile, component, configuration, RAG, or project workflow.
-Other modules in this directory bootstrap pinned runtimes and construct the
-staged Python-only Direct RAG build; they are support code, not alternative
-installation choices. Optional Unreal maintenance and verification wrappers
-live under `scripts/installer_support/`.
+검색 자료는 기본적으로 `~/.evidence-first/indexes/<namespace>/`에 보관합니다. 프로젝트 이름과 실제 경로를 함께 기록하고, 다른 엔진 버전의 자료는 별도 폴더에 둡니다. 이름이 같은 복사본이나 출처가 불명확한 예전 자료를 임의로 합치지 말아야 합니다.
 
-During an interactive STANDARD, FULL, or compatible CUSTOM installation, the
-installer presents independent RAG-indexing and Unreal-authority choices. RAG
-indexing can be skipped, or built at Lite, Standard, or Full depth; it is not
-implied by the install profile. Before choosing the tier, the installer restores
-the native `.uproject` / folder picker used to configure the active project and
-project search roots, then asks whether to auto-detect an Epic Games Launcher
-engine or select a custom/source engine folder. The authority choice is:
+대화 압축기는 파일을 설치하고 목록에 고정만 합니다. LM Studio 채팅의 스위치는 켜지 않으며 기본은 `OFF`로 사용합니다. 활성화 여부는 사용자가 채팅에서 확인해야 합니다.
 
-1. SAFE (read-only, recommended)
-2. AGENT (project writes, commands, and Unreal builds)
+런타임 다운로드 정보는 [runtime-manifest.json](runtime-manifest.json)이 기준입니다. 버전과 해시가 맞아야 압축을 풀고 실행합니다. 설치 프로세스가 겹치거나 압축 경로가 허용 범위를 벗어나면 진행하지 않습니다.
 
-AGENT authority requires a second confirmation and the final install summary shows
-the selected authority before any installation work starts.
-
-Generated RAG indexes default to the installer-owned
-`<state-home>/indexes/<namespace>/rag.sqlite` (default state home
-`~/.evidence-first`). The installed shared workspace and both Direct MCP entries
-receive that absolute path. A deliberately configured nonstandard external index
-remains user-managed. A prior package-relative index is reused only after
-query-level readiness checks; a broken or incomplete candidate is not promoted as
-the managed index.
-
-For every RAG build, the installer resolves a frozen set of exact existing
-`.uproject` descriptors; Standard/Full additionally bind engine evidence to one
-selected engine. Project rows use
-canonical descriptor root plus descriptor stem as ownership, keeping same-name
-clones isolated. Incompatible engine projects are reported/excluded, and the
-active descriptor may not be silently excluded. Versioned/custom associations
-use manifest-bound sibling index namespaces; no build or query merges projects
-across engine shards. Ambiguous legacy provenance fails closed rather than being
-assigned to the selected clone.
-
-After installation, select the actual LLM you want to use in LM Studio and leave the
-top-level `codex/unreal-context-compactor` switch OFF in the chat's plugin panel.
-Install/pin only makes the plugin available; it does not enable it for a chat. Chat
-activation is owned by LM Studio, so verify the top-level switch is OFF in every new
-or existing chat. For a long chat that needs bounded continuity, enable that single
-top-level switch for the chat. Handler invocation activates compaction; there is no
-second enable setting. `Observe only` remains available for measurement-only use.
-
-On every supported host, `install.py --build-rag` invokes the managed Python
-collectors directly. It does not require PowerShell, start Unreal Editor, execute
-Editor exporters, copy a project plugin, or mutate a `.uproject`. Engine discovery
-uses host-native common locations and accepts `UNREAL_ENGINE_ROOT` or
-`--engine-root` for source/custom installs. Unreal project builds use the host
-`Build.sh` (with the UBT DLL through `dotnet` as fallback), while Windows keeps its
-existing UBT/Build.bat path.
-
-Blueprint node/pin graph coverage therefore remains a manual project choice. With
-Unreal Editor closed, the user must copy `tools/ue_plugins/LmStudioGraphExporter`
-into the exact project's `Plugins` directory and enable it in that `.uproject`.
-The installer has no graph-plugin prompt and never performs this mutation.
-
-PowerShell 7 (`pwsh`) is only for optional, manually invoked `rag.ps1` maintenance:
-
-```text
-pwsh -NoProfile -File ./rag.ps1 refresh -RefreshScope project_source
-```
-
-The platform launchers use Python 3.10+ when available. On a Python-free
-supported host they first verify pinned uv and establish managed Python 3.12 in
-the selected user state-home; no system-wide Python or PATH registration is
-performed. Direct `python3 install.py` invocation still requires host Python
-3.10+. Node/npm is bootstrapped only for Unreal or context-compactor components.
-All pinned runtime archives are SHA-256 verified before extraction. The Linux
-runtime baseline is Ubuntu 22.04/24.04 with glibc; musl/Alpine is rejected with
-an actionable error.
-
-Cross-platform CI exercises installer, package, Direct MCP, collector, and shard
-behavior with controlled fixtures. The recorded physical FULL-install pass is
-Apple Silicon with UE 5.8 and documented Editor-export, API-connectivity, and
-signing/notarization limitations. Windows also has a prior native RAG/MCP/real-UBT
-session, but no clean-machine physical installer-lifecycle proof. Linux has
-automation/fixture coverage, not a recorded physical install claim. None of this
-claims universal compatibility across hosts, engine builds, projects, plugins, or
-Editor runtimes.
+개발용 검증 도구는 `scripts/installer_support/`에 있습니다. 일반 배포본 사용법과 개발 저장소 전용 명령을 섞지 말아야 합니다.

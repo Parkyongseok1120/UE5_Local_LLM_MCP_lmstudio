@@ -98,7 +98,7 @@ def main() -> int:
             "install.sh",
             "INSTALL.bat",
             "README.md",
-            "README.ko.md",
+            "README.portable.md",
             "CONTRIBUTING.md",
             "SECURITY.md",
             "EPIC_NOTICE.md",
