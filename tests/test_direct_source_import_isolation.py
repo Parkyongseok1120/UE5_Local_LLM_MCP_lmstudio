@@ -133,12 +133,15 @@ LEGACY_CONFIGS = frozenset(
     }
 )
 
-ARCHIVED_REPO_ONLY_PATHS = (
-    "config/rag_eval_e2e_compile_cases.json",
+REMOVED_REPO_ONLY_PATHS = (
     "docs/Evaluation_Claim_Guardrail.md",
     "docs/Evaluation_Risk_Register.md",
     "docs/Live_Test_Improvement_Plan.md",
     "docs/Mac_Remote_Setup.md",
+)
+
+ARCHIVED_REPO_ONLY_PATHS = (
+    "config/rag_eval_e2e_compile_cases.json",
     "scripts/asset_graph_lookup.py",
     "scripts/asset_hint_resolver.py",
     "scripts/bootstrap_local_holdout.py",
@@ -185,7 +188,11 @@ def test_controller_configs_are_outside_the_current_config_surface() -> None:
 
 
 def test_repo_only_legacy_runners_and_docs_are_outside_current_surface() -> None:
-    assert [relative for relative in ARCHIVED_REPO_ONLY_PATHS if (ROOT / relative).exists()] == []
+    assert [
+        relative
+        for relative in (*REMOVED_REPO_ONLY_PATHS, *ARCHIVED_REPO_ONLY_PATHS)
+        if (ROOT / relative).exists()
+    ] == []
     assert [
         relative
         for relative in ARCHIVED_REPO_ONLY_PATHS

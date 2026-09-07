@@ -13,6 +13,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.py"
+PORTABLE_RULE_SOURCE = (
+    ROOT
+    / "skills"
+    / "evidence-first-code-audit"
+    / "references"
+    / "portable-rule.md"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -1276,7 +1283,7 @@ def test_custom_rule_and_cline_install(tmp_path: Path) -> None:
         str(cline),
     )
     assert result.returncode == 0, result.stderr or result.stdout
-    assert "work evidence-first" in rule.read_text(encoding="utf-8")
+    assert rule.read_bytes() == PORTABLE_RULE_SOURCE.read_bytes()
     cline_payload = json.loads(cline.read_text(encoding="utf-8"))
     assert "evidence-first" in cline_payload["mcpServers"]
 
@@ -1318,7 +1325,7 @@ def test_portable_rule_uses_managed_default_path_when_not_supplied(tmp_path: Pat
     )
     assert result.returncode == 0, result.stderr or result.stdout
     payload = json.loads(result.stdout)
-    assert "work evidence-first" in rule.read_text(encoding="utf-8")
+    assert rule.read_bytes() == PORTABLE_RULE_SOURCE.read_bytes()
     assert payload["portableRulePaths"] == [str(rule)]
 
 
