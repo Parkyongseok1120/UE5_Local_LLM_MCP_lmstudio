@@ -15,41 +15,32 @@ function tempState(t, prefix) {
   return root;
 }
 
-function workerResult(child) {
-  return new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      try {
-        resolve({ code, payload: JSON.parse(stdout.trim()), stderr });
-      } catch (error) {
-        reject(new Error(`Invalid Strict worker output: ${stdout}\n${stderr}\n${error.message}`));
-      }
-    });
-  });
-}
-
 function spawnResumeWorker(stateRoot, sessionId, conversationId) {
   const lifecyclePath = path.resolve(__dirname, "../src/strict-lifecycle.js");
   const source = `
     const { createStrictLifecycle } = require(process.env.STRICT_LIFECYCLE_PATH);
     const lifecycle = createStrictLifecycle({ stateRoot: process.env.STRICT_STATE_ROOT });
+    process.on("message", (message) => {
+      if (message === "exit") process.exit(0);
+    });
+    process.on("disconnect", () => process.exit(2));
+    const watchdog = setTimeout(() => process.exit(2), 30_000);
+    watchdog.unref();
     try {
       lifecycle.resume({
         strictSessionId: process.env.STRICT_SESSION_ID,
         conversationId: process.env.STRICT_CONVERSATION_ID,
         userApproved: true,
       });
-      console.log(JSON.stringify({ ok: true, pid: process.pid }));
-      setTimeout(() => process.exit(0), 750);
+      process.send({ type: "result", payload: { ok: true, pid: process.pid } });
     } catch (error) {
-      console.log(JSON.stringify({ ok: false, code: error.code || "", message: error.message }));
+      process.send({
+        type: "result",
+        payload: { ok: false, code: error.code || "", message: error.message },
+      });
     }
   `;
-  return spawn(process.execPath, ["-e", source], {
+  const child = spawn(process.execPath, ["-e", source], {
     env: {
       ...process.env,
       STRICT_LIFECYCLE_PATH: lifecyclePath,
@@ -57,8 +48,43 @@ function spawnResumeWorker(stateRoot, sessionId, conversationId) {
       STRICT_SESSION_ID: sessionId,
       STRICT_CONVERSATION_ID: conversationId,
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
+  let stderr = "";
+  let resultSettled = false;
+  let resolveResult;
+  let rejectResult;
+  const result = new Promise((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+  let resolveExit;
+  let rejectExit;
+  const exit = new Promise((resolve, reject) => {
+    resolveExit = resolve;
+    rejectExit = reject;
+  });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.on("message", (message) => {
+    if (resultSettled || message?.type !== "result") return;
+    resultSettled = true;
+    resolveResult(message.payload);
+  });
+  child.on("error", (error) => {
+    if (!resultSettled) {
+      resultSettled = true;
+      rejectResult(error);
+    }
+    rejectExit(error);
+  });
+  child.on("close", (code) => {
+    if (!resultSettled) {
+      resultSettled = true;
+      rejectResult(new Error(`Strict worker exited before reporting a result: ${stderr}`));
+    }
+    resolveExit({ code, stderr });
+  });
+  return { child, result, exit };
 }
 
 test("only one process can resume the same orphaned Strict session", async (t) => {
@@ -67,14 +93,23 @@ test("only one process can resume the same orphaned Strict session", async (t) =
   const session = owner.begin({ conversationId: "chat-race", objective: "Exclusive work" });
   owner.orphanOwned("connection_closed");
 
-  const results = await Promise.all([
-    workerResult(spawnResumeWorker(stateRoot, session.id, "chat-race")),
-    workerResult(spawnResumeWorker(stateRoot, session.id, "chat-race")),
-  ]);
+  const workers = [
+    spawnResumeWorker(stateRoot, session.id, "chat-race"),
+    spawnResumeWorker(stateRoot, session.id, "chat-race"),
+  ];
+  let results;
+  try {
+    results = await Promise.all(workers.map((worker) => worker.result));
+  } finally {
+    for (const worker of workers) {
+      if (worker.child.connected) worker.child.send("exit");
+    }
+  }
+  const exits = await Promise.all(workers.map((worker) => worker.exit));
 
-  assert.strictEqual(results.filter(({ payload }) => payload.ok).length, 1);
-  assert.strictEqual(results.filter(({ payload }) => !payload.ok).length, 1);
-  assert.ok(results.every(({ code }) => code === 0));
+  assert.strictEqual(results.filter((payload) => payload.ok).length, 1);
+  assert.strictEqual(results.filter((payload) => !payload.ok).length, 1);
+  assert.ok(exits.every(({ code }) => code === 0));
 });
 
 test("an in-flight operation defers disconnect orphaning and blocks resume", async (t) => {
