@@ -14,6 +14,12 @@ cd UE5_Local_LLM_MCP_lmstudio
 
 Linux와 macOS에서는 같은 폴더에서 `./install.sh`를 실행하면 됩니다. Python이 없으면 실행에 필요한 버전을 사용자 폴더에 설치합니다. 시스템 전체의 Python 설정이나 PATH는 바꾸지 않습니다.
 
+Intel Mac에서는 LM Studio GUI 대신 Linux x64 VM의 `llmster`를 사용하고, 저장소를 VM 안에서 다음처럼 설치합니다. 이 모드는 MCP와 Unreal 구성을 설치하되 GUI 전용 대화 압축기는 제외합니다.
+
+```sh
+./install.sh --profile standard --yes --headless-lmlink
+```
+
 설치 화면에서 프로젝트와 엔진을 고르고, 검색 자료를 만들지 선택하면 됩니다. 처음에는 `STANDARD` 구성에 읽기 전용인 `SAFE` 권한으로 시작하면 됩니다. AI에게 파일 수정과 빌드까지 맡기려면 `AGENT` 권한을 따로 선택해야 합니다.
 
 **설치 구성과 검색 범위는 별개입니다.** `FULL` 구성을 골랐다고 엔진 소스 전체를 수집하거나 쓰기 권한을 켜는 건 아닙니다. 검색 자료는 별도로 만들어야 합니다.

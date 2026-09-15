@@ -636,20 +636,36 @@ def _host_cpu_arch() -> str:
     return machine or "unknown"
 
 
-def _assert_host_component_support(components: set[str]) -> None:
-    """Block LM Studio stack installs on Intel macOS; allow Codex/Cline-only custom installs."""
+def _assert_host_component_support(
+    components: set[str], *, headless_lmlink: bool = False
+) -> None:
+    """Require headless LM Link mode for LM Studio components on Intel macOS."""
     if platform.system().lower() != "darwin":
         return
     arch = _host_cpu_arch()
     needs_lmstudio = bool(components & LMSTUDIO_STACK_COMPONENTS)
     if arch == "x64" and needs_lmstudio:
+        if headless_lmlink and "context_compactor" not in components:
+            print(
+                "NOTE: Intel macOS headless LM Link install enabled; "
+                "LM Studio GUI and the context-compactor chat plugin are not installed.",
+                file=sys.stderr,
+            )
+            return
         raise RuntimeError(
-            "Intel macOS (x86_64) cannot install LM Studio-based components. "
-            "LM Studio does not support Intel Mac. Remove lmstudio/unreal/context_compactor "
-            "and use a custom Codex / portable_rule / Cline-only install, "
-            "or run on Apple Silicon macOS / Windows / Ubuntu Linux."
+            "Intel macOS (x86_64) requires --headless-lmlink for LM Studio-based "
+            "components. LM Studio GUI and the context-compactor chat plugin do not "
+            "support Intel Mac. Use llmster through a Linux VM/LM Link, or remove "
+            "lmstudio/unreal/context_compactor and install only Codex / portable_rule / Cline."
         )
     if arch == "arm64" and needs_lmstudio:
+        if headless_lmlink:
+            print(
+                "NOTE: headless LM Link install enabled; the LM Studio GUI-only "
+                "context-compactor chat plugin is not installed.",
+                file=sys.stderr,
+            )
+            return
         # Soft notice: physical FULL install is verified; signing/notarization is still not claimed.
         print(
             "NOTE: Apple Silicon macOS LM Studio FULL install is verified on physical hardware; "
@@ -1096,11 +1112,17 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         components = set(PROFILE_DEFAULTS[profile])
 
     if interactive:
-        print(
-            "\nLM Studio context compactor will be installed and pinned, but the installer "
-            "does not activate it for chats. Its single host-owned chat toggle defaults off; "
-            "enable that toggle only for a long chat that needs compaction."
-        )
+        if args.headless_lmlink:
+            print(
+                "\nHeadless LM Link mode installs MCP configuration for llmster and skips "
+                "the GUI-only LM Studio context compactor."
+            )
+        else:
+            print(
+                "\nLM Studio context compactor will be installed and pinned, but the installer "
+                "does not activate it for chats. Its single host-owned chat toggle defaults off; "
+                "enable that toggle only for a long chat that needs compaction."
+            )
         if _prompt_yes_no("Install a rule into another coding agent?", False):
             components.add("portable_rule")
             if not args.rule_path:
@@ -1152,7 +1174,9 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         raise ValueError("--build-rag requires the unreal component")
     if args.enable_agent_mode and not args.accept_agent_risk:
         raise ValueError("agent mode requires explicit --accept-agent-risk")
-    _assert_host_component_support(components)
+    _assert_host_component_support(
+        components, headless_lmlink=bool(args.headless_lmlink)
+    )
     if interactive:
         _confirm_interactive_install(profile, components, args)
     return profile, components
@@ -1163,6 +1187,14 @@ def _enforce_context_compactor_installation(components: set[str], args: argparse
     needs_compactor = bool({"lmstudio", "unreal", "context_compactor"} & components)
     if not needs_compactor:
         components.discard("context_compactor")
+        return
+    if args.headless_lmlink:
+        components.discard("context_compactor")
+        print(
+            "NOTE: headless LM Link mode skips the GUI-only LM Studio "
+            "context-compactor chat plugin.",
+            file=sys.stderr,
+        )
         return
     allow_skip = bool(getattr(args, "allow_skip_context_compactor", False))
     if args.skip_context_compactor and not allow_skip:
@@ -1844,6 +1876,7 @@ def install(
         "safeMode": not args.enable_agent_mode,
         "agentMode": args.enable_agent_mode,
         "dryRun": args.dry_run,
+        "headlessLmLink": bool(args.headless_lmlink),
         "platform": platform.system(),
         "safetyNormalizations": [],
         "portableRulePaths": [],
@@ -2174,6 +2207,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--components", help="Comma-separated components for CUSTOM profile.")
     parser.add_argument("--yes", action="store_true", help="Use profile defaults without prompts.")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--headless-lmlink",
+        action="store_true",
+        help=(
+            "Install LM Studio MCP configuration for llmster/LM Link without "
+            "GUI-only chat plugins; required for LM Studio components on Intel macOS."
+        ),
+    )
     parser.add_argument("--rollback", action="store_true", help="Restore the last managed install.")
     parser.add_argument("--enable-agent-mode", action="store_true")
     parser.add_argument(

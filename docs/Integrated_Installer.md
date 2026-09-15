@@ -9,7 +9,7 @@
 | Windows 10/11, x64·arm64 | `INSTALL.bat`. Python이 없으면 Windows PowerShell로 초기 설치를 진행합니다. |
 | Apple Silicon macOS | `./install.sh`. Rosetta로 실행해도 실제 장비에 맞는 프로그램을 선택합니다. |
 | Ubuntu 22.04/24.04, x64·arm64 | `./install.sh`. glibc 환경을 기준으로 합니다. Alpine처럼 musl을 쓰는 환경은 지원하지 않습니다. |
-| Intel macOS | LM Studio·언리얼·대화 압축기 구성은 설치할 수 없습니다. Codex 규칙이나 Cline 등만 고르는 사용자 지정 구성은 가능합니다. |
+| Intel macOS | LM Studio GUI는 지원하지 않습니다. Linux x64 VM에 `llmster`를 설치한 뒤 VM 안에서 `./install.sh --profile standard --yes --headless-lmlink`를 실행하면 MCP·언리얼 구성을 설치할 수 있습니다. GUI 전용 대화 압축기는 제외됩니다. |
 
 Python 3.10 이상이 있으면 초기 실행에 사용합니다. 없으면 버전과 SHA-256이 고정된 uv를 받아 검증한 뒤 사용자 폴더에 Python 3.12를 준비합니다. 실제 도구는 설치기가 관리하는 Python을 사용합니다. 시스템 전체에 Python을 등록하거나 PATH를 바꾸지 않습니다.
 
@@ -53,6 +53,14 @@ python install.py --profile standard --yes --build-rag --index-tier standard --e
 
 첫 명령은 읽기 전용 설치입니다. 두 번째는 지정한 엔진과 프로젝트로 검색 자료도 만듭니다. 경로는 실제 위치로 바꿔야 합니다. 파일 수정과 빌드를 허용하려면 아래 두 옵션이 모두 필요합니다.
 
+Intel Mac의 Linux VM 또는 다른 GUI 없는 `llmster` 환경에서는 헤드리스 LM Link 모드를 사용합니다.
+
+```sh
+./install.sh --profile standard --yes --headless-lmlink
+```
+
+`--headless-lmlink`는 `lmstudio`와 `unreal` MCP 구성을 유지하면서 GUI에서만 사용하는 `context_compactor`를 자동으로 제외합니다. 인텔 macOS에서 LM Studio 관련 구성요소를 선택할 때는 이 옵션이 필수입니다.
+
 ```powershell
 python install.py --profile standard --yes --enable-agent-mode --accept-agent-risk
 ```
@@ -67,7 +75,7 @@ python install.py --profile standard --yes --enable-agent-mode --accept-agent-ri
 
 대화 압축기 `codex/unreal-context-compactor`는 설치하고 목록에 고정만 합니다. 채팅에서 활성화하지는 않습니다. 새 채팅과 기존 채팅 모두 스위치가 꺼져 있는지 확인해야 합니다(`OFF`). 긴 대화에서 필요할 때 해당 채팅의 단일 스위치만 켜면 됩니다. `Observe only`는 대화를 바꾸지 않고 사용량만 측정하는 옵션입니다.
 
-LM Studio·언리얼 구성에는 압축기 파일 설치가 포함됩니다. 일반 설치에서 제외하는 선택지는 없습니다. `--skip-context-compactor --allow-skip-context-compactor`는 지원하지 않는 긴급 우회용입니다.
+LM Studio·언리얼 구성에는 압축기 파일 설치가 포함됩니다. 일반 GUI 설치에서 제외하는 선택지는 없습니다. `--headless-lmlink`는 GUI 없는 llmster 환경을 위한 지원 모드이며 압축기를 자동으로 제외합니다. `--skip-context-compactor --allow-skip-context-compactor`는 그 외 환경에서 지원하지 않는 긴급 우회용입니다.
 
 `lms`를 못 찾으면 `LMSTUDIO_CLI` 또는 LM Studio 설치 위치를 확인해야 합니다. 설치기는 사용자 LM Studio 폴더의 플러그인 파일과 설정을 확인하지만 개별 채팅 저장소는 바꾸지 않습니다.
 

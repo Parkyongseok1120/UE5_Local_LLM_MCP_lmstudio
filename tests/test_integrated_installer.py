@@ -72,6 +72,7 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.3"
     assert manifest["version"] == "2.1.17"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
+    assert manifest["safety"]["contextCompactorSkippedInHeadlessLmLinkMode"] is True
     assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is False
     assert manifest["safety"]["contextCompactionEnabledByDefault"] is False
     assert "contextCompactorEnabledByDefault" not in manifest["safety"]
@@ -366,12 +367,42 @@ def test_macos_picker_falls_back_to_tkinter_when_osascript_fails(
     assert calls == ["osascript", "tkinter:folder"]
 
 
-def test_intel_macos_blocks_lmstudio_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_intel_macos_requires_headless_mode_for_lmstudio_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     module = _load_installer_module()
     monkeypatch.setattr(module.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(module, "_host_cpu_arch", lambda: "x64")
-    with pytest.raises(RuntimeError, match="Intel macOS"):
+    with pytest.raises(RuntimeError, match="--headless-lmlink"):
         module._assert_host_component_support({"lmstudio", "context_compactor"})
+    sys.modules.pop("integrated_install", None)
+
+
+def test_intel_macos_allows_headless_lmlink_mcp_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr(module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(module, "_host_cpu_arch", lambda: "x64")
+    module._assert_host_component_support(
+        {"lmstudio", "unreal"}, headless_lmlink=True
+    )
+    sys.modules.pop("integrated_install", None)
+
+
+def test_intel_macos_headless_profile_skips_gui_context_compactor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr(module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(module, "_host_cpu_arch", lambda: "x64")
+    args = module.build_parser().parse_args(
+        ["--profile", "standard", "--yes", "--headless-lmlink"]
+    )
+    profile, components = module._resolve_components(args)
+    assert profile == "standard"
+    assert {"codex", "lmstudio", "unreal"} <= components
+    assert "context_compactor" not in components
     sys.modules.pop("integrated_install", None)
 
 
