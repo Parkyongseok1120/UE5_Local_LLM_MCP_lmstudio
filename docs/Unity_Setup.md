@@ -7,11 +7,34 @@ Unity 프로젝트의 상태를 모델이 읽고 명시한 작업만 실행하�
 - Unity **2022.3 LTS 이상에서 제공되는 공통 Editor API**를 구현 기준으로 사용합니다. 2022.3과 Unity 6 전체 버전을 테스트한 뜻은 아닙니다. 실제 실행한 버전/운영체제는 [검증 기록](Unity_Validation.md)에 구분합니다.
 - 특정 Editor 설치 경로, 프로젝트 이름, 게임 assembly, MonoBehaviour/SO 클래스 이름을 제품 코드에 넣지 않습니다. 프로젝트 루트는 `UNITY_PROJECT_ROOT`, 타입은 호출 인자, 버전·기능은 handshake에서 결정합니다.
 - 프로젝트를 복사하면 실제 정규 경로가 달라지므로 다른 연결 대상입니다. 각 프로젝트에 별도 MCP 프로세스를 연결합니다.
-- Node.js 20 이상. 기본 UPM 패키지는 Editor-only이며 `com.unity.nuget.newtonsoft-json` 3.2.1 이상을 명시적 의존성으로 사용합니다. 게임 assembly나 Test Framework를 직접 참조하지 않습니다.
+- Node.js 20 이상. RPC Bridge는 Editor-only이며 UPM 패키지는 작은 runtime debug 등록 계약과 선택 패키지별 관찰 probe도 포함합니다. 기본 Bridge는 특정 게임 assembly나 Test Framework를 참조하지 않습니다. Test Framework가 설치되어 있으면 분리된 선택 어댑터 assembly가 활성화됩니다.
 - Editor와 Node MCP는 **같은 OS 호스트**에서 실행합니다. loopback과 PID·실제 경로를 확인하므로 Intel Mac의 Linux VM에서 Mac Editor에 직접 연결하는 구성은 이 alpha에 포함되지 않습니다. 모델 추론은 MCP 호스트가 지원하는 원격 연결을 사용할 수 있습니다.
 - 지원하지 않는 기능은 capability=false 및 `capability_unavailable`로 반환합니다. 모델이 필요로 한다는 이유로 패키지를 설치하거나 다른 구현을 선택하지 않습니다.
 
 ## 설치
+
+통합 설치기를 사용할 수 있습니다. 프로젝트와 MCP 설정을 백업·기록하며 Unity 설정은 Unreal 설정과 분리합니다.
+
+```sh
+./install.sh --profile custom --components unity --yes \
+  --unity-project /absolute/path/to/UnityProject \
+  --unity-editor /absolute/path/to/installed/Unity
+```
+
+Node 의존성 및 외부 C# 분석 작업자를 준비하고 UPM Bridge를 연결합니다. `.NET SDK`가 없으면 명시한 Editor의 사용 가능한 컴파일러/runtime을 확인합니다. 기존 worker는 `--unity-dotnet`과 `--unity-symbol-worker`로 지정할 수 있습니다. `--dry-run`은 프로젝트를 변경하지 않습니다. 기본 MCP 설정 위치는 설치 결과의 `mcpConfig`입니다. `--unity-mcp-config`로 호스트 설정 파일을 지정하면 다른 서버 항목은 유지합니다. 다른 Bridge 경로의 교체는 `--unity-replace-bridge`가 필요합니다. 테스트·Input·UI 패키지를 자동 설치하지 않습니다.
+
+Intel Mac에서 VM 기반 모델 연결까지 설정하려면:
+
+```sh
+./install-intel-mac.sh --engine unity --project /absolute/path/to/UnityProject \
+  --unity-editor /absolute/path/to/installed/Unity --vm-name my-lm-vm --model provider/model
+```
+
+이 경로는 llmster/LM Link만 Linux VM에 두고 **Unity MCP는 Mac에서 실행**합니다. 생성된 `lmstudio-cli.sh` 옆 `lmstudio-cli.conf`에 VM·모델·실제 Python 경로를 보관합니다. 로그인 페어링은 사용자가 승인해야 합니다. 도구 목록, 구조화된 MCP 상태, 모델의 실제 health 도구 요청을 각각 검사하며 텍스트 `true/false`를 연결 증거로 취급하지 않습니다. 모델 연결의 실환경 검증 여부는 [검증 기록](Unity_Validation.md)을 확인하세요.
+
+`--model-endpoint`로 MCP 호스트에서 접근 가능한 `/v1/chat/completions` URL을 지정할 수 있고 CLI에 보관됩니다. 기본값은 `http://127.0.0.1:1234/v1/chat/completions`입니다. Unity 경로에서는 Mac에서 해당 포트가 원하는 VM/모델 서버로 연결되도록 포트 전달을 확인해야 합니다. 다른 서버가 포트를 점유했다면 별도 포트/URL을 지정하세요. VM의 LM Link 온라인 상태와 HTTP 모델 endpoint 연결 검사는 별개입니다.
+
+수동 구성은 다음과 같습니다.
 
 1. 저장소를 계속 유지할 위치에 둡니다. `shared-tool-core`와 `lmstudio-unreal-agent-mcp/src`의 공통 파일 I/O 의존성도 필요하므로 Unity 폴더만 복사하지 않습니다.
 2. Unity adapter 의존성을 설치합니다.
@@ -43,21 +66,29 @@ LM Studio의 MCP 설치 방법은 호스트 버전에 따라 달라질 수 있�
 | 파일 | 문자 그대로 검색, 범위 읽기, Receipt 기반 부분 수정, absent 조건 생성 | UTF-8만, 파일 2 MiB, 부모 디렉터리는 미리 존재해야 함 |
 | JSON | 명시 경로·깊이 조회, 기존 경로 replace/remove, draft-07 명시 스키마 검증 | root 교체/add/move 미지원, unsafe integer 거부, 원격 스키마 로딩 없음 |
 | CSV | 문자열 행·필터 조회, key 기반 cell 교체, 원본 셀 이외의 바이트 보존 | UTF-8, header 필수, 구분자 명시; 중복/없는 key 오류; 행 생성·삭제·schema 미지원 |
-| 탐색 | 로드된 Scene 객체/컴포넌트, AssetDatabase 필터, 컴파일된 타입 | 타입별 semantic 코드 인덱스 및 전체 참조 그래프 미지원 |
+| 탐색 | 로드된 Scene 객체/컴포넌트, AssetDatabase 필터, 컴파일된 타입 | 전체 프로젝트 자동 탐색 없음 |
+| C# 심볼 | 외부 Roslyn 의미 분석, 선언/타입/멤버/사용/상속/인터페이스, Unity 컴파일 구성과 소스 해시 | 작업자 설정 필요; 선택 assembly 범위, 불완전/오래된 인덱스 명시 |
+| 참조 | 코드 사용, 에셋 경로 의존성, 직렬화 propertyPath, 실제 관찰 런타임 관계; 정/역방향 | 명시 수집 범위 한정; 닫힌 Scene 자동 검사 없음, 미사용 추론 없음 |
+| 디버그 | object 상태, 실제 Input System/uGUI/3D 물리 관찰, 프로젝트 query/action 등록 및 FSM 검증 | 패키지 없으면 package_absent; 임의 getter/method 실행 없음 |
+| 스냅샷 | capture/read/diff/release, 제한적 연속 기록, 수집 당시 값 디스크 보관 | 명시 ObjectRef/직렬화 필드 한정; 자동 Pause/rollback 없음 |
 | Inspector/SO | SerializedProperty 조회, scalar/vector/color/quaternion/enum/object reference 수정, 배열 삽입·제거·이동 | 지원하지 않는 타입은 표시; 관리 참조 타입/그래프 교체는 미지원 |
 | 관리 참조 | ID/타입/명시 propertyPath의 하위 필드 관찰, 다른 속성 수정 시 기존 그래프 보존 | 무한 재귀 전개하지 않음; 임의 getter 실행 없음 |
-| Scene | 열린 Scene 목록, 저장된 열린 Scene에 객체 생성, 이름/활성/부모 변경, component 추가, 정확한 Scene 저장 | Scene 생성/열기, 루트로 reparent, 객체/컴포넌트 삭제 미지원 |
+| Scene | 열린 Scene 목록, 객체 생성·이름·활성·부모·component 수정, 정확한 Scene 저장, 승인된 객체 삭제/component 제거 | 삭제는 독립적인 Editor 승인 필요; Scene 자동 저장 없음 |
 | SO | 런타임에서 발견된 concrete SO 타입으로 `.asset` 생성, 공통 read/patch, 지정 에셋 저장 | 복제 기능 미지원; 새 SO 생성은 Unity CreateAsset로 바로 저장됨 |
-| Prefab | 원본 ObjectRef/직렬화 조회, 인스턴스 수정, property override 목록 조회 | 원본/isolated 편집, 생성/인스턴스화, nested/variant apply/revert는 미지원 |
+| Prefab | isolated 원본 편집, 생성·인스턴스화, exact property override apply/revert, nested/variant의 명시적 목적지 | 원본 저장은 명시적 save 및 sourceReceipt; 열린 Prefab Stage 충돌 거부; 배열 override 확대 적용 거부 |
 | 로그·컴파일 | 구독 이후 Console, 구조화된 compiler diagnostics, 명시적 script compilation/import | Editor.log 파일 도구와 소스 해시→assembly 검증 미지원; 과거 성공을 현재 코드 증거로 쓰지 않음 |
 | 실행 | 명시적 Play/Stop/Pause/Resume/Step, 런타임 직렬화 snapshot | 런타임 수정과 비직렬화 필드 탐색 미지원 |
-| operation | durable 요청 fingerprint/결과 보관, ID 충돌, reload 중단을 unknown으로 전환, 조회 | 실행 중 API 강제 취소 불가; 장시간 테스트 adapter 미구현 |
-| 테스트/디버그/이미지 | capability 조회 | 실행 adapter, 등록 debug 확장, 캡처는 비활성화 |
-| 파괴적 작업 | capability=false | 독립적인 사용자 승인 경로 미구현; `userApproved=true`로 우회할 수 없음 |
+| operation | durable 요청/결과, ID 충돌, 중단된 요청의 unknown 처리, 테스트 상태 조회 | 임의 Unity API 강제 중단 불가 |
+| Test Framework | 실제 EditMode/PlayMode 테스트, 정확한 이름/분류, 상태·결과 페이지·취소·release | 패키지/API 확인, 단일 실행·시간·개수·저장 상한; 이미지 캡처는 별도 미지원 |
+| 파괴적 작업 | 정확한 요청에 대한 Editor 승인 UI, 승인된 삭제·component 제거·override 폐기 | MCP에는 승인 발급 endpoint 없음; 2분 만료·1회 사용·상태/세션 결합 |
 
 DataSO는 프로젝트에서 만든 ScriptableObject입니다. 별도 포맷/데이터베이스를 만들지 않습니다. Material 등의 참조값은 관찰/지정할 수 있지만 Material·Shader 전용 제작 API는 제공하지 않습니다.
 
 ## 도구 사용 예
+
+네 추가 영역은 v1.4.0의 필수 완료 기준입니다. 작업자 빌드와 `UNITY_DOTNET`/`UNITY_SYMBOL_WORKER` 설정, 각 도구의 정확한 사용법·스키마·자원 상한은 [심볼·참조·디버그·스냅샷 계약](Unity_Debug_1_4.md)을 참고하세요. 환경 변수를 설정하고 config 생성 스크립트를 실행하면 두 작업자 설정도 출력에 포함됩니다.
+
+Prefab 원본·승인·Test Framework의 요청/결과 계약과 제한은 [Authoring 및 테스트 계약](Unity_Authoring_Tests.md)을 참고하세요.
 
 각 요청은 모델이 선택합니다. 서버가 다음 단계를 호출하지 않습니다.
 
@@ -99,7 +130,7 @@ Scene/SO 변경은 dirty만 만듭니다. 저장하려면 정확한 Scene 경로
 - mutation은 operationId를 필수로 사용합니다. 응답이 유실되면 `unity_operation`으로 확인합니다. 같은 ID의 다른 요청은 충돌합니다. domain reload 중 미완료 기록은 `outcome_unknown`이며 자동 실행하지 않습니다.
 - journal은 프로젝트 Library/EvidenceFirst/operations에 최대 1,000개를 보관하고 초과 시 거부합니다. 자동 삭제/eviction하지 않습니다. Library 삭제·디스크 손실 이후 exactly-once를 보장하지 않습니다. journal을 비운 뒤 이전 ID를 재사용하지 마세요.
 - 짧은 Undo group은 하나의 호출에만 사용합니다. rollback을 시도해도 프로젝트 callback의 부작용은 남을 수 있으므로 `partially_applied`와 `undoCompleted`를 분리합니다. 범용 atomic transaction을 주장하지 않습니다.
-- 네트워크 timeout은 미적용을 의미하지 않습니다. `outcome_unknown`으로 표시하며 재실행하지 않습니다. 취소 요청은 실행 중 Unity API를 강제 중단하지 못하며 `not_cancelled`를 반환합니다.
+- 네트워크 timeout은 미적용을 의미하지 않습니다. `outcome_unknown`으로 표시하며 재실행하지 않습니다. 일반 동기 Unity API는 강제 취소하지 않습니다. Test Framework의 협력적 취소는 `cancel_requested`와 실제 소유 job 종료 관찰을 구분합니다.
 
 ## 응답 및 보안 경계
 

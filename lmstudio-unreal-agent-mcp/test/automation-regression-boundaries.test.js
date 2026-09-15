@@ -432,7 +432,7 @@ test("Automation log persistence failure resolves as a bounded failure", async (
     const logPath = path.join(blockedParent, "latest-automation.log");
     let guard;
     const guardPromise = new Promise((_, reject) => {
-      guard = setTimeout(() => reject(new Error("Automation execution did not resolve")), 10000);
+      guard = setTimeout(() => reject(new Error("Automation execution did not resolve")), 20000);
     });
     let result;
     try {
@@ -441,7 +441,9 @@ test("Automation log persistence failure resolves as a bounded failure", async (
           engineRoot,
           projectPath,
           testFilter: "Portable.Log",
-          timeoutMs: 3000,
+          // This verifies log I/O failure, not process-start latency. A 3 s
+          // budget races native process startup on loaded Intel/CI hosts.
+          timeoutMs: 15000,
           logPath,
         }),
         guardPromise,

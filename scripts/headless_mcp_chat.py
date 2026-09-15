@@ -398,6 +398,32 @@ def run_turn(
     raise RuntimeError(f"Model exceeded the MCP tool-call limit ({max_rounds})")
 
 
+def verify_install(tool_name: str, owners: dict, definitions: list, model: str, endpoint: str, timeout: float) -> dict:
+    """A fixed installer diagnostic, not a chat/planning loop or prose success check."""
+    if tool_name not in {"unreal_rag_health", "unity_status"} or tool_name not in owners:
+        raise McpError("Required read-only health tool is unavailable")
+    result = owners[tool_name].call(tool_name, {})
+    if result.get("isError"):
+        raise McpError("MCP health call returned an error")
+    health = result.get("structuredContent")
+    if not isinstance(health, dict):
+        blocks = [item.get("text", "") for item in result.get("content", []) if item.get("type") == "text"]
+        try:
+            health = json.loads("".join(blocks))
+        except (ValueError, TypeError) as exc:
+            raise McpError("Health response was not a structured JSON object") from exc
+    ready = isinstance(health, dict) and (health.get("connection") == "connected" if tool_name == "unity_status" else health.get("ready") is True and health.get("okForChat") is not False)
+    if not ready:
+        raise McpError("MCP health is not ready; installation connection verification failed")
+    selected = [d for d in definitions if d["function"]["name"] == tool_name]
+    response = post_chat(endpoint, {"model": model, "messages": [{"role": "user", "content": f"Call {tool_name} with no arguments to verify the connection."}],
+        "tools": selected, "tool_choice": {"type": "function", "function": {"name": tool_name}}, "stream": False}, timeout)
+    calls = response.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
+    if len(calls) != 1 or calls[0].get("function", {}).get("name") != tool_name or json.loads(calls[0]["function"].get("arguments") or "{}") != {}:
+        raise McpError("Model did not issue the required health tool call; plain-text replies are not proof")
+    return {"ready": True, "mcpHealthVerified": True, "modelToolRequestVerified": True, "tool": tool_name, "model": model}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prompt", nargs="*", help="One-shot prompt; omit for interactive chat")
@@ -413,6 +439,7 @@ def main() -> int:
     parser.add_argument("--soft-remaining-tokens", type=int, default=14000)
     parser.add_argument("--compact-above-messages", type=int, default=24)
     parser.add_argument("--list-tools", action="store_true")
+    parser.add_argument("--verify-install", choices=["unreal_rag_health", "unity_status"], help="Verify structured MCP health and a real model tool request; never accept a prose success reply")
     parser.add_argument("--no-stream", action="store_true", help="Wait for the complete answer before printing")
     args = parser.parse_args()
 
@@ -446,12 +473,15 @@ def main() -> int:
                 compactor_node = str(spec["command"])
         if not tool_definitions:
             raise McpError(f"No MCP tools found in {args.mcp_config}")
-        if compactor_node is None or not compactor_adapter.is_file():
-            raise RuntimeError("Headless context compactor runtime is unavailable")
         if args.list_tools:
             for name, owner in sorted(tool_owners.items()):
                 print(f"{owner.label}\t{name}")
             return 0
+        if args.verify_install:
+            print(json.dumps(verify_install(args.verify_install, tool_owners, tool_definitions, args.model, args.endpoint, args.timeout)))
+            return 0
+        if compactor_node is None or not compactor_adapter.is_file():
+            raise RuntimeError("Headless context compactor runtime is unavailable")
 
         messages: list[dict[str, Any]] = []
         if args.prompt:

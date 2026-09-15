@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import importlib.util
 import os
+import platform
 import shutil
 import sqlite3
 import subprocess
@@ -10,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import gui_installer_command
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.py"
@@ -23,21 +25,26 @@ PORTABLE_RULE_SOURCE = (
 
 
 @pytest.fixture(autouse=True)
+def _gui_profile_host(monkeypatch):
+    """General GUI profile logic uses a supported host. Intel-specific tests below
+    explicitly override this with x86_64 and still test the native refusal gate.
+    """
+    if sys.platform == "darwin":
+        monkeypatch.setattr(platform, "machine", lambda: "arm64")
+
+
+@pytest.fixture(autouse=True)
 def _ensure_node_npm_on_path(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     """Unreal adapter tests need node/npm; provide shims when the host has none."""
     if shutil.which("node") and shutil.which("npm"):
         return
     bindir = tmp_path_factory.mktemp("node-shims")
-    if os.name == "nt":
-        (bindir / "node.cmd").write_text("@echo v20.20.2\r\n", encoding="utf-8")
-        (bindir / "npm.cmd").write_text("@echo 10.8.2\r\n", encoding="utf-8")
-    else:
-        node = bindir / "node"
-        npm = bindir / "npm"
-        node.write_text("#!/bin/sh\necho v20.20.2\n", encoding="utf-8")
-        npm.write_text("#!/bin/sh\necho 10.8.2\n", encoding="utf-8")
-        node.chmod(0o755)
-        npm.chmod(0o755)
+    for name, version in [("node", "v20.20.2"), ("npm", "10.8.2")]:
+        if shutil.which(name):
+            continue
+        shim = bindir / (name + ".cmd" if os.name == "nt" else name)
+        shim.write_text(f"@echo {version}\r\n" if os.name == "nt" else f"#!/bin/sh\necho {version}\n", encoding="utf-8")
+        shim.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
@@ -606,8 +613,7 @@ def _run(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
         extras.append("--skip-deps")
     return subprocess.run(
         [
-            sys.executable,
-            str(INSTALLER),
+            *gui_installer_command(INSTALLER),
             "--yes",
             "--skip-runtime-bootstrap",
             "--codex-home",

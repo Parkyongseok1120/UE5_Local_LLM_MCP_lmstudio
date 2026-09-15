@@ -2,9 +2,29 @@
 
 set -euo pipefail
 
-LIMACTL_BIN="${LIMACTL_BIN:-${HOME}/.local/bin/limactl}"
-LMSTUDIO_VM="${LMSTUDIO_VM:-lmstudio-link}"
-LMSTUDIO_MODEL="${LMSTUDIO_MODEL:-qwen/qwen3.8-27b}"
+CLI_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+INSTALL_VM="lmstudio-link"
+INSTALL_MODEL="qwen/qwen3.8-27b"
+INSTALL_LIMA="${HOME}/.local/bin/limactl"
+INSTALL_ENGINE="unreal"
+INSTALL_PYTHON=""
+INSTALL_CLIENT=""
+INSTALL_CONFIG=""
+INSTALL_ENDPOINT="http://127.0.0.1:1234/v1/chat/completions"
+# Data only: never source/eval this user-editable configuration.
+if [[ -f "$CLI_DIR/lmstudio-cli.conf" ]]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      VM) INSTALL_VM=$value ;; MODEL) INSTALL_MODEL=$value ;; LIMACTL) INSTALL_LIMA=$value ;;
+      ENGINE) INSTALL_ENGINE=$value ;; PYTHON) INSTALL_PYTHON=$value ;; CLIENT) INSTALL_CLIENT=$value ;; MCP_CONFIG) INSTALL_CONFIG=$value ;;
+      ENDPOINT) INSTALL_ENDPOINT=$value ;;
+    esac
+  done < "$CLI_DIR/lmstudio-cli.conf"
+fi
+LIMACTL_BIN="${LIMACTL_BIN:-$INSTALL_LIMA}"
+LMSTUDIO_VM="${LMSTUDIO_VM:-$INSTALL_VM}"
+LMSTUDIO_MODEL="${LMSTUDIO_MODEL:-$INSTALL_MODEL}"
+LMSTUDIO_CHAT_ENDPOINT="${LMSTUDIO_CHAT_ENDPOINT:-$INSTALL_ENDPOINT}"
 
 if [[ ! -x "$LIMACTL_BIN" ]]; then
   LIMACTL_BIN="$(command -v limactl 2>/dev/null || true)"
@@ -20,12 +40,25 @@ run_lms() {
 }
 
 run_mcp_chat() {
+  if [[ "$INSTALL_ENGINE" == "unity" ]]; then
+    [[ -x "$INSTALL_PYTHON" && -f "$INSTALL_CLIENT" && -f "$INSTALL_CONFIG" ]] || { echo "Unity local MCP launcher configuration is incomplete" >&2; return 1; }
+    "$INSTALL_PYTHON" "$INSTALL_CLIENT" --mcp-config "$INSTALL_CONFIG" --model "$LMSTUDIO_MODEL" --endpoint "$LMSTUDIO_CHAT_ENDPOINT" "$@"
+    return
+  fi
   "$LIMACTL_BIN" shell "$LMSTUDIO_VM" -- bash -lc \
-    'exec "$HOME/.evidence-first/runtimes/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12" "$HOME/UE5_Local_LLM_MCP_lmstudio/scripts/headless_mcp_chat.py" --model "$1" "${@:2}"' \
-    bash "$LMSTUDIO_MODEL" "$@"
+    'IFS= read -r runtime_python < "$HOME/.evidence-first/runtime-python.path"; test -x "$runtime_python" || exit 1; exec "$runtime_python" "$HOME/UE5_Local_LLM_MCP_lmstudio/scripts/headless_mcp_chat.py" --model "$1" "${@:2}"' \
+    bash "$LMSTUDIO_MODEL" --endpoint "$LMSTUDIO_CHAT_ENDPOINT" "$@"
 }
 
 show_compactor_status() {
+  if [[ "$INSTALL_ENGINE" == "unity" ]]; then
+    if [[ -f "$(dirname -- "$INSTALL_CLIENT")/headless_compact.js" ]]; then
+      echo "Headless Compactor: available (local background-only)"
+      return
+    fi
+    echo "Headless Compactor: unavailable (local)" >&2
+    return 1
+  fi
   if "$LIMACTL_BIN" shell --tty=false "$LMSTUDIO_VM" -- bash -lc \
     'test -f "$HOME/UE5_Local_LLM_MCP_lmstudio/scripts/headless_compact.js"'; then
     echo "Headless Compactor: enabled (background-only; 24 messages / 14K remaining-token threshold)"

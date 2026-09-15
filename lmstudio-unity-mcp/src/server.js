@@ -10,19 +10,26 @@ const { dataTools } = require("../../shared-tool-core/data");
 const { projectPolicy } = require("./project");
 const { BridgeClient } = require("./bridge-client");
 const { tools } = require("./catalog");
+const { Symbols } = require("./symbols");
 function createRuntime(env = process.env, injectedBridge) {
   const policy = projectPolicy(env.UNITY_PROJECT_ROOT);
   const files = new Files(policy, { allowWrite: env.ALLOW_WRITE === "1" });
   const data = dataTools(files, jsonc, Ajv);
   const bridge = injectedBridge || new BridgeClient(policy);
+  const symbols = new Symbols(policy, bridge, env);
   const ajv = new Ajv({ strict: false });
   const validators = new Map(tools.map(t => [t.name, ajv.compile(t.inputSchema)]));
   async function call(name, args = {}) {
     try {
       const validate = validators.get(name);
       if (!validate || !validate(args)) fail("invalid_arguments", validate ? ajv.errorsText(validate.errors) : "Unknown tool");
+      if (name === "unity_approval" && args.action === "request") {
+        const nested = validators.get(args.method);
+        if (!nested || !nested(args.arguments) || args.arguments?.approvalId) fail("invalid_arguments", "Approval must contain valid final operation arguments, without approvalId");
+      }
       let result;
-      if (name === "read_file") result = await files.read(args);
+      if (name === "unity_symbols") result = await symbols.call(args);
+      else if (name === "read_file") result = await files.read(args);
       else if (name === "search_files") result = await files.search(args);
       else if (name === "patch_file") result = await files.patch(args);
       else if (name === "create_file") result = await files.mutate(args, () => args.content, true);
@@ -31,8 +38,8 @@ function createRuntime(env = process.env, injectedBridge) {
         if (args.format === "json" && !args.changes?.length || args.format === "csv" && !args.cells?.length) fail("invalid_arguments", "Supply changes (JSON) or cells (CSV)");
         result = await data.patch(args);
       } else {
-        const edit = name === "unity_object_patch" || name === "unity_asset" || name === "unity_scene" && args.action !== "list";
-        const execute = name === "unity_editor";
+        const edit = name === "unity_object_patch" || name === "unity_asset" || name === "unity_scene" && args.action !== "list" || name === "unity_prefab" && !["read", "contents", "overrides"].includes(args.action) || name === "unity_approval" && args.action === "request";
+        const execute = name === "unity_editor" || name === "unity_debug_action" || name === "unity_tests" && !["status", "results"].includes(args.action) || name === "unity_operation" && args.action === "cancel";
         if (edit && env.ALLOW_WRITE !== "1") fail("edit_disabled", "Adapter Edit permission is disabled");
         if (execute && env.ALLOW_COMMANDS !== "1") fail("execute_disabled", "Adapter Execute permission is disabled");
         result = await bridge.call(name, args);

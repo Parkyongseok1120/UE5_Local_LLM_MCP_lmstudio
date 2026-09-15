@@ -6,11 +6,14 @@ set -euo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT=""
+ENGINE_KIND="unreal"
+UNITY_EDITOR=""
 ENGINE_ROOT=""
 WORKSPACE_ROOT=""
 VM_NAME="lmstudio-link"
 DEVICE_NAME="Intel Mac LM Link VM"
 MODEL="qwen/qwen3.8-27b"
+MODEL_ENDPOINT="${LMSTUDIO_CHAT_ENDPOINT:-http://127.0.0.1:1234/v1/chat/completions}"
 CPUS="4"
 MEMORY="6GiB"
 DISK="30GiB"
@@ -29,10 +32,13 @@ Intel Mac용 LM Studio 헤드리스 + UE5 MCP 자동 설치
   --engine-root PATH   Unreal Engine 루트 (예: /Users/Shared/Epic Games/UE_5.7)
 
 선택:
+  --engine unreal|unity    프로젝트 엔진 (기본: unreal)
+  --unity-editor PATH      Unity 프로젝트용 설치된 Editor 실행 파일
   --workspace-root PATH    MCP가 읽을 프로젝트 루트 (기본: .uproject 부모)
   --vm-name NAME           Lima VM 이름 (기본: lmstudio-link)
   --device-name NAME       LM Link 장치 이름
   --model ID               연결 검증 및 채팅에 사용할 모델
+  --model-endpoint URL     MCP 호스트에서 접근할 chat/completions URL
   --cpus N                 VM CPU 수 (기본: 4)
   --memory SIZE            VM 메모리 (기본: 6GiB)
   --disk SIZE              VM 디스크 (기본: 30GiB)
@@ -70,11 +76,14 @@ trap cleanup EXIT
 while (($#)); do
   case "$1" in
     --project) PROJECT=${2:?--project requires a path}; shift 2 ;;
+    --engine) ENGINE_KIND=${2:?--engine requires unreal or unity}; shift 2 ;;
+    --unity-editor) UNITY_EDITOR=${2:?--unity-editor requires a path}; shift 2 ;;
     --engine-root) ENGINE_ROOT=${2:?--engine-root requires a path}; shift 2 ;;
     --workspace-root) WORKSPACE_ROOT=${2:?--workspace-root requires a path}; shift 2 ;;
     --vm-name) VM_NAME=${2:?--vm-name requires a name}; shift 2 ;;
     --device-name) DEVICE_NAME=${2:?--device-name requires a name}; shift 2 ;;
     --model) MODEL=${2:?--model requires an ID}; shift 2 ;;
+    --model-endpoint) MODEL_ENDPOINT=${2:?--model-endpoint requires a URL}; shift 2 ;;
     --cpus) CPUS=${2:?--cpus requires a number}; shift 2 ;;
     --memory) MEMORY=${2:?--memory requires a size}; shift 2 ;;
     --disk) DISK=${2:?--disk requires a size}; shift 2 ;;
@@ -87,10 +96,21 @@ while (($#)); do
 done
 
 [[ -n "$PROJECT" ]] || die "--project가 필요합니다."
+[[ "$ENGINE_KIND" == "unreal" || "$ENGINE_KIND" == "unity" ]] || die "--engine는 unreal 또는 unity입니다."
+if [[ "$ENGINE_KIND" == "unreal" ]]; then
 [[ -n "$ENGINE_ROOT" ]] || die "--engine-root가 필요합니다."
+fi
+[[ "$MODEL$MODEL_ENDPOINT$PROJECT$ENGINE_ROOT$UNITY_EDITOR$WORKSPACE_ROOT${LIMACTL_BIN:-}" != *$'\n'* && "$MODEL$MODEL_ENDPOINT$PROJECT$ENGINE_ROOT$UNITY_EDITOR$WORKSPACE_ROOT${LIMACTL_BIN:-}" != *$'\r'* ]] || die "옵션에 줄바꿈을 포함할 수 없습니다."
+[[ "$MODEL_ENDPOINT" == http://* || "$MODEL_ENDPOINT" == https://* ]] || die "모델 endpoint는 명시적인 HTTP(S) URL이어야 합니다."
 [[ "$VM_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "유효하지 않은 VM 이름: $VM_NAME"
 [[ "$CPUS" =~ ^[1-9][0-9]*$ ]] || die "--cpus는 양의 정수여야 합니다."
 
+if [[ "$ENGINE_KIND" == "unity" ]]; then
+  [[ -d "$PROJECT/Assets" && -f "$PROJECT/Packages/manifest.json" && -f "$PROJECT/ProjectSettings/ProjectVersion.txt" ]] || die "Unity 프로젝트 루트가 필요합니다."
+  PROJECT=$(CDPATH= cd -- "$PROJECT" && pwd)
+  PROJECT_DIR=$PROJECT
+  ENGINE_ROOT=$PROJECT
+else
 if [[ -d "$PROJECT" ]]; then
   shopt -s nullglob
   project_matches=("$PROJECT"/*.uproject)
@@ -104,6 +124,7 @@ fi
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$PROJECT")" && pwd)
 PROJECT="$PROJECT_DIR/$(basename -- "$PROJECT")"
 ENGINE_ROOT=$(CDPATH= cd -- "$ENGINE_ROOT" && pwd)
+fi
 if [[ -z "$WORKSPACE_ROOT" ]]; then
   WORKSPACE_ROOT=$PROJECT_DIR
 else
@@ -125,6 +146,10 @@ echo "  Engine:    $ENGINE_ROOT"
 echo "  VM:        $VM_NAME ($CPUS CPU, $MEMORY RAM, $DISK disk)"
 echo "  Model:     $MODEL"
 if ((DRY_RUN)); then
+  if [[ "$ENGINE_KIND" == "unity" ]]; then
+    echo "  Steps: Lima -> VM -> llmster/LM Link -> LOCAL Unity MCP/Bridge/worker -> local CLI -> explicit connection checks"
+    exit 0
+  fi
   echo "  Steps: Lima -> VM -> llmster/login -> LM Link -> MCP/RAG -> server -> checks"
   exit 0
 fi
@@ -178,6 +203,11 @@ if ! "$LIMACTL" list -q "$VM_NAME" 2>/dev/null | grep -Fxq "$VM_NAME"; then
   VM_CONFIG="$TEMP_DIR/lima.yaml"
   PROJECT_YAML=$(yaml_escape "$WORKSPACE_ROOT")
   ENGINE_YAML=$(yaml_escape "$ENGINE_ROOT")
+  if [[ "$ENGINE_KIND" == "unity" ]]; then
+    MOUNTS_YAML="mounts: []"
+  else
+    MOUNTS_YAML=$(printf "mounts:\n  - location: '%s'\n    mountPoint: '%s'\n    writable: false\n  - location: '%s'\n    mountPoint: '%s'\n    writable: false" "$PROJECT_YAML" "$PROJECT_YAML" "$ENGINE_YAML" "$ENGINE_YAML")
+  fi
   cat >"$VM_CONFIG" <<EOF
 minimumLimaVersion: 2.0.0
 arch: x86_64
@@ -188,13 +218,7 @@ disk: $DISK
 images:
   - location: https://cloud-images.ubuntu.com/releases/jammy/release/ubuntu-22.04-server-cloudimg-amd64.img
     arch: x86_64
-mounts:
-  - location: '$PROJECT_YAML'
-    mountPoint: '$PROJECT_YAML'
-    writable: false
-  - location: '$ENGINE_YAML'
-    mountPoint: '$ENGINE_YAML'
-    writable: false
+$MOUNTS_YAML
 containerd:
   system: false
   user: false
@@ -206,12 +230,13 @@ fi
 note "VM을 시작합니다."
 "$LIMACTL" start --tty=false "$VM_NAME"
 
-if ! "$LIMACTL" shell --tty=false "$VM_NAME" -- bash -lc \
+if [[ "$ENGINE_KIND" == "unreal" ]] && ! "$LIMACTL" shell --tty=false "$VM_NAME" -- bash -lc \
   'test -r "$1" && test -d "$2"' bash "$PROJECT" "$ENGINE_ROOT"; then
   die "기존 VM에 프로젝트/엔진 마운트가 없습니다. 다른 --vm-name을 사용하거나 기존 VM 구성을 확인하세요."
 fi
 
 note "설치 저장소를 VM의 관리 경로로 동기화합니다."
+if [[ "$ENGINE_KIND" == "unreal" ]]; then
 LC_ALL=C COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata \
   --exclude='.git' \
   --exclude='node_modules' \
@@ -221,6 +246,7 @@ LC_ALL=C COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata \
   -C "$SCRIPT_DIR" -cf - . | \
   "$LIMACTL" shell --tty=false "$VM_NAME" -- bash -lc \
     'mkdir -p "$HOME/UE5_Local_LLM_MCP_lmstudio" && LC_ALL=C tar -xf - -C "$HOME/UE5_Local_LLM_MCP_lmstudio"'
+fi
 
 note "VM에 llmster를 설치하거나 기존 설치를 재사용합니다."
 "$LIMACTL" shell --tty=false "$VM_NAME" -- bash -lc \
@@ -253,7 +279,16 @@ if ((BUILD_RAG)); then
 fi
 
 note "MCP, 프로젝트 구성 및 RAG를 설치합니다."
+if [[ "$ENGINE_KIND" == "unity" ]]; then
+  UNITY_CONFIG="$WORKSPACE_ROOT/Library/EvidenceFirst/unity-mcp.json"
+  unity_options=(--profile custom --components unity --yes --unity-project "$PROJECT" --unity-mcp-config "$UNITY_CONFIG")
+  [[ -z "$UNITY_EDITOR" ]] || unity_options+=(--unity-editor "$UNITY_EDITOR")
+  "$SCRIPT_DIR/install.sh" "${unity_options[@]}"
+  IFS= read -r LOCAL_PYTHON < "$HOME/.evidence-first/runtime-python.path"
+  [[ -x "$LOCAL_PYTHON" ]] || die "로컬 설치 Python 경로를 찾을 수 없습니다."
+else
 "$LIMACTL" shell --tty=false "$VM_NAME" -- bash -lc "$INSTALL_COMMAND"
+fi
 
 note "llmster 설정을 다시 불러오고 API 서버를 시작합니다."
 "$LIMACTL" shell --tty=false "$VM_NAME" -- bash -lc \
@@ -273,8 +308,12 @@ echo "$LINK_STATUS"
 ((LINK_OK)) || die "LM Link가 제한 시간 안에 연결되지 않았습니다. 상대 장치가 온라인인지 확인하세요."
 
 note "등록된 MCP 서버를 실제로 초기화하고 도구 목록을 확인합니다."
+if [[ "$ENGINE_KIND" == "unity" ]]; then
+  "$LOCAL_PYTHON" "$SCRIPT_DIR/scripts/headless_mcp_chat.py" --mcp-config "$UNITY_CONFIG" --list-tools
+  "$LOCAL_PYTHON" "$SCRIPT_DIR/scripts/headless_mcp_chat.py" --mcp-config "$UNITY_CONFIG" --model "$MODEL" --endpoint "$MODEL_ENDPOINT" --verify-install unity_status
+else
 MCP_TOOLS=$("$LIMACTL" shell --tty=false "$VM_NAME" -- bash -lc \
-  '"$HOME/.evidence-first/runtimes/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12" "$HOME/UE5_Local_LLM_MCP_lmstudio/scripts/headless_mcp_chat.py" --list-tools')
+  'IFS= read -r runtime_python < "$HOME/.evidence-first/runtime-python.path"; test -x "$runtime_python" || exit 1; "$runtime_python" "$HOME/UE5_Local_LLM_MCP_lmstudio/scripts/headless_mcp_chat.py" --list-tools')
 echo "$MCP_TOOLS"
 for required in evidence-first unreal-rag unreal-agent; do
   grep -q "^${required}"$'\t' <<<"$MCP_TOOLS" || die "MCP 검증 실패: $required"
@@ -282,8 +321,9 @@ done
 
 note "모델이 MCP 도구를 실제 호출하는지 확인합니다."
 "$LIMACTL" shell --tty=false "$VM_NAME" -- bash -lc \
-  '"$HOME/.evidence-first/runtimes/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12" "$HOME/UE5_Local_LLM_MCP_lmstudio/scripts/headless_mcp_chat.py" --model "$1" "Call unreal_rag_health and report only its ready value."' \
-  bash "$MODEL"
+  'IFS= read -r runtime_python < "$HOME/.evidence-first/runtime-python.path"; test -x "$runtime_python" || exit 1; "$runtime_python" "$HOME/UE5_Local_LLM_MCP_lmstudio/scripts/headless_mcp_chat.py" --model "$1" --endpoint "$2" --verify-install unreal_rag_health' \
+  bash "$MODEL" "$MODEL_ENDPOINT"
+fi
 
 note "프로젝트에 MCP-aware CLI 실행기를 설치합니다."
 CLI_TARGET="$WORKSPACE_ROOT/lmstudio-cli.sh"
@@ -294,6 +334,14 @@ if [[ -f "$CLI_TARGET" ]] && ! cmp -s "$SCRIPT_DIR/scripts/lmstudio-headless-cli
 fi
 cp "$SCRIPT_DIR/scripts/lmstudio-headless-cli.sh" "$CLI_TARGET"
 chmod +x "$CLI_TARGET"
+CLI_CONFIG="$WORKSPACE_ROOT/lmstudio-cli.conf"
+if [[ -f "$CLI_CONFIG" ]]; then cp "$CLI_CONFIG" "$CLI_CONFIG.backup-$(date '+%Y%m%d%H%M%S')"; fi
+printf 'VM=%s\nMODEL=%s\nLIMACTL=%s\nENGINE=%s\n' "$VM_NAME" "$MODEL" "$LIMACTL" "$ENGINE_KIND" > "$CLI_CONFIG"
+printf 'ENDPOINT=%s\n' "$MODEL_ENDPOINT" >> "$CLI_CONFIG"
+if [[ "$ENGINE_KIND" == "unity" ]]; then
+  printf 'PYTHON=%s\nCLIENT=%s\nMCP_CONFIG=%s\n' "$LOCAL_PYTHON" "$SCRIPT_DIR/scripts/headless_mcp_chat.py" "$UNITY_CONFIG" >> "$CLI_CONFIG"
+fi
+chmod 600 "$CLI_CONFIG"
 
 cat <<EOF
 

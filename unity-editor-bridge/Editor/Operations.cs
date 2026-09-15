@@ -41,23 +41,36 @@ namespace EvidenceFirst.UnityBridge
         internal static JObject Dispatch(string method, JObject args)
         {
             if (method == "unity_status") return Bridge.Status();
+            if (method == "unity_compilation_manifest") return CompilationManifest.Export(args);
+            if (method == "unity_debug_query") return DebugAdapters.Query(args);
+            if (method == "unity_references") return ReferenceIndex.Call(args);
+            if (method == "unity_snapshot") return Snapshots.Call(args);
             if (method == "unity_object_read") return Objects.Read(args);
             if (method == "unity_find") return Find(args);
             if (method == "unity_logs") return Observations.Read(args);
-            if (method == "unity_prefab") return Prefab(args);
-            if (method == "unity_tests") return new JObject { ["status"] = "unavailable", ["errorCode"] = "capability_unavailable", ["testStatus"] = "not_run", ["reason"] = "Optional test adapter is not implemented in this alpha" };
+            if (method == "unity_approval") return Approvals.Call(args);
+            if (method == "unity_prefab" && (string)args["action"] == "overrides") return Prefab(args);
+            if (method == "unity_prefab" && ((string)args["action"] == "read" || (string)args["action"] == "contents")) return Prefabs.Read(args);
+            if (method == "unity_tests" && (string)args["action"] != "run") {
+                if ((string)args["action"] != "status" && (string)args["action"] != "results" && !Bridge.ExecuteAllowed) throw new BridgeException("permission_denied", "Editor Execute permission required");
+                return TestExecution.Call(args);
+            }
             if (method == "unity_scene" && (string)args["action"] == "list") return Scenes(args);
             if (method == "unity_operation")
             {
                 var file = OperationPath(Required(args, "operationId"));
                 if (!File.Exists(file)) return new JObject { ["status"] = "unknown", ["operationId"] = args["operationId"], ["message"] = "No retained execution record; do not infer non-execution after journal loss" };
                 var record = JObject.Parse(File.ReadAllText(file));
+                if ((string)record["method"] == "unity_tests") {
+                    if ((string)args["action"] == "cancel" && !Bridge.ExecuteAllowed) throw new BridgeException("permission_denied", "Editor Execute permission required");
+                    return TestExecution.Call(new JObject { ["action"] = (string)args["action"] == "cancel" ? "cancel" : "status", ["operationId"] = args["operationId"] });
+                }
                 if ((string)args["action"] == "cancel") return new JObject { ["status"] = "not_cancelled", ["operationId"] = args["operationId"], ["currentStatus"] = record["status"], ["reason"] = "Synchronous operations cannot be safely interrupted; no running API was aborted" };
                 if ((string)args["action"] != "get") throw new BridgeException("invalid_arguments", "Unknown operation action");
                 return (JObject)record["result"];
             }
-            bool edit = method == "unity_object_patch" || method == "unity_scene" || method == "unity_asset";
-            bool execute = method == "unity_editor";
+            bool edit = method == "unity_object_patch" || method == "unity_scene" || method == "unity_asset" || method == "unity_prefab";
+            bool execute = method == "unity_editor" || method == "unity_debug_action" || method == "unity_tests";
             if (!edit && !execute) throw new BridgeException("capability_unavailable", "Operation is not implemented");
             if (edit && !Bridge.EditAllowed || execute && !Bridge.ExecuteAllowed) throw new BridgeException("permission_denied", "Enable the required permission in the Editor Tools/Evidence First menu");
             string id = Required(args, "operationId"), filePath = OperationPath(id);
@@ -68,16 +81,21 @@ namespace EvidenceFirst.UnityBridge
                 if ((string)previous["digest"] != digest) throw new BridgeException("operation_conflict", "operationId was already bound to different content or Editor session");
                 return previous["result"] as JObject ?? new JObject { ["status"] = "outcome_unknown", ["operationId"] = id };
             }
+            if (Approvals.Required(method, args)) Approvals.Check(method, args);
             if (Directory.GetFiles(Journal, "*.json").Length >= 1000) throw new BridgeException("operation_capacity", "Journal capacity reached; records are not evicted automatically");
             if (EditorApplication.isCompiling || EditorApplication.isUpdating) throw new BridgeException("editor_busy", "Editor is compiling/importing; request was not executed");
-            var recordNew = new JObject { ["operationId"] = id, ["digest"] = digest, ["status"] = "running" };
+            var recordNew = new JObject { ["operationId"] = id, ["method"] = method, ["digest"] = digest, ["status"] = "running" };
             PathSafety.WritePrivate(filePath, recordNew.ToString(Formatting.None));
             JObject result;
             try
             {
-                if (method == "unity_object_patch") result = Objects.Patch(args);
+                if (Approvals.Required(method, args) && method != "unity_prefab") result = Approvals.Delete(method, args);
+                else if (method == "unity_object_patch") result = Objects.Patch(args);
+                else if (method == "unity_prefab") result = Prefabs.Mutate(args);
+                else if (method == "unity_tests") result = TestExecution.Call(args);
                 else if (method == "unity_scene") result = SceneAction(args);
                 else if (method == "unity_asset") result = AssetAction(args);
+                else if (method == "unity_debug_action") result = DebugAdapters.Execute(args);
                 else result = EditorAction(args);
             }
             catch (BridgeException e) { result = Bridge.Error(e); }

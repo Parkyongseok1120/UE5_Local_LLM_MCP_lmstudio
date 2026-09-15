@@ -7,13 +7,13 @@
 - `scripts/unreal_rag_direct.py` is the independent Python retrieval entry point. Unity does not reuse its Unreal project binding or expose the Unreal catalog.
 - `direct-read-capabilities.js`, `direct-file-snapshot.js`, `direct-file-version-policy.js` and `file-snapshot-registry.js` implement bounded reads and explicit version evidence. `write-guards.js` assumes Unreal directories, so it cannot authorize Unity paths.
 - `write-locks.js` implements canonical-path cooperative process locks, PID/start identity and conservative stale reclamation. `atomic-io.js` fsyncs a temporary file and renames it for replacement. Its create helper uses exclusive copy, not an atomic publication guarantee. These are not OS-enforced CAS against arbitrary editors. `direct-edit-bundle-*` recovery is not a general Unity transaction.
-- `direct-delete-capabilities.js` binds proposals to paths and content receipts, but its `userApproved` flag is supplied by the caller. This is not independent proof of human approval. Unity destructive capabilities remain unavailable until a trusted host/Editor approval channel exists; the existing Unreal behavior is not changed.
+- `direct-delete-capabilities.js` binds proposals to paths and content receipts, but its caller-supplied `userApproved` flag is not independent human approval. Unity now has a separate one-use Editor approval window and no MCP approval endpoint; existing Unreal behavior is not changed.
 - SAFE uses `ALLOW_WRITE=0`, `ALLOW_COMMANDS=0`, `ALLOW_UNREAL_BUILD=0`. Unity maps Observe/Edit/Execute independently and checks them again in the Bridge. No model flag is allowed to enable permissions.
 - `scripts/build_integrated_package.py` uses an explicit directory/file allowlist. Unity components must be included explicitly. Existing Intel Mac/CLI edits are preserved.
 
 ## Responsibility and rollout
 
-`lmstudio-unity-mcp` is a Node.js stdio adapter. `shared-tool-core` contains engine-independent file/data operations parameterized by a Unity path policy. It reuses existing low-level read, lock and replacement primitives without rewriting Unreal. `unity-editor-bridge` is an Editor-only UPM package using Unity's Newtonsoft package. Tests/debug adapters are optional capabilities, not assembly references of the base package.
+`lmstudio-unity-mcp` is a Node.js stdio adapter. `shared-tool-core` contains engine-independent file/data operations parameterized by a Unity path policy. It reuses existing low-level read, lock and replacement primitives without rewriting Unreal. The RPC Bridge is Editor-only; its UPM package also has a small runtime debug-registration contract and optional-package runtime observation probes. Test framework dependencies remain separate. Symbols, references, real debug adapters, snapshots and bounded recording are mandatory v1.4 release gates; see [the expanded contract](Unity_Debug_1_4.md).
 
 Project roots, engine installation paths and game types are never constants. Unity 2022.3+ common APIs form the compatibility baseline; the installed 6000.3 Editor is one test environment, not a product requirement for that exact version. Capabilities describe the implemented runtime surface; testing one version does not establish compatibility with all releases. Projects with unsupported versions/dependencies must resolve those prerequisites explicitly, not via a server-selected upgrade.
 
@@ -35,9 +35,9 @@ The implementation is an alpha vertical slice. The capability table in `Unity_Se
 
 ## Permissions, save and failure policy
 
-- Observe is the default. Adapter Edit uses `ALLOW_WRITE=1`; Execute uses `ALLOW_COMMANDS=1`. Bridge permissions are explicit Editor menu settings, default off. Runtime object mutation and destructive actions are separate unavailable capabilities.
+- Observe is the default. Adapter Edit uses `ALLOW_WRITE=1`; Execute uses `ALLOW_COMMANDS=1`. Bridge menu permissions default off. Runtime mutation remains unavailable. Destructive edits additionally require exact request/state/session-bound approval in the Editor window.
 - Scene edits and SO patches mark dirty. Saving requires the exact scene/asset and acknowledgement that existing dirty changes in that target may also be saved. Never SaveAssets/SaveOpenScenes globally. SaveAssetIfDirty bypasses OnWillSaveAssets; the response/documentation says so.
-- Prefab source mutations, nested/variant apply/revert and managed-reference type replacement are disabled until their full conflict/approval contracts are implemented. Scene instance property changes must name `sceneInstance` and preserve overrides.
+- Prefab source mutations use isolated contents and file receipts; nested/variant apply has an explicit source destination; revert requires independent approval. Managed-reference type replacement and scope-expanding array override application remain unavailable. See `Unity_Authoring_Tests.md` for actual supported scope.
 - A short Undo group is confined to one synchronous operation. Undo is not a database transaction and cannot undo arbitrary project-code side effects. Failure states distinguish `not_applied`, `rolled_back`, `partially_applied`, `outcome_unknown`; re-read values are point-in-time observations. No universal `atomic=true`.
 - General file access rejects symlink/reparse components, protected Unity formats and hidden/generated directories. Assets text is writable; Packages/ProjectSettings are read-only in this alpha. Same-account malicious filesystem races and executing an untrusted Unity project are not sandboxed.
 

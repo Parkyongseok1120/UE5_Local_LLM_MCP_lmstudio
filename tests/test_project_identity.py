@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -55,6 +56,8 @@ def test_project_identity_does_not_merge_unicode_casefold_project_roots(tmp_path
     composed = tmp_path / "\u0130Project" / "Demo.uproject"
     decomposed = tmp_path / "I\u0307Project" / "Demo.uproject"
     for project_file in (composed, decomposed):
+        if project_file.parent.exists():
+            pytest.skip("Host filesystem aliases the two Unicode spellings; distinct physical roots cannot be created")
         project_file.parent.mkdir(parents=True)
         project_file.write_text('{"Modules": [{"Name": "Demo"}]}', encoding="utf-8")
     assert str(composed).casefold() == str(decomposed).casefold()

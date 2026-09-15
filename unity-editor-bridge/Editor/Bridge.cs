@@ -75,6 +75,8 @@ namespace EvidenceFirst.UnityBridge
                 EditorApplication.playModeStateChanged -= PlayChanged;
                 EditorApplication.playModeStateChanged += PlayChanged;
                 Observations.Start();
+                DebugAdapters.Start();
+                Snapshots.Recover();
                 Operations.Recover();
                 var discovery = new JObject {
                     ["protocolVersion"] = 1, ["bridgeVersion"] = Version, ["projectIdentity"] = ProjectId,
@@ -137,6 +139,7 @@ namespace EvidenceFirst.UnityBridge
         static void Pump()
         {
             Observations.Drain();
+            Snapshots.Tick();
             for (int i = 0; i < 4 && Queue.TryDequeue(out var pending); i++)
             {
                 if (pending.Expired) continue;
@@ -173,11 +176,11 @@ namespace EvidenceFirst.UnityBridge
             ["editorSessionId"] = Session, ["domainGeneration"] = Generation, ["playSessionId"] = PlaySession,
             ["compilationId"] = Observations.CompilationId, ["compiling"] = EditorApplication.isCompiling,
             ["importing"] = EditorApplication.isUpdating, ["playing"] = EditorApplication.isPlaying, ["paused"] = EditorApplication.isPaused,
-            ["sourceAssemblyVerification"] = "unknown", ["permissions"] = new JObject { ["observe"] = true, ["edit"] = EditAllowed, ["execute"] = ExecuteAllowed, ["destructive"] = false },
+            ["sourceAssemblyVerification"] = "unknown", ["permissions"] = new JObject { ["observe"] = true, ["edit"] = EditAllowed, ["execute"] = ExecuteAllowed, ["destructive"] = "per_request_editor_approval" },
             ["capabilities"] = new JObject { ["objectRead"] = true, ["serializedPatch"] = true, ["sceneEdit"] = true, ["scriptableObjects"] = true,
-                ["prefabRead"] = true, ["prefabSourceEdit"] = false, ["prefabApplyRevert"] = false, ["managedReferenceReplace"] = false,
-                ["runtimeRead"] = true, ["runtimeWrite"] = false, ["testExecution"] = false, ["debugExtensions"] = false, ["capture"] = false,
-                ["destructive"] = false, ["logs"] = true, ["scriptCompilation"] = true, ["operations"] = true }
+                ["prefabRead"] = true, ["prefabSourceEdit"] = true, ["prefabApplyRevert"] = true, ["managedReferenceReplace"] = false,
+                ["runtimeRead"] = true, ["runtimeWrite"] = false, ["testExecution"] = TestExecution.Available, ["debugExtensions"] = true, ["capture"] = false, ["snapshots"] = true, ["boundedRecording"] = true, ["references"] = true, ["compilationManifest"] = true,
+                ["destructive"] = true, ["logs"] = true, ["scriptCompilation"] = true, ["operations"] = true }
         };
         static void NewPlaySession() { PlaySession = Guid.NewGuid().ToString("N"); SessionState.SetString("EvidenceFirst.PlaySession", PlaySession); Objects.ClearHandles(); }
         static void PlayChanged(PlayModeStateChange state)
@@ -191,6 +194,7 @@ namespace EvidenceFirst.UnityBridge
             EditorApplication.update -= Pump;
             EditorApplication.playModeStateChanged -= PlayChanged;
             Observations.Stop();
+            DebugAdapters.Stop();
             try { listener?.Stop(); } catch { }
             listener = null;
             lock (Connections) foreach (var client in Connections.ToArray()) client.Close();

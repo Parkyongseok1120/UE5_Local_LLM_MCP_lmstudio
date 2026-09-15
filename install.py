@@ -1166,6 +1166,8 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
     unknown = components - ALL_COMPONENTS
     if unknown:
         raise ValueError(f"unknown components: {sorted(unknown)}")
+    if "unity" in components and components != {"unity"}:
+        raise ValueError("Install Unity separately with --profile custom --components unity; each engine uses its own project-bound MCP configuration")
     if profile == "safe" and args.enable_agent_mode:
         raise ValueError("SAFE profile cannot enable agent mode")
     if args.enable_agent_mode and "unreal" not in components:
@@ -1796,6 +1798,9 @@ def install(
     # Real installs re-exec under Python 3.12 in main(); unit tests may call install()
     # directly on older interpreters with --skip-runtime-bootstrap.
     python_exe = Path(getattr(args, "runtime_python", None) or sys.executable).resolve()
+    if "unity" in components:
+        from installer.unity_install import install_unity
+        return install_unity(args, ROOT, Transaction, InstallLock)
     if not (SKILL_SOURCE / "SKILL.md").is_file():
         raise FileNotFoundError(f"skill source missing: {SKILL_SOURCE}")
 
@@ -2178,6 +2183,7 @@ def install(
         report["knownIntegrationsSafe"] = not args.enable_agent_mode
         report["restartRequired"] = "lmstudio" in components or "unreal" in components
         report["ok"] = True
+        tx.write_file(args.state_home / "runtime-python.path", (str(python_exe) + "\n").encode("utf-8"))
         journal = tx.commit(report)
         report["journal"] = str(journal or "")
         return report
@@ -2205,6 +2211,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {PRODUCT_VERSION}")
     parser.add_argument("--profile", choices=["safe", "standard", "full", "custom"])
     parser.add_argument("--components", help="Comma-separated components for CUSTOM profile.")
+    parser.add_argument("--unity-project", type=Path, help="Unity project root; used with --profile custom --components unity")
+    parser.add_argument("--unity-editor", type=Path, help="Optional installed Editor executable for its bundled compiler toolchain")
+    parser.add_argument("--unity-dotnet", type=Path, help="Explicit dotnet executable")
+    parser.add_argument("--unity-symbol-worker", type=Path, help="Existing compiled UnitySymbolWorker.dll; otherwise built during installation")
+    parser.add_argument("--unity-mcp-config", type=Path, help="Explicit MCP config destination; default is isolated per-project managed config")
+    parser.add_argument("--unity-replace-bridge", action="store_true", help="Explicitly replace a different existing Bridge package binding (backed up)")
     parser.add_argument("--yes", action="store_true", help="Use profile defaults without prompts.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -2275,7 +2287,7 @@ def _runtime_requirements(
     build_rag: bool,
 ) -> tuple[bool, bool]:
     del build_rag  # Direct RAG indexing is Python-only.
-    need_node = bool({"unreal", "context_compactor"} & components)
+    need_node = bool({"unreal", "unity", "context_compactor"} & components)
     return need_node, False
 
 

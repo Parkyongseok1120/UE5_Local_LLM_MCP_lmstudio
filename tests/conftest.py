@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import platform
 import shutil
 import sys
 from pathlib import Path
@@ -15,6 +16,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 AGENT_MCP_ROOT = ROOT / "lmstudio-unreal-agent-mcp"
 AGENT_MCP_SDK = AGENT_MCP_ROOT / "node_modules" / "@modelcontextprotocol" / "sdk"
+
+
+def gui_installer_command(installer: Path) -> list[str]:
+    """GUI-profile fixture tests simulate a supported Mac, not Intel GUI support.
+
+    Native Intel refusal/headless behavior is covered separately, without this helper.
+    No production installer switch or environment bypass is introduced.
+    """
+    if sys.platform == "darwin":
+        return [sys.executable, "-c", "import platform,runpy,sys; platform.machine=lambda:'arm64'; p=sys.argv.pop(1); sys.argv[0]=p; runpy.run_path(p,run_name='__main__')", str(installer)]
+    return [sys.executable, str(installer)]
 
 
 def powershell_prefix() -> list[str]:

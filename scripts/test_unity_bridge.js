@@ -13,10 +13,17 @@ if (!editorVersion || !/^\d+\.\d+\.\d+[abfp]\d+$/.test(editorVersion)) throw new
 const root = fs.mkdtempSync(path.join(process.argv[3] || os.tmpdir(), "unity-bridge-test-"));
 for (const directory of ["Assets/Smoke", "Packages", "ProjectSettings"]) fs.mkdirSync(path.join(root, directory), { recursive: true });
 fs.writeFileSync(path.join(root, "ProjectSettings/ProjectVersion.txt"), `m_EditorVersion: ${editorVersion}\n`);
-fs.writeFileSync(path.join(root, "Packages/manifest.json"), JSON.stringify({ dependencies: { "com.evidencefirst.unity-bridge": "file:" + path.join(repo, "unity-editor-bridge"), "com.unity.nuget.newtonsoft-json": "3.2.1", "com.unity.modules.jsonserialize": "1.0.0" } }, null, 2));
-for (const filename of fs.readdirSync(path.join(repo, "unity-editor-bridge/Tests~"))) fs.copyFileSync(path.join(repo, "unity-editor-bridge/Tests~", filename), path.join(root, "Assets/Smoke", filename));
+const dependencies = { "com.evidencefirst.unity-bridge": "file:" + path.join(repo, "unity-editor-bridge"), "com.unity.nuget.newtonsoft-json": "3.2.1", "com.unity.modules.jsonserialize": "1.0.0" };
+if (process.env.UNITY_TEST_DEBUG === "1") Object.assign(dependencies, { "com.unity.inputsystem": process.env.UNITY_TEST_INPUT_VERSION || "1.19.0", "com.unity.ugui": process.env.UNITY_TEST_UI_VERSION || "2.0.0", "com.unity.modules.physics": "1.0.0", "com.unity.modules.ui": "1.0.0", "com.unity.modules.imgui": "1.0.0" });
+if (process.env.UNITY_TEST_FRAMEWORK_VERSION) dependencies["com.unity.test-framework"] = process.env.UNITY_TEST_FRAMEWORK_VERSION;
+fs.writeFileSync(path.join(root, "Packages/manifest.json"), JSON.stringify({ dependencies }, null, 2));
+for (const entry of fs.readdirSync(path.join(repo, "unity-editor-bridge/Tests~"), { withFileTypes: true })) {
+  if (entry.name === "Framework" && !process.env.UNITY_TEST_FRAMEWORK_VERSION) continue;
+  if (entry.isDirectory() && process.env.UNITY_TEST_DEBUG !== "1") continue;
+  fs.cpSync(path.join(repo, "unity-editor-bridge/Tests~", entry.name), path.join(root, "Assets/Smoke", entry.name), { recursive: true });
+}
 console.log(JSON.stringify({ project: root, log: path.join(root, "editor.log") }));
-const child = spawn(editor, ["-batchmode", "-nographics", "-projectPath", root, "-executeMethod", "EvidenceFirst.Tests.BridgeSmoke.Run", "-logFile", path.join(root, "editor.log")], { stdio: "ignore" });
+const child = spawn(editor, ["-batchmode", "-nographics", "-projectPath", root, "-executeMethod", "EvidenceFirst.Tests.BridgeSmoke.Run", "-logFile", path.join(root, "editor.log")], { stdio: "ignore", detached: true });
 console.log(JSON.stringify({ editorPid: child.pid }));
 const started = Date.now();
 const timer = setInterval(() => {

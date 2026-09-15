@@ -51,7 +51,10 @@ namespace EvidenceFirst.UnityBridge
                 case "asset":
                     var path = AssetDatabase.GUIDToAssetPath((string)r["guid"]);
                     if (String.IsNullOrEmpty(path) || !Int64.TryParse((string)r["localFileId"], out var id)) break;
-                    foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(path))
+                    var candidates = new List<Object>(AssetDatabase.LoadAllAssetsAtPath(path));
+                    var prefabRoot = AssetDatabase.LoadMainAssetAtPath(path) as GameObject;
+                    if (prefabRoot != null) foreach (var t in prefabRoot.GetComponentsInChildren<Transform>(true)) { candidates.Add(t.gameObject); candidates.AddRange(t.GetComponents<Component>().Where(c => c != null)); }
+                    foreach (var asset in candidates)
                         if (asset != null && AssetDatabase.TryGetGUIDAndLocalFileIdentifier(asset, out string g, out long l) && g == (string)r["guid"] && l == id) { target = asset; break; }
                     break;
                 case "scene":
@@ -116,7 +119,7 @@ namespace EvidenceFirst.UnityBridge
                 ["nextCursor"] = end < items.Count ? Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(new JObject { ["revision"] = revision, ["offset"] = end }.ToString(Formatting.None))) : null };
         }
         static string EncodingUtf8(byte[] value) => System.Text.Encoding.UTF8.GetString(value);
-        internal static JObject Read(JObject args)
+        internal static JObject Read(JObject args, bool issueReceipt = true)
         {
             var target = Resolve(args["target"]);
             var before = Fingerprint(target);
@@ -151,7 +154,8 @@ namespace EvidenceFirst.UnityBridge
             }
             if (Fingerprint(target) != before) throw new BridgeException("snapshot_changed", "Object changed during observation");
             var result = Page(rows, args, Bridge.Digest(before + args["propertyPaths"] + depth.ToString() + Bridge.Session + Bridge.Generation + Bridge.PlaySession));
-            result["target"] = Ref(target); result["receipt"] = Issue(target); result["receiptScope"] = "serialized_object_and_related_hierarchy";
+            result["target"] = Ref(target);
+            if (issueReceipt) { result["receipt"] = Issue(target); result["receiptScope"] = "serialized_object_and_related_hierarchy"; }
             result["dirty"] = EditorUtility.IsDirty(target); result["runtime"] = EditorApplication.isPlaying && !EditorUtility.IsPersistent(target);
             result["observedFrame"] = Time.frameCount; result["name"] = target.name; result["type"] = target.GetType().AssemblyQualifiedName;
             if (target is MonoScript script) result["compiledType"] = script.GetClass()?.AssemblyQualifiedName;
@@ -237,6 +241,11 @@ namespace EvidenceFirst.UnityBridge
         internal static JObject Patch(JObject args)
         {
             var target = Resolve(args["target"]); Editable(target, (string)args["scope"]); CheckReceipt(target, (string)args["receipt"]);
+            return PatchTarget(target, args, false);
+        }
+        // Only Prefabs calls isolated=true on contents it has explicitly loaded and owns.
+        internal static JObject PatchTarget(Object target, JObject args, bool isolated)
+        {
             if (!(args["patches"] is JArray changes) || changes.Count == 0 || changes.Count > 32) throw new BridgeException("invalid_arguments", "patches must contain 1..32 edits");
             using (var so = new SerializedObject(target))
             {
@@ -259,12 +268,12 @@ namespace EvidenceFirst.UnityBridge
                     }
                 }
                 // Pending SerializedObject edits have not touched the live target yet.
-                CheckReceipt(target, (string)args["receipt"]);
+                if (!isolated) CheckReceipt(target, (string)args["receipt"]);
                 return Operations.WithUndo(target, () => {
                     bool changed = so.ApplyModifiedProperties();
                     if (PrefabUtility.IsPartOfPrefabInstance(target)) PrefabUtility.RecordPrefabInstancePropertyModifications(target);
                     EditorUtility.SetDirty(target);
-                    var result = Read(new JObject { ["target"] = Ref(target), ["propertyPaths"] = new JArray(changes.Select(c => c["propertyPath"])), ["limit"] = 32 });
+                    var result = isolated ? new JObject() : Read(new JObject { ["target"] = Ref(target), ["propertyPaths"] = new JArray(changes.Select(c => c["propertyPath"])), ["limit"] = 32 });
                     result["status"] = "applied"; result["changed"] = changed; result["saved"] = false; result["dirty"] = true;
                     result["scope"] = args["scope"]; result["verification"] = "observed_after_apply"; return result;
                 });

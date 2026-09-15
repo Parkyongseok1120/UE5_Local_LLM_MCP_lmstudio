@@ -88,6 +88,9 @@ async function main() {
   assert.notEqual(secondPlay.playSessionId, playing.playSessionId);
   await call("unity_editor", { action: "stop", operationId: id() });
   const beforeReload = await waitFor("second Stop", s => !s.playing && !s.playSessionId);
+  const durableSnapshot = await call("unity_snapshot", { action: "capture", targets: [{ target: assets.items[0].target, propertyPaths: ["number"] }] });
+  const durableRecording = await call("unity_snapshot", { action: "record_start", targets: [{ target: assets.items[0].target, propertyPaths: ["number"] }], maxDurationMs: 1000, maxFrames: 3600, intervalMs: 50, maxSamples: 1, maxBytes: 100000 });
+  await sleep(200);
   assert.equal(beforeReload.domainGeneration, initial.domainGeneration);
   results.push("two Play sessions with Domain Reload disabled");
   const symbol = `Probe_${Date.now()}`;
@@ -99,6 +102,11 @@ async function main() {
   if (imported.errorCode && imported.status !== "outcome_unknown") throw new Error(JSON.stringify(imported));
   const afterReload = await waitFor("compile + domain reload", s => s.domainGeneration > beforeReload.domainGeneration, 150000);
   assert.equal(afterReload.editorSessionId, initial.editorSessionId);
+  const retainedSnapshot = await call("unity_snapshot", { action: "read", snapshotId: durableSnapshot.snapshotId, targetIndex: 0 });
+  assert.equal(retainedSnapshot.values.items[0].value, "123");
+  const retainedRecording = await call("unity_snapshot", { action: "record_status", recordingId: durableRecording.recordingId });
+  assert.equal(retainedRecording.status, "stopped"); assert.equal(retainedRecording.snapshotIds.length, 1);
+  results.push("stored snapshot and bounded recording metadata survive real domain reload without resuming collection");
   const operation = await call("unity_operation", { action: "get", operationId: importId });
   assert(["accepted", "outcome_unknown"].includes(operation.status));
   const logs = await call("unity_logs", { source: "compiler", compilationId: afterReload.compilationId, limit: 50 });

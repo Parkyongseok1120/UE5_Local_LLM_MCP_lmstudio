@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
+from conftest import gui_installer_command
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_integrated_package.py"
@@ -403,7 +404,7 @@ def test_include_index_uses_the_supplied_source_not_another_mcp_workspace(
     assert builder._included_index_relative(source) == Path("data/unreal510/rag.sqlite")
 
 
-def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -> None:
+def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, monkeypatch) -> None:
     output, archive = _build(tmp_path, "portable 한글 one", legacy_stdout=True)
     builder = _load_builder_module()
     expected_files = {
@@ -780,6 +781,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "manifest.json",
         "runtime-manifest.json",
         "unreal_engine_binding.py",
+        "unity_install.py",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.3.3"
@@ -838,10 +840,18 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     lmstudio_home = tmp_path / "isolated lmstudio"
     lmstudio_home.mkdir(parents=True, exist_ok=True)
     _plant_fake_lms(lmstudio_home)
+    # skip-deps + fake LMS builds no npm dependencies; only the version probe is
+    # required. Preserve real Node for the actual packaged stdio smoke above.
+    if not shutil.which("npm"):
+        bindir = tmp_path / "npm-version-probe"
+        bindir.mkdir()
+        npm = bindir / ("npm.cmd" if os.name == "nt" else "npm")
+        npm.write_text("@echo 10.8.2\r\n" if os.name == "nt" else "#!/bin/sh\necho 10.8.2\n", encoding="utf-8")
+        npm.chmod(0o755)
+        monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ.get("PATH", ""))
     installed = subprocess.run(
         [
-            sys.executable,
-            str(output / "install.py"),
+            *gui_installer_command(output / "install.py"),
             "--profile",
             "safe",
             "--yes",
@@ -861,7 +871,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         errors="replace",
         timeout=60,
     )
-    assert installed.returncode == 0, installed.stderr or installed.stdout
+    assert installed.returncode == 0, installed.stdout + installed.stderr
     assert json.loads(installed.stdout)["mcpSmoke"]["ok"] is True
 
 
@@ -871,8 +881,7 @@ def test_packaged_unreal_skip_deps_fails_before_writing_mcp_config(tmp_path: Pat
     state_home = tmp_path / "isolated-state"
     result = subprocess.run(
         [
-            sys.executable,
-            str(output / "install.py"),
+            *gui_installer_command(output / "install.py"),
             "--profile",
             "standard",
             "--yes",

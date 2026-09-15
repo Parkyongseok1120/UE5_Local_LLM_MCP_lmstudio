@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
@@ -35,7 +36,8 @@ namespace EvidenceFirst.Tests
                 Check(Bridge.Root != null, "bootstrap");
                 Check(!Bridge.EditAllowed && !Bridge.ExecuteAllowed, "permissions default off");
                 SessionState.SetBool("EvidenceFirst.Edit", true); SessionState.SetBool("EvidenceFirst.Execute", true);
-                Check(Bridge.Status()["capabilities"]["testExecution"].Value<bool>() == false, "base works without test framework");
+                bool frameworkPresent = UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages().Any(p => p.name == "com.unity.test-framework");
+                Check(Bridge.Status()["capabilities"]["testExecution"].Value<bool>() == frameworkPresent, "test capability follows installed package");
                 var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
                 EditorSceneManager.SaveScene(scene, "Assets/TestScene.unity");
                 var request = new JObject { ["action"] = "create", ["name"] = "ReceiptTarget", ["scenePath"] = scene.path, ["operationId"] = "create-object-0001" };
@@ -88,6 +90,7 @@ namespace EvidenceFirst.Tests
                 try { Objects.Resolve(tempRef); Check(false, "expired temporary handle"); } catch (BridgeException) { Check(true, "expired temporary handle"); }
                 EditorSettings.enterPlayModeOptionsEnabled = true;
                 EditorSettings.enterPlayModeOptions = EnterPlayModeOptions.DisableDomainReload | EnterPlayModeOptions.DisableSceneReload;
+                if (Environment.GetEnvironmentVariable("UNITY_TEST_RELEASE") == "1") ReleaseSmoke.Run();
                 report["status"] = "passed"; report["passed"] = passed; report["editorVersion"] = Application.unityVersion;
                 report["projectRoot"] = Bridge.Root;
             }

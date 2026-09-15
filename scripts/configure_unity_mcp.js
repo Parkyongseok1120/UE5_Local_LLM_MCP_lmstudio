@@ -3,11 +3,13 @@
 // Emit an isolated Unity MCP configuration; never edit an existing host config implicitly.
 const path = require("node:path");
 const { projectPolicy } = require("../lmstudio-unity-mcp/src/project");
-function configuration(projectRoot, node = process.execPath) {
+function configuration(projectRoot, node = process.execPath, workerEnv = process.env) {
   const project = projectPolicy(projectRoot);
   return { mcpServers: { "unity-tools": { command: node,
     args: [path.resolve(__dirname, "../lmstudio-unity-mcp/src/server.js")],
-    env: { UNITY_PROJECT_ROOT: project.root, ALLOW_WRITE: "0", ALLOW_COMMANDS: "0" } } } };
+    env: { UNITY_PROJECT_ROOT: project.root, ALLOW_WRITE: "0", ALLOW_COMMANDS: "0",
+      ...(workerEnv.UNITY_DOTNET ? { UNITY_DOTNET: path.resolve(workerEnv.UNITY_DOTNET) } : {}),
+      ...(workerEnv.UNITY_SYMBOL_WORKER ? { UNITY_SYMBOL_WORKER: path.resolve(workerEnv.UNITY_SYMBOL_WORKER) } : {}) } } } };
 }
 module.exports = { configuration };
 if (require.main === module) {
