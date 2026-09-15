@@ -1,0 +1,8 @@
+{
+  "name": "EvidenceFirst.UnityBridge",
+  "rootNamespace": "EvidenceFirst.UnityBridge",
+  "references": ["Unity.Newtonsoft.Json"],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true,
+  "allowUnsafeCode": false
+}

@@ -1,5 +1,7 @@
 # 설치·업데이트·복구
 
+Unity v1.4.0 alpha는 별도 Node MCP와 UPM Editor Bridge로 설치합니다. [Unity 설치·권한·지원 범위](Unity_Setup.md)를 참고하세요. 아래 기존 통합 설치기는 Unreal용이며 Unity 도구를 Unreal 채팅에 자동 추가하지 않습니다.
+
 설치는 저장소 맨 위의 `INSTALL.bat` 또는 `install.sh`에서 시작하면 됩니다. 둘 다 같은 `install.py`를 실행합니다. 용도마다 다른 설치 파일을 찾을 필요는 없습니다.
 
 ## 지원 운영체제와 필수 프로그램
@@ -58,6 +60,16 @@ Intel Mac의 Linux VM 또는 다른 GUI 없는 `llmster` 환경에서는 헤드�
 ```sh
 ./install.sh --profile standard --yes --headless-lmlink
 ```
+
+Intel Mac 호스트에서 전체 VM 흐름을 자동화할 때는 저장소 루트의 전용 설치기를 실행합니다.
+
+```bash
+./install-intel-mac.sh \
+  --project /absolute/path/MyGame.uproject \
+  --engine-root "/Users/Shared/Epic Games/UE_5.7"
+```
+
+이 설치기는 Lima x86_64 VM, 읽기 전용 프로젝트·엔진 마운트, llmster 로그인과 LM Link, 헤드리스 프로필, RAG, 세 MCP 서버 초기화, 모델의 실제 MCP 호출, 프로젝트용 `lmstudio-cli.sh`까지 검증합니다. 계정 페어링 승인만 대화형 단계입니다. 기본 `lms chat`은 MCP 도구를 첨부하지 않으므로 프로젝트용 실행기는 OpenAI 호환 추론 요청과 stdio MCP 서버 사이의 도구 호출 루프를 제공합니다. 이 실행기에는 GUI를 띄우지 않는 헤드리스 Context Compactor가 포함되며 기존 deterministic compaction core로 오래된 대화를 조용히 축약합니다.
 
 `--headless-lmlink`는 `lmstudio`와 `unreal` MCP 구성을 유지하면서 GUI에서만 사용하는 `context_compactor`를 자동으로 제외합니다. 인텔 macOS에서 LM Studio 관련 구성요소를 선택할 때는 이 옵션이 필수입니다.
 

@@ -1,0 +1,121 @@
+# Unity MCP — v1.4.0 alpha
+
+Unity 프로젝트의 상태를 모델이 읽고 명시한 작업만 실행하는 별도 MCP 서버입니다. 내부 모델 호출, Planner, 자동 수정·재시도, 패키지 설치·빌드·Git 작업은 없습니다. 기존 Unreal 서버와 실행 경로를 공유하지 않습니다.
+
+## 호환성 및 프로젝트 독립성
+
+- Unity **2022.3 LTS 이상에서 제공되는 공통 Editor API**를 구현 기준으로 사용합니다. 2022.3과 Unity 6 전체 버전을 테스트한 뜻은 아닙니다. 실제 실행한 버전/운영체제는 [검증 기록](Unity_Validation.md)에 구분합니다.
+- 특정 Editor 설치 경로, 프로젝트 이름, 게임 assembly, MonoBehaviour/SO 클래스 이름을 제품 코드에 넣지 않습니다. 프로젝트 루트는 `UNITY_PROJECT_ROOT`, 타입은 호출 인자, 버전·기능은 handshake에서 결정합니다.
+- 프로젝트를 복사하면 실제 정규 경로가 달라지므로 다른 연결 대상입니다. 각 프로젝트에 별도 MCP 프로세스를 연결합니다.
+- Node.js 20 이상. 기본 UPM 패키지는 Editor-only이며 `com.unity.nuget.newtonsoft-json` 3.2.1 이상을 명시적 의존성으로 사용합니다. 게임 assembly나 Test Framework를 직접 참조하지 않습니다.
+- Editor와 Node MCP는 **같은 OS 호스트**에서 실행합니다. loopback과 PID·실제 경로를 확인하므로 Intel Mac의 Linux VM에서 Mac Editor에 직접 연결하는 구성은 이 alpha에 포함되지 않습니다. 모델 추론은 MCP 호스트가 지원하는 원격 연결을 사용할 수 있습니다.
+- 지원하지 않는 기능은 capability=false 및 `capability_unavailable`로 반환합니다. 모델이 필요로 한다는 이유로 패키지를 설치하거나 다른 구현을 선택하지 않습니다.
+
+## 설치
+
+1. 저장소를 계속 유지할 위치에 둡니다. `shared-tool-core`와 `lmstudio-unreal-agent-mcp/src`의 공통 파일 I/O 의존성도 필요하므로 Unity 폴더만 복사하지 않습니다.
+2. Unity adapter 의존성을 설치합니다.
+
+```sh
+cd /path/to/repository/lmstudio-unity-mcp
+pnpm install --frozen-lockfile --ignore-scripts
+```
+
+3. 선택한 Unity 프로젝트의 Package Manager에서 **Add package from disk**를 선택하고 저장소의 `unity-editor-bridge/package.json`을 지정합니다. UPM이 선언된 Newtonsoft 의존성을 해결합니다. 실행 중인 MCP는 패키지를 설치하지 않습니다.
+4. 다음 명령으로 선택한 프로젝트용 MCP 설정을 출력합니다.
+
+```sh
+node /path/to/repository/scripts/configure_unity_mcp.js /absolute/path/to/UnityProject
+```
+
+5. 출력의 `unity-tools` 항목을 사용하는 MCP 호스트에 등록합니다. Unity 채팅에는 해당 서버를 선택하고 Unreal 도구는 비활성화합니다. 이 스크립트는 기존 호스트 설정을 자동 덮어쓰지 않습니다. 도구 이름이 같은 파일 서버를 함께 노출하지 않습니다.
+6. `unity_status`에서 `connection=connected`, 정규 프로젝트 경로, Editor 버전과 capability를 확인합니다. Editor가 없거나 컴파일 오류로 Bridge가 로드되지 않아도 파일 도구는 사용할 수 있습니다.
+
+기본값은 Observe입니다. 수정하려면 호스트 설정 `ALLOW_WRITE=1`과 Unity 메뉴 **Tools → Evidence First → Allow Edit for this Editor session**을 모두 켭니다. Play/컴파일/import에는 `ALLOW_COMMANDS=1`과 **Allow Execute for this Editor session**이 모두 필요합니다. 메뉴 권한은 Editor를 종료하면 초기화되고 domain reload 사이에는 유지됩니다.
+
+LM Studio의 MCP 설치 방법은 호스트 버전에 따라 달라질 수 있습니다. 생성되는 설정은 stdio MCP 형식이며 모델 선택·로드를 담당하지 않습니다.
+
+## 실제 구현 범위
+
+| 영역 | 구현한 동작 | 현재 제한 |
+|---|---|---|
+| 연결 | 프로젝트 탐지, token 인증, loopback 동적 포트, 세션/버전 handshake, reload 후 discovery 재조회 | 같은 호스트만 지원; 자동 mutation 재전송 없음 |
+| 파일 | 문자 그대로 검색, 범위 읽기, Receipt 기반 부분 수정, absent 조건 생성 | UTF-8만, 파일 2 MiB, 부모 디렉터리는 미리 존재해야 함 |
+| JSON | 명시 경로·깊이 조회, 기존 경로 replace/remove, draft-07 명시 스키마 검증 | root 교체/add/move 미지원, unsafe integer 거부, 원격 스키마 로딩 없음 |
+| CSV | 문자열 행·필터 조회, key 기반 cell 교체, 원본 셀 이외의 바이트 보존 | UTF-8, header 필수, 구분자 명시; 중복/없는 key 오류; 행 생성·삭제·schema 미지원 |
+| 탐색 | 로드된 Scene 객체/컴포넌트, AssetDatabase 필터, 컴파일된 타입 | 타입별 semantic 코드 인덱스 및 전체 참조 그래프 미지원 |
+| Inspector/SO | SerializedProperty 조회, scalar/vector/color/quaternion/enum/object reference 수정, 배열 삽입·제거·이동 | 지원하지 않는 타입은 표시; 관리 참조 타입/그래프 교체는 미지원 |
+| 관리 참조 | ID/타입/명시 propertyPath의 하위 필드 관찰, 다른 속성 수정 시 기존 그래프 보존 | 무한 재귀 전개하지 않음; 임의 getter 실행 없음 |
+| Scene | 열린 Scene 목록, 저장된 열린 Scene에 객체 생성, 이름/활성/부모 변경, component 추가, 정확한 Scene 저장 | Scene 생성/열기, 루트로 reparent, 객체/컴포넌트 삭제 미지원 |
+| SO | 런타임에서 발견된 concrete SO 타입으로 `.asset` 생성, 공통 read/patch, 지정 에셋 저장 | 복제 기능 미지원; 새 SO 생성은 Unity CreateAsset로 바로 저장됨 |
+| Prefab | 원본 ObjectRef/직렬화 조회, 인스턴스 수정, property override 목록 조회 | 원본/isolated 편집, 생성/인스턴스화, nested/variant apply/revert는 미지원 |
+| 로그·컴파일 | 구독 이후 Console, 구조화된 compiler diagnostics, 명시적 script compilation/import | Editor.log 파일 도구와 소스 해시→assembly 검증 미지원; 과거 성공을 현재 코드 증거로 쓰지 않음 |
+| 실행 | 명시적 Play/Stop/Pause/Resume/Step, 런타임 직렬화 snapshot | 런타임 수정과 비직렬화 필드 탐색 미지원 |
+| operation | durable 요청 fingerprint/결과 보관, ID 충돌, reload 중단을 unknown으로 전환, 조회 | 실행 중 API 강제 취소 불가; 장시간 테스트 adapter 미구현 |
+| 테스트/디버그/이미지 | capability 조회 | 실행 adapter, 등록 debug 확장, 캡처는 비활성화 |
+| 파괴적 작업 | capability=false | 독립적인 사용자 승인 경로 미구현; `userApproved=true`로 우회할 수 없음 |
+
+DataSO는 프로젝트에서 만든 ScriptableObject입니다. 별도 포맷/데이터베이스를 만들지 않습니다. Material 등의 참조값은 관찰/지정할 수 있지만 Material·Shader 전용 제작 API는 제공하지 않습니다.
+
+## 도구 사용 예
+
+각 요청은 모델이 선택합니다. 서버가 다음 단계를 호출하지 않습니다.
+
+```json
+{"kind":"assets","query":"t:MyData","limit":10}
+```
+
+`unity_find` 결과의 `target`을 그대로 `unity_object_read`에 전달합니다. 이름을 ID처럼 사용하지 않습니다.
+
+```json
+{"target":"<실제 ObjectRef 객체>","propertyPaths":["health","items.Array.data[0]"],"limit":10}
+```
+
+위 예시의 target 문자열은 설명용 자리표시자입니다. 실제로는 결과에 있는 JSON ObjectRef 객체를 넣습니다.
+
+```json
+{
+  "target":"<실제 ObjectRef 객체>",
+  "scope":"asset",
+  "receipt":"<방금 읽은 receipt>",
+  "operationId":"unique-operation-0001",
+  "patches":[{"op":"set","propertyPath":"health","value":"100"}]
+}
+```
+
+Unity 정수는 64비트 정확도를 위해 decimal 문자열로 전달합니다. enum/flags는 정수값, 벡터는 숫자 배열, 객체 참조는 ObjectRef 또는 명시적 null입니다. `sceneInstance`는 일반 Scene 객체, `asset`은 ScriptableObject 에셋 수정 범위입니다. Prefab 원본을 이 두 범위로 수정할 수 없습니다.
+
+배열 인덱스는 현재 Receipt의 순서 기준입니다. `array_insert`는 삽입한 원소의 `value`를 반드시 지정합니다. 이 alpha에서는 직접 set이 가능한 원소 타입만 삽입합니다. `array_remove`는 객체 참조 배열의 null 처리 후 실제 슬롯 제거까지 수행합니다. `array_move`의 `toIndex`는 이동 후 위치입니다. 관리 참조의 타입 변경/공유관계 재구성은 비활성화되어 있습니다.
+
+Scene/SO 변경은 dirty만 만듭니다. 저장하려면 정확한 Scene 경로 또는 SO target/receipt와 `acknowledgeExistingDirty=true`를 전달합니다. 같은 Scene 또는 같은 asset 파일 내의 기존 사용자 변경·sub-asset도 저장될 수 있습니다. SO 저장은 SaveAssetIfDirty이며 OnWillSaveAssets 훅을 호출하지 않습니다.
+
+`unity_editor`는 API 요청을 발행하면 `accepted`를 반환합니다. 이후 모델이 `unity_status`, `unity_logs`, `unity_operation`을 요청해 관찰해야 합니다. `accepted`는 import 완료, 컴파일 성공, 테스트 통과를 뜻하지 않습니다. `sourceAssemblyVerification=unknown`을 유지합니다.
+
+## 충돌·실패·수명주기
+
+- 파일 receipt는 MCP 프로세스 세션/경로/내용에 묶이고 15분 후 만료됩니다. 객체 receipt는 Editor domain에 묶이며 reload 후 무효입니다. 오래된 receipt를 현재 값으로 자동 갱신하지 않습니다.
+- 조회 cursor는 결과/세션/쿼리에 묶입니다. 상태가 달라지면 `snapshot_changed`입니다. 전체 파일을 읽었어도 응답에는 요청 범위만 포함됩니다.
+- Runtime ObjectRef는 Play session에 묶입니다. Stop 후 또는 새 Play에서 실패하며 같은 이름 객체로 대체하지 않습니다.
+- mutation은 operationId를 필수로 사용합니다. 응답이 유실되면 `unity_operation`으로 확인합니다. 같은 ID의 다른 요청은 충돌합니다. domain reload 중 미완료 기록은 `outcome_unknown`이며 자동 실행하지 않습니다.
+- journal은 프로젝트 Library/EvidenceFirst/operations에 최대 1,000개를 보관하고 초과 시 거부합니다. 자동 삭제/eviction하지 않습니다. Library 삭제·디스크 손실 이후 exactly-once를 보장하지 않습니다. journal을 비운 뒤 이전 ID를 재사용하지 마세요.
+- 짧은 Undo group은 하나의 호출에만 사용합니다. rollback을 시도해도 프로젝트 callback의 부작용은 남을 수 있으므로 `partially_applied`와 `undoCompleted`를 분리합니다. 범용 atomic transaction을 주장하지 않습니다.
+- 네트워크 timeout은 미적용을 의미하지 않습니다. `outcome_unknown`으로 표시하며 재실행하지 않습니다. 취소 요청은 실행 중 Unity API를 강제 중단하지 못하며 `not_cancelled`를 반환합니다.
+
+## 응답 및 보안 경계
+
+기본 페이지 50개, 최대 200개; RPC 요청 128 KiB, 응답 64 KiB; 로그 최대 500개/256 KiB입니다. 로그 개별 message/stack은 잘림을 표시하고 구독 시작/생략 수를 반환합니다. 조회 필드 하나가 예산보다 크면 임의로 null로 바꾸지 않고 좁은 조회를 요청하는 오류를 반환합니다.
+
+일반 파일 쓰기는 Assets의 텍스트 allowlist만 허용합니다. Packages와 ProjectSettings는 기본 읽기 전용이며 embedded/local package 쓰기 allowlist는 아직 없습니다. Library/Temp/숨김 경로는 모델 파일 도구에서 차단합니다. `.meta`, `.prefab`, `.unity`, `.asset`은 일반 쓰기로 우회할 수 없습니다. symlink/junction 및 새 파일 부모를 재검사하며 hard-linked 수정도 거부합니다. 기존 lock/temp-rename는 협력하는 프로세스 간 제어이고 외부 Editor의 모든 경쟁 쓰기에 대한 OS 원자적 CAS는 아닙니다.
+
+discovery token은 private 파일과 RPC 인증에만 사용하며 도구 결과에 반환하지 않습니다. 같은 OS 사용자나 실행 중 프로젝트 코드에 대한 sandbox가 아닙니다. Scene/Asset 로드, 직렬화, import, OnValidate, ExecuteAlways, AddComponent의 RequireComponent 처리 등에서 프로젝트 코드나 Unity 자체 부작용이 발생할 수 있습니다. 서버는 관련 수정 대상을 추가로 판단하지 않습니다.
+
+## 개발 검사
+
+```sh
+node --test lmstudio-unity-mcp/test/*.test.js
+node lmstudio-unreal-agent-mcp/test/run-tests.js
+UNITY_TEST_VERSION=<설치된 버전> node scripts/test_unity_bridge.js /absolute/path/to/Unity /existing/work-parent
+node scripts/test_unity_rpc.js /generated/unity-bridge-test-project
+```
+
+첫 Editor harness는 기존 사용자 프로젝트를 사용하지 않고 임시 프로젝트를 생성합니다. 후속 RPC 검사 때문에 해당 테스트 Editor를 실행 상태로 남기고 PID를 출력합니다. 검사가 끝나면 그 PID만 종료해야 합니다. 제품의 Unity 지원과 테스트 harness의 명시적 테스트 시퀀스를 혼동하지 않습니다.

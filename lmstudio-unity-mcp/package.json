@@ -1,0 +1,14 @@
+{
+  "name": "lmstudio-unity-mcp",
+  "version": "1.4.0-alpha.1",
+  "private": true,
+  "type": "commonjs",
+  "description": "Explicit Unity observation and editing tools; no internal agent or model runtime.",
+  "scripts": { "start": "node src/server.js", "test": "node --test test/*.test.js" },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ajv": "^8.17.1",
+    "jsonc-parser": "^3.3.1"
+  }
+}

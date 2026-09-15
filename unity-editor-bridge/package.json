@@ -1,0 +1,8 @@
+{
+  "name": "com.evidencefirst.unity-bridge",
+  "version": "1.4.0-alpha.1",
+  "displayName": "Evidence First Unity Bridge",
+  "description": "Editor-only explicit MCP operations. No model runtime or planner.",
+  "unity": "2022.3",
+  "dependencies": { "com.unity.nuget.newtonsoft-json": "3.2.1" }
+}

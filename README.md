@@ -6,6 +6,8 @@ AI에게 프로젝트 전체를 매번 붙여 넣는 대신, 필요한 내용을
 
 ## 설치 방법
 
+Unity 지원은 v1.4.0 **alpha**에서 별도 서버와 Editor Bridge로 추가하고 있습니다. 특정 프로젝트나 Editor 설치 경로를 고정하지 않으며, 실제 구현 기능과 미구현 capability를 구분합니다. [Unity 설치·지원 범위](docs/Unity_Setup.md), [설계 및 기존 구조 분석](docs/Unity_1_4_Design.md), [검증 기록](docs/Unity_Validation.md)을 참고하세요. 아래의 기존 설치 흐름은 Unreal용입니다.
+
 ```powershell
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
 cd UE5_Local_LLM_MCP_lmstudio
@@ -19,6 +21,16 @@ Intel Mac에서는 LM Studio GUI 대신 Linux x64 VM의 `llmster`를 사용하�
 ```sh
 ./install.sh --profile standard --yes --headless-lmlink
 ```
+
+Intel Mac에서 VM 생성부터 LM Link, 프로젝트 마운트, MCP/RAG 설치와 실제 모델 도구 호출 검증까지 한 번에 수행하려면 호스트 macOS에서 다음 전용 설치기를 사용합니다.
+
+```bash
+./install-intel-mac.sh \
+  --project /absolute/path/MyGame.uproject \
+  --engine-root "/Users/Shared/Epic Games/UE_5.7"
+```
+
+최초 실행에서 LM Studio 계정 로그인이 필요하면 터미널에 페어링 URL이 표시됩니다. 브라우저에서 승인하면 설치가 자동으로 계속됩니다. 완료 후 프로젝트의 `./lmstudio-cli.sh`를 사용합니다. 기본 `lms chat`에는 MCP 통합 옵션이 없기 때문에 이 실행기가 `mcp.json`의 모든 도구를 모델에 전달하고 도구 요청을 자동 실행합니다. GUI 플러그인 대신 같은 deterministic core를 사용하는 헤드리스 Compactor가 채팅 요청 직전에 백그라운드로만 동작하며, 기본 24개 메시지 또는 컨텍스트 여유 14K 이하에서 오래된 기록을 압축합니다. MCP 서버 자체의 안전 제한은 계속 적용됩니다.
 
 설치 화면에서 프로젝트와 엔진을 고르고, 검색 자료를 만들지 선택하면 됩니다. 처음에는 `STANDARD` 구성에 읽기 전용인 `SAFE` 권한으로 시작하면 됩니다. AI에게 파일 수정과 빌드까지 맡기려면 `AGENT` 권한을 따로 선택해야 합니다.
 

@@ -1,0 +1,5 @@
+{
+  "name": "EvidenceFirst.UnityBridge.Smoke",
+  "references": ["EvidenceFirst.UnityBridge", "Unity.Newtonsoft.Json"],
+  "includePlatforms": ["Editor"]
+}
