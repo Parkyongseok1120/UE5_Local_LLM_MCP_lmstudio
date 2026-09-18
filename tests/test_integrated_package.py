@@ -320,8 +320,10 @@ def test_package_builder_requires_the_direct_compactor_runtime_surface() -> None
         "lmstudio-context-compactor-plugin/src/round-loop.ts",
         "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
         "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+        "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js",
         "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
         "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+        "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
         "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
         "lmstudio-context-compactor-plugin/src/continuity-text.js",
         "lmstudio-context-compactor-plugin/src/durable-memory-sanitizer.js",
@@ -409,6 +411,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
     builder = _load_builder_module()
     expected_files = {
         "INSTALL.bat",
+        "UPDATE.bat",
         "install.sh",
         "install.py",
         "rag.ps1",
@@ -765,7 +768,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
             or path.name == "install.sh"
         )
     }
-    assert public_launchers == {"INSTALL.bat", "install.sh"}
+    assert public_launchers == {"INSTALL.bat", "UPDATE.bat", "install.sh"}
     assert {path.name for path in (output / "installer").iterdir()} == {
         "README.md",
         "__init__.py",
@@ -785,10 +788,11 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.3.3"
-    assert packaged_installer_manifest["version"] == "2.1.17"
+    assert packaged_installer_manifest["version"] == "2.1.18"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
     assert (output / "docs" / "Release_Notes_1_3_3.md").is_file()
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
+    assert (output / "UPDATE.bat").read_bytes() == (ROOT / "UPDATE.bat").read_bytes()
     source_launcher = (ROOT / "install.sh").read_bytes()
     expected_launcher = source_launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     assert (output / "install.sh").read_bytes() == expected_launcher

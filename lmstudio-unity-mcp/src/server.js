@@ -11,6 +11,10 @@ const { projectPolicy } = require("./project");
 const { BridgeClient } = require("./bridge-client");
 const { tools } = require("./catalog");
 const { Symbols } = require("./symbols");
+const PROJECT_FILE_TOOLS = new Set([
+  "read_file", "list_directory", "search_files", "patch_file", "create_file",
+  "structured_data_read", "structured_data_patch",
+]);
 function createRuntime(env = process.env, injectedBridge) {
   const policy = projectPolicy(env.UNITY_PROJECT_ROOT);
   const files = new Files(policy, { allowWrite: env.ALLOW_WRITE === "1" });
@@ -30,6 +34,7 @@ function createRuntime(env = process.env, injectedBridge) {
       let result;
       if (name === "unity_symbols") result = await symbols.call(args);
       else if (name === "read_file") result = await files.read(args);
+      else if (name === "list_directory") result = files.list(args);
       else if (name === "search_files") result = await files.search(args);
       else if (name === "patch_file") result = await files.patch(args);
       else if (name === "create_file") result = await files.mutate(args, () => args.content, true);
@@ -43,6 +48,9 @@ function createRuntime(env = process.env, injectedBridge) {
         if (edit && env.ALLOW_WRITE !== "1") fail("edit_disabled", "Adapter Edit permission is disabled");
         if (execute && env.ALLOW_COMMANDS !== "1") fail("execute_disabled", "Adapter Execute permission is disabled");
         result = await bridge.call(name, args);
+      }
+      if (PROJECT_FILE_TOOLS.has(name) && result && !result.errorCode) {
+        result = { ...result, canonicalProjectRoot: policy.root, projectIdentity: policy.projectIdentity };
       }
       return bounded(result, args.byteBudget ?? 65536);
     } catch (error) {

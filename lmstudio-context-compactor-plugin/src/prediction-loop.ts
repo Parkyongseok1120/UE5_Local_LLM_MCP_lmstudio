@@ -1,6 +1,6 @@
 import {
   Chat,
-  type ChatMessage,
+  ChatMessage,
   type LLMTool,
   type PredictionLoopHandler,
   type PredictionLoopHandlerController,
@@ -15,6 +15,26 @@ const core = require("./direct-compaction-core.js") as {
   buildCheckpoint(messages: Array<NormalizedMessage>, options?: Record<string, unknown>): CheckpointResult;
   shouldCompact(measurement: ContextMeasurement, options?: Record<string, unknown>): boolean;
 };
+const modelNotes = require("./continuity-model-notes.js") as {
+  NOTE_INSTRUCTION: string;
+  ContinuityNoteStore: new () => {
+    read(key: string): ContinuityNote | null;
+    write(key: string, note: ContinuityNote): boolean;
+  };
+  attachScope(draft: unknown, fingerprint: string, messages: Array<ChatMessage>): ContinuityNote | null;
+  historyKey(messages: Array<ChatMessage>, workingDirectory: string): string;
+  objectiveFingerprint(messages: Array<ChatMessage>): string;
+  reconcileStoredNote(note: ContinuityNote, messages: Array<ChatMessage>): ContinuityNote | null;
+  renderAssistantNote(note: ContinuityNote): string;
+  splitVisibleAnswer(text: string): { visibleText: string; hasFooter: boolean; note: unknown };
+};
+
+type ContinuityNote = {
+  scope: { objectiveFingerprint: string; projectIdentity?: string };
+  decisions: Array<unknown>;
+  rejectedHypotheses: Array<unknown>;
+  openQuestions: Array<unknown>;
+};
 
 type NormalizedMessage = {
   role: string;
@@ -26,6 +46,7 @@ type NormalizedMessage = {
 
 type CheckpointResult = {
   checkpoint: string;
+  assistantCheckpoint: string;
   retainedIndexes: Array<number>;
   omittedMessageCount: number;
   latestUserVerbatim: string;
@@ -159,10 +180,31 @@ function buildCompactedHistory(
     if (messages[index].isSystemPrompt() && retained.has(index)) compacted.append(messages[index]);
   }
   compacted.append("system", checkpoint.checkpoint);
+  if (checkpoint.assistantCheckpoint) compacted.append("assistant", checkpoint.assistantCheckpoint);
   for (let index = 0; index < messages.length; index += 1) {
     if (!messages[index].isSystemPrompt() && retained.has(index)) compacted.append(messages[index]);
   }
   return { history: compacted, checkpoint };
+}
+
+function composeModelHistory(history: Chat, note: ContinuityNote | null, config: DirectConfig) {
+  const noteText = note ? modelNotes.renderAssistantNote(note) : "";
+  const instruction = modelNotes.NOTE_INSTRUCTION;
+  const canIncludeInstruction = config.maxCheckpointChars >= 2000 + instruction.length;
+  const canIncludeNote = canIncludeInstruction
+    && config.maxCheckpointChars >= 2000 + instruction.length + noteText.length;
+  const overhead = canIncludeInstruction ? instruction.length + (canIncludeNote ? noteText.length : 0) : 0;
+  const composed = Chat.empty();
+  const messages = history.getMessagesArray();
+  let index = 0;
+  while (index < messages.length && messages[index].isSystemPrompt()) {
+    composed.append(messages[index]);
+    index += 1;
+  }
+  if (canIncludeInstruction) composed.append("system", instruction);
+  if (canIncludeNote && noteText) composed.append("assistant", noteText);
+  for (; index < messages.length; index += 1) composed.append(messages[index]);
+  return { history: composed, overhead };
 }
 
 function selectedSourceIsThisPlugin(source: unknown): boolean {
@@ -236,7 +278,10 @@ function createMessageEmitter(
   return { beginRound, emit, registerRequest };
 }
 
-export const handlePredictionLoop: PredictionLoopHandler = async (ctl) => {
+export function createPredictionLoopHandler(
+  noteStore: InstanceType<typeof modelNotes.ContinuityNoteStore> = new modelNotes.ContinuityNoteStore(),
+): PredictionLoopHandler {
+  return async (ctl) => {
   ctl.guardAbort();
   const config = readConfig(ctl);
   const originalHistory = await ctl.pullHistory();
@@ -247,12 +292,30 @@ export const handlePredictionLoop: PredictionLoopHandler = async (ctl) => {
 
   const toolSession = await ctl.startToolUseSession();
   const emitter = createMessageEmitter(ctl, toolSession.tools);
+  const visibleHistory = Chat.from(originalHistory);
+  const objectiveFingerprint = modelNotes.objectiveFingerprint(originalHistory.getMessagesArray());
+  let workingDirectory = "";
+  if (!config.observeOnly) {
+    try { workingDirectory = ctl.getWorkingDirectory(); } catch { /* No stable chat workspace is available. */ }
+  }
+  const originalMessages = originalHistory.getMessagesArray();
+  const priorHistoryKey = originalMessages.at(-1)?.isUserMessage()
+    ? modelNotes.historyKey(originalMessages.slice(0, -1), workingDirectory) : "";
+  const priorNote = priorHistoryKey ? noteStore.read(priorHistoryKey) : null;
+  let activeNote = priorNote?.scope.objectiveFingerprint === objectiveFingerprint
+    ? modelNotes.reconcileStoredNote(priorNote, originalMessages) : null;
   let workingHistory = originalHistory;
   let roundIndex = 0;
   try {
     while (true) {
       ctl.guardAbort();
-      const before = await measureContext(tokenSource, workingHistory, config, toolSession.tools);
+      const noteEnabled = Boolean(workingDirectory && objectiveFingerprint && !config.observeOnly);
+      if (noteEnabled && activeNote) {
+        activeNote = modelNotes.reconcileStoredNote(activeNote, visibleHistory.getMessagesArray());
+      }
+      const beforeInput = noteEnabled ? composeModelHistory(workingHistory, activeNote, config)
+        : { history: workingHistory, overhead: 0 };
+      const before = await measureContext(tokenSource, beforeInput.history, config, toolSession.tools);
       let modelHistory = workingHistory;
       let compacted = false;
       if (core.shouldCompact(before, config)) {
@@ -261,12 +324,15 @@ export const handlePredictionLoop: PredictionLoopHandler = async (ctl) => {
           workingHistory,
           hard ? 0 : config.recentCompleteTurns,
           config,
-          hard ? { maxCurrentTurnMessages: 2 } : {},
+          { ...(hard ? { maxCurrentTurnMessages: 2 } : {}),
+            maxCheckpointChars: config.maxCheckpointChars - beforeInput.overhead },
         );
         if (!hard) {
           let needsBoundedCurrentTurn = candidate.history === workingHistory;
           if (!needsBoundedCurrentTurn) {
-            const afterFirst = await measureContext(tokenSource, candidate.history, config, toolSession.tools);
+            const measuredCandidate = noteEnabled ? composeModelHistory(candidate.history, activeNote, config).history
+              : candidate.history;
+            const afterFirst = await measureContext(tokenSource, measuredCandidate, config, toolSession.tools);
             needsBoundedCurrentTurn = core.shouldCompact(afterFirst, config);
           }
           if (needsBoundedCurrentTurn) {
@@ -274,7 +340,8 @@ export const handlePredictionLoop: PredictionLoopHandler = async (ctl) => {
               workingHistory,
               0,
               config,
-              { maxCurrentTurnMessages: 2 },
+              { maxCurrentTurnMessages: 2,
+                maxCheckpointChars: config.maxCheckpointChars - beforeInput.overhead },
             );
           }
         }
@@ -284,6 +351,8 @@ export const handlePredictionLoop: PredictionLoopHandler = async (ctl) => {
         }
       }
       workingHistory = modelHistory;
+      const modelInput = noteEnabled ? composeModelHistory(workingHistory, activeNote, config).history
+        : workingHistory;
 
       ctl.debug({
         event: "direct_context_measurement",
@@ -303,7 +372,7 @@ export const handlePredictionLoop: PredictionLoopHandler = async (ctl) => {
       emitter.beginRound();
       const captured = await runOneToolRound(
         tokenSource,
-        workingHistory,
+        modelInput,
         toolSession.tools,
         ctl.abortSignal,
         {
@@ -328,17 +397,41 @@ export const handlePredictionLoop: PredictionLoopHandler = async (ctl) => {
         },
       );
       for (const message of captured.messages) {
-        workingHistory.append(message);
-        emitter.emit(message);
+        let visibleMessage = message;
+        if (message.isAssistantMessage() && message.getText()) {
+          const extracted = modelNotes.splitVisibleAnswer(message.getText());
+          if (extracted.hasFooter) {
+            visibleMessage = ChatMessage.from(message);
+            visibleMessage.replaceText(extracted.visibleText);
+            if (noteEnabled && extracted.note) {
+              activeNote = modelNotes.attachScope(
+                extracted.note, objectiveFingerprint, visibleHistory.getMessagesArray(),
+              );
+              if (activeNote && activeNote.decisions.length + activeNote.rejectedHypotheses.length
+                + activeNote.openQuestions.length === 0) activeNote = null;
+            }
+          }
+        }
+        workingHistory.append(visibleMessage);
+        visibleHistory.append(visibleMessage);
+        emitter.emit(visibleMessage);
       }
       if (captured.failure !== undefined) throw captured.failure;
       if (!captured.continueAfterTools) break;
       roundIndex += 1;
     }
+    if (activeNote && workingDirectory) {
+      const nextHistoryKey = modelNotes.historyKey(visibleHistory.getMessagesArray(), workingDirectory);
+      const verifiedNote = modelNotes.reconcileStoredNote(activeNote, visibleHistory.getMessagesArray());
+      if (nextHistoryKey && verifiedNote) noteStore.write(nextHistoryKey, verifiedNote);
+    }
   } finally {
     toolSession[Symbol.dispose]();
   }
-};
+  };
+}
+
+export const handlePredictionLoop = createPredictionLoopHandler();
 
 export const __test = {
   buildCompactedHistory,

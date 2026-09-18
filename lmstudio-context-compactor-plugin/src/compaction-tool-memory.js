@@ -82,9 +82,14 @@ function retainedDiagnosticList(value, maxItems = 8, maxChars = 320) {
 function exactProjectIdentity(value) {
   const descriptor = String(value || "");
   const pathApi = pathApiFor(descriptor);
-  if (!descriptor.toLowerCase().endsWith(".uproject") || !pathApi.isAbsolute(descriptor)) return "";
+  if (!pathApi.isAbsolute(descriptor)) return "";
   const resolved = pathApi.resolve(descriptor);
   return pathApi === path.win32 ? resolved.toLowerCase() : resolved;
+}
+
+function hasBoundUnityProject(value) {
+  const root = String(value?.canonicalProjectRoot || "");
+  return Boolean(value?.projectIdentity && pathApiFor(root).isAbsolute(root));
 }
 
 function stripControl(value, depth = 0) {
@@ -130,7 +135,7 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
     scoped.activeProjectCleared = true;
   }
   if (inconsistentProjectScope) {
-    for (const key of ["activeProject", "projectPath", "project", "canonicalProject"]) delete scoped[key];
+    for (const key of ["activeProject", "projectPath", "project", "canonicalProject", "canonicalProjectRoot", "projectIdentity"]) delete scoped[key];
     scoped.projectScopeState = "omitted_inconsistent_project_scope";
   }
   const hasFileIdentity = Boolean(
@@ -141,12 +146,15 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
     scoped.canonicalProject = descriptor;
     scoped.canonicalProjectSource = perCallProject
       ? "tool_request_fact"
-      : (explicitProject ? "tool_result_fact" : fallbackSource);
+      : (explicitProject ? (hasBoundUnityProject(scoped) ? "unity_tool_result_fact" : "tool_result_fact") : fallbackSource);
     retainedObservation = fileObservation(scoped, descriptor);
     if (retainedObservation) {
       scoped.canonicalProjectRoot = retainedObservation.canonicalProjectRoot;
       scoped.canonicalPath = retainedObservation.canonicalPath;
-      scoped.mutationSnapshotState = "fresh_read_required";
+      if (scoped.operation || scoped.sha256 || scoped.previousSha256
+        || scoped.errorCode === "FILE_VERSION_CONFLICT") {
+        scoped.mutationSnapshotState = "fresh_read_required";
+      }
     }
   }
   if (hasFileIdentity && !retainedObservation) {
@@ -188,7 +196,7 @@ function parseToolResult(content) {
       "omittedErrorShapeCount", "omittedWarningShapeCount", "schemaVersion",
       "activeProject", "projectPath", "project", "engineAssociation", "resolvedEngineVersion",
       "requestedEngineAssociation", "resolvedRootType", "projectRelativePath", "workspaceRelativePath",
-      "hashSource", "canonicalProject", "canonicalPath",
+      "hashSource", "canonicalProject", "canonicalProjectRoot", "projectIdentity", "canonicalPath",
     ]) {
       if (source[key] !== undefined) out[key] = source[key];
     }
@@ -201,7 +209,13 @@ function parseToolResult(content) {
     if (source.absolutePath && out.canonicalPath === undefined) {
       out.canonicalPath = pathApiFor(source.absolutePath).resolve(String(source.absolutePath));
     }
-    if (source.snapshotCapturedAt !== undefined) out.lastObservedAt = source.snapshotCapturedAt;
+    if (hasBoundUnityProject(source) && source.hash !== undefined && out.sha256 === undefined) {
+      out.sha256 = source.hash;
+    }
+    if (source.lastObservedAt !== undefined || source.snapshotCapturedAt !== undefined
+      || (hasBoundUnityProject(source) && source.observedAt !== undefined)) {
+      out.lastObservedAt = source.lastObservedAt || source.snapshotCapturedAt || source.observedAt;
+    }
     if (out.path && (out.operation || out.sha256 || out.previousSha256 || out.canonicalPath)) {
       out.mutationSnapshotState = "fresh_read_required";
     }
@@ -308,7 +322,7 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     const requestOwnsScope = requestScope?.hasExplicitProject === true
       && requestScope?.changesActiveProject !== true;
     if (activeProjectCleared) activeProject = "";
-    else if (explicitProject && !requestOwnsScope) activeProject = explicitProject;
+    else if (explicitProject && !requestOwnsScope && !hasBoundUnityProject(parsed)) activeProject = explicitProject;
     const fallbackProject = activeProjectCleared ? "" : (requestOwnsScope ? requestScope.descriptor : activeProject);
     const fallbackSource = requestOwnsScope
       ? (requestScope.descriptor ? "tool_request_fact" : "unresolved_tool_request_project")
@@ -464,7 +478,8 @@ function stateMemory(outcomes) {
       continue;
     }
     const projectCandidate = projectDescriptor(item);
-    if (projectCandidate && item.canonicalProjectSource !== "tool_request_fact") {
+    if (projectCandidate && item.canonicalProjectSource !== "tool_request_fact"
+      && item.canonicalProjectSource !== "unity_tool_result_fact") {
       activeProject = {
         descriptor: String(projectCandidate),
         root: projectRoot(projectCandidate),

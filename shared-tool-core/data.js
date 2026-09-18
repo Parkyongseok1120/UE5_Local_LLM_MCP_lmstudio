@@ -100,7 +100,9 @@ function dataTools(files, jsonc, Ajv) {
     if (args.format === "json") {
       const selected = at(jsonDocument(s.content), args.selector ?? []);
       const entries = selected && typeof selected === "object" ? Object.entries(selected).map(([key, value]) => ({ key, ...limited(value, args.depth ?? 1) })) : [{ ...limited(selected, 0) }];
-      return bounded({ status: "observed", receipt: s.receipt, ...page(entries, args, hash(s.hash + JSON.stringify([args.selector, args.depth]))), validation: await schemaCheck(args, jsonDocument(s.content)) }, args.byteBudget);
+      return bounded({ status: "observed", path: args.path, hash: s.hash, observedAt: new Date().toISOString(),
+        receipt: s.receipt, ...page(entries, args, hash(s.hash + JSON.stringify([args.selector, args.depth]))),
+        validation: await schemaCheck(args, jsonDocument(s.content)) }, args.byteBudget);
     }
     if (args.schemaPath) fail("capability_unavailable", "CSV schema validation is not implemented; schemaPath is JSON-only");
     const doc = csvDocument(s.content, args.csv);
@@ -109,7 +111,8 @@ function dataTools(files, jsonc, Ajv) {
       if (!doc.columns.includes(args.filter.column)) fail("missing_column", "Filter column does not exist");
       rows = rows.filter(r => r.values[args.filter.column] === args.filter.equals);
     }
-    return bounded({ status: "observed", receipt: s.receipt, columns: doc.columns, format: doc.format,
+    return bounded({ status: "observed", path: args.path, hash: s.hash, observedAt: new Date().toISOString(),
+      receipt: s.receipt, columns: doc.columns, format: doc.format,
       ...page(rows, args, hash(s.hash + JSON.stringify([args.csv, args.filter]))) }, args.byteBudget);
   }
   async function patch(args) {

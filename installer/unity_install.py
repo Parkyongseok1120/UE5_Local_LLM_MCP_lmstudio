@@ -70,7 +70,7 @@ def worker(args, root: Path, project: Path, state: Path, node: str, external: li
     raise ValueError("Install a compatible .NET SDK or provide --unity-editor / --unity-dotnet and --unity-symbol-worker; no fixed engine version is assumed")
 
 
-def install_unity(args, root: Path, transaction_type, lock_type) -> dict:
+def install_unity(args, root: Path, transaction_type, lock_type, *, transaction=None, external_actions=None) -> dict:
     selected = getattr(args, "unity_project", None) or args.active_project
     if not selected:
         raise ValueError("--unity-project must name an existing Unity project root")
@@ -107,9 +107,10 @@ def install_unity(args, root: Path, transaction_type, lock_type) -> dict:
         return report
     if not node or int(run([node, "--version"], cwd=root).stdout.strip().lstrip("v").split(".")[0]) < 20:
         raise ValueError("Node.js 20+ required")
-    tx = transaction_type(state, [state, project / "Packages", config_path.parent], dry_run=False)
-    lock = lock_type(state, dry_run=False)
-    lock.acquire()
+    tx = transaction if transaction is not None else transaction_type(state, [state, project / "Packages", config_path.parent], dry_run=False)
+    lock = lock_type(state, dry_run=False) if transaction is None else None
+    if lock is not None:
+        lock.acquire()
     try:
         adapter = root / "lmstudio-unity-mcp"
         if not args.skip_deps:
@@ -144,10 +145,15 @@ def install_unity(args, root: Path, transaction_type, lock_type) -> dict:
         report["verification"] = json.loads(check.stdout)
         report["ready"] = report["verification"].get("connection") == "connected"
         report["worker"] = str(binary); report["ok"] = True
-        report["journal"] = str(tx.commit(report))
+        if transaction is None:
+            report["journal"] = str(tx.commit(report))
         return report
     except Exception:
-        tx.rollback_actions()
+        if transaction is None:
+            tx.rollback_actions()
         raise
     finally:
-        lock.release()
+        if external_actions is not None:
+            external_actions.extend("unity-" + action for action in report["externalActions"])
+        if lock is not None:
+            lock.release()

@@ -40,6 +40,48 @@ test("receipt conflicts, forgery, cross-project isolation and re-read", async t 
   assert.equal(result.status, "applied"); assert.equal(a.get(args.path), "class After {}\r\n");
   assert.equal(result.compilation, "unknown"); assert.equal(result.import, "not_requested");
 });
+test("file observations carry the bound project and the observed file version", async t => {
+  const a = fixture(t), b = fixture(t);
+  for (const f of [a, b]) {
+    f.put("Assets/Code.cs", "class Shared {}\n");
+    f.put("Assets/data.json", '{"value":1}');
+    f.put("Assets/table.csv", "key,value\na,1\n");
+  }
+  const aRead = await a.call("read_file", { path: "Assets/Code.cs" });
+  const bRead = await b.call("read_file", { path: "Assets/Code.cs" });
+  assert.equal(aRead.canonicalProjectRoot, a.root);
+  assert.equal(aRead.projectIdentity, a.policy.projectIdentity);
+  assert.notEqual(aRead.projectIdentity, bRead.projectIdentity);
+  assert.equal(aRead.hash, bRead.hash);
+  assert.match(aRead.hash, /^[a-f0-9]{64}$/u);
+  assert.ok(Number.isFinite(Date.parse(aRead.observedAt)));
+
+  const json = await a.call("structured_data_read", { path: "Assets/data.json", format: "json" });
+  const csv = await a.call("structured_data_read", { path: "Assets/table.csv", format: "csv",
+    csv: { header: true, delimiter: ",", keyColumn: "key", duplicateKey: "error", missingKey: "error" } });
+  for (const observed of [json, csv]) {
+    assert.equal(observed.canonicalProjectRoot, a.root);
+    assert.equal(observed.projectIdentity, a.policy.projectIdentity);
+    assert.match(observed.hash, /^[a-f0-9]{64}$/u);
+    assert.ok(Number.isFinite(Date.parse(observed.observedAt)));
+  }
+  assert.equal(json.path, "Assets/data.json");
+  assert.equal(csv.path, "Assets/table.csv");
+
+  const listing = await a.call("list_directory", { path: "Assets" });
+  const search = await a.call("search_files", { path: "Assets", extensions: [".cs", ".json"] });
+  for (const observed of [listing, search]) {
+    assert.equal(observed.canonicalProjectRoot, a.root);
+    assert.equal(observed.projectIdentity, a.policy.projectIdentity);
+    assert.equal(Object.hasOwn(observed, "hash"), false);
+  }
+  const changed = await a.call("patch_file", { path: "Assets/Code.cs", receipt: aRead.receipt,
+    edits: [{ oldText: "Shared", newText: "Changed" }] });
+  assert.equal(changed.status, "applied");
+  assert.equal(changed.canonicalProjectRoot, a.root);
+  assert.equal(changed.projectIdentity, a.policy.projectIdentity);
+  assert.notEqual(changed.hash, aRead.hash);
+});
 test("permissions, create precondition, exact-match edits, schema validation", async t => {
   const f = fixture(t, false);
   assert.equal((await f.call("create_file", { path: "Assets/New.cs", content: "", mustNotExist: true })).errorCode, "edit_disabled");
@@ -53,8 +95,12 @@ test("symlinks, hardlinks, protected formats and new-file parent checks", async 
   const f = fixture(t);
   const external = fs.mkdtempSync(path.join(os.tmpdir(), "unity-external-"));
   t.after(() => fs.rmSync(external, { recursive: true, force: true }));
-  fs.symlinkSync(external, path.join(f.root, "Assets/Link"), "dir");
-  assert.equal((await f.call("create_file", { path: "Assets/Link/x.cs", content: "bad", mustNotExist: true })).errorCode, "symlink_denied");
+  try {
+    fs.symlinkSync(external, path.join(f.root, "Assets/Link"), "dir");
+    assert.equal((await f.call("create_file", { path: "Assets/Link/x.cs", content: "bad", mustNotExist: true })).errorCode, "symlink_denied");
+  } catch (error) {
+    if (error.code !== "EPERM") throw error; // Windows may disallow symlink creation without developer mode.
+  }
   for (const p of ["Assets/a.prefab", "Assets/a.unity", "Assets/a.asset", "Assets/a.meta", "Packages/a.cs", "ProjectSettings/a.json", "Library/a.cs", "Assets/../a.cs"])
     assert.notEqual((await f.call("create_file", { path: p, content: "bad", mustNotExist: true })).status, "applied");
   f.put("Assets/a.cs", "original"); fs.linkSync(path.join(f.root, "Assets/a.cs"), path.join(f.root, "Assets/b.cs"));
@@ -128,6 +174,12 @@ test("real MCP stdio initialize/list/call preserves structured offline evidence"
   const status = await client.callTool({ name: "unity_status", arguments: {} });
   assert.equal(status.structuredContent.connection, "disconnected");
   assert.equal(status.structuredContent.projectIdentity, f.policy.projectIdentity);
+  assert(catalog.tools.some(tool => tool.name === "list_directory"));
+  f.put("Assets/Listed.cs", "class Listed {}");
+  const listing = await client.callTool({ name: "list_directory", arguments: { path: "Assets", kind: "files" } });
+  assert(listing.structuredContent.items.some(item => item.path === "Assets/Listed.cs"));
+  const search = await client.callTool({ name: "search_files", arguments: { path: "Assets", extensions: [".cs"] } });
+  assert(search.structuredContent.items.some(item => item.path === "Assets/Listed.cs"));
   const rejected = await client.callTool({ name: "create_file", arguments: { path: "Assets/Denied.cs", mustNotExist: true, content: "class Denied {}" } });
   assert.equal(rejected.isError, true); assert.equal(rejected.structuredContent.errorCode, "edit_disabled");
 });

@@ -23,6 +23,13 @@ const {
   extractPriorContinuityState,
 } = require("./continuity-memory.js");
 const {
+  extractPriorAssistantEvidence,
+  generatedAssistantCheckpoint,
+  mergePriorAssistantEvidence,
+  renderAssistantCheckpoint,
+  splitAssistantEvidence,
+} = require("./continuity-assistant-evidence.js");
+const {
   clip,
   clipHeadTail,
   looksElliptical,
@@ -87,7 +94,7 @@ function historicalConstraintEvidence(messages, latestUserIndex, maxItems = 12) 
 function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
   const candidates = [];
   const start = Math.max(0, latestUserIndex - 8);
-  const window = messages.slice(start, latestUserIndex + 1);
+  const window = messages.filter((message) => message.index >= start && message.index <= latestUserIndex);
   for (let offset = 0; offset < window.length; offset += 1) {
     const message = window[offset];
     if (message.role !== "user") continue;
@@ -114,7 +121,7 @@ function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
 
 function previousTurnFinalResponseEvidence(messages, latestUserIndex) {
   if (latestUserIndex <= 0) return { present: false, reason: "no_previous_turn" };
-  const prior = messages[latestUserIndex - 1];
+  const prior = messages.filter((message) => message.index < latestUserIndex).at(-1);
   if (!prior) return { present: false, reason: "no_previous_message" };
   if (prior.role === "assistant" && prior.toolRequests.length === 0 && prior.text.trim()) {
     return { present: true, messageIndex: prior.index };
@@ -220,7 +227,8 @@ function mergeEvidence(previous, current, maxItems) {
 
 function generatedCheckpoint(message) {
   const text = String(message?.text || "");
-  return CONTINUITY_MARKERS.some((marker) => text.includes(marker))
+  return generatedAssistantCheckpoint(message)
+    || CONTINUITY_MARKERS.some((marker) => text.includes(marker))
     || text.startsWith("[Context memory: deterministic factual compression");
 }
 
@@ -385,7 +393,11 @@ function renderCheckpoint(memory, maxChars) {
 
 function buildCheckpoint(messagesInput, options = {}) {
   const messages = messagesInput.map(normalizeMessage);
-  const previousState = extractPriorContinuityState(messages);
+  const previousState = mergePriorAssistantEvidence(
+    extractPriorContinuityState(messages),
+    extractPriorAssistantEvidence(messages),
+  );
+  const semanticMessages = messages.filter((message) => !generatedAssistantCheckpoint(message));
   const latestUserIndex = [...messages].reverse().find((message) => message.role === "user")?.index ?? -1;
   const latestUser = latestUserIndex >= 0 ? messages[latestUserIndex].text : String(previousState?.latestUserMessage || "");
   const tailStart = tailStartIndex(messages, options.recentCompleteTurns ?? 2);
@@ -398,8 +410,10 @@ function buildCheckpoint(messagesInput, options = {}) {
     && (!boundedCurrentTurn || message.role === "system" || message.role === "user")
   )).map((message) => message.index);
   const retainedIndexes = new Set(messages.filter((message) => (
-    (message.role === "system" && !generatedCheckpoint(message))
-    || (boundedCurrentTurn ? currentTurnIndexes.has(message.index) : message.index >= tailStart)
+    !generatedCheckpoint(message) && (
+      message.role === "system"
+      || (boundedCurrentTurn ? currentTurnIndexes.has(message.index) : message.index >= tailStart)
+    )
   )).map((message) => message.index));
   for (const index of fileIndexes) retainedIndexes.add(index);
   if (latestUserIndex >= 0) retainedIndexes.add(latestUserIndex);
@@ -418,14 +432,14 @@ function buildCheckpoint(messagesInput, options = {}) {
   const outcomes = serializeToolOutcomeRecords(outcomeRecords, toolMemoryOptions);
   const state = stateMemory(allRecentOutcomeRecords);
   const durableState = stateMemory(outcomeRecords);
-  const openQuestions = unresolvedQuestions(messages, latestUserIndex);
-  const continuity = buildContinuityMemory(messages, {
+  const openQuestions = unresolvedQuestions(semanticMessages, latestUserIndex);
+  const continuity = buildContinuityMemory(semanticMessages, {
     activeProject: state.activeProject,
     recentOlderToolOutcomes: outcomes,
     modifiedOrObservedFiles: durableState.files,
     recentBuildOrTestState: durableState.builds,
     openQuestionEvidence: openQuestions,
-  }, options);
+  }, { ...options, previousState });
   const latestMessage = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
   const recentRequests = priorUserRequestsForContinuation(messages, latestUserIndex);
   const memory = sanitizeStructuredDurableValue({
@@ -441,15 +455,22 @@ function buildCheckpoint(messagesInput, options = {}) {
       12,
     ),
     openQuestionEvidence: openQuestions,
-    previousTurnFinalResponseEvidence: previousTurnFinalResponseEvidence(messages, latestUserIndex),
+    previousTurnFinalResponseEvidence: previousTurnFinalResponseEvidence(semanticMessages, latestUserIndex),
     recentOlderToolOutcomes: continuity.currentWorkStatus?.recentToolOutcomes || [],
     modifiedOrObservedFiles: continuity.currentWorkStatus?.modifiedOrObservedFiles || [],
     recentBuildOrTestState: continuity.currentWorkStatus?.recentBuildOrTestState || [],
   });
   const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 12000));
-  const checkpoint = renderCheckpoint(memory, maxCheckpointChars);
+  const { systemMemory, assistantEvidence } = splitAssistantEvidence(memory);
+  const assistantCheckpoint = renderAssistantCheckpoint(
+    assistantEvidence,
+    // Preserve the factual checkpoint's emergency file/evidence budget first.
+    Math.min(2600, Math.max(0, maxCheckpointChars - 6000)),
+  );
+  const checkpoint = renderCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length);
   return {
     checkpoint,
+    assistantCheckpoint,
     memory,
     tailStart,
     latestUserIndex,

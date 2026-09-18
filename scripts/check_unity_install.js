@@ -10,7 +10,7 @@ async function main() {
   try {
     await client.connect(new StdioClientTransport({ ...entry, env: { ...process.env, ...entry.env }, stderr: "pipe" }));
     const list = await client.listTools();
-    for (const name of ["unity_status", "unity_symbols", "unity_snapshot", "unity_prefab", "unity_approval", "unity_tests"]) if (!list.tools.some(t => t.name === name)) throw Error("Missing required tool: " + name);
+    for (const name of ["unity_status", "list_directory", "search_files", "unity_symbols", "unity_snapshot", "unity_prefab", "unity_approval", "unity_tests"]) if (!list.tools.some(t => t.name === name)) throw Error("Missing required tool: " + name);
     const status = (await client.callTool({ name: "unity_status", arguments: {} })).structuredContent;
     const symbols = (await client.callTool({ name: "unity_symbols", arguments: { action: "status" } })).structuredContent;
     if (!symbols?.configured) throw Error("C# worker configuration missing");

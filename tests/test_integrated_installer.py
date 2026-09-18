@@ -77,7 +77,7 @@ def test_installer_profiles_are_manifest_driven() -> None:
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.3"
-    assert manifest["version"] == "2.1.17"
+    assert manifest["version"] == "2.1.18"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
     assert manifest["safety"]["contextCompactorSkippedInHeadlessLmLinkMode"] is True
     assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is False
@@ -86,9 +86,9 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
     assert node_package["version"] == node_lock["version"] == "0.3.22"
     assert node_lock["packages"][""]["version"] == "0.3.22"
-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.51"
-    assert compactor_lock["packages"][""]["version"] == "0.4.51"
-    assert compactor_manifest["revision"] == 98
+    assert compactor_package["version"] == compactor_lock["version"] == "0.4.52"
+    assert compactor_lock["packages"][""]["version"] == "0.4.52"
+    assert compactor_manifest["revision"] == 99
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
@@ -247,7 +247,7 @@ def test_interactive_agent_selector_confirms_or_falls_back_to_safe(
         def isatty() -> bool:
             return True
 
-    responses = iter(answers)
+    responses = iter(["y", "n", *answers])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -277,7 +277,7 @@ def test_interactive_index_selector_builds_selected_tier(
         def isatty() -> bool:
             return True
 
-    responses = iter(["n", "n", "n", "1", choice, "1", "y"])
+    responses = iter(["y", "n", "n", "n", "n", "1", choice, "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -300,7 +300,7 @@ def test_interactive_cline_selection_uses_default_settings_path(
         def isatty() -> bool:
             return True
 
-    responses = iter(["n", "y", "n", "1", "1", "1", "y"])
+    responses = iter(["y", "n", "n", "y", "n", "1", "1", "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -445,7 +445,7 @@ def test_interactive_project_picker_restores_uproject_and_folder_selection(
     selected = project_file if target_kind == "uproject" else project_dir
     # portable_rule=n, cline=n, select projects=y, menu, add another=n,
     # engine=launcher, rag=skip, authority=safe, continue=y
-    responses = iter(["n", "n", "y", menu_choice, "n", "1", "1", "1", "y"])
+    responses = iter(["y", "n", "n", "n", "y", menu_choice, "n", "1", "1", "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     monkeypatch.setattr(module, "_pick_indexing_target", lambda kind, initial: selected)

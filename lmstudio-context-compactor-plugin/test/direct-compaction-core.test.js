@@ -41,6 +41,53 @@ function assertNoDurableFileCapability(result) {
   assertNoExactEphemeralKeys(result.memory);
 }
 
+test("assistant-derived checkpoint evidence stays in an assistant message across compactions", () => {
+  const first = core.buildCheckpoint([
+    message("user", "Investigate the actor lifetime crash."),
+    message("assistant", "Cache hypothesis was rejected. Need to check the actor lifetime."),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0, maxCurrentTurnMessages: 0, maxCheckpointChars: 12000 });
+  assert.doesNotMatch(first.checkpoint, /Cache hypothesis was rejected|actor lifetime\./u);
+  assert.match(first.assistantCheckpoint, /Cache hypothesis was rejected/u);
+  assert.ok(first.checkpoint.length + first.assistantCheckpoint.length <= 12000);
+  const system = JSON.parse(first.checkpoint.slice(first.checkpoint.indexOf("{", first.checkpoint.indexOf("[Direct continuity state v2]"))));
+  assert.equal(Object.hasOwn(system.currentWorkStatus, "lastAssistantUpdate"), false);
+  assert.equal(system.unresolvedItems.some((item) => item.kind === "assistant_progress_evidence"), false);
+  assert.equal(system.recentRawTail.some((item) => item.role === "assistant"), false);
+
+  const second = core.buildCheckpoint([
+    message("system", first.checkpoint),
+    message("assistant", first.assistantCheckpoint),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0, maxCurrentTurnMessages: 0, maxCheckpointChars: 12000 });
+  assert.doesNotMatch(second.checkpoint, /Cache hypothesis was rejected/u);
+  assert.match(second.assistantCheckpoint, /Cache hypothesis was rejected/u);
+  assert.equal(second.retainedIndexes.includes(1), false);
+  assert.deepEqual(second.memory.recentRawTail.slice(0, 3).map((item) => item.role),
+    ["user", "assistant", "user"]);
+});
+
+test("a legacy system checkpoint migrates assistant claims into the assistant role", () => {
+  const prior = {
+    schemaVersion: 2,
+    authority: "factual_memory_only",
+    activeObjective: { kind: "user_objective", status: "active",
+      text: "Investigate the actor lifetime crash.", source: "current_history" },
+    currentWorkStatus: { lastAssistantUpdate: {
+      text: "Cache hypothesis was rejected.", source: "assistant_history",
+    }, recentToolOutcomes: [], modifiedOrObservedFiles: [], recentBuildOrTestState: [] },
+    unresolvedItems: [{ kind: "assistant_progress_evidence", text: "Need to check the actor lifetime." }],
+    recentRawTail: [{ role: "assistant", text: "Cache hypothesis was rejected." }],
+  };
+  const result = core.buildCheckpoint([
+    message("system", `[Direct continuity state v2]\n${JSON.stringify(prior)}`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0, maxCheckpointChars: 12000 });
+  assert.doesNotMatch(result.checkpoint, /Cache hypothesis was rejected|Need to check/u);
+  assert.match(result.assistantCheckpoint, /Cache hypothesis was rejected/u);
+  assert.match(result.assistantCheckpoint, /Need to check/u);
+});
+
 test("latest real user request stays authoritative without promoting an older objective", () => {
   const old = "Implement the old combat feature";
   const latest = "시네마틱 C++ 구조만 분석해. 파일은 수정하지 마.";
@@ -1829,6 +1876,92 @@ test("canonical identities retain capability-like substrings as structural data"
   assert.match(result.checkpoint, /fileVersionReceiptGame/u);
   assert.match(result.checkpoint, /snapshotVersionParser\.cpp/u);
   assertNoDurableFileCapability(result);
+});
+
+test("Unity file observations keep project, hash and time without changing the Unreal selection", () => {
+  const unreal = "C:\\Work\\Game\\Game.uproject";
+  const unityA = "C:\\Work\\UnityA";
+  const unityB = "C:\\Work\\UnityB";
+  const observedAt = "2026-09-19T03:00:00.000Z";
+  const unityResult = (root, path, hash) => JSON.stringify({ status: "observed", path,
+    canonicalProjectRoot: root, projectIdentity: `${root}-identity`, hash, observedAt,
+    receipt: "runtime-only-token" });
+  const result = core.buildCheckpoint([
+    message("user", "Inspect C# and JSON in both Unity projects, then continue Unreal work."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ ok: true, activeProject: unreal }) }] }),
+    message("assistant", "", { toolRequests: [
+      { id: "unity-cs", name: "read_file", arguments: { path: "Assets/Shared.cs" } },
+      { id: "unity-json", name: "structured_data_read", arguments: { path: "Assets/data.json", format: "json" } },
+      { id: "unity-other-cs", name: "read_file", arguments: { path: "Assets/Shared.cs" } },
+    ] }),
+    message("tool", "", { toolResults: [
+      { toolCallId: "unity-json", content: unityResult(unityA, "Assets/data.json", "b".repeat(64)) },
+      { toolCallId: "unity-other-cs", content: unityResult(unityB, "Assets/Shared.cs", "c".repeat(64)) },
+      { toolCallId: "unity-cs", content: unityResult(unityA, "Assets/Shared.cs", "a".repeat(64)) },
+    ] }),
+    message("assistant", "", { toolRequests: [{ id: "unreal-next", name: "write_file",
+      arguments: { path: "Source/Next.cpp", content: "// next" } }] }),
+    message("tool", "", { toolResults: [{ toolCallId: "unreal-next", content: JSON.stringify({ ok: true,
+      operation: "created", path: "Source/Next.cpp", sha256: "d".repeat(64) }) }] }),
+    message("user", "Continue with the observed facts."),
+  ], { recentCompleteTurns: 0 });
+
+  const observations = result.memory.modifiedOrObservedFiles;
+  assert.equal(result.memory.activeProject.descriptor, unreal);
+  assert.equal(observations.length, 4);
+  const byProjectAndPath = new Map(observations.map(item => [`${item.canonicalProject}|${item.path}`, item]));
+  assert.equal(byProjectAndPath.get(`${unityA}|Assets/Shared.cs`).sha256AtObservation, "a".repeat(64));
+  assert.equal(byProjectAndPath.get(`${unityB}|Assets/Shared.cs`).sha256AtObservation, "c".repeat(64));
+  assert.equal(byProjectAndPath.get(`${unityA}|Assets/data.json`).sha256AtObservation, "b".repeat(64));
+  assert.equal(byProjectAndPath.get(`${unityA}|Assets/data.json`).lastObservedAt, observedAt);
+  assert.equal(byProjectAndPath.get(`${unityA}|Assets/data.json`).canonicalPath,
+    "C:\\Work\\UnityA\\Assets\\data.json");
+  assert.equal(byProjectAndPath.get(`${unreal}|Source/Next.cpp`).canonicalPath,
+    "C:\\Work\\Game\\Source\\Next.cpp");
+  assert.doesNotMatch(JSON.stringify(result.memory), /runtime-only-token/u);
+});
+
+test("a Unity file result cannot be attributed to a conflicting explicit Unreal project", () => {
+  const unreal = "C:\\Work\\Game\\Game.uproject";
+  const result = core.buildCheckpoint([
+    message("user", "Read exactly the selected Unreal project."),
+    message("assistant", "", { toolRequests: [{ id: "read-one", name: "read_file",
+      arguments: { project: unreal, path: "Source/A.cpp" } }] }),
+    message("tool", "", { toolResults: [{ toolCallId: "read-one", content: JSON.stringify({
+      status: "observed", path: "Assets/A.cs", canonicalProjectRoot: "C:\\Work\\Unity",
+      projectIdentity: "unity-identity", hash: "a".repeat(64), observedAt: "2026-09-19T03:00:00.000Z",
+    }) }] }),
+    message("user", "Continue with only project-scoped observations."),
+  ], { recentCompleteTurns: 0 });
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.equal(result.memory.activeProject, null);
+  assert.match(JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes), /omitted_inconsistent_project_scope/u);
+});
+
+test("Unity directory listing stays a path fact without a file-version observation", () => {
+  const root = "C:\\Work\\Unity";
+  const result = core.buildCheckpoint([
+    message("user", "List the project directory."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ status: "observed", path: "Assets",
+      canonicalProjectRoot: root, projectIdentity: "unity-identity", total: 2,
+      items: [{ path: "Assets/A.cs", kind: "file" }, { path: "Assets/data.json", kind: "file" }] }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
+  assert.equal(result.memory.activeProject, null);
+  const outcomes = JSON.stringify(result.memory.currentWorkStatus.recentToolOutcomes);
+  assert.match(outcomes, /Assets/u);
+  assert.doesNotMatch(outcomes, /fresh_read_required/u);
+});
+
+test("an unrelated tool hash is not promoted to a Unity file hash", () => {
+  const result = core.buildCheckpoint([
+    message("user", "Inspect the tool result."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ status: "observed",
+      activeProject: "C:\\Work\\Game\\Game.uproject", path: "Source/A.cpp", hash: "index-revision" }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+  assert.deepEqual(result.memory.modifiedOrObservedFiles, []);
 });
 
 test("inherited user fields keep receipt-domain meaning while assistant fields are neutralized", () => {

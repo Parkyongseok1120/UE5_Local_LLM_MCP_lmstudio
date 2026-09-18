@@ -300,6 +300,10 @@ class McpServer:
 
 
 def main() -> int:
+    # JSON-RPC over stdio is UTF-8 even when Windows assigns a legacy code page
+    # to redirected Python streams.
+    sys.stdin.reconfigure(encoding="utf-8", errors="strict")
+    sys.stdout.reconfigure(encoding="utf-8", errors="strict")
     McpServer().run()
     return 0
 

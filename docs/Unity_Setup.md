@@ -13,7 +13,21 @@ Unity 프로젝트의 상태를 모델이 읽고 명시한 작업만 실행하�
 
 ## 설치
 
-통합 설치기를 사용할 수 있습니다. 프로젝트와 MCP 설정을 백업·기록하며 Unity 설정은 Unreal 설정과 분리합니다.
+통합 설치기에서 Unreal과 Unity를 함께 설치할 수 있습니다. 두 엔진의 프로젝트 경로와 권한은 각각 관리하며, 프로젝트와 MCP 설정을 백업·기록합니다.
+
+Windows에서는 `INSTALL.bat`를 실행하고 설치 프로필을 선택합니다. 이어서 **Unreal MCP를 추가할지**, **Unity MCP를 추가할지** 각각 묻습니다. 두 항목을 모두 선택하면 **Unreal 프로젝트·엔진·인덱싱 설정 → Unity 프로젝트 설정 → 설치 요약** 순서로 진행합니다. 하나만 선택하면 해당 엔진만 설정하며, 두 항목을 모두 제외할 수도 있습니다.
+
+Unity 폴더 선택 창에서는 `Assets`, `Packages`, `ProjectSettings`가 들어 있는 프로젝트 루트를 지정합니다. 선택 창을 사용할 수 없으면 경로를 직접 붙여 넣을 수 있습니다. 이어서 Unity Editor 실행 파일(`Unity.exe`) 경로를 입력하거나, 호환되는 .NET SDK가 설치되어 있으면 Enter로 건너뜁니다. Unreal의 `.uproject`와 Unity 폴더는 별도로 저장합니다. Unreal에서 AGENT 권한을 선택해도 Unity는 읽기 전용으로 설치합니다.
+
+명령줄에서는 다음과 같이 같은 설치 경로를 사용할 수 있습니다.
+
+```bat
+INSTALL.bat --profile custom --components codex,lmstudio,unreal,unity --yes --active-project "D:\Projects\UnrealGame\UnrealGame.uproject" --unity-project "D:\Projects\MyUnityGame" --unity-editor "C:\Program Files\Unity\Hub\Editor\<version>\Editor\Unity.exe"
+```
+
+LM Studio 또는 Unreal과 함께 설치하면 기존 LM Studio `mcp.json`에 `unity-tools`를 추가하고 기존 서버 항목을 유지합니다. 설치 결과의 `unity.mcpConfig`에서 경로를 확인할 수 있습니다. 관리 설정은 하나의 설치 기록으로 저장하므로 Unity 단계에서 실패하면 앞서 변경한 Unreal 설정도 복원합니다. 외부 의존성 설치, 생성한 인덱스와 컴파일된 worker는 복원 대상에 포함되지 않습니다. 채팅에서는 작업할 엔진에 맞는 도구를 활성화합니다.
+
+Unity만 설치하는 기존 `--profile custom --components unity` 방식도 유지합니다. 이 경우 기본값은 별도 프로젝트용 MCP 설정이며, 결과의 `mcpConfig`에 있는 `unity-tools` 항목을 사용할 MCP 호스트에 등록해야 합니다.
 
 ```sh
 ./install.sh --profile custom --components unity --yes \
@@ -58,12 +72,27 @@ node /path/to/repository/scripts/configure_unity_mcp.js /absolute/path/to/UnityP
 
 LM Studio의 MCP 설치 방법은 호스트 버전에 따라 달라질 수 있습니다. 생성되는 설정은 stdio MCP 형식이며 모델 선택·로드를 담당하지 않습니다.
 
+## Unity MCP 소스 업데이트
+
+Unity MCP 설정의 `unity-tools.args[0]`은 설치에 사용한 소스 폴더의 `lmstudio-unity-mcp/src/server.js`를 직접 가리킵니다. 같은 폴더에 새 소스를 반영한 다음, 아래 스크립트로 Node 의존성과 MCP 초기화를 확인합니다. 스크립트는 소스를 다운로드하거나 Git 상태를 변경하지 않습니다.
+
+Windows에서는 저장소 루트의 `UPDATE.bat`를 실행하면 Unity MCP 업데이트 검사와 대화 압축 플러그인 재설치를 순서대로 진행합니다. 기본 설정은 `%LMSTUDIO_HOME%\mcp.json` 또는 `%USERPROFILE%\.lmstudio\mcp.json`을 사용합니다. 다른 위치에 설치했다면 `UPDATE.bat "C:\path\to\mcp.json"`처럼 기존 설정 파일을 지정합니다. `UPDATE.bat --dry-run`은 두 단계의 계획만 확인합니다. 완료 후 LM Studio를 재시작합니다.
+
+```sh
+python scripts/update_unity_mcp.py --mcp-config /absolute/path/to/mcp.json --dry-run
+python scripts/update_unity_mcp.py --mcp-config /absolute/path/to/mcp.json
+```
+
+잠금 파일과 기존 Node 의존성이 그대로인 업데이트에서는 `--skip-deps`를 지정할 수 있습니다. 성공하면 MCP 호스트에서 `unity-tools` 연결을 다시 시작해야 새 도구 목록과 코드가 반영됩니다. 스크립트는 설정 파일, 다른 MCP 서버 항목, `ALLOW_WRITE`/`ALLOW_COMMANDS`, Unity 프로젝트 파일을 수정하지 않습니다. 이미 실행 중인 MCP 프로세스를 종료하지도 않습니다.
+
+새 릴리스 폴더로 실행 경로를 옮기거나 Unity Bridge 또는 C# 심볼 작업자를 갱신해야 한다면 기존 `install.py`의 Unity 설치 경로를 사용합니다. 업데이트 스크립트는 현재 설정이 다른 소스 폴더나 Bridge 바인딩을 가리킬 경우 시작 전에 거절합니다. 의존성 설치는 외부 작업이므로 실패 시 새 소스 폴더의 Node 의존성을 확인하고 다시 실행합니다.
+
 ## 실제 구현 범위
 
 | 영역 | 구현한 동작 | 현재 제한 |
 |---|---|---|
 | 연결 | 프로젝트 탐지, token 인증, loopback 동적 포트, 세션/버전 handshake, reload 후 discovery 재조회 | 같은 호스트만 지원; 자동 mutation 재전송 없음 |
-| 파일 | 문자 그대로 검색, 범위 읽기, Receipt 기반 부분 수정, absent 조건 생성 | UTF-8만, 파일 2 MiB, 부모 디렉터리는 미리 존재해야 함 |
+| 파일 | 직계 폴더 조회, 문자 그대로 경로/본문 검색과 다중 확장자 필터, 범위 읽기, Receipt 기반 부분 수정, absent 조건 생성 | UTF-8 본문만, 파일 2 MiB, 부모 디렉터리는 미리 존재해야 함 |
 | JSON | 명시 경로·깊이 조회, 기존 경로 replace/remove, draft-07 명시 스키마 검증 | root 교체/add/move 미지원, unsafe integer 거부, 원격 스키마 로딩 없음 |
 | CSV | 문자열 행·필터 조회, key 기반 cell 교체, 원본 셀 이외의 바이트 보존 | UTF-8, header 필수, 구분자 명시; 중복/없는 key 오류; 행 생성·삭제·schema 미지원 |
 | 탐색 | 로드된 Scene 객체/컴포넌트, AssetDatabase 필터, 컴파일된 타입 | 전체 프로젝트 자동 탐색 없음 |
@@ -91,6 +120,22 @@ DataSO는 프로젝트에서 만든 ScriptableObject입니다. 별도 포맷/데
 Prefab 원본·승인·Test Framework의 요청/결과 계약과 제한은 [Authoring 및 테스트 계약](Unity_Authoring_Tests.md)을 참고하세요.
 
 각 요청은 모델이 선택합니다. 서버가 다음 단계를 호출하지 않습니다.
+
+파일 구조를 볼 때는 `list_directory`로 선택한 폴더의 바로 아래 항목만 조회합니다. `kind`는 `all`(기본값), `files`, `directories` 중 하나입니다. 프로젝트 루트의 가상 목록은 없으며 `Assets`, `Packages`, `ProjectSettings`를 각각 지정합니다. 모델이 관심 있는 하위 폴더를 선택한 뒤 필요할 때만 다음 조회를 요청합니다.
+
+```json
+{"path":"Assets","kind":"directories","limit":20}
+```
+
+`search_files`의 `extensions`는 마지막 확장자를 정확하게 비교하는 선택적 배열이며 대소문자를 구분하지 않습니다. 여러 확장자 중 하나에 해당하면 포함하고, `query`가 있으면 프로젝트 상대 경로의 대소문자를 구분하는 부분 문자열과 함께 적용합니다. `.cs`는 `.cs.meta`를 포함하지 않습니다. 확장자를 생략하면 기존 검색처럼 종류를 제한하지 않습니다. `content:true`는 검색어가 있을 때만 허용하며, 선택한 확장자의 파일 본문에서 일치하는 줄도 찾습니다. 확장자만 지정하면 파일 본문은 읽지 않습니다.
+
+```json
+{"path":"Assets/03.Scripts/Craft","extensions":[".cs",".json",".prefab"],"limit":20}
+```
+
+`search_files`의 `total`은 이번 제한된 탐색에서 수집한 결과 **행** 수입니다. 본문 검색은 한 파일에서 여러 행이 나올 수 있습니다. `incomplete:true`이면 요청 범위 전체를 검사하지 못했습니다. `truncated`와 `nextCursor`는 이미 수집한 행의 다음 페이지를 뜻하며 미탐색 구간을 이어받지 않습니다. 여러 확장자를 섞어 검색했을 때 첫 페이지가 한 종류로만 채워져도 다른 종류의 부재를 뜻하지 않습니다. 각 종류를 반드시 확인해야 하면 별도 조건으로 조회합니다. 새 검색이나 폴더 조회의 커서는 도구·세션·경로·필터·관찰 결과에 묶여 있고, 다른 요청으로 재사용하면 `snapshot_changed`가 납니다.
+
+구조 개요 요청에서는 상위 폴더부터 필요한 만큼만 내려가고, 역할을 설명해야 하는 대표 파일만 읽습니다. 전체 파일 수집을 완료 조건으로 삼지 않습니다.
 
 ```json
 {"kind":"assets","query":"t:MyData","limit":10}

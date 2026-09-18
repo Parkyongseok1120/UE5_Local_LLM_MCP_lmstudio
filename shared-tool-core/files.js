@@ -122,7 +122,30 @@ class Files {
       return result;
     });
   }
+  list(args) {
+    const relative = args.path;
+    const target = this.policy.resolve(relative, false);
+    if (!fs.lstatSync(target).isDirectory()) fail("not_directory", "List target must be a directory");
+    const entries = fs.readdirSync(target, { withFileTypes: true });
+    if (entries.length > 10000) fail("query_budget_exceeded", "Narrow the directory scope; direct entries exceed the limit");
+    const kind = args.kind ?? "all";
+    const items = entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).flatMap(entry => {
+      const entryKind = entry.isDirectory() ? "directory" : entry.isFile() ? "file" : null;
+      if (!entryKind || kind !== "all" && kind !== (entryKind === "directory" ? "directories" : "files")) return [];
+      const entryPath = `${relative}/${entry.name}`;
+      try { this.policy.resolve(entryPath, false); } catch { return []; }
+      return [{ path: entryPath, kind: entryKind }];
+    });
+    const revision = hash(JSON.stringify([this.session, this.policy.projectIdentity, "list_directory", relative, kind, items]));
+    return bounded({ status: "observed", path: relative, ...page(items, args, revision), consistency: "per_file_observations" }, args.byteBudget);
+  }
   async search(args) {
+    const extensions = args.extensions?.map(extension => extension.toLowerCase());
+    if ((!args.query && !extensions?.length) || args.content === true && !args.query ||
+      extensions && (extensions.length > 16 || extensions.some(extension => !/^\.[a-z0-9_-]+$/.test(extension))))
+      fail("invalid_arguments", "Supply a query or 1-16 exact extensions; content search requires a query");
+    const selectedExtensions = extensions ? new Set(extensions) : null;
+    const searchPath = args.path ?? "Assets";
     const matches = [];
     let scanned = 0;
     let incomplete = false;
@@ -141,7 +164,8 @@ class Files {
         for (const name of fs.readdirSync(target).sort()) await walk(`${relative}/${name}`);
       } else if (stat.isFile()) {
         scanned++;
-        if (relative.includes(args.query)) append({ path: relative, kind: "path" });
+        if (selectedExtensions && !selectedExtensions.has(path.extname(relative).toLowerCase())) return;
+        if (!args.query || relative.includes(args.query)) append({ path: relative, kind: "path" });
         if (args.content === true && stat.size <= this.maxBytes) {
           try {
             const s = await this.snapshot(relative);
@@ -151,8 +175,10 @@ class Files {
         }
       }
     };
-    await walk(args.path ?? "Assets");
-    return bounded({ status: "observed", ...page(matches, args, hash(JSON.stringify(matches))), scanned, incomplete, consistency: "per_file_observations" }, args.byteBudget);
+    await walk(searchPath);
+    const revision = hash(JSON.stringify([this.session, this.policy.projectIdentity, "search_files", searchPath, args.query ?? null,
+      args.content === true, extensions ? [...new Set(extensions)].sort() : null, matches]));
+    return bounded({ status: "observed", ...page(matches, args, revision), scanned, incomplete, consistency: "per_file_observations" }, args.byteBudget);
   }
 }
 module.exports = { Files, fail, hash, page, bounded };

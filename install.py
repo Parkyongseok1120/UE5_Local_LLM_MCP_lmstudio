@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-platform integrated installer for evidence-first coding and optional Unreal adapters."""
+"""Cross-platform integrated installer for evidence-first coding and Unreal/Unity adapters."""
 
 from __future__ import annotations
 
@@ -385,6 +385,8 @@ def _project_picker_initial_directory(args: argparse.Namespace) -> Path:
 
 
 def _picker_title(kind: str) -> str:
+    if kind == "unity":
+        return "Select Unity project folder (Assets, Packages, ProjectSettings)"
     if kind == "uproject":
         return "Select Unreal project (.uproject) to index"
     if kind == "engine":
@@ -478,6 +480,13 @@ def _normalize_picked_path(kind: str, selected: str | None) -> Path | None:
     if not selected:
         return None
     path = Path(selected).expanduser().resolve()
+    if kind == "unity" and not (
+        (path / "Assets").is_dir()
+        and (path / "Packages/manifest.json").is_file()
+        and (path / "ProjectSettings/ProjectVersion.txt").is_file()
+    ):
+        print(f"  Invalid Unity project: {path}. Select the folder containing Assets, Packages and ProjectSettings.")
+        return None
     if kind == "uproject" and (not path.is_file() or path.suffix.lower() != ".uproject"):
         print(f"  Ignoring invalid Unreal project selection: {path}")
         return None
@@ -1041,6 +1050,33 @@ def _interactive_profile() -> str:
     return {"1": "safe", "2": "standard", "3": "full", "4": "custom"}.get(choice, "safe")
 
 
+def _interactive_unity_setup(args: argparse.Namespace) -> None:
+    print("\nUnity project setup:")
+    selected = args.unity_project
+    if not selected and args.active_project and args.active_project.is_dir():
+        selected = args.active_project
+    project = _normalize_picked_path("unity", str(selected)) if selected else None
+    while project is None:
+        initial = next((p.expanduser() for p in args.workspace_root if p.expanduser().is_dir()), Path.home())
+        project = _pick_indexing_target("unity", initial)
+        if project is None:
+            typed = input("Unity project folder (paste path, or Enter to retry picker): ").strip().strip('"')
+            if typed:
+                project = _normalize_picked_path("unity", typed)
+            if project is None and not _prompt_yes_no("Select a Unity project again?", True):
+                raise RuntimeError("Unity installation cancelled; no project selected")
+    args.unity_project = project
+    print(f"  Unity project: {project}")
+    if not args.unity_editor and not args.unity_symbol_worker:
+        print("  The C# worker requires a compatible .NET SDK or the Editor's bundled toolchain.")
+        editor = input("Unity Editor executable (Unity.exe on Windows; Enter to use installed .NET SDK): ").strip().strip('"')
+        if editor:
+            args.unity_editor = Path(editor).expanduser().resolve()
+            if not args.unity_editor.is_file():
+                raise ValueError(f"Unity Editor executable not found: {args.unity_editor}")
+    print("  Unity MCP configuration is shown in the installation result.")
+
+
 def _interactive_agent_authority() -> bool:
     print("\nUnreal adapter authority:")
     print("  1. SAFE (recommended: analysis only; no writes, commands, or builds)")
@@ -1074,7 +1110,13 @@ def _confirm_interactive_install(
     print("\nInstall summary:")
     print(f"  Profile    : {profile.upper()}")
     print(f"  Components : {', '.join(sorted(components)) or 'none'}")
-    print(f"  Authority  : {authority}")
+    print(f"  Unreal authority: {authority}" if "unreal" in components else f"  Authority  : {authority}")
+    if "unity" in components:
+        print(f"  Unity project: {args.unity_project or args.active_project}")
+        if args.unity_editor:
+            print(f"  Unity Editor: {args.unity_editor}")
+        print("  Unity authority: SAFE (read-only)")
+        print(f"  Unity MCP config: {args.unity_mcp_config or (args.lmstudio_home / 'mcp.json' if components & {'lmstudio', 'unreal'} else 'isolated per-project configuration')}")
     if args.build_rag:
         print(f"  RAG index  : build ({args.index_tier})")
     else:
@@ -1102,7 +1144,7 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
             item.strip() for item in str(args.components or "").split(",") if item.strip()
         }
         if interactive and not components:
-            for component in sorted(ALL_COMPONENTS):
+            for component in sorted(ALL_COMPONENTS - {"unreal", "unity"}):
                 if _prompt_yes_no(
                     f"Install {component}?",
                     component in {"codex", "lmstudio", "context_compactor"},
@@ -1112,12 +1154,23 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         components = set(PROFILE_DEFAULTS[profile])
 
     if interactive:
+        print("\nEngine integrations (you can install both):")
+        for component, label in (("unreal", "Unreal"), ("unity", "Unity")):
+            if component == "unreal" and args.no_unreal:
+                components.discard(component)
+                continue
+            if _prompt_yes_no(f"Install {label} MCP and connect a project?", component in components):
+                components.add(component)
+            else:
+                components.discard(component)
+
+    if interactive:
         if args.headless_lmlink:
             print(
                 "\nHeadless LM Link mode installs MCP configuration for llmster and skips "
                 "the GUI-only LM Studio context compactor."
             )
-        else:
+        elif components & {"lmstudio", "unreal", "context_compactor"}:
             print(
                 "\nLM Studio context compactor will be installed and pinned, but the installer "
                 "does not activate it for chats. Its single host-owned chat toggle defaults off; "
@@ -1137,7 +1190,7 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
             _interactive_project_indexing(args)
             _interactive_engine_selection(args)
             _interactive_rag_indexing(args)
-        if "unreal" in components and not args.enable_agent_mode:
+        if "unreal" in components and profile != "safe" and not args.enable_agent_mode:
             requested_agent_mode = _interactive_agent_authority()
             if requested_agent_mode:
                 accepted = _prompt_yes_no(
@@ -1147,6 +1200,8 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
                 args.accept_agent_risk = accepted
                 if not accepted:
                     print("AGENT authority was not confirmed; continuing in SAFE read-only mode.")
+        if "unity" in components:
+            _interactive_unity_setup(args)
 
     if args.no_codex:
         components.discard("codex")
@@ -1166,8 +1221,6 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
     unknown = components - ALL_COMPONENTS
     if unknown:
         raise ValueError(f"unknown components: {sorted(unknown)}")
-    if "unity" in components and components != {"unity"}:
-        raise ValueError("Install Unity separately with --profile custom --components unity; each engine uses its own project-bound MCP configuration")
     if profile == "safe" and args.enable_agent_mode:
         raise ValueError("SAFE profile cannot enable agent mode")
     if args.enable_agent_mode and "unreal" not in components:
@@ -1798,7 +1851,7 @@ def install(
     # Real installs re-exec under Python 3.12 in main(); unit tests may call install()
     # directly on older interpreters with --skip-runtime-bootstrap.
     python_exe = Path(getattr(args, "runtime_python", None) or sys.executable).resolve()
-    if "unity" in components:
+    if components == {"unity"}:
         from installer.unity_install import install_unity
         return install_unity(args, ROOT, Transaction, InstallLock)
     if not (SKILL_SOURCE / "SKILL.md").is_file():
@@ -1869,6 +1922,18 @@ def install(
     allowed_roots.extend(path.parent for path in args.rule_path)
     if args.cline_settings:
         allowed_roots.append(args.cline_settings.parent)
+    unity_args = None
+    if "unity" in components:
+        from installer.unity_install import install_unity
+        unity_args = copy.copy(args)
+        # Unreal's .uproject must never be used as the Unity project root.
+        unity_args.active_project = None
+        if not unity_args.unity_mcp_config and components & {"lmstudio", "unreal"}:
+            unity_args.unity_mcp_config = args.lmstudio_home / "mcp.json"
+        preflight_args = copy.copy(unity_args)
+        preflight_args.dry_run = True
+        unity_plan = install_unity(preflight_args, ROOT, Transaction, InstallLock)
+        allowed_roots.extend([Path(unity_plan["project"]) / "Packages", Path(unity_plan["mcpConfig"]).parent])
     for root in allowed_roots:
         _reject_filesystem_root(root, "managed install root")
     tx = Transaction(args.state_home, allowed_roots, dry_run=args.dry_run)
@@ -2167,6 +2232,11 @@ def install(
             if completed.returncode != 0 or not report["mcpSmoke"].get("ok"):
                 raise RuntimeError(completed.stderr or "evidence-first MCP smoke failed")
 
+        if unity_args is not None:
+            report["unity"] = install_unity(
+                unity_args, ROOT, Transaction, InstallLock,
+                transaction=tx, external_actions=external_actions_started,
+            )
         report["lmStudioServer"] = _live_server_status(args.lmstudio_url)
         report["indexTier"] = args.index_tier if "unreal" in components else None
         report["externalActions"] = external_actions_started if not args.dry_run else [
@@ -2178,7 +2248,7 @@ def install(
             if enabled
         ]
         report["rollbackScope"] = (
-            "managed configuration/files only; external npm/lms installs and generated indexes are not rolled back"
+            "managed configuration/files only; external npm/lms installs, compiled workers and generated indexes are not rolled back"
         )
         report["knownIntegrationsSafe"] = not args.enable_agent_mode
         report["restartRequired"] = "lmstudio" in components or "unreal" in components
@@ -2209,9 +2279,9 @@ def install(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {PRODUCT_VERSION}")
-    parser.add_argument("--profile", choices=["safe", "standard", "full", "custom"])
+    parser.add_argument("--profile", choices=[*PROFILE_DEFAULTS, "custom"])
     parser.add_argument("--components", help="Comma-separated components for CUSTOM profile.")
-    parser.add_argument("--unity-project", type=Path, help="Unity project root; used with --profile custom --components unity")
+    parser.add_argument("--unity-project", type=Path, help="Unity project root, independent of Unreal --active-project; select the unity component")
     parser.add_argument("--unity-editor", type=Path, help="Optional installed Editor executable for its bundled compiler toolchain")
     parser.add_argument("--unity-dotnet", type=Path, help="Explicit dotnet executable")
     parser.add_argument("--unity-symbol-worker", type=Path, help="Existing compiled UnitySymbolWorker.dll; otherwise built during installation")

@@ -48,6 +48,262 @@ def test_unity_dry_run_has_no_writes_and_no_model_ready_claim(fixture):
     assert (project / "Packages/manifest.json").read_bytes() == before
 
 
+def test_interactive_unity_selection_reaches_installer(fixture, monkeypatch, capsys):
+    _, i, project, original = fixture
+    args = i.build_parser().parse_args(["--profile", "custom", "--components", "unity", "--dry-run", "--state-home", str(original.state_home)])
+    responses = iter(["n", "y", "n", "n", "", "y"])
+    monkeypatch.setattr(i.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    picks = []
+    def pick(kind, initial):
+        picks.append(kind)
+        return project
+    monkeypatch.setattr(i, "_pick_indexing_target", pick)
+    resolved = i._resolve_components(args)
+    report = i.install(args, resolved_components=resolved)
+    assert resolved[1] == {"unity"}
+    assert picks == ["unity"]
+    assert args.unity_project == project
+    assert report["ok"] and report["engine"] == "unity" and not report["ready"]
+    assert report["project"] == str(project)
+    assert not args.state_home.exists()
+    output = capsys.readouterr().out
+    assert "Unity project setup" in output and str(project) in output
+    assert "compactor will be installed" not in output
+    assert "5. UNITY" not in output
+
+
+def test_unity_setup_preserves_explicit_paths(fixture, monkeypatch):
+    _, i, project, _ = fixture
+    args = i.build_parser().parse_args(["--profile", "custom", "--components", "unity", "--unity-project", str(project),
+                                       "--unity-editor", sys.executable])
+    monkeypatch.setattr(i.sys.stdin, "isatty", lambda: True)
+    prompts = []
+    def answer(prompt):
+        prompts.append(prompt)
+        return "y" if "Unity MCP" in prompt or "Continue" in prompt else "n"
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(i, "_pick_indexing_target", lambda *a: pytest.fail("explicit project must be preserved"))
+    assert i._resolve_components(args) == ("custom", {"unity"})
+    assert args.unity_project == project
+    assert args.unity_editor == Path(sys.executable)
+    assert len(prompts) == 5 and "Continue" in prompts[-1]
+
+
+def test_unity_picker_rejects_non_project_and_can_retry(fixture, monkeypatch):
+    _, i, project, _ = fixture
+    args = i.build_parser().parse_args(["--profile", "custom", "--components", "unity", "--unity-editor", sys.executable])
+    args.workspace_root = [project.parent]
+    selections = iter([str(project.parent), str(project)])
+    monkeypatch.setattr(i, "_pick_with_tkinter", lambda *a: next(selections))
+    monkeypatch.setattr(i, "_pick_with_osascript", lambda *a: next(selections))
+    responses = iter(["", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    i._interactive_unity_setup(args)
+    assert args.unity_project == project
+
+
+def test_unity_picker_cancel_does_not_select_default_project(fixture, monkeypatch):
+    _, i, _, _ = fixture
+    args = i.build_parser().parse_args(["--profile", "custom", "--components", "unity"])
+    args.workspace_root = []
+    monkeypatch.setattr(i, "_pick_indexing_target", lambda *a: None)
+    responses = iter(["", "n"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    with pytest.raises(RuntimeError, match="cancelled"):
+        i._interactive_unity_setup(args)
+    assert args.unity_project is None
+
+
+def test_unity_picker_unavailable_accepts_quoted_path(fixture, monkeypatch):
+    _, i, project, _ = fixture
+    args = i.build_parser().parse_args(["--profile", "custom", "--components", "unity"])
+    args.workspace_root = []
+    monkeypatch.setattr(i, "_pick_indexing_target", lambda *a: None)
+    responses = iter([f'"{project}"', f'"{sys.executable}"'])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    i._interactive_unity_setup(args)
+    assert args.unity_project == project
+    assert args.unity_editor == Path(sys.executable).resolve()
+
+
+def test_unity_profile_yes_never_prompts(fixture, monkeypatch):
+    _, i, project, _ = fixture
+    args = i.build_parser().parse_args(["--profile", "custom", "--components", "unity", "--yes", "--unity-project", str(project)])
+    monkeypatch.setattr(i.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("--yes must not prompt"))
+    assert i._resolve_components(args) == ("custom", {"unity"})
+
+
+def test_unity_mixed_components_accepted(fixture):
+    _, i, _, _ = fixture
+    args = i.build_parser().parse_args(["--profile", "custom", "--components", "unity,unreal", "--yes"])
+    assert i._resolve_components(args)[1] == {"unity", "unreal", "context_compactor"}
+
+
+@pytest.mark.parametrize("unreal,unity", [(True, True), (True, False), (False, True), (False, False)])
+def test_engine_choices_precede_project_setup_in_unreal_unity_order(fixture, monkeypatch, capsys, unreal, unity):
+    _, i, project, _ = fixture
+    args = i.build_parser().parse_args(["--profile", "standard"])
+    events = []
+    monkeypatch.setattr(i.sys.stdin, "isatty", lambda: True)
+    def answer(prompt):
+        if "Unreal MCP" in prompt:
+            events.append("choose-unreal")
+            return "y" if unreal else "n"
+        if "Unity MCP" in prompt:
+            events.append("choose-unity")
+            return "y" if unity else "n"
+        return "n"
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(i, "_interactive_project_indexing", lambda a: events.append("unreal-project"))
+    monkeypatch.setattr(i, "_interactive_engine_selection", lambda a: None)
+    monkeypatch.setattr(i, "_interactive_rag_indexing", lambda a: None)
+    monkeypatch.setattr(i, "_interactive_agent_authority", lambda: False)
+    def unity_setup(a):
+        events.append("unity-project")
+        assert a.active_project is None
+        a.unity_project = project
+    monkeypatch.setattr(i, "_interactive_unity_setup", unity_setup)
+    monkeypatch.setattr(i, "_confirm_interactive_install", lambda *a: events.append("summary"))
+    _, components = i._resolve_components(args)
+    assert ("unreal" in components) == unreal
+    assert ("unity" in components) == unity
+    assert events == ["choose-unreal", "choose-unity"] + (["unreal-project"] if unreal else []) + (["unity-project"] if unity else []) + ["summary"]
+    assert "5. UNITY" not in capsys.readouterr().out
+
+
+def test_unity_setup_does_not_reuse_unreal_project(fixture, monkeypatch):
+    _, i, project, _ = fixture
+    args = i.build_parser().parse_args(["--unity-editor", sys.executable])
+    unreal = project.parent / "Unreal.uproject"
+    unreal.write_text("{}")
+    args.active_project = unreal
+    args.workspace_root = [project.parent]
+    monkeypatch.setattr(i, "_pick_indexing_target", lambda *a: project)
+    i._interactive_unity_setup(args)
+    assert args.active_project == unreal and args.unity_project == project
+
+
+def test_profile_menu_has_no_separate_unity_choice(fixture, monkeypatch, capsys):
+    _, i, _, _ = fixture
+    monkeypatch.setattr("builtins.input", lambda *a: "2")
+    assert i._interactive_profile() == "standard"
+    assert "5. UNITY" not in capsys.readouterr().out
+
+
+@pytest.fixture
+def combined_install(fixture, monkeypatch):
+    u, i, project, original = fixture
+    base = project.parent
+    unreal = base / "Unreal Game" / "Game.uproject"
+    unreal.parent.mkdir()
+    unreal.write_text("{}")
+    args = i.build_parser().parse_args([
+        "--profile", "custom", "--components", "unreal,unity", "--yes", "--skip-deps",
+        "--skip-context-compactor", "--allow-skip-context-compactor",
+        "--state-home", str(original.state_home), "--lmstudio-home", str(base / "lmstudio"),
+        "--codex-home", str(base / "codex"), "--workspace-root", str(unreal.parent),
+        "--active-project", str(unreal), "--unity-project", str(project),
+    ])
+    monkeypatch.delenv("UNREAL_ENGINE_ROOT", raising=False)
+    monkeypatch.setattr(i, "_detect_engine_root", lambda *a: None)
+    monkeypatch.setattr(i, "_verify_unreal_agent_dependency", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(i, "_live_server_status", lambda *a: {"reachable": False})
+    def run(command, **kwargs):
+        if "check_unity_install.js" in " ".join(command):
+            return subprocess.CompletedProcess(command, 0, '{"connection":"disconnected","workerConfigured":true}', "")
+        return subprocess.CompletedProcess(command, 0, "v24.0.0", "")
+    monkeypatch.setattr(u, "run", run)
+    def worker(*worker_args):
+        worker_args[-1].append("dotnet-publish-symbol-worker")
+        return Path(sys.executable), base / "worker.dll"
+    monkeypatch.setattr(u, "worker", worker)
+    config = args.lmstudio_home / "mcp.json"
+    config.parent.mkdir()
+    config.write_bytes(b'{"mcpServers":{"keep":{"command":"untouched"}}}')
+    return u, i, project, unreal, args, config
+
+
+@pytest.mark.parametrize("agent_mode", [False, True])
+def test_combined_install_registers_both_and_rolls_back_one_journal(combined_install, agent_mode):
+    _, i, project, unreal, args, config = combined_install
+    manifest = project / "Packages/manifest.json"
+    before = manifest.read_bytes(), config.read_bytes()
+    args.enable_agent_mode = args.accept_agent_risk = agent_mode
+    report = i.install(args)
+    assert report["ok"] and set(report["components"]) == {"unreal", "unity"}
+    assert report["activeProject"] == str(unreal)
+    assert report["unity"]["project"] == str(project)
+    assert report["unity"]["ok"] and not report["unity"]["ready"]
+    assert report["unity"]["mcpConfig"] == str(config)
+    assert "journal" not in report["unity"]
+    assert "unity-dotnet-publish-symbol-worker" in report["externalActions"]
+    servers = json.loads(config.read_text())["mcpServers"]
+    assert set(servers) == {"keep", "unreal-agent", "unreal-rag", "unity-tools"}
+    assert servers["unity-tools"]["env"]["UNITY_PROJECT_ROOT"] == str(project)
+    assert servers["unity-tools"]["env"]["ALLOW_WRITE"] == "0"
+    assert servers["unity-tools"]["env"]["ALLOW_COMMANDS"] == "0"
+    assert servers["unreal-agent"]["env"]["ALLOW_WRITE"] == ("1" if agent_mode else "0")
+    journal = json.loads(Path(report["journal"]).read_text())
+    assert any(a["target"] == str(manifest) for a in journal["actions"])
+    i.rollback_last_install(args.state_home)
+    assert (manifest.read_bytes(), config.read_bytes()) == before
+    assert not (args.state_home / "runtime-python.path").exists()
+
+
+def test_combined_unity_failure_restores_both_engines(combined_install, monkeypatch):
+    u, i, project, _, args, config = combined_install
+    manifest = project / "Packages/manifest.json"
+    before = manifest.read_bytes(), config.read_bytes()
+    original_run = u.run
+    def fail(command, **kwargs):
+        if "check_unity_install.js" in " ".join(command):
+            raise RuntimeError("Unity connection check failed")
+        return original_run(command, **kwargs)
+    monkeypatch.setattr(u, "run", fail)
+    with pytest.raises(RuntimeError, match="unity-dotnet-publish-symbol-worker"):
+        i.install(args)
+    assert (manifest.read_bytes(), config.read_bytes()) == before
+    assert not (args.lmstudio_home / "config/unreal-workspace.json").exists()
+    assert not (args.state_home / "install-journal.json").exists()
+    assert not (args.state_home / "install.lock").exists()
+
+
+def test_combined_install_requires_separate_unity_project_before_writes(combined_install):
+    _, i, _, _, args, config = combined_install
+    args.unity_project = None
+    before = config.read_bytes()
+    with pytest.raises(ValueError, match="--unity-project"):
+        i.install(args)
+    assert config.read_bytes() == before
+    assert not args.state_home.exists()
+
+
+def test_combined_dry_run_keeps_both_projects_unchanged(combined_install):
+    _, i, project, _, args, config = combined_install
+    args.dry_run = True
+    manifest = project / "Packages/manifest.json"
+    before = manifest.read_bytes(), config.read_bytes()
+    report = i.install(args)
+    assert report["ok"] and report["unity"]["verification"] == "not_run"
+    assert (manifest.read_bytes(), config.read_bytes()) == before
+    assert not args.state_home.exists()
+
+
+def test_combined_install_honors_explicit_unity_config(combined_install):
+    _, i, project, _, args, config = combined_install
+    separate = project.parent / "separate-host" / "mcp.json"
+    args.unity_mcp_config = separate
+    report = i.install(args)
+    assert report["unity"]["mcpConfig"] == str(separate)
+    assert "unity-tools" not in json.loads(config.read_text())["mcpServers"]
+    assert "unity-tools" in json.loads(separate.read_text())["mcpServers"]
+    i.rollback_last_install(args.state_home)
+    assert not separate.exists()
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required for the Intel Mac launcher")
 def test_intel_unity_dry_run_keeps_mcp_on_editor_host(fixture):
     _, _, project, _ = fixture
     r = subprocess.run(["bash", str(ROOT / "install-intel-mac.sh"), "--engine", "unity", "--project", str(project), "--vm-name", "custom-unity-vm", "--model", "custom/model", "--dry-run"], env={**os.environ, "INTEL_MAC_INSTALLER_TEST": "1"}, capture_output=True, text=True)

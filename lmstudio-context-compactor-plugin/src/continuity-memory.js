@@ -213,7 +213,9 @@ function mergeRecentDistinct(previous, current, maxItems) {
 }
 
 function buildContinuityMemory(messages, facts, options = {}) {
-  const previousState = extractPriorContinuityState(messages);
+  const previousState = options.previousState === undefined
+    ? extractPriorContinuityState(messages)
+    : options.previousState;
   const objective = buildObjectiveContinuity(messages, previousState, options);
   const pendingItems = pendingAssistantItems(messages, objective.activeObjective);
   const previousWork = previousState?.currentWorkStatus || {};

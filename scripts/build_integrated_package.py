@@ -48,6 +48,7 @@ ALLOWED_ROOT_FILES = frozenset(
         "CONTRIBUTING.md",
         "EPIC_NOTICE.md",
         "INSTALL.bat",
+        "UPDATE.bat",
         "LICENSE",
         ".clinerules",
         "README.portable.md",
@@ -192,6 +193,7 @@ REQUIRED_RUNTIME_FILES = (
     "installer/unity_install.py",
     "docs/Unity_Authoring_Tests.md",
     "scripts/check_unity_install.js",
+    "scripts/update_unity_mcp.py",
     "unity-editor-bridge/Editor/Prefabs.cs",
     "unity-editor-bridge/Editor/Prefabs.cs.meta",
     "unity-editor-bridge/Editor/Approvals.cs",
@@ -541,8 +543,10 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/round-loop.ts",
     "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
     "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+    "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js",
     "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
     "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+    "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
     "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
     "lmstudio-context-compactor-plugin/src/continuity-text.js",
     "lmstudio-context-compactor-plugin/src/durable-memory-sanitizer.js",
@@ -842,6 +846,7 @@ def _sha256(path: Path) -> str:
 
 def _write_launchers(staging: Path) -> None:
     shutil.copy2(ROOT / "INSTALL.bat", staging / "INSTALL.bat")
+    shutil.copy2(ROOT / "UPDATE.bat", staging / "UPDATE.bat")
     shutil.copy2(ROOT / "scripts" / "portable_rag.ps1", staging / "rag.ps1")
     for source_name, target_name in (
         ("README.portable.md", "README.md"),
@@ -866,6 +871,7 @@ def _write_launchers(staging: Path) -> None:
         '## 설치 환경과 실행 방법\n'
         '\n'
         '- Windows는 `INSTALL.bat`, Ubuntu와 Apple Silicon macOS는 `./install.sh`를 실행합니다.\n'
+        '- Windows에서 기존 Unity MCP와 대화 압축 플러그인만 갱신할 때는 `UPDATE.bat`를 실행합니다. Unity MCP 설정이 기본 위치에 없으면 `UPDATE.bat "기존 mcp.json 경로"`를 사용합니다. 완료 후 LM Studio를 재시작합니다.\n'
         '- Python 3.10 이상이 없으면 SHA-256으로 확인한 uv를 자동으로 내려받고 선택한 사용자 상태 폴더에 Python 3.12를 설치합니다. `python3 install.py`를 직접 실행하려면 시스템 Python 3.10 이상이 필요합니다.\n'
         '- 언리얼·채팅 압축 구성에 필요한 Node.js 20 이상과 npm도 내려받습니다. 실행 파일 묶음은 SHA-256 확인값을 고정하고 CPU 종류에 맞춰 설치합니다.\n'
         '- SAFE, STANDARD, FULL, CUSTOM 중 필요한 범위를 선택합니다. 수정 기능과 별도 위험 확인을 모두 켜지 않으면 읽기 전용입니다. 명령행 옵션은 `python3 install.py --help`로 확인합니다.\n'

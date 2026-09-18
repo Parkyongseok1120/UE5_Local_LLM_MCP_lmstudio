@@ -1,10 +1,15 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
 const { Chat, ChatMessage } = require("@lmstudio/sdk");
-const { handlePredictionLoop } = require("../dist/prediction-loop.js");
+const { createPredictionLoopHandler, handlePredictionLoop } = require("../dist/prediction-loop.js");
 const { runOneToolRound } = require("../dist/round-loop.js");
+const { ContinuityNoteStore, NOTE_MARKER } = require("../dist/continuity-model-notes.js");
+const { ASSISTANT_MARKER } = require("../dist/continuity-assistant-evidence.js");
 
 function fakeController(history, tokenSource, overrides = {}, tools = []) {
   const blocks = [];
@@ -117,6 +122,118 @@ test("low-pressure history passes through without proxy model selection or sampl
     assert.equal(Object.prototype.hasOwnProperty.call(receivedOptions, key), false);
   }
   assert.equal(ctl.debugValue.compacted, false);
+});
+
+test("hidden model notes survive a new user turn as assistant judgment and leave visible answers clean", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "compactor-notes-loop-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const handler = createPredictionLoopHandler(new ContinuityNoteStore(path.join(directory, "private")));
+  const firstHistory = Chat.from([{ role: "user", content: "Inspect this search behavior." }]);
+  const footer = '\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n'
+    + JSON.stringify({ decisions: [{ statement: "Use extension OR filtering",
+      rationale: "The mixed file search should retain both kinds" }] }) + '\n</continuity-note>';
+  const firstModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, options) {
+      options.onMessage(ChatMessage.create("assistant", `Visible answer.${footer}`));
+    },
+  };
+  const first = fakeController(firstHistory, firstModel);
+  first.getWorkingDirectory = () => directory;
+  await handler(first);
+  assert.equal(first.blocks.at(-1).text, "Visible answer.");
+  assert.doesNotMatch(JSON.stringify(first.blocks), /continuity-note|extension OR filtering/u);
+
+  const secondHistory = Chat.from([{ role: "user", content: "Inspect this search behavior." },
+    { role: "assistant", content: "Visible answer." }, { role: "user", content: "Continue." }]);
+  let secondInput;
+  const secondModel = { ...firstModel, async act(chat, _tools, options) {
+    secondInput = chat;
+    options.onMessage(ChatMessage.create("assistant", "Continued answer."));
+  } };
+  const second = fakeController(secondHistory, secondModel);
+  second.getWorkingDirectory = () => directory;
+  await createPredictionLoopHandler(new ContinuityNoteStore(path.join(directory, "private")))(second);
+  const messages = secondInput.getMessagesArray();
+  const noteMessage = messages.find(message => message.getText().includes(NOTE_MARKER));
+  assert.equal(noteMessage.getRole(), "assistant");
+  assert.match(noteMessage.getText(), /Use extension OR filtering/u);
+  assert.doesNotMatch(second.blocks.at(-1).text, /continuity-note|extension OR filtering/u);
+  assert.equal(messages.filter(message => message.getRole() === "system").some(message => (
+    message.getText().includes("Use extension OR filtering"))), false);
+
+  const thirdHistory = Chat.from([{ role: "user", content: "Inspect this search behavior." },
+    { role: "assistant", content: "Visible answer." }, { role: "user", content: "Continue." },
+    { role: "assistant", content: "Continued answer." }, { role: "user", content: "Continue." }]);
+  let hardInput;
+  const thirdModel = { ...firstModel,
+    async getContextLength() { return 32768; },
+    async countTokens() { return 25000; },
+    async act(chat, _tools, options) {
+      hardInput = chat;
+      options.onMessage(ChatMessage.create("assistant", `Resolved.${'\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n{}\n</continuity-note>'}`));
+    },
+  };
+  const third = fakeController(thirdHistory, thirdModel);
+  third.getWorkingDirectory = () => directory;
+  await handler(third);
+  assert.match(hardInput.toString(), /Context memory/u);
+  const hardMessages = hardInput.getMessagesArray();
+  assert.ok(hardMessages.some(message => message.getRole() === "assistant"
+    && message.getText().includes("Use extension OR filtering")));
+  assert.ok(hardMessages.some(message => message.getRole() === "assistant"
+    && message.getText().includes(ASSISTANT_MARKER)));
+  assert.equal(hardMessages.some(message => message.getRole() === "system"
+    && message.getText().includes("Use extension OR filtering")), false);
+  assert.equal(hardMessages.some(message => message.getRole() === "system"
+    && message.getText().includes("Continued answer.")), false);
+  assert.equal(third.blocks.at(-1).text, "Resolved.");
+
+  const afterClearHistory = Chat.from([{ role: "user", content: "Inspect this search behavior." },
+    { role: "assistant", content: "Visible answer." }, { role: "user", content: "Continue." },
+    { role: "assistant", content: "Continued answer." }, { role: "user", content: "Continue." },
+    { role: "assistant", content: "Resolved." }, { role: "user", content: "Continue." }]);
+  let afterClearInput;
+  const afterClearModel = { ...firstModel, async act(chat, _tools, options) {
+    afterClearInput = chat;
+    options.onMessage(ChatMessage.create("assistant", "No old note."));
+  } };
+  const afterClear = fakeController(afterClearHistory, afterClearModel);
+  afterClear.getWorkingDirectory = () => directory;
+  await handler(afterClear);
+  assert.doesNotMatch(afterClearInput.toString(), /Use extension OR filtering/u);
+
+  const changedHistory = Chat.from([{ role: "user", content: "Inspect this search behavior." },
+    { role: "assistant", content: "Visible answer." }, { role: "user", content: "New unrelated objective." }]);
+  let changedInput;
+  const changedModel = { ...firstModel, async act(chat, _tools, options) {
+    changedInput = chat;
+    options.onMessage(ChatMessage.create("assistant", "New answer."));
+  } };
+  const changed = fakeController(changedHistory, changedModel);
+  changed.getWorkingDirectory = () => directory;
+  await handler(changed);
+  assert.doesNotMatch(changedInput.toString(), /Use extension OR filtering/u);
+});
+
+test("reserved note footers stay hidden when no stable working directory exists", async () => {
+  const history = Chat.from([{ role: "user", content: "Inspect this search behavior." }]);
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, options) {
+      options.onMessage(ChatMessage.create("assistant",
+        'Visible answer.\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n{}\n</continuity-note>'));
+    },
+  };
+  const ctl = fakeController(history, selectedModel);
+  await handlePredictionLoop(ctl);
+  assert.equal(ctl.blocks.at(-1).text, "Visible answer.");
 });
 
 test("inexact measurement activates the configured message-count fallback", async () => {

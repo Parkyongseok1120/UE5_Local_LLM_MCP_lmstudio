@@ -11,6 +11,8 @@ function isRecord(value) {
 function projectDescriptor(item, fallback = "") {
   const candidate = item?.canonicalProject || item?.activeProject || item?.projectPath
     || (String(item?.project || "").toLowerCase().endsWith(".uproject") ? item.project : "")
+    || (item?.projectIdentity && pathApiFor(item.canonicalProjectRoot).isAbsolute(String(item.canonicalProjectRoot || ""))
+      ? item.canonicalProjectRoot : "")
     || fallback;
   return candidate ? String(candidate) : "";
 }
