@@ -596,7 +596,7 @@ PORTABLE_CONTENT_FILES = frozenset(
         "docs/Model_Profiles.md",
         "docs/Project_Routing.md",
         "docs/RAG_Setup.md",
-        "docs/Release_Notes_1_3_3.md",
+        "docs/Release_Notes_1_4_0.md",
         "docs/Rider_Cline_Smoke_Checklist.md",
         "docs/Safe_Agent_Mode.md",
         "docs/Troubleshooting.md",
@@ -894,7 +894,7 @@ def _write_launchers(staging: Path) -> None:
         '- Apple Silicon macOS: 실제 기기에서 FULL 설치, 실행 환경, 채팅 압축, LM Studio 플러그인 설치·고정, 언리얼 자동 탐색, 전체 검색 자료 생성과 MCP 기본 연결을 확인한 기록이 있습니다. 서명·공증 여부는 보장하지 않습니다.\n'
         '- Intel macOS: LM Studio·언리얼·채팅 압축 설치는 초기에 중단됩니다. CUSTOM의 Codex·공통 규칙·Cline만 설치하는 구성은 가능합니다.\n'
         '\n'
-        '확인 범위는 [1.3.3 변경 사항](docs/Release_Notes_1_3_3.md)에 정리합니다.\n'
+        '확인 범위는 [1.4.0 변경 사항](docs/Release_Notes_1_4_0.md)에 정리합니다.\n'
         '\n'
         '## 검색 자료 관리\n'
         '\n'

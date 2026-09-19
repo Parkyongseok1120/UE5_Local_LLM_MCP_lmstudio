@@ -792,10 +792,10 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
         "unity_install.py",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert packaged_installer_manifest["productVersion"] == "1.3.3"
+    assert packaged_installer_manifest["productVersion"] == "1.4.0"
     assert packaged_installer_manifest["version"] == "2.1.18"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
-    assert (output / "docs" / "Release_Notes_1_3_3.md").is_file()
+    assert (output / "docs" / "Release_Notes_1_4_0.md").is_file()
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
     assert (output / "UPDATE.bat").read_bytes() == (ROOT / "UPDATE.bat").read_bytes()
     source_launcher = (ROOT / "install.sh").read_bytes()

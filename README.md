@@ -1,4 +1,4 @@
-# UE5_Local_LLM_MCP_lmstudio 1.3.3
+# UE5_Local_LLM_MCP_lmstudio 1.4.0
 
 LM Studio에서 돌리는 AI가 내 언리얼 프로젝트를 찾아보고, 코드를 읽고, 필요한 부분을 고칠 수 있게 연결하는 도구입니다.
 
@@ -97,7 +97,7 @@ python install.py --profile standard --yes --build-rag --index-tier standard --e
 | 오류 해결 | [문제 해결](docs/Troubleshooting.md) |
 | 수정·빌드 권한 이해 | [권한 설정](docs/Safe_Agent_Mode.md), [도구 사용 규칙](docs/LMStudio_MCP_Tool_Discipline.md) |
 | 내부 구조 확인 | [구성 설명](docs/ARCHITECTURE.md), [검색 대상 구분](docs/Project_Routing.md), [Build.cs 읽기](docs/Build_Cs_Parser.md) |
-| 이번 버전 변경 확인 | [1.3.3 변경 사항](docs/Release_Notes_1_3_3.md), [버전 관리](docs/VERSIONING.md) |
+| 이번 버전 변경 확인 | [1.4.0 변경 사항](docs/Release_Notes_1_4_0.md), [버전 관리](docs/VERSIONING.md) |
 
 실제 프로젝트에서의 동작은 엔진 버전, 플러그인, 개발 환경에 따라 확인이 필요합니다. 자동 검사를 통과한 것과 에디터에서 직접 실행해 본 것은 구분해서 적어야 합니다.
 
