@@ -143,17 +143,20 @@ def test_component_package_version_sources_are_synchronized() -> None:
 def test_workflow_has_supported_triggers_permissions_cancellation_timeouts_and_caches() -> None:
     ci = _read(".github/workflows/ci.yml")
 
-    assert ci.count('branches: ["main", "Develop"]') == 2
+    assert ci.count('branches: ["main", "Develop", "v*"]') == 2
+    assert "workflow_dispatch:" in ci
     assert "master" not in ci
     assert "permissions:\n  contents: read" in ci
     assert "group: ci-${{ github.workflow }}-${{ github.ref }}" in ci
     assert "cancel-in-progress: true" in ci
-    assert ci.count("timeout-minutes:") == 6
+    assert ci.count("timeout-minutes:") == 7
     assert "actions/checkout@v7" in ci
     assert "actions/setup-python@v7" in ci
     assert "actions/setup-node@v7" in ci
     assert "cache: pip" in ci
     assert "cache: npm" in ci
+    assert "name: Unity MCP (${{ matrix.os }})" in ci
+    assert "working-directory: lmstudio-unity-mcp" in ci
     assert "continue-on-error" not in ci
 
 

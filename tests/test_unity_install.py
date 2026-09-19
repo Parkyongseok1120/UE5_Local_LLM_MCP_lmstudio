@@ -318,9 +318,13 @@ def test_mock_intel_installer_generated_launcher_preserves_selection(tmp_path):
     (kit / "scripts").mkdir(parents=True)
     shutil.copyfile(ROOT / "install-intel-mac.sh", kit / "install-intel-mac.sh")
     shutil.copyfile(ROOT / "scripts/lmstudio-headless-cli.sh", kit / "scripts/lmstudio-headless-cli.sh")
-    project = tmp_path / "Game"; project.mkdir(); (project / "Game.uproject").write_text("{}")
-    engine = tmp_path / "Engine"; engine.mkdir()
-    fake = tmp_path / "limactl"; log = tmp_path / "calls.jsonl"
+    project = tmp_path / "Game"
+    project.mkdir()
+    (project / "Game.uproject").write_text("{}")
+    engine = tmp_path / "Engine"
+    engine.mkdir()
+    fake = tmp_path / "limactl"
+    log = tmp_path / "calls.jsonl"
     fake.write_text(f'''#!{sys.executable}
 import sys,json
 from pathlib import Path
@@ -334,7 +338,8 @@ elif "--verify-install" in c: print('{{"ready":true,"mcpHealthVerified":true,"mo
 ''')
     fake.chmod(0o755)
     env = {**os.environ, "LIMACTL_BIN": str(fake), "INTEL_MAC_INSTALLER_TEST": "1"}
-    env.pop("LMSTUDIO_VM", None); env.pop("LMSTUDIO_MODEL", None)
+    env.pop("LMSTUDIO_VM", None)
+    env.pop("LMSTUDIO_MODEL", None)
     endpoint = "http://127.0.0.1:2345/v1/chat/completions"
     r = subprocess.run(["bash", str(kit / "install-intel-mac.sh"), "--project", str(project), "--engine-root", str(engine), "--vm-name", "configured-vm", "--model", "configured/model", "--model-endpoint", endpoint, "--skip-rag-build", "--skip-login"], env=env, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stdout + r.stderr

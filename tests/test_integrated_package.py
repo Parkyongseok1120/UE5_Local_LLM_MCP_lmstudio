@@ -464,9 +464,11 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
         assert packaged_readme == (ROOT / source_template).read_text(encoding="utf-8")
         assert "Enable transparent compaction" not in packaged_readme
         assert "단일 스위치" in packaged_readme
-        assert "OFF" in packaged_readme
+        assert "기본 `ON`" in packaged_readme
     portable_install = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
-    assert "설치기는 플러그인을 설치하고 목록에 고정하지만 채팅에서 켜지는 않습니다" in portable_install
+    assert "기존 채팅의 단일 스위치를 ON으로 설정합니다" in portable_install
+    assert "적용 후 LM Studio를 재시작합니다" in portable_install
+    assert "채팅에서 켜지는 않습니다" not in portable_install
     assert "LM Studio 플러그인 설치·고정, 언리얼 자동 탐색" in portable_install
     assert "installation/pinning with the chat toggle OFF" not in portable_install
     assert _broken_local_markdown_links(output) == []

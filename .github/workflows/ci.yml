@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: ["main", "Develop"]
+    branches: ["main", "Develop", "v*"]
   pull_request:
-    branches: ["main", "Develop"]
+    branches: ["main", "Develop", "v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -230,6 +231,33 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\installer_support\Verify-UnrealMcp.ps1 -RepoOnly
+
+  unity-mcp:
+    name: Unity MCP (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: lmstudio-unity-mcp/package-lock.json
+
+      - name: Install Unity MCP dependencies
+        run: npm ci --no-fund --no-audit
+        working-directory: lmstudio-unity-mcp
+
+      - name: Unity MCP full test suite
+        run: npm test
+        working-directory: lmstudio-unity-mcp
 
   context-compactor:
     name: Context Compactor (${{ matrix.os }})
