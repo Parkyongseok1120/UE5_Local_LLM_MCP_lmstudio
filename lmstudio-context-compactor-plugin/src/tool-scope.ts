@@ -77,10 +77,15 @@ function existingPathFromCandidate(value: string): string {
 
 function pathsInText(text: string): Array<string> {
   const values: Array<string> = [];
-  const pattern = /(?:^|[\s`"'(=])([A-Za-z]:\\[^\r\n`"<>|?*]+)/gmu;
-  for (const match of String(text || "").matchAll(pattern)) {
-    const existing = existingPathFromCandidate(match[1]);
-    if (existing) values.push(existing);
+  const patterns = [
+    /(?:^|[\s`"'(=])([A-Za-z]:\\[^\r\n`"<>|?*]+)/gmu,
+    /(?:^|[\s`"'(=])(\/[^\r\n`"<>|?*]+)/gmu,
+  ];
+  for (const pattern of patterns) {
+    for (const match of String(text || "").matchAll(pattern)) {
+      const existing = existingPathFromCandidate(match[1]);
+      if (existing) values.push(existing);
+    }
   }
   return values;
 }
