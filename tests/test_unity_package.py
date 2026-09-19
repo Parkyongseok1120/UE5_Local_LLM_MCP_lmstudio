@@ -1,4 +1,4 @@
-"""The Unity alpha must be usable from a portable package, including common I/O."""
+"""The Unity beta must be usable from a portable package, including common I/O."""
 from pathlib import Path
 
 import build_integrated_package as builder

@@ -1,6 +1,6 @@
 # 설치·업데이트·복구
 
-Unity v1.4.0 alpha는 `--profile custom --components unity --unity-project /absolute/project`로 별도 Node MCP와 UPM Editor Bridge를 설치합니다. [Unity 설치·권한·지원 범위](Unity_Setup.md)를 참고하세요. 아래 기본 프로필 설명은 Unreal용이며 Unity 도구를 Unreal 채팅에 자동 추가하지 않습니다.
+Unity v1.4.0 beta 1은 `--profile custom --components unity --unity-project /absolute/project`로 별도 Node MCP와 UPM Editor Bridge를 설치합니다. [Unity 설치·권한·지원 범위](Unity_Setup.md)를 참고하세요. 아래 기본 프로필 설명은 Unreal용이며 Unity 도구를 Unreal 채팅에 자동 추가하지 않습니다.
 
 설치는 저장소 맨 위의 `INSTALL.bat` 또는 `install.sh`에서 시작하면 됩니다. 둘 다 같은 `install.py`를 실행합니다. 용도마다 다른 설치 파일을 찾을 필요는 없습니다.
 

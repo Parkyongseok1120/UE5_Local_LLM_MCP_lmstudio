@@ -17,7 +17,7 @@ class BridgeClient {
   }
   async send(d, method, args) {
     const requestId = crypto.randomUUID();
-    const envelope = { protocolVersion: 1, serverVersion: "1.4.0-alpha.1", requestId, token: d.token,
+    const envelope = { protocolVersion: 1, serverVersion: "1.4.0-beta.1", requestId, token: d.token,
       projectIdentity: d.projectIdentity, canonicalProjectRoot: d.canonicalProjectRoot, editorSessionId: d.editorSessionId,
       domainGeneration: d.domainGeneration, method, args };
     const bytes = Buffer.from(JSON.stringify(envelope) + "\n");

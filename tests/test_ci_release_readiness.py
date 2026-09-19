@@ -140,6 +140,21 @@ def test_component_package_version_sources_are_synchronized() -> None:
     assert installer_manifest["safety"]["contextCompactionEnabledByDefault"] is True
 
 
+def test_unity_beta_version_sources_are_synchronized() -> None:
+    expected = "1.4.0-beta.1"
+    package = json.loads(_read("lmstudio-unity-mcp/package.json"))
+    lock = json.loads(_read("lmstudio-unity-mcp/package-lock.json"))
+    bridge_package = json.loads(_read("unity-editor-bridge/package.json"))
+
+    assert package["version"] == expected
+    assert lock["version"] == expected
+    assert lock["packages"][""]["version"] == expected
+    assert bridge_package["version"] == expected
+    assert f'version: "{expected}"' in _read("lmstudio-unity-mcp/src/server.js")
+    assert f'serverVersion: "{expected}"' in _read("lmstudio-unity-mcp/src/bridge-client.js")
+    assert f'Version = "{expected}"' in _read("unity-editor-bridge/Editor/Bridge.cs")
+
+
 def test_workflow_has_supported_triggers_permissions_cancellation_timeouts_and_caches() -> None:
     ci = _read(".github/workflows/ci.yml")
 

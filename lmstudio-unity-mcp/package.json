@@ -1,6 +1,6 @@
 {
   "name": "lmstudio-unity-mcp",
-  "version": "1.4.0-alpha.1",
+  "version": "1.4.0-beta.1",
   "private": true,
   "type": "commonjs",
   "description": "Explicit Unity observation and editing tools; no internal agent or model runtime.",

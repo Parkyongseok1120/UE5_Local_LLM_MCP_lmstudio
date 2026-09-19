@@ -1,4 +1,4 @@
-# Unity MCP — v1.4.0 alpha
+# Unity MCP — v1.4.0 beta 1
 
 Unity 프로젝트의 상태를 모델이 읽고 명시한 작업만 실행하는 별도 MCP 서버입니다. 내부 모델 호출, Planner, 자동 수정·재시도, 패키지 설치·빌드·Git 작업은 없습니다. 기존 Unreal 서버와 실행 경로를 공유하지 않습니다.
 

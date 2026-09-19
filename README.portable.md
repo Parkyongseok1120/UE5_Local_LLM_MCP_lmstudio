@@ -1,6 +1,6 @@
 # 언리얼 AI 도구 압축 배포본
 
-Unity v1.4.0 alpha 서버·Editor Bridge도 포함합니다. Unity의 별도 설정과 실제 지원 범위는 [Unity 안내](docs/Unity_Setup.md)를 참고하세요. 아래 통합 설치 절차는 Unreal용입니다.
+Unity v1.4.0 beta 1 서버·Editor Bridge도 포함합니다. Unity의 별도 설정과 실제 지원 범위는 [Unity 안내](docs/Unity_Setup.md)를 참고하세요. 아래 통합 설치 절차는 Unreal용입니다.
 
 내 컴퓨터의 AI가 언리얼 프로젝트를 검색하고, 코드를 읽고, 수정과 빌드를 할 수 있게 연결하는 도구입니다. 엔진 소스와 완성된 검색 자료는 포함하지 않습니다. 사용할 프로젝트에 맞춰 직접 만들어야 합니다.
 

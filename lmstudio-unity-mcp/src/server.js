@@ -63,7 +63,7 @@ function createRuntime(env = process.env, injectedBridge) {
 }
 async function main() {
   const runtime = createRuntime();
-  const server = new Server({ name: "lmstudio-unity-mcp", version: "1.4.0-alpha.1" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "lmstudio-unity-mcp", version: "1.4.0-beta.1" }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: runtime.tools }));
   server.setRequestHandler(CallToolRequestSchema, async request => {
     const payload = await runtime.call(request.params.name, request.params.arguments ?? {});

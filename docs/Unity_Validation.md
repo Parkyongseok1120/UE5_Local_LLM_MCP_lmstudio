@@ -1,4 +1,4 @@
-# Unity v1.4.0 alpha — validation record
+# Unity v1.4.0 beta 1 — validation record
 
 Date: 2026-09-15. Implementation target: Unity 2022.3+ common APIs. Actual Editor available for execution: Unity 6000.3.14f1, Intel macOS. Other Editor versions and Windows/Linux are not integration-tested.
 

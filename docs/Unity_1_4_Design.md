@@ -1,4 +1,4 @@
-# Unity v1.4.0 alpha: design and implementation record
+# Unity v1.4.0 beta 1: design and implementation record
 
 ## Repository audit (2026-09-15)
 
@@ -17,14 +17,14 @@
 
 Project roots, engine installation paths and game types are never constants. Unity 2022.3+ common APIs form the compatibility baseline; the installed 6000.3 Editor is one test environment, not a product requirement for that exact version. Capabilities describe the implemented runtime surface; testing one version does not establish compatibility with all releases. Projects with unsupported versions/dependencies must resolve those prerequisites explicitly, not via a server-selected upgrade.
 
-The implementation is an alpha vertical slice. The capability table in `Unity_Setup.md` is the authoritative implemented scope; missing operations fail with `capability_unavailable`, never synthetic success. The runtime makes no LLM calls, chooses no models or next actions, installs no packages and performs no Git/build/deployment actions.
+The implementation is a beta 1 vertical slice. The capability table in `Unity_Setup.md` is the authoritative implemented scope; missing operations fail with `capability_unavailable`, never synthetic success. The runtime makes no LLM calls, chooses no models or next actions, installs no packages and performs no Git/build/deployment actions.
 
 ## Wire and identity contract
 
-- Protocol `1`, bridge/server `1.4.0-alpha.1`. Local TCP, IPv4 loopback, OS-selected port, one bounded newline-delimited JSON request/reply per connection. No HTTP/browser origin surface. Discovery is under `Library/EvidenceFirst/bridge.json` with a random token, process ID, canonical root and session identity. Tokens are transport-only, never returned in MCP results.
+- Protocol `1`, bridge/server `1.4.0-beta.1`. Local TCP, IPv4 loopback, OS-selected port, one bounded newline-delimited JSON request/reply per connection. No HTTP/browser origin surface. Discovery is under `Library/EvidenceFirst/bridge.json` with a random token, process ID, canonical root and session identity. Tokens are transport-only, never returned in MCP results.
 - `projectIdentity` is a hash of the canonical root, not a copied project UUID. Handshake checks the canonical root and live Editor PID/session. `editorSessionId` survives domain reload via SessionState; `domainGeneration` increments at reload. `playSessionId` changes on entering/exiting Play. Object handles are also domain-bound.
 - Every request carries `requestId`; mutations also require caller-chosen `operationId`. Mutation content, project and editor session are durably journaled before execution. Same ID/same content returns the record; different content conflicts. Pending records after reload/crash become `outcome_unknown`, never rerun. This is at-most-one attempt while the journal survives, not exactly-once execution. Records are bounded; capacity fails closed rather than evicting deduplication evidence.
-- Connection loss is `disconnected` with any last-known identity, not assumed reload. Reads can reconnect through discovery; mutations are never automatically retransmitted. Operation lookup is the recovery path. This alpha's cancellation endpoint reports `not_cancelled`; it does not claim to abort running Unity APIs or expose a cancellable long-running test queue.
+- Connection loss is `disconnected` with any last-known identity, not assumed reload. Reads can reconnect through discovery; mutations are never automatically retransmitted. Operation lookup is the recovery path. This beta's cancellation endpoint reports `not_cancelled`; it does not claim to abort running Unity APIs or expose a cancellable long-running test queue.
 
 ## ObjectRef and receipts
 
@@ -39,7 +39,7 @@ The implementation is an alpha vertical slice. The capability table in `Unity_Se
 - Scene edits and SO patches mark dirty. Saving requires the exact scene/asset and acknowledgement that existing dirty changes in that target may also be saved. Never SaveAssets/SaveOpenScenes globally. SaveAssetIfDirty bypasses OnWillSaveAssets; the response/documentation says so.
 - Prefab source mutations use isolated contents and file receipts; nested/variant apply has an explicit source destination; revert requires independent approval. Managed-reference type replacement and scope-expanding array override application remain unavailable. See `Unity_Authoring_Tests.md` for actual supported scope.
 - A short Undo group is confined to one synchronous operation. Undo is not a database transaction and cannot undo arbitrary project-code side effects. Failure states distinguish `not_applied`, `rolled_back`, `partially_applied`, `outcome_unknown`; re-read values are point-in-time observations. No universal `atomic=true`.
-- General file access rejects symlink/reparse components, protected Unity formats and hidden/generated directories. Assets text is writable; Packages/ProjectSettings are read-only in this alpha. Same-account malicious filesystem races and executing an untrusted Unity project are not sandboxed.
+- General file access rejects symlink/reparse components, protected Unity formats and hidden/generated directories. Assets text is writable; Packages/ProjectSettings are read-only in beta 1. Same-account malicious filesystem races and executing an untrusted Unity project are not sandboxed.
 
 ## Official API references
 
