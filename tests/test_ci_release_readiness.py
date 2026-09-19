@@ -141,7 +141,7 @@ def test_component_package_version_sources_are_synchronized() -> None:
 
 
 def test_unity_beta_version_sources_are_synchronized() -> None:
-    expected = "1.4.0-beta.1"
+    expected = "1.4.0-beta.3"
     package = json.loads(_read("lmstudio-unity-mcp/package.json"))
     lock = json.loads(_read("lmstudio-unity-mcp/package-lock.json"))
     bridge_package = json.loads(_read("unity-editor-bridge/package.json"))

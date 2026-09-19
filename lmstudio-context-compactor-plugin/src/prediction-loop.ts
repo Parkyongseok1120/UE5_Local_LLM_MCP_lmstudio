@@ -64,6 +64,9 @@ type CheckpointResult = {
   retainedIndexes: Array<number>;
   omittedMessageCount: number;
   latestUserVerbatim: string;
+  memory?: {
+    currentWorkStatus?: { modifiedOrObservedFiles?: Array<Record<string, unknown>> };
+  };
 };
 
 export type ContextMeasurement = {
@@ -103,6 +106,7 @@ const UNITY_OBSERVATION_TOOLS = new Set([
   "unity_debug_query",
   "unity_symbols",
   "unity_status",
+  "unity_git",
   "list_directory",
   "search_files",
   "read_file",
@@ -174,15 +178,15 @@ function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     projectEngine,
     projectIdentity: String(config.get("projectIdentity") || "").trim().slice(0, 4096),
     observeOnly: config.get("observeOnly") === true,
-    showDebugInfo: config.get("showDebugInfo") === true,
+    showDebugInfo: config.get("showDebugInfo") !== false,
     softRemainingTokens: numeric(config.get("softRemainingTokens"), 14000, 0, 1_000_000),
     hardRemainingTokens: numeric(config.get("hardRemainingTokens"), 8000, 0, 1_000_000),
-    maxOutputReserve: numeric(config.get("maxOutputReserve"), 4096, 256, 131072),
-    safetyMarginTokens: numeric(config.get("safetyMarginTokens"), 1024, 0, 131072),
-    assumedContextLength: numeric(config.get("assumedContextLength"), 32768, 2048, 4_000_000),
+    maxOutputReserve: numeric(config.get("maxOutputReserve"), 8192, 256, 131072),
+    safetyMarginTokens: numeric(config.get("safetyMarginTokens"), 1536, 0, 131072),
+    assumedContextLength: numeric(config.get("assumedContextLength"), 65536, 2048, 4_000_000),
     recentCompleteTurns: numeric(config.get("recentCompleteTurns"), 2, 0, 20),
     compactAboveMessageCount: numeric(config.get("compactAboveMessageCount"), 24, 4, 10000),
-    maxCheckpointChars: numeric(config.get("maxCheckpointChars"), 12000, 2000, 100000),
+    maxCheckpointChars: numeric(config.get("maxCheckpointChars"), 22000, 2000, 100000),
     maxToolResultChars: numeric(config.get("maxToolResultChars"), 1200, 200, 10000),
   };
 }
@@ -274,6 +278,66 @@ function buildCompactedHistory(
     if (!messages[index].isSystemPrompt() && retained.has(index)) compacted.append(messages[index]);
   }
   return { history: compacted, checkpoint };
+}
+
+type CompactedHistory = ReturnType<typeof buildCompactedHistory>;
+
+type SoftCompactionSelection = {
+  candidate: CompactedHistory;
+  targetRemainingTokens: number;
+  remainingTokensAfter: number | null;
+  maxCurrentTurnMessages: number | null;
+};
+
+async function selectSoftCompaction(
+  history: Chat,
+  config: DirectConfig,
+  checkpointOptions: Record<string, unknown>,
+  measureCandidate: (history: Chat) => Promise<ContextMeasurement>,
+): Promise<SoftCompactionSelection> {
+  const targetRemainingTokens = config.softRemainingTokens
+    + Math.max(1024, Math.trunc(Math.max(0,
+      config.softRemainingTokens - config.hardRemainingTokens) / 2));
+  const recent = buildCompactedHistory(
+    history, config.recentCompleteTurns, config, checkpointOptions,
+  );
+  if (recent.history !== history) {
+    const measured = await measureCandidate(recent.history);
+    if (measured.remainingTokens >= targetRemainingTokens) {
+      return { candidate: recent, targetRemainingTokens,
+        remainingTokensAfter: measured.remainingTokens, maxCurrentTurnMessages: null };
+    }
+  }
+
+  // Find the largest bounded current-turn tail that reaches the target. The
+  // checkpoint core retains only complete assistant/tool exchange groups, so
+  // the binary search cannot split a tool request from its result.
+  let low = 2;
+  let high = Math.max(2, Math.min(256, history.length));
+  let best: SoftCompactionSelection | null = null;
+  let smallest: SoftCompactionSelection | null = null;
+  while (low <= high) {
+    const cap = Math.trunc((low + high) / 2);
+    const candidate = buildCompactedHistory(history, 0, config, {
+      ...checkpointOptions, maxCurrentTurnMessages: cap,
+    });
+    const measured = candidate.history === history
+      ? null : await measureCandidate(candidate.history);
+    const selection = { candidate, targetRemainingTokens,
+      remainingTokensAfter: measured?.remainingTokens ?? null,
+      maxCurrentTurnMessages: cap };
+    if (!smallest || cap < smallest.maxCurrentTurnMessages!) smallest = selection;
+    if (measured && measured.remainingTokens >= targetRemainingTokens) {
+      best = selection;
+      low = cap + 1;
+    } else {
+      high = cap - 1;
+    }
+  }
+  if (best) return best;
+  if (smallest) return smallest;
+  return { candidate: recent, targetRemainingTokens,
+    remainingTokensAfter: null, maxCurrentTurnMessages: null };
 }
 
 function composeModelHistory(
@@ -504,6 +568,17 @@ function visibleAssistantOutput(text: string): { visibleText: string; hasFooter:
     ? raw.slice(separatorIndex + SYNTHETIC_REASONING_SEPARATOR.length) : raw);
 }
 
+function modelHistoryMessage(message: ChatMessage): ChatMessage {
+  if (!message.isAssistantMessage() || !message.getText()) return message;
+  const extracted = modelNotes.splitVisibleAnswer(message.getText());
+  if (!extracted.hasFooter || extracted.visibleText === message.getText()) return message;
+  const copy = ChatMessage.from(message);
+  // Keep the SDK's raw reasoning/non-reasoning serialization for the next
+  // tool round. Only the private continuity footer is removed from model input.
+  copy.replaceText(extracted.visibleText);
+  return copy;
+}
+
 export function createPredictionLoopHandler(
   noteStore: InstanceType<typeof modelNotes.ContinuityNoteStore> = new modelNotes.ContinuityNoteStore(),
   client?: LMStudioClient,
@@ -567,16 +642,41 @@ export function createPredictionLoopHandler(
       const before = await measureContext(tokenSource, beforeInput.history, config, modelTools);
       let modelHistory = workingHistory;
       let compacted = false;
+      let compactionCheckpoint: CheckpointResult | null = null;
+      let compactionRetention: Record<string, unknown> | null = null;
       if (core.shouldCompact(before, config)) {
         const hard = before.remainingTokens <= config.hardRemainingTokens;
-        let candidate = buildCompactedHistory(
-          workingHistory,
-          hard ? 0 : config.recentCompleteTurns,
-          config,
-          { ...(hard ? { maxCurrentTurnMessages: 2 } : {}),
-            maxCheckpointChars: config.maxCheckpointChars - beforeInput.overhead },
-        );
-        if (!hard) {
+        const checkpointOptions = {
+          maxCheckpointChars: config.maxCheckpointChars - beforeInput.overhead,
+        };
+        let candidate: CompactedHistory;
+        if (!hard && before.exact) {
+          const selected = await selectSoftCompaction(
+            workingHistory, config, checkpointOptions,
+            async (candidateHistory) => measureContext(
+              tokenSource,
+              composeModelHistory(candidateHistory, noteEnabled ? activeNote : null,
+                config, scopeInstructions, noteEnabled).history,
+              config,
+              modelTools,
+            ),
+          );
+          candidate = selected.candidate;
+          compactionRetention = {
+            mode: "soft_token_budget",
+            targetRemainingTokens: selected.targetRemainingTokens,
+            remainingTokensAfter: selected.remainingTokensAfter,
+            maxCurrentTurnMessages: selected.maxCurrentTurnMessages,
+          };
+        } else {
+          candidate = buildCompactedHistory(
+            workingHistory,
+            hard ? 0 : config.recentCompleteTurns,
+            config,
+            { ...checkpointOptions, ...(hard ? { maxCurrentTurnMessages: 2 } : {}) },
+          );
+        }
+        if (!hard && !before.exact) {
           let needsBoundedCurrentTurn = candidate.history === workingHistory;
           if (!needsBoundedCurrentTurn) {
             const measuredCandidate = composeModelHistory(
@@ -590,14 +690,19 @@ export function createPredictionLoopHandler(
               workingHistory,
               0,
               config,
-              { maxCurrentTurnMessages: 2,
-                maxCheckpointChars: config.maxCheckpointChars - beforeInput.overhead },
+              { ...checkpointOptions, maxCurrentTurnMessages: 2 },
             );
           }
+          compactionRetention = { mode: "inexact_message_fallback",
+            maxCurrentTurnMessages: needsBoundedCurrentTurn ? 2 : null };
+        } else if (hard) {
+          compactionRetention = { mode: "hard_latest_exchange",
+            maxCurrentTurnMessages: 2 };
         }
         if (candidate.history !== workingHistory) {
           modelHistory = candidate.history;
           compacted = modelHistory !== workingHistory;
+          compactionCheckpoint = candidate.checkpoint;
         }
       }
       workingHistory = modelHistory;
@@ -605,6 +710,9 @@ export function createPredictionLoopHandler(
         workingHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
       ).history;
 
+      const retainedIndexes = compactionCheckpoint?.retainedIndexes || [];
+      const retainedIndexLimit = 64;
+      const observedFiles = compactionCheckpoint?.memory?.currentWorkStatus?.modifiedOrObservedFiles || [];
       if (config.showDebugInfo) ctl.debug({
         event: "direct_context_measurement",
         roundIndex,
@@ -621,6 +729,24 @@ export function createPredictionLoopHandler(
         availableUnrealTools: scope.availableUnrealTools,
         visibleToolCount: modelTools.length,
         attachmentCount: attachmentContext.attachmentCount,
+        compactionDetails: compacted && compactionCheckpoint ? {
+          omittedMessageCount: compactionCheckpoint.omittedMessageCount,
+          retainedMessageCount: retainedIndexes.length,
+          retainedMessageIndexes: retainedIndexes.slice(-retainedIndexLimit),
+          retainedMessageIndexesTruncated: retainedIndexes.length > retainedIndexLimit,
+          checkpointChars: compactionCheckpoint.checkpoint.length,
+          assistantCheckpointChars: compactionCheckpoint.assistantCheckpoint.length,
+          retention: compactionRetention,
+          observedFiles: observedFiles.slice(-16).map((file) => ({
+            canonicalProject: file.canonicalProject,
+            canonicalPath: file.canonicalPath,
+            path: file.path,
+            sha256AtObservation: file.sha256AtObservation,
+            observedLineRanges: file.observedLineRanges,
+            totalLinesAtObservation: file.totalLinesAtObservation,
+            readCoverageState: file.readCoverageState,
+          })),
+        } : undefined,
       });
       ctl.guardAbort();
 
@@ -726,9 +852,11 @@ export function createPredictionLoopHandler(
       for (const message of captured.messages) {
         const live = liveMessages.get(message);
         let visibleMessage = live?.visibleMessage || message;
+        let historyMessage = message;
         let textAlreadyStreamed = live?.textStreamed || false;
         if (message.isAssistantMessage() && message.getText()) {
           const extracted = modelNotes.splitVisibleAnswer(message.getText());
+          historyMessage = modelHistoryMessage(message);
           if (!live) {
             const streamed = stream.consumeAssistant(message.getText());
             const fallback = visibleAssistantOutput(message.getText());
@@ -746,7 +874,7 @@ export function createPredictionLoopHandler(
             }
           }
         }
-        workingHistory.append(visibleMessage);
+        workingHistory.append(historyMessage);
         visibleHistory.append(visibleMessage);
         if (!displayedMessages.has(message)) emitter.emit(visibleMessage, textAlreadyStreamed);
       }
@@ -779,4 +907,6 @@ export const __test = {
   bindProjectArguments,
   isObservationOnlyToolCall,
   createRoundActivityTracker,
+  modelHistoryMessage,
+  selectSoftCompaction,
 };

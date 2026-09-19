@@ -1,0 +1,277 @@
+{
+  "mode": "architecture",
+  "claims": [
+    {
+      "claim": "실제 LM Studio MCP 포장 배열을 parseToolResult가 결과 객체로 취급하여 51개 결과 모두에서 허용 사실 추출을 잃는다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:185",
+          "observation": "JSON.parse(text) 결과에서 path/hash 등 최상위 필드를 바로 읽는다."
+        },
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/84/1789836297694.conversation.json#messages[3].versions[0].steps",
+          "observation": "실제 toolCallResult.content는 JSON으로 직렬화된 MCP text content 배열이다."
+        },
+        {
+          "kind": "test",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#parser",
+          "observation": "실제 51개 결과의 wrappedEmpty=51. 포장만 해제하면 plainWithPath=42, plainWithHash=36."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:194",
+          "symbol": "normalizeHistory: tool result content 수신"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:185",
+          "symbol": "parseToolResult: 포장 배열을 직접 해석"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#compactionProbe",
+          "symbol": "파일 관찰 0개 대 2개"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#compactionProbe.unwrapped",
+          "observation": "같은 내부 JSON은 기존 파서로 파일 범위 보존 가능하다. 모든 Unity 관찰 로직 부재는 아니다."
+        }
+      ],
+      "unknowns": [
+        "교정한 파서만 적용한 실제 Qwen 전체 요청의 완료 여부는 아직 검증하지 않았다."
+      ]
+    },
+    {
+      "claim": "soft 압축에서 현재 턴을 두 메시지로 축소하는 경로가 실제 반복 실행에서 사용되어 이전 도구 본문이 제거된다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:585",
+          "observation": "일반 압축 이후 soft 기준에 계속 걸리면 maxCurrentTurnMessages:2로 재생성한다."
+        },
+        {
+          "kind": "runtime",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#recordedRoundMetadata",
+          "observation": "27라운드 중 20번 압축, 최저 remainingTokens=8371로 hard=8000보다 높으며 최신 사용자와 최신 교환만 남기는 인덱스가 반복된다."
+        },
+        {
+          "kind": "test",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#compactionProbe",
+          "observation": "실제 읽기 결과 압축에서 이전 본문은 포장 해제 여부와 무관하게 제거된다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:571",
+          "symbol": "remaining token 측정"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:585",
+          "symbol": "soft compaction 후 bounded current turn 선택"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/direct-compaction-core.js#buildCheckpoint",
+          "symbol": "이전 tool exchange 제외"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#recordedRoundMetadata",
+          "symbol": "원본에서 유지 인덱스 확인"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/direct-compaction-core.js#boundedCurrentTurnIndexes",
+          "observation": "가장 최신의 완전한 tool exchange는 유지한다."
+        },
+        {
+          "kind": "test",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#compactionProbe.unwrapped",
+          "observation": "포장 수정 시 과거 파일 메타데이터는 살아남지만 본문은 여전히 제거된다."
+        }
+      ],
+      "unknowns": [
+        "이 보존 정책 하나를 바꾼 실제 생성에서 반복 빈도가 얼마나 줄어드는지는 미측정이다."
+      ]
+    },
+    {
+      "claim": "표시용 본문을 workingHistory에 넣으면 같은 사용자 턴에서 이전 생각 내용이 실제 Qwen 프롬프트에서 사라진다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:775",
+          "observation": "화면용 visibleMessage를 workingHistory에도 append한다."
+        },
+        {
+          "kind": "framework_source",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16662",
+          "observation": "SDK 기본 act는 contentArray 원문을 assistantMessage로 mutableChat에 추가한다."
+        },
+        {
+          "kind": "runtime",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#liveTemplate",
+          "observation": "실제 로드된 qwen/qwen3.8-27b applyPromptTemplate에서 raw thoughtPresent=true, visible=false, 양쪽 toolResultPresent=true."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:687",
+          "symbol": "onMessageCaptured에서 SDK message 수신"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:126",
+          "symbol": "consumeAssistant의 표시용 텍스트 생성"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:775",
+          "symbol": "workingHistory에 표시용 메시지 추가"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#liveTemplate",
+          "symbol": "실제 렌더링된 prompt의 thought sentinel 비교"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#liveTemplate",
+          "observation": "도구 결과는 양쪽 입력에 보존된다. 전체 대화가 초기화된 것은 아니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델 생성은 하지 않은 템플릿 실험이다. 판단 손실이 모든 반복의 단독 원인이라는 주장은 검증되지 않았다."
+      ]
+    },
+    {
+      "claim": "사용자의 실제 요청에서 압축, 동일 버전 재조회, 관찰 메모 소실이 반복되었으나 수정 후 전체 요청 완료는 아직 검증하지 않았다.",
+      "claimType": "behavior",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json",
+          "observation": "719줄 동일 hash 파일을 27회 읽고 2429줄을 중복 조회했다. 20개 압축 모두 observedFiles=[]였다."
+        },
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/server-logs/2026-09/2026-09-20.1.log#2026-09-20 02:08:04",
+          "observation": "최종 답변 없이 사용자 중단으로 실행이 종료되었다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.lmstudio/conversations/84/1789836297694.conversation.json#messages[2]",
+          "symbol": "첨부 PDF 기준 C 리팩토링 검토 요청"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts#handlePredictionLoop",
+          "symbol": "압축 및 모델 도구 라운드"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#fileCoverage",
+          "symbol": "동일 파일 재탐색 누적"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "docs/investigations/compactor-loop-2026-09-20/results.json#limits",
+          "observation": "오프라인 재생은 원본 도구 근거를 사용하나 전체 원본 프롬프트 생성 비교는 아니다."
+        }
+      ],
+      "unknowns": [
+        "세 결함의 개별적인 모델 행동 영향과 수정 후 최종 완료는 전체 실행 대조로 검증해야 한다.",
+        "유한 시간에 사용자 중단된 로그이므로 수학적으로 무한한 실행은 증명할 수 없다."
+      ]
+    }
+  ],
+  "existing": [
+    "parseToolResult 및 durable sanitizer",
+    "SDK 원문 메시지와 GUI PredictionStreamRenderer",
+    "buildCheckpoint와 완전한 tool exchange 보존",
+    "measureContext의 실제 토큰 측정",
+    "read_attached_document와 첨부 식별자"
+  ],
+  "proposed": [
+    "실제 MCP 포장을 제한적으로 정규화한 뒤 기존 사실/receipt 검증 적용",
+    "같은 사용자 턴의 모델 원문 기록과 GUI 표시 기록 분리",
+    "soft 압축에서 현재 턴 교환을 실제 토큰 예산에 맞춰 보존",
+    "큰 전처리 PDF의 원본 요청/첨부 경계를 검증하고 필요할 때 구조적 분리",
+    "동일 조건 실제 Qwen 완료 대조를 배포 전 필수 확인"
+  ],
+  "doNotDuplicate": [
+    "제어 필드 및 receipt sanitizer",
+    "파일 project/path/hash/range 관찰 병합",
+    "assistant 판단/관찰 사실 역할 분리",
+    "첨부 파싱 및 bounded document reading",
+    "새 계획 모델 또는 MCP 내부 workflow 엔진"
+  ],
+  "invariants": [
+    "요청/결과 ID와 프로젝트 경계를 보존",
+    "관찰 사실과 모델 판단을 분리",
+    "쓰기 receipt를 영속 메모리에서 제거",
+    "횟수로 강제 종료하지 않음",
+    "관찰 범위만으로 코드 이해/검토 완료를 주장하지 않음"
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+    "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
+    "실제 MCP 포장 fixture 및 LM Studio GUI 검증",
+    "첨부 전처리 경계: 별도 구조 확인 후 필요 여부 결정"
+  ],
+  "validationPlan": [
+    "재현 스크립트 actual envelope/plain 대조",
+    "실제 템플릿 현재 턴 내용/구조 보존",
+    "토큰 압박과 첨부 조합에서 근거 유지",
+    "실제 사용자 입력 수정 전후 완료와 재조회율 대조",
+    "GUI 응답 종료와 새 입력 가능 여부 확인"
+  ]
+}

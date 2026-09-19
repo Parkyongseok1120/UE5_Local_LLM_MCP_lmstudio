@@ -6,10 +6,10 @@
 |---|---|---|
 | 제품 | 1.4.0 | [installer/manifest.json](../installer/manifest.json) |
 | Node 파일·실행 서버 | 0.3.22 | [package.json](../lmstudio-unreal-agent-mcp/package.json) |
-| Unity MCP·Editor Bridge | 1.4.0-beta.1 | [MCP package.json](../lmstudio-unity-mcp/package.json), [Bridge package.json](../unity-editor-bridge/package.json) |
+| Unity MCP·Editor Bridge | 1.4.0-beta.3 | [MCP package.json](../lmstudio-unity-mcp/package.json), [Bridge package.json](../unity-editor-bridge/package.json) |
 | 근거 검토 서버 | 1.1.1 | [evidence_packet_contract.py](../skills/evidence-first-code-audit/scripts/evidence_packet_contract.py), [evidence_first_mcp.py](../skills/evidence-first-code-audit/scripts/evidence_first_mcp.py) |
-| 대화 압축기 | 0.4.58 / revision 105 | [package.json](../lmstudio-context-compactor-plugin/package.json), [manifest.json](../lmstudio-context-compactor-plugin/manifest.json) |
-| 압축 배포 구성 | 2.1.18 | [installer/manifest.json](../installer/manifest.json) |
+| 대화 압축기 | 0.4.60 / revision 107 | [package.json](../lmstudio-context-compactor-plugin/package.json), [manifest.json](../lmstudio-context-compactor-plugin/manifest.json) |
+| 압축 배포 구성 | 2.1.20 | [installer/manifest.json](../installer/manifest.json) |
 
 제품을 새로 배포할 때 제품 버전을 올립니다. 도구의 공개 입력·출력이나 동작이 바뀌면 해당 구성 요소 버전을 올립니다. 배포 파일 구성이나 설치 내용이 바뀌면 배포 구성 버전을 검토해야 합니다.
 

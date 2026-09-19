@@ -99,4 +99,18 @@ test("project scope and refs require unambiguous tool observations", () => {
   const repeated = messages({ role: "user", content: "Investigate this Unity project." },
     ...pair("read-a", projectA, identityA), ...pair("read-a", projectA, identityA));
   assert.equal(notes.attachScope(draft, fingerprint, repeated).decisions[0].refs, undefined);
+
+  const enveloped = messages({ role: "user", content: "Investigate this Unity project." },
+    { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+      id: "read-envelope", type: "function", name: "read_file", arguments: { path: "Assets/Foo.cs" },
+    } }] },
+    { role: "tool", content: [{ type: "toolCallResult", toolCallId: "read-envelope",
+      content: JSON.stringify([{ type: "text", text: JSON.stringify({ status: "observed",
+        canonicalProjectRoot: projectA, projectIdentity: identityA,
+        path: "Assets/Foo.cs", hash: "c".repeat(64) }) }]) }] });
+  const envelopedNote = notes.attachScope({ decisions: [{ statement: "Use envelope evidence",
+    rationale: "The exact tool call completed", refs: ["tool-call:read-envelope"] }] },
+  notes.objectiveFingerprint(enveloped), enveloped);
+  assert.equal(envelopedNote.scope.projectIdentity, `unity:${identityA}`);
+  assert.deepEqual(envelopedNote.decisions[0].refs, ["tool-call:read-envelope"]);
 });

@@ -281,7 +281,7 @@ def compact_in_background(
     measurement = {
         "contextLength": context_length,
         "inputTokens": estimated_input_tokens,
-        "remainingTokens": context_length - estimated_input_tokens - 4096 - 1024,
+        "remainingTokens": context_length - estimated_input_tokens - 8192 - 1536,
         "exact": False,
         "messageCount": len(messages),
     }
@@ -291,11 +291,11 @@ def compact_in_background(
         "options": {
             "softRemainingTokens": soft_remaining_tokens,
             "hardRemainingTokens": 8000,
-            "maxOutputReserve": 4096,
-            "safetyMarginTokens": 1024,
+            "maxOutputReserve": 8192,
+            "safetyMarginTokens": 1536,
             "recentCompleteTurns": 2,
             "compactAboveMessageCount": compact_above_messages,
-            "maxCheckpointChars": 12000,
+            "maxCheckpointChars": 22000,
             "maxToolResultChars": 1200,
         },
     }

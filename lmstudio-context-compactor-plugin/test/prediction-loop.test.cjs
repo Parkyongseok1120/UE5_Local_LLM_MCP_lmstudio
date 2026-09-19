@@ -467,6 +467,10 @@ test("inexact measurement activates the configured message-count fallback", asyn
   assert.equal(ctl.debugValue.exactMeasurement, false);
   assert.equal(ctl.debugValue.messageCount, 24);
   assert.equal(ctl.debugValue.compacted, true);
+  assert.ok(ctl.debugValue.compactionDetails.omittedMessageCount > 0);
+  assert.ok(ctl.debugValue.compactionDetails.retainedMessageCount > 0);
+  assert.ok(ctl.debugValue.compactionDetails.checkpointChars > 0);
+  assert.deepEqual(ctl.debugValue.compactionDetails.observedFiles, []);
   assert.notEqual(receivedHistory, history);
   assert.match(receivedHistory.toString(), /Context memory/);
 });
@@ -533,6 +537,8 @@ test("inexact fallback escalates a still-pressured current tool turn to bounded 
   assert.equal(actCount, 3);
   assert.equal(ctl.debugValues[2].exactMeasurement, false);
   assert.equal(ctl.debugValues[2].compacted, true);
+  assert.ok(ctl.debugValues[2].compactionDetails.omittedMessageCount > 0);
+  assert.ok(Array.isArray(ctl.debugValues[2].compactionDetails.retainedMessageIndexes));
   assert.match(actHistories[2].toString(), /NEW_FALLBACK_TOOL_RESULT/u);
   assert.doesNotMatch(actHistories[2].toString(), /OLD_FALLBACK_TOOL_RESULT/u);
   assert.equal(actHistories[2].getMessagesArray().filter((message) => (
@@ -724,6 +730,75 @@ test("tool rounds are captured once, remeasured, and compacted before the next a
   }
   assert.equal(ctl.blocks.at(-1).text, "final report");
   assert.equal(ctl.session.disposed, true);
+});
+
+test("soft compaction keeps the largest complete tool tail that meets the token budget", async () => {
+  const history = Chat.empty();
+  history.append("user", "Inspect all four files and then report.");
+  for (let index = 1; index <= 4; index += 1) {
+    const request = {
+      id: `read-${index}`,
+      type: "function",
+      name: "read_file",
+      arguments: { path: `File${index}.cs` },
+    };
+    history.append(ChatMessage.from({
+      role: "assistant",
+      content: [{ type: "toolCallRequest", toolCallRequest: request }],
+    }));
+    history.append(ChatMessage.from({
+      role: "tool",
+      content: [{
+        type: "toolCallResult",
+        toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: request.arguments.path, marker: `RESULT_${index}` }),
+      }],
+    }));
+  }
+
+  const config = {
+    projectEngine: "auto",
+    projectIdentity: "",
+    observeOnly: false,
+    showDebugInfo: true,
+    softRemainingTokens: 14000,
+    hardRemainingTokens: 8000,
+    maxOutputReserve: 8192,
+    safetyMarginTokens: 1536,
+    assumedContextLength: 65536,
+    recentCompleteTurns: 2,
+    compactAboveMessageCount: 24,
+    maxCheckpointChars: 22000,
+    maxToolResultChars: 1200,
+  };
+  const measuredLengths = [];
+  const selection = await __test.selectSoftCompaction(
+    history,
+    config,
+    { maxCheckpointChars: config.maxCheckpointChars },
+    async (candidate) => {
+      const length = candidate.getMessagesArray().length;
+      measuredLengths.push(length);
+      return {
+        exact: true,
+        contextLength: 65536,
+        inputTokens: length <= 7 ? 47000 : 51000,
+        remainingTokens: length <= 7 ? 18344 : 14344,
+      };
+    },
+  );
+
+  assert.equal(selection.targetRemainingTokens, 17000);
+  assert.ok(selection.maxCurrentTurnMessages > 2);
+  assert.equal(selection.remainingTokensAfter, 18344);
+  assert.ok(measuredLengths.length > 1);
+  const selectedMessages = selection.candidate.history.getMessagesArray();
+  const selectedRequests = selectedMessages.flatMap((message) => message.getToolCallRequests());
+  const selectedResults = selectedMessages.flatMap((message) => message.getToolCallResults());
+  assert.equal(selectedRequests.length, selectedResults.length);
+  assert.ok(selectedRequests.length >= 2);
+  assert.deepEqual(selectedRequests.map((request) => request.id), selectedResults.map((result) => result.toolCallId));
+  assert.equal(selectedRequests.at(-1).id, "read-4");
 });
 
 test("tool generation, finalized requests, results, and the final answer update the GUI without round buffering", async () => {
@@ -1018,6 +1093,57 @@ test("prediction fragments stream reasoning into a thinking block and the answer
   assert.equal(ctl.blocks[1].text, "현재 프로젝트입니다.");
   assert.doesNotMatch(JSON.stringify(ctl.blocks), /SYNTHETIC_REASONING_END/u);
   assert.equal(ctl.debugValues.length, 0);
+});
+
+test("a tool follow-up keeps raw reasoning in model history while the GUI stays separated", async () => {
+  const history = Chat.from([{ role: "user", content: "Review A and B." }]);
+  const separator = "__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__";
+  const reasoning = "A is already verified; inspect only B next.";
+  const request = { id: "read-b", type: "function", name: "read_file",
+    arguments: { path: "Assets/B.cs" } };
+  let actCount = 0;
+  let secondHistory;
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 1000; },
+    async act(chat, _tools, options) {
+      actCount += 1;
+      if (actCount === 2) {
+        secondHistory = Chat.from(chat);
+        options.onMessage(ChatMessage.create("assistant", "검토를 마쳤습니다."));
+        return {};
+      }
+      options.onPredictionFragment({ roundIndex: 0, content: reasoning, reasoningType: "reasoning",
+        tokensCount: 8, containsDrafted: false, isStructural: false });
+      options.onPredictionFragment({ roundIndex: 0, content: separator, reasoningType: "reasoningEndTag",
+        tokensCount: 1, containsDrafted: false, isStructural: true });
+      options.onPredictionFragment({ roundIndex: 0, content: "B를 읽겠습니다.", reasoningType: "none",
+        tokensCount: 4, containsDrafted: false, isStructural: false });
+      options.onMessage(ChatMessage.from({ role: "assistant", content: [
+        { type: "text", text: `${reasoning}${separator}B를 읽겠습니다.` },
+        { type: "toolCallRequest", toolCallRequest: request },
+      ] }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+        toolCallId: request.id, content: JSON.stringify({ status: "observed", path: "Assets/B.cs" }) }] }));
+      options.onRoundEnd(0);
+      throw options.signal.reason;
+    },
+  };
+  const tool = { name: "read_file", description: "Read one file.",
+    parametersJsonSchema: { type: "object", properties: { path: { type: "string" } } },
+    pluginIdentifier: "mcp/unity-tools" };
+  const ctl = fakeController(history, selectedModel, { showDebugInfo: false }, [tool]);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(actCount, 2);
+  assert.match(secondHistory.toString(), new RegExp(reasoning.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(ctl.blocks.filter(block => block.options.style?.type === "thinking")[0].text, reasoning);
+  assert.equal(ctl.blocks.filter(block => block.options.style?.type !== "thinking")
+    .some(block => block.text.includes(reasoning)), false);
+  assert.equal(ctl.blocks.at(-1).text, "검토를 마쳤습니다.");
 });
 
 test("plain answer fragments are appended once instead of waiting for the completed message", async () => {

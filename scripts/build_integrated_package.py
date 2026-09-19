@@ -262,6 +262,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unity-mcp/src/project.js",
     "lmstudio-unity-mcp/src/catalog.js",
     "lmstudio-unity-mcp/src/bridge-client.js",
+    "lmstudio-unity-mcp/src/version-control.js",
     "shared-tool-core/files.js",
     "shared-tool-core/data.js",
     "unity-editor-bridge/package.json",

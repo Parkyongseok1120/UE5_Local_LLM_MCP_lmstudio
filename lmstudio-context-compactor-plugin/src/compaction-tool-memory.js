@@ -111,7 +111,9 @@ function retainedFileFact(file, fallbackOperation = "observed") {
     "path", "operation", "observationState", "sha256", "sha256AtObservation",
     "previousSha256", "previousSha256AtObservation", "canonicalProject",
     "canonicalProjectRoot", "canonicalPath", "absolutePath", "projectRelativePath",
-    "workspaceRelativePath", "resolvedRootType", "errorCode",
+    "workspaceRelativePath", "resolvedRootType", "errorCode", "startLine", "endLine",
+    "returnedLineCount", "nextStartLine", "totalLines", "hasMore", "observedLineRanges",
+    "totalLinesAtObservation", "readCoverageState",
   ]) {
     if (file[key] !== undefined) fact[key] = file[key];
   }
@@ -180,16 +182,65 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
   return sanitizeStructuredDurableValue(scoped);
 }
 
-function parseToolResult(content) {
+const MAX_TOOL_RESULT_CONTENT_CHARS = 4 * 1024 * 1024;
+
+function decodeToolResultRecord(content) {
   const text = String(content || "").trim();
-  if (!text) return { summary: "empty tool result" };
+  if (!text) return { error: "empty" };
+  if (text.length > MAX_TOOL_RESULT_CONTENT_CHARS) return { error: "oversized" };
+  let value;
   try {
-    const source = stripControl(JSON.parse(text));
+    value = JSON.parse(text);
+  } catch {
+    return { error: "malformed" };
+  }
+
+  // LM Studio serializes MCP CallToolResult.content as an array of content
+  // blocks. File facts live in the JSON string of one text block. Accept only
+  // one unambiguous block so facts from separate results or projects can never
+  // be merged by the continuity layer.
+  if (Array.isArray(value)) {
+    if (value.length !== 1 || !isRecord(value[0]) || value[0].type !== "text"
+      || typeof value[0].text !== "string" || value[0].text.length > MAX_TOOL_RESULT_CONTENT_CHARS) {
+      return { error: "unsupported_envelope" };
+    }
+    try {
+      value = JSON.parse(value[0].text);
+    } catch {
+      return { error: "malformed_embedded_json" };
+    }
+  } else if (isRecord(value) && isRecord(value.structuredContent)) {
+    value = value.structuredContent;
+  } else if (isRecord(value) && Array.isArray(value.content)) {
+    if (value.content.length !== 1 || !isRecord(value.content[0])
+      || value.content[0].type !== "text" || typeof value.content[0].text !== "string"
+      || value.content[0].text.length > MAX_TOOL_RESULT_CONTENT_CHARS) {
+      return { error: "unsupported_envelope" };
+    }
+    try {
+      value = JSON.parse(value.content[0].text);
+    } catch {
+      return { error: "malformed_embedded_json" };
+    }
+  }
+  return isRecord(value) ? { value } : { error: "unsupported_value" };
+}
+
+function parseToolResult(content) {
+  const decoded = decodeToolResultRecord(content);
+  if (decoded.error === "empty") return { summary: "empty tool result" };
+  if (decoded.error) {
+    return { summary: decoded.error === "malformed" || decoded.error === "malformed_embedded_json"
+      ? "malformed tool result omitted"
+      : "unsupported tool result envelope omitted" };
+  }
+  try {
+    const source = stripControl(decoded.value);
     const out = {};
     for (const key of [
       "ok", "status", "summary", "message", "errorCode", "path", "operation", "mode",
       "sha256", "previousSha256", "size", "truncated", "hasMore",
-      "startLine", "endLine", "totalLines", "filesScanned", "findingCount",
+      "startLine", "endLine", "returnedLineCount", "nextStartLine", "totalLines", "filesScanned", "findingCount",
       "validationOk", "blocksBuild", "exitCode", "likelyErrors", "fullLogPath",
       "upToDate", "actionsExecuted", "proofLevel", "failedCount", "succeededCount",
       "claimCount", "errorCount", "warningCount", "errorShapeCount", "warningShapeCount",
@@ -213,6 +264,9 @@ function parseToolResult(content) {
     }
     if (hasBoundUnityProject(source) && source.hash !== undefined && out.sha256 === undefined) {
       out.sha256 = source.hash;
+    }
+    if (hasBoundUnityProject(source) && source.previousHash !== undefined && out.previousSha256 === undefined) {
+      out.previousSha256 = source.previousHash;
     }
     if (source.lastObservedAt !== undefined || source.snapshotCapturedAt !== undefined
       || (hasBoundUnityProject(source) && source.observedAt !== undefined)) {
@@ -385,6 +439,15 @@ const DERIVED_FILE_FIELDS = new Set([
   "sha256",
   "previousSha256",
   "lastObservedAt",
+  "startLine",
+  "endLine",
+  "returnedLineCount",
+  "nextStartLine",
+  "totalLines",
+  "hasMore",
+  "observedLineRanges",
+  "totalLinesAtObservation",
+  "readCoverageState",
   "mutationSnapshotState",
   "files",
 ]);
@@ -525,6 +588,7 @@ function stateMemory(outcomes) {
 module.exports = {
   CONTROL_DIRECTIVES,
   INTERNAL_KEYS,
+  decodeToolResultRecord,
   parseToolResult,
   retainedFileFact,
   scopeToolOutcome,

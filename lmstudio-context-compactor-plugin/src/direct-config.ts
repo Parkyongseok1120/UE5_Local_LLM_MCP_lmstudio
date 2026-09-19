@@ -36,15 +36,15 @@ export const directConfigSchematics = createConfigSchematics()
     "showDebugInfo",
     "boolean",
     { displayName: "Show debug info", subtitle: "Show per-round context measurements in the chat." },
-    false,
+    true,
   )
   .field("softRemainingTokens", "numeric", { displayName: "Soft threshold", subtitle: "Compact when estimated remaining context falls below this value." }, 14000)
   .field("hardRemainingTokens", "numeric", { displayName: "Hard threshold", subtitle: "At this threshold retain the current request, the newest unread tool exchange, and factual memory." }, 8000)
-  .field("maxOutputReserve", "numeric", { displayName: "Output reserve", subtitle: "Tokens reserved for the selected model's next response." }, 4096)
-  .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra allowance for prompt-template and token-estimation variance." }, 1024)
-  .field("assumedContextLength", "numeric", { displayName: "Fallback context length", subtitle: "Used only when the selected token source cannot report its context length." }, 32768)
+  .field("maxOutputReserve", "numeric", { displayName: "Output reserve", subtitle: "Tokens reserved for the selected model's next response." }, 8192)
+  .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra allowance for prompt-template and token-estimation variance." }, 1536)
+  .field("assumedContextLength", "numeric", { displayName: "Fallback context length", subtitle: "Used only when the selected token source cannot report its context length." }, 65536)
   .field("recentCompleteTurns", "numeric", { displayName: "Recent complete turns", subtitle: "Prior completed user turns retained verbatim after soft compaction." }, 2)
   .field("compactAboveMessageCount", "numeric", { displayName: "Fallback message threshold", subtitle: "Used only when exact token measurement is unavailable." }, 24)
-  .field("maxCheckpointChars", "numeric", { displayName: "Memory size", subtitle: "Maximum deterministic factual-memory characters." }, 12000)
+  .field("maxCheckpointChars", "numeric", { displayName: "Memory size", subtitle: "Maximum deterministic factual-memory characters." }, 22000)
   .field("maxToolResultChars", "numeric", { displayName: "Tool summary size", subtitle: "Maximum characters retained for each older tool outcome." }, 1200)
   .build();

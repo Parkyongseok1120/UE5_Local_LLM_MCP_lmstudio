@@ -25,7 +25,7 @@ namespace EvidenceFirst.UnityBridge
     [InitializeOnLoad]
     public static class Bridge
     {
-        public const string Version = "1.4.0-beta.1";
+        public const string Version = "1.4.0-beta.3";
         internal static string Root, ProjectId, Session, PlaySession, StateDirectory;
         internal static int Generation;
         static string token;

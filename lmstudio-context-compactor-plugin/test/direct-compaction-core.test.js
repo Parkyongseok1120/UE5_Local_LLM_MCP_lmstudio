@@ -1921,6 +1921,120 @@ test("Unity file observations keep project, hash and time without changing the U
   assert.doesNotMatch(JSON.stringify(result.memory), /runtime-only-token/u);
 });
 
+test("Unity file observations retain only line ranges proven for the current file hash", () => {
+  const root = "C:\\Work\\Unity";
+  const identity = "1".repeat(64);
+  const unityResult = (path, hash, startLine, endLine, totalLines) => JSON.stringify({
+    status: "observed",
+    path,
+    canonicalProjectRoot: root,
+    projectIdentity: identity,
+    hash,
+    observedAt: "2026-09-20T01:00:00.000Z",
+    startLine,
+    endLine,
+    returnedLineCount: endLine - startLine + 1,
+    totalLines,
+    hasMore: endLine < totalLines,
+    nextStartLine: endLine < totalLines ? endLine + 1 : null,
+  });
+  const requestAndResult = (id, path, content) => [
+    message("assistant", "", { toolRequests: [{ id, name: "read_file", arguments: { path } }] }),
+    message("tool", "", { toolResults: [{ toolCallId: id, content }] }),
+  ];
+  const sameHash = "a".repeat(64);
+  const changedHash = "b".repeat(64);
+  const messages = [message("user", "Read the relevant Unity source ranges.")];
+  messages.push(...requestAndResult("same-1", "Assets/Story.cs",
+    unityResult("Assets/Story.cs", sameHash, 1, 100, 250)));
+  messages.push(...requestAndResult("same-2", "Assets/Story.cs",
+    unityResult("Assets/Story.cs", sameHash, 101, 200, 250)));
+  messages.push(...requestAndResult("changed-1", "Assets/Changed.cs",
+    unityResult("Assets/Changed.cs", sameHash, 1, 100, 250)));
+  messages.push(...requestAndResult("changed-2", "Assets/Changed.cs",
+    unityResult("Assets/Changed.cs", changedHash, 201, 250, 250)));
+  messages.push(...requestAndResult("write-before", "Assets/Written.cs",
+    unityResult("Assets/Written.cs", sameHash, 1, 100, 250)));
+  messages.push(...requestAndResult("write-after", "Assets/Written.cs", JSON.stringify({
+    status: "applied",
+    operation: "modified",
+    path: "Assets/Written.cs",
+    canonicalProjectRoot: root,
+    projectIdentity: identity,
+    hash: changedHash,
+    previousHash: sameHash,
+    observedAt: "2026-09-20T01:01:00.000Z",
+  })));
+  messages.push(message("user", "Continue from the proven ranges."));
+
+  const result = core.buildCheckpoint(messages, { recentCompleteTurns: 0 });
+  const byPath = new Map(result.memory.modifiedOrObservedFiles.map(item => [item.path, item]));
+  assert.deepEqual(byPath.get("Assets/Story.cs").observedLineRanges,
+    [{ startLine: 1, endLine: 200 }]);
+  assert.equal(byPath.get("Assets/Story.cs").totalLinesAtObservation, 250);
+  assert.equal(byPath.get("Assets/Story.cs").readCoverageState, "partial");
+  assert.equal(byPath.get("Assets/Story.cs").sha256AtObservation, sameHash);
+  assert.deepEqual(byPath.get("Assets/Changed.cs").observedLineRanges,
+    [{ startLine: 201, endLine: 250 }]);
+  assert.equal(byPath.get("Assets/Changed.cs").sha256AtObservation, changedHash);
+  assert.doesNotMatch(JSON.stringify(byPath.get("Assets/Changed.cs")), /"startLine":1,"endLine":100/u);
+  assert.equal(byPath.get("Assets/Written.cs").observationState, "modified");
+  assert.equal(byPath.get("Assets/Written.cs").sha256AtObservation, changedHash);
+  assert.equal(byPath.get("Assets/Written.cs").previousSha256AtObservation, sameHash);
+  assert.equal(Object.hasOwn(byPath.get("Assets/Written.cs"), "observedLineRanges"), false);
+  assert.match(result.checkpoint, /observedLineRanges/u);
+});
+
+test("LM Studio MCP text envelopes retain the same Unity facts as direct JSON", () => {
+  const root = "C:\\Work\\Unity";
+  const hash = "a".repeat(64);
+  const payload = JSON.stringify({
+    status: "observed",
+    path: "Assets/Story.cs",
+    canonicalProjectRoot: root,
+    projectIdentity: "1".repeat(64),
+    hash,
+    observedAt: "2026-09-20T01:00:00.000Z",
+    startLine: 1,
+    endLine: 100,
+    returnedLineCount: 100,
+    totalLines: 250,
+    hasMore: true,
+    nextStartLine: 101,
+    receipt: "runtime-only-token",
+  });
+  const envelope = JSON.stringify([{ type: "text", text: payload }]);
+  const parsed = core.parseToolResult(envelope);
+  assert.equal(parsed.path, "Assets/Story.cs");
+  assert.equal(parsed.sha256, hash);
+  assert.equal(parsed.startLine, 1);
+  assert.equal(parsed.endLine, 100);
+  assert.equal(parsed.totalLines, 250);
+  assert.equal(Object.hasOwn(parsed, "receipt"), false);
+
+  const result = core.buildCheckpoint([
+    message("user", "Inspect the Unity file."),
+    message("assistant", "", { toolRequests: [{ id: "read-one", name: "read_file",
+      arguments: { path: "Assets/Story.cs" } }] }),
+    message("tool", "", { toolResults: [{ toolCallId: "read-one", content: envelope }] }),
+    message("user", "Continue from the observed range."),
+  ], { recentCompleteTurns: 0 });
+  const observation = result.memory.modifiedOrObservedFiles[0];
+  assert.equal(observation.path, "Assets/Story.cs");
+  assert.equal(observation.sha256AtObservation, hash);
+  assert.deepEqual(observation.observedLineRanges, [{ startLine: 1, endLine: 100 }]);
+  assert.doesNotMatch(JSON.stringify(result.memory), /runtime-only-token/u);
+});
+
+test("ambiguous MCP content envelopes are omitted instead of merging facts", () => {
+  const envelope = JSON.stringify([
+    { type: "text", text: JSON.stringify({ canonicalProjectRoot: "C:\\UnityA", path: "Assets/A.cs" }) },
+    { type: "text", text: JSON.stringify({ canonicalProjectRoot: "C:\\UnityB", path: "Assets/B.cs" }) },
+  ]);
+  assert.deepEqual(core.parseToolResult(envelope),
+    { summary: "unsupported tool result envelope omitted" });
+});
+
 test("a Unity file result cannot be attributed to a conflicting explicit Unreal project", () => {
   const unreal = "C:\\Work\\Game\\Game.uproject";
   const result = core.buildCheckpoint([

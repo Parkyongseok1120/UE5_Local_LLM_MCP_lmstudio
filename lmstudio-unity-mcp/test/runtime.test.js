@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const net = require("node:net");
+const { execFileSync } = require("node:child_process");
 const { createRuntime } = require("../src/server");
 const { BridgeClient } = require("../src/bridge-client");
 const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
@@ -38,6 +39,9 @@ test("receipt conflicts, forgery, cross-project isolation and re-read", async t 
   const current = await a.call("read_file", { path: args.path });
   const result = await a.call("patch_file", { ...args, receipt: current.receipt, edits: [{ oldText: "UserEdit", newText: "After" }] });
   assert.equal(result.status, "applied"); assert.equal(a.get(args.path), "class After {}\r\n");
+  assert.equal(result.operation, "modified");
+  assert.equal(result.previousHash, current.hash);
+  assert.notEqual(result.hash, result.previousHash);
   assert.equal(result.compilation, "unknown"); assert.equal(result.import, "not_requested");
 });
 test("file observations carry the bound project and the observed file version", async t => {
@@ -82,11 +86,87 @@ test("file observations carry the bound project and the observed file version", 
   assert.equal(changed.projectIdentity, a.policy.projectIdentity);
   assert.notEqual(changed.hash, aRead.hash);
 });
+test("read_file reports exact ranges and reads Unity package and project settings files", async t => {
+  const f = fixture(t);
+  f.put("Assets/Code.cs", "one\ntwo\nthree\nfour\nfive");
+
+  const middle = await f.call("read_file", { path: "Assets/Code.cs", startLine: 2, limit: 2 });
+  assert.equal(middle.text, "two\nthree");
+  assert.equal(middle.startLine, 2);
+  assert.equal(middle.endLine, 3);
+  assert.equal(middle.returnedLineCount, 2);
+  assert.equal(middle.totalLines, 5);
+  assert.equal(middle.hasMore, true);
+  assert.equal(middle.nextStartLine, 4);
+  assert.equal(middle.truncated, true);
+
+  const tail = await f.call("read_file", { path: "Assets/Code.cs", startLine: 4, limit: 2 });
+  assert.equal(tail.text, "four\nfive");
+  assert.equal(tail.endLine, 5);
+  assert.equal(tail.returnedLineCount, 2);
+  assert.equal(tail.hasMore, false);
+  assert.equal(tail.nextStartLine, null);
+  assert.equal(tail.truncated, false);
+
+  const beyondEnd = await f.call("read_file", { path: "Assets/Code.cs", startLine: 6, limit: 2 });
+  assert.equal(beyondEnd.text, "");
+  assert.equal(beyondEnd.endLine, null);
+  assert.equal(beyondEnd.returnedLineCount, 0);
+  assert.equal(beyondEnd.nextStartLine, null);
+
+  const packageManifest = await f.call("read_file", { path: "Packages/manifest.json" });
+  const projectVersion = await f.call("read_file", { path: "ProjectSettings/ProjectVersion.txt" });
+  assert.equal(packageManifest.status, "observed");
+  assert.equal(projectVersion.status, "observed");
+  assert.equal(packageManifest.canonicalProjectRoot, f.root);
+  assert.equal(projectVersion.canonicalProjectRoot, f.root);
+  const readTool = f.tools.find(tool => tool.name === "read_file");
+  assert.match(readTool.description, /Assets, Packages or ProjectSettings/u);
+});
+test("unity_git returns bounded read-only status, log and diff evidence for the bound project", async t => {
+  const f = fixture(t);
+  const git = args => execFileSync("git", args, { cwd: f.root, encoding: "utf8", windowsHide: true });
+  git(["init", "-q"]);
+  git(["config", "user.email", "unity-test@example.invalid"]);
+  git(["config", "user.name", "Unity Test"]);
+  f.put("Assets/Code.cs", "class Before {}\n");
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "initial"]);
+  f.put("Assets/Code.cs", "class After {}\n");
+
+  const status = await f.call("unity_git", { action: "status", limit: 20 });
+  assert.equal(status.status, "observed");
+  assert.equal(status.projectIdentity, f.policy.projectIdentity);
+  assert(status.items.some(item => item.path === "Assets/Code.cs" && item.status.includes("M")));
+
+  const log = await f.call("unity_git", { action: "log", limit: 5 });
+  assert.equal(log.items.length, 1);
+  assert.equal(log.items[0].subject, "initial");
+
+  const diff = await f.call("unity_git", { action: "diff", comparison: "worktree",
+    paths: ["Assets/Code.cs"], startLine: 1, limit: 20 });
+  assert.match(diff.text, /class Before \{\}/u);
+  assert.match(diff.text, /class After \{\}/u);
+  assert.equal(diff.startLine, 1);
+  assert.ok(diff.returnedLineCount > 0);
+  assert.equal(diff.hasMore, false);
+
+  git(["add", "Assets/Code.cs"]);
+  git(["commit", "-q", "-m", "refactor C"]);
+  const committed = await f.call("unity_git", { action: "diff", comparison: "last_commit",
+    paths: ["Assets/Code.cs"], startLine: 1, limit: 20 });
+  assert.match(committed.text, /class After \{\}/u);
+  assert.equal((await f.call("unity_git", { action: "diff", comparison: "range",
+    base: "--help", head: "HEAD" })).errorCode, "invalid_revision");
+});
 test("permissions, create precondition, exact-match edits, schema validation", async t => {
   const f = fixture(t, false);
   assert.equal((await f.call("create_file", { path: "Assets/New.cs", content: "", mustNotExist: true })).errorCode, "edit_disabled");
   const g = fixture(t);
-  assert.equal((await g.call("create_file", { path: "Assets/New.cs", content: "x", mustNotExist: true })).status, "applied");
+  const created = await g.call("create_file", { path: "Assets/New.cs", content: "x", mustNotExist: true });
+  assert.equal(created.status, "applied");
+  assert.equal(created.operation, "created");
+  assert.equal(Object.hasOwn(created, "previousHash"), false);
   assert.equal((await g.call("create_file", { path: "Assets/New.cs", content: "y", mustNotExist: true })).errorCode, "already_exists");
   assert.equal(g.get("Assets/New.cs"), "x");
   assert.equal((await g.call("read_file", { path: "Assets/New.cs", limit: 999999 })).errorCode, "invalid_arguments");

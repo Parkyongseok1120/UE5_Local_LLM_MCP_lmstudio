@@ -460,7 +460,7 @@ function buildCheckpoint(messagesInput, options = {}) {
     modifiedOrObservedFiles: continuity.currentWorkStatus?.modifiedOrObservedFiles || [],
     recentBuildOrTestState: continuity.currentWorkStatus?.recentBuildOrTestState || [],
   });
-  const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 12000));
+  const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 22000));
   const { systemMemory, assistantEvidence } = splitAssistantEvidence(memory);
   const assistantCheckpoint = renderAssistantCheckpoint(
     assistantEvidence,

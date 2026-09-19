@@ -1,0 +1,1184 @@
+{
+  "sourceSha256": "0c8f95193035e95817629ebaf89c1ca955bc7aee8954e3572657ade605d57122",
+  "roundCount": 27,
+  "compactedRounds": [
+    2,
+    3,
+    4,
+    5,
+    7,
+    8,
+    9,
+    10,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    22,
+    24,
+    26
+  ],
+  "uniqueCalls": 51,
+  "toolResults": 51,
+  "recordedFilesEmptyAtEveryCompaction": true,
+  "minimumRecordedRemainingTokens": 8371,
+  "enrichedLatestUserChars": 42432,
+  "actualLatestUserChars": 35,
+  "attachmentCountInEveryRound": [
+    0
+  ],
+  "explicitContinuityFooters": 0,
+  "inputTokensBeforeFirstCompaction": 42289,
+  "remainingTokensBeforeFirstCompaction": 13519,
+  "recordedRoundMetadata": [
+    {
+      "round": 0,
+      "compacted": false,
+      "inputTokens": 35255,
+      "remainingTokens": 20553,
+      "messageCount": 9
+    },
+    {
+      "round": 1,
+      "compacted": false,
+      "inputTokens": 40141,
+      "remainingTokens": 15667,
+      "messageCount": 11
+    },
+    {
+      "round": 2,
+      "compacted": true,
+      "inputTokens": 42289,
+      "remainingTokens": 13519,
+      "messageCount": 13,
+      "retainedIndexes": [
+        0,
+        8,
+        11,
+        12
+      ]
+    },
+    {
+      "round": 3,
+      "compacted": true,
+      "inputTokens": 44663,
+      "remainingTokens": 11145,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 4,
+      "compacted": true,
+      "inputTokens": 45993,
+      "remainingTokens": 9815,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 5,
+      "compacted": true,
+      "inputTokens": 43193,
+      "remainingTokens": 12615,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 6,
+      "compacted": false,
+      "inputTokens": 40752,
+      "remainingTokens": 15056,
+      "messageCount": 7
+    },
+    {
+      "round": 7,
+      "compacted": true,
+      "inputTokens": 43665,
+      "remainingTokens": 12143,
+      "messageCount": 9,
+      "retainedIndexes": [
+        2,
+        7,
+        8
+      ]
+    },
+    {
+      "round": 8,
+      "compacted": true,
+      "inputTokens": 43798,
+      "remainingTokens": 12010,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 9,
+      "compacted": true,
+      "inputTokens": 45037,
+      "remainingTokens": 10771,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 10,
+      "compacted": true,
+      "inputTokens": 43245,
+      "remainingTokens": 12563,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 11,
+      "compacted": false,
+      "inputTokens": 41262,
+      "remainingTokens": 14546,
+      "messageCount": 7
+    },
+    {
+      "round": 12,
+      "compacted": true,
+      "inputTokens": 44368,
+      "remainingTokens": 11440,
+      "messageCount": 9,
+      "retainedIndexes": [
+        2,
+        7,
+        8
+      ]
+    },
+    {
+      "round": 13,
+      "compacted": true,
+      "inputTokens": 43501,
+      "remainingTokens": 12307,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 14,
+      "compacted": true,
+      "inputTokens": 45547,
+      "remainingTokens": 10261,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 15,
+      "compacted": true,
+      "inputTokens": 47437,
+      "remainingTokens": 8371,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 16,
+      "compacted": true,
+      "inputTokens": 44964,
+      "remainingTokens": 10844,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 17,
+      "compacted": true,
+      "inputTokens": 42178,
+      "remainingTokens": 13630,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 18,
+      "compacted": true,
+      "inputTokens": 44959,
+      "remainingTokens": 10849,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 19,
+      "compacted": true,
+      "inputTokens": 44777,
+      "remainingTokens": 11031,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 20,
+      "compacted": true,
+      "inputTokens": 42380,
+      "remainingTokens": 13428,
+      "messageCount": 7,
+      "retainedIndexes": [
+        2,
+        5,
+        6
+      ]
+    },
+    {
+      "round": 21,
+      "compacted": false,
+      "inputTokens": 40438,
+      "remainingTokens": 15370,
+      "messageCount": 7
+    },
+    {
+      "round": 22,
+      "compacted": true,
+      "inputTokens": 43171,
+      "remainingTokens": 12637,
+      "messageCount": 9,
+      "retainedIndexes": [
+        2,
+        7,
+        8
+      ]
+    },
+    {
+      "round": 23,
+      "compacted": false,
+      "inputTokens": 40908,
+      "remainingTokens": 14900,
+      "messageCount": 7
+    },
+    {
+      "round": 24,
+      "compacted": true,
+      "inputTokens": 43988,
+      "remainingTokens": 11820,
+      "messageCount": 9,
+      "retainedIndexes": [
+        2,
+        7,
+        8
+      ]
+    },
+    {
+      "round": 25,
+      "compacted": false,
+      "inputTokens": 40333,
+      "remainingTokens": 15475,
+      "messageCount": 7
+    },
+    {
+      "round": 26,
+      "compacted": true,
+      "inputTokens": 43560,
+      "remainingTokens": 12248,
+      "messageCount": 9,
+      "retainedIndexes": [
+        2,
+        7,
+        8
+      ]
+    }
+  ],
+  "fileCoverage": [
+    {
+      "file": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+      "readCalls": 27,
+      "uniqueLines": 719,
+      "repeatedLines": 2429,
+      "uniqueHashes": 1
+    },
+    {
+      "file": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+      "readCalls": 5,
+      "uniqueLines": 347,
+      "repeatedLines": 442,
+      "uniqueHashes": 1
+    },
+    {
+      "file": "Assets/03.Scripts/Tool/ConditionUtil.cs",
+      "readCalls": 1,
+      "uniqueLines": 100,
+      "repeatedLines": 0,
+      "uniqueHashes": 1
+    },
+    {
+      "file": "Assets/03.Scripts/Story/StoryExecutionResult.cs",
+      "readCalls": 1,
+      "uniqueLines": 54,
+      "repeatedLines": 0,
+      "uniqueHashes": 1
+    },
+    {
+      "file": "Assets/03.Scripts/Story/StoryResultContext.cs",
+      "readCalls": 1,
+      "uniqueLines": 37,
+      "repeatedLines": 0,
+      "uniqueHashes": 1
+    },
+    {
+      "file": "Assets/03.Scripts/Story/IStoryCraftGate.cs",
+      "readCalls": 1,
+      "uniqueLines": 44,
+      "repeatedLines": 0,
+      "uniqueHashes": 1
+    }
+  ],
+  "parser": {
+    "wrappedEmpty": 51,
+    "plainWithPath": 42,
+    "plainWithHash": 36
+  },
+  "compactionProbe": {
+    "wrapped": {
+      "omittedMessageCount": 2,
+      "retainedIndexes": [
+        0,
+        3,
+        4
+      ],
+      "files": [],
+      "outcomes": [
+        "{\"summary\":\"tool result contained no retained factual fields\"}"
+      ],
+      "entireEarlierReadBodyRetained": false
+    },
+    "unwrapped": {
+      "omittedMessageCount": 2,
+      "retainedIndexes": [
+        0,
+        3,
+        4
+      ],
+      "files": [
+        {
+          "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+          "observedLineRanges": [
+            {
+              "startLine": 1,
+              "endLine": 200
+            }
+          ],
+          "readCoverageState": "partial"
+        },
+        {
+          "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+          "observedLineRanges": [
+            {
+              "startLine": 1,
+              "endLine": 200
+            }
+          ],
+          "readCoverageState": "partial"
+        }
+      ],
+      "outcomes": [
+        "{\"status\":\"observed\",\"truncated\":true,\"projectIdentity\":\"0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b\",\"canonicalProjectSource\":\"unity_tool_result_fact\"}"
+      ],
+      "entireEarlierReadBodyRetained": false
+    }
+  },
+  "replay": {
+    "wrapped": [
+      {
+        "round": 2,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 3,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 4,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 5,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 7,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 8,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 9,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 10,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 12,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 13,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 14,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 15,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 16,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 17,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 18,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 19,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 20,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 22,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 24,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 26,
+        "fileCount": 0,
+        "ranges": []
+      }
+    ],
+    "unwrapped": [
+      {
+        "round": 2,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 3,
+        "fileCount": 0,
+        "ranges": []
+      },
+      {
+        "round": 4,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 200
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 200
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 5,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 222
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 7,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 224
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 8,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 424
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 9,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 10,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 12,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 13,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 14,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 15,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 16,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 17,
+        "fileCount": 2,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 18,
+        "fileCount": 3,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Tool/ConditionUtil.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 100
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 19,
+        "fileCount": 6,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Tool/ConditionUtil.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 100
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryExecutionResult.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 54
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryResultContext.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 37
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/IStoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 44
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 20,
+        "fileCount": 6,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Tool/ConditionUtil.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 100
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryExecutionResult.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 54
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryResultContext.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 37
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/IStoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 44
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 22,
+        "fileCount": 6,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Tool/ConditionUtil.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 100
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryExecutionResult.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 54
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryResultContext.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 37
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/IStoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 44
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 24,
+        "fileCount": 6,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Tool/ConditionUtil.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 100
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryExecutionResult.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 54
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryResultContext.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 37
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/IStoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 44
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "round": 26,
+        "fileCount": 6,
+        "ranges": [
+          {
+            "path": "Assets/03.Scripts/Tool/ConditionUtil.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 100
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryExecutionResult.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 54
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryResultContext.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 37
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/IStoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 44
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryScriptRunner.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 719
+              }
+            ]
+          },
+          {
+            "path": "Assets/03.Scripts/Story/StoryCraftGate.cs",
+            "ranges": [
+              {
+                "startLine": 1,
+                "endLine": 347
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "limits": [
+    "Replay uses actual calls/results and recorded compaction decisions, but a short replacement user message. It proves parser/retention data flow, not the original complete rendered prompt.",
+    "Input unwrapping is an experimental ablation, not a shipped fix or a model-quality benchmark."
+  ],
+  "liveTemplate": {
+    "model": "qwen/qwen3.8-27b",
+    "contextLength": 65536,
+    "raw": {
+      "thoughtPresent": true,
+      "toolResultPresent": true,
+      "emptyThink": false
+    },
+    "visible": {
+      "thoughtPresent": false,
+      "toolResultPresent": true,
+      "emptyThink": true
+    },
+    "generatedTokens": 0
+  }
+}

@@ -66,10 +66,15 @@ class Files {
     const s = await this.snapshot(args.path);
     const lines = s.content.split(/\r\n|\n|\r/);
     const start = args.startLine ?? 1;
+    const limit = args.limit ?? 100;
+    const selected = lines.slice(start - 1, start - 1 + limit);
+    const returnedLineCount = selected.length;
+    const endLine = returnedLineCount > 0 ? start + returnedLineCount - 1 : null;
+    const hasMore = start - 1 + returnedLineCount < lines.length;
     return bounded({ status: "observed", path: args.path, receipt: s.receipt, receiptScope: "entire_file_bytes", hash: s.hash,
-      observedAt: new Date().toISOString(), startLine: start, totalLines: lines.length,
-      text: lines.slice(start - 1, start - 1 + (args.limit ?? 100)).join("\n"),
-      truncated: start - 1 + (args.limit ?? 100) < lines.length }, args.byteBudget);
+      observedAt: new Date().toISOString(), startLine: start, endLine, returnedLineCount, totalLines: lines.length,
+      text: selected.join("\n"), hasMore, nextStartLine: hasMore ? start + returnedLineCount : null,
+      truncated: hasMore }, args.byteBudget);
   }
   async mutate(args, transform, create = false) {
     if (!this.allowWrite) fail("edit_disabled", "Edit requires ALLOW_WRITE=1 in the host configuration");
@@ -105,8 +110,10 @@ class Files {
           applied = true;
         }
         const after = await this.snapshot(args.path);
-        return { status: "applied", changed: before?.hash !== after.hash, saved: true, receipt: after.receipt,
-          path: args.path, hash: after.hash, import: "not_requested", compilation: "unknown",
+        return { status: "applied", operation: create ? "created" : "modified",
+          changed: before?.hash !== after.hash, saved: true, receipt: after.receipt,
+          path: args.path, hash: after.hash, ...(before ? { previousHash: before.hash } : {}),
+          import: "not_requested", compilation: "unknown",
           verification: after.hash === hash(Buffer.from(content)) ? "bytes_match" : "changed_after_write",
           observedAt: new Date().toISOString() };
       } catch (error) { error.status = applied ? "partially_applied" : "not_applied"; throw error; }

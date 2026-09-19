@@ -8,6 +8,7 @@ const { buildObjectiveContinuity } = require("./continuity-objectives.js");
 const { pathApiFor } = require("./continuity-file-observations.js");
 const { normalizedTextKey } = require("./continuity-text.js");
 const { sanitizeDerivedOperationalText } = require("./durable-memory-sanitizer.js");
+const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
 
 const NOTE_START = "\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n";
 const NOTE_END = "\n</continuity-note>";
@@ -151,9 +152,9 @@ function provenanceFromMessages(messages) {
       }
       const content = String(result.content || "");
       if (content.length > 262144) continue;
-      let value;
-      try { value = JSON.parse(content); } catch { continue; }
-      if (!isRecord(value)) continue;
+      const decoded = decodeToolResultRecord(content);
+      if (!decoded.value) continue;
+      const value = decoded.value;
       const unityRoot = normalizedProjectRoot(value.canonicalProjectRoot);
       if (unityRoot && typeof value.projectIdentity === "string"
         && /^[a-f0-9]{64}$/iu.test(value.projectIdentity)) {

@@ -11,9 +11,11 @@ const { projectPolicy } = require("./project");
 const { BridgeClient } = require("./bridge-client");
 const { tools } = require("./catalog");
 const { Symbols } = require("./symbols");
+const { VersionControl } = require("./version-control");
 const PROJECT_FILE_TOOLS = new Set([
   "read_file", "list_directory", "search_files", "patch_file", "create_file",
   "structured_data_read", "structured_data_patch",
+  "unity_git",
 ]);
 function createRuntime(env = process.env, injectedBridge) {
   const policy = projectPolicy(env.UNITY_PROJECT_ROOT);
@@ -21,6 +23,7 @@ function createRuntime(env = process.env, injectedBridge) {
   const data = dataTools(files, jsonc, Ajv);
   const bridge = injectedBridge || new BridgeClient(policy);
   const symbols = new Symbols(policy, bridge, env);
+  const versionControl = new VersionControl(policy);
   const ajv = new Ajv({ strict: false });
   const validators = new Map(tools.map(t => [t.name, ajv.compile(t.inputSchema)]));
   async function call(name, args = {}) {
@@ -33,6 +36,7 @@ function createRuntime(env = process.env, injectedBridge) {
       }
       let result;
       if (name === "unity_symbols") result = await symbols.call(args);
+      else if (name === "unity_git") result = versionControl.call(args);
       else if (name === "read_file") result = await files.read(args);
       else if (name === "list_directory") result = files.list(args);
       else if (name === "search_files") result = await files.search(args);
@@ -63,7 +67,7 @@ function createRuntime(env = process.env, injectedBridge) {
 }
 async function main() {
   const runtime = createRuntime();
-  const server = new Server({ name: "lmstudio-unity-mcp", version: "1.4.0-beta.1" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "lmstudio-unity-mcp", version: "1.4.0-beta.3" }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: runtime.tools }));
   server.setRequestHandler(CallToolRequestSchema, async request => {
     const payload = await runtime.call(request.params.name, request.params.arguments ?? {});
