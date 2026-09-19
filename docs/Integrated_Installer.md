@@ -85,11 +85,11 @@ python install.py --profile standard --yes --enable-agent-mode --accept-agent-ri
 
 설치 후 LM Studio를 재시작하고 사용할 AI 모델을 직접 선택합니다. `unreal-rag`, `unreal-agent`를 켜면 됩니다.
 
-대화 압축기 `codex/unreal-context-compactor`는 설치하고 목록에 고정만 합니다. 채팅에서 활성화하지는 않습니다. 새 채팅과 기존 채팅 모두 스위치가 꺼져 있는지 확인해야 합니다(`OFF`). 긴 대화에서 필요할 때 해당 채팅의 단일 스위치만 켜면 됩니다. `Observe only`는 대화를 바꾸지 않고 사용량만 측정하는 옵션입니다.
+대화 압축기 `codex/unreal-context-compactor`는 설치하고 목록에 고정하며, 설치·업데이트 시 당시 저장된 기존 채팅의 스위치를 `ON`으로 설정합니다. 필요 없는 채팅에서는 단일 스위치를 끌 수 있습니다. `Observe only`는 대화를 바꾸지 않고 사용량만 측정하는 옵션입니다.
 
 LM Studio·언리얼 구성에는 압축기 파일 설치가 포함됩니다. 일반 GUI 설치에서 제외하는 선택지는 없습니다. `--headless-lmlink`는 GUI 없는 llmster 환경을 위한 지원 모드이며 압축기를 자동으로 제외합니다. `--skip-context-compactor --allow-skip-context-compactor`는 그 외 환경에서 지원하지 않는 긴급 우회용입니다.
 
-`lms`를 못 찾으면 `LMSTUDIO_CLI` 또는 LM Studio 설치 위치를 확인해야 합니다. 설치기는 사용자 LM Studio 폴더의 플러그인 파일과 설정을 확인하지만 개별 채팅 저장소는 바꾸지 않습니다.
+`lms`를 못 찾으면 `LMSTUDIO_CLI` 또는 LM Studio 설치 위치를 확인해야 합니다. 설치기는 사용자 LM Studio 폴더의 플러그인 파일과 설정을 확인하고, 정상적인 기존 채팅 파일의 `plugins` 목록에 압축기 ID를 추가합니다. 손상되거나 알 수 없는 형식의 채팅 파일은 바꾸지 않습니다.
 
 ## 설치 위치와 업데이트
 

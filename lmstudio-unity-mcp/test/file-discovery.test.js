@@ -109,8 +109,15 @@ test("pages are scoped to the exact query and do not imply a file type is absent
 
 test("a finished result page does not hide an unfinished scan", async t => {
   const names = Array.from({ length: 5001 }, (_, i) => `${String(i).padStart(4, "0")}.cs`);
-  t.mock.method(fs, "readdirSync", () => names);
-  t.mock.method(fs, "lstatSync", relative => ({ isDirectory: () => relative === "Assets", isFile: () => relative !== "Assets" }));
+  t.mock.method(fs, "readdirSync", () => names.map(name => ({
+    name,
+    isSymbolicLink: () => false,
+  })));
+  t.mock.method(fs, "lstatSync", relative => ({
+    isDirectory: () => relative === "Assets",
+    isFile: () => relative !== "Assets",
+    isSymbolicLink: () => false,
+  }));
   const files = new Files({ root: "fake-project", projectIdentity: "fake-project-id", resolve: relative => relative });
   const result = await files.search({ path: "Assets", query: "0000.cs", limit: 1 });
   assert.equal(result.total, 1);
@@ -118,4 +125,22 @@ test("a finished result page does not hide an unfinished scan", async t => {
   assert.equal(result.truncated, false);
   assert.equal(result.nextCursor, null);
   assert.equal(result.incomplete, true);
+});
+
+test("parallel path searches validate the search root without re-resolving every descendant", async t => {
+  const f = fixture(t);
+  for (let i = 0; i < 100; i++) f.put(`Assets/Code/File${i}.cs`, `class File${i} {}`);
+  const originalResolve = f.policy.resolve;
+  let resolveCalls = 0;
+  f.policy.resolve = (...args) => {
+    resolveCalls++;
+    return originalResolve(...args);
+  };
+  const [files, named] = await Promise.all([
+    f.call("search_files", { path: "Assets", extensions: [".cs"] }),
+    f.call("search_files", { path: "Assets", query: "File9", extensions: [".cs"] }),
+  ]);
+  assert.equal(files.total, 100);
+  assert.equal(named.total, 11);
+  assert.equal(resolveCalls, 2);
 });

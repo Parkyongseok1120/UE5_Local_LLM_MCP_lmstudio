@@ -44,4 +44,4 @@ python install.py --profile custom --components codex,lmstudio,unreal,cline --cl
 - 수정이 막히면 [권한 설정](Safe_Agent_Mode.md)과 파일 충돌 여부를 확인합니다.
 - 빌드가 꺼져 있으면 Rider에서 실행하거나 설치 시 빌드 권한을 켭니다.
 
-LM Studio 채팅을 직접 쓴다면 [LM Studio 설정](LMStudio_Unreal_Agent_Setup.md)을 참고해야 합니다. 그 채팅의 대화 압축기는 기본 `OFF`이며 Cline의 대화를 자동으로 압축해 주는 기능은 아닙니다.
+LM Studio 채팅을 직접 쓴다면 [LM Studio 설정](LMStudio_Unreal_Agent_Setup.md)을 참고해야 합니다. 설치·업데이트 시 기존 LM Studio 채팅의 대화 압축기는 기본 `ON`이지만 Cline의 대화를 자동으로 압축해 주는 기능은 아닙니다.

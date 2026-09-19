@@ -12,6 +12,15 @@ type TokenSource = LLM | LLMGeneratorHandle;
 type RoundCallbacks = {
   onToolCallRequestFinalized: NonNullable<LLMActionOpts["onToolCallRequestFinalized"]>;
   guardToolCall: NonNullable<LLMActionOpts["guardToolCall"]>;
+  onPromptProcessingProgress?: NonNullable<LLMActionOpts["onPromptProcessingProgress"]>;
+  onFirstToken?: NonNullable<LLMActionOpts["onFirstToken"]>;
+  onPredictionFragment?: NonNullable<LLMActionOpts["onPredictionFragment"]>;
+  onToolCallRequestStart?: NonNullable<LLMActionOpts["onToolCallRequestStart"]>;
+  onToolCallRequestNameReceived?: NonNullable<LLMActionOpts["onToolCallRequestNameReceived"]>;
+  onToolCallRequestArgumentFragmentGenerated?: NonNullable<LLMActionOpts["onToolCallRequestArgumentFragmentGenerated"]>;
+  onToolCallRequestEnd?: NonNullable<LLMActionOpts["onToolCallRequestEnd"]>;
+  onToolCallRequestFailure?: NonNullable<LLMActionOpts["onToolCallRequestFailure"]>;
+  onMessageCaptured?: (message: ChatMessage) => void;
 };
 
 export type CapturedRound = {
@@ -42,11 +51,13 @@ export async function runOneToolRound(
   else parentSignal.addEventListener("abort", forwardAbort, { once: true });
 
   try {
+    const { onMessageCaptured, ...actCallbacks } = callbacks;
     await tokenSource.act(history, tools, {
       signal: roundAbort.signal,
-      ...callbacks,
+      ...actCallbacks,
       onMessage: (message) => {
         messages.push(message);
+        onMessageCaptured?.(message);
         if (message.getToolCallResults().length > 0) hasToolResults = true;
       },
       onRoundEnd: () => {

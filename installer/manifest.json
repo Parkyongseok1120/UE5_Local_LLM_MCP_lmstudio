@@ -37,8 +37,8 @@
     "indexTierIsIndependent": true,
     "contextCompactorInstalledWithLmStudio": true,
     "contextCompactorSkippedInHeadlessLmLinkMode": true,
-    "contextCompactorChatActivationManagedByInstaller": false,
-    "contextCompactionEnabledByDefault": false
+    "contextCompactorChatActivationManagedByInstaller": true,
+    "contextCompactionEnabledByDefault": true
   },
   "portablePackage": {
     "launchers": ["INSTALL.bat", "UPDATE.bat", "install.sh"],

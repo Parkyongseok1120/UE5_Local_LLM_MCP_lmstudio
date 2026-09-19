@@ -77,6 +77,21 @@ def test_skip_deps_validates_stdio_without_rewriting_permissions_or_other_server
     assert (config.read_bytes(), manifest.read_bytes()) == before
 
 
+def test_process_output_is_decoded_as_utf8_without_windows_codepage_failures(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="done ✓", stderr="")
+
+    monkeypatch.setattr(updater.subprocess, "run", fake_run)
+    result = updater._run([sys.executable, "--version"], cwd=tmp_path, timeout=15)
+    assert result.stdout == "done ✓"
+    assert captured["text"] is True
+    assert captured["encoding"] == "utf-8"
+    assert captured["errors"] == "replace"
+
+
 def test_update_rejects_different_source_or_bridge_before_external_action(installed, monkeypatch):
     source, _, config, manifest = installed
     monkeypatch.setattr(updater, "_run", lambda *a, **k: pytest.fail("invalid binding must fail in preflight"))

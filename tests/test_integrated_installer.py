@@ -80,15 +80,15 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert manifest["version"] == "2.1.18"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
     assert manifest["safety"]["contextCompactorSkippedInHeadlessLmLinkMode"] is True
-    assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is False
-    assert manifest["safety"]["contextCompactionEnabledByDefault"] is False
+    assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is True
+    assert manifest["safety"]["contextCompactionEnabledByDefault"] is True
     assert "contextCompactorEnabledByDefault" not in manifest["safety"]
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
     assert node_package["version"] == node_lock["version"] == "0.3.22"
     assert node_lock["packages"][""]["version"] == "0.3.22"
-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.52"
-    assert compactor_lock["packages"][""]["version"] == "0.4.52"
-    assert compactor_manifest["revision"] == 99
+    assert compactor_package["version"] == compactor_lock["version"] == "0.4.58"
+    assert compactor_lock["packages"][""]["version"] == "0.4.58"
+    assert compactor_manifest["revision"] == 105
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
@@ -891,16 +891,76 @@ def test_resolve_lms_cli_prefers_env_and_platform_binaries(
     sys.modules.pop("integrated_install", None)
 
 
-def test_context_compactor_pins_shortcut_without_activation_claim(tmp_path: Path) -> None:
+def test_context_compactor_pins_shortcut_and_enables_existing_chats(tmp_path: Path) -> None:
     module = _load_installer_module()
     home = tmp_path / ".lmstudio"
     home.mkdir()
+    chats = home / "conversations" / "00"
+    chats.mkdir(parents=True)
+    disabled = chats / "disabled.conversation.json"
+    enabled = chats / "enabled.conversation.json"
+    invalid = chats / "invalid.conversation.json"
+    disabled.write_text(json.dumps({"plugins": ["mcp/unity-tools"]}), encoding="utf-8")
+    enabled.write_text(json.dumps({"plugins": [module.CONTEXT_COMPACTOR_PLUGIN_ID]}), encoding="utf-8")
+    invalid.write_text(json.dumps({"plugins": "invalid"}), encoding="utf-8")
     result = module._configure_context_compactor_availability(home, dry_run=False)
     settings = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     assert result["pinned"] is True
-    assert "activation" not in result
+    assert result["activation"] == {
+        "managed": True,
+        "pluginId": module.CONTEXT_COMPACTOR_PLUGIN_ID,
+        "conversationsRoot": str(home / "conversations"),
+        "eligibleConversationCount": 2,
+        "alreadyEnabledConversationCount": 1,
+        "updatedConversationCount": 1,
+        "skippedConversationCount": 1,
+        "enabledForExistingChats": True,
+    }
+    assert module.CONTEXT_COMPACTOR_PLUGIN_ID in json.loads(
+        disabled.read_text(encoding="utf-8")
+    )["plugins"]
     assert module.CONTEXT_COMPACTOR_PLUGIN_ID in settings["chat"]["pinnedPlugins"]
     assert settings["developer"]["allowDevelopmentPlugins"] is True
+    sys.modules.pop("integrated_install", None)
+
+
+def test_context_compactor_activation_dry_run_reports_without_writing(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    home = tmp_path / ".lmstudio"
+    chats = home / "conversations" / "00"
+    chats.mkdir(parents=True)
+    conversation = chats / "chat.conversation.json"
+    conversation.write_text(json.dumps({"plugins": []}), encoding="utf-8")
+    before = conversation.read_bytes()
+    result = module._configure_context_compactor_availability(home, dry_run=True)
+    assert result["dryRun"] is True
+    assert result["activation"]["dryRun"] is True
+    assert result["activation"]["updatedConversationCount"] == 1
+    assert conversation.read_bytes() == before
+    assert not (home / "settings.json").exists()
+    sys.modules.pop("integrated_install", None)
+
+
+def test_context_compactor_uses_the_conversation_specific_json_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_installer_module()
+    home = tmp_path / ".lmstudio"
+    chats = home / "conversations" / "00"
+    chats.mkdir(parents=True)
+    conversation = chats / "large.conversation.json"
+    conversation.write_text(json.dumps({"plugins": [], "padding": "x" * 128}), encoding="utf-8")
+    monkeypatch.setattr(module, "MAX_INSTALLER_JSON_BYTES", 32)
+    monkeypatch.setattr(module, "MAX_CONVERSATION_JSON_BYTES", 1024)
+
+    result = module._enable_context_compactor_for_existing_chats(home, dry_run=False)
+
+    assert result["updatedConversationCount"] == 1
+    assert result["skippedConversationCount"] == 0
+    assert module.CONTEXT_COMPACTOR_PLUGIN_ID in json.loads(
+        conversation.read_text(encoding="utf-8")
+    )["plugins"]
     sys.modules.pop("integrated_install", None)
 
 

@@ -197,6 +197,8 @@ function parseToolResult(content) {
       "activeProject", "projectPath", "project", "engineAssociation", "resolvedEngineVersion",
       "requestedEngineAssociation", "resolvedRootType", "projectRelativePath", "workspaceRelativePath",
       "hashSource", "canonicalProject", "canonicalProjectRoot", "projectIdentity", "canonicalPath",
+      "observation", "attachmentId", "attachmentName", "attachmentType", "parser",
+      "startOffset", "endOffset", "totalChars",
     ]) {
       if (source[key] !== undefined) out[key] = source[key];
     }

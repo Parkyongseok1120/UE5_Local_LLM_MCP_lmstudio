@@ -75,6 +75,7 @@ CONTEXT_COMPACTOR_PLUGIN_NAME = "unreal-context-compactor"
 
 INVALID_LOCK_GRACE_SECONDS = 300
 MAX_INSTALLER_JSON_BYTES = 16 * 1024 * 1024
+MAX_CONVERSATION_JSON_BYTES = 64 * 1024 * 1024
 
 
 def _detect_engine_root(engine_association: str = "") -> Path | None:
@@ -599,13 +600,18 @@ def _json_bytes(payload: Any) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
-def _load_json(path: Path, default: Any) -> Any:
+def _load_json(
+    path: Path,
+    default: Any,
+    *,
+    max_bytes: int = MAX_INSTALLER_JSON_BYTES,
+) -> Any:
     if not path.exists():
         return default
     size = path.stat().st_size
-    if size > MAX_INSTALLER_JSON_BYTES:
+    if size > max_bytes:
         raise ValueError(
-            f"JSON file exceeds the {MAX_INSTALLER_JSON_BYTES}-byte installer safety limit: {path}"
+            f"JSON file exceeds the {max_bytes}-byte installer safety limit: {path}"
         )
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -717,6 +723,25 @@ def _sync_directory(path: Path) -> None:
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        _sync_directory(path.parent)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
 
 
 def _atomic_write_bytes(path: Path, content: bytes) -> None:
@@ -1697,12 +1722,62 @@ def _ensure_context_compactor_on_disk(
     return detail
 
 
+def _enable_context_compactor_for_existing_chats(
+    lmstudio_home: Path,
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    conversations_root = lmstudio_home / "conversations"
+    result: dict[str, Any] = {
+        "managed": True,
+        "pluginId": CONTEXT_COMPACTOR_PLUGIN_ID,
+        "conversationsRoot": str(conversations_root),
+        "eligibleConversationCount": 0,
+        "alreadyEnabledConversationCount": 0,
+        "updatedConversationCount": 0,
+        "skippedConversationCount": 0,
+        "enabledForExistingChats": True,
+    }
+    if dry_run:
+        result["dryRun"] = True
+    if not conversations_root.is_dir() or conversations_root.is_symlink():
+        return result
+    for conversation_path in sorted(conversations_root.rglob("*.conversation.json")):
+        try:
+            if conversation_path.is_symlink() or not conversation_path.is_file():
+                result["skippedConversationCount"] += 1
+                continue
+            if conversation_path.stat().st_size > MAX_CONVERSATION_JSON_BYTES:
+                result["skippedConversationCount"] += 1
+                continue
+            conversation = _load_json(
+                conversation_path,
+                None,
+                max_bytes=MAX_CONVERSATION_JSON_BYTES,
+            )
+            plugins = conversation.get("plugins") if isinstance(conversation, dict) else None
+            if not isinstance(plugins, list) or any(not isinstance(item, str) for item in plugins):
+                result["skippedConversationCount"] += 1
+                continue
+            result["eligibleConversationCount"] += 1
+            if CONTEXT_COMPACTOR_PLUGIN_ID in plugins:
+                result["alreadyEnabledConversationCount"] += 1
+                continue
+            result["updatedConversationCount"] += 1
+            if not dry_run:
+                conversation["plugins"] = [*plugins, CONTEXT_COMPACTOR_PLUGIN_ID]
+                _write_json_atomic(conversation_path, conversation)
+        except (OSError, ValueError, json.JSONDecodeError):
+            result["skippedConversationCount"] += 1
+    return result
+
+
 def _configure_context_compactor_availability(
     lmstudio_home: Path,
     *,
     dry_run: bool,
 ) -> dict[str, Any]:
-    """Make the installed plugin visible without enabling it for any chat."""
+    """Pin the plugin and enable its GUI switch in existing chats."""
     settings_path = lmstudio_home / "settings.json"
     result: dict[str, Any] = {
         "settingsPath": str(settings_path),
@@ -1710,9 +1785,6 @@ def _configure_context_compactor_availability(
         "allowDevelopmentPlugins": False,
         "changed": False,
     }
-    if dry_run:
-        result["dryRun"] = True
-        return result
     settings = _load_json(settings_path, {}) if settings_path.exists() else {}
     if not isinstance(settings, dict):
         settings = {}
@@ -1736,13 +1808,17 @@ def _configure_context_compactor_availability(
         developer["allowDevelopmentPlugins"] = True
         result["changed"] = True
     result["allowDevelopmentPlugins"] = bool(developer.get("allowDevelopmentPlugins"))
-    if result["changed"]:
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(
-            json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        _sync_directory(settings_path.parent)
+    activation = _enable_context_compactor_for_existing_chats(
+        lmstudio_home,
+        dry_run=dry_run,
+    )
+    result["activation"] = activation
+    if activation["updatedConversationCount"]:
+        result["changed"] = True
+    if dry_run:
+        result["dryRun"] = True
+    elif result["changed"]:
+        _write_json_atomic(settings_path, settings)
     return result
 
 
@@ -2251,7 +2327,9 @@ def install(
             "managed configuration/files only; external npm/lms installs, compiled workers and generated indexes are not rolled back"
         )
         report["knownIntegrationsSafe"] = not args.enable_agent_mode
-        report["restartRequired"] = "lmstudio" in components or "unreal" in components
+        report["restartRequired"] = bool(
+            {"lmstudio", "unreal", "context_compactor"} & components
+        )
         report["ok"] = True
         tx.write_file(args.state_home / "runtime-python.path", (str(python_exe) + "\n").encode("utf-8"))
         journal = tx.commit(report)

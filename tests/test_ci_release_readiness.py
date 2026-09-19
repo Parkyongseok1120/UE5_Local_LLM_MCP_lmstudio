@@ -137,7 +137,7 @@ def test_component_package_version_sources_are_synchronized() -> None:
     assert package["version"] == lock["version"] == lock["packages"][""]["version"]
     assert plugin_manifest["name"] == package["name"]
     assert isinstance(plugin_manifest["revision"], int) and plugin_manifest["revision"] > 0
-    assert installer_manifest["safety"]["contextCompactionEnabledByDefault"] is False
+    assert installer_manifest["safety"]["contextCompactionEnabledByDefault"] is True
 
 
 def test_workflow_has_supported_triggers_permissions_cancellation_timeouts_and_caches() -> None:

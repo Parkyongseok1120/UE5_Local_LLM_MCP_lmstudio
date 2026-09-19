@@ -64,7 +64,8 @@ def _read_config(config_path: Path, source_root: Path) -> dict:
 
 
 def _run(command: list[str], *, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
-    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False,
+    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=timeout, check=False,
                             env={**os.environ, "PATH": str(Path(command[0]).parent) + os.pathsep + os.environ.get("PATH", "")})
     if result.returncode:
         raise RuntimeError(f"Update check failed ({Path(command[0]).name}): {(result.stderr or result.stdout)[-2000:]}")

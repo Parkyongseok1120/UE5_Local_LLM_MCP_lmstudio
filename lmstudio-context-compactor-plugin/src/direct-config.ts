@@ -2,9 +2,40 @@ import { createConfigSchematics } from "@lmstudio/sdk";
 
 export const directConfigSchematics = createConfigSchematics()
   .field(
+    "projectEngine",
+    "select",
+    {
+      displayName: "Project engine",
+      subtitle: "Filters project tools before the model sees them. Auto verifies configured paths, paths mentioned in chat, and workspace markers.",
+      options: [
+        { value: "auto", displayName: "Auto (verified project path)" },
+        { value: "unity", displayName: "Unity" },
+        { value: "unreal", displayName: "Unreal Engine" },
+        { value: "mixed", displayName: "Both (explicit mixed workspace)" },
+      ],
+    },
+    "auto",
+  )
+  .field(
+    "projectIdentity",
+    "string",
+    {
+      displayName: "Project identity",
+      subtitle: "Optional exact Unity root, Unreal .uproject path, or exact Unreal project name. Unreal project arguments are deterministically bound to this value.",
+      placeholder: "C:\\Projects\\Game\\Game.uproject",
+    },
+    "",
+  )
+  .field(
     "observeOnly",
     "boolean",
     { displayName: "Observe only", subtitle: "Measure context pressure without changing the model-facing history." },
+    false,
+  )
+  .field(
+    "showDebugInfo",
+    "boolean",
+    { displayName: "Show debug info", subtitle: "Show per-round context measurements in the chat." },
     false,
   )
   .field("softRemainingTokens", "numeric", { displayName: "Soft threshold", subtitle: "Compact when estimated remaining context falls below this value." }, 14000)

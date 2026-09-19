@@ -18,7 +18,7 @@ Unity v1.4.0 alpha 서버·Editor Bridge도 포함합니다. Unity의 별도 설
 
 실제 AI 모델을 선택한 뒤 `unreal-rag`와 `unreal-agent`를 켜면 됩니다. 기본 방식인 `Direct`에서는 AI가 도구 사용 순서와 답변할 시점을 정합니다.
 
-`codex/unreal-context-compactor`는 긴 대화를 줄여 주는 보조 기능입니다. 기본적으로 꺼두어야 합니다(`OFF`). 설치만으로 채팅에서 켜지지는 않습니다. 필요한 긴 채팅에서 단일 스위치만 켜면 됩니다.
+`codex/unreal-context-compactor`는 긴 대화를 줄여 주는 보조 기능입니다. 설치·업데이트 시 당시 저장된 기존 채팅에서 기본 `ON`으로 설정합니다. 필요 없는 채팅에서는 단일 스위치를 끌 수 있습니다.
 
 기존 파일은 `replace_in_file`로 필요한 부분만 고칩니다. 읽기나 직전 수정 결과의 `fileVersionReceipt`를 매번 전달해야 합니다. 호환 입력인 `expectedHash`도 가능합니다. `write_file`은 새 파일에만 사용합니다.
 

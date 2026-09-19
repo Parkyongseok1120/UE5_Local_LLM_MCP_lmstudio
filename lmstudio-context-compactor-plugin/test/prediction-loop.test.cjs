@@ -6,15 +6,19 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { Chat, ChatMessage } = require("@lmstudio/sdk");
-const { createPredictionLoopHandler, handlePredictionLoop } = require("../dist/prediction-loop.js");
+const { createPredictionLoopHandler, handlePredictionLoop, __test } = require("../dist/prediction-loop.js");
 const { runOneToolRound } = require("../dist/round-loop.js");
 const { ContinuityNoteStore, NOTE_MARKER } = require("../dist/continuity-model-notes.js");
 const { ASSISTANT_MARKER } = require("../dist/continuity-assistant-evidence.js");
 
 function fakeController(history, tokenSource, overrides = {}, tools = []) {
   const blocks = [];
+  const statuses = [];
   const config = {
+    projectEngine: "auto",
+    projectIdentity: "",
     observeOnly: false,
+    showDebugInfo: true,
     softRemainingTokens: 14000,
     hardRemainingTokens: 8000,
     maxOutputReserve: 4096,
@@ -40,16 +44,27 @@ function fakeController(history, tokenSource, overrides = {}, tools = []) {
     async startToolUseSession() { return session; },
     async requestConfirmToolCall() { return { type: "allow" }; },
     debug(value) { ctl.debugValue = value; },
+    createStatus(initialState) {
+      const status = { state: initialState, texts: [initialState.text], states: [initialState], removed: false };
+      statuses.push(status);
+      return {
+        setText(text) { status.state = { ...status.state, text }; status.texts.push(text); },
+        setState(state) { status.state = state; status.states.push(state); },
+        remove() { status.removed = true; },
+      };
+    },
     createContentBlock(options) {
-      const block = { options, text: "", requests: [], results: [] };
+      const block = { options, text: "", requests: [], results: [], styles: [] };
       blocks.push(block);
       return {
         appendText(text) { block.text += text; },
         appendToolRequest(request) { block.requests.push(request); },
         appendToolResult(result) { block.results.push(result); },
+        setStyle(style) { block.styles.push(style); block.options.style = style; },
       };
     },
     blocks,
+    statuses,
     session,
     debugValues: [],
     debugValue: null,
@@ -122,6 +137,203 @@ test("low-pressure history passes through without proxy model selection or sampl
     assert.equal(Object.prototype.hasOwnProperty.call(receivedOptions, key), false);
   }
   assert.equal(ctl.debugValue.compacted, false);
+});
+
+test("prediction loop exposes only the configured engine tools and common tools", async () => {
+  const history = Chat.from([{ role: "user", content: "Inspect this Unity project." }]);
+  const tools = [
+    { name: "unity_status", description: "Unity status", parametersJsonSchema: { type: "object" },
+      pluginIdentifier: "mcp/unity-tools" },
+    { name: "build_unreal_project", description: "Unreal build", parametersJsonSchema: { type: "object" },
+      pluginIdentifier: "mcp/unreal-agent" },
+    { name: "common_lookup", description: "Common", parametersJsonSchema: { type: "object" },
+      pluginIdentifier: "mcp/other" },
+  ];
+  let receivedTools;
+  let receivedHistory;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, modelTools, options) {
+      receivedHistory = chat;
+      receivedTools = modelTools;
+      options.onMessage(ChatMessage.create("assistant", "done"));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { projectEngine: "unity", projectIdentity: "C:\\Game" }, tools);
+
+  await handlePredictionLoop(ctl);
+
+  assert.deepEqual(receivedTools.map((tool) => tool.name), ["unity_status", "common_lookup"]);
+  assert.match(receivedHistory.toString(), /engine=unity/u);
+  assert.match(receivedHistory.toString(), /projectIdentity=C:\\Game/u);
+  assert.equal(ctl.debugValue.availableUnityTools, 1);
+  assert.equal(ctl.debugValue.availableUnrealTools, 1);
+  assert.equal(ctl.debugValue.visibleToolCount, 2);
+});
+
+test("Qwen-compatible history has exactly one leading system message after scope injection", async () => {
+  const history = Chat.from([
+    { role: "system", content: "base system policy" },
+    { role: "user", content: "Review the retrieved guide." },
+    { role: "system", content: "retrieval citation metadata" },
+  ]);
+  const tool = { name: "unity_status", description: "Unity status",
+    parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unity-tools" };
+  const assertCompatible = (chat) => {
+    const roles = chat.getMessagesArray().map((message) => message.getRole());
+    assert.equal(roles.filter((role) => role === "system").length, 1);
+    assert.equal(roles[0], "system");
+    assert.match(chat.at(0).getText(), /base system policy/u);
+    assert.match(chat.at(0).getText(), /retrieval citation metadata/u);
+    assert.match(chat.at(0).getText(), /engine=unity/u);
+  };
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { assertCompatible(chat); return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, _tools, options) {
+      assertCompatible(chat);
+      options.onMessage(ChatMessage.create("assistant", "compatible"));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { projectEngine: "unity" }, [tool]);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(ctl.blocks.at(-1).text, "compatible");
+});
+
+test("prediction loop denies a handcrafted tool call withheld by engine scope", async () => {
+  const history = Chat.from([{ role: "user", content: "Inspect this Unity project." }]);
+  const tools = [
+    { name: "unity_status", description: "Unity status", parametersJsonSchema: { type: "object" },
+      pluginIdentifier: "mcp/unity-tools" },
+    { name: "build_unreal_project", description: "Unreal build", parametersJsonSchema: { type: "object" },
+      pluginIdentifier: "mcp/unreal-agent" },
+  ];
+  let deniedReason = "";
+  let confirmationCalled = false;
+  const selectedModel = {
+    identifier: "selected-model",
+    async act(_chat, modelTools, options) {
+      assert.deepEqual(modelTools.map((tool) => tool.name), ["unity_status"]);
+      await options.guardToolCall(0, 77, {
+        toolCallRequest: { id: "bad", type: "function", name: "build_unreal_project", arguments: {} },
+        allow() { throw new Error("must not allow"); },
+        allowAndOverrideParameters() { throw new Error("must not override"); },
+        deny(reason) { deniedReason = reason; },
+      });
+      options.onMessage(ChatMessage.create("assistant", "blocked"));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { projectEngine: "unity" }, tools);
+  ctl.requestConfirmToolCall = async () => { confirmationCalled = true; return { type: "allow" }; };
+
+  await handlePredictionLoop(ctl);
+
+  assert.match(deniedReason, /project-engine scope/u);
+  assert.equal(confirmationCalled, false);
+});
+
+test("prediction loop binds Unreal mutation project arguments after confirmation overrides", async () => {
+  const history = Chat.from([{ role: "user", content: "Update the selected Unreal project." }]);
+  const tool = {
+    name: "replace_in_file",
+    description: "Replace exact text in one file",
+    parametersJsonSchema: { type: "object", properties: { path: { type: "string" }, project: { type: "string" } } },
+    pluginIdentifier: "mcp/unreal-agent",
+  };
+  const exactProject = "C:\\Projects\\Game\\Game.uproject";
+  let confirmedParameters;
+  let executedParameters;
+  const request = { id: "write", type: "function", name: "replace_in_file",
+    arguments: { path: "project://Source/A.cpp", project: "WrongProject" } };
+  const selectedModel = {
+    identifier: "selected-model",
+    async act(_chat, _tools, options) {
+      await options.guardToolCall(0, 88, {
+        toolCallRequest: request,
+        allow() { throw new Error("bound calls must use an override"); },
+        allowAndOverrideParameters(parameters) { executedParameters = parameters; },
+        deny(reason) { throw new Error(reason); },
+      });
+      options.onMessage(ChatMessage.create("assistant", "bound"));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel,
+    { projectEngine: "unreal", projectIdentity: exactProject }, [tool]);
+  ctl.requestConfirmToolCall = async ({ parameters }) => {
+    confirmedParameters = parameters;
+    return { type: "allow", toolArgsOverride: { ...parameters, project: "AnotherWrongProject" } };
+  };
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(confirmedParameters.project, exactProject);
+  assert.equal(executedParameters.project, exactProject);
+  assert.equal(executedParameters.path, "project://Source/A.cpp");
+});
+
+test("Unity and Unreal observation calls bypass the invisible host confirmation wait", async () => {
+  const cases = [
+    [{ name: "unity_status", pluginIdentifier: "mcp/unity-tools" }, {}],
+    [{ name: "list_directory", pluginIdentifier: "mcp/unity-tools" }, { path: "Assets" }],
+    [{ name: "read_file", pluginIdentifier: "mcp/unreal-agent" }, { path: "project://Source/A.cpp" }],
+    [{ name: "unity_scene", pluginIdentifier: "mcp/unity-tools" }, { action: "list" }],
+  ];
+  for (const [tool, args] of cases) {
+    assert.equal(__test.isObservationOnlyToolCall(
+      { ...tool, description: "test" }, { name: tool.name, arguments: args }), true);
+  }
+  const mutations = [
+    [{ name: "patch_file", pluginIdentifier: "mcp/unity-tools" }, { path: "Assets/A.cs" }],
+    [{ name: "write_file", pluginIdentifier: "mcp/unreal-agent" }, { path: "project://Source/A.cpp" }],
+    [{ name: "unity_scene", pluginIdentifier: "mcp/unity-tools" }, { action: "delete" }],
+  ];
+  for (const [tool, args] of mutations) {
+    assert.equal(__test.isObservationOnlyToolCall(
+      { ...tool, description: "test" }, { name: tool.name, arguments: args }), false);
+  }
+});
+
+test("read-only Unity calls finish without asking the hidden confirmation UI", async () => {
+  const history = Chat.from([{ role: "user", content: "Check this Unity project." }]);
+  const request = { id: "status", type: "function", name: "unity_status", arguments: {} };
+  const tool = {
+    name: "unity_status",
+    description: "Observe Unity status.",
+    parametersJsonSchema: { type: "object", properties: {} },
+    pluginIdentifier: "mcp/unity-tools",
+  };
+  let allowed = false;
+  const selectedModel = {
+    identifier: "selected-model",
+    async act(_chat, _tools, options) {
+      await options.guardToolCall(0, 91, {
+        toolCallRequest: request,
+        allow() { allowed = true; },
+        allowAndOverrideParameters() { allowed = true; },
+        deny(reason) { throw new Error(reason); },
+      });
+      options.onMessage(ChatMessage.create("assistant", "status checked"));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { projectEngine: "unity" }, [tool]);
+  ctl.requestConfirmToolCall = async () => new Promise(() => {});
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(allowed, true);
+  assert.equal(ctl.blocks.at(-1).text, "status checked");
 });
 
 test("hidden model notes survive a new user turn as assistant judgment and leave visible answers clean", async (t) => {
@@ -375,6 +587,47 @@ test("observe-only remains the explicit no-mutation mode", async () => {
   assert.equal(ctl.debugValue.compacted, false);
 });
 
+test("observe-only does not filter tools or bind project arguments", async () => {
+  const history = Chat.from([{ role: "user", content: "measure only" }]);
+  const tools = [
+    { name: "unity_status", description: "Unity status", parametersJsonSchema: { type: "object" },
+      pluginIdentifier: "mcp/unity-tools" },
+    { name: "read_file", description: "Unreal read",
+      parametersJsonSchema: { type: "object", properties: { path: { type: "string" }, project: { type: "string" } } },
+      pluginIdentifier: "mcp/unreal-agent" },
+  ];
+  const request = { id: "observe-read", type: "function", name: "read_file",
+    arguments: { path: "project://Source/A.cpp", project: "ModelSelected" } };
+  let receivedHistory;
+  let receivedTools;
+  let guardResult;
+  const selectedModel = {
+    identifier: "selected-model",
+    async act(chat, modelTools, options) {
+      receivedHistory = chat;
+      receivedTools = modelTools;
+      await options.guardToolCall(0, 89, {
+        toolCallRequest: request,
+        allow() { guardResult = "allow"; },
+        allowAndOverrideParameters() { guardResult = "override"; },
+        deny() { guardResult = "deny"; },
+      });
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, {
+    observeOnly: true,
+    projectEngine: "unity",
+    projectIdentity: "C:\\Bound\\Game.uproject",
+  }, tools);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(receivedHistory, history);
+  assert.deepEqual(receivedTools, tools);
+  assert.equal(guardResult, "allow");
+});
+
 test("tool rounds are captured once, remeasured, and compacted before the next act", async () => {
   const history = Chat.from([{ role: "user", content: "inspect both files, then report" }]);
   const oldNoise = `${"OLD_ALREADY_READ ".repeat(1600)}OLD_ALREADY_READ_END`;
@@ -473,17 +726,79 @@ test("tool rounds are captured once, remeasured, and compacted before the next a
   assert.equal(ctl.session.disposed, true);
 });
 
-test("a denied tool call keeps the SDK confirmation call ID in emitted messages", async () => {
+test("tool generation, finalized requests, results, and the final answer update the GUI without round buffering", async () => {
+  const history = Chat.from([{ role: "user", content: "Read the project and summarize." }]);
+  const request = { id: "live-read", type: "function", name: "read_file",
+    arguments: { path: "project://Source/Live.cpp" } };
+  const tool = { name: "read_file", description: "Read one project file.",
+    parametersJsonSchema: { type: "object", properties: { path: { type: "string" } } },
+    pluginIdentifier: "mcp/unreal-agent" };
+  let actCount = 0;
+  let requestVisibleBeforeResult = false;
+  let resultVisibleBeforeRoundReturn = false;
+  let ctl;
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async act(_chat, _tools, options) {
+      actCount += 1;
+      if (actCount > 1) {
+        for (const content of ["Final ", "answer ", "streams."]) {
+          options.onPredictionFragment({ roundIndex: 0, content, reasoningType: "none",
+            tokensCount: 1, containsDrafted: false, isStructural: false });
+        }
+        options.onMessage(ChatMessage.create("assistant", "Final answer streams."));
+        return {};
+      }
+      options.onToolCallRequestStart(0, 707, { toolCallId: request.id });
+      options.onToolCallRequestNameReceived(0, 707, request.name);
+      options.onToolCallRequestArgumentFragmentGenerated(0, 707, '{"path":');
+      options.onToolCallRequestArgumentFragmentGenerated(0, 707, '"project://Source/Live.cpp"}');
+      options.onToolCallRequestEnd(0, 707, { isQueued: false, toolCallRequest: request });
+      await options.guardToolCall(0, 707, {
+        toolCallRequest: request,
+        allow() {},
+        allowAndOverrideParameters() {},
+        deny(reason) { throw new Error(reason); },
+      });
+      options.onToolCallRequestFinalized(0, 707, { toolCallRequest: request });
+      requestVisibleBeforeResult = ctl.blocks.some((block) => (
+        block.requests.some((item) => item.callId === 707)));
+      options.onMessage(ChatMessage.from({ role: "assistant",
+        content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+        toolCallId: request.id, content: JSON.stringify({ ok: true }) }] }));
+      resultVisibleBeforeRoundReturn = ctl.blocks.some((block) => (
+        block.results.some((item) => item.callId === 707)));
+      options.onRoundEnd(0);
+      throw options.signal.reason;
+    },
+  };
+  ctl = fakeController(history, selectedModel, {}, [tool]);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(requestVisibleBeforeResult, true);
+  assert.equal(resultVisibleBeforeRoundReturn, true);
+  assert.equal(ctl.blocks.flatMap((block) => block.requests).length, 1);
+  assert.equal(ctl.blocks.flatMap((block) => block.results).length, 1);
+  assert.equal(ctl.blocks.at(-1).text, "Final answer streams.");
+  const toolStatus = ctl.statuses.find((status) => status.texts.some((text) => /도구 호출 생성/u.test(text)));
+  assert.ok(toolStatus);
+  assert.match(toolStatus.texts.join("\n"), /read_file.*\(\d+자\)/u);
+  assert.equal(toolStatus.removed, true);
+});
+
+test("a denied mutation call keeps the SDK confirmation call ID in emitted messages", async () => {
   const history = Chat.from([{ role: "user", content: "Do not run the proposed tool." }]);
   const request = {
     id: "denied-read",
     type: "function",
-    name: "read_file",
-    arguments: { path: "Denied.cpp" },
+    name: "write_file",
+    arguments: { path: "Denied.cpp", content: "x" },
   };
   const tool = {
-    name: "read_file",
-    description: "Read one project file.",
+    name: "write_file",
+    description: "Write one project file.",
     parametersJsonSchema: { type: "object", properties: {} },
     pluginIdentifier: "mcp/unreal-agent",
   };
@@ -646,4 +961,106 @@ test("the compactor cannot be selected recursively as the token source", async (
   const history = Chat.from([{ role: "user", content: "hello" }]);
   const ctl = fakeController(history, { identifier: "codex/unreal-context-compactor", async act() {} });
   await assert.rejects(() => handlePredictionLoop(ctl), /Select the actual Qwen\/LLM/);
+});
+
+test("prompt processing progress is visible before the first generated token", async () => {
+  const history = Chat.from([{ role: "user", content: "Show progress." }]);
+  let progressWasVisibleBeforeFirstToken = false;
+  let ctl;
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async act(_chat, _tools, options) {
+      options.onPromptProcessingProgress(0, 0.4718);
+      progressWasVisibleBeforeFirstToken = ctl.statuses.some((status) => (
+        status.texts.includes("프롬프트 처리 중 47.18%") && !status.removed));
+      options.onFirstToken(0);
+      options.onPredictionFragment({ roundIndex: 0, content: "done", reasoningType: "none",
+        tokensCount: 1, containsDrafted: false, isStructural: false });
+      options.onMessage(ChatMessage.create("assistant", "done"));
+    },
+  };
+  ctl = fakeController(history, selectedModel, { showDebugInfo: false });
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(progressWasVisibleBeforeFirstToken, true);
+  const activity = ctl.statuses.find((status) => status.texts.some((text) => /프롬프트 처리 중 47\.18%/u.test(text)));
+  assert.ok(activity);
+  assert.equal(activity.removed, true);
+  assert.equal(ctl.blocks.at(-1).text, "done");
+});
+
+test("prediction fragments stream reasoning into a thinking block and the answer into normal output", async () => {
+  const history = Chat.from([{ role: "user", content: "Where is the current project?" }]);
+  const separator = "__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__";
+  const fragment = (content, reasoningType, tokensCount = 1, isStructural = false) => ({
+    roundIndex: 0, content, reasoningType, tokensCount, containsDrafted: false, isStructural,
+  });
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async act(_chat, _tools, options) {
+      options.onPredictionFragment(fragment("I should inspect the supplied context.", "reasoning", 7));
+      options.onPredictionFragment(fragment(separator, "reasoningEndTag", 1, true));
+      options.onPredictionFragment(fragment("현재 ", "none", 1));
+      options.onPredictionFragment(fragment("프로젝트입니다.", "none", 3));
+      options.onMessage(ChatMessage.create("assistant",
+        `I should inspect the supplied context.${separator}현재 프로젝트입니다.`));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { showDebugInfo: false });
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(ctl.blocks.length, 2);
+  assert.equal(ctl.blocks[0].text, "I should inspect the supplied context.");
+  assert.deepEqual(ctl.blocks[0].options.style, { type: "thinking", ended: true, title: "생각" });
+  assert.equal(ctl.blocks[0].options.includeInContext, false);
+  assert.equal(ctl.blocks[1].text, "현재 프로젝트입니다.");
+  assert.doesNotMatch(JSON.stringify(ctl.blocks), /SYNTHETIC_REASONING_END/u);
+  assert.equal(ctl.debugValues.length, 0);
+});
+
+test("plain answer fragments are appended once instead of waiting for the completed message", async () => {
+  const history = Chat.from([{ role: "user", content: "Answer briefly." }]);
+  const selectedModel = {
+    identifier: "plain-model",
+    async act(_chat, _tools, options) {
+      for (const content of ["one", " ", "token", " ", "at", " ", "a", " ", "time"]) {
+        options.onPredictionFragment({ roundIndex: 0, content, reasoningType: "none",
+          tokensCount: 1, containsDrafted: false, isStructural: false });
+      }
+      options.onMessage(ChatMessage.create("assistant", "one token at a time"));
+    },
+  };
+  const ctl = fakeController(history, selectedModel);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(ctl.blocks.length, 1);
+  assert.equal(ctl.blocks[0].text, "one token at a time");
+});
+
+test("streaming keeps a continuity footer out of the visible answer", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "compactor-stream-footer-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const history = Chat.from([{ role: "user", content: "Continue this project." }]);
+  const footer = '\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n{}\n</continuity-note>';
+  const selectedModel = {
+    identifier: "selected-model",
+    async act(_chat, _tools, options) {
+      for (const content of ["Visible answer.", footer.slice(0, 19), footer.slice(19)]) {
+        options.onPredictionFragment({ roundIndex: 0, content, reasoningType: "none",
+          tokensCount: 1, containsDrafted: false, isStructural: false });
+      }
+      options.onMessage(ChatMessage.create("assistant", `Visible answer.${footer}`));
+    },
+  };
+  const ctl = fakeController(history, selectedModel);
+  ctl.getWorkingDirectory = () => directory;
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(ctl.blocks.length, 1);
+  assert.equal(ctl.blocks[0].text, "Visible answer.");
+  assert.doesNotMatch(JSON.stringify(ctl.blocks), /continuity-note/u);
 });

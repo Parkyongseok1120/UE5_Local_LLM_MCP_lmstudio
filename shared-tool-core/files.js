@@ -155,13 +155,32 @@ class Files {
       if (matchBytes > 2 * 1024 * 1024 || matches.length >= 5000) fail("query_budget_exceeded", "Narrow the search; accumulated matches exceed the scan budget");
       matches.push(row);
     };
-    const walk = async relative => {
+    // Validate the requested root once, then walk its descendants directly.
+    // Calling policy.resolve() for every file revalidated every ancestor and
+    // turned several parallel searches into thousands of duplicate lstat
+    // calls. Directory entries still reject links before they are traversed,
+    // so the walk cannot leave the already validated project subtree.
+    const searchRoot = this.policy.resolve(searchPath, false);
+    const rootStat = fs.lstatSync(searchRoot);
+    if (!rootStat.isDirectory()) fail("not_directory", "Search target must be a directory");
+    const walk = async (relative, target, knownStat = null) => {
       if (scanned >= 5000 || ++nodes > 10000) { incomplete = true; return; }
-      let target;
-      try { target = this.policy.resolve(relative, false); } catch { return; }
-      const stat = fs.lstatSync(target);
+      let stat = knownStat;
+      try { stat ||= fs.lstatSync(target); } catch { return; }
+      if (stat.isSymbolicLink()) return;
       if (stat.isDirectory()) {
-        for (const name of fs.readdirSync(target).sort()) await walk(`${relative}/${name}`);
+        let entries;
+        try { entries = fs.readdirSync(target, { withFileTypes: true }); } catch { return; }
+        entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+        for (const entry of entries) {
+          if (entry.isSymbolicLink()) continue;
+          const entryRelative = `${relative}/${entry.name}`;
+          const entryTarget = path.join(target, entry.name);
+          let entryStat;
+          try { entryStat = fs.lstatSync(entryTarget); } catch { continue; }
+          if (entryStat.isSymbolicLink()) continue;
+          await walk(entryRelative, entryTarget, entryStat);
+        }
       } else if (stat.isFile()) {
         scanned++;
         if (selectedExtensions && !selectedExtensions.has(path.extname(relative).toLowerCase())) return;
@@ -175,7 +194,7 @@ class Files {
         }
       }
     };
-    await walk(searchPath);
+    await walk(searchPath, searchRoot, rootStat);
     const revision = hash(JSON.stringify([this.session, this.policy.projectIdentity, "search_files", searchPath, args.query ?? null,
       args.content === true, extensions ? [...new Set(extensions)].sort() : null, matches]));
     return bounded({ status: "observed", ...page(matches, args, revision), scanned, incomplete, consistency: "per_file_observations" }, args.byteBudget);
