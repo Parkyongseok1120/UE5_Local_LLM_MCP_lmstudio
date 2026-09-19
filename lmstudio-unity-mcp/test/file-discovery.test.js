@@ -66,6 +66,26 @@ test("search combines exact extension choices with path query without reading bo
   assert.equal(f.bridgeCalls(), 0);
 });
 
+test("dot discovery paths resolve to the Assets root without weakening traversal checks", async t => {
+  const f = fixture(t);
+  f.put("Assets/Code/RootAlias.cs", "class RootAlias {}");
+  f.put("Packages/HiddenFromAlias.cs", "class HiddenFromAlias {}");
+
+  const dotted = await f.call("search_files", { path: ".", extensions: [".cs"] });
+  const dottedSlash = await f.call("search_files", { path: "./", extensions: [".cs"] });
+  const listed = await f.call("list_directory", { path: ".", kind: "directories" });
+
+  assert.deepEqual(dotted.items.map(row => row.path), ["Assets/Code/RootAlias.cs"]);
+  assert.deepEqual(dottedSlash.items.map(row => row.path), ["Assets/Code/RootAlias.cs"]);
+  assert.equal(dotted.path, undefined);
+  assert.equal(listed.path, "Assets");
+  assert.deepEqual(listed.items.map(row => row.path), ["Assets/Code", "Assets/Other"]);
+  assert.equal(
+    (await f.call("search_files", { path: "../", extensions: [".cs"] })).errorCode,
+    "invalid_path"
+  );
+});
+
 test("content search requires a query and remains independently scoped", async t => {
   const f = fixture(t);
   f.put("Assets/Code/One.cs", "needle");

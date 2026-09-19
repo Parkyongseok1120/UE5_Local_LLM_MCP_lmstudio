@@ -10,6 +10,9 @@ const { atomicWriteText, uniqueTempPath } = require("../lmstudio-unreal-agent-mc
 
 function fail(code, message) { throw Object.assign(new Error(message), { code, status: "not_applied" }); }
 function hash(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
+function discoveryPath(value, fallback = "Assets") {
+  return value === "." || value === "./" || value === undefined ? fallback : value;
+}
 function bounded(payload, budget = 32768) {
   if (Buffer.byteLength(JSON.stringify(payload)) > budget) fail("response_budget_exceeded", "Narrow the query or request a smaller page; values were not silently clipped.");
   return payload;
@@ -123,7 +126,7 @@ class Files {
     });
   }
   list(args) {
-    const relative = args.path;
+    const relative = discoveryPath(args.path);
     const target = this.policy.resolve(relative, false);
     if (!fs.lstatSync(target).isDirectory()) fail("not_directory", "List target must be a directory");
     const entries = fs.readdirSync(target, { withFileTypes: true });
@@ -145,7 +148,7 @@ class Files {
       extensions && (extensions.length > 16 || extensions.some(extension => !/^\.[a-z0-9_-]+$/.test(extension))))
       fail("invalid_arguments", "Supply a query or 1-16 exact extensions; content search requires a query");
     const selectedExtensions = extensions ? new Set(extensions) : null;
-    const searchPath = args.path ?? "Assets";
+    const searchPath = discoveryPath(args.path);
     const matches = [];
     let scanned = 0;
     let incomplete = false;
@@ -200,4 +203,4 @@ class Files {
     return bounded({ status: "observed", ...page(matches, args, revision), scanned, incomplete, consistency: "per_file_observations" }, args.byteBudget);
   }
 }
-module.exports = { Files, fail, hash, page, bounded };
+module.exports = { Files, fail, hash, page, bounded, discoveryPath };
