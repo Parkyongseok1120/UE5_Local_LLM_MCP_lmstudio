@@ -76,11 +76,18 @@ LM Studio의 MCP 설치 방법은 호스트 버전에 따라 달라질 수 있�
 
 Unity MCP 설정의 `unity-tools.args[0]`은 설치에 사용한 소스 폴더의 `lmstudio-unity-mcp/src/server.js`를 직접 가리킵니다. 같은 폴더에 새 소스를 반영한 다음, 아래 스크립트로 Node 의존성과 MCP 초기화를 확인합니다. 스크립트는 소스를 다운로드하거나 Git 상태를 변경하지 않습니다.
 
-Windows에서는 저장소 루트의 `UPDATE.bat`를 실행하면 Unity MCP 업데이트 검사와 대화 압축 플러그인 재설치를 순서대로 진행합니다. 기본 설정은 `%LMSTUDIO_HOME%\mcp.json` 또는 `%USERPROFILE%\.lmstudio\mcp.json`을 사용합니다. 다른 위치에 설치했다면 `UPDATE.bat "C:\path\to\mcp.json"`처럼 기존 설정 파일을 지정합니다. `UPDATE.bat --dry-run`은 두 단계의 계획만 확인합니다. 완료 후 LM Studio를 재시작합니다.
+Windows에서는 저장소 루트의 `UPDATE.bat`를 실행하면 설치된 Unity MCP, Unreal Agent/RAG, 대화 압축 플러그인을 순서대로 갱신합니다. 설치되지 않은 엔진은 건너뜁니다. 기본 설정은 `%LMSTUDIO_HOME%\mcp.json` 또는 `%USERPROFILE%\.lmstudio\mcp.json`을 사용합니다. 다른 위치에 설치했다면 `UPDATE.bat "C:\path\to\mcp.json"`처럼 기존 설정 파일을 지정합니다. 기존 프로젝트·엔진·인덱스·권한 설정은 다시 생성하지 않고 유지합니다. `UPDATE.bat --dry-run`은 세 단계의 계획만 확인합니다. 완료 후 LM Studio를 재시작합니다.
 
 ```sh
 python scripts/update_unity_mcp.py --mcp-config /absolute/path/to/mcp.json --dry-run
 python scripts/update_unity_mcp.py --mcp-config /absolute/path/to/mcp.json
+```
+
+Unreal Agent/RAG만 검사하려면 다음 명령을 사용할 수 있습니다.
+
+```text
+python scripts/update_unreal_mcp.py --mcp-config /absolute/path/to/mcp.json --dry-run
+python scripts/update_unreal_mcp.py --mcp-config /absolute/path/to/mcp.json
 ```
 
 잠금 파일과 기존 Node 의존성이 그대로인 업데이트에서는 `--skip-deps`를 지정할 수 있습니다. 성공하면 MCP 호스트에서 `unity-tools` 연결을 다시 시작해야 새 도구 목록과 코드가 반영됩니다. 스크립트는 설정 파일, 다른 MCP 서버 항목, `ALLOW_WRITE`/`ALLOW_COMMANDS`, Unity 프로젝트 파일을 수정하지 않습니다. 이미 실행 중인 MCP 프로세스를 종료하지도 않습니다.

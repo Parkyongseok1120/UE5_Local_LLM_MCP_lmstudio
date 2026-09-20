@@ -56,14 +56,14 @@ def test_workflow_invokes_only_existing_named_pytest_suites() -> None:
 def test_suite_manifest_preserves_pre_consolidation_unique_coverage() -> None:
     assert {name: len(SUITES[name]) for name in PRIMARY_SUITE_NAMES} == {
         "portable_direct": 29,
-        "portable_release": 12,
+        "portable_release": 14,
         "windows_direct": 9,
         "windows_release": 2,
     }
     paths = _all_suite_paths()
     normalized = [path.casefold() for path in paths]
 
-    assert len(paths) == 52
+    assert len(paths) == 54
     assert len(normalized) == len(set(normalized))
     assert all((ROOT / path).is_file() for path in paths)
     assert "tests/test_public_path_hygiene.py" in paths
@@ -205,6 +205,16 @@ def test_release_job_closes_clean_package_and_compactor_only_dry_run() -> None:
     assert "forbidden inventory count: 0" in release
     assert "--profile custom --components context_compactor" in release
     assert "--dry-run" in release
+
+
+def test_windows_update_launcher_covers_installed_engine_runtimes_and_compactor() -> None:
+    update = _read("UPDATE.bat")
+    assert "scripts\\update_unity_mcp.py" in update
+    assert "scripts\\update_unreal_mcp.py" in update
+    assert "--if-present" in update
+    assert "--profile custom --components context_compactor" in update
+    assert update.index("update_unity_mcp.py") < update.index("update_unreal_mcp.py")
+    assert update.index("update_unreal_mcp.py") < update.index("--components context_compactor")
 
 
 def test_oss_release_scan_excludes_the_quarantined_legacy_archive() -> None:

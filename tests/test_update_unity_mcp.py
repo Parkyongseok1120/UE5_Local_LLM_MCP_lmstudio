@@ -77,6 +77,26 @@ def test_skip_deps_validates_stdio_without_rewriting_permissions_or_other_server
     assert (config.read_bytes(), manifest.read_bytes()) == before
 
 
+def test_dependency_refresh_uses_locked_npm_install_from_configured_node(installed, monkeypatch):
+    source, _, config, manifest = installed
+    before = config.read_bytes(), manifest.read_bytes()
+    commands = []
+
+    def fake_run(command, **_):
+        commands.append(command)
+        output = "v20.20.2" if command[1] == "--version" else json.dumps({"initialized": True})
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    configured_npm = str(source / "managed-runtime/npm.cmd")
+    monkeypatch.setattr(updater, "_npm_for", lambda node: configured_npm)
+    monkeypatch.setattr(updater, "_run", fake_run)
+    report = updater.update(config, source_root=source)
+    assert report["dependencies"] == "npm_ci"
+    assert commands[1] == [configured_npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"]
+    assert commands[2][1] == str(source / "scripts/check_unity_install.js")
+    assert (config.read_bytes(), manifest.read_bytes()) == before
+
+
 def test_process_output_is_decoded_as_utf8_without_windows_codepage_failures(tmp_path, monkeypatch):
     captured = {}
 
@@ -137,3 +157,11 @@ def test_real_cli_checks_current_mcp_without_changing_config(tmp_path):
     assert report["ok"] and report["verification"]["initialized"]
     assert report["verification"]["connection"] == "disconnected"
     assert (config.read_bytes(), manifest.read_bytes()) == before
+
+
+def test_if_present_skips_when_unity_is_not_installed(tmp_path):
+    config = tmp_path / "mcp.json"
+    config.write_text(json.dumps({"mcpServers": {"keep": {"command": "other"}}}), encoding="utf-8")
+    report = updater.update(config, if_present=True, dry_run=True)
+    assert report["ok"] and report["installed"] is False
+    assert report["restartRequired"] is False

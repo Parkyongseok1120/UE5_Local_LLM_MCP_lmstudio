@@ -77,7 +77,7 @@ def test_installer_profiles_are_manifest_driven() -> None:
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.4.0"
-    assert manifest["version"] == "2.1.21"
+    assert manifest["version"] == "2.1.22"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
     assert manifest["safety"]["contextCompactorSkippedInHeadlessLmLinkMode"] is True
     assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is True

@@ -9,7 +9,7 @@
 - Unity와 Unreal 프로젝트 도구는 설정값과 정확한 프로젝트 표식을 기준으로 구분합니다. 프로젝트 종류를 확인하지 못한 대화에는 두 엔진의 프로젝트 도구를 보류합니다.
 - 대화 압축기는 도구 호출 라운드와 최종 본문을 LM Studio 화면에 진행 중인 상태로 전달하고, 프롬프트 처리 진행률을 표시합니다.
 - 압축 뒤 연속성 메모는 별도 모델 없이 제한된 형식으로 파싱합니다. 관찰된 사실과 이전 assistant 판단을 분리하고, 다음 도구나 실행 순서를 메모가 지시하지 못하게 제한합니다.
-- 설치·업데이트 시 `codex/unreal-context-compactor`를 설치하고 저장된 기존 채팅에서 기본 활성화합니다. Unity MCP와 압축기만 갱신하는 `UPDATE.bat`도 배포본에 포함합니다.
+- 설치·업데이트 시 `codex/unreal-context-compactor`를 설치하고 저장된 기존 채팅에서 기본 활성화합니다. `UPDATE.bat`은 설치된 Unity MCP, Unreal Agent/RAG와 압축기를 함께 갱신하며 기존 프로젝트·엔진·인덱스·권한 설정을 보존합니다.
 - 릴리스 브랜치에서도 GitHub Actions가 실행되며 Unity MCP, Unreal Direct MCP, 대화 압축기, 휴대용 설치 패키지를 Windows·Ubuntu·macOS에서 검증합니다.
 
 ## 구성별 버전

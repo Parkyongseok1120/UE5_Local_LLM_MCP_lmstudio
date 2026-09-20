@@ -18,7 +18,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _read_config(config_path: Path, source_root: Path) -> dict:
+def _read_config(config_path: Path, source_root: Path, *, if_present: bool = False) -> dict | None:
     config_path = config_path.expanduser().absolute()
     if config_path.is_symlink() or not config_path.is_file() or config_path.stat().st_size > 1048576:
         raise ValueError("MCP config must be an existing regular file of at most 1 MiB")
@@ -26,6 +26,8 @@ def _read_config(config_path: Path, source_root: Path) -> dict:
     servers = config.get("mcpServers") if isinstance(config, dict) else None
     entry = servers.get("unity-tools") if isinstance(servers, dict) else None
     if not isinstance(entry, dict):
+        if if_present:
+            return None
         raise ValueError("MCP config has no unity-tools entry")
     command, arguments, env = entry.get("command"), entry.get("args"), entry.get("env")
     if not isinstance(command, str) or not command or not isinstance(arguments, list) or not arguments or not isinstance(env, dict):
@@ -64,17 +66,36 @@ def _read_config(config_path: Path, source_root: Path) -> dict:
 
 
 def _run(command: list[str], *, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
-    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            timeout=timeout, check=False,
-                            env={**os.environ, "PATH": str(Path(command[0]).parent) + os.pathsep + os.environ.get("PATH", "")})
+    shell = os.name == "nt" and Path(command[0]).suffix.lower() in {".cmd", ".bat"}
+    native_command: list[str] | str = subprocess.list2cmdline(command) if shell else command
+    result = subprocess.run(native_command, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=timeout, check=False, shell=shell,
+                            env={**os.environ, "PATH": str(Path(command[0]).parent) + os.pathsep
+                                 + os.environ.get("PATH", "")})
     if result.returncode:
         raise RuntimeError(f"Update check failed ({Path(command[0]).name}): {(result.stderr or result.stdout)[-2000:]}")
     return result
 
 
-def update(config_path: Path, *, source_root: Path = ROOT, dry_run: bool = False, skip_deps: bool = False) -> dict:
+def _npm_for(node: str) -> str:
+    directory = Path(node).parent
+    for name in ("npm.cmd", "npm.exe", "npm") if os.name == "nt" else ("npm",):
+        candidate = directory / name
+        if candidate.is_file():
+            return str(candidate)
+    resolved = shutil.which("npm")
+    if not resolved:
+        raise ValueError("npm is required; use --skip-deps only when current dependencies are valid")
+    return resolved
+
+
+def update(config_path: Path, *, source_root: Path = ROOT, dry_run: bool = False,
+           skip_deps: bool = False, if_present: bool = False) -> dict:
     source_root = source_root.expanduser().resolve()
-    details = _read_config(config_path, source_root)
+    details = _read_config(config_path, source_root, if_present=if_present)
+    if details is None:
+        return {"ok": True, "dryRun": dry_run, "scope": "in_place_unity_mcp",
+                "installed": False, "skipped": "unity-tools is not installed", "restartRequired": False}
     adapter = source_root / "lmstudio-unity-mcp"
     report = {"ok": True, "dryRun": dry_run, "scope": "in_place_unity_mcp", "config": details["config"],
               "project": details["project"], "sourceRoot": details["sourceRoot"], "configurationChanged": False,
@@ -88,16 +109,9 @@ def update(config_path: Path, *, source_root: Path = ROOT, dry_run: bool = False
     if not version.startswith("v") or int(version[1:].split(".")[0]) < 20:
         raise ValueError("Node.js 20+ required")
     if not skip_deps:
-        pnpm = shutil.which("pnpm")
-        npm = shutil.which("npm")
-        if pnpm:
-            _run([pnpm, "install", "--frozen-lockfile", "--ignore-scripts"], cwd=adapter, timeout=300)
-            report["dependencies"] = "pnpm"
-        elif npm:
-            _run([npm, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock"], cwd=adapter, timeout=300)
-            report["dependencies"] = "npm"
-        else:
-            raise ValueError("npm or pnpm is required; use --skip-deps only when current dependencies are valid")
+        npm = _npm_for(node)
+        _run([npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=adapter, timeout=600)
+        report["dependencies"] = "npm_ci"
     else:
         report["dependencies"] = "skipped"
     result = _run([node, str(source_root / "scripts/check_unity_install.js"), details["config"]], cwd=source_root, timeout=45)
@@ -113,9 +127,11 @@ def main() -> int:
     parser.add_argument("--mcp-config", type=Path, required=True, help="Existing MCP JSON containing unity-tools")
     parser.add_argument("--dry-run", action="store_true", help="Inspect bindings without installing dependencies or starting MCP")
     parser.add_argument("--skip-deps", action="store_true", help="Use existing Node dependencies")
+    parser.add_argument("--if-present", action="store_true", help="Succeed without changes when unity-tools is not installed")
     args = parser.parse_args()
     try:
-        print(json.dumps(update(args.mcp_config, dry_run=args.dry_run, skip_deps=args.skip_deps), ensure_ascii=False, indent=2))
+        print(json.dumps(update(args.mcp_config, dry_run=args.dry_run, skip_deps=args.skip_deps,
+                                if_present=args.if_present), ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
         print(f"Unity MCP update failed: {error}", file=sys.stderr)

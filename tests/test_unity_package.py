@@ -27,6 +27,7 @@ def test_unity_portable_runtime_is_complete_and_has_no_editor_state(tmp_path):
         assert packaged.read_bytes() == source.read_bytes()
     assert (output / "lmstudio-unity-mcp/pnpm-lock.yaml").is_file()
     assert (output / "scripts/update_unity_mcp.py").is_file()
+    assert (output / "scripts/update_unreal_mcp.py").is_file()
     assert (output / "lmstudio-unreal-agent-mcp/src/write-locks.js").is_file()
     assert (output / "lmstudio-unreal-agent-mcp/src/direct-file-snapshot.js").is_file()
     assert not (output / "unity-editor-bridge/Tests~").exists()

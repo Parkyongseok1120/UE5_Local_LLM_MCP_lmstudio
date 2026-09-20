@@ -44,16 +44,27 @@ set "PYTHON_CMD=python"
 :update_unity
 echo Checking the existing Unity MCP binding and runtime...
 if "%UPDATE_DRY_RUN%"=="1" goto check_unity
-%PYTHON_CMD% scripts\update_unity_mcp.py --mcp-config "%MCP_CONFIG%"
+%PYTHON_CMD% scripts\update_unity_mcp.py --mcp-config "%MCP_CONFIG%" --if-present
 if errorlevel 1 goto unity_failed
-goto update_plugin
+goto update_unreal
 
 :check_unity
-%PYTHON_CMD% scripts\update_unity_mcp.py --mcp-config "%MCP_CONFIG%" --dry-run
+%PYTHON_CMD% scripts\update_unity_mcp.py --mcp-config "%MCP_CONFIG%" --if-present --dry-run
 if errorlevel 1 goto unity_failed
 
+:update_unreal
+echo Checking the existing Unreal Agent and RAG runtimes...
+if "%UPDATE_DRY_RUN%"=="1" goto check_unreal
+%PYTHON_CMD% scripts\update_unreal_mcp.py --mcp-config "%MCP_CONFIG%" --if-present
+if errorlevel 1 goto unreal_failed
+goto update_plugin
+
+:check_unreal
+%PYTHON_CMD% scripts\update_unreal_mcp.py --mcp-config "%MCP_CONFIG%" --if-present --dry-run
+if errorlevel 1 goto unreal_failed
+
 :update_plugin
-echo Updating the context compactor plugin only...
+echo Updating the context compactor plugin...
 set "INSTALL_NO_PAUSE=1"
 if "%UPDATE_DRY_RUN%"=="1" goto check_plugin
 call "%SCRIPT_DIR%INSTALL.bat" --profile custom --components context_compactor --yes
@@ -84,7 +95,7 @@ set "UPDATE_EXIT=2"
 goto finish
 
 :config_missing
-echo Unity MCP config not found: "%MCP_CONFIG%" 1>&2
+echo MCP config not found: "%MCP_CONFIG%" 1>&2
 echo Pass the existing mcp.json path as the final argument. 1>&2
 set "UPDATE_EXIT=2"
 goto finish
@@ -96,6 +107,11 @@ goto finish
 
 :unity_failed
 echo Unity MCP update check failed. The context compactor was not reinstalled. 1>&2
+set "UPDATE_EXIT=1"
+goto finish
+
+:unreal_failed
+echo Unreal Agent/RAG update check failed. The context compactor was not reinstalled. 1>&2
 set "UPDATE_EXIT=1"
 goto finish
 
