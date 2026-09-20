@@ -11,6 +11,7 @@ const { runOneToolRound } = require("../dist/round-loop.js");
 const { ContinuityNoteStore, NOTE_MARKER } = require("../dist/continuity-model-notes.js");
 const { ASSISTANT_MARKER } = require("../dist/continuity-assistant-evidence.js");
 const inputAvailability = require("../dist/input-availability.js");
+const availabilityEval = require("../scripts/availability-eval-core.cjs");
 
 function fakeController(history, tokenSource, overrides = {}, tools = []) {
   const blocks = [];
@@ -107,7 +108,9 @@ test("prediction loop calls the directly selected model with compacted history",
   assert.doesNotMatch(receivedHistory.toString(), /old old old old old/);
   assert.equal(ctl.blocks.at(-1).text, "direct answer");
   assert.equal(ctl.session.disposed, true);
-  assert.equal(ctl.debugValues.find(value => value.event === "direct_context_measurement").compacted, true);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.compacted, true);
+  assert.equal(measurement.compactionAppliedCount, 1);
 });
 
 test("low-pressure history passes through without proxy model selection or sampling overrides", async () => {
@@ -860,6 +863,116 @@ test("tool rounds are captured once, remeasured, and compacted before the next a
   }
   assert.equal(ctl.blocks.at(-1).text, "final report");
   assert.equal(ctl.session.disposed, true);
+});
+
+test("pressure trace measures eviction and historical reacquisition against the causal input", async () => {
+  const history = Chat.from([{ role: "user", content: "Cross-check the synthetic settlement audit." }]);
+  const projectIdentity = "C:\\Synthetic\\Audit.uproject";
+  const hashA = "a".repeat(64);
+  const hashB = "b".repeat(64);
+  const linesA = Array.from({ length: 1000 }, (_, index) => (
+    `// Guest settlement evidence ${String(index + 1).padStart(4, "0")}: reset and wallet flow context`
+  ));
+  linesA[188] = "dailySales.Reset();";
+  linesA[899] = "playerDataWriter.AddMoney(sessionTotal);";
+  const linesB = Array.from({ length: 80 }, (_, index) => (
+    `// Serialized UI binding evidence ${String(index + 1).padStart(3, "0")}`
+  ));
+  linesB[39] = "m_PersistentCalls: UICashPanel.AddCurrency";
+  const payload = (pathName, hash, sourceLines, startLine, endLine) => ({
+    ok: true,
+    projectIdentity,
+    path: pathName,
+    sha256: hash,
+    startLine,
+    endLine,
+    totalLines: sourceLines.length,
+    returnedLineCount: endLine - startLine + 1,
+    content: sourceLines.slice(startLine - 1, endLine).join("\n"),
+  });
+  const payloadA = payload("Source/GuestManager.cs", hashA, linesA, 1, 1000);
+  const payloadB = payload("Content/UI.prefab", hashB, linesB, 1, 80);
+  const payloadAReread = payload("Source/GuestManager.cs", hashA, linesA, 21, 60);
+  const tool = {
+    name: "read_file_range",
+    description: "Read an exact synthetic range.",
+    parametersJsonSchema: { type: "object", properties: {
+      path: { type: "string" }, startLine: { type: "integer" }, endLine: { type: "integer" },
+    }, required: ["path", "startLine", "endLine"], additionalProperties: false },
+    pluginIdentifier: "mcp/unreal-agent",
+  };
+  const modelInputs = new Map();
+  const calls = [];
+  let actCount = 0;
+  let ctl;
+  const emitRead = async (options, callId, requestId, requestArgs, resultPayload, causalModelInputId) => {
+    const request = { id: requestId, type: "function", name: tool.name, arguments: requestArgs };
+    await options.guardToolCall(0, callId, {
+      toolCallRequest: request,
+      allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); },
+    });
+    options.onToolCallRequestFinalized(0, callId, { toolCallRequest: request });
+    options.onMessage(ChatMessage.from({ role: "assistant", content: [
+      { type: "toolCallRequest", toolCallRequest: request },
+    ] }));
+    options.onMessage(ChatMessage.from({ role: "tool", content: [
+      { type: "toolCallResult", toolCallId: requestId, content: JSON.stringify(resultPayload) },
+    ] }));
+    calls.push({ callKey: requestId, causalModelInputId, executionState: "succeeded", payload: resultPayload });
+    options.onRoundEnd(0);
+    throw options.signal.reason;
+  };
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async getContextLength() { return 40000; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(prompt) { return Math.ceil(prompt.length / 4); },
+    async act(chat, _tools, options) {
+      actCount += 1;
+      const measurement = ctl.debugValues.filter(value => value.event === "direct_context_measurement").at(-1);
+      modelInputs.set(measurement.modelInputId, Chat.from(chat));
+      if (actCount === 1) return emitRead(options, 201, "read-a", {
+        path: payloadA.path, startLine: 1, endLine: 1000,
+      }, payloadA, measurement.modelInputId);
+      if (actCount === 2) return emitRead(options, 202, "read-b", {
+        path: payloadB.path, startLine: 1, endLine: 80,
+      }, payloadB, measurement.modelInputId);
+      if (actCount === 3) return emitRead(options, 203, "reread-a", {
+        path: payloadA.path, startLine: 21, endLine: 60,
+      }, payloadAReread, measurement.modelInputId);
+      options.onMessage(ChatMessage.create("assistant", "final bounded report"));
+      options.onRoundEnd(0);
+      return {};
+    },
+  };
+  ctl = fakeController(history, selectedModel, {
+    compactAboveMessageCount: 4,
+    softRemainingTokens: 39000,
+    hardRemainingTokens: 1000,
+    maxOutputReserve: 1000,
+    safetyMarginTokens: 500,
+    recentCompleteTurns: 0,
+    maxCheckpointChars: 5000,
+    maxToolResultChars: 800,
+    inputAvailabilityMode: "observe",
+  }, [tool]);
+  await handlePredictionLoop(ctl);
+
+  const measurements = ctl.debugValues.filter(value => value.event === "direct_context_measurement");
+  assert.equal(actCount, 4);
+  assert.ok(measurements.reduce((sum, value) => sum + value.compactionAppliedCount, 0) >= 2);
+  const causalThirdInput = modelInputs.get(calls[2].causalModelInputId);
+  const thirdRaw = availabilityEval.oracleProjection(causalThirdInput, [
+    availabilityEval.oracleObservation(payloadA),
+    availabilityEval.oracleObservation(payloadB),
+  ]);
+  const aAtThirdInput = thirdRaw.find(entry => entry.path === payloadA.path);
+  assert.equal(aAtThirdInput.rawPresence, "none");
+  const measured = availabilityEval.evaluateCausalCalls({ initialMessages: history, modelInputs, calls });
+  const thirdCall = measured.perCall.find(call => call.callKey === "reread-a");
+  assert.equal(thirdCall.inputOverlapUnits, 0);
+  assert.equal(thirdCall.historicalReacquisitionUnits, 40);
+  assert.equal(thirdCall.newEvidenceUnits, 0);
 });
 
 test("pause policy stops before a fourth equivalent tool round", async () => {

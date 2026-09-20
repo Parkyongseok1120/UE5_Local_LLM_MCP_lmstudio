@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Chat, ChatMessage, LMStudioClient, rawFunctionTool } = require("@lmstudio/sdk");
 const { createPredictionLoopHandler } = require("../dist/prediction-loop.js");
+const evalCore = require("./availability-eval-core.cjs");
 
 const SOURCE_LINES = [
   'public const string SettlementOwner = "DailySales";',
@@ -32,6 +33,17 @@ const TOOL_SCHEMA = {
   required: ["path"],
   additionalProperties: false,
 };
+
+const {
+  auditAnswerMatchesOracle,
+  answerMatchesOracle,
+  calculateReadMetrics,
+  evaluateCausalCalls,
+  oracleObservation,
+  oracleObservationsFromMessages,
+  oracleProjection,
+  projectionMatchesOracle,
+} = evalCore;
 
 function valueAfter(flag, fallback = "") {
   const index = process.argv.indexOf(flag);
@@ -70,7 +82,7 @@ function initialHistory() {
   return { history, payload };
 }
 
-function controller(history, tokenSource, tool, mode) {
+function controller(history, tokenSource, tool, mode, recorder, configOverrides = {}) {
   const blocks = [];
   const debugValues = [];
   const statuses = [];
@@ -96,6 +108,7 @@ function controller(history, tokenSource, tool, mode) {
     inputAvailabilityMode: mode,
     reviewProgress: false,
     separateAttachments: false,
+    ...configOverrides,
   };
   const session = { tools: [tool], [Symbol.dispose]() {} };
   return {
@@ -107,7 +120,10 @@ function controller(history, tokenSource, tool, mode) {
     async tokenSource() { return tokenSource; },
     async startToolUseSession() { return session; },
     async requestConfirmToolCall() { return { type: "allow" }; },
-    debug(value) { debugValues.push(value); },
+    debug(value) {
+      debugValues.push(value);
+      if (value?.event === "direct_context_measurement") recorder.latestMeasurement = value;
+    },
     createStatus(initial) {
       const status = { initial, texts: [], states: [], removed: false };
       statuses.push(status);
@@ -136,13 +152,19 @@ function controller(history, tokenSource, tool, mode) {
 async function oneRun(model, modelInfo, group, phase, pairIndex, seed) {
   const mode = group === "A" ? "observe" : "inject";
   const { history, payload } = initialHistory();
-  const toolCalls = [];
+  const recorder = { latestMeasurement: null, activeModelInputId: null, modelInputs: new Map(), calls: [] };
   const tool = rawFunctionTool({
     name: "read_file",
     description: "Read the exact two-line synthetic fixture. Calling it is always allowed but is never automatic.",
     parametersJsonSchema: TOOL_SCHEMA,
     implementation: async (args) => {
-      toolCalls.push({ argsFingerprint: crypto.createHash("sha256").update(JSON.stringify(args)).digest("hex") });
+      recorder.calls.push({
+        callKey: `smoke:${phase}:${pairIndex}:${group}:${recorder.calls.length}`,
+        causalModelInputId: recorder.activeModelInputId,
+        executionState: "succeeded",
+        argsFingerprint: crypto.createHash("sha256").update(JSON.stringify(args)).digest("hex"),
+        payload,
+      });
       return payload;
     },
   });
@@ -151,14 +173,19 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed) {
     getContextLength: () => model.getContextLength(),
     applyPromptTemplate: (chat, options) => model.applyPromptTemplate(chat, options),
     countTokens: text => model.countTokens(text),
-    act: (chat, tools, options) => model.act(chat, tools, {
-      ...options,
-      temperature: 0,
-      seed,
-      maxTokens: 1200,
-    }),
+    act: (chat, tools, options) => {
+      const modelInputId = recorder.latestMeasurement?.modelInputId || `unmatched:${recorder.modelInputs.size}`;
+      recorder.activeModelInputId = modelInputId;
+      recorder.modelInputs.set(modelInputId, Chat.from(chat));
+      return model.act(chat, tools, {
+        ...options,
+        temperature: 0,
+        seed,
+        maxTokens: 1200,
+      });
+    },
   };
-  const ctl = controller(history, fixedModel, tool, mode);
+  const ctl = controller(history, fixedModel, tool, mode, recorder);
   const started = Date.now();
   let error = null;
   try {
@@ -170,11 +197,37 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed) {
     .filter(block => block.options?.style?.type !== "thinking")
     .map(block => block.text).join("").trim();
   const measurements = ctl.debugValues.filter(value => value.event === "direct_context_measurement");
-  const measurement = measurements.at(-1);
   const rounds = ctl.debugValues.filter(value => value.event === "direct_round_observation");
-  const successReads = toolCalls.length;
-  const returnedLines = successReads * SOURCE_LINES.length;
-  const inputOverlapLines = returnedLines;
+  const causalMetrics = evaluateCausalCalls({
+    initialMessages: history,
+    modelInputs: recorder.modelInputs,
+    calls: recorder.calls,
+  });
+  const lineMetrics = causalMetrics.byUnit.line || {
+    returnedUnits: 0,
+    inputOverlapUnits: 0,
+    historicalReacquisitionUnits: 0,
+    newEvidenceUnits: 0,
+    overlapRate: null,
+  };
+  const historical = oracleObservationsFromMessages(history).filter(item => item.verified);
+  const availabilityComparisons = [];
+  for (const measurement of measurements) {
+    const input = recorder.modelInputs.get(measurement.modelInputId);
+    const oracleEntries = input ? oracleProjection(input, historical) : [];
+    const comparison = projectionMatchesOracle(
+      measurement.inputAvailability?.entries || [], oracleEntries,
+    );
+    availabilityComparisons.push({
+      modelInputId: measurement.modelInputId,
+      ...comparison,
+    });
+    for (const call of recorder.calls.filter(item => item.causalModelInputId === measurement.modelInputId)) {
+      const observation = oracleObservation(call.payload);
+      if (call.executionState === "succeeded" && observation?.verified) historical.push(observation);
+    }
+  }
+  const answerEvaluation = answerMatchesOracle(visibleAnswer);
   return {
     phase,
     pairIndex,
@@ -187,23 +240,39 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed) {
     loadedContextLength: modelInfo.contextLength || null,
     elapsedMs: Date.now() - started,
     predictionRounds: rounds.length,
-    compactionCount: measurements.filter(value => value.compacted === true).length,
-    actualSuccessfulReads: successReads,
-    returnedLines,
-    inputOverlapLines,
-    inInputReturnOverlap: returnedLines ? inputOverlapLines / returnedLines : null,
-    historicalReacquisitionLines: 0,
-    metadataTokens: measurement?.inputAvailability?.metadataTokens ?? null,
-    finalInputTokens: measurement?.finalInputTokens ?? null,
-    groundedFinalAnswer: /DailySales/u.test(visibleAnswer) && /\btrue\b/iu.test(visibleAnswer),
-    availabilityProjectionMatchesOracle: measurement?.inputAvailability?.entries?.[0]?.rawPresence === "full",
+    compressedPredictionCount: measurements.filter(value => value.compactionAppliedCount > 0).length,
+    compactionCount: measurements.reduce((sum, value) => sum + Number(value.compactionAppliedCount || 0), 0),
+    actualSuccessfulReads: causalMetrics.statusCounts.succeeded,
+    returnedLines: lineMetrics.returnedUnits,
+    inputOverlapLines: lineMetrics.inputOverlapUnits,
+    inInputReturnOverlap: lineMetrics.overlapRate,
+    historicalReacquisitionLines: lineMetrics.historicalReacquisitionUnits,
+    newEvidenceLines: lineMetrics.newEvidenceUnits,
+    rangeMetricsByUnit: causalMetrics.byUnit,
+    callMetrics: causalMetrics.perCall,
+    callStatusCounts: causalMetrics.statusCounts,
+    excludedMetricCallCount: causalMetrics.excludedCallCount,
+    metadataTokens: measurements.reduce((sum, value) => (
+      sum + Number(value.inputAvailability?.metadataTokens || 0)
+    ), 0),
+    finalInputTokens: measurements.at(-1)?.finalInputTokens ?? null,
+    modelInputs: measurements.map(value => ({
+      modelInputId: value.modelInputId,
+      finalInputTokens: value.finalInputTokens,
+      metadataTokens: value.inputAvailability?.metadataTokens ?? null,
+      compactionAppliedCount: value.compactionAppliedCount,
+      compactionAppliedModes: value.compactionAppliedModes,
+    })),
+    groundedFinalAnswer: answerEvaluation.pass,
+    answerEvaluation,
+    availabilityProjectionMatchesOracle: availabilityComparisons.every(item => item.matches),
+    availabilityComparisons,
     visibleAnswer,
     error,
     trace: {
-      executionId: measurement?.executionId || null,
-      modelInputId: measurement?.modelInputId || null,
-      rawPresence: measurement?.inputAvailability?.entries?.[0]?.rawPresence || null,
-      hostInputVerification: measurement?.inputAvailability?.hostInputVerification || null,
+      executionId: measurements.at(-1)?.executionId || null,
+      modelInputId: measurements.at(-1)?.modelInputId || null,
+      hostInputVerification: measurements.at(-1)?.inputAvailability?.hostInputVerification || null,
       roundFinishReasons: rounds.map(round => round.finishReason),
     },
   };
@@ -316,7 +385,20 @@ async function main() {
   if (runs.some(run => run.error)) process.exitCode = 1;
 }
 
-main().catch(error => {
-  console.error(error?.stack || error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(error => {
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  auditAnswerMatchesOracle,
+  answerMatchesOracle,
+  calculateReadMetrics,
+  evaluateCausalCalls,
+  oracleObservation,
+  oracleObservationsFromMessages,
+  oracleProjection,
+  projectionMatchesOracle,
+};

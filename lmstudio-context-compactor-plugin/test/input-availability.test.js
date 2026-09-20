@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const {
   projectInputAvailability,
+  rawObservation,
   renderInputAvailabilityMetadata,
   traceToolRound,
 } = require("../dist/input-availability.js");
@@ -192,4 +193,72 @@ test("worktree and commit-blob adapters preserve the same range contract", () =>
   const projected = projectInputAvailability(messages, [], { modelInputId: "exec-a:prediction-20" });
   assert.deepEqual(projected.entries.map(entry => entry.sourceType), ["worktree", "commit_blob"]);
   assert.ok(projected.entries.every(entry => entry.rawPresence === "full"));
+});
+
+test("verified and bodyless ranges with the same key never promote the bodyless range", () => {
+  const verifiedBody = Array.from({ length: 20 }, (_, index) => `verified ${index + 1}`).join("\n");
+  const messages = [
+    result("verified", worktreePayload({ startLine: 1, endLine: 20, totalLines: 40,
+      returnedLineCount: 20, content: verifiedBody })),
+    result("bodyless", worktreePayload({ startLine: 21, endLine: 40, totalLines: 40,
+      returnedLineCount: 20, content: undefined })),
+  ];
+  const projected = projectInputAvailability(messages, [historyRange({ ranges: [[1, 40]], total: 40 })],
+    { modelInputId: "exec-a:prediction-verified-only" });
+  assert.deepEqual(projected.entries[0].rawRangesInThisInput, [[1, 20]]);
+  assert.equal(projected.entries[0].rawPresence, "partial");
+  assert.equal(projected.metrics.unverifiableRawObservationCount, 1);
+});
+
+test("Unreal UTF-8 byte windows keep byte units without inventing line ranges", () => {
+  const content = "한글\r\n🙂";
+  const byteLength = Buffer.byteLength(content, "utf8");
+  const projected = projectInputAvailability([result("bytes", {
+    ok: true,
+    activeProject: "C:\\Game\\Game.uproject",
+    path: "project://Config/Utf8.ini",
+    sha256: HASH_A,
+    size: byteLength + 20,
+    offsetBytes: 0,
+    nextOffsetBytes: byteLength,
+    hasMore: true,
+    content,
+  })], [], { modelInputId: "exec-a:prediction-bytes" });
+  assert.equal(projected.entries[0].rangeUnit, "utf8_byte");
+  assert.deepEqual(projected.entries[0].rawRangesInThisInput, [[0, byteLength - 1]]);
+  assert.equal(projected.entries[0].rawPresence, "full");
+});
+
+test("Unreal byte windows reject a decoded body that cannot prove the reported byte span", () => {
+  const malformed = rawObservation({
+    ok: true,
+    activeProject: "C:\\Game\\Game.uproject",
+    path: "project://Config/Utf8.ini",
+    sha256: HASH_A,
+    size: 10,
+    offsetBytes: 1,
+    nextOffsetBytes: 4,
+    content: "�",
+  });
+  assert.equal(malformed.rangeUnit, "utf8_byte");
+  assert.equal(malformed.rawVerified, false);
+  assert.equal(malformed.bodyState, "byte_body_mismatch");
+});
+
+test("an exact empty Unreal byte response is a verified full empty file", () => {
+  const projected = projectInputAvailability([result("empty", {
+    ok: true,
+    activeProject: "C:\\Game\\Game.uproject",
+    path: "project://Config/Empty.ini",
+    sha256: HASH_B,
+    size: 0,
+    offsetBytes: 0,
+    nextOffsetBytes: 0,
+    hasMore: false,
+    content: "",
+  })], [], { modelInputId: "exec-a:prediction-empty" });
+  assert.equal(projected.entries[0].rangeUnit, "utf8_byte");
+  assert.deepEqual(projected.entries[0].rawRangesInThisInput, []);
+  assert.equal(projected.entries[0].rawPresence, "full");
+  assert.equal(projected.entries[0].bodyVerification, "exact_empty_body");
 });

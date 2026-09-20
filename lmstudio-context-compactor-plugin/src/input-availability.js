@@ -98,8 +98,10 @@ function rawObservation(payload) {
   const body = bodyField(payload);
   let rangeUnit;
   let ranges = [];
+  let verifiedRanges = [];
   let total = null;
   let bodyMatchesRange = false;
+  let emptyVerified = false;
   if (sourceType === "attachment") {
     const start = nonNegativeInteger(payload.startOffset);
     const endExclusive = nonNegativeInteger(payload.endOffset);
@@ -108,6 +110,21 @@ function rawObservation(payload) {
     if (start !== null && endExclusive !== null && endExclusive > start) {
       ranges = [[start, endExclusive - 1]];
       bodyMatchesRange = body !== null && body.length === endExclusive - start;
+      if (bodyMatchesRange) verifiedRanges = ranges;
+    }
+  } else if (payload.offsetBytes !== undefined || payload.nextOffsetBytes !== undefined) {
+    const start = nonNegativeInteger(payload.offsetBytes);
+    const endExclusive = nonNegativeInteger(payload.nextOffsetBytes);
+    total = nonNegativeInteger(payload.size);
+    rangeUnit = "utf8_byte";
+    if (start !== null && endExclusive !== null && endExclusive >= start
+      && total !== null && start <= total && endExclusive <= total) {
+      const expected = endExclusive - start;
+      bodyMatchesRange = body !== null && !body.includes("\uFFFD")
+        && Buffer.byteLength(body, "utf8") === expected;
+      emptyVerified = bodyMatchesRange && expected === 0 && total === 0;
+      if (endExclusive > start) ranges = [[start, endExclusive - 1]];
+      if (bodyMatchesRange) verifiedRanges = ranges;
     }
   } else {
     const start = positiveInteger(payload.startLine);
@@ -121,8 +138,17 @@ function rawObservation(payload) {
       const reported = payload.returnedLineCount === undefined
         ? expected : nonNegativeInteger(payload.returnedLineCount);
       bodyMatchesRange = actual === expected && reported === expected;
+      if (bodyMatchesRange) verifiedRanges = ranges;
     }
   }
+  const rawVerified = Boolean(identity && path && versionRef
+    && (verifiedRanges.length > 0 || emptyVerified));
+  let bodyState;
+  if (body === null) bodyState = "absent";
+  else if (emptyVerified) bodyState = "exact_empty_body";
+  else if (bodyMatchesRange) bodyState = rangeUnit === "utf8_byte"
+    ? "exact_byte_body" : "exact_range_body";
+  else bodyState = rangeUnit === "utf8_byte" ? "byte_body_mismatch" : "range_body_mismatch";
   return {
     sourceType,
     projectIdentity: identity,
@@ -131,9 +157,11 @@ function rawObservation(payload) {
     versionRef,
     rangeUnit,
     ranges: normalizeRanges(ranges),
+    verifiedRanges: normalizeRanges(verifiedRanges),
     total,
-    rawVerified: Boolean(identity && path && versionRef && ranges.length && bodyMatchesRange),
-    bodyState: body === null ? "absent" : bodyMatchesRange ? "exact_range_body" : "range_body_mismatch",
+    rawVerified,
+    emptyVerified,
+    bodyState,
     revisionRef: sourceType === "commit_blob" ? String(payload.head || payload.revision || "") : "",
     blobRef: sourceType === "commit_blob" ? String(payload.blobOid || "") : "",
   };
@@ -141,6 +169,7 @@ function rawObservation(payload) {
 
 function historicalObservation(item) {
   if (!isRecord(item)) return null;
+  if (item.rawVerified === false) return null;
   const sourceType = ["worktree", "commit_blob", "attachment"].includes(item.sourceType)
     ? item.sourceType : classifyPayload(item);
   if (!sourceType) return null;
@@ -233,13 +262,26 @@ function mergeObservations(items) {
     if (!item) continue;
     const key = observationKey(item);
     const previous = merged.get(key);
-    if (!previous) merged.set(key, { ...item, ranges: normalizeRanges(item.ranges) });
+    if (!previous) merged.set(key, {
+      ...item,
+      ranges: normalizeRanges(item.ranges),
+      verifiedRanges: normalizeRanges(item.verifiedRanges
+        || (item.rawVerified === true ? item.ranges : [])),
+    });
     else merged.set(key, {
       ...previous,
       ...item,
       ranges: normalizeRanges([...(previous.ranges || []), ...(item.ranges || [])]),
+      verifiedRanges: normalizeRanges([
+        ...(previous.verifiedRanges || []),
+        ...(item.verifiedRanges || (item.rawVerified === true ? item.ranges || [] : [])),
+      ]),
       rawVerified: previous.rawVerified === true || item.rawVerified === true,
-      bodyState: item.rawVerified ? item.bodyState : previous.bodyState || item.bodyState,
+      emptyVerified: previous.emptyVerified === true || item.emptyVerified === true,
+      bodyState: previous.rawVerified === true && item.rawVerified === false
+        || previous.rawVerified === false && item.rawVerified === true
+        ? "mixed_verified_and_unverified_bodies"
+        : item.rawVerified ? item.bodyState : previous.bodyState || item.bodyState,
     });
   }
   return [...merged.values()];
@@ -249,16 +291,18 @@ function projectInputAvailability(messages, historicalItems = [], options = {}) 
   const modelInputId = String(options.modelInputId || "unknown");
   const maxEntries = Math.max(1, Math.min(128, Number(options.maxEntries || MAX_ENTRIES)));
   const historical = mergeObservations((historicalItems || []).map(historicalObservation).filter(Boolean));
-  const current = mergeObservations(currentRawObservations(messages));
+  const currentItems = currentRawObservations(messages);
+  const current = mergeObservations(currentItems);
   const combined = mergeObservations([...historical, ...current]);
   const entries = combined.map((basis) => {
     const historicalMatch = historical.find((item) => observationKey(item) === observationKey(basis));
     const currentMatch = current.find((item) => observationKey(item) === observationKey(basis));
     const historicalRanges = normalizeRanges(historicalMatch?.ranges?.length
-      ? historicalMatch.ranges : currentMatch?.ranges || []);
-    const rawRanges = currentMatch?.rawVerified ? normalizeRanges(currentMatch.ranges) : [];
+      ? historicalMatch.ranges : currentMatch?.verifiedRanges || []);
+    const rawRanges = currentMatch?.rawVerified ? normalizeRanges(currentMatch.verifiedRanges) : [];
     let rawPresence;
-    if (currentMatch && !currentMatch.rawVerified) rawPresence = "unknown";
+    if (currentMatch?.rawVerified && currentMatch.emptyVerified && currentMatch.total === 0) rawPresence = "full";
+    else if (currentMatch && !currentMatch.rawVerified) rawPresence = "unknown";
     else if (!currentMatch || rawRanges.length === 0) rawPresence = basis.projectIdentity
       && basis.path && basis.versionRef ? "none" : "unknown";
     else if (historicalRanges.length > 0 && historicalRanges.every((range) => rangeContains(rawRanges, range))) {
@@ -292,8 +336,8 @@ function projectInputAvailability(messages, historicalItems = [], options = {}) 
     omittedEntryCount: Math.max(0, entries.length - selected.length),
     entryListComplete: entries.length <= selected.length,
     metrics: {
-      currentRawObservationCount: current.filter((item) => item.rawVerified).length,
-      unverifiableRawObservationCount: current.filter((item) => !item.rawVerified).length,
+      currentRawObservationCount: currentItems.filter((item) => item.rawVerified).length,
+      unverifiableRawObservationCount: currentItems.filter((item) => !item.rawVerified).length,
     },
   };
 }
@@ -364,6 +408,7 @@ function traceToolRound(messages, options = {}) {
           path: observation.path,
           versionRef: observation.versionRef || null,
           returnedRanges: observation.ranges,
+          verifiedRawRanges: observation.verifiedRanges,
         } : {}),
       });
       resultOrdinal += 1;

@@ -1,0 +1,1160 @@
+{
+  "experiment": "compressed-audit-metadata-A-B-and-user-contract-A-C",
+  "generatedAt": "2026-09-20T19:37:30.232Z",
+  "sourceScope": "repository dist exercised directly; installed plugin and active chats were not modified",
+  "sourceHead": "897d7f76422bd15cd9b0af22f50e4b6d089c0a9e",
+  "sourceWorktreeDirty": true,
+  "packageVersion": "0.4.64",
+  "manifestRevision": 111,
+  "sdkVersion": "1.5.0",
+  "sourceBundleSha256": "febc830f4502ac15110def1d7b1ed89343d5c5a1478d2c452e3d404d80364339",
+  "fixture": {
+    "fileCount": 8,
+    "projectIdentity": "C:\\SyntheticAudit\\AuditProject.uproject",
+    "fileVersions": [
+      {
+        "path": "Assets/03.Scripts/Tycoon/GuestManager.cs",
+        "sha256": "b9ba2f125f79569ce6b16ec45e298f7bf19fe907c38d1eeea551ec4f48fcc4d4",
+        "totalLines": 1056
+      },
+      {
+        "path": "Assets/03.Scripts/Tycoon/DailySales.cs",
+        "sha256": "3c91630a93af75dd6a13e014538e46b73898a8c32679e223f828728272c31955",
+        "totalLines": 180
+      },
+      {
+        "path": "Assets/03.Scripts/Player/PlayerDataSO.cs",
+        "sha256": "e6895dfdca03b12ec84c4031d93fd9266cd537390ccfdfb76d3b91be3685d12d",
+        "totalLines": 220
+      },
+      {
+        "path": "Assets/03.Scripts/UI/UICashPanel.cs",
+        "sha256": "faab6191279c1cca0a663fc78f190844a72b599182ffdfe59caa23c7295a79e6",
+        "totalLines": 200
+      },
+      {
+        "path": "Assets/ProjectLifeScope.prefab",
+        "sha256": "8fb648f3f01bf79fcbff4610c4645b5254a6c752bb7da73dabe2aa02f7a6387b",
+        "totalLines": 240
+      },
+      {
+        "path": "Assets/03.Scripts/Event/GameEvent.cs",
+        "sha256": "3607cb1a8999a1cc0b3ea592881bebaf744718a08bbcda4da1bb4cf212fe7e19",
+        "totalLines": 150
+      },
+      {
+        "path": "Assets/03.Scripts/Tycoon/SettlementFlow.cs",
+        "sha256": "728f601b4adb439712c1b388b8a7aa80eef34fc70cdc0fae5c5cc4774543b43e",
+        "totalLines": 180
+      },
+      {
+        "path": "Evidence/RuntimeObservation.md",
+        "sha256": "1bdb7779ac33c61fc69c86b2b7567aa759d5da6b256da0af5edf272228e6c068",
+        "totalLines": 90
+      }
+    ],
+    "systemPromptSha256": "23558d787c18043f1d78bce39199a95d483257d58a33c42564ff24ff498ef5d9",
+    "auditQuestionSha256": "8683db6fbb7d3c3fc06883a0ff16f2cfa8acc569595b4c4430e9ced9b4292c32",
+    "toolSchemaSha256": "46d039d88d52536c716be1f728b0957a36955170f72b4f2231576476fdd7accd",
+    "deliberatelyFailedInitialRead": "Assets/03.Scripts/UI/MissingCashPanel.cs",
+    "retainedCurrentRaw": "Assets/03.Scripts/Event/GameEvent.cs:1-150"
+  },
+  "model": {
+    "identifier": "swift-qwen3.8-27b",
+    "path": "ukisai/Swift-Qwen3.8-27B-GGUF/Swift-Qwen3.8-27B-Q4_K_S.gguf",
+    "quantization": {
+      "name": "Q4_K_S",
+      "bits": 4
+    },
+    "loadedContextLength": 66816,
+    "maxContextLength": 262144,
+    "temperature": 0,
+    "maxTokens": 1800,
+    "seedPolicy": "same seed within each comparison pair"
+  },
+  "groups": {
+    "A": "Observe metadata mode; base audit prompt",
+    "B": "Inject metadata mode; otherwise identical to A",
+    "C": "Observe metadata mode; user-selected AUDIT_TASK_CONTRACT appended to system prompt"
+  },
+  "comparisons": {
+    "metadataAB": {
+      "pilotExposureSatisfied": false,
+      "requestedMainPairs": 0,
+      "completedMainPairs": 0,
+      "A": {
+        "n": 0,
+        "pressureExposureRuns": 0,
+        "successfulRuns": 0,
+        "errors": 0,
+        "totalCompactions": 0,
+        "generatedToolCalls": 0,
+        "historicalReacquisitionLines": 0,
+        "groundedAnswers": 0,
+        "answerScores": [],
+        "oracleProjectionMatches": 0,
+        "elapsedMs": []
+      },
+      "B": {
+        "n": 0,
+        "pressureExposureRuns": 0,
+        "successfulRuns": 0,
+        "errors": 0,
+        "totalCompactions": 0,
+        "generatedToolCalls": 0,
+        "historicalReacquisitionLines": 0,
+        "groundedAnswers": 0,
+        "answerScores": [],
+        "oracleProjectionMatches": 0,
+        "elapsedMs": []
+      }
+    },
+    "auditInstructionsAC": {
+      "exploratory": true,
+      "requestedPairs": 0,
+      "completedPairs": 0,
+      "A": {
+        "n": 0,
+        "pressureExposureRuns": 0,
+        "successfulRuns": 0,
+        "errors": 0,
+        "totalCompactions": 0,
+        "generatedToolCalls": 0,
+        "historicalReacquisitionLines": 0,
+        "groundedAnswers": 0,
+        "answerScores": [],
+        "oracleProjectionMatches": 0,
+        "elapsedMs": []
+      },
+      "C": {
+        "n": 0,
+        "pressureExposureRuns": 0,
+        "successfulRuns": 0,
+        "errors": 0,
+        "totalCompactions": 0,
+        "generatedToolCalls": 0,
+        "historicalReacquisitionLines": 0,
+        "groundedAnswers": 0,
+        "answerScores": [],
+        "oracleProjectionMatches": 0,
+        "elapsedMs": []
+      }
+    }
+  },
+  "pilot": {
+    "A": {
+      "n": 1,
+      "pressureExposureRuns": 1,
+      "successfulRuns": 1,
+      "errors": 0,
+      "totalCompactions": 1,
+      "generatedToolCalls": 22,
+      "historicalReacquisitionLines": 0,
+      "groundedAnswers": 0,
+      "answerScores": [
+        2
+      ],
+      "oracleProjectionMatches": 1,
+      "elapsedMs": [
+        155266
+      ]
+    },
+    "B": {
+      "n": 1,
+      "pressureExposureRuns": 1,
+      "successfulRuns": 0,
+      "errors": 1,
+      "totalCompactions": 1,
+      "generatedToolCalls": 6,
+      "historicalReacquisitionLines": 1090,
+      "groundedAnswers": 0,
+      "answerScores": [
+        1
+      ],
+      "oracleProjectionMatches": 1,
+      "elapsedMs": [
+        96061
+      ]
+    }
+  },
+  "runs": [
+    {
+      "phase": "pilot",
+      "pairIndex": 1,
+      "group": "A",
+      "mode": "observe",
+      "auditContractSelected": false,
+      "seed": 4101,
+      "modelIdentifier": "swift-qwen3.8-27b",
+      "modelPath": "ukisai/Swift-Qwen3.8-27B-GGUF/Swift-Qwen3.8-27B-Q4_K_S.gguf",
+      "quantization": "Q4_K_S",
+      "loadedContextLength": 66816,
+      "elapsedMs": 155266,
+      "predictionRounds": 12,
+      "compressedPredictionCount": 1,
+      "compactionCount": 1,
+      "firstInputCurrentFullCount": 1,
+      "firstInputCurrentPartialCount": 0,
+      "firstInputCurrentAbsentCount": 7,
+      "pressureExposure": true,
+      "generatedToolCalls": 22,
+      "callStatusCounts": {
+        "succeeded": 0,
+        "failed": 22,
+        "canceled": 0,
+        "unknown": 0
+      },
+      "rangeMetricsByUnit": {},
+      "callMetrics": [
+        {
+          "callKey": "pilot:1:A:1",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-1",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Settlement/SettlementManager.cs",
+            "startLine": 1,
+            "endLine": 240
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Settlement/SettlementManager.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:2",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-1",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Economy/CashSystem.cs",
+            "startLine": 1,
+            "endLine": 200
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Economy/CashSystem.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:3",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-2",
+          "executionState": "failed",
+          "args": {
+            "path": "audit_manifest.json",
+            "startLine": 1,
+            "endLine": 100
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: audit_manifest.json"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:4",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-2",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Settlement/DailySettlement.cs",
+            "startLine": 1,
+            "endLine": 240
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Settlement/DailySettlement.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:5",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-3",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Settlement/SettlementController.cs",
+            "startLine": 1,
+            "endLine": 240
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Settlement/SettlementController.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:6",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-3",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Cash/CashSystem.cs",
+            "startLine": 1,
+            "endLine": 200
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Cash/CashSystem.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:7",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-4",
+          "executionState": "failed",
+          "args": {
+            "path": "README.md",
+            "startLine": 1,
+            "endLine": 120
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: README.md"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:8",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-4",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/UI/CashPanel.cs",
+            "startLine": 1,
+            "endLine": 200
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/UI/CashPanel.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:9",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-5",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Settlement/Settlement.cs",
+            "startLine": 1,
+            "endLine": 240
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Settlement/Settlement.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:10",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-5",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Money/MoneyManager.cs",
+            "startLine": 1,
+            "endLine": 200
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Money/MoneyManager.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:11",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-6",
+          "executionState": "failed",
+          "args": {
+            "path": "AUDIT.md",
+            "startLine": 1,
+            "endLine": 120
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: AUDIT.md"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:12",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-6",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Settlement/PaymentFlow.cs",
+            "startLine": 1,
+            "endLine": 240
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Settlement/PaymentFlow.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:13",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-7",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/SettlementManager.cs",
+            "startLine": 1,
+            "endLine": 240
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/SettlementManager.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:14",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-7",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/CashSystem.cs",
+            "startLine": 1,
+            "endLine": 200
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/CashSystem.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:15",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-8",
+          "executionState": "failed",
+          "args": {
+            "path": "RuntimeReport.txt",
+            "startLine": 1,
+            "endLine": 90
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: RuntimeReport.txt"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:16",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-8",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/Prefabs/MoneyHUD.prefab",
+            "startLine": 1,
+            "endLine": 200
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/Prefabs/MoneyHUD.prefab"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:17",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-9",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Economy/Wallet.cs",
+            "startLine": 1,
+            "endLine": 200
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Economy/Wallet.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:18",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-9",
+          "executionState": "failed",
+          "args": {
+            "path": "Logs/runtime_report.log",
+            "startLine": 1,
+            "endLine": 90
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Logs/runtime_report.log"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:19",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-10",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Settlement/SettlementFlow.cs",
+            "startLine": 1,
+            "endLine": 240
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Settlement/SettlementFlow.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:20",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-10",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/02.Prefabs/MoneyHUD.prefab",
+            "startLine": 1,
+            "endLine": 220
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/02.Prefabs/MoneyHUD.prefab"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:21",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-11",
+          "executionState": "failed",
+          "args": {
+            "path": "Assets/03.Scripts/Settlement/CashSettlement.cs",
+            "startLine": 1,
+            "endLine": 240
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Assets/03.Scripts/Settlement/CashSettlement.cs"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        },
+        {
+          "callKey": "pilot:1:A:22",
+          "causalModelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-11",
+          "executionState": "failed",
+          "args": {
+            "path": "Reports/runtime_report.txt",
+            "startLine": 1,
+            "endLine": 90
+          },
+          "payload": {
+            "ok": false,
+            "errorCode": "NOT_FOUND",
+            "message": "Synthetic file not found: Reports/runtime_report.txt"
+          },
+          "measured": false,
+          "excludedReason": "execution_failed"
+        }
+      ],
+      "excludedMetricCallCount": 0,
+      "answerEvaluation": {
+        "pass": false,
+        "score": 2,
+        "maximumScore": 10,
+        "checks": {
+          "resetLocation": false,
+          "addMoneyLocation": false,
+          "settlementDistinction": false,
+          "directSearchNotConclusive": false,
+          "serializedBinding": false,
+          "selfRemoval": true,
+          "lowerRemovalRisk": false,
+          "runtimeUnknown": false,
+          "runtimeMinimum": false,
+          "noRuntimeOverclaim": true
+        },
+        "reasons": [
+          "missing_or_failed:resetLocation",
+          "missing_or_failed:addMoneyLocation",
+          "missing_or_failed:settlementDistinction",
+          "missing_or_failed:directSearchNotConclusive",
+          "missing_or_failed:serializedBinding",
+          "missing_or_failed:lowerRemovalRisk",
+          "missing_or_failed:runtimeUnknown",
+          "missing_or_failed:runtimeMinimum"
+        ],
+        "humanReviewRequired": true
+      },
+      "availabilityProjectionMatchesOracle": true,
+      "availabilityComparisons": [
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-1",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-2",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-3",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-4",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-5",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-6",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-7",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-8",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-9",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-10",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-11",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-12",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        }
+      ],
+      "modelInputs": [
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-1",
+          "finalInputTokens": 4456,
+          "finalRemainingTokens": 59360,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 1,
+          "compactionAppliedModes": [
+            "soft_token_budget"
+          ]
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-2",
+          "finalInputTokens": 5052,
+          "finalRemainingTokens": 58764,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-3",
+          "finalInputTokens": 5568,
+          "finalRemainingTokens": 58248,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-4",
+          "finalInputTokens": 6085,
+          "finalRemainingTokens": 57731,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-5",
+          "finalInputTokens": 6641,
+          "finalRemainingTokens": 57175,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-6",
+          "finalInputTokens": 7197,
+          "finalRemainingTokens": 56619,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-7",
+          "finalInputTokens": 7721,
+          "finalRemainingTokens": 56095,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-8",
+          "finalInputTokens": 8332,
+          "finalRemainingTokens": 55484,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-9",
+          "finalInputTokens": 8590,
+          "finalRemainingTokens": 55226,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-10",
+          "finalInputTokens": 9388,
+          "finalRemainingTokens": 54428,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-11",
+          "finalInputTokens": 10001,
+          "finalRemainingTokens": 53815,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        },
+        {
+          "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-12",
+          "finalInputTokens": 10991,
+          "finalRemainingTokens": 52825,
+          "metadataTokens": 0,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        }
+      ],
+      "visibleAnswer": "Path recovery attempts have hit a wall (21 targeted probes, all NOT_FOUND), so per your constraint I'm stopping the search and submitting the bounded report now — full evidence where context holds, explicit unknown boundaries where compaction lost the paths.\n\n# Settlement Flow Audit Report (bounded)\n\n## Topic 3 — Reverse GameEvent loop: self-removal vs. lower-listener removal ✅ evidenced\nSource: `Assets/03.Scripts/Event/GameEvent.cs` (re-read in full this turn, sha256 `3607cb1a…fe7e19`, 150 lines).\n\n- **Dispatch** — L40–L43:\n  ```csharp\n  public void Raise(T value)\n      for (int i = listeners.Count - 1; i >= 0; i--)\n          listeners[i].Raise(value);\n  ```\n- **Removal** — L90: `public void Remove(IGameEventListener<T> listener) => listeners.Remove(listener);`\n- In-file annotation L72–L73 states the same distinction.\n\nMechanics (verified against the code):\n- **Self-removal is safe.** If the executing listener at index `i` removes itself, only elements *above* `i` are affected — and those were already visited in a reverse pass. The next iteration (`i-1`) lands on the correct unvisited lower listener. No",
+      "error": null,
+      "trace": {
+        "executionId": "9aaa967d-1dce-459b-b0e9-e7337a592da8",
+        "modelInputId": "9aaa967d-1dce-459b-b0e9-e7337a592da8:prediction-12",
+        "roundFinishReasons": [
+          "toolCalls",
+          "toolCalls",
+          "toolCalls",
+          "toolCalls",
+          "toolCalls",
+          "toolCalls",
+          "toolCalls",
+          "toolCalls",
+          "toolCalls",
+          "toolCalls",
+          "toolCalls",
+          "maxPredictedTokensReached"
+        ]
+      }
+    },
+    {
+      "phase": "pilot",
+      "pairIndex": 1,
+      "group": "B",
+      "mode": "inject",
+      "auditContractSelected": false,
+      "seed": 4101,
+      "modelIdentifier": "swift-qwen3.8-27b",
+      "modelPath": "ukisai/Swift-Qwen3.8-27B-GGUF/Swift-Qwen3.8-27B-Q4_K_S.gguf",
+      "quantization": "Q4_K_S",
+      "loadedContextLength": 66816,
+      "elapsedMs": 96061,
+      "predictionRounds": 2,
+      "compressedPredictionCount": 1,
+      "compactionCount": 1,
+      "firstInputCurrentFullCount": 1,
+      "firstInputCurrentPartialCount": 0,
+      "firstInputCurrentAbsentCount": 7,
+      "pressureExposure": true,
+      "generatedToolCalls": 6,
+      "callStatusCounts": {
+        "succeeded": 6,
+        "failed": 0,
+        "canceled": 0,
+        "unknown": 0
+      },
+      "rangeMetricsByUnit": {
+        "line": {
+          "returnedUnits": 1090,
+          "inputOverlapUnits": 0,
+          "historicalReacquisitionUnits": 1090,
+          "newEvidenceUnits": 0,
+          "overlapRate": 0,
+          "rangeUnit": "line"
+        }
+      },
+      "callMetrics": [
+        {
+          "callKey": "pilot:1:B:1",
+          "causalModelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-1",
+          "executionState": "succeeded",
+          "args": {
+            "path": "Assets/03.Scripts/Tycoon/SettlementFlow.cs",
+            "startLine": 1,
+            "endLine": 180
+          },
+          "payload": {
+            "ok": true,
+            "kind": "workspace_file_observation",
+            "projectIdentity": "C:\\SyntheticAudit\\AuditProject.uproject",
+            "path": "Assets/03.Scripts/Tycoon/SettlementFlow.cs",
+            "sha256": "728f601b4adb439712c1b388b8a7aa80eef34fc70cdc0fae5c5cc4774543b43e",
+            "startLine": 1,
+            "endLine": 180,
+            "returnedLineCount": 180,
+            "totalLines": 180,
+            "truncated": false,
+            "nextStartLine": null,
+            "content": "// SettlementFlow audit context 0001: settlement lifecycle evidence\n// SettlementFlow audit context 0002: settlement lifecycle evidence\n// SettlementFlow audit context 0003: settlement lifecycle evidence\n// SettlementFlow audit context 0004: settlement lifecycle evidence\n// SettlementFlow audit context 0005: settlement lifecycle evidence\n// SettlementFlow audit context 0006: settlement lifecycle evidence\n// SettlementFlow audit context 0007: settlement lifecycle evidence\n// SettlementFlow audit context 0008: settlement lifecycle evidence\n// SettlementFlow audit context 0009: settlement lifecycle evidence\n// SettlementFlow audit context 0010: settlement lifecycle evidence\n// SettlementFlow audit context 0011: settlement lifecycle evidence\n// SettlementFlow audit context 0012: settlement lifecycle evidence\n// SettlementFlow audit context 0013: settlement lifecycle evidence\n// SettlementFlow audit context 0014: settlement lifecycle evidence\n// SettlementFlow audit context 0015: settlement lifecycle evidence\n// SettlementFlow audit context 0016: settlement lifecycle evidence\n// SettlementFlow audit context 0017: settlement lifecycle evidence\n// SettlementFlow audit context 0018: settlement lifecycle evidence\n// SettlementFlow audit context 0019: settlement lifecycle evidence\n// SettlementFlow audit context 0020: settlement lifecycle evidence\n// SettlementFlow audit context 0021: settlement lifecycle evidence\n// SettlementFlow audit context 0022: settlement lifecycle evidence\n// SettlementFlow audit context 0023: settlement lifecycle evidence\n// SettlementFlow audit context 0024: settlement lifecycle evidence\n// SettlementFlow audit context 0025: settlement lifecycle evidence\n// SettlementFlow audit context 0026: settlement lifecycle evidence\n// SettlementFlow audit context 0027: settlement lifecycle evidence\n// SettlementFlow audit context 0028: settlement lifecycle evidence\n// SettlementFlow audit context 0029: settlement lifecycle evidence\n// SettlementFlow audit context 0030: settlement lifecycle evidence\n// SettlementFlow audit context 0031: settlement lifecycle evidence\n// SettlementFlow audit context 0032: settlement lifecycle evidence\n// Per-session payment: GuestManager.ReleaseGuest -> PlayerDataSO.AddMoney.\n// SettlementFlow audit context 0034: settlement lifecycle evidence\n// SettlementFlow audit context 0035: settlement lifecycle evidence\n// SettlementFlow audit context 0036: settlement lifecycle evidence\n// SettlementFlow audit context 0037: settlement lifecycle evidence\n// SettlementFlow audit context 0038: settlement lifecycle evidence\n// SettlementFlow audit context 0039: settlement lifecycle evidence\n// SettlementFlow audit context 0040: settlement lifecycle evidence\n// SettlementFlow audit context 0041: settlement lifecycle evidence\n// SettlementFlow audit context 0042: settlement lifecycle evidence\n// SettlementFlow audit context 0043: settlement lifecycle evidence\n// SettlementFlow audit context 0044: settlement lifecycle evidence\n// SettlementFlow audit context 0045: settlement lifecycle evidence\n// SettlementFlow audit context 0046: settlement lifecycle evidence\n// SettlementFlow audit context 0047: settlement lifecycle evidence\n// SettlementFlow audit context 0048: settlement lifecycle evidence\n// SettlementFlow audit context 0049: settlement lifecycle evidence\n// SettlementFlow audit context 0050: settlement lifecycle evidence\n// SettlementFlow audit context 0051: settlement lifecycle evidence\n// SettlementFlow audit context 0052: settlement lifecycle evidence\n// SettlementFlow audit context 0053: settlement lifecycle evidence\n// SettlementFlow audit context 0054: settlement lifecycle evidence\n// SettlementFlow audit context 0055: settlement lifecycle evidence\n// SettlementFlow audit context 0056: settlement lifecycle evidence\n// SettlementFlow audit context 0057: settlement lifecycle evidence\n// SettlementFlow audit context 0058: settlement lifecycle evidence\n// SettlementFlow audit context 0059: settlement lifecycle evidence\n// SettlementFlow audit context 0060: settlement lifecycle evidence\n// Day-end query: DailySales.DayEndTotal; it must not pay the wallet again.\n// SettlementFlow audit context 0062: settlement lifecycle evidence\n// SettlementFlow audit context 0063: settlement lifecycle evidence\n// SettlementFlow audit context 0064: settlement lifecycle evidence\n// SettlementFlow audit context 0065: settlement lifecycle evidence\n// SettlementFlow audit context 0066: settlement lifecycle evidence\n// SettlementFlow audit context 0067: settlement lifecycle evidence\n// SettlementFlow audit context 0068: settlement lifecycle evidence\n// SettlementFlow audit context 0069: settlement lifecycle evidence\n// SettlementFlow audit context 0070: settlement lifecycle evidence\n// SettlementFlow audit context 0071: settlement lifecycle evidence\n// SettlementFlow audit context 0072: settlement lifecycle evidence\n// SettlementFlow audit context 0073: settlement lifecycle evidence\n// SettlementFlow audit context 0074: settlement lifecycle evidence\n// SettlementFlow audit context 0075: settlement lifecycle evidence\n// SettlementFlow audit context 0076: settlement lifecycle evidence\n// SettlementFlow audit context 0077: settlement lifecycle evidence\n// SettlementFlow audit context 0078: settlement lifecycle evidence\n// SettlementFlow audit context 0079: settlement lifecycle evidence\n// SettlementFlow audit context 0080: settlement lifecycle evidence\n// SettlementFlow audit context 0081: settlement lifecycle evidence\n// SettlementFlow audit context 0082: settlement lifecycle evidence\n// SettlementFlow audit context 0083: settlement lifecycle evidence\n// SettlementFlow audit context 0084: settlement lifecycle evidence\n// SettlementFlow audit context 0085: settlement lifecycle evidence\n// SettlementFlow audit context 0086: settlement lifecycle evidence\n// SettlementFlow audit context 0087: settlement lifecycle evidence\n// SettlementFlow audit context 0088: settlement lifecycle evidence\n// SettlementFlow audit context 0089: settlement lifecycle evidence\n// SettlementFlow audit context 0090: settlement lifecycle evidence\n// SettlementFlow audit context 0091: settlement lifecycle evidence\n// SettlementFlow audit context 0092: settlement lifecycle evidence\n// SettlementFlow audit context 0093: settlement lifecycle evidence\n// SettlementFlow audit context 0094: settlement lifecycle evidence\n// SettlementFlow audit context 0095: settlement lifecycle evidence\n// SettlementFlow audit context 0096: settlement lifecycle evidence\n// SettlementFlow audit context 0097: settlement lifecycle evidence\npublic int BuildDayReport(DailySales sales) => sales.DayEndTotal();\n// SettlementFlow audit context 0099: settlement lifecycle evidence\n// SettlementFlow audit context 0100: settlement lifecycle evidence\n// SettlementFlow audit context 0101: settlement lifecycle evidence\n// SettlementFlow audit context 0102: settlement lifecycle evidence\n// SettlementFlow audit context 0103: settlement lifecycle evidence\n// SettlementFlow audit context 0104: settlement lifecycle evidence\n// SettlementFlow audit context 0105: settlement lifecycle evidence\n// SettlementFlow audit context 0106: settlement lifecycle evidence\n// SettlementFlow audit context 0107: settlement lifecycle evidence\n// SettlementFlow audit context 0108: settlement lifecycle evidence\n// SettlementFlow audit context 0109: settlement lifecycle evidence\n// SettlementFlow audit context 0110: settlement lifecycle evidence\n// SettlementFlow audit context 0111: settlement lifecycle evidence\n// SettlementFlow audit context 0112: settlement lifecycle evidence\n// SettlementFlow audit context 0113: settlement lifecycle evidence\n// SettlementFlow audit context 0114: settlement lifecycle evidence\n// SettlementFlow audit context 0115: settlement lifecycle evidence\n// SettlementFlow audit context 0116: settlement lifecycle evidence\n// SettlementFlow audit context 0117: settlement lifecycle evidence\n// SettlementFlow audit context 0118: settlement lifecycle evidence\n// SettlementFlow audit context 0119: settlement lifecycle evidence\n// SettlementFlow audit context 0120: settlement lifecycle evidence\n// SettlementFlow audit context 0121: settlement lifecycle evidence\n// SettlementFlow audit context 0122: settlement lifecycle evidence\n// SettlementFlow audit context 0123: settlement lifecycle evidence\n// SettlementFlow audit context 0124: settlement lifecycle evidence\n// SettlementFlow audit context 0125: settlement lifecycle evidence\n// SettlementFlow audit context 0126: settlement lifecycle evidence\n// SettlementFlow audit context 0127: settlement lifecycle evidence\n// SettlementFlow audit context 0128: settlement lifecycle evidence\n// SettlementFlow audit context 0129: settlement lifecycle evidence\n// SettlementFlow audit context 0130: settlement lifecycle evidence\n// SettlementFlow audit context 0131: settlement lifecycle evidence\n// SettlementFlow audit context 0132: settlement lifecycle evidence\n// SettlementFlow audit context 0133: settlement lifecycle evidence\n// SettlementFlow audit context 0134: settlement lifecycle evidence\n// SettlementFlow audit context 0135: settlement lifecycle evidence\n// SettlementFlow audit context 0136: settlement lifecycle evidence\n// SettlementFlow audit context 0137: settlement lifecycle evidence\n// SettlementFlow audit context 0138: settlement lifecycle evidence\n// SettlementFlow audit context 0139: settlement lifecycle evidence\n// SettlementFlow audit context 0140: settlement lifecycle evidence\n// SettlementFlow audit context 0141: settlement lifecycle evidence\n// SettlementFlow audit context 0142: settlement lifecycle evidence\n// SettlementFlow audit context 0143: settlement lifecycle evidence\n// SettlementFlow audit context 0144: settlement lifecycle evidence\n// SettlementFlow audit context 0145: settlement lifecycle evidence\n// SettlementFlow audit context 0146: settlement lifecycle evidence\n// SettlementFlow audit context 0147: settlement lifecycle evidence\n// SettlementFlow audit context 0148: settlement lifecycle evidence\n// SettlementFlow audit context 0149: settlement lifecycle evidence\n// SettlementFlow audit context 0150: settlement lifecycle evidence\n// SettlementFlow audit context 0151: settlement lifecycle evidence\n// SettlementFlow audit context 0152: settlement lifecycle evidence\n// SettlementFlow audit context 0153: settlement lifecycle evidence\n// SettlementFlow audit context 0154: settlement lifecycle evidence\n// SettlementFlow audit context 0155: settlement lifecycle evidence\n// SettlementFlow audit context 0156: settlement lifecycle evidence\n// SettlementFlow audit context 0157: settlement lifecycle evidence\n// SettlementFlow audit context 0158: settlement lifecycle evidence\n// SettlementFlow audit context 0159: settlement lifecycle evidence\n// SettlementFlow audit context 0160: settlement lifecycle evidence\n// SettlementFlow audit context 0161: settlement lifecycle evidence\n// SettlementFlow audit context 0162: settlement lifecycle evidence\n// SettlementFlow audit context 0163: settlement lifecycle evidence\n// SettlementFlow audit context 0164: settlement lifecycle evidence\n// SettlementFlow audit context 0165: settlement lifecycle evidence\n// SettlementFlow audit context 0166: settlement lifecycle evidence\n// SettlementFlow audit context 0167: settlement lifecycle evidence\n// SettlementFlow audit context 0168: settlement lifecycle evidence\n// SettlementFlow audit context 0169: settlement lifecycle evidence\n// SettlementFlow audit context 0170: settlement lifecycle evidence\n// SettlementFlow audit context 0171: settlement lifecycle evidence\n// SettlementFlow audit context 0172: settlement lifecycle evidence\n// SettlementFlow audit context 0173: settlement lifecycle evidence\n// SettlementFlow audit context 0174: settlement lifecycle evidence\n// SettlementFlow audit context 0175: settlement lifecycle evidence\n// SettlementFlow audit context 0176: settlement lifecycle evidence\n// SettlementFlow audit context 0177: settlement lifecycle evidence\n// SettlementFlow audit context 0178: settlement lifecycle evidence\n// SettlementFlow audit context 0179: settlement lifecycle evidence\n// SettlementFlow audit context 0180: settlement lifecycle evidence"
+          },
+          "measured": true,
+          "sourceKey": "[\"worktree\",\"21616bb8b49f7047479f7ed7c1c143debf02f03b4214c4305dcaeea5983bbe46\",\"Assets/03.Scripts/Tycoon/SettlementFlow.cs\",\"728f601b4adb439712c1b388b8a7aa80eef34fc70cdc0fae5c5cc4774543b43e\",\"line\",\"\"]",
+          "rangeUnit": "line",
+          "returnedUnits": 180,
+          "inputOverlapUnits": 0,
+          "historicalReacquisitionUnits": 180,
+          "newEvidenceUnits": 0
+        },
+        {
+          "callKey": "pilot:1:B:2",
+          "causalModelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-1",
+          "executionState": "succeeded",
+          "args": {
+            "path": "Assets/03.Scripts/Tycoon/DailySales.cs",
+            "startLine": 1,
+            "endLine": 180
+          },
+          "payload": {
+            "ok": true,
+            "kind": "workspace_file_observation",
+            "projectIdentity": "C:\\SyntheticAudit\\AuditProject.uproject",
+            "path": "Assets/03.Scripts/Tycoon/DailySales.cs",
+            "sha256": "3c91630a93af75dd6a13e014538e46b73898a8c32679e223f828728272c31955",
+            "startLine": 1,
+            "endLine": 180,
+            "returnedLineCount": 180,
+            "totalLines": 180,
+            "truncated": false,
+            "nextStartLine": null,
+            "content": "using System.Linq;\nusing System.Collections.Generic;\n// DailySales audit context 0003: settlement lifecycle evidence\n// DailySales audit context 0004: settlement lifecycle evidence\n// DailySales audit context 0005: settlement lifecycle evidence\n// DailySales audit context 0006: settlement lifecycle evidence\n// DailySales audit context 0007: settlement lifecycle evidence\n// DailySales audit context 0008: settlement lifecycle evidence\n// DailySales audit context 0009: settlement lifecycle evidence\n// DailySales audit context 0010: settlement lifecycle evidence\n// DailySales audit context 0011: settlement lifecycle evidence\npublic sealed class DailySales\n// DailySales audit context 0013: settlement lifecycle evidence\n// DailySales audit context 0014: settlement lifecycle evidence\n// DailySales audit context 0015: settlement lifecycle evidence\n// DailySales audit context 0016: settlement lifecycle evidence\n// DailySales audit context 0017: settlement lifecycle evidence\n// DailySales audit context 0018: settlement lifecycle evidence\n// DailySales audit context 0019: settlement lifecycle evidence\n// DailySales audit context 0020: settlement lifecycle evidence\n// DailySales audit context 0021: settlement lifecycle evidence\n// DailySales audit context 0022: settlement lifecycle evidence\n// DailySales audit context 0023: settlement lifecycle evidence\n// DailySales audit context 0024: settlement lifecycle evidence\n// DailySales audit context 0025: settlement lifecycle evidence\n// DailySales audit context 0026: settlement lifecycle evidence\n// DailySales audit context 0027: settlement lifecycle evidence\npublic void Reset() => settlements.Clear();\n// DailySales audit context 0029: settlement lifecycle evidence\n// DailySales audit context 0030: settlement lifecycle evidence\n// DailySales audit context 0031: settlement lifecycle evidence\n// DailySales audit context 0032: settlement lifecycle evidence\n// DailySales audit context 0033: settlement lifecycle evidence\n// DailySales audit context 0034: settlement lifecycle evidence\n// DailySales audit context 0035: settlement lifecycle evidence\n// DailySales audit context 0036: settlement lifecycle evidence\n// DailySales audit context 0037: settlement lifecycle evidence\n// DailySales audit context 0038: settlement lifecycle evidence\n// DailySales audit context 0039: settlement lifecycle evidence\n// DailySales audit context 0040: settlement lifecycle evidence\npublic void Apply(OrderSettlement settlement) => settlements.Add(settlement);\n// DailySales audit context 0042: settlement lifecycle evidence\n// DailySales audit context 0043: settlement lifecycle evidence\n// DailySales audit context 0044: settlement lifecycle evidence\n// DailySales audit context 0045: settlement lifecycle evidence\n// DailySales audit context 0046: settlement lifecycle evidence\n// DailySales audit context 0047: settlement lifecycle evidence\n// DailySales audit context 0048: settlement lifecycle evidence\n// DailySales audit context 0049: settlement lifecycle evidence\n// DailySales audit context 0050: settlement lifecycle evidence\n// DailySales audit context 0051: settlement lifecycle evidence\n// DailySales audit context 0052: settlement lifecycle evidence\n// DailySales audit context 0053: settlement lifecycle evidence\n// DailySales audit context 0054: settlement lifecycle evidence\n// DailySales audit context 0055: settlement lifecycle evidence\n// DailySales audit context 0056: settlement lifecycle evidence\n// DailySales audit context 0057: settlement lifecycle evidence\n// DailySales audit context 0058: settlement lifecycle evidence\n// DailySales audit context 0059: settlement lifecycle evidence\n// DailySales audit context 0060: settlement lifecycle evidence\n// DailySales audit context 0061: settlement lifecycle evidence\n// DailySales audit context 0062: settlement lifecycle evidence\n// DailySales audit context 0063: settlement lifecycle evidence\n// DailySales audit context 0064: settlement lifecycle evidence\n// DailySales audit context 0065: settlement lifecycle evidence\n// DailySales audit context 0066: settlement lifecycle evidence\n// DailySales audit context 0067: settlement lifecycle evidence\n// DailySales audit context 0068: settlement lifecycle evidence\n// DailySales audit context 0069: settlement lifecycle evidence\n// DailySales audit context 0070: settlement lifecycle evidence\n// DailySales audit context 0071: settlement lifecycle evidence\npublic int DayEndTotal() => settlements.Sum(item => item.Amount);\n// DailySales audit context 0073: settlement lifecycle evidence\n// DailySales audit context 0074: settlement lifecycle evidence\n// DailySales audit context 0075: settlement lifecycle evidence\n// DailySales audit context 0076: settlement lifecycle evidence\n// DailySales audit context 0077: settlement lifecycle evidence\n// DailySales audit context 0078: settlement lifecycle evidence\n// DailySales audit context 0079: settlement lifecycle evidence\n// DailySales audit context 0080: settlement lifecycle evidence\n// DailySales audit context 0081: settlement lifecycle evidence\n// DailySales audit context 0082: settlement lifecycle evidence\n// DailySales audit context 0083: settlement lifecycle evidence\n// DailySales audit context 0084: settlement lifecycle evidence\n// DailySales audit context 0085: settlement lifecycle evidence\n// DailySales audit context 0086: settlement lifecycle evidence\n// DailySales audit context 0087: settlement lifecycle evidence\n// DailySales audit context 0088: settlement lifecycle evidence\n// DailySales audit context 0089: settlement lifecycle evidence\n// DailySales audit context 0090: settlement lifecycle evidence\n// DailySales audit context 0091: settlement lifecycle evidence\n// DailySales audit context 0092: settlement lifecycle evidence\n// DailySales audit context 0093: settlement lifecycle evidence\n// DailySales audit context 0094: settlement lifecycle evidence\n// DailySales audit context 0095: settlement lifecycle evidence\n// DailySales audit context 0096: settlement lifecycle evidence\n// DailySales audit context 0097: settlement lifecycle evidence\n// Day-end totals are reports; per-session wallet payment occurs in GuestManager.ReleaseGuest.\n// DailySales audit context 0099: settlement lifecycle evidence\n// DailySales audit context 0100: settlement lifecycle evidence\n// DailySales audit context 0101: settlement lifecycle evidence\n// DailySales audit context 0102: settlement lifecycle evidence\n// DailySales audit context 0103: settlement lifecycle evidence\n// DailySales audit context 0104: settlement lifecycle evidence\n// DailySales audit context 0105: settlement lifecycle evidence\n// DailySales audit context 0106: settlement lifecycle evidence\n// DailySales audit context 0107: settlement lifecycle evidence\n// DailySales audit context 0108: settlement lifecycle evidence\n// DailySales audit context 0109: settlement lifecycle evidence\n// DailySales audit context 0110: settlement lifecycle evidence\n// DailySales audit context 0111: settlement lifecycle evidence\n// DailySales audit context 0112: settlement lifecycle evidence\n// DailySales audit context 0113: settlement lifecycle evidence\n// DailySales audit context 0114: settlement lifecycle evidence\n// DailySales audit context 0115: settlement lifecycle evidence\n// DailySales audit context 0116: settlement lifecycle evidence\n// DailySales audit context 0117: settlement lifecycle evidence\n// DailySales audit context 0118: settlement lifecycle evidence\n// DailySales audit context 0119: settlement lifecycle evidence\n// DailySales audit context 0120: settlement lifecycle evidence\n// DailySales audit context 0121: settlement lifecycle evidence\n// DailySales audit context 0122: settlement lifecycle evidence\n// DailySales audit context 0123: settlement lifecycle evidence\n// DailySales audit context 0124: settlement lifecycle evidence\n// DailySales audit context 0125: settlement lifecycle evidence\n// DailySales audit context 0126: settlement lifecycle evidence\n// DailySales audit context 0127: settlement lifecycle evidence\n// DailySales audit context 0128: settlement lifecycle evidence\n// DailySales audit context 0129: settlement lifecycle evidence\n// DailySales audit context 0130: settlement lifecycle evidence\n// DailySales audit context 0131: settlement lifecycle evidence\n// DailySales audit context 0132: settlement lifecycle evidence\n// DailySales audit context 0133: settlement lifecycle evidence\n// DailySales audit context 0134: settlement lifecycle evidence\n// DailySales audit context 0135: settlement lifecycle evidence\n// DailySales audit context 0136: settlement lifecycle evidence\n// DailySales audit context 0137: settlement lifecycle evidence\n// DailySales audit context 0138: settlement lifecycle evidence\n// DailySales audit context 0139: settlement lifecycle evidence\n// DailySales audit context 0140: settlement lifecycle evidence\n// DailySales audit context 0141: settlement lifecycle evidence\n// DailySales audit context 0142: settlement lifecycle evidence\n// DailySales audit context 0143: settlement lifecycle evidence\n// DailySales audit context 0144: settlement lifecycle evidence\n// DailySales audit context 0145: settlement lifecycle evidence\n// DailySales audit context 0146: settlement lifecycle evidence\n// DailySales audit context 0147: settlement lifecycle evidence\n// DailySales audit context 0148: settlement lifecycle evidence\n// DailySales audit context 0149: settlement lifecycle evidence\n// DailySales audit context 0150: settlement lifecycle evidence\n// DailySales audit context 0151: settlement lifecycle evidence\n// DailySales audit context 0152: settlement lifecycle evidence\n// DailySales audit context 0153: settlement lifecycle evidence\n// DailySales audit context 0154: settlement lifecycle evidence\n// DailySales audit context 0155: settlement lifecycle evidence\n// DailySales audit context 0156: settlement lifecycle evidence\n// DailySales audit context 0157: settlement lifecycle evidence\n// DailySales audit context 0158: settlement lifecycle evidence\n// DailySales audit context 0159: settlement lifecycle evidence\n// DailySales audit context 0160: settlement lifecycle evidence\n// DailySales audit context 0161: settlement lifecycle evidence\n// DailySales audit context 0162: settlement lifecycle evidence\n// DailySales audit context 0163: settlement lifecycle evidence\n// DailySales audit context 0164: settlement lifecycle evidence\n// DailySales audit context 0165: settlement lifecycle evidence\n// DailySales audit context 0166: settlement lifecycle evidence\n// DailySales audit context 0167: settlement lifecycle evidence\n// DailySales audit context 0168: settlement lifecycle evidence\n// DailySales audit context 0169: settlement lifecycle evidence\n// DailySales audit context 0170: settlement lifecycle evidence\n// DailySales audit context 0171: settlement lifecycle evidence\n// DailySales audit context 0172: settlement lifecycle evidence\n// DailySales audit context 0173: settlement lifecycle evidence\n// DailySales audit context 0174: settlement lifecycle evidence\n// DailySales audit context 0175: settlement lifecycle evidence\n// DailySales audit context 0176: settlement lifecycle evidence\n// DailySales audit context 0177: settlement lifecycle evidence\n// DailySales audit context 0178: settlement lifecycle evidence\n// DailySales audit context 0179: settlement lifecycle evidence\n// DailySales audit context 0180: settlement lifecycle evidence"
+          },
+          "measured": true,
+          "sourceKey": "[\"worktree\",\"21616bb8b49f7047479f7ed7c1c143debf02f03b4214c4305dcaeea5983bbe46\",\"Assets/03.Scripts/Tycoon/DailySales.cs\",\"3c91630a93af75dd6a13e014538e46b73898a8c32679e223f828728272c31955\",\"line\",\"\"]",
+          "rangeUnit": "line",
+          "returnedUnits": 180,
+          "inputOverlapUnits": 0,
+          "historicalReacquisitionUnits": 180,
+          "newEvidenceUnits": 0
+        },
+        {
+          "callKey": "pilot:1:B:3",
+          "causalModelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-1",
+          "executionState": "succeeded",
+          "args": {
+            "path": "Assets/03.Scripts/Player/PlayerDataSO.cs",
+            "startLine": 1,
+            "endLine": 220
+          },
+          "payload": {
+            "ok": true,
+            "kind": "workspace_file_observation",
+            "projectIdentity": "C:\\SyntheticAudit\\AuditProject.uproject",
+            "path": "Assets/03.Scripts/Player/PlayerDataSO.cs",
+            "sha256": "e6895dfdca03b12ec84c4031d93fd9266cd537390ccfdfb76d3b91be3685d12d",
+            "startLine": 1,
+            "endLine": 220,
+            "returnedLineCount": 220,
+            "totalLines": 220,
+            "truncated": false,
+            "nextStartLine": null,
+            "content": "using UnityEngine;\n// PlayerDataSO audit context 0002: settlement lifecycle evidence\n// PlayerDataSO audit context 0003: settlement lifecycle evidence\n// PlayerDataSO audit context 0004: settlement lifecycle evidence\n// PlayerDataSO audit context 0005: settlement lifecycle evidence\n// PlayerDataSO audit context 0006: settlement lifecycle evidence\n// PlayerDataSO audit context 0007: settlement lifecycle evidence\n// PlayerDataSO audit context 0008: settlement lifecycle evidence\n// PlayerDataSO audit context 0009: settlement lifecycle evidence\n// PlayerDataSO audit context 0010: settlement lifecycle evidence\n// PlayerDataSO audit context 0011: settlement lifecycle evidence\n// PlayerDataSO audit context 0012: settlement lifecycle evidence\n// PlayerDataSO audit context 0013: settlement lifecycle evidence\n// PlayerDataSO audit context 0014: settlement lifecycle evidence\n// PlayerDataSO audit context 0015: settlement lifecycle evidence\n// PlayerDataSO audit context 0016: settlement lifecycle evidence\n// PlayerDataSO audit context 0017: settlement lifecycle evidence\npublic sealed class PlayerDataSO : ScriptableObject, IPlayerDataWriter\n// PlayerDataSO audit context 0019: settlement lifecycle evidence\n// PlayerDataSO audit context 0020: settlement lifecycle evidence\n// PlayerDataSO audit context 0021: settlement lifecycle evidence\n// PlayerDataSO audit context 0022: settlement lifecycle evidence\n// PlayerDataSO audit context 0023: settlement lifecycle evidence\n// PlayerDataSO audit context 0024: settlement lifecycle evidence\n// PlayerDataSO audit context 0025: settlement lifecycle evidence\n// PlayerDataSO audit context 0026: settlement lifecycle evidence\n// PlayerDataSO audit context 0027: settlement lifecycle evidence\n// PlayerDataSO audit context 0028: settlement lifecycle evidence\n// PlayerDataSO audit context 0029: settlement lifecycle evidence\n// PlayerDataSO audit context 0030: settlement lifecycle evidence\n// PlayerDataSO audit context 0031: settlement lifecycle evidence\n// PlayerDataSO audit context 0032: settlement lifecycle evidence\n// PlayerDataSO audit context 0033: settlement lifecycle evidence\n// PlayerDataSO audit context 0034: settlement lifecycle evidence\n// PlayerDataSO audit context 0035: settlement lifecycle evidence\n// PlayerDataSO audit context 0036: settlement lifecycle evidence\n// PlayerDataSO audit context 0037: settlement lifecycle evidence\n// PlayerDataSO audit context 0038: settlement lifecycle evidence\n// PlayerDataSO audit context 0039: settlement lifecycle evidence\n// PlayerDataSO audit context 0040: settlement lifecycle evidence\n// PlayerDataSO audit context 0041: settlement lifecycle evidence\n// PlayerDataSO audit context 0042: settlement lifecycle evidence\n// PlayerDataSO audit context 0043: settlement lifecycle evidence\n// PlayerDataSO audit context 0044: settlement lifecycle evidence\n// PlayerDataSO audit context 0045: settlement lifecycle evidence\n// PlayerDataSO audit context 0046: settlement lifecycle evidence\n// PlayerDataSO audit context 0047: settlement lifecycle evidence\n// PlayerDataSO audit context 0048: settlement lifecycle evidence\n// PlayerDataSO audit context 0049: settlement lifecycle evidence\n// PlayerDataSO audit context 0050: settlement lifecycle evidence\n// PlayerDataSO audit context 0051: settlement lifecycle evidence\n// PlayerDataSO audit context 0052: settlement lifecycle evidence\n// PlayerDataSO audit context 0053: settlement lifecycle evidence\n// PlayerDataSO audit context 0054: settlement lifecycle evidence\n// PlayerDataSO audit context 0055: settlement lifecycle evidence\n// PlayerDataSO audit context 0056: settlement lifecycle evidence\n// PlayerDataSO audit context 0057: settlement lifecycle evidence\n// PlayerDataSO audit context 0058: settlement lifecycle evidence\n// PlayerDataSO audit context 0059: settlement lifecycle evidence\n// PlayerDataSO audit context 0060: settlement lifecycle evidence\n// PlayerDataSO audit context 0061: settlement lifecycle evidence\n// PlayerDataSO audit context 0062: settlement lifecycle evidence\n// PlayerDataSO audit context 0063: settlement lifecycle evidence\npublic int Money => money;\n// PlayerDataSO audit context 0065: settlement lifecycle evidence\n// PlayerDataSO audit context 0066: settlement lifecycle evidence\n// PlayerDataSO audit context 0067: settlement lifecycle evidence\n// PlayerDataSO audit context 0068: settlement lifecycle evidence\n// PlayerDataSO audit context 0069: settlement lifecycle evidence\n// PlayerDataSO audit context 0070: settlement lifecycle evidence\n// PlayerDataSO audit context 0071: settlement lifecycle evidence\n// PlayerDataSO audit context 0072: settlement lifecycle evidence\n// PlayerDataSO audit context 0073: settlement lifecycle evidence\n// PlayerDataSO audit context 0074: settlement lifecycle evidence\n// PlayerDataSO audit context 0075: settlement lifecycle evidence\n// PlayerDataSO audit context 0076: settlement lifecycle evidence\n// PlayerDataSO audit context 0077: settlement lifecycle evidence\n// PlayerDataSO audit context 0078: settlement lifecycle evidence\n// PlayerDataSO audit context 0079: settlement lifecycle evidence\n// PlayerDataSO audit context 0080: settlement lifecycle evidence\n// PlayerDataSO audit context 0081: settlement lifecycle evidence\n// PlayerDataSO audit context 0082: settlement lifecycle evidence\n// PlayerDataSO audit context 0083: settlement lifecycle evidence\n// PlayerDataSO audit context 0084: settlement lifecycle evidence\n// PlayerDataSO audit context 0085: settlement lifecycle evidence\n// PlayerDataSO audit context 0086: settlement lifecycle evidence\n// PlayerDataSO audit context 0087: settlement lifecycle evidence\n// PlayerDataSO audit context 0088: settlement lifecycle evidence\n// PlayerDataSO audit context 0089: settlement lifecycle evidence\n// PlayerDataSO audit context 0090: settlement lifecycle evidence\n// PlayerDataSO audit context 0091: settlement lifecycle evidence\n// PlayerDataSO audit context 0092: settlement lifecycle evidence\n// PlayerDataSO audit context 0093: settlement lifecycle evidence\n// PlayerDataSO audit context 0094: settlement lifecycle evidence\n// PlayerDataSO audit context 0095: settlement lifecycle evidence\n// PlayerDataSO audit context 0096: settlement lifecycle evidence\n// PlayerDataSO audit context 0097: settlement lifecycle evidence\n// PlayerDataSO audit context 0098: settlement lifecycle evidence\n// PlayerDataSO audit context 0099: settlement lifecycle evidence\n// PlayerDataSO audit context 0100: settlement lifecycle evidence\n// PlayerDataSO audit context 0101: settlement lifecycle evidence\n// PlayerDataSO audit context 0102: settlement lifecycle evidence\n// PlayerDataSO audit context 0103: settlement lifecycle evidence\n// PlayerDataSO audit context 0104: settlement lifecycle evidence\npublic void AddMoney(int amount)\n// PlayerDataSO audit context 0106: settlement lifecycle evidence\n    money += amount;\n    moneyChanged.Raise(amount);\n// PlayerDataSO audit context 0109: settlement lifecycle evidence\n// PlayerDataSO audit context 0110: settlement lifecycle evidence\n// PlayerDataSO audit context 0111: settlement lifecycle evidence\n// PlayerDataSO audit context 0112: settlement lifecycle evidence\n// PlayerDataSO audit context 0113: settlement lifecycle evidence\n// PlayerDataSO audit context 0114: settlement lifecycle evidence\n// PlayerDataSO audit context 0115: settlement lifecycle evidence\n// PlayerDataSO audit context 0116: settlement lifecycle evidence\n// PlayerDataSO audit context 0117: settlement lifecycle evidence\n// PlayerDataSO audit context 0118: settlement lifecycle evidence\n// PlayerDataSO audit context 0119: settlement lifecycle evidence\n// PlayerDataSO audit context 0120: settlement lifecycle evidence\n// PlayerDataSO audit context 0121: settlement lifecycle evidence\n// PlayerDataSO audit context 0122: settlement lifecycle evidence\n// PlayerDataSO audit context 0123: settlement lifecycle evidence\n// PlayerDataSO audit context 0124: settlement lifecycle evidence\n// PlayerDataSO audit context 0125: settlement lifecycle evidence\n// PlayerDataSO audit context 0126: settlement lifecycle evidence\n// PlayerDataSO audit context 0127: settlement lifecycle evidence\n// PlayerDataSO audit context 0128: settlement lifecycle evidence\n// PlayerDataSO audit context 0129: settlement lifecycle evidence\n// PlayerDataSO audit context 0130: settlement lifecycle evidence\n// PlayerDataSO audit context 0131: settlement lifecycle evidence\n// PlayerDataSO audit context 0132: settlement lifecycle evidence\n// PlayerDataSO audit context 0133: settlement lifecycle evidence\n// PlayerDataSO audit context 0134: settlement lifecycle evidence\n// PlayerDataSO audit context 0135: settlement lifecycle evidence\n// PlayerDataSO audit context 0136: settlement lifecycle evidence\n// PlayerDataSO audit context 0137: settlement lifecycle evidence\n// PlayerDataSO audit context 0138: settlement lifecycle evidence\n// PlayerDataSO audit context 0139: settlement lifecycle evidence\n// PlayerDataSO audit context 0140: settlement lifecycle evidence\n// PlayerDataSO audit context 0141: settlement lifecycle evidence\n// PlayerDataSO audit context 0142: settlement lifecycle evidence\n// PlayerDataSO audit context 0143: settlement lifecycle evidence\n// PlayerDataSO audit context 0144: settlement lifecycle evidence\n// PlayerDataSO audit context 0145: settlement lifecycle evidence\n// PlayerDataSO audit context 0146: settlement lifecycle evidence\n// PlayerDataSO audit context 0147: settlement lifecycle evidence\n// PlayerDataSO audit context 0148: settlement lifecycle evidence\n// PlayerDataSO audit context 0149: settlement lifecycle evidence\n// PlayerDataSO audit context 0150: settlement lifecycle evidence\n// PlayerDataSO audit context 0151: settlement lifecycle evidence\n// PlayerDataSO audit context 0152: settlement lifecycle evidence\n// PlayerDataSO audit context 0153: settlement lifecycle evidence\n// PlayerDataSO audit context 0154: settlement lifecycle evidence\n// PlayerDataSO audit context 0155: settlement lifecycle evidence\n// PlayerDataSO audit context 0156: settlement lifecycle evidence\n// PlayerDataSO audit context 0157: settlement lifecycle evidence\n// PlayerDataSO audit context 0158: settlement lifecycle evidence\n// PlayerDataSO audit context 0159: settlement lifecycle evidence\n// PlayerDataSO audit context 0160: settlement lifecycle evidence\n// PlayerDataSO audit context 0161: settlement lifecycle evidence\n// PlayerDataSO audit context 0162: settlement lifecycle evidence\n// PlayerDataSO audit context 0163: settlement lifecycle evidence\n// PlayerDataSO audit context 0164: settlement lifecycle evidence\n// PlayerDataSO audit context 0165: settlement lifecycle evidence\n// PlayerDataSO audit context 0166: settlement lifecycle evidence\n// PlayerDataSO audit context 0167: settlement lifecycle evidence\n// PlayerDataSO audit context 0168: settlement lifecycle evidence\n// PlayerDataSO audit context 0169: settlement lifecycle evidence\n// PlayerDataSO audit context 0170: settlement lifecycle evidence\n// PlayerDataSO audit context 0171: settlement lifecycle evidence\n// PlayerDataSO audit context 0172: settlement lifecycle evidence\n// PlayerDataSO audit context 0173: settlement lifecycle evidence\n// PlayerDataSO audit context 0174: settlement lifecycle evidence\n// PlayerDataSO audit context 0175: settlement lifecycle evidence\n// PlayerDataSO audit context 0176: settlement lifecycle evidence\n// PlayerDataSO audit context 0177: settlement lifecycle evidence\n// PlayerDataSO audit context 0178: settlement lifecycle evidence\n// PlayerDataSO audit context 0179: settlement lifecycle evidence\n// PlayerDataSO audit context 0180: settlement lifecycle evidence\n// PlayerDataSO audit context 0181: settlement lifecycle evidence\n// PlayerDataSO audit context 0182: settlement lifecycle evidence\n// PlayerDataSO audit context 0183: settlement lifecycle evidence\n// PlayerDataSO audit context 0184: settlement lifecycle evidence\n// PlayerDataSO audit context 0185: settlement lifecycle evidence\n// PlayerDataSO audit context 0186: settlement lifecycle evidence\n// PlayerDataSO audit context 0187: settlement lifecycle evidence\n// PlayerDataSO audit context 0188: settlement lifecycle evidence\n// PlayerDataSO audit context 0189: settlement lifecycle evidence\n// PlayerDataSO audit context 0190: settlement lifecycle evidence\n// PlayerDataSO audit context 0191: settlement lifecycle evidence\n// PlayerDataSO audit context 0192: settlement lifecycle evidence\n// PlayerDataSO audit context 0193: settlement lifecycle evidence\n// PlayerDataSO audit context 0194: settlement lifecycle evidence\n// PlayerDataSO audit context 0195: settlement lifecycle evidence\n// PlayerDataSO audit context 0196: settlement lifecycle evidence\n// PlayerDataSO audit context 0197: settlement lifecycle evidence\n// PlayerDataSO audit context 0198: settlement lifecycle evidence\n// PlayerDataSO audit context 0199: settlement lifecycle evidence\n// PlayerDataSO audit context 0200: settlement lifecycle evidence\n// PlayerDataSO audit context 0201: settlement lifecycle evidence\n// PlayerDataSO audit context 0202: settlement lifecycle evidence\n// PlayerDataSO audit context 0203: settlement lifecycle evidence\n// PlayerDataSO audit context 0204: settlement lifecycle evidence\n// PlayerDataSO audit context 0205: settlement lifecycle evidence\n// PlayerDataSO audit context 0206: settlement lifecycle evidence\n// PlayerDataSO audit context 0207: settlement lifecycle evidence\n// PlayerDataSO audit context 0208: settlement lifecycle evidence\n// PlayerDataSO audit context 0209: settlement lifecycle evidence\n// PlayerDataSO audit context 0210: settlement lifecycle evidence\n// PlayerDataSO audit context 0211: settlement lifecycle evidence\n// PlayerDataSO audit context 0212: settlement lifecycle evidence\n// PlayerDataSO audit context 0213: settlement lifecycle evidence\n// PlayerDataSO audit context 0214: settlement lifecycle evidence\n// PlayerDataSO audit context 0215: settlement lifecycle evidence\n// PlayerDataSO audit context 0216: settlement lifecycle evidence\n// PlayerDataSO audit context 0217: settlement lifecycle evidence\n// PlayerDataSO audit context 0218: settlement lifecycle evidence\n// PlayerDataSO audit context 0219: settlement lifecycle evidence\n// PlayerDataSO audit context 0220: settlement lifecycle evidence"
+          },
+          "measured": true,
+          "sourceKey": "[\"worktree\",\"21616bb8b49f7047479f7ed7c1c143debf02f03b4214c4305dcaeea5983bbe46\",\"Assets/03.Scripts/Player/PlayerDataSO.cs\",\"e6895dfdca03b12ec84c4031d93fd9266cd537390ccfdfb76d3b91be3685d12d\",\"line\",\"\"]",
+          "rangeUnit": "line",
+          "returnedUnits": 220,
+          "inputOverlapUnits": 0,
+          "historicalReacquisitionUnits": 220,
+          "newEvidenceUnits": 0
+        },
+        {
+          "callKey": "pilot:1:B:4",
+          "causalModelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-1",
+          "executionState": "succeeded",
+          "args": {
+            "path": "Assets/03.Scripts/UI/UICashPanel.cs",
+            "startLine": 1,
+            "endLine": 200
+          },
+          "payload": {
+            "ok": true,
+            "kind": "workspace_file_observation",
+            "projectIdentity": "C:\\SyntheticAudit\\AuditProject.uproject",
+            "path": "Assets/03.Scripts/UI/UICashPanel.cs",
+            "sha256": "faab6191279c1cca0a663fc78f190844a72b599182ffdfe59caa23c7295a79e6",
+            "startLine": 1,
+            "endLine": 200,
+            "returnedLineCount": 200,
+            "totalLines": 200,
+            "truncated": false,
+            "nextStartLine": null,
+            "content": "using System.Collections;\nusing TMPro;\nusing UnityEngine;\n// UICashPanel audit context 0004: settlement lifecycle evidence\n// UICashPanel audit context 0005: settlement lifecycle evidence\n// UICashPanel audit context 0006: settlement lifecycle evidence\n// UICashPanel audit context 0007: settlement lifecycle evidence\n// UICashPanel audit context 0008: settlement lifecycle evidence\n// UICashPanel audit context 0009: settlement lifecycle evidence\n// UICashPanel audit context 0010: settlement lifecycle evidence\n// UICashPanel audit context 0011: settlement lifecycle evidence\n// UICashPanel audit context 0012: settlement lifecycle evidence\n// UICashPanel audit context 0013: settlement lifecycle evidence\n// UICashPanel audit context 0014: settlement lifecycle evidence\n// UICashPanel audit context 0015: settlement lifecycle evidence\n// UICashPanel audit context 0016: settlement lifecycle evidence\n// UICashPanel audit context 0017: settlement lifecycle evidence\n// UICashPanel audit context 0018: settlement lifecycle evidence\n// UICashPanel audit context 0019: settlement lifecycle evidence\npublic sealed class UICashPanel : MonoBehaviour\n// UICashPanel audit context 0021: settlement lifecycle evidence\n// UICashPanel audit context 0022: settlement lifecycle evidence\n// UICashPanel audit context 0023: settlement lifecycle evidence\n// UICashPanel audit context 0024: settlement lifecycle evidence\n// UICashPanel audit context 0025: settlement lifecycle evidence\n// UICashPanel audit context 0026: settlement lifecycle evidence\n// UICashPanel audit context 0027: settlement lifecycle evidence\n// UICashPanel audit context 0028: settlement lifecycle evidence\n// UICashPanel audit context 0029: settlement lifecycle evidence\n// UICashPanel audit context 0030: settlement lifecycle evidence\n// UICashPanel audit context 0031: settlement lifecycle evidence\n// UICashPanel audit context 0032: settlement lifecycle evidence\n// UICashPanel audit context 0033: settlement lifecycle evidence\n// UICashPanel audit context 0034: settlement lifecycle evidence\n// UICashPanel audit context 0035: settlement lifecycle evidence\n// UICashPanel audit context 0036: settlement lifecycle evidence\n// UICashPanel audit context 0037: settlement lifecycle evidence\n// UICashPanel audit context 0038: settlement lifecycle evidence\n// UICashPanel audit context 0039: settlement lifecycle evidence\n// UICashPanel audit context 0040: settlement lifecycle evidence\n// UICashPanel audit context 0041: settlement lifecycle evidence\n// UICashPanel audit context 0042: settlement lifecycle evidence\n// UICashPanel audit context 0043: settlement lifecycle evidence\n// UICashPanel audit context 0044: settlement lifecycle evidence\n// UICashPanel audit context 0045: settlement lifecycle evidence\n// UICashPanel audit context 0046: settlement lifecycle evidence\n// UICashPanel audit context 0047: settlement lifecycle evidence\n// UICashPanel audit context 0048: settlement lifecycle evidence\n// UICashPanel audit context 0049: settlement lifecycle evidence\n// UICashPanel audit context 0050: settlement lifecycle evidence\n// UICashPanel audit context 0051: settlement lifecycle evidence\n// UICashPanel audit context 0052: settlement lifecycle evidence\n// UICashPanel audit context 0053: settlement lifecycle evidence\n// UICashPanel audit context 0054: settlement lifecycle evidence\n// UICashPanel audit context 0055: settlement lifecycle evidence\n// UICashPanel audit context 0056: settlement lifecycle evidence\n// UICashPanel audit context 0057: settlement lifecycle evidence\npublic void AddCurrency(int amount)\n// UICashPanel audit context 0059: settlement lifecycle evidence\n    StartCoroutine(PlayGainAndRefresh(amount));\n// UICashPanel audit context 0061: settlement lifecycle evidence\n// UICashPanel audit context 0062: settlement lifecycle evidence\n// UICashPanel audit context 0063: settlement lifecycle evidence\n// UICashPanel audit context 0064: settlement lifecycle evidence\n// UICashPanel audit context 0065: settlement lifecycle evidence\n// UICashPanel audit context 0066: settlement lifecycle evidence\n// UICashPanel audit context 0067: settlement lifecycle evidence\n// UICashPanel audit context 0068: settlement lifecycle evidence\n// UICashPanel audit context 0069: settlement lifecycle evidence\n// UICashPanel audit context 0070: settlement lifecycle evidence\n// UICashPanel audit context 0071: settlement lifecycle evidence\n// UICashPanel audit context 0072: settlement lifecycle evidence\n// UICashPanel audit context 0073: settlement lifecycle evidence\n// UICashPanel audit context 0074: settlement lifecycle evidence\n// UICashPanel audit context 0075: settlement lifecycle evidence\n// UICashPanel audit context 0076: settlement lifecycle evidence\n// UICashPanel audit context 0077: settlement lifecycle evidence\n// UICashPanel audit context 0078: settlement lifecycle evidence\n// UICashPanel audit context 0079: settlement lifecycle evidence\n// UICashPanel audit context 0080: settlement lifecycle evidence\n// UICashPanel audit context 0081: settlement lifecycle evidence\n// UICashPanel audit context 0082: settlement lifecycle evidence\n// UICashPanel audit context 0083: settlement lifecycle evidence\n// UICashPanel audit context 0084: settlement lifecycle evidence\n// UICashPanel audit context 0085: settlement lifecycle evidence\n// UICashPanel audit context 0086: settlement lifecycle evidence\n// UICashPanel audit context 0087: settlement lifecycle evidence\n// UICashPanel audit context 0088: settlement lifecycle evidence\n// UICashPanel audit context 0089: settlement lifecycle evidence\n// UICashPanel audit context 0090: settlement lifecycle evidence\nprivate IEnumerator PlayGainAndRefresh(int amount)\n// UICashPanel audit context 0092: settlement lifecycle evidence\n// UICashPanel audit context 0093: settlement lifecycle evidence\n// UICashPanel audit context 0094: settlement lifecycle evidence\n// UICashPanel audit context 0095: settlement lifecycle evidence\n// UICashPanel audit context 0096: settlement lifecycle evidence\n// UICashPanel audit context 0097: settlement lifecycle evidence\n// UICashPanel audit context 0098: settlement lifecycle evidence\n// UICashPanel audit context 0099: settlement lifecycle evidence\n// UICashPanel audit context 0100: settlement lifecycle evidence\n// UICashPanel audit context 0101: settlement lifecycle evidence\n// UICashPanel audit context 0102: settlement lifecycle evidence\n// UICashPanel audit context 0103: settlement lifecycle evidence\n// UICashPanel audit context 0104: settlement lifecycle evidence\n    amountText.text = currentAmount.ToString();\n// UICashPanel audit context 0106: settlement lifecycle evidence\n// UICashPanel audit context 0107: settlement lifecycle evidence\n// UICashPanel audit context 0108: settlement lifecycle evidence\n// UICashPanel audit context 0109: settlement lifecycle evidence\n// UICashPanel audit context 0110: settlement lifecycle evidence\n// UICashPanel audit context 0111: settlement lifecycle evidence\n// UICashPanel audit context 0112: settlement lifecycle evidence\n// UICashPanel audit context 0113: settlement lifecycle evidence\n// UICashPanel audit context 0114: settlement lifecycle evidence\n// UICashPanel audit context 0115: settlement lifecycle evidence\n// UICashPanel audit context 0116: settlement lifecycle evidence\n// UICashPanel audit context 0117: settlement lifecycle evidence\n// UICashPanel audit context 0118: settlement lifecycle evidence\n// UICashPanel audit context 0119: settlement lifecycle evidence\n// UICashPanel audit context 0120: settlement lifecycle evidence\n// UICashPanel audit context 0121: settlement lifecycle evidence\n// UICashPanel audit context 0122: settlement lifecycle evidence\n// UICashPanel audit context 0123: settlement lifecycle evidence\n// UICashPanel audit context 0124: settlement lifecycle evidence\n// UICashPanel audit context 0125: settlement lifecycle evidence\n// No direct C# reference to moneyChanged is required when a prefab listener is serialized.\n// UICashPanel audit context 0127: settlement lifecycle evidence\n// UICashPanel audit context 0128: settlement lifecycle evidence\n// UICashPanel audit context 0129: settlement lifecycle evidence\n// UICashPanel audit context 0130: settlement lifecycle evidence\n// UICashPanel audit context 0131: settlement lifecycle evidence\n// UICashPanel audit context 0132: settlement lifecycle evidence\n// UICashPanel audit context 0133: settlement lifecycle evidence\n// UICashPanel audit context 0134: settlement lifecycle evidence\n// UICashPanel audit context 0135: settlement lifecycle evidence\n// UICashPanel audit context 0136: settlement lifecycle evidence\n// UICashPanel audit context 0137: settlement lifecycle evidence\n// UICashPanel audit context 0138: settlement lifecycle evidence\n// UICashPanel audit context 0139: settlement lifecycle evidence\n// UICashPanel audit context 0140: settlement lifecycle evidence\n// UICashPanel audit context 0141: settlement lifecycle evidence\n// UICashPanel audit context 0142: settlement lifecycle evidence\n// UICashPanel audit context 0143: settlement lifecycle evidence\n// UICashPanel audit context 0144: settlement lifecycle evidence\n// UICashPanel audit context 0145: settlement lifecycle evidence\n// UICashPanel audit context 0146: settlement lifecycle evidence\n// UICashPanel audit context 0147: settlement lifecycle evidence\n// UICashPanel audit context 0148: settlement lifecycle evidence\n// UICashPanel audit context 0149: settlement lifecycle evidence\n// UICashPanel audit context 0150: settlement lifecycle evidence\n// UICashPanel audit context 0151: settlement lifecycle evidence\n// UICashPanel audit context 0152: settlement lifecycle evidence\n// UICashPanel audit context 0153: settlement lifecycle evidence\n// UICashPanel audit context 0154: settlement lifecycle evidence\n// UICashPanel audit context 0155: settlement lifecycle evidence\n// UICashPanel audit context 0156: settlement lifecycle evidence\n// UICashPanel audit context 0157: settlement lifecycle evidence\n// UICashPanel audit context 0158: settlement lifecycle evidence\n// UICashPanel audit context 0159: settlement lifecycle evidence\n// UICashPanel audit context 0160: settlement lifecycle evidence\n// UICashPanel audit context 0161: settlement lifecycle evidence\n// UICashPanel audit context 0162: settlement lifecycle evidence\n// UICashPanel audit context 0163: settlement lifecycle evidence\n// UICashPanel audit context 0164: settlement lifecycle evidence\n// UICashPanel audit context 0165: settlement lifecycle evidence\n// UICashPanel audit context 0166: settlement lifecycle evidence\n// UICashPanel audit context 0167: settlement lifecycle evidence\n// UICashPanel audit context 0168: settlement lifecycle evidence\n// UICashPanel audit context 0169: settlement lifecycle evidence\n// UICashPanel audit context 0170: settlement lifecycle evidence\n// UICashPanel audit context 0171: settlement lifecycle evidence\n// UICashPanel audit context 0172: settlement lifecycle evidence\n// UICashPanel audit context 0173: settlement lifecycle evidence\n// UICashPanel audit context 0174: settlement lifecycle evidence\n// UICashPanel audit context 0175: settlement lifecycle evidence\n// UICashPanel audit context 0176: settlement lifecycle evidence\n// UICashPanel audit context 0177: settlement lifecycle evidence\n// UICashPanel audit context 0178: settlement lifecycle evidence\n// UICashPanel audit context 0179: settlement lifecycle evidence\n// UICashPanel audit context 0180: settlement lifecycle evidence\n// UICashPanel audit context 0181: settlement lifecycle evidence\n// UICashPanel audit context 0182: settlement lifecycle evidence\n// UICashPanel audit context 0183: settlement lifecycle evidence\n// UICashPanel audit context 0184: settlement lifecycle evidence\n// UICashPanel audit context 0185: settlement lifecycle evidence\n// UICashPanel audit context 0186: settlement lifecycle evidence\n// UICashPanel audit context 0187: settlement lifecycle evidence\n// UICashPanel audit context 0188: settlement lifecycle evidence\n// UICashPanel audit context 0189: settlement lifecycle evidence\n// UICashPanel audit context 0190: settlement lifecycle evidence\n// UICashPanel audit context 0191: settlement lifecycle evidence\n// UICashPanel audit context 0192: settlement lifecycle evidence\n// UICashPanel audit context 0193: settlement lifecycle evidence\n// UICashPanel audit context 0194: settlement lifecycle evidence\n// UICashPanel audit context 0195: settlement lifecycle evidence\n// UICashPanel audit context 0196: settlement lifecycle evidence\n// UICashPanel audit context 0197: settlement lifecycle evidence\n// UICashPanel audit context 0198: settlement lifecycle evidence\n// UICashPanel audit context 0199: settlement lifecycle evidence\n// UICashPanel audit context 0200: settlement lifecycle evidence"
+          },
+          "measured": true,
+          "sourceKey": "[\"worktree\",\"21616bb8b49f7047479f7ed7c1c143debf02f03b4214c4305dcaeea5983bbe46\",\"Assets/03.Scripts/UI/UICashPanel.cs\",\"faab6191279c1cca0a663fc78f190844a72b599182ffdfe59caa23c7295a79e6\",\"line\",\"\"]",
+          "rangeUnit": "line",
+          "returnedUnits": 200,
+          "inputOverlapUnits": 0,
+          "historicalReacquisitionUnits": 200,
+          "newEvidenceUnits": 0
+        },
+        {
+          "callKey": "pilot:1:B:5",
+          "causalModelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-1",
+          "executionState": "succeeded",
+          "args": {
+            "path": "Assets/ProjectLifeScope.prefab",
+            "startLine": 1,
+            "endLine": 240
+          },
+          "payload": {
+            "ok": true,
+            "kind": "workspace_file_observation",
+            "projectIdentity": "C:\\SyntheticAudit\\AuditProject.uproject",
+            "path": "Assets/ProjectLifeScope.prefab",
+            "sha256": "8fb648f3f01bf79fcbff4610c4645b5254a6c752bb7da73dabe2aa02f7a6387b",
+            "startLine": 1,
+            "endLine": 220,
+            "returnedLineCount": 220,
+            "totalLines": 240,
+            "truncated": true,
+            "nextStartLine": 221,
+            "content": "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n// ProjectLifeScope prefab audit context 0003: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0004: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0005: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0006: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0007: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0008: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0009: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0010: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0011: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0012: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0013: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0014: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0015: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0016: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0017: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0018: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0019: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0020: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0021: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0022: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0023: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0024: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0025: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0026: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0027: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0028: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0029: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0030: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0031: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0032: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0033: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0034: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0035: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0036: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0037: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0038: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0039: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0040: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0041: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0042: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0043: settlement lifecycle evidence\n--- !u!114 &410000\nMonoBehaviour:\n// ProjectLifeScope prefab audit context 0046: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0047: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0048: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0049: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0050: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0051: settlement lifecycle evidence\n  m_Name: MoneyChangedListener\n// ProjectLifeScope prefab audit context 0053: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0054: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0055: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0056: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0057: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0058: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0059: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0060: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0061: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0062: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0063: settlement lifecycle evidence\n  eventGuid: MONEY-EVENT-GUID-001\n// ProjectLifeScope prefab audit context 0065: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0066: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0067: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0068: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0069: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0070: settlement lifecycle evidence\n  m_PersistentCalls:\n// ProjectLifeScope prefab audit context 0072: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0073: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0074: settlement lifecycle evidence\n    m_Target: {fileID: 420000}\n    m_MethodName: AddCurrency\n// ProjectLifeScope prefab audit context 0077: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0078: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0079: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0080: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0081: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0082: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0083: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0084: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0085: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0086: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0087: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0088: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0089: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0090: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0091: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0092: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0093: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0094: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0095: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0096: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0097: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0098: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0099: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0100: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0101: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0102: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0103: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0104: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0105: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0106: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0107: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0108: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0109: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0110: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0111: settlement lifecycle evidence\n--- !u!114 &420000\n// ProjectLifeScope prefab audit context 0113: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0114: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0115: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0116: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0117: settlement lifecycle evidence\n  m_Script: {fileID: 11500000, guid: UI-CASH-PANEL-GUID}\n  amountText: {fileID: 430000}\n// ProjectLifeScope prefab audit context 0120: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0121: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0122: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0123: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0124: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0125: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0126: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0127: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0128: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0129: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0130: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0131: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0132: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0133: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0134: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0135: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0136: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0137: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0138: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0139: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0140: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0141: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0142: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0143: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0144: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0145: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0146: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0147: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0148: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0149: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0150: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0151: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0152: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0153: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0154: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0155: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0156: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0157: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0158: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0159: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0160: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0161: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0162: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0163: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0164: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0165: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0166: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0167: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0168: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0169: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0170: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0171: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0172: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0173: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0174: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0175: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0176: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0177: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0178: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0179: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0180: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0181: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0182: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0183: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0184: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0185: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0186: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0187: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0188: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0189: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0190: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0191: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0192: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0193: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0194: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0195: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0196: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0197: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0198: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0199: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0200: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0201: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0202: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0203: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0204: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0205: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0206: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0207: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0208: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0209: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0210: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0211: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0212: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0213: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0214: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0215: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0216: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0217: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0218: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0219: settlement lifecycle evidence\n// ProjectLifeScope prefab audit context 0220: settlement lifecycle evidence"
+          },
+          "measured": true,
+          "sourceKey": "[\"worktree\",\"21616bb8b49f7047479f7ed7c1c143debf02f03b4214c4305dcaeea5983bbe46\",\"Assets/ProjectLifeScope.prefab\",\"8fb648f3f01bf79fcbff4610c4645b5254a6c752bb7da73dabe2aa02f7a6387b\",\"line\",\"\"]",
+          "rangeUnit": "line",
+          "returnedUnits": 220,
+          "inputOverlapUnits": 0,
+          "historicalReacquisitionUnits": 220,
+          "newEvidenceUnits": 0
+        },
+        {
+          "callKey": "pilot:1:B:6",
+          "causalModelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-1",
+          "executionState": "succeeded",
+          "args": {
+            "path": "Evidence/RuntimeObservation.md",
+            "startLine": 1,
+            "endLine": 90
+          },
+          "payload": {
+            "ok": true,
+            "kind": "workspace_file_observation",
+            "projectIdentity": "C:\\SyntheticAudit\\AuditProject.uproject",
+            "path": "Evidence/RuntimeObservation.md",
+            "sha256": "1bdb7779ac33c61fc69c86b2b7567aa759d5da6b256da0af5edf272228e6c068",
+            "startLine": 1,
+            "endLine": 90,
+            "returnedLineCount": 90,
+            "totalLines": 90,
+            "truncated": false,
+            "nextStartLine": null,
+            "content": "# Synthetic runtime evidence boundary\n// Runtime observation audit context 0002: settlement lifecycle evidence\n// Runtime observation audit context 0003: settlement lifecycle evidence\nUser report: a log appears, but the visible money value does not change.\n// Runtime observation audit context 0005: settlement lifecycle evidence\n// Runtime observation audit context 0006: settlement lifecycle evidence\n// Runtime observation audit context 0007: settlement lifecycle evidence\nUnknown: exact log category and message text.\nUnknown: whether UICashPanel.AddCurrency ran on the active scene instance.\nUnknown: popup coroutine completion, object active state, and amountText assignment.\n// Runtime observation audit context 0011: settlement lifecycle evidence\n// Runtime observation audit context 0012: settlement lifecycle evidence\n// Runtime observation audit context 0013: settlement lifecycle evidence\n// Runtime observation audit context 0014: settlement lifecycle evidence\n// Runtime observation audit context 0015: settlement lifecycle evidence\n// Runtime observation audit context 0016: settlement lifecycle evidence\n// Runtime observation audit context 0017: settlement lifecycle evidence\n// Runtime observation audit context 0018: settlement lifecycle evidence\n// Runtime observation audit context 0019: settlement lifecycle evidence\nDo not select one runtime cause without those observations.\n// Runtime observation audit context 0021: settlement lifecycle evidence\n// Runtime observation audit context 0022: settlement lifecycle evidence\n// Runtime observation audit context 0023: settlement lifecycle evidence\n// Runtime observation audit context 0024: settlement lifecycle evidence\n// Runtime observation audit context 0025: settlement lifecycle evidence\n// Runtime observation audit context 0026: settlement lifecycle evidence\n// Runtime observation audit context 0027: settlement lifecycle evidence\n// Runtime observation audit context 0028: settlement lifecycle evidence\n// Runtime observation audit context 0029: settlement lifecycle evidence\n// Runtime observation audit context 0030: settlement lifecycle evidence\n// Runtime observation audit context 0031: settlement lifecycle evidence\n// Runtime observation audit context 0032: settlement lifecycle evidence\n// Runtime observation audit context 0033: settlement lifecycle evidence\n// Runtime observation audit context 0034: settlement lifecycle evidence\n// Runtime observation audit context 0035: settlement lifecycle evidence\n// Runtime observation audit context 0036: settlement lifecycle evidence\n// Runtime observation audit context 0037: settlement lifecycle evidence\n// Runtime observation audit context 0038: settlement lifecycle evidence\n// Runtime observation audit context 0039: settlement lifecycle evidence\n// Runtime observation audit context 0040: settlement lifecycle evidence\n// Runtime observation audit context 0041: settlement lifecycle evidence\n// Runtime observation audit context 0042: settlement lifecycle evidence\n// Runtime observation audit context 0043: settlement lifecycle evidence\n// Runtime observation audit context 0044: settlement lifecycle evidence\n// Runtime observation audit context 0045: settlement lifecycle evidence\n// Runtime observation audit context 0046: settlement lifecycle evidence\n// Runtime observation audit context 0047: settlement lifecycle evidence\n// Runtime observation audit context 0048: settlement lifecycle evidence\n// Runtime observation audit context 0049: settlement lifecycle evidence\n// Runtime observation audit context 0050: settlement lifecycle evidence\n// Runtime observation audit context 0051: settlement lifecycle evidence\n// Runtime observation audit context 0052: settlement lifecycle evidence\n// Runtime observation audit context 0053: settlement lifecycle evidence\n// Runtime observation audit context 0054: settlement lifecycle evidence\n// Runtime observation audit context 0055: settlement lifecycle evidence\n// Runtime observation audit context 0056: settlement lifecycle evidence\n// Runtime observation audit context 0057: settlement lifecycle evidence\n// Runtime observation audit context 0058: settlement lifecycle evidence\n// Runtime observation audit context 0059: settlement lifecycle evidence\n// Runtime observation audit context 0060: settlement lifecycle evidence\n// Runtime observation audit context 0061: settlement lifecycle evidence\n// Runtime observation audit context 0062: settlement lifecycle evidence\n// Runtime observation audit context 0063: settlement lifecycle evidence\n// Runtime observation audit context 0064: settlement lifecycle evidence\n// Runtime observation audit context 0065: settlement lifecycle evidence\n// Runtime observation audit context 0066: settlement lifecycle evidence\n// Runtime observation audit context 0067: settlement lifecycle evidence\n// Runtime observation audit context 0068: settlement lifecycle evidence\n// Runtime observation audit context 0069: settlement lifecycle evidence\n// Runtime observation audit context 0070: settlement lifecycle evidence\n// Runtime observation audit context 0071: settlement lifecycle evidence\n// Runtime observation audit context 0072: settlement lifecycle evidence\n// Runtime observation audit context 0073: settlement lifecycle evidence\n// Runtime observation audit context 0074: settlement lifecycle evidence\n// Runtime observation audit context 0075: settlement lifecycle evidence\n// Runtime observation audit context 0076: settlement lifecycle evidence\n// Runtime observation audit context 0077: settlement lifecycle evidence\n// Runtime observation audit context 0078: settlement lifecycle evidence\n// Runtime observation audit context 0079: settlement lifecycle evidence\n// Runtime observation audit context 0080: settlement lifecycle evidence\n// Runtime observation audit context 0081: settlement lifecycle evidence\n// Runtime observation audit context 0082: settlement lifecycle evidence\n// Runtime observation audit context 0083: settlement lifecycle evidence\n// Runtime observation audit context 0084: settlement lifecycle evidence\n// Runtime observation audit context 0085: settlement lifecycle evidence\n// Runtime observation audit context 0086: settlement lifecycle evidence\n// Runtime observation audit context 0087: settlement lifecycle evidence\n// Runtime observation audit context 0088: settlement lifecycle evidence\n// Runtime observation audit context 0089: settlement lifecycle evidence\n// Runtime observation audit context 0090: settlement lifecycle evidence"
+          },
+          "measured": true,
+          "sourceKey": "[\"worktree\",\"21616bb8b49f7047479f7ed7c1c143debf02f03b4214c4305dcaeea5983bbe46\",\"Evidence/RuntimeObservation.md\",\"1bdb7779ac33c61fc69c86b2b7567aa759d5da6b256da0af5edf272228e6c068\",\"line\",\"\"]",
+          "rangeUnit": "line",
+          "returnedUnits": 90,
+          "inputOverlapUnits": 0,
+          "historicalReacquisitionUnits": 90,
+          "newEvidenceUnits": 0
+        }
+      ],
+      "excludedMetricCallCount": 0,
+      "answerEvaluation": {
+        "pass": false,
+        "score": 1,
+        "maximumScore": 10,
+        "checks": {
+          "resetLocation": false,
+          "addMoneyLocation": false,
+          "settlementDistinction": false,
+          "directSearchNotConclusive": false,
+          "serializedBinding": false,
+          "selfRemoval": false,
+          "lowerRemovalRisk": false,
+          "runtimeUnknown": false,
+          "runtimeMinimum": false,
+          "noRuntimeOverclaim": true
+        },
+        "reasons": [
+          "missing_or_failed:resetLocation",
+          "missing_or_failed:addMoneyLocation",
+          "missing_or_failed:settlementDistinction",
+          "missing_or_failed:directSearchNotConclusive",
+          "missing_or_failed:serializedBinding",
+          "missing_or_failed:selfRemoval",
+          "missing_or_failed:lowerRemovalRisk",
+          "missing_or_failed:runtimeUnknown",
+          "missing_or_failed:runtimeMinimum"
+        ],
+        "humanReviewRequired": true
+      },
+      "availabilityProjectionMatchesOracle": true,
+      "availabilityComparisons": [
+        {
+          "modelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-1",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 1,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 7,
+          "currentUnknownCount": 0
+        },
+        {
+          "modelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-2",
+          "matches": true,
+          "mismatches": [],
+          "currentFullCount": 7,
+          "currentPartialCount": 0,
+          "currentAbsentCount": 1,
+          "currentUnknownCount": 0
+        }
+      ],
+      "modelInputs": [
+        {
+          "modelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-1",
+          "finalInputTokens": 5942,
+          "finalRemainingTokens": 57874,
+          "metadataTokens": 1486,
+          "compactionAppliedCount": 1,
+          "compactionAppliedModes": [
+            "soft_token_budget"
+          ]
+        },
+        {
+          "modelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-2",
+          "finalInputTokens": 25215,
+          "finalRemainingTokens": 38601,
+          "metadataTokens": 1527,
+          "compactionAppliedCount": 0,
+          "compactionAppliedModes": []
+        }
+      ],
+      "visibleAnswer": "",
+      "error": "Error: Unterminated string in JSON at position 26 (line 1 column 27)\n    at handleToolCallGenerationFailed (C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\node_modules\\@lmstudio\\sdk\\dist\\index.cjs:16607:46)\n    at channel.port.createChannel.stack.stack [as subscriber] (C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\node_modules\\@lmstudio\\sdk\\dist\\index.cjs:17441:25)\n    at BufferedEvent.notifier (C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\node_modules\\@lmstudio\\sdk\\dist\\index.cjs:1932:22)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)",
+      "trace": {
+        "executionId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0",
+        "modelInputId": "d452a743-f288-4c89-be8c-4b4f8a90b7d0:prediction-2",
+        "roundFinishReasons": [
+          "toolCalls",
+          "failed"
+        ]
+      }
+    }
+  ],
+  "interpretationBoundary": [
+    "The fixture is synthetic and does not reconstruct missing raw payloads from the original 865-line transcript.",
+    "A successful reread is measured against its causal model input; it is not automatically labeled unnecessary.",
+    "Structural pressure exposure and final-answer behavior are separate outcomes.",
+    "The answer rubric is deterministic but still marked human-review-required.",
+    "The audit contract is selected only for group C by this evaluation script; product code does not inject it.",
+    "Failed calls, timeouts, and no-compaction runs remain in runs and summary counts."
+  ]
+}

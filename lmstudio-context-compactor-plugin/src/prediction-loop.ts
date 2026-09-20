@@ -807,6 +807,8 @@ export function createPredictionLoopHandler(
       let before = await measureContext(tokenSource, beforeInput.history, config, modelTools);
       let modelHistory = workingHistory;
       let compacted = false;
+      let compactionAppliedCount = 0;
+      const compactionAppliedModes: Array<string> = [];
       let compactionCheckpoint: CheckpointResult | null = null;
       let compactionRetention: Record<string, unknown> | null = null;
       if (core.shouldCompact(before, config)) {
@@ -878,6 +880,8 @@ export function createPredictionLoopHandler(
           modelHistory = candidate.history;
           compacted = modelHistory !== workingHistory;
           compactionCheckpoint = candidate.checkpoint;
+          compactionAppliedCount += 1;
+          compactionAppliedModes.push(String(compactionRetention?.mode || "regular"));
         }
       }
       workingHistory = modelHistory;
@@ -948,6 +952,8 @@ export function createPredictionLoopHandler(
           compacted = true;
           compactionCheckpoint = emergency.checkpoint;
           compactionRetention = { mode: "final_budget_emergency", maxCurrentTurnMessages: 2 };
+          compactionAppliedCount += 1;
+          compactionAppliedModes.push("final_budget_emergency");
           assembledInput = await assembleModelInput(workingHistory);
           modelComposition = assembledInput.composition;
           modelInput = assembledInput.history;
@@ -961,6 +967,8 @@ export function createPredictionLoopHandler(
           executionId,
           modelInputId,
           roundIndex,
+          compactionAppliedCount,
+          compactionAppliedModes,
           exactMeasurement: finalMeasurement.exact,
           fit: false,
           contextLength: finalMeasurement.contextLength,
@@ -989,6 +997,8 @@ export function createPredictionLoopHandler(
         modelInputId,
         roundIndex,
         compacted,
+        compactionAppliedCount,
+        compactionAppliedModes,
         observeOnly: config.observeOnly,
         exactMeasurement: before.exact,
         messageCount: before.messageCount,

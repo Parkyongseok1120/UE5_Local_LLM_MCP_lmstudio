@@ -39,7 +39,7 @@
 
 원래 system 지침은 체크포인트와 내부적으로 구분해 보존합니다. 압축을 반복해도 Qwen 계열 입력에는 하나의 선행 system 메시지만 만들며, 원래 지침과 최신 체크포인트가 각각 한 번만 들어갑니다. 사용자·도구 본문에 체크포인트 표식이 문자 그대로 있어도 생성 체크포인트로 분류하지 않습니다.
 
-파일 관찰은 최근 도구 결과 표시 제한을 적용하기 전에 먼저 집계합니다. 같은 파일·같은 해시의 읽기 범위는 합치고, 해시·프로젝트·clone/worktree가 다르면 섞지 않습니다. 현재 체크포인트는 최대 64개의 파일 관찰을 유지하며, 문자 예산 때문에 실제 직렬화에서 빠진 항목 수는 디버그 omission 메타데이터에 명시합니다. 검색 결과에는 실제 요청의 query, literal/regex 모드, root, 확장자/종류 필터, 결과 수, 스캔 수와 partial/complete/unknown 상태를 남깁니다. 불완전한 0건은 저장소 전체 부재로 해석하지 않습니다.
+파일 관찰은 최근 도구 결과 표시 제한을 적용하기 전에 먼저 집계합니다. 같은 파일·같은 해시의 읽기 범위는 합치고, 해시·프로젝트·clone/worktree가 다르면 섞지 않습니다. 줄 범위 응답과 Unreal의 UTF-8 byte-window 응답은 서로 다른 단위로 검증하며, 보고된 범위만 있고 본문이 없는 결과는 같은 key의 정상 원문과 합쳐져도 검증된 원문 범위를 넓히지 않습니다. 현재 체크포인트는 최대 64개의 파일 관찰을 유지하며, 문자 예산 때문에 실제 직렬화에서 빠진 항목 수는 디버그 omission 메타데이터에 명시합니다. 검색 결과에는 실제 요청의 query, literal/regex 모드, root, 확장자/종류 필터, 결과 수, 스캔 수와 partial/complete/unknown 상태를 남깁니다. 불완전한 0건은 저장소 전체 부재로 해석하지 않습니다.
 
 ## 첨부 문서 추가 읽기
 
@@ -82,6 +82,7 @@ npm run status
 npm ci
 npm test
 npm run eval:availability-ab -- --model <loaded-model-id> --pilot-pairs 1 --pairs 5 --output <report.json>
+npm run eval:audit-pressure -- --model <loaded-model-id> --main-pairs 5 --contract-pairs 1 --output <report.json>
 npm run dev
 ```
 
@@ -89,4 +90,6 @@ npm run dev
 
 `eval:availability-ab`는 설치 상태를 바꾸지 않고 현재 저장소의 빌드와 이미 로드된 모델을 사용합니다. A는 비주입 계측, B는 검증된 현재 입력 메타데이터 주입입니다. 합성 두 줄 fixture의 실제 도구 호출·중첩 반환량·메타데이터 비용·최종 답변을 모두 기록합니다. 원래 사용자 세션의 raw 실행 기록을 재구성하거나 모든 모델의 행동 개선을 증명하지는 않습니다.
 
-설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.63 / revision 110입니다.
+`eval:audit-pressure`는 8개 파일 fixture에서 실제 압축 뒤 과거 원문 퇴출과 현재 원문 잔존을 독립 oracle로 먼저 확인합니다. 파일럿이 이 조건을 충족할 때만 A/B 본 반복을 실행합니다. A/B는 `Observe`와 `Inject`의 메타데이터 효과만 비교하고, A/C는 사용자가 선택한 `eval/AUDIT_TASK_CONTRACT.md`의 감사 지시 효과를 별도의 탐색 실험으로 비교합니다. 계약은 제품 하네스가 자동 주입하지 않으며, 실패·timeout·압축 미발생 실행도 보고서에서 삭제하지 않습니다. 재조회 반환량은 요청을 만든 `modelInputId`의 실제 입력 원문과 과거 원문 ledger를 각각 대조해 현재 입력 중첩·과거 근거 재획득·새 근거로 나눕니다.
+
+설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.64 / revision 111입니다.
