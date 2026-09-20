@@ -30,12 +30,44 @@ test("the footer parser accepts only bounded descriptive note fields", () => {
     refs: ["long-runtime-receipt-payload-12345." + "a".repeat(64)] }] })).note, null);
 });
 
+test("assistant judgments have stable ids and explicit lifecycle states", () => {
+  const opened = notes.validateDraftNote({ openQuestions: [{ question: "Does the range cover the file?" }] });
+  assert.match(opened.openQuestions[0].id, /^j_[a-f0-9]{16}$/u);
+  assert.equal(opened.openQuestions[0].status, "open");
+
+  const resolved = notes.validateDraftNote({ openQuestions: [{
+    id: opened.openQuestions[0].id,
+    status: "resolved",
+    question: "Does the range cover the file?",
+  }] });
+  assert.equal(resolved.openQuestions[0].id, opened.openQuestions[0].id);
+  assert.equal(resolved.openQuestions[0].status, "resolved");
+
+  const replacement = notes.validateDraftNote({ decisions: [{
+    id: "j_replacement",
+    status: "open",
+    statement: "Use a literal search",
+    rationale: "The regex hypothesis was rejected",
+    supersedes: [opened.openQuestions[0].id],
+  }] });
+  assert.deepEqual(replacement.decisions[0].supersedes, [opened.openQuestions[0].id]);
+  assert.equal(notes.validateDraftNote({
+    decisions: [{ id: "j_duplicate", statement: "A", rationale: "B" }],
+    openQuestions: [{ id: "j_duplicate", question: "C?" }],
+  }), null);
+});
+
 test("malformed reserved footers are removed while quoted code examples remain visible", () => {
   const malformed = "Visible answer.\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n{broken";
   assert.deepEqual(notes.splitVisibleAnswer(malformed), { visibleText: "Visible answer.", hasFooter: true, note: null });
   const example = `Here is an example:\n\`\`\`text\n${footer({})}\n\`\`\``;
   assert.equal(notes.splitVisibleAnswer(example).hasFooter, false);
   assert.equal(notes.splitVisibleAnswer("Visible answer.").hasFooter, false);
+  const empty = notes.splitVisibleAnswer(footer({}));
+  assert.deepEqual(empty.note, { decisions: [], rejectedHypotheses: [], openQuestions: [] });
+  const oversized = `Visible answer.\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n${"x".repeat(1801)}\n</continuity-note>`;
+  assert.equal(notes.splitVisibleAnswer(oversized).visibleText, "Visible answer.");
+  assert.equal(notes.splitVisibleAnswer(oversized).note, null);
 });
 
 test("stored notes follow the exact visible transcript and objective", (t) => {
@@ -55,6 +87,10 @@ test("stored notes follow the exact visible transcript and objective", (t) => {
     { role: "assistant", content: "I found the issue." }]).getMessagesArray(), directory) === key, false);
   assert.notEqual(notes.historyKey(messages, `${directory}-different`), key);
   assert.equal(notes.historyKey(messages, ""), "");
+
+  const before = store.read(key);
+  assert.equal(store.write(key, { ...note, decisions: [{ status: "invalid" }] }), false);
+  assert.deepEqual(store.read(key), before);
 });
 
 test("project scope and refs require unambiguous tool observations", () => {

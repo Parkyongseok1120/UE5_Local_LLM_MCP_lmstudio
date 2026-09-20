@@ -21,6 +21,7 @@ type RoundCallbacks = {
   onToolCallRequestEnd?: NonNullable<LLMActionOpts["onToolCallRequestEnd"]>;
   onToolCallRequestFailure?: NonNullable<LLMActionOpts["onToolCallRequestFailure"]>;
   onMessageCaptured?: (message: ChatMessage) => void;
+  abortAfterPredictionFragment?: (fragment: Parameters<NonNullable<LLMActionOpts["onPredictionFragment"]>>[0]) => Error | undefined;
 };
 
 export type CapturedRound = {
@@ -45,6 +46,7 @@ export async function runOneToolRound(
   let boundaryRequested = false;
   let failure: unknown;
   let finishReason: string | undefined;
+  let fragmentAbortReason: Error | undefined;
 
   const forwardAbort = () => {
     if (!roundAbort.signal.aborted) roundAbort.abort(parentSignal.reason);
@@ -53,10 +55,18 @@ export async function runOneToolRound(
   else parentSignal.addEventListener("abort", forwardAbort, { once: true });
 
   try {
-    const { onMessageCaptured, ...actCallbacks } = callbacks;
+    const { onMessageCaptured, abortAfterPredictionFragment, ...actCallbacks } = callbacks;
     await tokenSource.act(history, tools, {
       signal: roundAbort.signal,
       ...actCallbacks,
+      onPredictionFragment: (fragment) => {
+        actCallbacks.onPredictionFragment?.(fragment);
+        const reason = abortAfterPredictionFragment?.(fragment);
+        if (reason && !roundAbort.signal.aborted) {
+          fragmentAbortReason = reason;
+          roundAbort.abort(reason);
+        }
+      },
       onPredictionCompleted: (result) => {
         finishReason = String((result as { stats?: { stopReason?: unknown } }).stats?.stopReason || "unknown");
       },
@@ -72,7 +82,7 @@ export async function runOneToolRound(
       },
     });
   } catch (error) {
-    if (!(boundaryRequested && error === boundaryReason)) failure = error;
+    if (!(boundaryRequested && error === boundaryReason) && error !== fragmentAbortReason) failure = error;
   } finally {
     parentSignal.removeEventListener("abort", forwardAbort);
   }
@@ -80,7 +90,8 @@ export async function runOneToolRound(
   return {
     messages,
     continueAfterTools: boundaryRequested,
-    ...(finishReason === undefined ? {} : { finishReason }),
+    ...(fragmentAbortReason ? { finishReason: "generation_repetition_paused" }
+      : finishReason === undefined ? {} : { finishReason }),
     ...(failure === undefined ? {} : { failure }),
   };
 }

@@ -230,10 +230,46 @@ function mergeEvidence(previous, current, maxItems) {
 }
 
 function generatedCheckpoint(message) {
+  return generatedAssistantCheckpoint(message) || Boolean(splitSystemCheckpoint(message));
+}
+
+function splitSystemCheckpoint(message) {
+  if (message?.role !== "system") return null;
   const text = String(message?.text || "");
-  return generatedAssistantCheckpoint(message)
-    || CONTINUITY_MARKERS.some((marker) => text.includes(marker))
-    || text.startsWith("[Context memory: deterministic factual compression");
+  const starts = [
+    "[Context memory: deterministic factual compression; not a workflow instruction]",
+    ...CONTINUITY_MARKERS,
+  ];
+  const candidates = [];
+  for (const start of starts) {
+    let offset = text.indexOf(start);
+    while (offset >= 0) {
+      if (offset === 0 || text.slice(Math.max(0, offset - 2), offset) === "\n\n") {
+        candidates.push(offset);
+      }
+      offset = text.indexOf(start, offset + start.length);
+    }
+  }
+  for (const offset of [...new Set(candidates)].sort((left, right) => right - left)) {
+    const checkpointText = text.slice(offset).trim();
+    const marker = CONTINUITY_MARKERS.find(value => checkpointText.includes(value));
+    if (!marker) continue;
+    const jsonStart = checkpointText.indexOf("{", checkpointText.indexOf(marker) + marker.length);
+    if (jsonStart < 0) continue;
+    try {
+      const parsed = JSON.parse(checkpointText.slice(jsonStart));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      return { instructionText: text.slice(0, offset).trim(), checkpointText };
+    } catch {
+      // A literal marker or malformed quoted example is ordinary system text.
+    }
+  }
+  return null;
+}
+
+function invariantSystemText(message) {
+  if (message?.role !== "system") return "";
+  return splitSystemCheckpoint(message)?.instructionText ?? String(message?.text || "").trim();
 }
 
 function compactEmergencyGitObservation(value) {
@@ -299,6 +335,7 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     activeProject,
   }) => sanitizeStructuredDurableValue({
     schemaVersion: 2,
+    compactionGeneration: candidate.compactionGeneration,
     authority: "factual_memory_only",
     latestUserMessage: clippedOrEmpty(candidate.latestUserMessage, latestLimit),
     latestUserMessageVerbatimRetainedSeparately: true,
@@ -350,6 +387,7 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
   }
   emergency ||= {
     schemaVersion: 2,
+    compactionGeneration: candidate.compactionGeneration,
     authority: "factual_memory_only",
     latestUserMessageVerbatimRetainedSeparately: true,
     activeObjective: null,
@@ -502,10 +540,18 @@ function buildCheckpoint(messagesInput, options = {}) {
     ...toolMemoryOptions,
     includeMessageIndexes: omittedToolMessageIndexes,
   });
-  const allRecentOutcomeRecords = toolOutcomeRecords(messages, messages.length, toolMemoryOptions);
+  const allRecentOutcomeRecords = toolOutcomeRecords(messages, messages.length, {
+    ...toolMemoryOptions,
+    aggregateAll: true,
+  });
+  const allOmittedOutcomeRecords = toolOutcomeRecords(messages, messages.length, {
+    ...toolMemoryOptions,
+    includeMessageIndexes: omittedToolMessageIndexes,
+    aggregateAll: true,
+  });
   const outcomes = serializeToolOutcomeRecords(outcomeRecords, toolMemoryOptions);
   const state = stateMemory(allRecentOutcomeRecords);
-  const durableState = stateMemory(outcomeRecords);
+  const durableState = stateMemory(allOmittedOutcomeRecords);
   const openQuestions = unresolvedQuestions(semanticMessages, latestUserIndex);
   const continuity = buildContinuityMemory(semanticMessages, {
     activeProject: state.activeProject,
@@ -542,6 +588,26 @@ function buildCheckpoint(messagesInput, options = {}) {
     Math.min(2600, Math.max(0, maxCheckpointChars - 6000)),
   );
   const checkpoint = renderCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length);
+  let serializedState = {};
+  try {
+    const marker = checkpoint.indexOf(CONTINUITY_MARKER);
+    serializedState = JSON.parse(checkpoint.slice(checkpoint.indexOf("{", marker)));
+  } catch {
+    // Keep diagnostics conservative if a future checkpoint format changes.
+  }
+  const sourceFiles = systemMemory.currentWorkStatus?.modifiedOrObservedFiles || [];
+  const serializedFiles = serializedState.currentWorkStatus?.modifiedOrObservedFiles || [];
+  const serializationDiagnostics = {
+    schemaVersion: serializedState.schemaVersion ?? null,
+    compactionGeneration: serializedState.compactionGeneration ?? null,
+    sourceFileObservationCount: sourceFiles.length,
+    serializedFileObservationCount: serializedFiles.length,
+    serializedObservedRangeCount: serializedFiles.reduce((count, file) => (
+      count + (Array.isArray(file?.observedLineRanges) ? file.observedLineRanges.length : 0)
+    ), 0),
+    omittedFileObservationCount: Math.max(0, sourceFiles.length - serializedFiles.length),
+    omissionReasons: sourceFiles.length > serializedFiles.length ? ["checkpoint_character_budget"] : [],
+  };
   return {
     checkpoint,
     assistantCheckpoint,
@@ -551,6 +617,7 @@ function buildCheckpoint(messagesInput, options = {}) {
     latestUserVerbatim: latestUser,
     retainedIndexes: [...retainedIndexes].sort((a, b) => a - b),
     omittedMessageCount: messages.length - retainedIndexes.size,
+    serializationDiagnostics,
   };
 }
 
@@ -570,6 +637,7 @@ module.exports = {
   INTERNAL_KEYS,
   buildCheckpoint,
   explicitConstraints,
+  invariantSystemText,
   normalizeMessage,
   olderContinuationAnchor,
   parseToolResult,

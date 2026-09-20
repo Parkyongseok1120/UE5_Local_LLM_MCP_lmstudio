@@ -48,6 +48,26 @@ export const directConfigSchematics = createConfigSchematics()
   .field("maxCheckpointChars", "numeric", { displayName: "Memory size", subtitle: "Maximum deterministic factual-memory characters." }, 22000)
   .field("maxToolResultChars", "numeric", { displayName: "Tool summary size", subtitle: "Maximum characters retained for each older tool outcome." }, 1200)
   .field("pastReasoningTokens", "numeric", { displayName: "Past reasoning budget (experimental)", subtitle: "0 keeps current behavior. Under context pressure, retain older SDK-delimited reasoning up to this token budget; preserve the latest exchange." }, 0)
+  .field("toolStagnationAction", "select", {
+    displayName: "Repeated tool rounds",
+    subtitle: "Warn or pause after equivalent tool-call/result rounds. Pagination cursors and changed evidence reset the count.",
+    options: [
+      { value: "warn", displayName: "Warn" },
+      { value: "pause", displayName: "Pause" },
+      { value: "off", displayName: "Off" },
+    ],
+  }, "warn")
+  .field("toolStagnationRounds", "numeric", { displayName: "Tool repetition threshold", subtitle: "Equivalent consecutive tool rounds before warning or pausing." }, 3)
+  .field("generationRepetitionAction", "select", {
+    displayName: "Within-generation repetition",
+    subtitle: "Warn or pause when a substantial generated text block repeats consecutively.",
+    options: [
+      { value: "warn", displayName: "Warn" },
+      { value: "pause", displayName: "Pause" },
+      { value: "off", displayName: "Off" },
+    ],
+  }, "warn")
+  .field("generationRepeatCount", "numeric", { displayName: "Text repetition threshold", subtitle: "Consecutive copies required; each repeated block must be at least 80 characters." }, 3)
   .field("separateAttachments", "boolean", { displayName: "Separate document input (experimental)", subtitle: "Requires this preprocessor before document RAG. Preserve typed document references instead of injecting the full document." }, false)
   .field("reviewProgress", "boolean", { displayName: "Review continuity notes (experimental)", subtitle: "Allow bounded assistant review claims tied to observed file versions. Claims are not verified completion." }, false)
   .build();

@@ -58,9 +58,11 @@ test("budget selection measures nonmonotone candidates and never claims an unmea
   const selected = await selectMeasuredCandidate(32, 100, cap => cap, async cap => {
     measured.push(cap); return cap === 16 ? 120 : 40;
   });
-  assert.equal(selected.candidate, 16); assert.deepEqual(measured, [32, 16]);
+  assert.equal(selected.candidate, 16); assert.equal(selected.fit, true); assert.deepEqual(measured, [32, 16]);
   const fallback = await selectMeasuredCandidate(8, 100, cap => cap, async cap => cap === 4 ? 80 : 10);
-  assert.equal(fallback.candidate, 4); assert.equal(fallback.remainingTokensAfter, 80);
+  assert.equal(fallback.candidate, 4); assert.equal(fallback.remainingTokensAfter, 80); assert.equal(fallback.fit, false);
+  const unknown = await selectMeasuredCandidate(8, 100, cap => cap, async () => null);
+  assert.equal(unknown.fit, null);
 });
 
 test("old reasoning loses only structural reasoning, preserving newest reasoning and tool pairing", async () => {

@@ -318,6 +318,58 @@ function parseToolResult(content) {
   }
 }
 
+function searchRequestFact(request) {
+  const name = String(request?.name || "");
+  if (name !== "search_files" && name !== "unity_find") return null;
+  const args = isRecord(request?.arguments) ? request.arguments : {};
+  const fact = {
+    tool: name,
+    query: typeof args.query === "string" ? args.query.slice(0, 500) : "",
+    matchMode: args.regex === true ? "regex" : "literal",
+    requestedRoot: typeof args.path === "string" ? args.path.slice(0, 500) : undefined,
+    requestedKind: typeof args.kind === "string" ? args.kind.slice(0, 80) : undefined,
+    requestedType: typeof args.type === "string" ? args.type.slice(0, 200) : undefined,
+    extensions: Array.isArray(args.extensions)
+      ? args.extensions.slice(0, 16).map(value => String(value).slice(0, 40)) : undefined,
+    contentSearch: args.content === true,
+    matchFileNames: typeof args.matchFileNames === "boolean" ? args.matchFileNames : undefined,
+    caseSensitive: typeof args.caseSensitive === "boolean" ? args.caseSensitive : undefined,
+    maxResults: Number.isSafeInteger(args.maxResults) ? args.maxResults : undefined,
+    maxFiles: Number.isSafeInteger(args.maxFiles) ? args.maxFiles : undefined,
+    pageContinuationRequested: typeof args.cursor === "string" && args.cursor.length > 0,
+  };
+  return sanitizeStructuredDurableValue(fact);
+}
+
+function searchObservation(requestFact, rawValue, parsed) {
+  if (!requestFact || !isRecord(rawValue)) return null;
+  const resultItems = Array.isArray(rawValue.results)
+    ? rawValue.results : Array.isArray(rawValue.items) ? rawValue.items : null;
+  const matchCount = resultItems ? resultItems.length
+    : Number.isSafeInteger(rawValue.findingCount) ? rawValue.findingCount : null;
+  const partial = rawValue.incomplete === true || rawValue.maxFilesReached === true
+    || rawValue.truncated === true || rawValue.hasMore === true || Boolean(rawValue.nextCursor);
+  const explicitlyComplete = rawValue.incomplete === false
+    || rawValue.maxFilesReached === false || rawValue.truncated === false || rawValue.hasMore === false;
+  const completeness = partial ? "partial" : explicitlyComplete ? "complete_for_requested_scope" : "unknown";
+  return sanitizeStructuredDurableValue({
+    ...requestFact,
+    matchCount: matchCount === null ? undefined : matchCount,
+    reportedTotal: Number.isSafeInteger(rawValue.total) ? rawValue.total : undefined,
+    filesScanned: Number.isSafeInteger(rawValue.filesScanned)
+      ? rawValue.filesScanned : Number.isSafeInteger(rawValue.scanned) ? rawValue.scanned : parsed.filesScanned,
+    incomplete: rawValue.incomplete === true,
+    truncated: rawValue.truncated === true,
+    hasMore: rawValue.hasMore === true || Boolean(rawValue.nextCursor),
+    completeness,
+    zeroMatchMeaning: matchCount === 0
+      ? completeness === "complete_for_requested_scope"
+        ? "no_matches_in_requested_scope"
+        : "zero_reported_not_repository_absence"
+      : undefined,
+  });
+}
+
 function toolOutcomeRecords(messages, beforeIndex, options = {}) {
   const maxItems = Math.max(1, Number(options.maxItems || 12));
   const includeMessageIndexes = options.includeMessageIndexes instanceof Set
@@ -342,6 +394,7 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     const descriptor = projectDescriptor(args);
     const record = {
       descriptor,
+      searchRequest: searchRequestFact(request),
       changesActiveProject: String(request?.name || "") === "set_active_project",
       clearsActiveProject: String(request?.name || "") === "set_active_project" && args.clear === true,
       hasExplicitProject: Object.prototype.hasOwnProperty.call(args, "project")
@@ -401,6 +454,7 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
   };
   const retain = (content, requestScope = null, includeOutcome = true) => {
     const parsed = parseToolResult(content);
+    const decoded = decodeToolResultRecord(content);
     const explicitProject = projectDescriptor(parsed);
     const activeProjectCleared = requestScope?.clearsActiveProject === true && parsed.ok !== false;
     const requestOwnsScope = requestScope?.hasExplicitProject === true
@@ -423,6 +477,8 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
       activeProjectCleared,
       inconsistentProjectScope,
     });
+    const search = searchObservation(requestScope?.searchRequest, decoded.value, parsed);
+    if (search) scopedOutcome.searchObservation = search;
     if (includeOutcome) outcomes.push(scopedOutcome);
   };
   for (const message of messages.slice(0, beforeIndex)) {
@@ -446,7 +502,7 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     // ID-less result is accepted only in the immediate result message.
     acceptsIdlessResults = false;
   }
-  return outcomes.slice(-maxItems);
+  return options.aggregateAll === true ? outcomes : outcomes.slice(-maxItems);
 }
 
 const DERIVED_BUILD_FIELDS = new Set([
@@ -531,6 +587,7 @@ function serializeToolOutcome(record, maxChars) {
       bounded.gitObservation = candidate.gitObservation;
     }
   }
+  if (displayRecord.searchObservation) bounded.searchObservation = displayRecord.searchObservation;
   for (const key of ["errors", "warnings"]) {
     if (!Array.isArray(displayRecord[key])) continue;
     const retained = [];
@@ -650,7 +707,7 @@ function stateMemory(outcomes) {
     }
   }
   return {
-    files: coalesceFileObservations(files.filter(Boolean), 16),
+    files: coalesceFileObservations(files.filter(Boolean), 64),
     builds: builds.slice(-4),
     gitObservations: gitObservations.slice(-8),
     activeProject,

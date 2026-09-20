@@ -18,7 +18,7 @@ const MAX_NOTE_ITEMS = 4;
 const MAX_STORED_NOTES = 128;
 const NOTE_INSTRUCTION = [
   "You may append a private continuity note only when a decision, rejected hypothesis, or open question materially changes.",
-  "Use only these optional JSON arrays: decisions [{statement, rationale, refs?}], rejectedHypotheses [{hypothesis, reason, refs?}], openQuestions [{question, refs?}]. No other keys. refs may contain only tool-call:<id> values for completed tool calls already in this conversation; omit uncertain refs.",
+  "Use only these optional JSON arrays: decisions [{id?, status?, statement, rationale, supersedes?, refs?}], rejectedHypotheses [{id?, status?, hypothesis, reason, supersedes?, refs?}], openQuestions [{id?, status?, question, supersedes?, refs?}]. status is open, resolved, or superseded. Reuse an injected item's id for an explicit status update; supersedes contains prior item ids. No other keys. refs may contain only tool-call:<id> values for completed tool calls already in this conversation; omit uncertain refs.",
   "Write the normal user-facing answer first. Then append this footer with only your JSON object between the tags:",
   "<!-- direct-continuity-note-v1 -->",
   "<continuity-note>",
@@ -51,12 +51,30 @@ function parseRefs(value) {
   return refs.every(Boolean) ? refs : null;
 }
 
-function parseItems(value, keys, textFields) {
+function parseJudgmentId(value) {
+  if (value === undefined) return undefined;
+  return typeof value === "string" && /^[a-z][a-z0-9_-]{2,63}$/u.test(value) ? value : null;
+}
+
+function parseSupersedes(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 3) return null;
+  const ids = value.map(parseJudgmentId);
+  return ids.every(Boolean) && new Set(ids).size === ids.length ? ids : null;
+}
+
+function stableJudgmentId(category, item, textFields) {
+  const seed = `${category}\n${textFields.map(([field]) => item[field]).join("\n")}`;
+  return `j_${crypto.createHash("sha256").update(seed).digest("hex").slice(0, 16)}`;
+}
+
+function parseItems(value, keys, textFields, category, lifecycle = true) {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > MAX_NOTE_ITEMS) return null;
   const items = [];
   for (const item of value) {
-    if (!isRecord(item) || !exactKeys(item, [...keys, "refs"])) return null;
+    const lifecycleKeys = lifecycle ? ["id", "status", "supersedes"] : [];
+    if (!isRecord(item) || !exactKeys(item, [...keys, ...lifecycleKeys, "refs"])) return null;
     const parsed = {};
     for (const [field, limit] of textFields) {
       const text = shortText(item[field], limit);
@@ -66,6 +84,15 @@ function parseItems(value, keys, textFields) {
     const refs = parseRefs(item.refs);
     if (refs === null) return null;
     if (refs !== undefined) parsed.refs = refs;
+    if (lifecycle) {
+      const id = parseJudgmentId(item.id);
+      const status = item.status === undefined ? "open" : String(item.status);
+      const supersedes = parseSupersedes(item.supersedes);
+      if (id === null || !["open", "resolved", "superseded"].includes(status) || supersedes === null) return null;
+      parsed.id = id || stableJudgmentId(category, parsed, textFields);
+      parsed.status = status;
+      if (supersedes !== undefined) parsed.supersedes = supersedes;
+    }
     items.push(parsed);
   }
   return items;
@@ -74,19 +101,23 @@ function parseItems(value, keys, textFields) {
 function parseReviewClaims(value) {
   if (value === undefined) return [];
   const items = parseItems(value, ["path", "sha256", "reviewScope", "statement"],
-    [["path", 300], ["sha256", 64], ["reviewScope", 80], ["statement", 300]]);
+    [["path", 300], ["sha256", 64], ["reviewScope", 80], ["statement", 300]], "reviewClaims", false);
   if (!items || items.some(x => !/^[a-f0-9]{64}$/i.test(x.sha256) || !x.refs?.length)) return null;
   return items;
 }
 
 function validateDraftNote(value) {
   if (!isRecord(value) || !exactKeys(value, ["decisions", "rejectedHypotheses", "openQuestions", "reviewClaims"])) return null;
-  const decisions = parseItems(value.decisions, ["statement", "rationale"], [["statement", 300], ["rationale", 400]]);
-  const rejectedHypotheses = parseItems(value.rejectedHypotheses, ["hypothesis", "reason"], [["hypothesis", 300], ["reason", 400]]);
-  const openQuestions = parseItems(value.openQuestions, ["question"], [["question", 350]]);
+  const decisions = parseItems(value.decisions, ["statement", "rationale"],
+    [["statement", 300], ["rationale", 400]], "decisions");
+  const rejectedHypotheses = parseItems(value.rejectedHypotheses, ["hypothesis", "reason"],
+    [["hypothesis", 300], ["reason", 400]], "rejectedHypotheses");
+  const openQuestions = parseItems(value.openQuestions, ["question"], [["question", 350]], "openQuestions");
   const reviewClaims = parseReviewClaims(value.reviewClaims);
   if (!decisions || !rejectedHypotheses || !openQuestions || !reviewClaims) return null;
   if (decisions.length + rejectedHypotheses.length + openQuestions.length + reviewClaims.length > MAX_NOTE_ITEMS) return null;
+  const ids = [...decisions, ...rejectedHypotheses, ...openQuestions].map(item => item.id);
+  if (new Set(ids).size !== ids.length) return null;
   const note = { decisions, rejectedHypotheses, openQuestions, ...(reviewClaims.length ? { reviewClaims } : {}) };
   return JSON.stringify(note).length <= MAX_NOTE_CHARS ? note : null;
 }

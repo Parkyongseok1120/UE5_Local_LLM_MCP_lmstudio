@@ -11,10 +11,12 @@ export async function selectMeasuredCandidate<T>(
 ) {
   const maximum = Math.max(2, Math.min(256, maxMessages));
   const caps = [...new Set([2, 4, 8, 16, 32, 64, 128, maximum].filter(n => n <= maximum))].sort((a, b) => b - a);
-  let fallback: { candidate: T; remainingTokensAfter: number | null; maxCurrentTurnMessages: number } | null = null;
+  let fallback: { candidate: T; remainingTokensAfter: number | null; maxCurrentTurnMessages: number;
+    fit: boolean | null } | null = null;
   for (const cap of caps) {
     const candidate = build(cap), available = await remaining(candidate);
-    const item = { candidate, remainingTokensAfter: available, maxCurrentTurnMessages: cap };
+    const item = { candidate, remainingTokensAfter: available, maxCurrentTurnMessages: cap,
+      fit: available === null ? null : available >= targetRemainingTokens };
     if (available !== null && available >= targetRemainingTokens) return item;
     if (!fallback || (available ?? -Infinity) > (fallback.remainingTokensAfter ?? -Infinity)) fallback = item;
   }

@@ -15,7 +15,7 @@ import { attachmentBoundary } from "./attachment-boundary";
 import { createAttachmentContext } from "./attachment-tools";
 import { directConfigSchematics } from "./direct-config";
 import { runOneToolRound } from "./round-loop";
-import { PredictionStreamRenderer } from "./prediction-stream";
+import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
 import {
   bindProjectArguments,
   detectMentionedProject,
@@ -30,6 +30,7 @@ import {
 // Node's test runner without booting an LM Studio plugin host.
 const core = require("./direct-compaction-core.js") as {
   buildCheckpoint(messages: Array<NormalizedMessage>, options?: Record<string, unknown>): CheckpointResult;
+  invariantSystemText(message: NormalizedMessage): string;
   shouldCompact(measurement: ContextMeasurement, options?: Record<string, unknown>): boolean;
 };
 const modelNotes = require("./continuity-model-notes.js") as {
@@ -105,11 +106,20 @@ function serializedCheckpointCounts(checkpoint: string) {
     const start = checkpoint.indexOf("{", marker);
     const parsed = JSON.parse(checkpoint.slice(start));
     return {
+      serializedSchemaVersion: parsed?.schemaVersion ?? null,
+      serializedCompactionGeneration: parsed?.compactionGeneration ?? null,
       serializedToolOutcomeCount: parsed?.currentWorkStatus?.recentToolOutcomes?.length || 0,
       serializedGitObservationCount: parsed?.currentWorkStatus?.gitObservations?.length || 0,
+      serializedFileObservationCount: parsed?.currentWorkStatus?.modifiedOrObservedFiles?.length || 0,
+      serializedObservedRangeCount: (parsed?.currentWorkStatus?.modifiedOrObservedFiles || [])
+        .reduce((count: number, file: { observedLineRanges?: Array<unknown> }) => (
+          count + (Array.isArray(file?.observedLineRanges) ? file.observedLineRanges.length : 0)
+        ), 0),
     };
   } catch {
-    return { serializedToolOutcomeCount: 0, serializedGitObservationCount: 0 };
+    return { serializedSchemaVersion: null, serializedCompactionGeneration: null,
+      serializedToolOutcomeCount: 0, serializedGitObservationCount: 0,
+      serializedFileObservationCount: 0, serializedObservedRangeCount: 0 };
   }
 }
 
@@ -130,6 +140,7 @@ type CheckpointResult = {
   memory?: {
     currentWorkStatus?: { modifiedOrObservedFiles?: Array<Record<string, unknown>> };
   };
+  serializationDiagnostics?: Record<string, unknown>;
 };
 
 export type ContextMeasurement = {
@@ -138,6 +149,7 @@ export type ContextMeasurement = {
   remainingTokens: number;
   exact: boolean;
   messageCount: number;
+  fit: boolean | null;
 };
 
 type DirectConfig = {
@@ -156,7 +168,13 @@ type DirectConfig = {
   compactAboveMessageCount: number;
   maxCheckpointChars: number;
   maxToolResultChars: number;
+  toolStagnationAction: StagnationAction;
+  toolStagnationRounds: number;
+  generationRepetitionAction: StagnationAction;
+  generationRepeatCount: number;
 };
+
+type StagnationAction = "off" | "warn" | "pause";
 
 type RemoteToolLike = Tool & {
   name: string;
@@ -236,6 +254,28 @@ function numeric(value: unknown, fallback: number, min: number, max: number): nu
   return Math.max(min, Math.min(max, Math.trunc(parsed)));
 }
 
+function assistantNoteTelemetry(note: ContinuityNote | null, enabled: boolean) {
+  const items = note ? [note.decisions, note.rejectedHypotheses, note.openQuestions].flat() as Array<{
+    status?: unknown;
+  }> : [];
+  const statusCounts = { open: 0, resolved: 0, superseded: 0 };
+  for (const item of items) {
+    const status = String(item?.status || "open") as keyof typeof statusCounts;
+    if (Object.hasOwn(statusCounts, status)) statusCounts[status] += 1;
+  }
+  return {
+    protocol: enabled ? "enabled" : "disabled",
+    state: note ? "injected" : "absent",
+    itemCount: items.length,
+    reviewClaimCount: note?.reviewClaims?.length || 0,
+    statusCounts,
+  };
+}
+
+function stagnationAction(value: unknown): StagnationAction {
+  return value === "off" || value === "pause" ? value : "warn";
+}
+
 function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
   const config = ctl.getPluginConfig(directConfigSchematics);
   const configuredEngine = String(config.get("projectEngine") || "auto");
@@ -257,7 +297,32 @@ function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     compactAboveMessageCount: numeric(config.get("compactAboveMessageCount"), 24, 4, 10000),
     maxCheckpointChars: numeric(config.get("maxCheckpointChars"), 22000, 2000, 100000),
     maxToolResultChars: numeric(config.get("maxToolResultChars"), 1200, 200, 10000),
+    toolStagnationAction: stagnationAction(config.get("toolStagnationAction")),
+    toolStagnationRounds: numeric(config.get("toolStagnationRounds"), 3, 2, 20),
+    generationRepetitionAction: stagnationAction(config.get("generationRepetitionAction")),
+    generationRepeatCount: numeric(config.get("generationRepeatCount"), 3, 2, 10),
   };
+}
+
+class ToolRoundStagnationDetector {
+  private previous = "";
+  private count = 0;
+
+  observe(messages: Array<ChatMessage>) {
+    const evidence = messageEvidenceTelemetry(messages);
+    if (!evidence.calls.length || !evidence.results.length) {
+      this.previous = "";
+      this.count = 0;
+      return { repeated: false, count: 0, fingerprint: "" };
+    }
+    const fingerprint = telemetryFingerprint({
+      calls: evidence.calls,
+      results: evidence.results.map(result => result.semanticResultFingerprint),
+    });
+    this.count = fingerprint === this.previous ? this.count + 1 : 1;
+    this.previous = fingerprint;
+    return { repeated: this.count > 1, count: this.count, fingerprint };
+  }
 }
 
 function normalizeHistory(history: Chat): Array<NormalizedMessage> {
@@ -310,12 +375,14 @@ async function measureContext(
     // measurement. Character estimation remains conservative, and the
     // configured message-count fallback independently protects this path.
   }
+  const remainingTokens = contextLength - inputTokens - config.maxOutputReserve - config.safetyMarginTokens;
   return {
     contextLength,
     inputTokens,
-    remainingTokens: contextLength - inputTokens - config.maxOutputReserve - config.safetyMarginTokens,
+    remainingTokens,
     exact,
     messageCount: history.length,
+    fit: remainingTokens >= 0 ? (exact ? true : null) : false,
   };
 }
 
@@ -337,8 +404,8 @@ function buildCompactedHistory(
   const retained = new Set(checkpoint.retainedIndexes);
   const compacted = Chat.empty();
   const systemText = [
-    ...messages.filter((message, index) => message.isSystemPrompt() && retained.has(index))
-      .map((message) => message.getText().trim()).filter(Boolean),
+    ...normalized.filter(message => message.role === "system")
+      .map(message => core.invariantSystemText(message)).filter(Boolean),
     checkpoint.checkpoint,
   ].filter(Boolean).join("\n\n");
   if (systemText) compacted.append("system", systemText);
@@ -356,6 +423,7 @@ type SoftCompactionSelection = {
   targetRemainingTokens: number;
   remainingTokensAfter: number | null;
   maxCurrentTurnMessages: number | null;
+  fit: boolean | null;
 };
 
 async function selectSoftCompaction(
@@ -374,7 +442,7 @@ async function selectSoftCompaction(
     const measured = await measureCandidate(recent.history);
     if (measured.remainingTokens >= targetRemainingTokens) {
       return { candidate: recent, targetRemainingTokens,
-        remainingTokensAfter: measured.remainingTokens, maxCurrentTurnMessages: null };
+        remainingTokensAfter: measured.remainingTokens, maxCurrentTurnMessages: null, fit: true };
     }
   }
 
@@ -403,8 +471,8 @@ function composeModelHistory(
   }
   const noteText = note ? modelNotes.renderAssistantNote(note) : "";
   const instruction = config.reviewProgress ? modelNotes.NOTE_INSTRUCTION.replace(
-    "openQuestions [{question, refs?}]. No other keys.",
-    "openQuestions [{question, refs?}], reviewClaims [{path, sha256, reviewScope, statement, refs}]. reviewClaims require an observed file hash and tool-call refs; they are assistant claims, never verified completion. No other keys.") : modelNotes.NOTE_INSTRUCTION;
+    "No other keys. refs may contain",
+    "The optional reviewClaims array uses [{path, sha256, reviewScope, statement, refs}]; reviewClaims require an observed file hash and tool-call refs and are assistant claims, never verified completion. No other keys. refs may contain") : modelNotes.NOTE_INSTRUCTION;
   const canIncludeInstruction = enableNoteProtocol
     && config.maxCheckpointChars >= 2000 + instruction.length;
   const canIncludeNote = canIncludeInstruction
@@ -680,6 +748,7 @@ export function createPredictionLoopHandler(
   let workingHistory = originalHistory;
   let roundIndex = 0;
   let activeActivity: ReturnType<typeof createRoundActivityTracker> | null = null;
+  const toolStagnation = new ToolRoundStagnationDetector();
   try {
     while (true) {
       ctl.guardAbort();
@@ -768,17 +837,56 @@ export function createPredictionLoopHandler(
         }
       }
       workingHistory = modelHistory;
-      const modelInput = composeModelHistory(
+      let modelComposition = composeModelHistory(
         workingHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
-      ).history;
+      );
+      let modelInput = modelComposition.history;
+      let finalMeasurement = await measureContext(tokenSource, modelInput, config, modelTools);
+      if (finalMeasurement.remainingTokens < 0 && !config.observeOnly) {
+        const emergency = buildCompactedHistory(workingHistory, 0, config, {
+          maxCheckpointChars: config.maxCheckpointChars - modelComposition.overhead,
+          maxCurrentTurnMessages: 2,
+        });
+        if (emergency.history !== workingHistory) {
+          workingHistory = emergency.history;
+          modelHistory = emergency.history;
+          compacted = true;
+          compactionCheckpoint = emergency.checkpoint;
+          compactionRetention = { mode: "final_budget_emergency", maxCurrentTurnMessages: 2 };
+          modelComposition = composeModelHistory(
+            workingHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
+          );
+          modelInput = modelComposition.history;
+          finalMeasurement = await measureContext(tokenSource, modelInput, config, modelTools);
+        }
+      }
+
+      if (finalMeasurement.remainingTokens < 0 && !config.observeOnly) {
+        if (config.showDebugInfo) ctl.debug({
+          event: "direct_context_budget_rejected",
+          roundIndex,
+          exactMeasurement: finalMeasurement.exact,
+          fit: false,
+          contextLength: finalMeasurement.contextLength,
+          inputTokens: finalMeasurement.inputTokens,
+          outputReserve: config.maxOutputReserve,
+          safetyMargin: config.safetyMarginTokens,
+          remainingTokens: finalMeasurement.remainingTokens,
+          modelCallSkipped: true,
+        });
+        ctl.createStatus({
+          status: "error",
+          text: "최소 연속성 컨텍스트도 선택한 모델의 입력 예산을 초과해 모델 호출을 중단했습니다.",
+        });
+        throw new Error(`CONTEXT_BUDGET_EXCEEDED: final model input exceeds the context budget by ${-finalMeasurement.remainingTokens} tokens`);
+      }
 
       const retainedIndexes = compactionCheckpoint?.retainedIndexes || [];
       const retainedIndexLimit = 64;
-      const observedFiles = compactionCheckpoint?.memory?.currentWorkStatus?.modifiedOrObservedFiles || [];
       const inputEvidence = messageEvidenceTelemetry(modelInput.getMessagesArray());
       const serializedCounts = compactionCheckpoint
         ? serializedCheckpointCounts(compactionCheckpoint.checkpoint)
-        : { serializedToolOutcomeCount: 0, serializedGitObservationCount: 0 };
+        : serializedCheckpointCounts("");
       if (config.showDebugInfo) ctl.debug({
         event: "direct_context_measurement",
         roundIndex,
@@ -788,6 +896,12 @@ export function createPredictionLoopHandler(
         messageCount: before.messageCount,
         inputTokens: before.inputTokens,
         remainingTokens: before.remainingTokens,
+        finalExactMeasurement: finalMeasurement.exact,
+        finalInputTokens: finalMeasurement.inputTokens,
+        finalRemainingTokens: finalMeasurement.remainingTokens,
+        finalFit: finalMeasurement.fit,
+        finalMessageCount: finalMeasurement.messageCount,
+        assistantNote: assistantNoteTelemetry(activeNote, noteEnabled),
         projectEngine: scope.engine,
         projectScopeSource: scope.source,
         projectIdentity: scope.projectIdentity || undefined,
@@ -803,19 +917,11 @@ export function createPredictionLoopHandler(
           checkpointChars: compactionCheckpoint.checkpoint.length,
           assistantCheckpointChars: compactionCheckpoint.assistantCheckpoint.length,
           ...serializedCounts,
+          serialization: compactionCheckpoint.serializationDiagnostics,
           inputToolResultCount: inputEvidence.results.length,
           inputLatestToolResultFingerprint: inputEvidence.results.at(-1)?.resultFingerprint,
           inputLatestSemanticResultFingerprint: inputEvidence.results.at(-1)?.semanticResultFingerprint,
           retention: compactionRetention,
-          observedFiles: observedFiles.slice(-16).map((file) => ({
-            canonicalProject: file.canonicalProject,
-            canonicalPath: file.canonicalPath,
-            path: file.path,
-            sha256AtObservation: file.sha256AtObservation,
-            observedLineRanges: file.observedLineRanges,
-            totalLinesAtObservation: file.totalLinesAtObservation,
-            readCoverageState: file.readCoverageState,
-          })),
         } : undefined,
       });
       ctl.guardAbort();
@@ -825,6 +931,8 @@ export function createPredictionLoopHandler(
       // been emitted, while keeping guard/finalized registration idempotent.
       emitter.beginRound();
       const stream = new PredictionStreamRenderer(ctl, modelNotes.splitVisibleAnswer, noteEnabled);
+      const generationRepetition = new GenerationRepetitionDetector(config.generationRepeatCount);
+      let generationRepetitionReported = false;
       const toolGeneration = createToolGenerationTracker(ctl);
       activeActivity.waitingForPrompt();
       const displayedMessages = new Set<ChatMessage>();
@@ -841,6 +949,29 @@ export function createPredictionLoopHandler(
             activeActivity?.firstToken();
             stream.onFragment(fragment);
           },
+          abortAfterPredictionFragment: config.observeOnly || config.generationRepetitionAction === "off"
+            ? undefined
+            : (fragment) => {
+              if (!generationRepetition.observe(fragment) || generationRepetitionReported) return undefined;
+              generationRepetitionReported = true;
+              const pause = config.generationRepetitionAction === "pause";
+              ctl.createStatus({
+                status: pause ? "canceled" : "done",
+                text: pause
+                  ? "생성 중 반복 블록을 감지해 이 응답을 일시 중지했습니다."
+                  : "생성 중 반복 블록을 감지했습니다. 응답은 계속 진행합니다.",
+              });
+              if (config.showDebugInfo) ctl.debug({
+                event: "within_generation_repetition",
+                roundIndex,
+                action: config.generationRepetitionAction,
+                repeatCount: config.generationRepeatCount,
+              });
+              if (!pause) return undefined;
+              const reason = new Error("Generation paused after repeated text blocks");
+              reason.name = "ContextCompactorGenerationRepetition";
+              return reason;
+            },
           onToolCallRequestStart: (modelRoundIndex, callId) => {
             activeActivity?.firstToken();
             toolGeneration.start(modelRoundIndex, callId);
@@ -969,6 +1100,26 @@ export function createPredictionLoopHandler(
           modelNoteLifecycle: noteLifecycle,
         });
       }
+      if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
+        const stagnation = toolStagnation.observe(captured.messages);
+        if (stagnation.count >= config.toolStagnationRounds) {
+          const pause = config.toolStagnationAction === "pause";
+          ctl.createStatus({
+            status: pause ? "canceled" : "done",
+            text: pause
+              ? `동일한 도구 라운드가 ${stagnation.count}회 반복되어 후속 호출을 일시 중지했습니다.`
+              : `동일한 도구 라운드가 ${stagnation.count}회 반복되었습니다. 후속 호출은 계속합니다.`,
+          });
+          if (config.showDebugInfo) ctl.debug({
+            event: "tool_round_stagnation",
+            roundIndex,
+            action: config.toolStagnationAction,
+            repeatCount: stagnation.count,
+            semanticFingerprint: stagnation.fingerprint,
+          });
+          if (pause) captured.continueAfterTools = false;
+        }
+      }
       if (captured.failure !== undefined) throw captured.failure;
       if (!captured.continueAfterTools) break;
       roundIndex += 1;
@@ -976,7 +1127,17 @@ export function createPredictionLoopHandler(
     if (activeNote && noteWorkingDirectory) {
       const nextHistoryKey = modelNotes.historyKey(visibleHistory.getMessagesArray(), noteWorkingDirectory);
       const verifiedNote = modelNotes.reconcileStoredNote(activeNote, visibleHistory.getMessagesArray());
-      if (nextHistoryKey && verifiedNote) noteStore.write(nextHistoryKey, verifiedNote);
+      const stored = Boolean(nextHistoryKey && verifiedNote && noteStore.write(nextHistoryKey, verifiedNote));
+      if (config.showDebugInfo) ctl.debug({
+        event: "assistant_note_persistence",
+        status: stored ? "stored" : "not_stored",
+        reason: stored ? undefined : !nextHistoryKey ? "unstable_history_key"
+          : !verifiedNote ? "scope_reconciliation_failed" : "atomic_write_failed",
+        itemCount: verifiedNote
+          ? verifiedNote.decisions.length + verifiedNote.rejectedHypotheses.length + verifiedNote.openQuestions.length
+          : 0,
+        reviewClaimCount: verifiedNote?.reviewClaims?.length || 0,
+      });
     }
   } finally {
     activeActivity?.complete();
@@ -1001,6 +1162,8 @@ export const __test = {
   telemetryFingerprint,
   messageEvidenceTelemetry,
   serializedCheckpointCounts,
+  ToolRoundStagnationDetector,
+  GenerationRepetitionDetector,
   modelHistoryMessage,
   selectSoftCompaction,
 };

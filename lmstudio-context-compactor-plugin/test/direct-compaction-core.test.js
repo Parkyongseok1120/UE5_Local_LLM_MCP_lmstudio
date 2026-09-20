@@ -81,6 +81,18 @@ test("assistant-derived checkpoint evidence stays in an assistant message across
   assert.equal(second.retainedIndexes.includes(1), false);
   assert.deepEqual(second.memory.recentRawTail.slice(0, 3).map((item) => item.role),
     ["user", "assistant", "user"]);
+  assert.equal(second.memory.unresolvedItems.some(item => item.kind === "assistant_progress_evidence"), false);
+});
+
+test("an attachment-bearing user message with a literal checkpoint marker is retained", () => {
+  const literal = "Attached rubric quotes [Direct continuity state v2] as plain text.";
+  const result = core.buildCheckpoint([
+    message("system", "base policy"),
+    message("user", literal, { hasFiles: true }),
+    message("assistant", "Older response."),
+    message("user", "Continue with the attached rubric."),
+  ], { recentCompleteTurns: 0, maxCurrentTurnMessages: 1 });
+  assert.equal(result.retainedIndexes.includes(1), true);
 });
 
 test("a legacy system checkpoint migrates assistant claims into the assistant role", () => {
@@ -101,7 +113,8 @@ test("a legacy system checkpoint migrates assistant claims into the assistant ro
   ], { recentCompleteTurns: 0, maxCheckpointChars: 12000 });
   assert.doesNotMatch(result.checkpoint, /Cache hypothesis was rejected|Need to check/u);
   assert.match(result.assistantCheckpoint, /Cache hypothesis was rejected/u);
-  assert.match(result.assistantCheckpoint, /Need to check/u);
+  assert.doesNotMatch(result.assistantCheckpoint, /Need to check/u);
+  assert.equal(result.memory.unresolvedItems.some(item => item.kind === "assistant_progress_evidence"), false);
 });
 
 test("latest real user request stays authoritative without promoting an older objective", () => {
@@ -465,7 +478,8 @@ test("prior unresolved items and assistant pending evidence cannot replay a rece
   ], { recentCompleteTurns: 0 });
 
   assertNoDurableFileCapability(result);
-  assert.match(JSON.stringify(result.memory.unresolvedItems), /fresh file snapshot required before mutation/iu);
+  assert.deepEqual(result.memory.unresolvedItems, []);
+  assert.doesNotMatch(result.assistantCheckpoint, /fvr1_prior_pending/u);
 });
 
 test("three hard compactions preserve the objective while never reviving an old receipt", () => {
@@ -2167,6 +2181,133 @@ test("ambiguous MCP content envelopes are omitted instead of merging facts", () 
   ]);
   assert.deepEqual(core.parseToolResult(envelope),
     { summary: "unsupported tool result envelope omitted" });
+});
+
+test("file observation aggregation precedes the recent tool outcome display window", () => {
+  const root = "C:\\Work\\Unity";
+  const identity = "7".repeat(64);
+  const hash = "a".repeat(64);
+  const messages = [message("user", "Read the entire large file in ranges.")];
+  for (let index = 0; index < 14; index += 1) {
+    const startLine = index * 100 + 1;
+    const endLine = startLine + 99;
+    const id = `read-${index + 1}`;
+    messages.push(message("assistant", "", {
+      toolRequests: [{ id, name: "read_file", arguments: { path: "Assets/Large.cs", startLine, endLine } }],
+    }));
+    messages.push(message("tool", "", { toolResults: [{ toolCallId: id, content: JSON.stringify({
+      status: "observed",
+      path: "Assets/Large.cs",
+      canonicalProjectRoot: root,
+      projectIdentity: identity,
+      hash,
+      startLine,
+      endLine,
+      totalLines: 1400,
+      hasMore: endLine < 1400,
+      nextStartLine: endLine < 1400 ? endLine + 1 : null,
+    }) }] }));
+  }
+  messages.push(message("user", "Continue from the complete read."));
+
+  const result = core.buildCheckpoint(messages, { recentCompleteTurns: 0 });
+  const observation = result.memory.modifiedOrObservedFiles.find(item => item.path === "Assets/Large.cs");
+  assert.ok(observation);
+  assert.deepEqual(observation.observedLineRanges, [{ startLine: 1, endLine: 1400 }]);
+  assert.equal(observation.readCoverageState, "complete");
+  assert.ok(result.memory.currentWorkStatus.recentToolOutcomes.length <= 12);
+});
+
+test("thirty file observations survive a six-outcome display window and a later re-reference", () => {
+  const root = "C:\\Work\\Unity";
+  const identity = "8".repeat(64);
+  const messages = [message("user", "Inspect these project files.")];
+  for (let index = 0; index < 30; index += 1) {
+    const id = `file-${index}`;
+    const filePath = `Assets/File${String(index).padStart(2, "0")}.cs`;
+    messages.push(message("assistant", "", {
+      toolRequests: [{ id, name: "read_file", arguments: { path: filePath } }],
+    }));
+    messages.push(message("tool", "", { toolResults: [{ toolCallId: id, content: JSON.stringify({
+      status: "observed", path: filePath, canonicalProjectRoot: root,
+      projectIdentity: identity, hash: index.toString(16).padStart(64, "0"),
+      startLine: 1, endLine: 10, totalLines: 10, hasMore: false,
+    }) }] }));
+  }
+  messages.push(message("user", "Continue."));
+  const first = core.buildCheckpoint(messages, { recentCompleteTurns: 0, maxItems: 6 });
+  assert.equal(first.memory.modifiedOrObservedFiles.length, 30);
+  assert.ok(first.memory.currentWorkStatus.recentToolOutcomes.length <= 6);
+
+  const second = core.buildCheckpoint([
+    message("system", first.checkpoint),
+    ...(first.assistantCheckpoint ? [message("assistant", first.assistantCheckpoint)] : []),
+    message("user", "Re-open Assets/File00.cs and compare it."),
+  ], { recentCompleteTurns: 0, maxItems: 6 });
+  assert.ok(second.memory.modifiedOrObservedFiles.some(item => item.path === "Assets/File00.cs"));
+  assert.equal(second.serializationDiagnostics.compactionGeneration, 2);
+});
+
+test("serialization diagnostics are derived from the emitted checkpoint after budget omission", () => {
+  const root = "C:\\Work\\Unity";
+  const identity = "9".repeat(64);
+  const messages = [message("user", "Inspect a broad file set.")];
+  for (let index = 0; index < 24; index += 1) {
+    const id = `wide-${index}`;
+    const filePath = `Assets/VeryLongFolderName${index}/VeryLongSourceFileName${index}.cs`;
+    messages.push(message("assistant", "", { toolRequests: [{ id, name: "read_file", arguments: { path: filePath } }] }));
+    messages.push(message("tool", "", { toolResults: [{ toolCallId: id, content: JSON.stringify({
+      status: "observed", path: filePath, canonicalProjectRoot: root, projectIdentity: identity,
+      hash: index.toString(16).padStart(64, "0"), startLine: 1, endLine: 20, totalLines: 100, hasMore: true,
+    }) }] }));
+  }
+  messages.push(message("user", "Continue."));
+  const result = core.buildCheckpoint(messages, { recentCompleteTurns: 0, maxCheckpointChars: 4000 });
+  const emitted = parsedCheckpoint(result);
+  const emittedFiles = emitted.currentWorkStatus?.modifiedOrObservedFiles || [];
+  assert.equal(result.serializationDiagnostics.serializedFileObservationCount, emittedFiles.length);
+  assert.equal(result.serializationDiagnostics.serializedObservedRangeCount,
+    emittedFiles.reduce((count, file) => count + (file.observedLineRanges?.length || 0), 0));
+  assert.ok(result.serializationDiagnostics.sourceFileObservationCount > emittedFiles.length);
+  assert.equal(result.serializationDiagnostics.omittedFileObservationCount,
+    result.serializationDiagnostics.sourceFileObservationCount - emittedFiles.length);
+  assert.deepEqual(result.serializationDiagnostics.omissionReasons, ["checkpoint_character_budget"]);
+});
+
+test("search continuity keeps request mode, scope, counts, and incomplete zero-match meaning", () => {
+  const project = "C:\\Work\\Game\\Game.uproject";
+  const messages = [
+    message("user", "Find the exact call site, correcting the search mode if needed."),
+    message("assistant", "", { toolRequests: [{ id: "search-regex", name: "search_files", arguments: {
+      project, path: "project://Source", query: "Foo(Bar", regex: true,
+      caseSensitive: false, maxResults: 10, maxFiles: 10,
+    } }] }),
+    message("tool", "", { toolResults: [{ toolCallId: "search-regex", content: JSON.stringify({
+      ok: true, canonicalProject: project, path: "project://Source", results: [],
+      filesScanned: 10, maxFilesReached: true, truncated: false,
+    }) }] }),
+    message("assistant", "", { toolRequests: [{ id: "search-literal", name: "search_files", arguments: {
+      project, path: "project://Source", query: "Foo(Bar", regex: false,
+      matchFileNames: false, caseSensitive: true, maxResults: 100, maxFiles: 5000,
+    } }] }),
+    message("tool", "", { toolResults: [{ toolCallId: "search-literal", content: JSON.stringify({
+      ok: true, canonicalProject: project, path: "project://Source",
+      results: [{ path: "Private/Foo.cpp", line: 42 }], filesScanned: 200,
+      maxFilesReached: false, truncated: false,
+    }) }] }),
+    message("user", "Continue from the corrected literal search."),
+  ];
+  const result = core.buildCheckpoint(messages, { recentCompleteTurns: 0 });
+  const observations = result.memory.currentWorkStatus.recentToolOutcomes
+    .map(value => JSON.parse(value).searchObservation).filter(Boolean);
+  assert.equal(observations.length, 2);
+  assert.deepEqual(observations.map(item => item.matchMode), ["regex", "literal"]);
+  assert.equal(observations[0].requestedRoot, "project://Source");
+  assert.equal(observations[0].matchCount, 0);
+  assert.equal(observations[0].completeness, "partial");
+  assert.equal(observations[0].zeroMatchMeaning, "zero_reported_not_repository_absence");
+  assert.equal(observations[1].matchCount, 1);
+  assert.equal(observations[1].completeness, "complete_for_requested_scope");
 });
 
 test("a Unity file result cannot be attributed to a conflicting explicit Unreal project", () => {

@@ -17,7 +17,6 @@ const {
   clip,
   normalizedTextKey,
   recentConversationTail,
-  sentenceCandidates,
   visibleAssistantText,
 } = require("./continuity-text.js");
 
@@ -160,35 +159,13 @@ function lastAssistantUpdate(messages, minimumIndex = -1) {
   };
 }
 
-function pendingAssistantItems(messages, activeObjective, maxItems = 8) {
-  const activeIndex = Number.isInteger(activeObjective?.messageIndex)
-    ? activeObjective.messageIndex
-    : -1;
-  const patterns = [
-    /\b(?:need to|needs? to|will|next|remaining|pending|not yet|still need|retry)\b/iu,
-    /(?:해야|할\s*(?:일|것)|다음|남았|미완료|아직|재시도|진행할|확인할|수정할|빌드할)/u,
-  ];
-  const values = [];
-  const seen = new Set();
-  for (const message of messages) {
-    if (message.role !== "assistant" || message.index < activeIndex) continue;
-    for (const sentence of sentenceCandidates(visibleAssistantText(message.text))) {
-      if (!patterns.some((pattern) => pattern.test(sentence))) continue;
-      const text = clip(sanitizeDerivedOperationalText(sentence), 800);
-      const key = normalizedTextKey(text);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      values.push({ kind: "assistant_progress_evidence", text, messageIndex: message.index });
-    }
-  }
-  return values.slice(-Math.max(1, maxItems));
-}
-
 function mergeUnresolved(previousState, activeObjective, openQuestions, pendingItems) {
   const previousSameObjective = normalizedTextKey(previousState?.activeObjective?.text)
     === normalizedTextKey(activeObjective?.text);
   const combined = [
-    ...(previousSameObjective ? previousState?.unresolvedItems || [] : []),
+    ...(previousSameObjective ? (previousState?.unresolvedItems || []).filter(item => (
+      item?.kind !== "assistant_progress_evidence"
+    )) : []),
     ...(openQuestions || []).map((item) => ({ kind: "open_question_evidence", ...item })),
     ...pendingItems,
   ];
@@ -220,7 +197,10 @@ function buildContinuityMemory(messages, facts, options = {}) {
     ? extractPriorContinuityState(messages)
     : options.previousState;
   const objective = buildObjectiveContinuity(messages, previousState, options);
-  const pendingItems = pendingAssistantItems(messages, objective.activeObjective);
+  // Assistant prose such as "next I will..." is conversation evidence, not an
+  // explicit lifecycle update. Durable open/resolved/superseded judgments live
+  // in the separately validated assistant continuity note.
+  const pendingItems = [];
   const previousWork = previousState?.currentWorkStatus || {};
   const activeIndex = objective.activeObjective?.source === "current_history"
     && Number.isInteger(objective.activeObjective.messageIndex)
@@ -241,11 +221,11 @@ function buildContinuityMemory(messages, facts, options = {}) {
   const previousFileObservations = migratePriorFileObservations(
     previousWork.modifiedOrObservedFiles || [],
     previousState,
-    12,
+    64,
   );
   const currentFileObservations = coalesceFileObservations(
     facts.modifiedOrObservedFiles || [],
-    12,
+    64,
     String(facts.activeProject?.descriptor || ""),
   );
   const currentWorkStatus = {
@@ -263,7 +243,7 @@ function buildContinuityMemory(messages, facts, options = {}) {
     ),
     modifiedOrObservedFiles: coalesceFileObservations(
       [...previousFileObservations, ...currentFileObservations],
-      12,
+      64,
     ),
     recentBuildOrTestState: mergeRecentDistinct(
       previousWork.recentBuildOrTestState,
@@ -273,6 +253,7 @@ function buildContinuityMemory(messages, facts, options = {}) {
   };
   return sanitizeStructuredDurableValue({
     schemaVersion: 2,
+    compactionGeneration: Math.max(0, Number(previousState?.compactionGeneration || 0)) + 1,
     authority: "factual_memory_only",
     latestUserMessage: objective.latestUserMessage,
     activeObjective: objective.activeObjective,

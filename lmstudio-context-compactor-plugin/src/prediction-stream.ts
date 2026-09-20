@@ -28,6 +28,41 @@ export type StreamedAssistant = {
 
 const FOOTER_MARKER = "\n<!-- direct-continuity-note-v1 -->";
 
+export class GenerationRepetitionDetector {
+  private text = "";
+  private detected = false;
+  private totalChars = 0;
+  private lastCheckedAt = 0;
+
+  constructor(private readonly repeatCount = 3, private readonly minimumBlockChars = 80) {}
+
+  observe(fragment: LLMPredictionFragmentWithRoundIndex): boolean {
+    if (this.detected || fragment.isStructural || fragment.reasoningType === "reasoningStartTag"
+      || fragment.reasoningType === "reasoningEndTag" || !fragment.content) return false;
+    this.totalChars += fragment.content.length;
+    this.text = (this.text + fragment.content).slice(-12_000);
+    if (this.totalChars - this.lastCheckedAt < 32) return false;
+    this.lastCheckedAt = this.totalChars;
+    const maximumBlock = Math.min(2_000, Math.floor(this.text.length / this.repeatCount));
+    for (let size = this.minimumBlockChars; size <= maximumBlock; size += 1) {
+      const suffix = this.text.slice(-size);
+      if (new Set(suffix.replace(/\s/gu, "")).size < 12) continue;
+      let repeated = true;
+      for (let copy = 2; copy <= this.repeatCount; copy += 1) {
+        if (this.text.slice(-size * copy, -size * (copy - 1)) !== suffix) {
+          repeated = false;
+          break;
+        }
+      }
+      if (repeated) {
+        this.detected = true;
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
 export class PredictionStreamRenderer {
   private readonly states = new Map<number, StreamState>();
 

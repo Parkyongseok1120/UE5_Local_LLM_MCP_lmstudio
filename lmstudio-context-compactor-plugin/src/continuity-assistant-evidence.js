@@ -118,7 +118,6 @@ function mergePriorAssistantEvidence(previousState, evidence) {
   if (evidence.lastAssistantUpdate) merged.currentWorkStatus.lastAssistantUpdate = evidence.lastAssistantUpdate;
   merged.unresolvedItems = [
     ...(merged.unresolvedItems || []).filter((item) => item?.kind !== "assistant_progress_evidence"),
-    ...(evidence.pendingAssistantItems || []),
   ];
   merged.recentRawTail = [
     ...(merged.recentRawTail || []).filter((item) => item?.role !== "assistant"),
