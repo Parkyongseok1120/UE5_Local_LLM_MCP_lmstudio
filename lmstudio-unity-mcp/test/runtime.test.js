@@ -11,7 +11,7 @@ const { BridgeClient } = require("../src/bridge-client");
 const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
 function fixture(t, edit = true) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "unity-tools-test-")));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "unity-tools-test-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const folder of ["Assets", "Packages", "ProjectSettings", "Library/EvidenceFirst"]) fs.mkdirSync(path.join(root, folder), { recursive: true });
   fs.writeFileSync(path.join(root, "Packages/manifest.json"), "{}");
