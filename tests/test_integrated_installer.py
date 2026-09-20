@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import importlib.util
 import os
+import platform
 import shutil
 import sqlite3
 import subprocess
@@ -10,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import gui_installer_command
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.py"
@@ -23,21 +25,26 @@ PORTABLE_RULE_SOURCE = (
 
 
 @pytest.fixture(autouse=True)
+def _gui_profile_host(monkeypatch):
+    """General GUI profile logic uses a supported host. Intel-specific tests below
+    explicitly override this with x86_64 and still test the native refusal gate.
+    """
+    if sys.platform == "darwin":
+        monkeypatch.setattr(platform, "machine", lambda: "arm64")
+
+
+@pytest.fixture(autouse=True)
 def _ensure_node_npm_on_path(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     """Unreal adapter tests need node/npm; provide shims when the host has none."""
     if shutil.which("node") and shutil.which("npm"):
         return
     bindir = tmp_path_factory.mktemp("node-shims")
-    if os.name == "nt":
-        (bindir / "node.cmd").write_text("@echo v20.20.2\r\n", encoding="utf-8")
-        (bindir / "npm.cmd").write_text("@echo 10.8.2\r\n", encoding="utf-8")
-    else:
-        node = bindir / "node"
-        npm = bindir / "npm"
-        node.write_text("#!/bin/sh\necho v20.20.2\n", encoding="utf-8")
-        npm.write_text("#!/bin/sh\necho 10.8.2\n", encoding="utf-8")
-        node.chmod(0o755)
-        npm.chmod(0o755)
+    for name, version in [("node", "v20.20.2"), ("npm", "10.8.2")]:
+        if shutil.which(name):
+            continue
+        shim = bindir / (name + ".cmd" if os.name == "nt" else name)
+        shim.write_text(f"@echo {version}\r\n" if os.name == "nt" else f"#!/bin/sh\necho {version}\n", encoding="utf-8")
+        shim.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
 
 
@@ -69,18 +76,19 @@ def test_installer_profiles_are_manifest_driven() -> None:
     compactor_manifest = json.loads(
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
-    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.3.3"
-    assert manifest["version"] == "2.1.17"
+    assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.4.0"
+    assert manifest["version"] == "2.1.22"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
-    assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is False
-    assert manifest["safety"]["contextCompactionEnabledByDefault"] is False
+    assert manifest["safety"]["contextCompactorSkippedInHeadlessLmLinkMode"] is True
+    assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is True
+    assert manifest["safety"]["contextCompactionEnabledByDefault"] is True
     assert "contextCompactorEnabledByDefault" not in manifest["safety"]
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
-    assert node_package["version"] == node_lock["version"] == "0.3.22"
-    assert node_lock["packages"][""]["version"] == "0.3.22"
-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.51"
-    assert compactor_lock["packages"][""]["version"] == "0.4.51"
-    assert compactor_manifest["revision"] == 98
+    assert node_package["version"] == node_lock["version"] == "0.3.23"
+    assert node_lock["packages"][""]["version"] == "0.3.23"
+    assert compactor_package["version"] == compactor_lock["version"] == "0.4.61"
+    assert compactor_lock["packages"][""]["version"] == "0.4.61"
+    assert compactor_manifest["revision"] == 108
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
@@ -239,7 +247,7 @@ def test_interactive_agent_selector_confirms_or_falls_back_to_safe(
         def isatty() -> bool:
             return True
 
-    responses = iter(answers)
+    responses = iter(["y", "n", *answers])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -269,7 +277,7 @@ def test_interactive_index_selector_builds_selected_tier(
         def isatty() -> bool:
             return True
 
-    responses = iter(["n", "n", "n", "1", choice, "1", "y"])
+    responses = iter(["y", "n", "n", "n", "n", "1", choice, "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -292,7 +300,7 @@ def test_interactive_cline_selection_uses_default_settings_path(
         def isatty() -> bool:
             return True
 
-    responses = iter(["n", "y", "n", "1", "1", "1", "y"])
+    responses = iter(["y", "n", "n", "y", "n", "1", "1", "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     args = module.build_parser().parse_args(["--profile", "standard"])
@@ -366,12 +374,42 @@ def test_macos_picker_falls_back_to_tkinter_when_osascript_fails(
     assert calls == ["osascript", "tkinter:folder"]
 
 
-def test_intel_macos_blocks_lmstudio_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_intel_macos_requires_headless_mode_for_lmstudio_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     module = _load_installer_module()
     monkeypatch.setattr(module.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(module, "_host_cpu_arch", lambda: "x64")
-    with pytest.raises(RuntimeError, match="Intel macOS"):
+    with pytest.raises(RuntimeError, match="--headless-lmlink"):
         module._assert_host_component_support({"lmstudio", "context_compactor"})
+    sys.modules.pop("integrated_install", None)
+
+
+def test_intel_macos_allows_headless_lmlink_mcp_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr(module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(module, "_host_cpu_arch", lambda: "x64")
+    module._assert_host_component_support(
+        {"lmstudio", "unreal"}, headless_lmlink=True
+    )
+    sys.modules.pop("integrated_install", None)
+
+
+def test_intel_macos_headless_profile_skips_gui_context_compactor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_installer_module()
+    monkeypatch.setattr(module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(module, "_host_cpu_arch", lambda: "x64")
+    args = module.build_parser().parse_args(
+        ["--profile", "standard", "--yes", "--headless-lmlink"]
+    )
+    profile, components = module._resolve_components(args)
+    assert profile == "standard"
+    assert {"codex", "lmstudio", "unreal"} <= components
+    assert "context_compactor" not in components
     sys.modules.pop("integrated_install", None)
 
 
@@ -407,7 +445,7 @@ def test_interactive_project_picker_restores_uproject_and_folder_selection(
     selected = project_file if target_kind == "uproject" else project_dir
     # portable_rule=n, cline=n, select projects=y, menu, add another=n,
     # engine=launcher, rag=skip, authority=safe, continue=y
-    responses = iter(["n", "n", "y", menu_choice, "n", "1", "1", "1", "y"])
+    responses = iter(["y", "n", "n", "n", "y", menu_choice, "n", "1", "1", "1", "y"])
     monkeypatch.setattr(module.sys, "stdin", InteractiveInput())
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(responses))
     monkeypatch.setattr(module, "_pick_indexing_target", lambda kind, initial: selected)
@@ -575,8 +613,7 @@ def _run(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
         extras.append("--skip-deps")
     return subprocess.run(
         [
-            sys.executable,
-            str(INSTALLER),
+            *gui_installer_command(INSTALLER),
             "--yes",
             "--skip-runtime-bootstrap",
             "--codex-home",
@@ -854,16 +891,76 @@ def test_resolve_lms_cli_prefers_env_and_platform_binaries(
     sys.modules.pop("integrated_install", None)
 
 
-def test_context_compactor_pins_shortcut_without_activation_claim(tmp_path: Path) -> None:
+def test_context_compactor_pins_shortcut_and_enables_existing_chats(tmp_path: Path) -> None:
     module = _load_installer_module()
     home = tmp_path / ".lmstudio"
     home.mkdir()
+    chats = home / "conversations" / "00"
+    chats.mkdir(parents=True)
+    disabled = chats / "disabled.conversation.json"
+    enabled = chats / "enabled.conversation.json"
+    invalid = chats / "invalid.conversation.json"
+    disabled.write_text(json.dumps({"plugins": ["mcp/unity-tools"]}), encoding="utf-8")
+    enabled.write_text(json.dumps({"plugins": [module.CONTEXT_COMPACTOR_PLUGIN_ID]}), encoding="utf-8")
+    invalid.write_text(json.dumps({"plugins": "invalid"}), encoding="utf-8")
     result = module._configure_context_compactor_availability(home, dry_run=False)
     settings = json.loads((home / "settings.json").read_text(encoding="utf-8"))
     assert result["pinned"] is True
-    assert "activation" not in result
+    assert result["activation"] == {
+        "managed": True,
+        "pluginId": module.CONTEXT_COMPACTOR_PLUGIN_ID,
+        "conversationsRoot": str(home / "conversations"),
+        "eligibleConversationCount": 2,
+        "alreadyEnabledConversationCount": 1,
+        "updatedConversationCount": 1,
+        "skippedConversationCount": 1,
+        "enabledForExistingChats": True,
+    }
+    assert module.CONTEXT_COMPACTOR_PLUGIN_ID in json.loads(
+        disabled.read_text(encoding="utf-8")
+    )["plugins"]
     assert module.CONTEXT_COMPACTOR_PLUGIN_ID in settings["chat"]["pinnedPlugins"]
     assert settings["developer"]["allowDevelopmentPlugins"] is True
+    sys.modules.pop("integrated_install", None)
+
+
+def test_context_compactor_activation_dry_run_reports_without_writing(tmp_path: Path) -> None:
+    module = _load_installer_module()
+    home = tmp_path / ".lmstudio"
+    chats = home / "conversations" / "00"
+    chats.mkdir(parents=True)
+    conversation = chats / "chat.conversation.json"
+    conversation.write_text(json.dumps({"plugins": []}), encoding="utf-8")
+    before = conversation.read_bytes()
+    result = module._configure_context_compactor_availability(home, dry_run=True)
+    assert result["dryRun"] is True
+    assert result["activation"]["dryRun"] is True
+    assert result["activation"]["updatedConversationCount"] == 1
+    assert conversation.read_bytes() == before
+    assert not (home / "settings.json").exists()
+    sys.modules.pop("integrated_install", None)
+
+
+def test_context_compactor_uses_the_conversation_specific_json_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_installer_module()
+    home = tmp_path / ".lmstudio"
+    chats = home / "conversations" / "00"
+    chats.mkdir(parents=True)
+    conversation = chats / "large.conversation.json"
+    conversation.write_text(json.dumps({"plugins": [], "padding": "x" * 128}), encoding="utf-8")
+    monkeypatch.setattr(module, "MAX_INSTALLER_JSON_BYTES", 32)
+    monkeypatch.setattr(module, "MAX_CONVERSATION_JSON_BYTES", 1024)
+
+    result = module._enable_context_compactor_for_existing_chats(home, dry_run=False)
+
+    assert result["updatedConversationCount"] == 1
+    assert result["skippedConversationCount"] == 0
+    assert module.CONTEXT_COMPACTOR_PLUGIN_ID in json.loads(
+        conversation.read_text(encoding="utf-8")
+    )["plugins"]
     sys.modules.pop("integrated_install", None)
 
 

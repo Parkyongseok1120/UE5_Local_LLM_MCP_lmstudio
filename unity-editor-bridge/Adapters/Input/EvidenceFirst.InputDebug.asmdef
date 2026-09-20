@@ -1,0 +1,1 @@
+{"name":"EvidenceFirst.InputDebug","references":["EvidenceFirst.UnityBridge","EvidenceFirst.DebugRuntime","Unity.Newtonsoft.Json","Unity.InputSystem"],"includePlatforms":["Editor"],"defineConstraints":["EVIDENCE_INPUT"],"versionDefines":[{"name":"com.unity.inputsystem","expression":"1.0.0","define":"EVIDENCE_INPUT"}],"autoReferenced":true}

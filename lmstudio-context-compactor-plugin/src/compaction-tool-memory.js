@@ -82,9 +82,14 @@ function retainedDiagnosticList(value, maxItems = 8, maxChars = 320) {
 function exactProjectIdentity(value) {
   const descriptor = String(value || "");
   const pathApi = pathApiFor(descriptor);
-  if (!descriptor.toLowerCase().endsWith(".uproject") || !pathApi.isAbsolute(descriptor)) return "";
+  if (!pathApi.isAbsolute(descriptor)) return "";
   const resolved = pathApi.resolve(descriptor);
   return pathApi === path.win32 ? resolved.toLowerCase() : resolved;
+}
+
+function hasBoundUnityProject(value) {
+  const root = String(value?.canonicalProjectRoot || "");
+  return Boolean(value?.projectIdentity && pathApiFor(root).isAbsolute(root));
 }
 
 function stripControl(value, depth = 0) {
@@ -106,7 +111,9 @@ function retainedFileFact(file, fallbackOperation = "observed") {
     "path", "operation", "observationState", "sha256", "sha256AtObservation",
     "previousSha256", "previousSha256AtObservation", "canonicalProject",
     "canonicalProjectRoot", "canonicalPath", "absolutePath", "projectRelativePath",
-    "workspaceRelativePath", "resolvedRootType", "errorCode",
+    "workspaceRelativePath", "resolvedRootType", "errorCode", "startLine", "endLine",
+    "returnedLineCount", "nextStartLine", "totalLines", "hasMore", "observedLineRanges",
+    "totalLinesAtObservation", "readCoverageState",
   ]) {
     if (file[key] !== undefined) fact[key] = file[key];
   }
@@ -130,7 +137,7 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
     scoped.activeProjectCleared = true;
   }
   if (inconsistentProjectScope) {
-    for (const key of ["activeProject", "projectPath", "project", "canonicalProject"]) delete scoped[key];
+    for (const key of ["activeProject", "projectPath", "project", "canonicalProject", "canonicalProjectRoot", "projectIdentity"]) delete scoped[key];
     scoped.projectScopeState = "omitted_inconsistent_project_scope";
   }
   const hasFileIdentity = Boolean(
@@ -141,12 +148,15 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
     scoped.canonicalProject = descriptor;
     scoped.canonicalProjectSource = perCallProject
       ? "tool_request_fact"
-      : (explicitProject ? "tool_result_fact" : fallbackSource);
+      : (explicitProject ? (hasBoundUnityProject(scoped) ? "unity_tool_result_fact" : "tool_result_fact") : fallbackSource);
     retainedObservation = fileObservation(scoped, descriptor);
     if (retainedObservation) {
       scoped.canonicalProjectRoot = retainedObservation.canonicalProjectRoot;
       scoped.canonicalPath = retainedObservation.canonicalPath;
-      scoped.mutationSnapshotState = "fresh_read_required";
+      if (scoped.operation || scoped.sha256 || scoped.previousSha256
+        || scoped.errorCode === "FILE_VERSION_CONFLICT") {
+        scoped.mutationSnapshotState = "fresh_read_required";
+      }
     }
   }
   if (hasFileIdentity && !retainedObservation) {
@@ -172,23 +182,102 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
   return sanitizeStructuredDurableValue(scoped);
 }
 
-function parseToolResult(content) {
+const MAX_TOOL_RESULT_CONTENT_CHARS = 4 * 1024 * 1024;
+
+function decodeToolResultRecord(content) {
   const text = String(content || "").trim();
-  if (!text) return { summary: "empty tool result" };
+  if (!text) return { error: "empty" };
+  if (text.length > MAX_TOOL_RESULT_CONTENT_CHARS) return { error: "oversized" };
+  let value;
   try {
-    const source = stripControl(JSON.parse(text));
+    value = JSON.parse(text);
+  } catch {
+    return { error: "malformed" };
+  }
+
+  // LM Studio serializes MCP CallToolResult.content as an array of content
+  // blocks. File facts live in the JSON string of one text block. Accept only
+  // one unambiguous block so facts from separate results or projects can never
+  // be merged by the continuity layer.
+  if (Array.isArray(value)) {
+    if (value.length !== 1 || !isRecord(value[0]) || value[0].type !== "text"
+      || typeof value[0].text !== "string" || value[0].text.length > MAX_TOOL_RESULT_CONTENT_CHARS) {
+      return { error: "unsupported_envelope" };
+    }
+    try {
+      value = JSON.parse(value[0].text);
+    } catch {
+      return { error: "malformed_embedded_json" };
+    }
+  } else if (isRecord(value) && isRecord(value.structuredContent)) {
+    value = value.structuredContent;
+  } else if (isRecord(value) && Array.isArray(value.content)) {
+    if (value.content.length !== 1 || !isRecord(value.content[0])
+      || value.content[0].type !== "text" || typeof value.content[0].text !== "string"
+      || value.content[0].text.length > MAX_TOOL_RESULT_CONTENT_CHARS) {
+      return { error: "unsupported_envelope" };
+    }
+    try {
+      value = JSON.parse(value.content[0].text);
+    } catch {
+      return { error: "malformed_embedded_json" };
+    }
+  }
+  return isRecord(value) ? { value } : { error: "unsupported_value" };
+}
+
+function parseToolResult(content) {
+  const decoded = decodeToolResultRecord(content);
+  if (decoded.error === "empty") return { summary: "empty tool result" };
+  if (decoded.error) {
+    return { summary: decoded.error === "malformed" || decoded.error === "malformed_embedded_json"
+      ? "malformed tool result omitted"
+      : "unsupported tool result envelope omitted" };
+  }
+  try {
+    const source = stripControl(decoded.value);
     const out = {};
+    // Git comparisons are repository observations, never file read/review coverage.
+    if (source.kind === "git_observation" || source.action && source.comparison && source.canonicalProjectRoot) {
+      const git = {};
+      for (const key of ["action", "comparison", "base", "head", "currentHead", "blobOid", "path",
+        "repositoryIdentity", "workspaceIdentity", "snapshotId", "hasMore", "complete", "incomplete",
+        "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total", "observedAt", "sourceConsistency", "submoduleWorktrees",
+        "queryPathBase", "requestedPathsCount", "requestedPathsOmitted", "requestedPathsSha256",
+        "resolvedRepositoryPathsCount", "resolvedRepositoryPathsOmitted", "resolvedRepositoryPathsSha256"]) {
+        if (source[key] !== undefined) git[key] = source[key];
+      }
+      for (const key of ["requestedPaths", "resolvedRepositoryPaths"]) {
+        if (!Array.isArray(source[key])) continue;
+        git[key] = source[key].slice(0, 8).map(value => String(value).slice(0, 400));
+        const omitted = source[key].length - git[key].length;
+        if (omitted > 0) git[`${key}Omitted`] = Number(git[`${key}Omitted`] || 0) + omitted;
+      }
+      if (Array.isArray(source.items)) {
+        git.items = source.items.slice(0, 8).map(item => Object.fromEntries(
+          ["status", "path", "oldPath", "similarity", "commit", "subject"].filter(k => item?.[k] !== undefined)
+            .map(k => [k, typeof item[k] === "string" ? item[k].slice(0, 400) : item[k]])));
+        git.omittedItems = Math.max(0, (decoded.value.items?.length || source.items.length) - git.items.length);
+      }
+      out.gitObservation = git;
+      // Commit blob lines are not current-worktree coverage or a write receipt.
+      for (const key of ["status", "canonicalProject", "canonicalProjectRoot", "projectIdentity"])
+        if (source[key] !== undefined) out[key] = source[key];
+      return out;
+    }
     for (const key of [
       "ok", "status", "summary", "message", "errorCode", "path", "operation", "mode",
       "sha256", "previousSha256", "size", "truncated", "hasMore",
-      "startLine", "endLine", "totalLines", "filesScanned", "findingCount",
+      "startLine", "endLine", "returnedLineCount", "nextStartLine", "totalLines", "filesScanned", "findingCount",
       "validationOk", "blocksBuild", "exitCode", "likelyErrors", "fullLogPath",
       "upToDate", "actionsExecuted", "proofLevel", "failedCount", "succeededCount",
       "claimCount", "errorCount", "warningCount", "errorShapeCount", "warningShapeCount",
       "omittedErrorShapeCount", "omittedWarningShapeCount", "schemaVersion",
       "activeProject", "projectPath", "project", "engineAssociation", "resolvedEngineVersion",
       "requestedEngineAssociation", "resolvedRootType", "projectRelativePath", "workspaceRelativePath",
-      "hashSource", "canonicalProject", "canonicalPath",
+      "hashSource", "canonicalProject", "canonicalProjectRoot", "projectIdentity", "canonicalPath",
+      "observation", "attachmentId", "attachmentName", "attachmentType", "parser",
+      "startOffset", "endOffset", "totalChars", "parsedTextSha256", "rangeUnit",
     ]) {
       if (source[key] !== undefined) out[key] = source[key];
     }
@@ -201,7 +290,16 @@ function parseToolResult(content) {
     if (source.absolutePath && out.canonicalPath === undefined) {
       out.canonicalPath = pathApiFor(source.absolutePath).resolve(String(source.absolutePath));
     }
-    if (source.snapshotCapturedAt !== undefined) out.lastObservedAt = source.snapshotCapturedAt;
+    if (hasBoundUnityProject(source) && source.hash !== undefined && out.sha256 === undefined) {
+      out.sha256 = source.hash;
+    }
+    if (hasBoundUnityProject(source) && source.previousHash !== undefined && out.previousSha256 === undefined) {
+      out.previousSha256 = source.previousHash;
+    }
+    if (source.lastObservedAt !== undefined || source.snapshotCapturedAt !== undefined
+      || (hasBoundUnityProject(source) && source.observedAt !== undefined)) {
+      out.lastObservedAt = source.lastObservedAt || source.snapshotCapturedAt || source.observedAt;
+    }
     if (out.path && (out.operation || out.sha256 || out.previousSha256 || out.canonicalPath)) {
       out.mutationSnapshotState = "fresh_read_required";
     }
@@ -308,7 +406,7 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     const requestOwnsScope = requestScope?.hasExplicitProject === true
       && requestScope?.changesActiveProject !== true;
     if (activeProjectCleared) activeProject = "";
-    else if (explicitProject && !requestOwnsScope) activeProject = explicitProject;
+    else if (explicitProject && !requestOwnsScope && !hasBoundUnityProject(parsed)) activeProject = explicitProject;
     const fallbackProject = activeProjectCleared ? "" : (requestOwnsScope ? requestScope.descriptor : activeProject);
     const fallbackSource = requestOwnsScope
       ? (requestScope.descriptor ? "tool_request_fact" : "unresolved_tool_request_project")
@@ -369,6 +467,15 @@ const DERIVED_FILE_FIELDS = new Set([
   "sha256",
   "previousSha256",
   "lastObservedAt",
+  "startLine",
+  "endLine",
+  "returnedLineCount",
+  "nextStartLine",
+  "totalLines",
+  "hasMore",
+  "observedLineRanges",
+  "totalLinesAtObservation",
+  "readCoverageState",
   "mutationSnapshotState",
   "files",
 ]);
@@ -413,6 +520,17 @@ function serializeToolOutcome(record, maxChars) {
     bounded.fileFactsExtractedSeparately = true;
   }
   bounded.outcomeDisplayState = "bounded_after_factual_extraction";
+  if (displayRecord.gitObservation) {
+    const { items, ...identity } = displayRecord.gitObservation;
+    bounded.gitObservation = { ...identity, ...(items ? { omittedItems: (identity.omittedItems || 0) + items.length } : {}) };
+    // Preserve comparison identity before optional names, diagnostics or prose.
+    for (const item of items || []) {
+      const candidate = { ...bounded, gitObservation: { ...bounded.gitObservation,
+        items: [...(bounded.gitObservation.items || []), item], omittedItems: bounded.gitObservation.omittedItems - 1 } };
+      if (JSON.stringify(candidate).length > maxChars) break;
+      bounded.gitObservation = candidate.gitObservation;
+    }
+  }
   for (const key of ["errors", "warnings"]) {
     if (!Array.isArray(displayRecord[key])) continue;
     const retained = [];
@@ -454,17 +572,50 @@ function parsedOutcomes(outcomes) {
   return parsed;
 }
 
+function durableGitObservation(value) {
+  if (!isRecord(value)) return null;
+  const retained = {};
+  for (const key of [
+    "action", "comparison", "base", "head", "currentHead", "blobOid", "path",
+    "repositoryIdentity", "workspaceIdentity", "hasMore", "complete", "incomplete",
+    "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total",
+    "sourceConsistency", "submoduleWorktrees", "queryPathBase", "requestedPaths",
+    "requestedPathsCount", "requestedPathsOmitted", "requestedPathsSha256", "resolvedRepositoryPaths",
+    "resolvedRepositoryPathsCount", "resolvedRepositoryPathsOmitted", "resolvedRepositoryPathsSha256",
+    "canonicalProjectRoot", "canonicalProject", "projectIdentity",
+  ]) {
+    if (value[key] !== undefined) retained[key] = value[key];
+  }
+  if (Array.isArray(value.items)) {
+    retained.items = value.items.slice(0, 4);
+    retained.omittedItems = Math.max(0, Number(value.omittedItems || 0) + value.items.length - retained.items.length);
+  } else if (value.omittedItems !== undefined) {
+    retained.omittedItems = value.omittedItems;
+  }
+  return sanitizeStructuredDurableValue(retained);
+}
+
 function stateMemory(outcomes) {
   const files = [];
   const builds = [];
+  const gitObservations = [];
   let activeProject = null;
   for (const item of parsedOutcomes(outcomes)) {
+    if (isRecord(item.gitObservation)) {
+      gitObservations.push(durableGitObservation({
+        ...item.gitObservation,
+        ...(item.canonicalProjectRoot ? { canonicalProjectRoot: item.canonicalProjectRoot } : {}),
+        ...(item.canonicalProject ? { canonicalProject: item.canonicalProject } : {}),
+        ...(item.projectIdentity ? { projectIdentity: item.projectIdentity } : {}),
+      }));
+    }
     if (item.activeProjectCleared === true) {
       activeProject = { cleared: true, source: "tool_result_fact" };
       continue;
     }
     const projectCandidate = projectDescriptor(item);
-    if (projectCandidate && item.canonicalProjectSource !== "tool_request_fact") {
+    if (projectCandidate && item.canonicalProjectSource !== "tool_request_fact"
+      && item.canonicalProjectSource !== "unity_tool_result_fact") {
       activeProject = {
         descriptor: String(projectCandidate),
         root: projectRoot(projectCandidate),
@@ -501,6 +652,7 @@ function stateMemory(outcomes) {
   return {
     files: coalesceFileObservations(files.filter(Boolean), 16),
     builds: builds.slice(-4),
+    gitObservations: gitObservations.slice(-8),
     activeProject,
   };
 }
@@ -508,7 +660,9 @@ function stateMemory(outcomes) {
 module.exports = {
   CONTROL_DIRECTIVES,
   INTERNAL_KEYS,
+  decodeToolResultRecord,
   parseToolResult,
+  durableGitObservation,
   retainedFileFact,
   scopeToolOutcome,
   stateMemory,

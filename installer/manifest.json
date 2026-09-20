@@ -1,7 +1,7 @@
 {
   "name": "Evidence-First Integrated Coding Stack",
-  "productVersion": "1.3.3",
-  "version": "2.1.17",
+  "productVersion": "1.4.0",
+  "version": "2.1.22",
   "requires": {
     "python": "3.10+ for direct install.py invocation; automatic from platform launchers",
     "node": "20+",
@@ -26,6 +26,7 @@
     "lmstudio",
     "portable_rule",
     "unreal",
+    "unity",
     "context_compactor",
     "cline"
   ],
@@ -35,16 +36,17 @@
     "interactiveAgentModeSelector": true,
     "indexTierIsIndependent": true,
     "contextCompactorInstalledWithLmStudio": true,
-    "contextCompactorChatActivationManagedByInstaller": false,
-    "contextCompactionEnabledByDefault": false
+    "contextCompactorSkippedInHeadlessLmLinkMode": true,
+    "contextCompactorChatActivationManagedByInstaller": true,
+    "contextCompactionEnabledByDefault": true
   },
   "portablePackage": {
-    "launchers": ["INSTALL.bat", "install.sh"],
+    "launchers": ["INSTALL.bat", "UPDATE.bat", "install.sh"],
     "indexIncludedByDefault": false,
     "supportedHosts": ["windows", "ubuntu-linux", "macos-apple-silicon"],
     "hostNotes": {
       "macos-apple-silicon": "Physical FULL install PASS on darwin-arm64 (runtimes, context compactor 45/45, LM Studio plugin installation/pinning, UE 5.8 auto-detect, full RAG 88829 chunks, evidence-first MCP smoke, ok:true). Chat-level activation was not durably proven. Limitations: headless Unreal asset metadata export FAIL; LM Studio API connectivity UNVERIFIED when server was down; installer signing/notarization not claimed.",
-      "macos-intel": "LM Studio configuration unsupported; custom Codex/portable_rule/Cline-only allowed",
+      "macos-intel": "LM Studio GUI unsupported. MCP/Unreal configuration is available through Linux x64 llmster/LM Link with --headless-lmlink; GUI-only context compactor is omitted. Native custom Codex/portable_rule/Cline-only installs remain allowed.",
       "windows": "Automated CI/fixture installer and Direct MCP paths are exercised. A prior native Windows LM Studio GUI session observed RAG/MCP tool use and a real UBT invocation; a clean-machine physical installer lifecycle and universal project/engine/plugin coverage are not claimed."
     },
     "runtimeArchiveIntegrity": "pinned-sha256",

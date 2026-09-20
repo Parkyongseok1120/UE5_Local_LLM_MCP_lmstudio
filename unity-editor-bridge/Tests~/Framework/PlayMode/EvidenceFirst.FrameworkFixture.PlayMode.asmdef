@@ -1,0 +1,5 @@
+{
+  "name": "EvidenceFirst.FrameworkFixture.PlayMode",
+  "references": [],
+  "optionalUnityReferences": ["TestAssemblies"]
+}

@@ -1,8 +1,10 @@
-import { type PluginContext } from "@lmstudio/sdk";
+import { type LMStudioClient, type PluginContext } from "@lmstudio/sdk";
+import { preprocessAttachments } from "./attachment-boundary";
 import { directConfigSchematics } from "./direct-config";
-import { handlePredictionLoop } from "./prediction-loop";
+import { createPredictionLoopHandler } from "./prediction-loop";
 
-export async function main(context: PluginContext) {
+export async function main(context: PluginContext, client?: LMStudioClient) {
   context.withConfigSchematics(directConfigSchematics);
-  context.withPredictionLoopHandler(handlePredictionLoop);
+  context.withPromptPreprocessor(preprocessAttachments);
+  context.withPredictionLoopHandler(createPredictionLoopHandler(undefined, client));
 }

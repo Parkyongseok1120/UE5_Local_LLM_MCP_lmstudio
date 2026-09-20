@@ -1,5 +1,7 @@
 # 설치·업데이트·복구
 
+Unity v1.4.0 beta 1은 `--profile custom --components unity --unity-project /absolute/project`로 별도 Node MCP와 UPM Editor Bridge를 설치합니다. [Unity 설치·권한·지원 범위](Unity_Setup.md)를 참고하세요. 아래 기본 프로필 설명은 Unreal용이며 Unity 도구를 Unreal 채팅에 자동 추가하지 않습니다.
+
 설치는 저장소 맨 위의 `INSTALL.bat` 또는 `install.sh`에서 시작하면 됩니다. 둘 다 같은 `install.py`를 실행합니다. 용도마다 다른 설치 파일을 찾을 필요는 없습니다.
 
 ## 지원 운영체제와 필수 프로그램
@@ -9,7 +11,7 @@
 | Windows 10/11, x64·arm64 | `INSTALL.bat`. Python이 없으면 Windows PowerShell로 초기 설치를 진행합니다. |
 | Apple Silicon macOS | `./install.sh`. Rosetta로 실행해도 실제 장비에 맞는 프로그램을 선택합니다. |
 | Ubuntu 22.04/24.04, x64·arm64 | `./install.sh`. glibc 환경을 기준으로 합니다. Alpine처럼 musl을 쓰는 환경은 지원하지 않습니다. |
-| Intel macOS | LM Studio·언리얼·대화 압축기 구성은 설치할 수 없습니다. Codex 규칙이나 Cline 등만 고르는 사용자 지정 구성은 가능합니다. |
+| Intel macOS | LM Studio GUI는 지원하지 않습니다. Linux x64 VM에 `llmster`를 설치한 뒤 VM 안에서 `./install.sh --profile standard --yes --headless-lmlink`를 실행하면 MCP·언리얼 구성을 설치할 수 있습니다. GUI 전용 대화 압축기는 제외됩니다. |
 
 Python 3.10 이상이 있으면 초기 실행에 사용합니다. 없으면 버전과 SHA-256이 고정된 uv를 받아 검증한 뒤 사용자 폴더에 Python 3.12를 준비합니다. 실제 도구는 설치기가 관리하는 Python을 사용합니다. 시스템 전체에 Python을 등록하거나 PATH를 바꾸지 않습니다.
 
@@ -53,6 +55,24 @@ python install.py --profile standard --yes --build-rag --index-tier standard --e
 
 첫 명령은 읽기 전용 설치입니다. 두 번째는 지정한 엔진과 프로젝트로 검색 자료도 만듭니다. 경로는 실제 위치로 바꿔야 합니다. 파일 수정과 빌드를 허용하려면 아래 두 옵션이 모두 필요합니다.
 
+Intel Mac의 Linux VM 또는 다른 GUI 없는 `llmster` 환경에서는 헤드리스 LM Link 모드를 사용합니다.
+
+```sh
+./install.sh --profile standard --yes --headless-lmlink
+```
+
+Intel Mac 호스트에서 전체 VM 흐름을 자동화할 때는 저장소 루트의 전용 설치기를 실행합니다.
+
+```bash
+./install-intel-mac.sh \
+  --project /absolute/path/MyGame.uproject \
+  --engine-root "/Users/Shared/Epic Games/UE_5.7"
+```
+
+이 설치기는 Lima x86_64 VM, 읽기 전용 프로젝트·엔진 마운트, llmster 로그인과 LM Link, 헤드리스 프로필, RAG, 세 MCP 서버 초기화, 모델의 실제 MCP 호출, 프로젝트용 `lmstudio-cli.sh`까지 검증합니다. 계정 페어링 승인만 대화형 단계입니다. 기본 `lms chat`은 MCP 도구를 첨부하지 않으므로 프로젝트용 실행기는 OpenAI 호환 추론 요청과 stdio MCP 서버 사이의 도구 호출 루프를 제공합니다. 이 실행기에는 GUI를 띄우지 않는 헤드리스 Context Compactor가 포함되며 기존 deterministic compaction core로 오래된 대화를 조용히 축약합니다.
+
+`--headless-lmlink`는 `lmstudio`와 `unreal` MCP 구성을 유지하면서 GUI에서만 사용하는 `context_compactor`를 자동으로 제외합니다. 인텔 macOS에서 LM Studio 관련 구성요소를 선택할 때는 이 옵션이 필수입니다.
+
 ```powershell
 python install.py --profile standard --yes --enable-agent-mode --accept-agent-risk
 ```
@@ -65,11 +85,11 @@ python install.py --profile standard --yes --enable-agent-mode --accept-agent-ri
 
 설치 후 LM Studio를 재시작하고 사용할 AI 모델을 직접 선택합니다. `unreal-rag`, `unreal-agent`를 켜면 됩니다.
 
-대화 압축기 `codex/unreal-context-compactor`는 설치하고 목록에 고정만 합니다. 채팅에서 활성화하지는 않습니다. 새 채팅과 기존 채팅 모두 스위치가 꺼져 있는지 확인해야 합니다(`OFF`). 긴 대화에서 필요할 때 해당 채팅의 단일 스위치만 켜면 됩니다. `Observe only`는 대화를 바꾸지 않고 사용량만 측정하는 옵션입니다.
+대화 압축기 `codex/unreal-context-compactor`는 설치하고 목록에 고정하며, 설치·업데이트 시 당시 저장된 기존 채팅의 스위치를 `ON`으로 설정합니다. 필요 없는 채팅에서는 단일 스위치를 끌 수 있습니다. `Observe only`는 대화를 바꾸지 않고 사용량만 측정하는 옵션입니다.
 
-LM Studio·언리얼 구성에는 압축기 파일 설치가 포함됩니다. 일반 설치에서 제외하는 선택지는 없습니다. `--skip-context-compactor --allow-skip-context-compactor`는 지원하지 않는 긴급 우회용입니다.
+LM Studio·언리얼 구성에는 압축기 파일 설치가 포함됩니다. 일반 GUI 설치에서 제외하는 선택지는 없습니다. `--headless-lmlink`는 GUI 없는 llmster 환경을 위한 지원 모드이며 압축기를 자동으로 제외합니다. `--skip-context-compactor --allow-skip-context-compactor`는 그 외 환경에서 지원하지 않는 긴급 우회용입니다.
 
-`lms`를 못 찾으면 `LMSTUDIO_CLI` 또는 LM Studio 설치 위치를 확인해야 합니다. 설치기는 사용자 LM Studio 폴더의 플러그인 파일과 설정을 확인하지만 개별 채팅 저장소는 바꾸지 않습니다.
+`lms`를 못 찾으면 `LMSTUDIO_CLI` 또는 LM Studio 설치 위치를 확인해야 합니다. 설치기는 사용자 LM Studio 폴더의 플러그인 파일과 설정을 확인하고, 정상적인 기존 채팅 파일의 `plugins` 목록에 압축기 ID를 추가합니다. 손상되거나 알 수 없는 형식의 채팅 파일은 바꾸지 않습니다.
 
 ## 설치 위치와 업데이트
 

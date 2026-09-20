@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -261,6 +262,20 @@ def test_generic_mcp_stdio_smoke() -> None:
     payload = json.loads(completed.stdout)
     assert payload["ok"] is True
     assert payload["status"]["readOnly"] is True
+
+
+def test_generic_mcp_stdio_smoke_with_legacy_windows_code_page() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(SMOKE)],
+        cwd=str(ROOT),
+        env={**os.environ, "PYTHONIOENCODING": "cp949"},
+        capture_output=True,
+        text=True,
+        encoding="cp949",
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert json.loads(completed.stdout)["ok"] is True
 
 
 def test_lmstudio_preset_contains_contract_and_low_temperature() -> None:

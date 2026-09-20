@@ -11,6 +11,8 @@ function isRecord(value) {
 function projectDescriptor(item, fallback = "") {
   const candidate = item?.canonicalProject || item?.activeProject || item?.projectPath
     || (String(item?.project || "").toLowerCase().endsWith(".uproject") ? item.project : "")
+    || (item?.projectIdentity && pathApiFor(item.canonicalProjectRoot).isAbsolute(String(item.canonicalProjectRoot || ""))
+      ? item.canonicalProjectRoot : "")
     || fallback;
   return candidate ? String(candidate) : "";
 }
@@ -74,20 +76,70 @@ function normalizedObservationState(item, fallbackOperation) {
   return "observed";
 }
 
+const MAX_OBSERVED_LINE_RANGES = 16;
+
+function positiveInteger(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 1 ? number : null;
+}
+
+function normalizeObservedLineRanges(item) {
+  const candidates = Array.isArray(item?.observedLineRanges)
+    ? item.observedLineRanges.slice(0, 80)
+    : [];
+  const startLine = positiveInteger(item?.startLine);
+  const endLine = positiveInteger(item?.endLine);
+  if (startLine !== null && endLine !== null && endLine >= startLine) {
+    candidates.push({ startLine, endLine });
+  }
+  const ranges = candidates.map((range) => ({
+    startLine: positiveInteger(range?.startLine),
+    endLine: positiveInteger(range?.endLine),
+  })).filter((range) => (
+    range.startLine !== null && range.endLine !== null && range.endLine >= range.startLine
+  )).sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
+  const merged = [];
+  for (const range of ranges) {
+    const previous = merged.at(-1);
+    if (previous && range.startLine <= previous.endLine + 1) {
+      previous.endLine = Math.max(previous.endLine, range.endLine);
+    } else {
+      merged.push({ startLine: range.startLine, endLine: range.endLine });
+    }
+  }
+  if (merged.length <= MAX_OBSERVED_LINE_RANGES) return merged;
+  const headCount = Math.ceil(MAX_OBSERVED_LINE_RANGES / 2);
+  return [...merged.slice(0, headCount), ...merged.slice(-(MAX_OBSERVED_LINE_RANGES - headCount))];
+}
+
+function lineCoverageState(ranges, totalLines) {
+  if (!ranges.length) return undefined;
+  return ranges.length === 1 && ranges[0].startLine === 1
+    && totalLines !== null && ranges[0].endLine >= totalLines
+    ? "complete"
+    : "partial";
+}
+
 function fileObservation(item, fallbackProject = "", fallbackOperation = "observed") {
   if (!isRecord(item) || !item.path) return null;
   const descriptor = projectDescriptor(item, fallbackProject);
   const canonicalPath = canonicalFilePath(item, descriptor);
   if (!descriptor || !canonicalPath) return null;
+  const sha256AtObservation = item.sha256AtObservation || item.sha256 || undefined;
+  const observedLineRanges = sha256AtObservation ? normalizeObservedLineRanges(item) : [];
+  const totalLinesAtObservation = positiveInteger(item.totalLinesAtObservation ?? item.totalLines);
   return sanitizeStructuredDurableValue({
     canonicalProject: descriptor || undefined,
     canonicalProjectRoot: projectRoot(descriptor) || undefined,
     canonicalPath: canonicalPath || undefined,
     path: String(item.path),
     observationState: normalizedObservationState(item, fallbackOperation),
-    sha256AtObservation: item.sha256AtObservation || item.sha256 || undefined,
+    sha256AtObservation,
     previousSha256AtObservation: item.previousSha256AtObservation || item.previousSha256 || undefined,
     lastObservedAt: item.lastObservedAt || item.snapshotCapturedAt || undefined,
+    observedLineRanges: observedLineRanges.length ? observedLineRanges : undefined,
+    totalLinesAtObservation: observedLineRanges.length ? totalLinesAtObservation || undefined : undefined,
+    readCoverageState: lineCoverageState(observedLineRanges, totalLinesAtObservation),
     mutationSnapshotState: "fresh_read_required",
   });
 }
@@ -102,12 +154,33 @@ function coalesceFileObservations(items, maxItems = 16, fallbackProject = "") {
       observation.canonicalPath || observation.path || "",
     ]);
     const previous = observations.get(identity);
+    const previousHash = String(previous?.sha256AtObservation || "");
+    const currentHash = String(observation.sha256AtObservation || "");
+    const sameObservedVersion = Boolean(previous && previousHash && (!currentHash || currentHash === previousHash));
+    const observedLineRanges = normalizeObservedLineRanges({
+      observedLineRanges: [
+        ...(sameObservedVersion ? previous.observedLineRanges || [] : []),
+        ...(observation.observedLineRanges || []),
+      ],
+    });
+    const totalLinesAtObservation = positiveInteger(observation.totalLinesAtObservation)
+      || (sameObservedVersion ? positiveInteger(previous.totalLinesAtObservation) : null);
     if (observations.has(identity)) observations.delete(identity);
-    observations.set(identity, {
+    const merged = {
       ...previous,
       ...observation,
       mutationSnapshotState: "fresh_read_required",
-    });
+    };
+    if (observedLineRanges.length) {
+      merged.observedLineRanges = observedLineRanges;
+      if (totalLinesAtObservation !== null) merged.totalLinesAtObservation = totalLinesAtObservation;
+      merged.readCoverageState = lineCoverageState(observedLineRanges, totalLinesAtObservation);
+    } else {
+      delete merged.observedLineRanges;
+      delete merged.totalLinesAtObservation;
+      delete merged.readCoverageState;
+    }
+    observations.set(identity, merged);
   }
   return [...observations.values()].slice(-maxItems);
 }
@@ -140,6 +213,7 @@ module.exports = {
   normalizedObservationState,
   pathApiFor,
   isContainedPath,
+  normalizeObservedLineRanges,
   migratePriorFileObservations,
   projectDescriptor,
   projectRoot,

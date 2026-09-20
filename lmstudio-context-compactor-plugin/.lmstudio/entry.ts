@@ -34,7 +34,7 @@ const context: PluginContext = {
 (globalThis as any).__LMS_PLUGIN_CONTEXT = true;
 
 import("./../src/index.ts")
-  .then(async module => module.main(context))
+  .then(async module => module.main(context, client))
   .then(() => host.initCompleted())
   .catch(error => {
     console.error("Failed to execute the Unreal context compactor plugin.");

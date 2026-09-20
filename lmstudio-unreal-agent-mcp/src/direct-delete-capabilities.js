@@ -308,6 +308,7 @@ function createDeleteCapabilities(context) {
     context.fileSnapshots.invalidatePath(resolution.activeProject, resolution.absolutePath);
     return success({
       operation: "moved_to_trash",
+      canonicalProject: resolution.activeProject,
       path: `project://${resolution.relativePath}`,
       sha256: read.hash,
       hashSource: version.hashSource,

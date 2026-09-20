@@ -9,6 +9,8 @@
  * project/read/mutation/diagnostic boundaries; this file owns no workflow.
  */
 
+const path = require("node:path");
+const { createWorkspaceCapabilities, workspaceToolDefinitions } = require("../../shared-tool-core/workspace");
 const { Server } = require("@modelcontextprotocol/sdk/server/index.js");
 const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js");
 const { CallToolRequestSchema, ListToolsRequestSchema } = require("@modelcontextprotocol/sdk/types.js");
@@ -27,14 +29,19 @@ const { recoverRuntimeTransactions } = require("./direct-transaction-recovery.js
 
 function createDirectRuntime(options = {}) {
   const context = createDirectRuntimeContext(options);
+  const workspace = createWorkspaceCapabilities({ resolveBinding: async selector => {
+    const project = await context.resolveCallProject(selector);
+    return { root: project ? path.dirname(project) : context.workspaceRoot, engine: "unreal", projectIdentity: project || null };
+  } });
   const handlers = Object.freeze({
+    ...Object.fromEntries(workspaceToolDefinitions().map(t => [t.name, args => workspace(t.name, args)])),
     ...createProjectCapabilities(context),
     ...createReadCapabilities(context),
     ...createLogCapabilities(context),
     ...createMutationCapabilities(context),
     ...createDiagnosticCapabilities(context),
   });
-  const tools = toolDefinitions();
+  const tools = toolDefinitions().filter(t => context.env.WORKSPACE_CAPABILITIES !== "0" || !workspaceToolDefinitions().some(w => w.name === t.name));
   const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
   const missingHandlers = tools.map((tool) => tool.name).filter((name) => typeof handlers[name] !== "function");
   if (missingHandlers.length) throw new Error(`Direct catalog has no handler: ${missingHandlers.join(", ")}`);
@@ -42,7 +49,7 @@ function createDirectRuntime(options = {}) {
   async function callTool(name, rawArgs = {}, requestContext = {}) {
     const args = cleanArgs(rawArgs);
     try {
-      const handler = handlers[name];
+      const handler = toolsByName.has(name) ? handlers[name] : undefined;
       const definition = toolsByName.get(name);
       const allowed = new Set(Object.keys(definition?.inputSchema?.properties || {}));
       const unsupported = Object.keys(args).filter((key) => !allowed.has(key));

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-platform integrated installer for evidence-first coding and optional Unreal adapters."""
+"""Cross-platform integrated installer for evidence-first coding and Unreal/Unity adapters."""
 
 from __future__ import annotations
 
@@ -75,6 +75,7 @@ CONTEXT_COMPACTOR_PLUGIN_NAME = "unreal-context-compactor"
 
 INVALID_LOCK_GRACE_SECONDS = 300
 MAX_INSTALLER_JSON_BYTES = 16 * 1024 * 1024
+MAX_CONVERSATION_JSON_BYTES = 64 * 1024 * 1024
 
 
 def _detect_engine_root(engine_association: str = "") -> Path | None:
@@ -385,6 +386,8 @@ def _project_picker_initial_directory(args: argparse.Namespace) -> Path:
 
 
 def _picker_title(kind: str) -> str:
+    if kind == "unity":
+        return "Select Unity project folder (Assets, Packages, ProjectSettings)"
     if kind == "uproject":
         return "Select Unreal project (.uproject) to index"
     if kind == "engine":
@@ -478,6 +481,13 @@ def _normalize_picked_path(kind: str, selected: str | None) -> Path | None:
     if not selected:
         return None
     path = Path(selected).expanduser().resolve()
+    if kind == "unity" and not (
+        (path / "Assets").is_dir()
+        and (path / "Packages/manifest.json").is_file()
+        and (path / "ProjectSettings/ProjectVersion.txt").is_file()
+    ):
+        print(f"  Invalid Unity project: {path}. Select the folder containing Assets, Packages and ProjectSettings.")
+        return None
     if kind == "uproject" and (not path.is_file() or path.suffix.lower() != ".uproject"):
         print(f"  Ignoring invalid Unreal project selection: {path}")
         return None
@@ -590,13 +600,18 @@ def _json_bytes(payload: Any) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
 
-def _load_json(path: Path, default: Any) -> Any:
+def _load_json(
+    path: Path,
+    default: Any,
+    *,
+    max_bytes: int = MAX_INSTALLER_JSON_BYTES,
+) -> Any:
     if not path.exists():
         return default
     size = path.stat().st_size
-    if size > MAX_INSTALLER_JSON_BYTES:
+    if size > max_bytes:
         raise ValueError(
-            f"JSON file exceeds the {MAX_INSTALLER_JSON_BYTES}-byte installer safety limit: {path}"
+            f"JSON file exceeds the {max_bytes}-byte installer safety limit: {path}"
         )
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
@@ -636,20 +651,36 @@ def _host_cpu_arch() -> str:
     return machine or "unknown"
 
 
-def _assert_host_component_support(components: set[str]) -> None:
-    """Block LM Studio stack installs on Intel macOS; allow Codex/Cline-only custom installs."""
+def _assert_host_component_support(
+    components: set[str], *, headless_lmlink: bool = False
+) -> None:
+    """Require headless LM Link mode for LM Studio components on Intel macOS."""
     if platform.system().lower() != "darwin":
         return
     arch = _host_cpu_arch()
     needs_lmstudio = bool(components & LMSTUDIO_STACK_COMPONENTS)
     if arch == "x64" and needs_lmstudio:
+        if headless_lmlink and "context_compactor" not in components:
+            print(
+                "NOTE: Intel macOS headless LM Link install enabled; "
+                "LM Studio GUI and the context-compactor chat plugin are not installed.",
+                file=sys.stderr,
+            )
+            return
         raise RuntimeError(
-            "Intel macOS (x86_64) cannot install LM Studio-based components. "
-            "LM Studio does not support Intel Mac. Remove lmstudio/unreal/context_compactor "
-            "and use a custom Codex / portable_rule / Cline-only install, "
-            "or run on Apple Silicon macOS / Windows / Ubuntu Linux."
+            "Intel macOS (x86_64) requires --headless-lmlink for LM Studio-based "
+            "components. LM Studio GUI and the context-compactor chat plugin do not "
+            "support Intel Mac. Use llmster through a Linux VM/LM Link, or remove "
+            "lmstudio/unreal/context_compactor and install only Codex / portable_rule / Cline."
         )
     if arch == "arm64" and needs_lmstudio:
+        if headless_lmlink:
+            print(
+                "NOTE: headless LM Link install enabled; the LM Studio GUI-only "
+                "context-compactor chat plugin is not installed.",
+                file=sys.stderr,
+            )
+            return
         # Soft notice: physical FULL install is verified; signing/notarization is still not claimed.
         print(
             "NOTE: Apple Silicon macOS LM Studio FULL install is verified on physical hardware; "
@@ -692,6 +723,25 @@ def _sync_directory(path: Path) -> None:
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        _sync_directory(path.parent)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
 
 
 def _atomic_write_bytes(path: Path, content: bytes) -> None:
@@ -1025,6 +1075,33 @@ def _interactive_profile() -> str:
     return {"1": "safe", "2": "standard", "3": "full", "4": "custom"}.get(choice, "safe")
 
 
+def _interactive_unity_setup(args: argparse.Namespace) -> None:
+    print("\nUnity project setup:")
+    selected = args.unity_project
+    if not selected and args.active_project and args.active_project.is_dir():
+        selected = args.active_project
+    project = _normalize_picked_path("unity", str(selected)) if selected else None
+    while project is None:
+        initial = next((p.expanduser() for p in args.workspace_root if p.expanduser().is_dir()), Path.home())
+        project = _pick_indexing_target("unity", initial)
+        if project is None:
+            typed = input("Unity project folder (paste path, or Enter to retry picker): ").strip().strip('"')
+            if typed:
+                project = _normalize_picked_path("unity", typed)
+            if project is None and not _prompt_yes_no("Select a Unity project again?", True):
+                raise RuntimeError("Unity installation cancelled; no project selected")
+    args.unity_project = project
+    print(f"  Unity project: {project}")
+    if not args.unity_editor and not args.unity_symbol_worker:
+        print("  The C# worker requires a compatible .NET SDK or the Editor's bundled toolchain.")
+        editor = input("Unity Editor executable (Unity.exe on Windows; Enter to use installed .NET SDK): ").strip().strip('"')
+        if editor:
+            args.unity_editor = Path(editor).expanduser().resolve()
+            if not args.unity_editor.is_file():
+                raise ValueError(f"Unity Editor executable not found: {args.unity_editor}")
+    print("  Unity MCP configuration is shown in the installation result.")
+
+
 def _interactive_agent_authority() -> bool:
     print("\nUnreal adapter authority:")
     print("  1. SAFE (recommended: analysis only; no writes, commands, or builds)")
@@ -1058,7 +1135,13 @@ def _confirm_interactive_install(
     print("\nInstall summary:")
     print(f"  Profile    : {profile.upper()}")
     print(f"  Components : {', '.join(sorted(components)) or 'none'}")
-    print(f"  Authority  : {authority}")
+    print(f"  Unreal authority: {authority}" if "unreal" in components else f"  Authority  : {authority}")
+    if "unity" in components:
+        print(f"  Unity project: {args.unity_project or args.active_project}")
+        if args.unity_editor:
+            print(f"  Unity Editor: {args.unity_editor}")
+        print("  Unity authority: SAFE (read-only)")
+        print(f"  Unity MCP config: {args.unity_mcp_config or (args.lmstudio_home / 'mcp.json' if components & {'lmstudio', 'unreal'} else 'isolated per-project configuration')}")
     if args.build_rag:
         print(f"  RAG index  : build ({args.index_tier})")
     else:
@@ -1086,7 +1169,7 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
             item.strip() for item in str(args.components or "").split(",") if item.strip()
         }
         if interactive and not components:
-            for component in sorted(ALL_COMPONENTS):
+            for component in sorted(ALL_COMPONENTS - {"unreal", "unity"}):
                 if _prompt_yes_no(
                     f"Install {component}?",
                     component in {"codex", "lmstudio", "context_compactor"},
@@ -1096,11 +1179,28 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         components = set(PROFILE_DEFAULTS[profile])
 
     if interactive:
-        print(
-            "\nLM Studio context compactor will be installed and pinned, but the installer "
-            "does not activate it for chats. Its single host-owned chat toggle defaults off; "
-            "enable that toggle only for a long chat that needs compaction."
-        )
+        print("\nEngine integrations (you can install both):")
+        for component, label in (("unreal", "Unreal"), ("unity", "Unity")):
+            if component == "unreal" and args.no_unreal:
+                components.discard(component)
+                continue
+            if _prompt_yes_no(f"Install {label} MCP and connect a project?", component in components):
+                components.add(component)
+            else:
+                components.discard(component)
+
+    if interactive:
+        if args.headless_lmlink:
+            print(
+                "\nHeadless LM Link mode installs MCP configuration for llmster and skips "
+                "the GUI-only LM Studio context compactor."
+            )
+        elif components & {"lmstudio", "unreal", "context_compactor"}:
+            print(
+                "\nLM Studio context compactor will be installed and pinned, but the installer "
+                "does not activate it for chats. Its single host-owned chat toggle defaults off; "
+                "enable that toggle only for a long chat that needs compaction."
+            )
         if _prompt_yes_no("Install a rule into another coding agent?", False):
             components.add("portable_rule")
             if not args.rule_path:
@@ -1115,7 +1215,7 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
             _interactive_project_indexing(args)
             _interactive_engine_selection(args)
             _interactive_rag_indexing(args)
-        if "unreal" in components and not args.enable_agent_mode:
+        if "unreal" in components and profile != "safe" and not args.enable_agent_mode:
             requested_agent_mode = _interactive_agent_authority()
             if requested_agent_mode:
                 accepted = _prompt_yes_no(
@@ -1125,6 +1225,8 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
                 args.accept_agent_risk = accepted
                 if not accepted:
                     print("AGENT authority was not confirmed; continuing in SAFE read-only mode.")
+        if "unity" in components:
+            _interactive_unity_setup(args)
 
     if args.no_codex:
         components.discard("codex")
@@ -1152,7 +1254,9 @@ def _resolve_components(args: argparse.Namespace) -> tuple[str, set[str]]:
         raise ValueError("--build-rag requires the unreal component")
     if args.enable_agent_mode and not args.accept_agent_risk:
         raise ValueError("agent mode requires explicit --accept-agent-risk")
-    _assert_host_component_support(components)
+    _assert_host_component_support(
+        components, headless_lmlink=bool(args.headless_lmlink)
+    )
     if interactive:
         _confirm_interactive_install(profile, components, args)
     return profile, components
@@ -1163,6 +1267,14 @@ def _enforce_context_compactor_installation(components: set[str], args: argparse
     needs_compactor = bool({"lmstudio", "unreal", "context_compactor"} & components)
     if not needs_compactor:
         components.discard("context_compactor")
+        return
+    if args.headless_lmlink:
+        components.discard("context_compactor")
+        print(
+            "NOTE: headless LM Link mode skips the GUI-only LM Studio "
+            "context-compactor chat plugin.",
+            file=sys.stderr,
+        )
         return
     allow_skip = bool(getattr(args, "allow_skip_context_compactor", False))
     if args.skip_context_compactor and not allow_skip:
@@ -1313,6 +1425,7 @@ def _unreal_entries(
         "timeout": 720000,
         "env": {
             "WORKSPACE_ROOT": str(args.workspace_root[0]),
+            "WORKSPACE_CAPABILITIES": "1",
             "AGENT_MCP_CONFIG": str(agent_config),
             "SHARED_UNREAL_CONFIG": str(shared_config),
             "AGENT_STATE_ROOT": str(state_root),
@@ -1610,12 +1723,62 @@ def _ensure_context_compactor_on_disk(
     return detail
 
 
+def _enable_context_compactor_for_existing_chats(
+    lmstudio_home: Path,
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    conversations_root = lmstudio_home / "conversations"
+    result: dict[str, Any] = {
+        "managed": True,
+        "pluginId": CONTEXT_COMPACTOR_PLUGIN_ID,
+        "conversationsRoot": str(conversations_root),
+        "eligibleConversationCount": 0,
+        "alreadyEnabledConversationCount": 0,
+        "updatedConversationCount": 0,
+        "skippedConversationCount": 0,
+        "enabledForExistingChats": True,
+    }
+    if dry_run:
+        result["dryRun"] = True
+    if not conversations_root.is_dir() or conversations_root.is_symlink():
+        return result
+    for conversation_path in sorted(conversations_root.rglob("*.conversation.json")):
+        try:
+            if conversation_path.is_symlink() or not conversation_path.is_file():
+                result["skippedConversationCount"] += 1
+                continue
+            if conversation_path.stat().st_size > MAX_CONVERSATION_JSON_BYTES:
+                result["skippedConversationCount"] += 1
+                continue
+            conversation = _load_json(
+                conversation_path,
+                None,
+                max_bytes=MAX_CONVERSATION_JSON_BYTES,
+            )
+            plugins = conversation.get("plugins") if isinstance(conversation, dict) else None
+            if not isinstance(plugins, list) or any(not isinstance(item, str) for item in plugins):
+                result["skippedConversationCount"] += 1
+                continue
+            result["eligibleConversationCount"] += 1
+            if CONTEXT_COMPACTOR_PLUGIN_ID in plugins:
+                result["alreadyEnabledConversationCount"] += 1
+                continue
+            result["updatedConversationCount"] += 1
+            if not dry_run:
+                conversation["plugins"] = [*plugins, CONTEXT_COMPACTOR_PLUGIN_ID]
+                _write_json_atomic(conversation_path, conversation)
+        except (OSError, ValueError, json.JSONDecodeError):
+            result["skippedConversationCount"] += 1
+    return result
+
+
 def _configure_context_compactor_availability(
     lmstudio_home: Path,
     *,
     dry_run: bool,
 ) -> dict[str, Any]:
-    """Make the installed plugin visible without enabling it for any chat."""
+    """Pin the plugin and enable its GUI switch in existing chats."""
     settings_path = lmstudio_home / "settings.json"
     result: dict[str, Any] = {
         "settingsPath": str(settings_path),
@@ -1623,9 +1786,6 @@ def _configure_context_compactor_availability(
         "allowDevelopmentPlugins": False,
         "changed": False,
     }
-    if dry_run:
-        result["dryRun"] = True
-        return result
     settings = _load_json(settings_path, {}) if settings_path.exists() else {}
     if not isinstance(settings, dict):
         settings = {}
@@ -1649,13 +1809,17 @@ def _configure_context_compactor_availability(
         developer["allowDevelopmentPlugins"] = True
         result["changed"] = True
     result["allowDevelopmentPlugins"] = bool(developer.get("allowDevelopmentPlugins"))
-    if result["changed"]:
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(
-            json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        _sync_directory(settings_path.parent)
+    activation = _enable_context_compactor_for_existing_chats(
+        lmstudio_home,
+        dry_run=dry_run,
+    )
+    result["activation"] = activation
+    if activation["updatedConversationCount"]:
+        result["changed"] = True
+    if dry_run:
+        result["dryRun"] = True
+    elif result["changed"]:
+        _write_json_atomic(settings_path, settings)
     return result
 
 
@@ -1764,6 +1928,9 @@ def install(
     # Real installs re-exec under Python 3.12 in main(); unit tests may call install()
     # directly on older interpreters with --skip-runtime-bootstrap.
     python_exe = Path(getattr(args, "runtime_python", None) or sys.executable).resolve()
+    if components == {"unity"}:
+        from installer.unity_install import install_unity
+        return install_unity(args, ROOT, Transaction, InstallLock)
     if not (SKILL_SOURCE / "SKILL.md").is_file():
         raise FileNotFoundError(f"skill source missing: {SKILL_SOURCE}")
 
@@ -1832,6 +1999,18 @@ def install(
     allowed_roots.extend(path.parent for path in args.rule_path)
     if args.cline_settings:
         allowed_roots.append(args.cline_settings.parent)
+    unity_args = None
+    if "unity" in components:
+        from installer.unity_install import install_unity
+        unity_args = copy.copy(args)
+        # Unreal's .uproject must never be used as the Unity project root.
+        unity_args.active_project = None
+        if not unity_args.unity_mcp_config and components & {"lmstudio", "unreal"}:
+            unity_args.unity_mcp_config = args.lmstudio_home / "mcp.json"
+        preflight_args = copy.copy(unity_args)
+        preflight_args.dry_run = True
+        unity_plan = install_unity(preflight_args, ROOT, Transaction, InstallLock)
+        allowed_roots.extend([Path(unity_plan["project"]) / "Packages", Path(unity_plan["mcpConfig"]).parent])
     for root in allowed_roots:
         _reject_filesystem_root(root, "managed install root")
     tx = Transaction(args.state_home, allowed_roots, dry_run=args.dry_run)
@@ -1844,6 +2023,7 @@ def install(
         "safeMode": not args.enable_agent_mode,
         "agentMode": args.enable_agent_mode,
         "dryRun": args.dry_run,
+        "headlessLmLink": bool(args.headless_lmlink),
         "platform": platform.system(),
         "safetyNormalizations": [],
         "portableRulePaths": [],
@@ -2129,6 +2309,11 @@ def install(
             if completed.returncode != 0 or not report["mcpSmoke"].get("ok"):
                 raise RuntimeError(completed.stderr or "evidence-first MCP smoke failed")
 
+        if unity_args is not None:
+            report["unity"] = install_unity(
+                unity_args, ROOT, Transaction, InstallLock,
+                transaction=tx, external_actions=external_actions_started,
+            )
         report["lmStudioServer"] = _live_server_status(args.lmstudio_url)
         report["indexTier"] = args.index_tier if "unreal" in components else None
         report["externalActions"] = external_actions_started if not args.dry_run else [
@@ -2140,11 +2325,14 @@ def install(
             if enabled
         ]
         report["rollbackScope"] = (
-            "managed configuration/files only; external npm/lms installs and generated indexes are not rolled back"
+            "managed configuration/files only; external npm/lms installs, compiled workers and generated indexes are not rolled back"
         )
         report["knownIntegrationsSafe"] = not args.enable_agent_mode
-        report["restartRequired"] = "lmstudio" in components or "unreal" in components
+        report["restartRequired"] = bool(
+            {"lmstudio", "unreal", "context_compactor"} & components
+        )
         report["ok"] = True
+        tx.write_file(args.state_home / "runtime-python.path", (str(python_exe) + "\n").encode("utf-8"))
         journal = tx.commit(report)
         report["journal"] = str(journal or "")
         return report
@@ -2170,10 +2358,24 @@ def install(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {PRODUCT_VERSION}")
-    parser.add_argument("--profile", choices=["safe", "standard", "full", "custom"])
+    parser.add_argument("--profile", choices=[*PROFILE_DEFAULTS, "custom"])
     parser.add_argument("--components", help="Comma-separated components for CUSTOM profile.")
+    parser.add_argument("--unity-project", type=Path, help="Unity project root, independent of Unreal --active-project; select the unity component")
+    parser.add_argument("--unity-editor", type=Path, help="Optional installed Editor executable for its bundled compiler toolchain")
+    parser.add_argument("--unity-dotnet", type=Path, help="Explicit dotnet executable")
+    parser.add_argument("--unity-symbol-worker", type=Path, help="Existing compiled UnitySymbolWorker.dll; otherwise built during installation")
+    parser.add_argument("--unity-mcp-config", type=Path, help="Explicit MCP config destination; default is isolated per-project managed config")
+    parser.add_argument("--unity-replace-bridge", action="store_true", help="Explicitly replace a different existing Bridge package binding (backed up)")
     parser.add_argument("--yes", action="store_true", help="Use profile defaults without prompts.")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--headless-lmlink",
+        action="store_true",
+        help=(
+            "Install LM Studio MCP configuration for llmster/LM Link without "
+            "GUI-only chat plugins; required for LM Studio components on Intel macOS."
+        ),
+    )
     parser.add_argument("--rollback", action="store_true", help="Restore the last managed install.")
     parser.add_argument("--enable-agent-mode", action="store_true")
     parser.add_argument(
@@ -2234,7 +2436,7 @@ def _runtime_requirements(
     build_rag: bool,
 ) -> tuple[bool, bool]:
     del build_rag  # Direct RAG indexing is Python-only.
-    need_node = bool({"unreal", "context_compactor"} & components)
+    need_node = bool({"unreal", "unity", "context_compactor"} & components)
     return need_node, False
 
 

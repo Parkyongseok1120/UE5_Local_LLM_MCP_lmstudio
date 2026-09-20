@@ -1,0 +1,1 @@
+{"name":"EvidenceFirst.DebugIntegration","references":["EvidenceFirst.UnityBridge","EvidenceFirst.DebugRuntime","EvidenceFirst.Fixture","Unity.Newtonsoft.Json","Unity.InputSystem","UnityEngine.UI"],"includePlatforms":["Editor"],"autoReferenced":true}

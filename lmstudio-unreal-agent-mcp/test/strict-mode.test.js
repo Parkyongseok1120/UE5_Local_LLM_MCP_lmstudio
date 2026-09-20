@@ -53,10 +53,11 @@ function fixture(t) {
 
 test("Direct catalog classifies every tool and Strict derives all mutation/long-running gates", async (t) => {
   const definitions = toolDefinitions();
-  assert.strictEqual(definitions.length, 20);
+  assert.strictEqual(definitions.length, 26);
   assert.deepStrictEqual(
     Object.fromEntries(definitions.map((definition) => [definition.name, toolEffect(definition)])),
     {
+      workspace_status: "read", git_status: "read", git_log: "read", git_changed_files: "read", git_diff_file: "read", git_read_file: "read",
       get_workspace_info: "read",
       list_unreal_projects: "read",
       get_active_project: "read",

@@ -92,6 +92,47 @@ test("Direct and Strict use separate executable entries", () => {
   assert.doesNotMatch(directSource, /MCP_EXECUTION_MODE|strict-server|createStrictRuntime/);
 });
 
+test("Workspace Git binds the selected Unreal project and rollback removes only new capabilities", async t => {
+  const f = fixture(t);
+  const git = (...args) => {
+    const result = spawnSync("git", args, { cwd: f.projectRoot, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+  };
+  git("init", "-q"); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid");
+  git("add", "."); git("commit", "-qm", "base"); const base = git("rev-parse", "HEAD");
+  fs.appendFileSync(f.sourceFile, "// changed\n"); git("add", "."); git("commit", "-qm", "head");
+  const status = payloadOf(await f.runtime.callTool("workspace_status", { project: f.projectFile }));
+  assert.equal(status.engine, "unreal"); assert.equal(status.independentWriter, false);
+  const changes = payloadOf(await f.runtime.callTool("git_changed_files", { project: f.projectFile, comparison: "range", base, head: "HEAD" }));
+  assert.equal(changes.canonicalProject, f.projectFile);
+  assert.deepEqual(changes.items.map(item => item.path), ["Source/DirectFixture/DirectFixture.cpp"]);
+  assert.equal(changes.queryPathBase, "workspace_root");
+  assert.deepEqual(changes.requestedPaths, []);
+  assert.deepEqual(changes.resolvedRepositoryPaths, ["."]);
+  const invalid = payloadOf(await f.runtime.callTool("git_log", { limit: "bad" }));
+  assert.match(invalid.errorCode, /invalid_argument/i);
+  const rollback = createDirectRuntime({ workspaceRoot: f.workspaceRoot, configPath: f.runtime.configPath,
+    env: { WORKSPACE_CAPABILITIES: "0", AGENT_STATE_ROOT: f.stateRoot }, getActiveProject: () => f.projectFile });
+  assert(!rollback.tools.some(tool => tool.name === "git_log"));
+  assert.equal(payloadOf(await rollback.callTool("git_log", {})).errorCode, "UNKNOWN_TOOL");
+  assert(rollback.tools.some(tool => tool.name === "read_file"));
+});
+
+test("all Workspace Git schemas describe paths from the bound workspace root", () => {
+  const tools = toolDefinitions().filter(tool => /^git_/u.test(tool.name));
+  assert.ok(tools.length >= 5);
+  for (const tool of tools) {
+    assert.match(tool.description, /workspace(?:-| )relative|relative to the bound workspace root/iu, tool.name);
+    const pathRule = tool.inputSchema.properties.path;
+    const pathsRule = tool.inputSchema.properties.paths;
+    if (pathRule) assert.match(pathRule.description, /workspace root/iu, tool.name);
+    if (pathsRule) {
+      assert.match(pathsRule.description, /workspace root/iu, tool.name);
+      assert.match(pathsRule.items.description, /workspace root/iu, tool.name);
+    }
+  }
+});
+
 test("Direct catalog is static capability surface without task/control schemas", () => {
   const tools = toolDefinitions();
   const names = tools.map((tool) => tool.name);
@@ -375,6 +416,7 @@ test("Direct exact patch succeeds without plan/task and stale hash is rejected",
   assert.strictEqual(patchedResult.isError, false);
   assert.strictEqual(patched.ok, true);
   assert.strictEqual(patched.operation, "replaced");
+  assert.strictEqual(patched.kind, "workspace_mutation_observation");
   assert.match(fs.readFileSync(configFile, "utf8"), /Value=beta/);
   assert.doesNotMatch(JSON.stringify(patched), CONTROL_FIELD_PATTERN);
 

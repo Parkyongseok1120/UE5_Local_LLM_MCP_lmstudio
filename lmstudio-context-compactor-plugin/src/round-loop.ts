@@ -12,12 +12,22 @@ type TokenSource = LLM | LLMGeneratorHandle;
 type RoundCallbacks = {
   onToolCallRequestFinalized: NonNullable<LLMActionOpts["onToolCallRequestFinalized"]>;
   guardToolCall: NonNullable<LLMActionOpts["guardToolCall"]>;
+  onPromptProcessingProgress?: NonNullable<LLMActionOpts["onPromptProcessingProgress"]>;
+  onFirstToken?: NonNullable<LLMActionOpts["onFirstToken"]>;
+  onPredictionFragment?: NonNullable<LLMActionOpts["onPredictionFragment"]>;
+  onToolCallRequestStart?: NonNullable<LLMActionOpts["onToolCallRequestStart"]>;
+  onToolCallRequestNameReceived?: NonNullable<LLMActionOpts["onToolCallRequestNameReceived"]>;
+  onToolCallRequestArgumentFragmentGenerated?: NonNullable<LLMActionOpts["onToolCallRequestArgumentFragmentGenerated"]>;
+  onToolCallRequestEnd?: NonNullable<LLMActionOpts["onToolCallRequestEnd"]>;
+  onToolCallRequestFailure?: NonNullable<LLMActionOpts["onToolCallRequestFailure"]>;
+  onMessageCaptured?: (message: ChatMessage) => void;
 };
 
 export type CapturedRound = {
   messages: Array<ChatMessage>;
   continueAfterTools: boolean;
   failure?: unknown;
+  finishReason?: string;
 };
 
 export async function runOneToolRound(
@@ -34,6 +44,7 @@ export async function runOneToolRound(
   let hasToolResults = false;
   let boundaryRequested = false;
   let failure: unknown;
+  let finishReason: string | undefined;
 
   const forwardAbort = () => {
     if (!roundAbort.signal.aborted) roundAbort.abort(parentSignal.reason);
@@ -42,11 +53,16 @@ export async function runOneToolRound(
   else parentSignal.addEventListener("abort", forwardAbort, { once: true });
 
   try {
+    const { onMessageCaptured, ...actCallbacks } = callbacks;
     await tokenSource.act(history, tools, {
       signal: roundAbort.signal,
-      ...callbacks,
+      ...actCallbacks,
+      onPredictionCompleted: (result) => {
+        finishReason = String((result as { stats?: { stopReason?: unknown } }).stats?.stopReason || "unknown");
+      },
       onMessage: (message) => {
         messages.push(message);
+        onMessageCaptured?.(message);
         if (message.getToolCallResults().length > 0) hasToolResults = true;
       },
       onRoundEnd: () => {
@@ -64,6 +80,7 @@ export async function runOneToolRound(
   return {
     messages,
     continueAfterTools: boundaryRequested,
+    ...(finishReason === undefined ? {} : { finishReason }),
     ...(failure === undefined ? {} : { failure }),
   };
 }

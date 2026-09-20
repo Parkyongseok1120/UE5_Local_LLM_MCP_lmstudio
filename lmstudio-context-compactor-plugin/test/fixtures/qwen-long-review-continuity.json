@@ -1,0 +1,37 @@
+{
+  "documentParagraph": "Synthetic architecture guide paragraph describing ownership, cancellation, lifecycle, and review criteria without containing any real project content. ",
+  "documentRepeat": 360,
+  "userRequest": "\n\nReview subsystem C against the supplied guide and report only findings supported by repository evidence.",
+  "repositoryIdentity": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+  "workspaceIdentity": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+  "base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "gitObservations": [
+    {
+      "action": "log",
+      "requestedPaths": ["Assets/SubsystemC"],
+      "resolvedRepositoryPaths": ["SyntheticGame/Assets/SubsystemC"],
+      "items": [{ "commit": "1111111111111111111111111111111111111111", "subject": "Synthetic subsystem change" }],
+      "returnedCount": 1,
+      "total": 1
+    },
+    {
+      "action": "changed_files",
+      "comparison": "range",
+      "requestedPaths": ["Assets/SubsystemC"],
+      "resolvedRepositoryPaths": ["SyntheticGame/Assets/SubsystemC"],
+      "items": [{ "status": "modified", "path": "Assets/SubsystemC/Coordinator.cs" }],
+      "returnedCount": 1,
+      "total": 1
+    },
+    {
+      "action": "status",
+      "comparison": "worktree",
+      "requestedPaths": [],
+      "resolvedRepositoryPaths": ["SyntheticGame"],
+      "items": [],
+      "returnedCount": 0,
+      "total": 0
+    }
+  ]
+}

@@ -26,6 +26,7 @@ lmstudio-unreal-agent-mcp/config/lmstudio-mcp-unreal-agent.json
 PORTABLE_ROOT.txt
 docs/internal/
 lmstudio-context-compactor-plugin/dist/
+unity-symbol-worker/obj/
 .agent/
 .DS_Store
 

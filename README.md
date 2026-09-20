@@ -1,10 +1,12 @@
-# UE5_Local_LLM_MCP_lmstudio 1.3.3
+# UE5_Local_LLM_MCP_lmstudio 1.4.0
 
 LM Studio에서 돌리는 AI가 내 언리얼 프로젝트를 찾아보고, 코드를 읽고, 필요한 부분을 고칠 수 있게 연결하는 도구입니다.
 
 AI에게 프로젝트 전체를 매번 붙여 넣는 대신, 필요한 내용을 로컬 검색 자료에서 찾아서 보여줍니다. 이 검색 방식을 RAG라고 부릅니다. MCP는 AI가 검색·파일 읽기·수정·빌드 같은 기능을 호출할 때 쓰는 연결 방식입니다.
 
 ## 설치 방법
+
+Unity 지원은 v1.4.0 **beta 1**에서 별도 서버와 Editor Bridge로 제공합니다. 특정 프로젝트나 Editor 설치 경로를 고정하지 않으며, 실제 구현 기능과 미구현 capability를 구분합니다. [Unity 설치·지원 범위](docs/Unity_Setup.md), [설계 및 기존 구조 분석](docs/Unity_1_4_Design.md), [검증 기록](docs/Unity_Validation.md)을 참고하세요. 아래의 기존 설치 흐름은 Unreal용입니다.
 
 ```powershell
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
@@ -13,6 +15,22 @@ cd UE5_Local_LLM_MCP_lmstudio
 ```
 
 Linux와 macOS에서는 같은 폴더에서 `./install.sh`를 실행하면 됩니다. Python이 없으면 실행에 필요한 버전을 사용자 폴더에 설치합니다. 시스템 전체의 Python 설정이나 PATH는 바꾸지 않습니다.
+
+Intel Mac에서는 LM Studio GUI 대신 Linux x64 VM의 `llmster`를 사용하고, 저장소를 VM 안에서 다음처럼 설치합니다. 이 모드는 MCP와 Unreal 구성을 설치하되 GUI 전용 대화 압축기는 제외합니다.
+
+```sh
+./install.sh --profile standard --yes --headless-lmlink
+```
+
+Intel Mac에서 VM 생성부터 LM Link, 프로젝트 마운트, MCP/RAG 설치와 실제 모델 도구 호출 검증까지 한 번에 수행하려면 호스트 macOS에서 다음 전용 설치기를 사용합니다.
+
+```bash
+./install-intel-mac.sh \
+  --project /absolute/path/MyGame.uproject \
+  --engine-root "/Users/Shared/Epic Games/UE_5.7"
+```
+
+최초 실행에서 LM Studio 계정 로그인이 필요하면 터미널에 페어링 URL이 표시됩니다. 브라우저에서 승인하면 설치가 자동으로 계속됩니다. 완료 후 프로젝트의 `./lmstudio-cli.sh`를 사용합니다. 기본 `lms chat`에는 MCP 통합 옵션이 없기 때문에 이 실행기가 `mcp.json`의 모든 도구를 모델에 전달하고 도구 요청을 자동 실행합니다. GUI 플러그인 대신 같은 deterministic core를 사용하는 헤드리스 Compactor가 채팅 요청 직전에 백그라운드로만 동작하며, 기본 24개 메시지 또는 컨텍스트 여유 14K 이하에서 오래된 기록을 압축합니다. MCP 서버 자체의 안전 제한은 계속 적용됩니다.
 
 설치 화면에서 프로젝트와 엔진을 고르고, 검색 자료를 만들지 선택하면 됩니다. 처음에는 `STANDARD` 구성에 읽기 전용인 `SAFE` 권한으로 시작하면 됩니다. AI에게 파일 수정과 빌드까지 맡기려면 `AGENT` 권한을 따로 선택해야 합니다.
 
@@ -26,10 +44,10 @@ Linux와 macOS에서는 같은 폴더에서 `./install.sh`를 실행하면 됩�
 
 1. 사용할 AI 모델을 불러오고 모델 목록에서 직접 선택합니다.
 2. 설치 후 LM Studio를 재시작하고 `unreal-rag`, `unreal-agent`를 켭니다.
-3. 채팅의 `codex/unreal-context-compactor`는 기본적으로 꺼두어야 합니다(`OFF`). 오래된 채팅에 켜져 있으면 직접 끄면 됩니다.
+3. 설치·업데이트 시 기존 채팅의 `codex/unreal-context-compactor`가 `ON`으로 설정됩니다. 필요 없는 채팅에서는 해당 단일 스위치를 끌 수 있습니다.
 4. 정확한 프로젝트를 지정하고 질문하거나 수정할 내용을 요청합니다.
 
-대화 압축기는 긴 대화의 오래된 내용을 줄여 주는 보조 기능입니다. 설치했다고 채팅에서 켜지는 건 아닙니다. 필요할 때 해당 채팅의 단일 스위치만 켜면 되고, 별도 활성화 설정은 없습니다.
+대화 압축기는 긴 대화의 오래된 내용을 줄여 주는 보조 기능입니다. 설치기는 목록에 고정하고 당시 저장된 기존 채팅의 단일 스위치를 켭니다. `Observe only`를 켜지 않는 한 임계값 아래에서만 실제 압축합니다.
 
 언리얼 작업 채팅에서는 LM Studio의 `js-code-sandbox`를 꺼두어야 합니다. 이 도구의 작업 폴더는 언리얼 프로젝트와 다르므로 프로젝트 파일 작업에 쓰면 안 됩니다.
 
@@ -79,7 +97,7 @@ python install.py --profile standard --yes --build-rag --index-tier standard --e
 | 오류 해결 | [문제 해결](docs/Troubleshooting.md) |
 | 수정·빌드 권한 이해 | [권한 설정](docs/Safe_Agent_Mode.md), [도구 사용 규칙](docs/LMStudio_MCP_Tool_Discipline.md) |
 | 내부 구조 확인 | [구성 설명](docs/ARCHITECTURE.md), [검색 대상 구분](docs/Project_Routing.md), [Build.cs 읽기](docs/Build_Cs_Parser.md) |
-| 이번 버전 변경 확인 | [1.3.3 변경 사항](docs/Release_Notes_1_3_3.md), [버전 관리](docs/VERSIONING.md) |
+| 이번 버전 변경 확인 | [1.4.0 변경 사항](docs/Release_Notes_1_4_0.md), [버전 관리](docs/VERSIONING.md) |
 
 실제 프로젝트에서의 동작은 엔진 버전, 플러그인, 개발 환경에 따라 확인이 필요합니다. 자동 검사를 통과한 것과 에디터에서 직접 실행해 본 것은 구분해서 적어야 합니다.
 

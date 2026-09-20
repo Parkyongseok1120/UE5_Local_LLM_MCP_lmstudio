@@ -1,0 +1,1 @@
+{"name":"EvidenceFirst.PhysicsDebug","references":["EvidenceFirst.UnityBridge","EvidenceFirst.DebugRuntime","EvidenceFirst.PhysicsDebugRuntime","Unity.Newtonsoft.Json"],"includePlatforms":["Editor"],"defineConstraints":["EVIDENCE_PHYSICS"],"versionDefines":[{"name":"com.unity.modules.physics","expression":"1.0.0","define":"EVIDENCE_PHYSICS"}],"autoReferenced":true}

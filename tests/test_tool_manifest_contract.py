@@ -73,6 +73,9 @@ def test_agent_direct_manifest_matches_runtime_source() -> None:
         ROOT / "lmstudio-unreal-agent-mcp" / "src" / "direct-tool-catalog.js"
     ).read_text(encoding="utf-8")
     registered = set(re.findall(r'name:\s*"([a-z_]+)"', catalog_js))
+    workspace_js = (ROOT / "shared-tool-core" / "workspace.js").read_text(encoding="utf-8")
+    assert "workspaceToolDefinitions().map" in catalog_js
+    registered.update(re.findall(r'spec\("([a-z_]+)"', workspace_js))
     assert registered == set(manifest["agentEssential"])
     assert "taskAuthorization" not in catalog_js
 

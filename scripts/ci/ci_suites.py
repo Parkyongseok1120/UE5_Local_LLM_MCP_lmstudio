@@ -36,6 +36,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "tests/test_no_project_hardcode.py",
     ),
     "portable_release": (
+        "tests/test_update_unity_mcp.py",
+        "tests/test_update_unreal_mcp.py",
         "tests/test_integrated_installer.py",
         "tests/test_bootstrap_runtimes.py",
         "tests/test_integrated_package.py",

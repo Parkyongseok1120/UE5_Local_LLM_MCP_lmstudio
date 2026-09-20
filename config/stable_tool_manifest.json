@@ -31,7 +31,13 @@
     "static_validate_project",
     "build_unreal_project",
     "run_unreal_automation_tests",
-    "run_command"
+    "run_command",
+    "workspace_status",
+    "git_status",
+    "git_log",
+    "git_changed_files",
+    "git_diff_file",
+    "git_read_file"
   ],
   "projectSwitchCanonical": "unreal_set_active_project",
   "docReferencedTools": [

@@ -5,10 +5,24 @@ const {
   sanitizeUserAuthoredText,
 } = require("./durable-memory-sanitizer.js");
 
+const REASONING_SEPARATOR =
+  "__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__";
+
+function visibleAssistantText(value) {
+  const raw = String(value ?? "");
+  const marker = raw.indexOf(REASONING_SEPARATOR);
+  // Only the SDK's unambiguous single structural boundary is trusted. Plain
+  // assistant text that resembles a marker remains ordinary visible text.
+  if (marker < 0 || raw.indexOf(REASONING_SEPARATOR, marker + REASONING_SEPARATOR.length) >= 0) {
+    return raw;
+  }
+  return raw.slice(marker + REASONING_SEPARATOR.length);
+}
+
 function sanitizeConversationText(role, value) {
   return role === "user"
     ? sanitizeUserAuthoredText(value)
-    : sanitizeDerivedOperationalText(value);
+    : sanitizeDerivedOperationalText(visibleAssistantText(value));
 }
 
 function clip(value, maxChars, { trim = true } = {}) {
@@ -77,10 +91,12 @@ function recentConversationTail(messages, previousTail = [], options = {}) {
 }
 
 module.exports = {
+  REASONING_SEPARATOR,
   clip,
   clipHeadTail,
   looksElliptical,
   normalizedTextKey,
   recentConversationTail,
   sentenceCandidates,
+  visibleAssistantText,
 };

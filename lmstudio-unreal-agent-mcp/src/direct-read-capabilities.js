@@ -324,6 +324,7 @@ function createReadCapabilities(context) {
     const payload = success({
       path: displayPath(resolution),
       symbol,
+      ...pathMetadata(resolution),
       content: allLines.slice(start - 1, end).join("\n"),
       startLine: start,
       endLine: end,

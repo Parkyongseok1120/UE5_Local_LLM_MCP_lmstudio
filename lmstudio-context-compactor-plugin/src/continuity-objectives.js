@@ -2,15 +2,17 @@
 
 const {
   clip,
+  clipHeadTail,
   looksElliptical,
   normalizedTextKey,
+  visibleAssistantText,
 } = require("./continuity-text.js");
 const { sanitizeUserAuthoredText } = require("./durable-memory-sanitizer.js");
 
 function retainedUserText(value, maxChars) {
   const sanitized = sanitizeUserAuthoredText(value);
   return maxChars
-    ? clip(sanitized, maxChars, { trim: false })
+    ? clipHeadTail(sanitized, maxChars, { trim: false })
     : sanitized;
 }
 
@@ -52,7 +54,7 @@ function assistantEvidenceBetween(messages, startIndex, endIndex) {
     message.index > startIndex
     && message.index < endIndex
     && message.role === "assistant"
-    && String(message.text || "").trim()
+    && visibleAssistantText(message.text).trim()
     && message.toolRequests.length === 0
   ));
   return evidence ? { present: true, messageIndex: evidence.index } : { present: false };

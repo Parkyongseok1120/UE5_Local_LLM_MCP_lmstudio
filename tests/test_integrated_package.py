@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
+from conftest import gui_installer_command
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_integrated_package.py"
@@ -317,10 +318,15 @@ def test_package_builder_requires_the_direct_compactor_runtime_surface() -> None
         "lmstudio-context-compactor-plugin/src/index.ts",
         "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
         "lmstudio-context-compactor-plugin/src/round-loop.ts",
+        "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+        "lmstudio-context-compactor-plugin/src/tool-scope.ts",
+        "lmstudio-context-compactor-plugin/src/attachment-tools.ts",
         "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
         "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+        "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js",
         "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
         "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+        "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
         "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
         "lmstudio-context-compactor-plugin/src/continuity-text.js",
         "lmstudio-context-compactor-plugin/src/durable-memory-sanitizer.js",
@@ -403,11 +409,12 @@ def test_include_index_uses_the_supplied_source_not_another_mcp_workspace(
     assert builder._included_index_relative(source) == Path("data/unreal510/rag.sqlite")
 
 
-def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -> None:
+def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, monkeypatch) -> None:
     output, archive = _build(tmp_path, "portable 한글 one", legacy_stdout=True)
     builder = _load_builder_module()
     expected_files = {
         "INSTALL.bat",
+        "UPDATE.bat",
         "install.sh",
         "install.py",
         "rag.ps1",
@@ -457,9 +464,11 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         assert packaged_readme == (ROOT / source_template).read_text(encoding="utf-8")
         assert "Enable transparent compaction" not in packaged_readme
         assert "단일 스위치" in packaged_readme
-        assert "OFF" in packaged_readme
+        assert "기본 `ON`" in packaged_readme
     portable_install = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
-    assert "설치기는 플러그인을 설치하고 목록에 고정하지만 채팅에서 켜지는 않습니다" in portable_install
+    assert "기존 채팅의 단일 스위치를 ON으로 설정합니다" in portable_install
+    assert "적용 후 LM Studio를 재시작합니다" in portable_install
+    assert "채팅에서 켜지는 않습니다" not in portable_install
     assert "LM Studio 플러그인 설치·고정, 언리얼 자동 탐색" in portable_install
     assert "installation/pinning with the chat toggle OFF" not in portable_install
     assert _broken_local_markdown_links(output) == []
@@ -764,7 +773,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
             or path.name == "install.sh"
         )
     }
-    assert public_launchers == {"INSTALL.bat", "install.sh"}
+    assert public_launchers == {"INSTALL.bat", "UPDATE.bat", "install.sh"}
     assert {path.name for path in (output / "installer").iterdir()} == {
         "README.md",
         "__init__.py",
@@ -780,13 +789,15 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "manifest.json",
         "runtime-manifest.json",
         "unreal_engine_binding.py",
+        "unity_install.py",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert packaged_installer_manifest["productVersion"] == "1.3.3"
-    assert packaged_installer_manifest["version"] == "2.1.17"
+    assert packaged_installer_manifest["productVersion"] == "1.4.0"
+    assert packaged_installer_manifest["version"] == "2.1.22"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
-    assert (output / "docs" / "Release_Notes_1_3_3.md").is_file()
+    assert (output / "docs" / "Release_Notes_1_4_0.md").is_file()
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
+    assert (output / "UPDATE.bat").read_bytes() == (ROOT / "UPDATE.bat").read_bytes()
     source_launcher = (ROOT / "install.sh").read_bytes()
     expected_launcher = source_launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     assert (output / "install.sh").read_bytes() == expected_launcher
@@ -838,10 +849,18 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     lmstudio_home = tmp_path / "isolated lmstudio"
     lmstudio_home.mkdir(parents=True, exist_ok=True)
     _plant_fake_lms(lmstudio_home)
+    # skip-deps + fake LMS builds no npm dependencies; only the version probe is
+    # required. Preserve real Node for the actual packaged stdio smoke above.
+    if not shutil.which("npm"):
+        bindir = tmp_path / "npm-version-probe"
+        bindir.mkdir()
+        npm = bindir / ("npm.cmd" if os.name == "nt" else "npm")
+        npm.write_text("@echo 10.8.2\r\n" if os.name == "nt" else "#!/bin/sh\necho 10.8.2\n", encoding="utf-8")
+        npm.chmod(0o755)
+        monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ.get("PATH", ""))
     installed = subprocess.run(
         [
-            sys.executable,
-            str(output / "install.py"),
+            *gui_installer_command(output / "install.py"),
             "--profile",
             "safe",
             "--yes",
@@ -861,7 +880,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         errors="replace",
         timeout=60,
     )
-    assert installed.returncode == 0, installed.stderr or installed.stdout
+    assert installed.returncode == 0, installed.stdout + installed.stderr
     assert json.loads(installed.stdout)["mcpSmoke"]["ok"] is True
 
 
@@ -871,8 +890,7 @@ def test_packaged_unreal_skip_deps_fails_before_writing_mcp_config(tmp_path: Pat
     state_home = tmp_path / "isolated-state"
     result = subprocess.run(
         [
-            sys.executable,
-            str(output / "install.py"),
+            *gui_installer_command(output / "install.py"),
             "--profile",
             "standard",
             "--yes",

@@ -682,6 +682,9 @@ test("Direct deletion still requires exact approval and moves source to recovera
   }));
   assert.equal(deleted.ok, true);
   assert.equal(deleted.operation, "moved_to_trash");
+  assert.equal(deleted.kind, "workspace_mutation_observation");
+  assert.equal(deleted.observationState, "deleted");
+  assert.match(deleted.canonicalProject, /\.uproject$/);
   assert.equal(deleted.recoverable, true);
   assert.equal(fs.existsSync(target), false);
   assert.equal(fs.readFileSync(deleted.restorePath, "utf8"), content);
