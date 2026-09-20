@@ -35,6 +35,7 @@ const {
   looksElliptical,
   normalizedTextKey,
   sentenceCandidates,
+  visibleAssistantText,
 } = require("./continuity-text.js");
 const {
   sanitizeStructuredDurableValue,
@@ -102,7 +103,9 @@ function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
     const answerBoundary = nextUserOffset >= 0 ? nextUserOffset : window.length;
     const laterAnswerExists = window
       .slice(offset + 1, answerBoundary)
-      .some((candidate) => candidate.role === "assistant" && candidate.text.trim() && candidate.toolRequests.length === 0);
+      .some((candidate) => candidate.role === "assistant"
+        && visibleAssistantText(candidate.text).trim()
+        && candidate.toolRequests.length === 0);
     if (laterAnswerExists) continue;
     for (const sentence of sentenceCandidates(message.text)) {
       if (/[?？]\s*$/u.test(sentence) || /^(?:whether|which|what|why|how|where|when|누가|무엇|왜|어떻게|어디|언제)/iu.test(sentence)) {
@@ -123,7 +126,8 @@ function previousTurnFinalResponseEvidence(messages, latestUserIndex) {
   if (latestUserIndex <= 0) return { present: false, reason: "no_previous_turn" };
   const prior = messages.filter((message) => message.index < latestUserIndex).at(-1);
   if (!prior) return { present: false, reason: "no_previous_message" };
-  if (prior.role === "assistant" && prior.toolRequests.length === 0 && prior.text.trim()) {
+  if (prior.role === "assistant" && prior.toolRequests.length === 0
+    && visibleAssistantText(prior.text).trim()) {
     return { present: true, messageIndex: prior.index };
   }
   return { present: false, reason: "previous_turn_ended_with_tool_activity" };
@@ -232,6 +236,55 @@ function generatedCheckpoint(message) {
     || text.startsWith("[Context memory: deterministic factual compression");
 }
 
+function compactEmergencyGitObservation(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const compact = {};
+  for (const key of [
+    "action", "comparison", "base", "head", "currentHead", "blobOid", "path",
+    "repositoryIdentity", "workspaceIdentity", "hasMore", "complete", "incomplete",
+    "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total",
+    "sourceConsistency", "submoduleWorktrees", "queryPathBase", "requestedPathsOmitted",
+    "requestedPathsCount", "requestedPathsSha256", "resolvedRepositoryPathsOmitted",
+    "resolvedRepositoryPathsCount", "resolvedRepositoryPathsSha256", "omittedItems", "canonicalProjectRoot", "canonicalProject",
+    "projectIdentity",
+  ]) {
+    if (value[key] !== undefined) compact[key] = value[key];
+  }
+  for (const key of ["requestedPaths", "resolvedRepositoryPaths"]) {
+    if (!Array.isArray(value[key])) continue;
+    compact[key] = value[key].slice(0, 2).map(item => clip(item, 160, { trim: false }));
+    const omitted = value[key].length - compact[key].length;
+    if (omitted > 0) compact[`${key}Omitted`] = Number(compact[`${key}Omitted`] || 0) + omitted;
+  }
+  if (Array.isArray(value.items) && value.items.length) {
+    compact.items = value.items.slice(0, 1);
+    compact.omittedItems = Number(value.omittedItems || 0) + value.items.length - compact.items.length;
+  }
+  return sanitizeStructuredDurableValue(compact);
+}
+
+function boundedSerializedOutcome(value, maxChars = 480) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const serialized = JSON.stringify(sanitizeStructuredDurableValue(parsed));
+    if (serialized.length <= maxChars) return serialized;
+    const compact = {};
+    for (const key of [
+      "ok", "status", "operation", "errorCode", "mode", "proofLevel", "exitCode",
+      "upToDate", "actionsExecuted", "failedCount", "succeededCount", "summary",
+      "outcomeDisplayState", "canonicalProject", "fileObservationState",
+    ]) {
+      if (parsed[key] !== undefined) compact[key] = typeof parsed[key] === "string"
+        ? clip(parsed[key], 180, { trim: false }) : parsed[key];
+    }
+    const result = JSON.stringify(sanitizeStructuredDurableValue(compact));
+    return Object.keys(compact).length && result.length <= maxChars ? result : null;
+  } catch {
+    return null;
+  }
+}
+
 function emergencyContinuityMemory(candidate, maxPayloadChars) {
   candidate = sanitizeStructuredDurableValue(candidate);
   const payloadLimit = Math.max(2, Number(maxPayloadChars || 12000));
@@ -263,6 +316,7 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     activeProject,
     currentWorkStatus: {
       recentToolOutcomes: [],
+      gitObservations: [],
       modifiedOrObservedFiles: [],
       recentBuildOrTestState: [],
     },
@@ -280,11 +334,14 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     { latestLimit: 240, keepContinuation: true, activeProject: null },
     { latestLimit: 0, keepContinuation: false, activeProject: null },
   ];
+  const factualReserve = candidate.currentWorkStatus?.gitObservations?.length
+    ? Math.min(2400, Math.max(700, Math.floor(payloadLimit * 0.3)))
+    : 0;
   let emergency = null;
   for (const objectiveLimit of objectiveLimits) {
     for (const variant of auxiliaryVariants) {
       const candidateMemory = baseForLimits({ objectiveLimit, ...variant });
-      if (JSON.stringify(candidateMemory).length <= payloadLimit) {
+      if (JSON.stringify(candidateMemory).length <= payloadLimit - factualReserve) {
         emergency = candidateMemory;
         break;
       }
@@ -299,6 +356,7 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     activeProject: null,
     currentWorkStatus: {
       recentToolOutcomes: [],
+      gitObservations: [],
       modifiedOrObservedFiles: [],
       recentBuildOrTestState: [],
     },
@@ -316,6 +374,10 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     else target.pop();
     return false;
   };
+  for (const observation of [...(candidate.currentWorkStatus?.gitObservations || [])].reverse()) {
+    const compact = compactEmergencyGitObservation(observation);
+    if (compact) addBounded(emergency.currentWorkStatus.gitObservations, compact, true);
+  }
   const files = candidate.currentWorkStatus?.modifiedOrObservedFiles || [];
   for (const file of [...files].reverse()) {
     addBounded(emergency.currentWorkStatus.modifiedOrObservedFiles, file, true);
@@ -335,8 +397,9 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
       text: clipHeadTail(item.text, 160, { trim: false }),
     }, true);
   }
-  for (const outcome of (candidate.currentWorkStatus?.recentToolOutcomes || []).slice(-1)) {
-    addBounded(emergency.currentWorkStatus.recentToolOutcomes, clipHeadTail(outcome, 240, { trim: false }));
+  for (const outcome of [...(candidate.currentWorkStatus?.recentToolOutcomes || [])].reverse()) {
+    const bounded = boundedSerializedOutcome(outcome);
+    if (bounded) addBounded(emergency.currentWorkStatus.recentToolOutcomes, bounded, true);
   }
   const sanitized = sanitizeStructuredDurableValue(emergency);
   return JSON.stringify(sanitized).length <= payloadLimit ? sanitized : { schemaVersion: 2 };
@@ -349,6 +412,14 @@ function renderCheckpoint(memory, maxChars) {
     CONTINUITY_MARKER,
   ].join("\n");
   const candidate = sanitizeStructuredDurableValue(JSON.parse(JSON.stringify(memory)));
+  // The raw latest user message is retained as a separate model-history
+  // message. Keep only a bounded head/tail reminder in durable memory and do
+  // not serialize its exact duplicate under a second field.
+  if (typeof candidate.latestUserMessage === "string") {
+    candidate.latestUserMessage = clipHeadTail(candidate.latestUserMessage, 1200, { trim: false });
+    candidate.latestUserMessageVerbatimRetainedSeparately = true;
+  }
+  delete candidate.currentUserRequestVerbatim;
   if (candidate.currentWorkStatus) {
     // These legacy top-level mirrors remain on the in-process result for
     // compatibility, but serializing them would duplicate the canonical
@@ -382,7 +453,10 @@ function renderCheckpoint(memory, maxChars) {
     role: item.role,
     text: clip(item.text, 300, { trim: false }),
   }));
-  candidate.currentWorkStatus.recentToolOutcomes = [];
+  candidate.currentWorkStatus.recentToolOutcomes = candidate.currentWorkStatus.recentToolOutcomes
+    .slice(-2)
+    .map(outcome => boundedSerializedOutcome(outcome))
+    .filter(Boolean);
   if (render(false).length <= maxChars) return render(false);
   // Never byte-slice JSON: a later hard compaction must be able to inherit it.
   // The original latest user message remains independently retained verbatim.
@@ -436,6 +510,7 @@ function buildCheckpoint(messagesInput, options = {}) {
   const continuity = buildContinuityMemory(semanticMessages, {
     activeProject: state.activeProject,
     recentOlderToolOutcomes: outcomes,
+    gitObservations: durableState.gitObservations,
     modifiedOrObservedFiles: durableState.files,
     recentBuildOrTestState: durableState.builds,
     openQuestionEvidence: openQuestions,
@@ -444,7 +519,6 @@ function buildCheckpoint(messagesInput, options = {}) {
   const recentRequests = priorUserRequestsForContinuation(messages, latestUserIndex);
   const memory = sanitizeStructuredDurableValue({
     ...continuity,
-    currentUserRequestVerbatim: continuity.latestUserMessage,
     olderContinuationAnchor: olderContinuationAnchor(messages, latestUserIndex, recentRequests)
       || continuity.continuationAntecedent,
     priorUserRequestsForContinuation: recentRequests,

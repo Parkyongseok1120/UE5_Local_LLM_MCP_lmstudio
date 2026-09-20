@@ -106,6 +106,9 @@ test("Workspace Git binds the selected Unreal project and rollback removes only 
   const changes = payloadOf(await f.runtime.callTool("git_changed_files", { project: f.projectFile, comparison: "range", base, head: "HEAD" }));
   assert.equal(changes.canonicalProject, f.projectFile);
   assert.deepEqual(changes.items.map(item => item.path), ["Source/DirectFixture/DirectFixture.cpp"]);
+  assert.equal(changes.queryPathBase, "workspace_root");
+  assert.deepEqual(changes.requestedPaths, []);
+  assert.deepEqual(changes.resolvedRepositoryPaths, ["."]);
   const invalid = payloadOf(await f.runtime.callTool("git_log", { limit: "bad" }));
   assert.match(invalid.errorCode, /invalid_argument/i);
   const rollback = createDirectRuntime({ workspaceRoot: f.workspaceRoot, configPath: f.runtime.configPath,
@@ -113,6 +116,21 @@ test("Workspace Git binds the selected Unreal project and rollback removes only 
   assert(!rollback.tools.some(tool => tool.name === "git_log"));
   assert.equal(payloadOf(await rollback.callTool("git_log", {})).errorCode, "UNKNOWN_TOOL");
   assert(rollback.tools.some(tool => tool.name === "read_file"));
+});
+
+test("all Workspace Git schemas describe paths from the bound workspace root", () => {
+  const tools = toolDefinitions().filter(tool => /^git_/u.test(tool.name));
+  assert.ok(tools.length >= 5);
+  for (const tool of tools) {
+    assert.match(tool.description, /workspace(?:-| )relative|relative to the bound workspace root/iu, tool.name);
+    const pathRule = tool.inputSchema.properties.path;
+    const pathsRule = tool.inputSchema.properties.paths;
+    if (pathRule) assert.match(pathRule.description, /workspace root/iu, tool.name);
+    if (pathsRule) {
+      assert.match(pathsRule.description, /workspace root/iu, tool.name);
+      assert.match(pathsRule.items.description, /workspace root/iu, tool.name);
+    }
+  }
 });
 
 test("Direct catalog is static capability surface without task/control schemas", () => {

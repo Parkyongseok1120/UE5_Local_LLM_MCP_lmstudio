@@ -1,5 +1,7 @@
 import { Chat, ChatMessage } from "@lmstudio/sdk";
 
+const continuityText = require("./continuity-text.js") as { REASONING_SEPARATOR: string };
+
 // Candidate sizes need not be monotone: complete exchanges and checkpoints vary.
 // Measure a bounded set explicitly, rather than assuming binary-search ordering.
 export async function selectMeasuredCandidate<T>(
@@ -19,7 +21,7 @@ export async function selectMeasuredCandidate<T>(
   return fallback!;
 }
 
-export const REASONING_SEPARATOR = "__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__";
+export const REASONING_SEPARATOR = continuityText.REASONING_SEPARATOR;
 
 // Only completed older assistant messages, only the SDK's structural boundary.
 // Never rewrite the latest exchange, infer summaries, or touch call/result parts.

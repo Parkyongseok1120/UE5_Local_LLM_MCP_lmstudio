@@ -27,6 +27,20 @@ function text(buffer) {
   catch { fail("unsupported_encoding", "Evidence is not UTF-8; no lossy path or content returned"); }
 }
 const line = b => text(b).replace(/\r?\n$/, "");
+function boundedQueryPaths(values, prefix) {
+  const retained = [];
+  let chars = 0;
+  for (const value of values) {
+    if (retained.length >= 8 || chars + value.length > 4096) break;
+    retained.push(value); chars += value.length;
+  }
+  return {
+    [prefix]: retained,
+    [`${prefix}Count`]: values.length,
+    [`${prefix}Omitted`]: values.length - retained.length,
+    [`${prefix}Sha256`]: hash(JSON.stringify(values)),
+  };
+}
 function validRevision(value, name = "revision") {
   if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/@{}~^:-]{0,199}$/u.test(value))
     fail("invalid_revision", `${name} must be an explicit revision without options or whitespace`);
@@ -153,7 +167,10 @@ class VersionControl {
         }
       }
     }
+    const requestedPaths = a.path ? [a.path] : (Array.isArray(a.paths) ? [...a.paths] : []);
     const facts = { schemaVersion: 1, kind: "git_observation", status: "observed", action: a.action, ...binding,
+      queryPathBase: "workspace_root", ...boundedQueryPaths(requestedPaths, "requestedPaths"),
+      ...boundedQueryPaths(paths, "resolvedRepositoryPaths"),
       observedAt: new Date().toISOString(), sourceConsistency: "bounded_collection_not_atomic_filesystem_snapshot" };
     let rows = [], isText = false;
     if (a.action === "status") {

@@ -27,6 +27,7 @@ export type CapturedRound = {
   messages: Array<ChatMessage>;
   continueAfterTools: boolean;
   failure?: unknown;
+  finishReason?: string;
 };
 
 export async function runOneToolRound(
@@ -43,6 +44,7 @@ export async function runOneToolRound(
   let hasToolResults = false;
   let boundaryRequested = false;
   let failure: unknown;
+  let finishReason: string | undefined;
 
   const forwardAbort = () => {
     if (!roundAbort.signal.aborted) roundAbort.abort(parentSignal.reason);
@@ -55,6 +57,9 @@ export async function runOneToolRound(
     await tokenSource.act(history, tools, {
       signal: roundAbort.signal,
       ...actCallbacks,
+      onPredictionCompleted: (result) => {
+        finishReason = String((result as { stats?: { stopReason?: unknown } }).stats?.stopReason || "unknown");
+      },
       onMessage: (message) => {
         messages.push(message);
         onMessageCaptured?.(message);
@@ -75,6 +80,7 @@ export async function runOneToolRound(
   return {
     messages,
     continueAfterTools: boundaryRequested,
+    ...(finishReason === undefined ? {} : { finishReason }),
     ...(failure === undefined ? {} : { failure }),
   };
 }

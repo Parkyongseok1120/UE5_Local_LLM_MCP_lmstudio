@@ -106,7 +106,7 @@ test("prediction loop calls the directly selected model with compacted history",
   assert.doesNotMatch(receivedHistory.toString(), /old old old old old/);
   assert.equal(ctl.blocks.at(-1).text, "direct answer");
   assert.equal(ctl.session.disposed, true);
-  assert.equal(ctl.debugValue.compacted, true);
+  assert.equal(ctl.debugValues.find(value => value.event === "direct_context_measurement").compacted, true);
 });
 
 test("low-pressure history passes through without proxy model selection or sampling overrides", async () => {
@@ -136,7 +136,7 @@ test("low-pressure history passes through without proxy model selection or sampl
   ]) {
     assert.equal(Object.prototype.hasOwnProperty.call(receivedOptions, key), false);
   }
-  assert.equal(ctl.debugValue.compacted, false);
+  assert.equal(ctl.debugValues.find(value => value.event === "direct_context_measurement").compacted, false);
 });
 
 test("prediction loop exposes only the configured engine tools and common tools", async () => {
@@ -170,9 +170,10 @@ test("prediction loop exposes only the configured engine tools and common tools"
   assert.deepEqual(receivedTools.map((tool) => tool.name), ["unity_status", "common_lookup"]);
   assert.match(receivedHistory.toString(), /engine=unity/u);
   assert.match(receivedHistory.toString(), /projectIdentity=C:\\Game/u);
-  assert.equal(ctl.debugValue.availableUnityTools, 1);
-  assert.equal(ctl.debugValue.availableUnrealTools, 1);
-  assert.equal(ctl.debugValue.visibleToolCount, 2);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.availableUnityTools, 1);
+  assert.equal(measurement.availableUnrealTools, 1);
+  assert.equal(measurement.visibleToolCount, 2);
 });
 
 test("Qwen-compatible history has exactly one leading system message after scope injection", async () => {
@@ -464,13 +465,14 @@ test("inexact measurement activates the configured message-count fallback", asyn
 
   await handlePredictionLoop(ctl);
 
-  assert.equal(ctl.debugValue.exactMeasurement, false);
-  assert.equal(ctl.debugValue.messageCount, 24);
-  assert.equal(ctl.debugValue.compacted, true);
-  assert.ok(ctl.debugValue.compactionDetails.omittedMessageCount > 0);
-  assert.ok(ctl.debugValue.compactionDetails.retainedMessageCount > 0);
-  assert.ok(ctl.debugValue.compactionDetails.checkpointChars > 0);
-  assert.deepEqual(ctl.debugValue.compactionDetails.observedFiles, []);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.exactMeasurement, false);
+  assert.equal(measurement.messageCount, 24);
+  assert.equal(measurement.compacted, true);
+  assert.ok(measurement.compactionDetails.omittedMessageCount > 0);
+  assert.ok(measurement.compactionDetails.retainedMessageCount > 0);
+  assert.ok(measurement.compactionDetails.checkpointChars > 0);
+  assert.deepEqual(measurement.compactionDetails.observedFiles, []);
   assert.notEqual(receivedHistory, history);
   assert.match(receivedHistory.toString(), /Context memory/);
 });
@@ -535,10 +537,11 @@ test("inexact fallback escalates a still-pressured current tool turn to bounded 
   await handlePredictionLoop(ctl);
 
   assert.equal(actCount, 3);
-  assert.equal(ctl.debugValues[2].exactMeasurement, false);
-  assert.equal(ctl.debugValues[2].compacted, true);
-  assert.ok(ctl.debugValues[2].compactionDetails.omittedMessageCount > 0);
-  assert.ok(Array.isArray(ctl.debugValues[2].compactionDetails.retainedMessageIndexes));
+  const measurements = ctl.debugValues.filter(value => value.event === "direct_context_measurement");
+  assert.equal(measurements[2].exactMeasurement, false);
+  assert.equal(measurements[2].compacted, true);
+  assert.ok(measurements[2].compactionDetails.omittedMessageCount > 0);
+  assert.ok(Array.isArray(measurements[2].compactionDetails.retainedMessageIndexes));
   assert.match(actHistories[2].toString(), /NEW_FALLBACK_TOOL_RESULT/u);
   assert.doesNotMatch(actHistories[2].toString(), /OLD_FALLBACK_TOOL_RESULT/u);
   assert.equal(actHistories[2].getMessagesArray().filter((message) => (
@@ -568,7 +571,7 @@ test("handler activation ignores a legacy nested enabled=false value", async () 
 
   assert.notEqual(receivedHistory, history);
   assert.match(receivedHistory.toString(), /Context memory/);
-  assert.equal(ctl.debugValue.compacted, true);
+  assert.equal(ctl.debugValues.find(value => value.event === "direct_context_measurement").compacted, true);
 });
 
 test("observe-only remains the explicit no-mutation mode", async () => {
@@ -589,8 +592,9 @@ test("observe-only remains the explicit no-mutation mode", async () => {
   await handlePredictionLoop(ctl);
 
   assert.equal(receivedHistory, history);
-  assert.equal(ctl.debugValue.observeOnly, true);
-  assert.equal(ctl.debugValue.compacted, false);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.observeOnly, true);
+  assert.equal(measurement.compacted, false);
 });
 
 test("observe-only does not filter tools or bind project arguments", async () => {
@@ -704,8 +708,11 @@ test("tool rounds are captured once, remeasured, and compacted before the next a
   await handlePredictionLoop(ctl);
 
   assert.equal(actCount, 3);
-  assert.equal(ctl.debugValues.length, 3);
-  assert.equal(ctl.debugValues[2].compacted, true);
+  const measurements = ctl.debugValues.filter(value => value.event === "direct_context_measurement");
+  const observations = ctl.debugValues.filter(value => value.event === "direct_round_observation");
+  assert.equal(measurements.length, 3);
+  assert.equal(observations.length, 3);
+  assert.equal(measurements[2].compacted, true);
   assert.match(actHistories[2].toString(), /Context memory/);
   assert.match(actHistories[2].toString(), /NEW_UNREAD_END/);
   assert.doesNotMatch(actHistories[2].toString(), /OLD_ALREADY_READ_END/);
@@ -1030,6 +1037,33 @@ test("round control never swallows an unrelated lookalike error", async () => {
 
   assert.equal(captured.continueAfterTools, false);
   assert.equal(captured.failure, lookalike);
+});
+
+test("round telemetry records the SDK finish reason without exposing result bodies", async () => {
+  const tokenSource = {
+    async act(_history, _tools, options) {
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      options.onMessage(ChatMessage.create("assistant", "done"));
+    },
+  };
+  const captured = await runOneToolRound(
+    tokenSource,
+    Chat.empty(),
+    [],
+    new AbortController().signal,
+    { onToolCallRequestFinalized() {}, async guardToolCall() {} },
+  );
+  assert.equal(captured.finishReason, "eosFound");
+});
+
+test("semantic result fingerprints ignore random snapshot metadata but retain evidence changes", () => {
+  const first = { kind: "git_observation", snapshotId: "random-a", observedAt: "2026-01-01T00:00:00Z",
+    action: "changed_files", items: [{ path: "Assets/A.cs", status: "modified" }] };
+  const sameMeaning = { ...first, snapshotId: "random-b", observedAt: "2026-01-02T00:00:00Z" };
+  const newEvidence = { ...sameMeaning, items: [{ path: "Assets/B.cs", status: "modified" }] };
+  assert.notEqual(__test.telemetryFingerprint(first), __test.telemetryFingerprint(sameMeaning));
+  assert.equal(__test.telemetryFingerprint(first, true), __test.telemetryFingerprint(sameMeaning, true));
+  assert.notEqual(__test.telemetryFingerprint(first, true), __test.telemetryFingerprint(newEvidence, true));
 });
 
 test("the compactor cannot be selected recursively as the token source", async () => {

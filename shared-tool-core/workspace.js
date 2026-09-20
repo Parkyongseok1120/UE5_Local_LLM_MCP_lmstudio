@@ -5,9 +5,12 @@ const { VersionControl } = require("./git");
 const { hash, fail } = require("./files");
 const { canonicalAbsolutePathIdentity } = require("../lmstudio-unreal-agent-mcp/src/filesystem-path-identity");
 const string = { type: "string", minLength: 1, maxLength: 4096 };
+const workspacePath = { ...string,
+  description: "Literal slash path relative to the bound workspace root. Do not repeat the repository-side project directory prefix." };
 const paging = { limit: { type: "integer", minimum: 1, maximum: 200 }, cursor: string,
   byteBudget: { type: "integer", minimum: 1024, maximum: 65536 } };
-const paths = { type: "array", items: string, maxItems: 16 };
+const paths = { type: "array", items: workspacePath, maxItems: 16,
+  description: "Optional literal paths relative to the bound workspace root; an omitted list scopes the whole workspace." };
 const comparison = { comparison: { type: "string", enum: ["range", "worktree", "staged"] }, base: string, head: string };
 const spec = (name, description, properties, required = []) => ({ name, description,
   inputSchema: { type: "object", properties: { ...properties, project: string }, required, additionalProperties: false } });
@@ -15,11 +18,11 @@ const GIT_ACTIONS = Object.freeze({ git_status: "status", git_log: "log", git_ch
 function workspaceToolDefinitions() {
   return [
     spec("workspace_status", "Observe the actual bound project root, engine and generic capability ownership. Does not change projects or plan work.", {}),
-    spec("git_status", "Read scoped index/worktree status. Does not modify the index. Continue with nextCursor from the same snapshot.", { paths, ...paging }),
-    spec("git_log", "Read commit metadata at a revision (default HEAD). Returns full commit IDs; bounded immutable pages.", { revision: string, paths, ...paging }),
+    spec("git_status", "Read scoped index/worktree status. Path filters are literal and relative to the bound workspace root, even when that workspace is nested inside a repository. Does not modify the index. Continue with nextCursor from the same snapshot.", { paths, ...paging }),
+    spec("git_log", "Read commit metadata at a revision (default HEAD). Path filters are literal and relative to the bound workspace root; do not include the repository-side project prefix. Returns full commit IDs; bounded immutable pages.", { revision: string, paths, ...paging }),
     spec("git_changed_files", "List changed paths without a full diff. Explicit comparison required: range requires base/head; worktree/staged forbid both. Paths are workspace-relative literals. Continue with nextCursor.", { ...comparison, paths, ...paging }, ["comparison"]),
-    spec("git_diff_file", "Read the diff of one exact regular file. range requires base/head; worktree/staged forbid both. Continue with cursor OR startLine. Never accepts directories.", { ...comparison, path: string, startLine: { type: "integer", minimum: 1 }, ...paging }, ["comparison", "path"]),
-    spec("git_read_file", "Read source from a pinned commit rather than the current worktree. Raw blob hash is evidence, not a mutation receipt. Only regular UTF-8 blobs. Continue with cursor OR startLine.", { revision: string, path: string, startLine: { type: "integer", minimum: 1 }, ...paging }, ["revision", "path"]),
+    spec("git_diff_file", "Read the diff of one exact regular file at a literal workspace-relative path. range requires base/head; worktree/staged forbid both. Continue with cursor OR startLine. Never accepts directories.", { ...comparison, path: workspacePath, startLine: { type: "integer", minimum: 1 }, ...paging }, ["comparison", "path"]),
+    spec("git_read_file", "Read source at one literal workspace-relative path from a pinned commit rather than the current worktree. Raw blob hash is evidence, not a mutation receipt. Only regular UTF-8 blobs. Continue with cursor OR startLine.", { revision: string, path: workspacePath, startLine: { type: "integer", minimum: 1 }, ...paging }, ["revision", "path"]),
   ];
 }
 function createWorkspaceCapabilities({ resolveBinding }) {

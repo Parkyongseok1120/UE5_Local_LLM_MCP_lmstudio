@@ -18,6 +18,7 @@ const {
   normalizedTextKey,
   recentConversationTail,
   sentenceCandidates,
+  visibleAssistantText,
 } = require("./continuity-text.js");
 
 const CONTINUITY_MARKER = "[Direct continuity state v2]";
@@ -64,7 +65,7 @@ function sanitizePriorContinuityState(value) {
   if (work?.lastAssistantUpdate?.text) {
     work.lastAssistantUpdate.text = sanitizeDerivedOperationalText(work.lastAssistantUpdate.text);
   }
-  for (const key of ["recentToolOutcomes", "recentBuildOrTestState"]) {
+  for (const key of ["recentToolOutcomes", "gitObservations", "recentBuildOrTestState"]) {
     if (Array.isArray(work?.[key])) {
       work[key] = work[key].map((item) => sanitizeDerivedOperationalRecord(item));
     }
@@ -150,9 +151,11 @@ function lastAssistantUpdate(messages, minimumIndex = -1) {
     && String(candidate.text || "").trim()
   ));
   if (!message) return null;
+  const visibleText = visibleAssistantText(message.text);
+  if (!visibleText.trim()) return null;
   return {
     messageIndex: message.index,
-    text: clip(sanitizeDerivedOperationalText(message.text), 2400, { trim: false }),
+    text: clip(sanitizeDerivedOperationalText(visibleText), 2400, { trim: false }),
     source: "assistant_history",
   };
 }
@@ -169,7 +172,7 @@ function pendingAssistantItems(messages, activeObjective, maxItems = 8) {
   const seen = new Set();
   for (const message of messages) {
     if (message.role !== "assistant" || message.index < activeIndex) continue;
-    for (const sentence of sentenceCandidates(message.text)) {
+    for (const sentence of sentenceCandidates(visibleAssistantText(message.text))) {
       if (!patterns.some((pattern) => pattern.test(sentence))) continue;
       const text = clip(sanitizeDerivedOperationalText(sentence), 800);
       const key = normalizedTextKey(text);
@@ -252,6 +255,11 @@ function buildContinuityMemory(messages, facts, options = {}) {
       previousWork.recentToolOutcomes,
       facts.recentOlderToolOutcomes,
       6,
+    ),
+    gitObservations: mergeRecentDistinct(
+      previousWork.gitObservations,
+      facts.gitObservations,
+      8,
     ),
     modifiedOrObservedFiles: coalesceFileObservations(
       [...previousFileObservations, ...currentFileObservations],

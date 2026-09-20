@@ -3,6 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { createRuntime } = require("../src/server");
+const { VersionControl } = require("../../shared-tool-core/git");
 function fixture(t) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "workspace-git-long-name-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -121,4 +122,48 @@ test("Windows short root aliases identify the same Git project", { skip: process
   if (!short.includes("~")) return t.skip("Volume does not provide DOS short aliases");
   const runtime = createRuntime({ UNITY_PROJECT_ROOT: short });
   const r = await runtime.call("unity_git", { action: "status" }); assert.equal(r.status, "observed", JSON.stringify(r));
+});
+
+test("nested workspaces report exact requested and repository query scopes without guessing prefixes", t => {
+  const repositoryRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "nested-workspace-git-")));
+  const workspaceRoot = path.join(repositoryRoot, "SyntheticGame");
+  t.after(() => fs.rmSync(repositoryRoot, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(workspaceRoot, "Assets"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "SyntheticGame", "Assets"), { recursive: true });
+  const git = (...args) => execFileSync("git", args, { cwd: repositoryRoot, encoding: "utf8", windowsHide: true }).trim();
+  git("init", "-q"); git("config", "user.email", "test@example.invalid"); git("config", "user.name", "Test");
+  fs.writeFileSync(path.join(workspaceRoot, "Assets", "A.cs"), "base\n");
+  fs.writeFileSync(path.join(workspaceRoot, "Assets", "Deleted.cs"), "deleted later\n");
+  fs.writeFileSync(path.join(workspaceRoot, "SyntheticGame", "Assets", "Nested.cs"), "nested base\n");
+  git("add", "."); git("commit", "-qm", "base"); const base = git("rev-parse", "HEAD");
+  fs.writeFileSync(path.join(workspaceRoot, "Assets", "A.cs"), "head\n");
+  fs.rmSync(path.join(workspaceRoot, "Assets", "Deleted.cs"));
+  fs.writeFileSync(path.join(workspaceRoot, "SyntheticGame", "Assets", "Nested.cs"), "nested head\n");
+  git("add", "-A"); git("commit", "-qm", "head"); const head = git("rev-parse", "HEAD");
+  const vc = new VersionControl({ root: workspaceRoot });
+  const changed = paths => vc.call({ action: "changed_files", comparison: "range", base, head, paths });
+
+  const ordinary = changed(["Assets/A.cs"]);
+  assert.deepEqual(ordinary.requestedPaths, ["Assets/A.cs"]);
+  assert.deepEqual(ordinary.resolvedRepositoryPaths, ["SyntheticGame/Assets/A.cs"]);
+  assert.equal(ordinary.queryPathBase, "workspace_root");
+  assert.deepEqual(ordinary.items.map(item => item.path), ["Assets/A.cs"]);
+
+  const actualNestedDirectory = changed(["SyntheticGame/Assets/Nested.cs"]);
+  assert.deepEqual(actualNestedDirectory.resolvedRepositoryPaths,
+    ["SyntheticGame/SyntheticGame/Assets/Nested.cs"]);
+  assert.deepEqual(actualNestedDirectory.items.map(item => item.path), ["SyntheticGame/Assets/Nested.cs"]);
+
+  const repeatedPrefixDoesNotMatchAnotherFile = changed(["SyntheticGame/Assets/A.cs"]);
+  assert.deepEqual(repeatedPrefixDoesNotMatchAnotherFile.items, []);
+  assert.equal(repeatedPrefixDoesNotMatchAnotherFile.complete, true);
+  assert.deepEqual(repeatedPrefixDoesNotMatchAnotherFile.resolvedRepositoryPaths,
+    ["SyntheticGame/SyntheticGame/Assets/A.cs"]);
+
+  const historicalDeletion = changed(["Assets/Deleted.cs"]);
+  assert.deepEqual(historicalDeletion.items, [{ status: "deleted", path: "Assets/Deleted.cs" }]);
+  const empty = changed(["Assets/DoesNotExist.cs"]);
+  assert.deepEqual(empty.items, []);
+  assert.equal(empty.complete, true);
+  assert.deepEqual(empty.requestedPaths, ["Assets/DoesNotExist.cs"]);
 });

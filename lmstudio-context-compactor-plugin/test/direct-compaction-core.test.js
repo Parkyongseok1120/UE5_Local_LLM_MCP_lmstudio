@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const core = require("../src/direct-compaction-core.js");
+const { REASONING_SEPARATOR } = require("../src/continuity-text.js");
 
 function message(role, text, extra = {}) {
   return { role, text, hasFiles: false, toolRequests: [], toolResults: [], ...extra };
@@ -39,6 +40,21 @@ function assertNoDurableFileCapability(result) {
   const durable = `${JSON.stringify(result.memory)}\n${result.checkpoint}`;
   assert.doesNotMatch(durable, /fvr1_[A-Za-z0-9_-]+/iu);
   assertNoExactEphemeralKeys(result.memory);
+}
+
+function parsedCheckpoint(result) {
+  const marker = result.checkpoint.indexOf("[Direct continuity state v2]");
+  const jsonStart = result.checkpoint.indexOf("{", marker);
+  return JSON.parse(result.checkpoint.slice(jsonStart));
+}
+
+function retainedHistory(history, result) {
+  const retained = new Set(result.retainedIndexes);
+  return [
+    message("system", result.checkpoint),
+    ...(result.assistantCheckpoint ? [message("assistant", result.assistantCheckpoint)] : []),
+    ...history.filter((_item, index) => retained.has(index)),
+  ];
 }
 
 test("assistant-derived checkpoint evidence stays in an assistant message across compactions", () => {
@@ -99,7 +115,7 @@ test("latest real user request stays authoritative without promoting an older ob
   ], { recentCompleteTurns: 0 });
 
   assert.equal(result.latestUserVerbatim, latest);
-  assert.equal(result.memory.currentUserRequestVerbatim, latest);
+  assert.equal(Object.hasOwn(result.memory, "currentUserRequestVerbatim"), false);
   assert.equal(result.retainedIndexes.includes(3), true);
   assert.equal(result.checkpoint.includes(latest), true);
   assert.equal(result.memory.priorUserRequestsForContinuation[0].text, old);
@@ -116,7 +132,7 @@ test("hard compaction preserves the prior request needed to interpret a continua
     message("user", continuation),
   ], { recentCompleteTurns: 0 });
 
-  assert.equal(result.memory.currentUserRequestVerbatim, continuation);
+  assert.equal(result.latestUserVerbatim, continuation);
   assert.deepEqual(result.memory.priorUserRequestsForContinuation, [{
     messageIndex: 1,
     text: objective,
@@ -136,7 +152,7 @@ test("hard compaction preserves a bounded multi-hop continuation chain", () => {
     message("user", "Continue."),
   ], { recentCompleteTurns: 0 });
 
-  assert.equal(result.memory.currentUserRequestVerbatim, "Continue.");
+  assert.equal(result.latestUserVerbatim, "Continue.");
   assert.deepEqual(result.memory.priorUserRequestsForContinuation, [
     { messageIndex: 1, text: objective },
     { messageIndex: 3, text: "Yes." },
@@ -161,7 +177,7 @@ test("hard compaction keeps one substantive anchor beyond any fixed ellipsis hor
     message("user", "Continue."),
   ], { recentCompleteTurns: 0 });
 
-  assert.equal(result.memory.currentUserRequestVerbatim, "Continue.");
+  assert.equal(result.latestUserVerbatim, "Continue.");
   assert.deepEqual(result.memory.priorUserRequestsForContinuation.map((item) => item.text), ["Yes.", "Continue.", "Go on."]);
   assert.deepEqual(result.memory.olderContinuationAnchor, { messageIndex: 1, text: objective });
   assert.match(result.checkpoint, /camera handoff/u);
@@ -191,7 +207,7 @@ test("a newer request does not promote a conflicting old constraint to active st
 
   assert.deepEqual(result.memory.latestUserConstraints, []);
   assert.match(JSON.stringify(result.memory.historicalUserConstraintEvidence), /Never modify Source\/Old\.cpp/u);
-  assert.equal(result.memory.currentUserRequestVerbatim, "Now replace Source/Old.cpp exactly as requested.");
+  assert.equal(result.latestUserVerbatim, "Now replace Source/Old.cpp exactly as requested.");
 });
 
 test("older tool outcomes retain file/build facts but strip workflow control", () => {
@@ -281,7 +297,7 @@ test("tool-result redaction never rewrites the latest real user message", () => 
     message("user", latest),
   ], { recentCompleteTurns: 0 });
 
-  assert.equal(result.memory.currentUserRequestVerbatim, latest);
+  assert.equal(Object.hasOwn(result.memory, "currentUserRequestVerbatim"), false);
   assert.equal(result.latestUserVerbatim, latest);
   assert.match(result.checkpoint, /Explain why requiredNextTool and phase appeared/u);
   assert.doesNotMatch(result.memory.recentOlderToolOutcomes[0], /requiredNextTool|phase|synthesis/i);
@@ -1350,8 +1366,8 @@ test("the durable user copy strips raw capability payloads but keeps diagnostic 
 
   assert.equal(result.latestUserVerbatim, latest);
   assertNoDurableFileCapability(result);
-  assert.match(result.memory.currentUserRequestVerbatim, /ephemeral file capability omitted/iu);
-  assert.match(result.memory.currentUserRequestVerbatim, /never persist fileVersionReceipt/iu);
+  assert.match(result.memory.latestUserMessage, /ephemeral file capability omitted/iu);
+  assert.match(result.memory.latestUserMessage, /never persist fileVersionReceipt/iu);
 });
 
 test("a retained file result stays raw and becomes durable only after it is omitted", () => {
@@ -1721,7 +1737,7 @@ test("Korean payment-receipt objective is preserved across hard compaction", () 
 
   assert.equal(result.memory.latestUserMessage, objective);
   assert.equal(result.memory.activeObjective.text, objective);
-  assert.equal(result.memory.currentUserRequestVerbatim, objective);
+  assert.equal(Object.hasOwn(result.memory, "currentUserRequestVerbatim"), false);
   assert.equal(result.memory.recentRawTail[0].text, objective);
   assert.doesNotMatch(result.checkpoint, /fresh file snapshot required before mutation/iu);
 });
@@ -1767,7 +1783,7 @@ test("file-receipt diagnosis remains a diagnosis instead of executable guidance"
 
   assert.equal(result.memory.latestUserMessage, objective);
   assert.equal(result.memory.activeObjective.text, objective);
-  assert.equal(result.memory.currentUserRequestVerbatim, objective);
+  assert.equal(Object.hasOwn(result.memory, "currentUserRequestVerbatim"), false);
   assert.match(result.checkpoint, /snapshotVersionHandler/u);
   assert.doesNotMatch(result.memory.activeObjective.text, /fresh file snapshot required before mutation/iu);
   assertNoDurableFileCapability(result);
@@ -1876,6 +1892,124 @@ test("canonical identities retain capability-like substrings as structural data"
   assert.match(result.checkpoint, /fileVersionReceiptGame/u);
   assert.match(result.checkpoint, /snapshotVersionParser\.cpp/u);
   assertNoDurableFileCapability(result);
+});
+
+test("synthetic long review keeps several Git observations in the final checkpoint across consecutive compactions", () => {
+  const fixture = JSON.parse(fs.readFileSync(
+    path.join(__dirname, "fixtures", "qwen-long-review-continuity.json"),
+    "utf8",
+  ));
+  const longUser = fixture.documentParagraph.repeat(fixture.documentRepeat) + fixture.userRequest;
+  const toolExchange = (id, name, args, payload, reasoning = "") => [
+    message("assistant", reasoning, { toolRequests: [{ id, name, arguments: args }] }),
+    message("tool", "", { toolResults: [{ toolCallId: id, content: JSON.stringify(payload) }] }),
+  ];
+  const gitPayload = (observation) => ({
+    schemaVersion: 1,
+    kind: "git_observation",
+    status: "observed",
+    queryPathBase: "workspace_root",
+    repositoryIdentity: fixture.repositoryIdentity,
+    workspaceIdentity: fixture.workspaceIdentity,
+    base: fixture.base,
+    head: fixture.head,
+    currentHead: fixture.head,
+    complete: true,
+    hasMore: false,
+    ...observation,
+  });
+
+  let history = [message("user", longUser)];
+  fixture.gitObservations.forEach((observation, index) => {
+    history.push(...toolExchange(
+      `git-${index}`,
+      `git_${observation.action}`,
+      { paths: observation.requestedPaths },
+      gitPayload(observation),
+      `Repeated private plan ${index}${REASONING_SEPARATOR}`,
+    ));
+  });
+  history.push(...toolExchange("read-current", "read_file", { path: "Assets/SubsystemC/Coordinator.cs" }, {
+    status: "observed",
+    operation: "read",
+    canonicalProjectRoot: "C:/Synthetic/SyntheticGame",
+    projectIdentity: "p".repeat(64),
+    path: "Assets/SubsystemC/Coordinator.cs",
+    absolutePath: "C:/Synthetic/SyntheticGame/Assets/SubsystemC/Coordinator.cs",
+    sha256: "c".repeat(64),
+    startLine: 1,
+    endLine: 20,
+    totalLines: 20,
+  }));
+
+  const first = core.buildCheckpoint(history, {
+    recentCompleteTurns: 0,
+    maxCurrentTurnMessages: 2,
+    maxCheckpointChars: 8000,
+  });
+  const firstParsed = parsedCheckpoint(first);
+  assert.equal(Object.hasOwn(firstParsed, "currentUserRequestVerbatim"), false);
+  assert.equal(firstParsed.latestUserMessageVerbatimRetainedSeparately, true);
+  assert.match(firstParsed.latestUserMessage, /Review subsystem C/u);
+  assert.match(firstParsed.activeObjective.text, /Review subsystem C/u);
+  assert.equal(firstParsed.currentWorkStatus.gitObservations.length, 3);
+  assert.deepEqual(firstParsed.currentWorkStatus.gitObservations.map(item => item.action),
+    ["log", "changed_files", "status"]);
+  assert.equal(firstParsed.currentWorkStatus.gitObservations[1].base, fixture.base);
+  assert.equal(firstParsed.currentWorkStatus.gitObservations[1].head, fixture.head);
+  assert.equal(firstParsed.currentWorkStatus.gitObservations[1].queryPathBase, "workspace_root");
+  assert.equal(firstParsed.currentWorkStatus.gitObservations[1].complete, true);
+  assert.deepEqual(first.retainedIndexes.slice(-2), [history.length - 2, history.length - 1]);
+  assert.doesNotMatch(first.assistantCheckpoint, /Repeated private plan/u);
+
+  history = retainedHistory(history, first);
+  history.push(...toolExchange("directory-current", "list_directory", { path: "Assets/SubsystemC" }, {
+    status: "observed",
+    canonicalProjectRoot: "C:/Synthetic/SyntheticGame",
+    path: "Assets/SubsystemC",
+    files: [{ path: "Assets/SubsystemC/Coordinator.cs", operation: "observed", sha256: "c".repeat(64) }],
+  }));
+  const second = core.buildCheckpoint(history, {
+    recentCompleteTurns: 0,
+    maxCurrentTurnMessages: 2,
+    maxCheckpointChars: 8000,
+  });
+  const secondParsed = parsedCheckpoint(second);
+  assert.equal(secondParsed.currentWorkStatus.gitObservations.length, 3);
+  assert.deepEqual(secondParsed.currentWorkStatus.gitObservations.map(item => item.action),
+    ["log", "changed_files", "status"]);
+  assert.ok(secondParsed.currentWorkStatus.modifiedOrObservedFiles.some(item => (
+    item.path === "Assets/SubsystemC/Coordinator.cs"
+  )));
+  assert.deepEqual(second.retainedIndexes.slice(-2), [history.length - 2, history.length - 1]);
+  assert.ok(second.checkpoint.length <= 8000);
+});
+
+test("only an unambiguous SDK reasoning boundary is excluded from assistant continuity evidence", () => {
+  const visible = core.buildCheckpoint([
+    message("user", "Review the subsystem."),
+    message("assistant", `PRIVATE PLAN: relist everything${REASONING_SEPARATOR}Visible progress: inspected the coordinator.`),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0, maxCurrentTurnMessages: 0, maxCheckpointChars: 12000 });
+  assert.doesNotMatch(visible.assistantCheckpoint, /PRIVATE PLAN/u);
+  assert.match(visible.assistantCheckpoint, /Visible progress/u);
+
+  const reasoningOnly = core.buildCheckpoint([
+    message("user", "Review the subsystem."),
+    message("assistant", `PRIVATE PLAN: relist everything${REASONING_SEPARATOR}`),
+    message("user", "Start the report."),
+  ], { recentCompleteTurns: 0, maxCurrentTurnMessages: 0, maxCheckpointChars: 12000 });
+  assert.equal(reasoningOnly.memory.previousTurnFinalResponseEvidence.present, false);
+  assert.doesNotMatch(reasoningOnly.assistantCheckpoint, /PRIVATE PLAN/u);
+
+  const ambiguousText = `First${REASONING_SEPARATOR}Middle${REASONING_SEPARATOR}Last`;
+  const ambiguous = core.buildCheckpoint([
+    message("user", "Review the subsystem."),
+    message("assistant", ambiguousText),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0, maxCurrentTurnMessages: 0, maxCheckpointChars: 12000 });
+  assert.match(ambiguous.assistantCheckpoint, /First/u);
+  assert.match(ambiguous.assistantCheckpoint, /Last/u);
 });
 
 test("Unity file observations keep project, hash and time without changing the Unreal selection", () => {

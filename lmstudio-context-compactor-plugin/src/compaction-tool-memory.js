@@ -242,8 +242,16 @@ function parseToolResult(content) {
       const git = {};
       for (const key of ["action", "comparison", "base", "head", "currentHead", "blobOid", "path",
         "repositoryIdentity", "workspaceIdentity", "snapshotId", "hasMore", "complete", "incomplete",
-        "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total", "observedAt", "sourceConsistency", "submoduleWorktrees"]) {
+        "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total", "observedAt", "sourceConsistency", "submoduleWorktrees",
+        "queryPathBase", "requestedPathsCount", "requestedPathsOmitted", "requestedPathsSha256",
+        "resolvedRepositoryPathsCount", "resolvedRepositoryPathsOmitted", "resolvedRepositoryPathsSha256"]) {
         if (source[key] !== undefined) git[key] = source[key];
+      }
+      for (const key of ["requestedPaths", "resolvedRepositoryPaths"]) {
+        if (!Array.isArray(source[key])) continue;
+        git[key] = source[key].slice(0, 8).map(value => String(value).slice(0, 400));
+        const omitted = source[key].length - git[key].length;
+        if (omitted > 0) git[`${key}Omitted`] = Number(git[`${key}Omitted`] || 0) + omitted;
       }
       if (Array.isArray(source.items)) {
         git.items = source.items.slice(0, 8).map(item => Object.fromEntries(
@@ -564,11 +572,43 @@ function parsedOutcomes(outcomes) {
   return parsed;
 }
 
+function durableGitObservation(value) {
+  if (!isRecord(value)) return null;
+  const retained = {};
+  for (const key of [
+    "action", "comparison", "base", "head", "currentHead", "blobOid", "path",
+    "repositoryIdentity", "workspaceIdentity", "hasMore", "complete", "incomplete",
+    "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total",
+    "sourceConsistency", "submoduleWorktrees", "queryPathBase", "requestedPaths",
+    "requestedPathsCount", "requestedPathsOmitted", "requestedPathsSha256", "resolvedRepositoryPaths",
+    "resolvedRepositoryPathsCount", "resolvedRepositoryPathsOmitted", "resolvedRepositoryPathsSha256",
+    "canonicalProjectRoot", "canonicalProject", "projectIdentity",
+  ]) {
+    if (value[key] !== undefined) retained[key] = value[key];
+  }
+  if (Array.isArray(value.items)) {
+    retained.items = value.items.slice(0, 4);
+    retained.omittedItems = Math.max(0, Number(value.omittedItems || 0) + value.items.length - retained.items.length);
+  } else if (value.omittedItems !== undefined) {
+    retained.omittedItems = value.omittedItems;
+  }
+  return sanitizeStructuredDurableValue(retained);
+}
+
 function stateMemory(outcomes) {
   const files = [];
   const builds = [];
+  const gitObservations = [];
   let activeProject = null;
   for (const item of parsedOutcomes(outcomes)) {
+    if (isRecord(item.gitObservation)) {
+      gitObservations.push(durableGitObservation({
+        ...item.gitObservation,
+        ...(item.canonicalProjectRoot ? { canonicalProjectRoot: item.canonicalProjectRoot } : {}),
+        ...(item.canonicalProject ? { canonicalProject: item.canonicalProject } : {}),
+        ...(item.projectIdentity ? { projectIdentity: item.projectIdentity } : {}),
+      }));
+    }
     if (item.activeProjectCleared === true) {
       activeProject = { cleared: true, source: "tool_result_fact" };
       continue;
@@ -612,6 +652,7 @@ function stateMemory(outcomes) {
   return {
     files: coalesceFileObservations(files.filter(Boolean), 16),
     builds: builds.slice(-4),
+    gitObservations: gitObservations.slice(-8),
     activeProject,
   };
 }
@@ -621,6 +662,7 @@ module.exports = {
   INTERNAL_KEYS,
   decodeToolResultRecord,
   parseToolResult,
+  durableGitObservation,
   retainedFileFact,
   scopeToolOutcome,
   stateMemory,

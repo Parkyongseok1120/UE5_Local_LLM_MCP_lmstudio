@@ -9,6 +9,7 @@ import {
   type Tool,
   type ToolCallRequest,
 } from "@lmstudio/sdk";
+import crypto from "node:crypto";
 import { selectMeasuredCandidate, boundPastReasoning } from "./context-budget";
 import { attachmentBoundary } from "./attachment-boundary";
 import { createAttachmentContext } from "./attachment-tools";
@@ -52,6 +53,65 @@ type ContinuityNote = {
   openQuestions: Array<unknown>;
   reviewClaims?: Array<unknown>;
 };
+const { REASONING_SEPARATOR } = require("./continuity-text.js") as { REASONING_SEPARATOR: string };
+
+const VOLATILE_OBSERVATION_KEYS = new Set([
+  "observedAt", "lastObservedAt", "snapshotCapturedAt", "snapshotId", "nextCursor",
+]);
+
+function canonicalTelemetryValue(value: unknown, semantic = false): unknown {
+  if (Array.isArray(value)) return value.map(item => canonicalTelemetryValue(item, semantic));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !(semantic && VOLATILE_OBSERVATION_KEYS.has(key)))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => [key, canonicalTelemetryValue(item, semantic)]));
+}
+
+function telemetryFingerprint(value: unknown, semantic = false): string {
+  let parsed = value;
+  if (typeof value === "string") {
+    try { parsed = JSON.parse(value); } catch { parsed = value; }
+  }
+  const serialized = JSON.stringify(canonicalTelemetryValue(parsed, semantic));
+  return crypto.createHash("sha256")
+    .update(serialized === undefined ? "undefined" : serialized)
+    .digest("hex");
+}
+
+function resultContent(result: unknown): unknown {
+  if (!result || typeof result !== "object") return result;
+  return (result as { content?: unknown }).content;
+}
+
+function messageEvidenceTelemetry(messages: Array<ChatMessage>) {
+  const calls = messages.flatMap(message => message.getToolCallRequests()).map(request => ({
+    toolName: request.name,
+    argumentsFingerprint: telemetryFingerprint(request.arguments || {}),
+  }));
+  const results = messages.flatMap(message => message.getToolCallResults()).map(result => {
+    const content = resultContent(result);
+    return {
+      resultFingerprint: telemetryFingerprint(content),
+      semanticResultFingerprint: telemetryFingerprint(content, true),
+    };
+  });
+  return { calls, results };
+}
+
+function serializedCheckpointCounts(checkpoint: string) {
+  try {
+    const marker = checkpoint.indexOf("[Direct continuity state v2]");
+    const start = checkpoint.indexOf("{", marker);
+    const parsed = JSON.parse(checkpoint.slice(start));
+    return {
+      serializedToolOutcomeCount: parsed?.currentWorkStatus?.recentToolOutcomes?.length || 0,
+      serializedGitObservationCount: parsed?.currentWorkStatus?.gitObservations?.length || 0,
+    };
+  } catch {
+    return { serializedToolOutcomeCount: 0, serializedGitObservationCount: 0 };
+  }
+}
 
 type NormalizedMessage = {
   role: string;
@@ -545,14 +605,11 @@ function createRoundActivityTracker(
   return { waitingForPrompt, progress, firstToken: complete, complete };
 }
 
-const SYNTHETIC_REASONING_SEPARATOR =
-  "__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__";
-
 function visibleAssistantOutput(text: string): { visibleText: string; hasFooter: boolean; note: unknown } {
   const raw = String(text || "");
-  const separatorIndex = raw.lastIndexOf(SYNTHETIC_REASONING_SEPARATOR);
+  const separatorIndex = raw.lastIndexOf(REASONING_SEPARATOR);
   return modelNotes.splitVisibleAnswer(separatorIndex >= 0
-    ? raw.slice(separatorIndex + SYNTHETIC_REASONING_SEPARATOR.length) : raw);
+    ? raw.slice(separatorIndex + REASONING_SEPARATOR.length) : raw);
 }
 
 function modelHistoryMessage(message: ChatMessage): ChatMessage {
@@ -718,6 +775,10 @@ export function createPredictionLoopHandler(
       const retainedIndexes = compactionCheckpoint?.retainedIndexes || [];
       const retainedIndexLimit = 64;
       const observedFiles = compactionCheckpoint?.memory?.currentWorkStatus?.modifiedOrObservedFiles || [];
+      const inputEvidence = messageEvidenceTelemetry(modelInput.getMessagesArray());
+      const serializedCounts = compactionCheckpoint
+        ? serializedCheckpointCounts(compactionCheckpoint.checkpoint)
+        : { serializedToolOutcomeCount: 0, serializedGitObservationCount: 0 };
       if (config.showDebugInfo) ctl.debug({
         event: "direct_context_measurement",
         roundIndex,
@@ -741,6 +802,10 @@ export function createPredictionLoopHandler(
           retainedMessageIndexesTruncated: retainedIndexes.length > retainedIndexLimit,
           checkpointChars: compactionCheckpoint.checkpoint.length,
           assistantCheckpointChars: compactionCheckpoint.assistantCheckpoint.length,
+          ...serializedCounts,
+          inputToolResultCount: inputEvidence.results.length,
+          inputLatestToolResultFingerprint: inputEvidence.results.at(-1)?.resultFingerprint,
+          inputLatestSemanticResultFingerprint: inputEvidence.results.at(-1)?.semanticResultFingerprint,
           retention: compactionRetention,
           observedFiles: observedFiles.slice(-16).map((file) => ({
             canonicalProject: file.canonicalProject,
@@ -854,6 +919,7 @@ export function createPredictionLoopHandler(
       );
       activeActivity.complete();
       activeActivity = null;
+      let noteLifecycle = activeNote ? "injected_existing" : "absent";
       for (const message of captured.messages) {
         const live = liveMessages.get(message);
         let visibleMessage = live?.visibleMessage || message;
@@ -875,13 +941,33 @@ export function createPredictionLoopHandler(
                 extracted.note, objectiveFingerprint, visibleHistory.getMessagesArray(),
               );
               if (activeNote && activeNote.decisions.length + activeNote.rejectedHypotheses.length
-                + activeNote.openQuestions.length + (activeNote.reviewClaims?.length || 0) === 0) activeNote = null;
+                + activeNote.openQuestions.length + (activeNote.reviewClaims?.length || 0) === 0) {
+                activeNote = null;
+                noteLifecycle = "rejected_empty";
+              } else noteLifecycle = activeNote ? "accepted" : "rejected_invalid";
+            } else {
+              noteLifecycle = noteEnabled ? "rejected_invalid" : "ignored_disabled";
             }
           }
         }
         workingHistory.append(historyMessage);
         visibleHistory.append(visibleMessage);
         if (!displayedMessages.has(message)) emitter.emit(visibleMessage, textAlreadyStreamed);
+      }
+      if (config.showDebugInfo) {
+        const outputEvidence = messageEvidenceTelemetry(captured.messages);
+        ctl.debug({
+          event: "direct_round_observation",
+          roundIndex,
+          finishReason: captured.finishReason || (captured.failure === undefined ? "unknown" : "failed"),
+          continueAfterTools: captured.continueAfterTools,
+          modelInputToolResultCount: inputEvidence.results.length,
+          modelInputLatestResultFingerprint: inputEvidence.results.at(-1)?.resultFingerprint,
+          modelInputLatestSemanticResultFingerprint: inputEvidence.results.at(-1)?.semanticResultFingerprint,
+          calls: outputEvidence.calls,
+          results: outputEvidence.results,
+          modelNoteLifecycle: noteLifecycle,
+        });
       }
       if (captured.failure !== undefined) throw captured.failure;
       if (!captured.continueAfterTools) break;
@@ -912,6 +998,9 @@ export const __test = {
   bindProjectArguments,
   isObservationOnlyToolCall,
   createRoundActivityTracker,
+  telemetryFingerprint,
+  messageEvidenceTelemetry,
+  serializedCheckpointCounts,
   modelHistoryMessage,
   selectSoftCompaction,
 };
