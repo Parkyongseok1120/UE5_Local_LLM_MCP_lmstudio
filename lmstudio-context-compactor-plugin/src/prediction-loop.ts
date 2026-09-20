@@ -9,6 +9,8 @@ import {
   type Tool,
   type ToolCallRequest,
 } from "@lmstudio/sdk";
+import { selectMeasuredCandidate, boundPastReasoning } from "./context-budget";
+import { attachmentBoundary } from "./attachment-boundary";
 import { createAttachmentContext } from "./attachment-tools";
 import { directConfigSchematics } from "./direct-config";
 import { runOneToolRound } from "./round-loop";
@@ -48,6 +50,7 @@ type ContinuityNote = {
   decisions: Array<unknown>;
   rejectedHypotheses: Array<unknown>;
   openQuestions: Array<unknown>;
+  reviewClaims?: Array<unknown>;
 };
 
 type NormalizedMessage = {
@@ -82,6 +85,8 @@ type DirectConfig = {
   projectIdentity: string;
   observeOnly: boolean;
   showDebugInfo: boolean;
+  pastReasoningTokens: number;
+  reviewProgress: boolean;
   softRemainingTokens: number;
   hardRemainingTokens: number;
   maxOutputReserve: number;
@@ -101,6 +106,7 @@ type RemoteToolLike = Tool & {
 };
 
 const UNITY_OBSERVATION_TOOLS = new Set([
+  "workspace_status", "git_status", "git_log", "git_changed_files", "git_diff_file", "git_read_file",
   "unity_references",
   "unity_snapshot",
   "unity_debug_query",
@@ -117,6 +123,7 @@ const UNITY_OBSERVATION_TOOLS = new Set([
 ]);
 
 const UNREAL_OBSERVATION_TOOLS = new Set([
+  "workspace_status", "git_status", "git_log", "git_changed_files", "git_diff_file", "git_read_file",
   "get_workspace_info",
   "list_unreal_projects",
   "get_active_project",
@@ -179,6 +186,8 @@ function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     projectIdentity: String(config.get("projectIdentity") || "").trim().slice(0, 4096),
     observeOnly: config.get("observeOnly") === true,
     showDebugInfo: config.get("showDebugInfo") !== false,
+    reviewProgress: config.get("reviewProgress") === true,
+    pastReasoningTokens: numeric(config.get("pastReasoningTokens"), 0, 0, 16384),
     softRemainingTokens: numeric(config.get("softRemainingTokens"), 14000, 0, 1_000_000),
     hardRemainingTokens: numeric(config.get("hardRemainingTokens"), 8000, 0, 1_000_000),
     maxOutputReserve: numeric(config.get("maxOutputReserve"), 8192, 256, 131072),
@@ -309,35 +318,11 @@ async function selectSoftCompaction(
     }
   }
 
-  // Find the largest bounded current-turn tail that reaches the target. The
-  // checkpoint core retains only complete assistant/tool exchange groups, so
-  // the binary search cannot split a tool request from its result.
-  let low = 2;
-  let high = Math.max(2, Math.min(256, history.length));
-  let best: SoftCompactionSelection | null = null;
-  let smallest: SoftCompactionSelection | null = null;
-  while (low <= high) {
-    const cap = Math.trunc((low + high) / 2);
-    const candidate = buildCompactedHistory(history, 0, config, {
-      ...checkpointOptions, maxCurrentTurnMessages: cap,
-    });
-    const measured = candidate.history === history
-      ? null : await measureCandidate(candidate.history);
-    const selection = { candidate, targetRemainingTokens,
-      remainingTokensAfter: measured?.remainingTokens ?? null,
-      maxCurrentTurnMessages: cap };
-    if (!smallest || cap < smallest.maxCurrentTurnMessages!) smallest = selection;
-    if (measured && measured.remainingTokens >= targetRemainingTokens) {
-      best = selection;
-      low = cap + 1;
-    } else {
-      high = cap - 1;
-    }
-  }
-  if (best) return best;
-  if (smallest) return smallest;
-  return { candidate: recent, targetRemainingTokens,
-    remainingTokensAfter: null, maxCurrentTurnMessages: null };
+  const selected = await selectMeasuredCandidate(history.length, targetRemainingTokens,
+    cap => buildCompactedHistory(history, 0, config, { ...checkpointOptions, maxCurrentTurnMessages: cap }),
+    async candidate => candidate.history === history ? null : (await measureCandidate(candidate.history)).remainingTokens);
+  return { ...selected, targetRemainingTokens };
+
 }
 
 function composeModelHistory(
@@ -357,7 +342,9 @@ function composeModelHistory(
     return { history, overhead: 0 };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note) : "";
-  const instruction = modelNotes.NOTE_INSTRUCTION;
+  const instruction = config.reviewProgress ? modelNotes.NOTE_INSTRUCTION.replace(
+    "openQuestions [{question, refs?}]. No other keys.",
+    "openQuestions [{question, refs?}], reviewClaims [{path, sha256, reviewScope, statement, refs}]. reviewClaims require an observed file hash and tool-call refs; they are assistant claims, never verified completion. No other keys.") : modelNotes.NOTE_INSTRUCTION;
   const canIncludeInstruction = enableNoteProtocol
     && config.maxCheckpointChars >= 2000 + instruction.length;
   const canIncludeNote = canIncludeInstruction
@@ -586,7 +573,9 @@ export function createPredictionLoopHandler(
   return async (ctl) => {
   ctl.guardAbort();
   const config = readConfig(ctl);
-  const originalHistory = await ctl.pullHistory();
+  const pulledHistory = await ctl.pullHistory();
+  const attachments = config.observeOnly ? { modelHistory: pulledHistory, attachmentHistory: pulledHistory } : attachmentBoundary.restore(pulledHistory, client);
+  const originalHistory = attachments.modelHistory;
   const tokenSource = await ctl.tokenSource();
   if (selectedSourceIsThisPlugin(tokenSource)) {
     throw new Error("Select the actual Qwen/LLM in LM Studio. The context compactor is middleware, not a chat model.");
@@ -606,7 +595,7 @@ export function createPredictionLoopHandler(
   );
   const attachmentContext = config.observeOnly
     ? { tools: [], instruction: "", attachmentCount: 0 }
-    : createAttachmentContext(originalHistory, client);
+    : createAttachmentContext(attachments.attachmentHistory, client);
   const scopedRemoteTools = config.observeOnly
     ? toolSession.tools as Array<ScopedTool>
     : filterToolsForScope(toolSession.tools as Array<ScopedTool>, scope);
@@ -625,6 +614,12 @@ export function createPredictionLoopHandler(
   const priorNote = priorHistoryKey ? noteStore.read(priorHistoryKey) : null;
   let activeNote = priorNote?.scope.objectiveFingerprint === objectiveFingerprint
     ? modelNotes.reconcileStoredNote(priorNote, originalMessages) : null;
+  // A newly attached rubric may change what "review C" means even when the
+  // request text and source hashes are identical. Never carry review claims
+  // across this unverified criterion boundary.
+  if (activeNote && attachments.attachmentHistory.getMessagesArray().at(-1)?.hasFiles()) {
+    delete activeNote.reviewClaims;
+  }
   let workingHistory = originalHistory;
   let roundIndex = 0;
   let activeActivity: ReturnType<typeof createRoundActivityTracker> | null = null;
@@ -639,11 +634,21 @@ export function createPredictionLoopHandler(
       const beforeInput = composeModelHistory(
         workingHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
       );
-      const before = await measureContext(tokenSource, beforeInput.history, config, modelTools);
+      let before = await measureContext(tokenSource, beforeInput.history, config, modelTools);
       let modelHistory = workingHistory;
       let compacted = false;
       let compactionCheckpoint: CheckpointResult | null = null;
       let compactionRetention: Record<string, unknown> | null = null;
+      if (core.shouldCompact(before, config)) {
+        const counter = tokenSource as { countTokens?: (text: string) => Promise<number> };
+        if (config.pastReasoningTokens > 0 && counter.countTokens) {
+          workingHistory = await boundPastReasoning(workingHistory, config.pastReasoningTokens, text => counter.countTokens!(text));
+          modelHistory = workingHistory;
+          before = await measureContext(tokenSource,
+            composeModelHistory(workingHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled).history,
+            config, modelTools);
+        }
+      }
       if (core.shouldCompact(before, config)) {
         const hard = before.remainingTokens <= config.hardRemainingTokens;
         const checkpointOptions = {
@@ -870,7 +875,7 @@ export function createPredictionLoopHandler(
                 extracted.note, objectiveFingerprint, visibleHistory.getMessagesArray(),
               );
               if (activeNote && activeNote.decisions.length + activeNote.rejectedHypotheses.length
-                + activeNote.openQuestions.length === 0) activeNote = null;
+                + activeNote.openQuestions.length + (activeNote.reviewClaims?.length || 0) === 0) activeNote = null;
             }
           }
         }

@@ -1,5 +1,6 @@
 "use strict";
 
+const { workspaceToolDefinitions } = require("../../shared-tool-core/workspace");
 const { HARD_MUTATION_LIMITS } = require("./direct-mutation-limits");
 
 const DIRECT_TOOL_EFFECT = Symbol("directToolEffect");
@@ -353,8 +354,8 @@ function toolDefinitions() {
   if (staleEffects.length) {
     throw new Error(`Direct tool effects have no definition: ${staleEffects.join(", ")}`);
   }
-  return definitions.map((definition) => (
-    classifyToolDefinition(definition, TOOL_EFFECTS[definition.name])
+  return [...definitions, ...workspaceToolDefinitions().map(definition => classifyToolDefinition(definition, "read"))].map((definition) => (
+    TOOL_EFFECTS[definition.name] ? classifyToolDefinition(definition, TOOL_EFFECTS[definition.name]) : definition
   ));
 }
 

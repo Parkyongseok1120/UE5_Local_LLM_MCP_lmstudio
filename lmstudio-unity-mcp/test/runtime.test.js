@@ -135,7 +135,7 @@ test("unity_git returns bounded read-only status, log and diff evidence for the 
   f.put("Assets/Code.cs", "class After {}\n");
 
   const status = await f.call("unity_git", { action: "status", limit: 20 });
-  assert.equal(status.status, "observed");
+  assert.equal(status.status, "observed", JSON.stringify(status));
   assert.equal(status.projectIdentity, f.policy.projectIdentity);
   assert(status.items.some(item => item.path === "Assets/Code.cs" && item.status.includes("M")));
 

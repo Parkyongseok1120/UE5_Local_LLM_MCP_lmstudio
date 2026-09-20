@@ -7,6 +7,8 @@ const path = require("node:path");
 const DIRECT_SOURCE_FILES = Object.freeze([
   "src/index.ts",
   "src/prediction-loop.ts",
+  "src/context-budget.ts",
+  "src/attachment-boundary.ts",
   "src/round-loop.ts",
   "src/prediction-stream.ts",
   "src/tool-scope.ts",

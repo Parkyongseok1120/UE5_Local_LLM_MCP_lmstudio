@@ -230,7 +230,7 @@ export function bindProjectArguments(
   projectIdentity: string,
 ): Record<string, unknown> | null {
   const identity = String(projectIdentity || "").trim();
-  if (!identity || toolEngine(tool) !== "unreal") return null;
+  if (!identity || !["unity", "unreal"].includes(toolEngine(tool))) return null;
   const args = { ...(request.arguments || {}) } as Record<string, unknown>;
   if (toolSupportsProjectArgument(tool)) {
     if (args.project === identity) return null;

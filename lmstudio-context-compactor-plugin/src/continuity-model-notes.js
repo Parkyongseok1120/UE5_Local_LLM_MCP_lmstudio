@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { buildObjectiveContinuity } = require("./continuity-objectives.js");
-const { pathApiFor } = require("./continuity-file-observations.js");
+const { pathApiFor, canonicalFilePath, projectDescriptor, normalizedObservationState } = require("./continuity-file-observations.js");
 const { normalizedTextKey } = require("./continuity-text.js");
 const { sanitizeDerivedOperationalText } = require("./durable-memory-sanitizer.js");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
@@ -71,14 +71,23 @@ function parseItems(value, keys, textFields) {
   return items;
 }
 
+function parseReviewClaims(value) {
+  if (value === undefined) return [];
+  const items = parseItems(value, ["path", "sha256", "reviewScope", "statement"],
+    [["path", 300], ["sha256", 64], ["reviewScope", 80], ["statement", 300]]);
+  if (!items || items.some(x => !/^[a-f0-9]{64}$/i.test(x.sha256) || !x.refs?.length)) return null;
+  return items;
+}
+
 function validateDraftNote(value) {
-  if (!isRecord(value) || !exactKeys(value, ["decisions", "rejectedHypotheses", "openQuestions"])) return null;
+  if (!isRecord(value) || !exactKeys(value, ["decisions", "rejectedHypotheses", "openQuestions", "reviewClaims"])) return null;
   const decisions = parseItems(value.decisions, ["statement", "rationale"], [["statement", 300], ["rationale", 400]]);
   const rejectedHypotheses = parseItems(value.rejectedHypotheses, ["hypothesis", "reason"], [["hypothesis", 300], ["reason", 400]]);
   const openQuestions = parseItems(value.openQuestions, ["question"], [["question", 350]]);
-  if (!decisions || !rejectedHypotheses || !openQuestions) return null;
-  if (decisions.length + rejectedHypotheses.length + openQuestions.length > MAX_NOTE_ITEMS) return null;
-  const note = { decisions, rejectedHypotheses, openQuestions };
+  const reviewClaims = parseReviewClaims(value.reviewClaims);
+  if (!decisions || !rejectedHypotheses || !openQuestions || !reviewClaims) return null;
+  if (decisions.length + rejectedHypotheses.length + openQuestions.length + reviewClaims.length > MAX_NOTE_ITEMS) return null;
+  const note = { decisions, rejectedHypotheses, openQuestions, ...(reviewClaims.length ? { reviewClaims } : {}) };
   return JSON.stringify(note).length <= MAX_NOTE_CHARS ? note : null;
 }
 
@@ -137,6 +146,7 @@ function provenanceFromMessages(messages) {
   const projects = new Map();
   const requestCounts = new Map();
   const completedIds = new Set();
+  const observations = new Map();
   for (let index = Math.max(0, objectiveIndex); index < messages.length; index += 1) {
     const message = messages[index];
     if (message.getRole() === "assistant") {
@@ -155,6 +165,7 @@ function provenanceFromMessages(messages) {
       const decoded = decodeToolResultRecord(content);
       if (!decoded.value) continue;
       const value = decoded.value;
+      if (result.toolCallId) observations.set(String(result.toolCallId), value);
       const unityRoot = normalizedProjectRoot(value.canonicalProjectRoot);
       if (unityRoot && typeof value.projectIdentity === "string"
         && /^[a-f0-9]{64}$/iu.test(value.projectIdentity)) {
@@ -175,13 +186,15 @@ function provenanceFromMessages(messages) {
   const verifiedToolIds = new Set([...completedIds].filter((id) => requestCounts.get(id) === 1));
   return {
     projectIdentity: projects.size === 1 ? [...projects.keys()][0] : "",
+    projectDescriptor: projects.size === 1 ? [...projects.values()][0] : "",
     projectState: projects.size === 0 ? "unobserved" : projects.size === 1 ? "single" : "mixed",
     verifiedToolIds,
+    observations: new Map([...observations].filter(([id]) => verifiedToolIds.has(id))),
   };
 }
 
-function verifiedRefs(draft, verifiedToolIds) {
-  return Object.fromEntries(["decisions", "rejectedHypotheses", "openQuestions"].map((key) => [
+function verifiedRefs(draft, verifiedToolIds, provenance = {}) {
+  const result = Object.fromEntries(["decisions", "rejectedHypotheses", "openQuestions"].map((key) => [
     key, (draft[key] || []).map((item) => {
       const { refs: _unverifiedRefs, ...body } = item;
       const refs = (item.refs || []).filter((ref) => {
@@ -191,6 +204,27 @@ function verifiedRefs(draft, verifiedToolIds) {
       return refs.length ? { ...body, refs } : body;
     }),
   ]));
+  const records = [...(provenance.observations || new Map()).entries()].filter(([, value]) => value.kind !== "git_observation");
+  const fileKey = value => {
+    const descriptor = projectDescriptor(value, provenance.projectDescriptor);
+    const canonical = canonicalFilePath(value, descriptor);
+    return pathApiFor(descriptor) === path.win32 ? canonical.toLowerCase() : canonical;
+  };
+  const claims = (draft.reviewClaims || []).filter(claim => {
+    if (provenance.projectState !== "single") return false;
+    const identity = fileKey(claim);
+    if (!identity) return false;
+    const latest = records.filter(([, value]) => fileKey(value) === identity).at(-1);
+    if (!latest || normalizedObservationState(latest[1]) === "deleted"
+      || String(latest[1].sha256 || latest[1].hash).toLowerCase() !== claim.sha256.toLowerCase()) return false;
+    return claim.refs.some(ref => {
+      const observed = provenance.observations.get(ref.replace(/^tool-call:/, ""));
+      return /^tool-call:/.test(ref) && observed && observed.kind !== "git_observation" && fileKey(observed) === identity
+        && String(observed.sha256 || observed.hash).toLowerCase() === claim.sha256.toLowerCase();
+    });
+  }).map(claim => ({ ...claim, refs: claim.refs.filter(ref => verifiedToolIds.has(ref.replace(/^tool-call:/, ""))) }));
+  if (claims.length) result.reviewClaims = claims;
+  return result;
 }
 
 function attachScope(draft, fingerprint, messages = []) {
@@ -200,7 +234,7 @@ function attachScope(draft, fingerprint, messages = []) {
   const provenance = provenanceFromMessages(messages);
   const note = { scope: { objectiveFingerprint: fingerprint,
     ...(provenance.projectIdentity ? { projectIdentity: provenance.projectIdentity } : {}) },
-  ...verifiedRefs(validated, provenance.verifiedToolIds) };
+  ...verifiedRefs(validated, provenance.verifiedToolIds, provenance) };
   return JSON.stringify(note).length <= MAX_NOTE_CHARS ? note : null;
 }
 
@@ -209,12 +243,12 @@ function reconcileStoredNote(note, messages) {
   if (!validated) return null;
   const provenance = provenanceFromMessages(messages);
   if (validated.scope.projectIdentity && validated.scope.projectIdentity !== provenance.projectIdentity) return null;
-  const reconciled = { scope: validated.scope, ...verifiedRefs(validated, provenance.verifiedToolIds) };
+  const reconciled = { scope: validated.scope, ...verifiedRefs(validated, provenance.verifiedToolIds, provenance) };
   return validateStoredNote(reconciled);
 }
 
 function validateStoredNote(value) {
-  if (!isRecord(value) || !exactKeys(value, ["scope", "decisions", "rejectedHypotheses", "openQuestions"])) return null;
+  if (!isRecord(value) || !exactKeys(value, ["scope", "decisions", "rejectedHypotheses", "openQuestions", "reviewClaims"])) return null;
   if (!isRecord(value.scope) || !exactKeys(value.scope, ["objectiveFingerprint", "projectIdentity"])) return null;
   const fingerprint = value.scope.objectiveFingerprint;
   if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(fingerprint)) return null;
@@ -224,6 +258,7 @@ function validateStoredNote(value) {
     decisions: value.decisions,
     rejectedHypotheses: value.rejectedHypotheses,
     openQuestions: value.openQuestions,
+    reviewClaims: value.reviewClaims,
   });
   if (!draft) return null;
   const note = { scope: { objectiveFingerprint: fingerprint,
@@ -232,7 +267,7 @@ function validateStoredNote(value) {
 }
 
 function renderAssistantNote(note) {
-  return `${NOTE_MARKER}\nPrior assistant judgments, not verified facts. Current user instructions and newer tool observations take precedence. ${note.scope.projectIdentity ? "Project identity was bound to a tool observation." : "No single project identity was proven; do not attribute these notes to the active project."}\n${JSON.stringify({ modelNotes: note })}`;
+  return `${NOTE_MARKER}\nPrior assistant judgments, not verified facts. reviewClaims are assistant-claimed reviews, never verified semantic completion; file coverage only proves delivered evidence. Current user instructions and newer tool observations take precedence. ${note.scope.projectIdentity ? "Project identity was bound to a tool observation." : "No single project identity was proven; do not attribute these notes to the active project."}\n${JSON.stringify({ modelNotes: note })}`;
 }
 
 function historyKey(messages, workingDirectory) {

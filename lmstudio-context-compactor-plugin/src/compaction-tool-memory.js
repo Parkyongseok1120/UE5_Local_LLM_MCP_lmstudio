@@ -237,6 +237,26 @@ function parseToolResult(content) {
   try {
     const source = stripControl(decoded.value);
     const out = {};
+    // Git comparisons are repository observations, never file read/review coverage.
+    if (source.kind === "git_observation" || source.action && source.comparison && source.canonicalProjectRoot) {
+      const git = {};
+      for (const key of ["action", "comparison", "base", "head", "currentHead", "blobOid", "path",
+        "repositoryIdentity", "workspaceIdentity", "snapshotId", "hasMore", "complete", "incomplete",
+        "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total", "observedAt", "sourceConsistency", "submoduleWorktrees"]) {
+        if (source[key] !== undefined) git[key] = source[key];
+      }
+      if (Array.isArray(source.items)) {
+        git.items = source.items.slice(0, 8).map(item => Object.fromEntries(
+          ["status", "path", "oldPath", "similarity", "commit", "subject"].filter(k => item?.[k] !== undefined)
+            .map(k => [k, typeof item[k] === "string" ? item[k].slice(0, 400) : item[k]])));
+        git.omittedItems = Math.max(0, (decoded.value.items?.length || source.items.length) - git.items.length);
+      }
+      out.gitObservation = git;
+      // Commit blob lines are not current-worktree coverage or a write receipt.
+      for (const key of ["status", "canonicalProject", "canonicalProjectRoot", "projectIdentity"])
+        if (source[key] !== undefined) out[key] = source[key];
+      return out;
+    }
     for (const key of [
       "ok", "status", "summary", "message", "errorCode", "path", "operation", "mode",
       "sha256", "previousSha256", "size", "truncated", "hasMore",
@@ -249,7 +269,7 @@ function parseToolResult(content) {
       "requestedEngineAssociation", "resolvedRootType", "projectRelativePath", "workspaceRelativePath",
       "hashSource", "canonicalProject", "canonicalProjectRoot", "projectIdentity", "canonicalPath",
       "observation", "attachmentId", "attachmentName", "attachmentType", "parser",
-      "startOffset", "endOffset", "totalChars",
+      "startOffset", "endOffset", "totalChars", "parsedTextSha256", "rangeUnit",
     ]) {
       if (source[key] !== undefined) out[key] = source[key];
     }
@@ -492,6 +512,17 @@ function serializeToolOutcome(record, maxChars) {
     bounded.fileFactsExtractedSeparately = true;
   }
   bounded.outcomeDisplayState = "bounded_after_factual_extraction";
+  if (displayRecord.gitObservation) {
+    const { items, ...identity } = displayRecord.gitObservation;
+    bounded.gitObservation = { ...identity, ...(items ? { omittedItems: (identity.omittedItems || 0) + items.length } : {}) };
+    // Preserve comparison identity before optional names, diagnostics or prose.
+    for (const item of items || []) {
+      const candidate = { ...bounded, gitObservation: { ...bounded.gitObservation,
+        items: [...(bounded.gitObservation.items || []), item], omittedItems: bounded.gitObservation.omittedItems - 1 } };
+      if (JSON.stringify(candidate).length > maxChars) break;
+      bounded.gitObservation = candidate.gitObservation;
+    }
+  }
   for (const key of ["errors", "warnings"]) {
     if (!Array.isArray(displayRecord[key])) continue;
     const retained = [];

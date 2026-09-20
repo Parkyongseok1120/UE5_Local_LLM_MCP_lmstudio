@@ -7,7 +7,7 @@ const PROTECTED = new Set([".prefab", ".unity", ".asset", ".meta"]);
 function identity(root) { return process.platform === "win32" ? root.replace(/\\/g, "/").toLowerCase() : root; }
 function projectPolicy(input) {
   if (!input || !path.isAbsolute(input)) fail("project_required", "UNITY_PROJECT_ROOT must be an absolute Unity project path");
-  const root = fs.realpathSync(input);
+  const root = fs.realpathSync.native(input);
   for (const marker of ["Assets", "Packages/manifest.json", "ProjectSettings/ProjectVersion.txt"]) if (!fs.existsSync(path.join(root, marker))) fail("not_unity_project", `Missing ${marker}`);
   const resolve = (relative, write = false) => {
     if (typeof relative !== "string" || !relative || path.isAbsolute(relative) || relative.includes("\\") || relative.includes(":")) fail("invalid_path", "Use a project-relative slash-separated path");

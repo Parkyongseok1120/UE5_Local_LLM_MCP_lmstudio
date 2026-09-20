@@ -15,7 +15,7 @@
         },
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/84/1789836297694.conversation.json#messages[3].versions[0].steps",
+          "location": "<LMSTUDIO_HOME>/conversations/84/1789836297694.conversation.json#messages[3].versions[0].steps",
           "observation": "실제 toolCallResult.content는 JSON으로 직렬화된 MCP text content 배열이다."
         },
         {
@@ -194,7 +194,7 @@
         },
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/server-logs/2026-09/2026-09-20.1.log#2026-09-20 02:08:04",
+          "location": "<LMSTUDIO_HOME>/server-logs/2026-09/2026-09-20.1.log#2026-09-20 02:08:04",
           "observation": "최종 답변 없이 사용자 중단으로 실행이 종료되었다."
         }
       ],
@@ -202,7 +202,7 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.lmstudio/conversations/84/1789836297694.conversation.json#messages[2]",
+          "location": "<LMSTUDIO_HOME>/conversations/84/1789836297694.conversation.json#messages[2]",
           "symbol": "첨부 PDF 기준 C 리팩토링 검토 요청"
         },
         {

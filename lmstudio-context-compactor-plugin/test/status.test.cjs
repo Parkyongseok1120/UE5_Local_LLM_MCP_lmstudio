@@ -20,6 +20,8 @@ test("status verifies every direct prediction-loop source and its index wiring",
   assert.deepEqual(DIRECT_SOURCE_FILES, [
     "src/index.ts",
     "src/prediction-loop.ts",
+    "src/context-budget.ts",
+    "src/attachment-boundary.ts",
     "src/round-loop.ts",
     "src/prediction-stream.ts",
     "src/tool-scope.ts",

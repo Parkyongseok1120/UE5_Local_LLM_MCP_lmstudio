@@ -19,7 +19,9 @@
 
 `Auto`는 GUI에 지정한 경로, 사용자가 대화에서 가장 최근에 언급한 실제 절대 경로, 현재 작업 폴더 순서로 프로젝트 표식을 확인합니다. Unity는 `Assets`, `Packages/manifest.json`, `ProjectSettings/ProjectVersion.txt`가 모두 있어야 하며, Unreal은 같은 폴더의 `.uproject`가 정확히 하나여야 합니다. 존재하지 않는 경로나 표식이 없는 폴더는 신뢰하지 않습니다. Unity와 Unreal 도구가 함께 연결돼 있는데 범위를 확정할 수 없으면 두 엔진 도구를 모두 숨깁니다. 양쪽을 실제로 함께 써야 하는 작업만 `Both`를 명시적으로 선택합니다.
 
-`Project identity`를 지정하면 Unreal 도구 스키마에 `project` 인자가 있는 호출을 그 값으로 고정합니다. `set_active_project`도 같은 값으로 고정합니다. Unity MCP는 설치 시 `UNITY_PROJECT_ROOT` 하나에 이미 결합되어 있으므로 플러그인은 엔진 도구만 제한하고 서버의 프로젝트 경계 검사를 그대로 사용합니다.
+`Project identity`를 지정하면 Unity·Unreal 도구 스키마에 `project` 인자가 있는 호출을 그 값으로 고정합니다. Unreal의 `set_active_project`도 같은 값으로 고정합니다. Unity MCP는 설치 시 `UNITY_PROJECT_ROOT` 하나에 결합되며 다른 root가 전달되면 명시적으로 거부합니다.
+
+공통 Git 도구, 호환 경로와 기본 비활성 실험 옵션은 [Workspace 기능과 호환 경계](../docs/Workspace_Capabilities.md)를 참고하세요.
 
 이 범위 처리는 문자열 규칙, 파일 표식, 도구 스키마만 사용합니다. 별도 LLM 호출, 계획 생성, 자동 도구 순서, 실패 후 자동 재시도는 없습니다. `read_file` 등의 호출 횟수 제한도 추가하지 않습니다.
 
@@ -68,4 +70,4 @@ npm run dev
 
 `npm run status`는 소스와 빌드 연결을 검사합니다. 실제 채팅 활성화를 증명하지는 않습니다. `npm run test:active`는 현재 연결 방식으로 지속적인 활성화 증거를 얻을 수 없어 종료 코드 3을 반환합니다.
 
-설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.60 / revision 107입니다.
+설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.61 / revision 108입니다.

@@ -1425,6 +1425,7 @@ def _unreal_entries(
         "timeout": 720000,
         "env": {
             "WORKSPACE_ROOT": str(args.workspace_root[0]),
+            "WORKSPACE_CAPABILITIES": "1",
             "AGENT_MCP_CONFIG": str(agent_config),
             "SHARED_UNREAL_CONFIG": str(shared_config),
             "AGENT_STATE_ROOT": str(state_root),

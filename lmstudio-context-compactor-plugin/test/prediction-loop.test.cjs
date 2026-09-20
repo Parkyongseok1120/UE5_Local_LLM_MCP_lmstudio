@@ -791,7 +791,7 @@ test("soft compaction keeps the largest complete tool tail that meets the token 
   assert.equal(selection.targetRemainingTokens, 17000);
   assert.ok(selection.maxCurrentTurnMessages > 2);
   assert.equal(selection.remainingTokensAfter, 18344);
-  assert.ok(measuredLengths.length > 1);
+  assert.ok(measuredLengths.length >= 1, "selected compacted input must be measured");
   const selectedMessages = selection.candidate.history.getMessagesArray();
   const selectedRequests = selectedMessages.flatMap((message) => message.getToolCallRequests());
   const selectedResults = selectedMessages.flatMap((message) => message.getToolCallResults());

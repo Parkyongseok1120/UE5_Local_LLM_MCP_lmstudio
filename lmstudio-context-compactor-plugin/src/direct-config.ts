@@ -21,7 +21,7 @@ export const directConfigSchematics = createConfigSchematics()
     "string",
     {
       displayName: "Project identity",
-      subtitle: "Optional exact Unity root, Unreal .uproject path, or exact Unreal project name. Unreal project arguments are deterministically bound to this value.",
+      subtitle: "Optional exact Unity root, Unreal .uproject path, or exact Unreal project name. Project-capable tools are bound to this value; Unity rejects a different server root.",
       placeholder: "C:\\Projects\\Game\\Game.uproject",
     },
     "",
@@ -47,4 +47,7 @@ export const directConfigSchematics = createConfigSchematics()
   .field("compactAboveMessageCount", "numeric", { displayName: "Fallback message threshold", subtitle: "Used only when exact token measurement is unavailable." }, 24)
   .field("maxCheckpointChars", "numeric", { displayName: "Memory size", subtitle: "Maximum deterministic factual-memory characters." }, 22000)
   .field("maxToolResultChars", "numeric", { displayName: "Tool summary size", subtitle: "Maximum characters retained for each older tool outcome." }, 1200)
+  .field("pastReasoningTokens", "numeric", { displayName: "Past reasoning budget (experimental)", subtitle: "0 keeps current behavior. Under context pressure, retain older SDK-delimited reasoning up to this token budget; preserve the latest exchange." }, 0)
+  .field("separateAttachments", "boolean", { displayName: "Separate document input (experimental)", subtitle: "Requires this preprocessor before document RAG. Preserve typed document references instead of injecting the full document." }, false)
+  .field("reviewProgress", "boolean", { displayName: "Review continuity notes (experimental)", subtitle: "Allow bounded assistant review claims tied to observed file versions. Claims are not verified completion." }, false)
   .build();

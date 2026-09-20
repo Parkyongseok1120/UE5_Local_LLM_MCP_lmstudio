@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import {
   type Chat,
   type FileHandle,
@@ -48,6 +49,8 @@ export function createAttachmentContext(
   const parse = (file: FileHandle, signal: AbortSignal) => {
     let pending = parsedDocuments.get(file.identifier);
     if (!pending) {
+      if (file.sizeBytes > 32 * 1024 * 1024) throw new Error("Attachment source exceeds 32 MiB parse limit");
+      if (parsedDocuments.size >= 4) parsedDocuments.delete(parsedDocuments.keys().next().value!);
       pending = file.filesNamespace.parseDocument(file, { signal });
       parsedDocuments.set(file.identifier, pending);
       pending.catch(() => parsedDocuments.delete(file.identifier));
@@ -95,6 +98,9 @@ export function createAttachmentContext(
       ctx.status(`Reading ${file.name}`);
       const parsed = await parse(file, ctx.signal);
       const content = String(parsed.content || "");
+      if (content.length > 8 * 1024 * 1024) { parsedDocuments.delete(file.identifier); return { ok: false, errorCode: "ATTACHMENT_TOO_LARGE", message: "Parsed document exceeds 8 MiB characters" }; }
+      if (startOffset > content.length) return { ok: false, errorCode: "ATTACHMENT_RANGE_INVALID", totalChars: content.length };
+      const parsedTextSha256 = crypto.createHash("sha256").update(content, "utf8").digest("hex");
       const endOffset = Math.min(content.length, startOffset + maxChars);
       return {
         ok: true,
@@ -103,6 +109,8 @@ export function createAttachmentContext(
         attachmentName: file.name,
         attachmentType: file.type,
         parser: parsed.parser,
+        parsedTextSha256,
+        rangeUnit: "utf16_code_units",
         startOffset,
         endOffset,
         totalChars: content.length,

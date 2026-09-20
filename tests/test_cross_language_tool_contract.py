@@ -47,7 +47,7 @@ def test_default_node_catalog_matches_direct_manifest() -> None:
     )
     names = set(json.loads(result.stdout))
     assert names == set(_manifest()["agentEssential"])
-    assert len(names) == 20
+    assert len(names) == 26
     assert not names.intersection(
         {"list_active_tasks", "cancel_active_task", "write_session_handoff"}
     )

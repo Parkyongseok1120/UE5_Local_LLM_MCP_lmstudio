@@ -127,7 +127,7 @@ def install_unity(args, root: Path, transaction_type, lock_type, *, transaction=
         run([node, "-e", "require('./src/server.js')"], cwd=adapter)
         dotnet, binary = worker(args, root, project, state, node, report["externalActions"])
         config = {"mcpServers": {"unity-tools": {"command": node, "args": [str(adapter / "src/server.js")], "env": {
-            "UNITY_PROJECT_ROOT": str(project), "UNITY_DOTNET": str(dotnet), "UNITY_SYMBOL_WORKER": str(binary), "ALLOW_WRITE": "0", "ALLOW_COMMANDS": "0"}}}}
+            "UNITY_PROJECT_ROOT": str(project), "WORKSPACE_CAPABILITIES": "1", "UNITY_DOTNET": str(dotnet), "UNITY_SYMBOL_WORKER": str(binary), "ALLOW_WRITE": "0", "ALLOW_COMMANDS": "0"}}}}
         if config_path.exists():
             if config_path.stat().st_size > 1048576:
                 raise ValueError("MCP configuration exceeds 1 MiB")

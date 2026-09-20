@@ -12,11 +12,11 @@
 
 ## 근거 출처
 
-- 원본 대화: `C:/Users/sster/.lmstudio/conversations/84/1789836297694.conversation.json`, messages[3].versions[0].steps.
+- 원본 대화: `<LMSTUDIO_HOME>/conversations/84/1789836297694.conversation.json`, messages[3].versions[0].steps.
 - 사용자 요청: messages[2].versions[0], PDF 첨부와 C 담당 리팩토링 검토 요청.
 - 원본 SHA-256: `0c8f95193035e95817629ebaf89c1ca955bc7aee8954e3572657ade605d57122`.
 - 실행 시각: 2026-09-20 01:49:05.485 ~ 02:08:04.014 KST, 약 18분 59초.
-- 서버 로그: `C:/Users/sster/.lmstudio/server-logs/2026-09/2026-09-20.1.log`. 02:08:04에 사용자 중단 요청이 도착한 기록이 있다.
+- 서버 로그: `<LMSTUDIO_HOME>/server-logs/2026-09/2026-09-20.1.log`. 02:08:04에 사용자 중단 요청이 도착한 기록이 있다.
 - 설치본: compactor 0.4.59 / revision 106, SDK 1.5.0. 설치본 dist의 compaction-tool-memory, direct-compaction-core, continuity-file-observations, prediction-stream, round-loop는 조사 시 로컬 빌드와 동일했다. production.js에도 해당 포장 해석 누락과 표시용 메시지 재주입이 존재한다.
 - 재현: [replay.cjs](replay.cjs). 수정 전 결과: [results.json](results.json). 수정 후 결과: [results-after-fix.json](results-after-fix.json). 근거 형식: [evidence.json](evidence.json).
 
@@ -125,7 +125,7 @@ SDK 1.5.0의 기본 act 루프는 원문 contentArray를 assistant 메시지에 
 저장소 루트에서 실행한다. 기본 실행은 오프라인이다. --live-template은 이미 로드된 동일 모델의 템플릿만 검사하며 모델을 로드하거나 생성하지 않는다.
 
 ```powershell
-node docs/investigations/compactor-loop-2026-09-20/replay.cjs C:/Users/sster/.lmstudio/conversations/84/1789836297694.conversation.json --live-template --output docs/investigations/compactor-loop-2026-09-20/results-after-fix.json
+node docs/investigations/compactor-loop-2026-09-20/replay.cjs <LMSTUDIO_HOME>/conversations/84/1789836297694.conversation.json --live-template --output docs/investigations/compactor-loop-2026-09-20/results-after-fix.json
 ```
 
 재생은 실제 요청/결과와 실제 압축 시점을 사용하되 사용자 텍스트를 짧은 대체 문구로 사용한다. 원본 전체 프롬프트 재생이라고 오해하지 말아야 한다. 목적은 동일 결과의 포장 유무만 바꾼 데이터 경로 대조다.

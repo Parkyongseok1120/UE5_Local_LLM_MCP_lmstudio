@@ -70,7 +70,7 @@ async function registerCurrentVersion(context, resolution, hash, requestContext 
     stat,
     requestContext,
   });
-  return snapshotResultFields(snapshot);
+  return { canonicalProject: resolution.activeProject, ...snapshotResultFields(snapshot) };
 }
 
 module.exports = {

@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("node:path");
+const { fileObservation } = require("../../shared-tool-core/workspace");
 
 const {
   getActiveProject,
@@ -96,11 +97,11 @@ function createDirectRuntimeContext(options = {}) {
   }
 
   function directResult(toolName, payload) {
-    return toMcpResult(payload, { currentTool: toolName, maxChars: limits.maxResponseChars });
+    return toMcpResult(fileObservation(payload), { currentTool: toolName, maxChars: limits.maxResponseChars });
   }
 
   function payloadFits(payload, reserveChars = 0) {
-    return JSON.stringify(payload, null, 2).length + reserveChars <= limits.maxResponseChars;
+    return JSON.stringify(fileObservation(payload), null, 2).length + reserveChars <= limits.maxResponseChars;
   }
 
   function projectScopedSuggestionArgs(args, suggestionArgs) {

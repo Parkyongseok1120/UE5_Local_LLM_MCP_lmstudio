@@ -1,11 +1,16 @@
 {
   "name": "lmstudio-unity-mcp",
-  "version": "1.4.0-beta.3",
+  "version": "1.4.0-beta.4",
   "private": true,
   "type": "commonjs",
   "description": "Explicit Unity observation and editing tools; no internal agent or model runtime.",
-  "scripts": { "start": "node src/server.js", "test": "node --test test/file-discovery.test.js test/runtime.test.js test/symbol-worker.test.js" },
-  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/file-discovery.test.js test/runtime.test.js test/git.test.js test/symbol-worker.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "ajv": "^8.17.1",
