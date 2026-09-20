@@ -55,6 +55,16 @@ type ContinuityNote = {
   reviewClaims?: Array<unknown>;
 };
 const { REASONING_SEPARATOR } = require("./continuity-text.js") as { REASONING_SEPARATOR: string };
+const inputAvailability = require("./input-availability.js") as {
+  currentRawObservations(messages: Array<NormalizedMessage>): Array<Record<string, unknown>>;
+  historicalAvailabilityFromMemory(memory: unknown): Array<Record<string, unknown>>;
+  projectInputAvailability(messages: Array<NormalizedMessage>, historical: Array<Record<string, unknown>>,
+    options: { modelInputId: string; maxEntries?: number }): InputAvailabilityProjection;
+  renderInputAvailabilityMetadata(projection: InputAvailabilityProjection): string;
+  traceToolRound(messages: Array<NormalizedMessage>, options: {
+    executionId: string; modelInputId: string; roundIndex: number;
+  }): Record<string, unknown>;
+};
 
 const VOLATILE_OBSERVATION_KEYS = new Set([
   "observedAt", "lastObservedAt", "snapshotCapturedAt", "snapshotId", "nextCursor",
@@ -143,6 +153,16 @@ type CheckpointResult = {
   serializationDiagnostics?: Record<string, unknown>;
 };
 
+type InputAvailabilityProjection = {
+  modelInputId: string;
+  verificationBoundary: "final_sdk_chat";
+  hostInputVerification: "unknown" | "verified";
+  entries: Array<Record<string, unknown>>;
+  omittedEntryCount: number;
+  entryListComplete: boolean;
+  metrics: Record<string, number>;
+};
+
 export type ContextMeasurement = {
   contextLength: number;
   inputTokens: number;
@@ -172,9 +192,11 @@ type DirectConfig = {
   toolStagnationRounds: number;
   generationRepetitionAction: StagnationAction;
   generationRepeatCount: number;
+  inputAvailabilityMode: InputAvailabilityMode;
 };
 
 type StagnationAction = "off" | "warn" | "pause";
+type InputAvailabilityMode = "off" | "observe" | "inject";
 
 type RemoteToolLike = Tool & {
   name: string;
@@ -276,6 +298,10 @@ function stagnationAction(value: unknown): StagnationAction {
   return value === "off" || value === "pause" ? value : "warn";
 }
 
+function inputAvailabilityMode(value: unknown): InputAvailabilityMode {
+  return value === "off" || value === "inject" ? value : "observe";
+}
+
 function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
   const config = ctl.getPluginConfig(directConfigSchematics);
   const configuredEngine = String(config.get("projectEngine") || "auto");
@@ -301,6 +327,7 @@ function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     toolStagnationRounds: numeric(config.get("toolStagnationRounds"), 3, 2, 20),
     generationRepetitionAction: stagnationAction(config.get("generationRepetitionAction")),
     generationRepeatCount: numeric(config.get("generationRepeatCount"), 3, 2, 10),
+    inputAvailabilityMode: inputAvailabilityMode(config.get("inputAvailabilityMode")),
   };
 }
 
@@ -325,14 +352,18 @@ class ToolRoundStagnationDetector {
   }
 }
 
-function normalizeHistory(history: Chat): Array<NormalizedMessage> {
-  return history.getMessagesArray().map((message) => ({
+function normalizeMessages(messages: Array<ChatMessage>): Array<NormalizedMessage> {
+  return messages.map((message) => ({
     role: message.getRole(),
     text: message.getText(),
     hasFiles: message.hasFiles(),
     toolRequests: message.getToolCallRequests(),
     toolResults: message.getToolCallResults(),
   }));
+}
+
+function normalizeHistory(history: Chat): Array<NormalizedMessage> {
+  return normalizeMessages(history.getMessagesArray());
 }
 
 async function measureContext(
@@ -732,6 +763,18 @@ export function createPredictionLoopHandler(
   ];
   const emitter = createMessageEmitter(ctl, modelTools);
   const visibleHistory = Chat.from(originalHistory);
+  const executionId = crypto.randomUUID();
+  const historicalAvailabilityLedger: Array<Record<string, unknown>> = [];
+  if (config.inputAvailabilityMode !== "off") {
+    const normalizedOriginal = normalizeHistory(originalHistory);
+    historicalAvailabilityLedger.push(...inputAvailability.currentRawObservations(normalizedOriginal));
+    const bootstrap = core.buildCheckpoint(normalizedOriginal, {
+      recentCompleteTurns: config.recentCompleteTurns,
+      maxCheckpointChars: config.maxCheckpointChars,
+      maxToolResultChars: config.maxToolResultChars,
+    });
+    historicalAvailabilityLedger.push(...inputAvailability.historicalAvailabilityFromMemory(bootstrap.memory));
+  }
   const objectiveFingerprint = modelNotes.objectiveFingerprint(originalHistory.getMessagesArray());
   const originalMessages = originalHistory.getMessagesArray();
   const priorHistoryKey = originalMessages.at(-1)?.isUserMessage()
@@ -752,6 +795,7 @@ export function createPredictionLoopHandler(
   try {
     while (true) {
       ctl.guardAbort();
+      const modelInputId = `${executionId}:prediction-${roundIndex + 1}`;
       activeActivity = createRoundActivityTracker(ctl, roundIndex);
       const noteEnabled = Boolean(noteWorkingDirectory && objectiveFingerprint && !config.observeOnly);
       if (noteEnabled && activeNote) {
@@ -837,11 +881,62 @@ export function createPredictionLoopHandler(
         }
       }
       workingHistory = modelHistory;
-      let modelComposition = composeModelHistory(
-        workingHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
-      );
-      let modelInput = modelComposition.history;
-      let finalMeasurement = await measureContext(tokenSource, modelInput, config, modelTools);
+      const assembleModelInput = async (sourceHistory: Chat) => {
+        const baseComposition = composeModelHistory(
+          sourceHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
+        );
+        const baseMeasurement = await measureContext(tokenSource, baseComposition.history, config, modelTools);
+        let projection = config.inputAvailabilityMode === "off" ? null
+          : inputAvailability.projectInputAvailability(
+            normalizeHistory(baseComposition.history), historicalAvailabilityLedger, { modelInputId },
+          );
+        if (config.inputAvailabilityMode !== "inject" || !projection || projection.entries.length === 0) {
+          return {
+            composition: baseComposition,
+            history: baseComposition.history,
+            measurement: baseMeasurement,
+            projection,
+            metadataChars: 0,
+            metadataTokens: 0,
+          };
+        }
+        let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
+        let composition = composeModelHistory(
+          sourceHistory, noteEnabled ? activeNote : null, config,
+          [...scopeInstructions, metadata], noteEnabled,
+        );
+        let measurement = await measureContext(tokenSource, composition.history, config, modelTools);
+        const finalProjection = inputAvailability.projectInputAvailability(
+          normalizeHistory(composition.history), historicalAvailabilityLedger, { modelInputId },
+        );
+        const finalMetadata = inputAvailability.renderInputAvailabilityMetadata(finalProjection);
+        // One bounded reassembly is sufficient: metadata is derived only from
+        // tool-result bodies, and adding the metadata does not create one.
+        if (finalMetadata !== metadata) {
+          metadata = finalMetadata;
+          composition = composeModelHistory(
+            sourceHistory, noteEnabled ? activeNote : null, config,
+            [...scopeInstructions, metadata], noteEnabled,
+          );
+          measurement = await measureContext(tokenSource, composition.history, config, modelTools);
+        }
+        projection = inputAvailability.projectInputAvailability(
+          normalizeHistory(composition.history), historicalAvailabilityLedger, { modelInputId },
+        );
+        return {
+          composition,
+          history: composition.history,
+          measurement,
+          projection,
+          metadataChars: metadata.length,
+          metadataTokens: baseMeasurement.exact && measurement.exact
+            ? Math.max(0, measurement.inputTokens - baseMeasurement.inputTokens) : null,
+        };
+      };
+      let assembledInput = await assembleModelInput(workingHistory);
+      let modelComposition = assembledInput.composition;
+      let modelInput = assembledInput.history;
+      let finalMeasurement = assembledInput.measurement;
       if (finalMeasurement.remainingTokens < 0 && !config.observeOnly) {
         const emergency = buildCompactedHistory(workingHistory, 0, config, {
           maxCheckpointChars: config.maxCheckpointChars - modelComposition.overhead,
@@ -853,17 +948,18 @@ export function createPredictionLoopHandler(
           compacted = true;
           compactionCheckpoint = emergency.checkpoint;
           compactionRetention = { mode: "final_budget_emergency", maxCurrentTurnMessages: 2 };
-          modelComposition = composeModelHistory(
-            workingHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
-          );
-          modelInput = modelComposition.history;
-          finalMeasurement = await measureContext(tokenSource, modelInput, config, modelTools);
+          assembledInput = await assembleModelInput(workingHistory);
+          modelComposition = assembledInput.composition;
+          modelInput = assembledInput.history;
+          finalMeasurement = assembledInput.measurement;
         }
       }
 
       if (finalMeasurement.remainingTokens < 0 && !config.observeOnly) {
         if (config.showDebugInfo) ctl.debug({
           event: "direct_context_budget_rejected",
+          executionId,
+          modelInputId,
           roundIndex,
           exactMeasurement: finalMeasurement.exact,
           fit: false,
@@ -889,6 +985,8 @@ export function createPredictionLoopHandler(
         : serializedCheckpointCounts("");
       if (config.showDebugInfo) ctl.debug({
         event: "direct_context_measurement",
+        executionId,
+        modelInputId,
         roundIndex,
         compacted,
         observeOnly: config.observeOnly,
@@ -909,6 +1007,18 @@ export function createPredictionLoopHandler(
         availableUnrealTools: scope.availableUnrealTools,
         visibleToolCount: modelTools.length,
         attachmentCount: attachmentContext.attachmentCount,
+        inputAvailability: assembledInput.projection ? {
+          mode: config.inputAvailabilityMode,
+          verificationBoundary: assembledInput.projection.verificationBoundary,
+          hostInputVerification: assembledInput.projection.hostInputVerification,
+          entries: assembledInput.projection.entries,
+          omittedEntryCount: assembledInput.projection.omittedEntryCount,
+          entryListComplete: assembledInput.projection.entryListComplete,
+          metrics: assembledInput.projection.metrics,
+          metadataChars: assembledInput.metadataChars,
+          metadataTokens: assembledInput.metadataTokens,
+          metadataTokenMeasurement: assembledInput.metadataTokens === null ? "unknown" : "prompt_delta",
+        } : { mode: "off" },
         compactionDetails: compacted && compactionCheckpoint ? {
           omittedMessageCount: compactionCheckpoint.omittedMessageCount,
           retainedMessageCount: retainedIndexes.length,
@@ -934,6 +1044,16 @@ export function createPredictionLoopHandler(
       const generationRepetition = new GenerationRepetitionDetector(config.generationRepeatCount);
       let generationRepetitionReported = false;
       const toolGeneration = createToolGenerationTracker(ctl);
+      const runtimeToolTrace = new Map<number, Record<string, unknown>>();
+      const traceCall = (callId: number, values: Record<string, unknown>) => {
+        runtimeToolTrace.set(callId, {
+          ...(runtimeToolTrace.get(callId) || {}),
+          callKey: `${executionId}:${roundIndex}:sdk-${callId}`,
+          causalModelInputId: modelInputId,
+          sdkCallId: callId,
+          ...values,
+        });
+      };
       activeActivity.waitingForPrompt();
       const displayedMessages = new Set<ChatMessage>();
       const liveMessages = new Map<ChatMessage, { visibleMessage: ChatMessage; textStreamed: boolean }>();
@@ -975,15 +1095,35 @@ export function createPredictionLoopHandler(
           onToolCallRequestStart: (modelRoundIndex, callId) => {
             activeActivity?.firstToken();
             toolGeneration.start(modelRoundIndex, callId);
+            traceCall(callId, { sdkPredictionRound: modelRoundIndex, generationState: "started" });
           },
-          onToolCallRequestNameReceived: toolGeneration.name,
-          onToolCallRequestArgumentFragmentGenerated: toolGeneration.argument,
-          onToolCallRequestEnd: toolGeneration.end,
-          onToolCallRequestFailure: toolGeneration.failure,
+          onToolCallRequestNameReceived: (modelRoundIndex, callId, name) => {
+            toolGeneration.name(modelRoundIndex, callId, name);
+            traceCall(callId, { toolName: name });
+          },
+          onToolCallRequestArgumentFragmentGenerated: (modelRoundIndex, callId, content) => {
+            toolGeneration.argument(modelRoundIndex, callId, content);
+            const prior = runtimeToolTrace.get(callId);
+            traceCall(callId, { argumentChars: Number(prior?.argumentChars || 0) + content.length });
+          },
+          onToolCallRequestEnd: (modelRoundIndex, callId) => {
+            toolGeneration.end(modelRoundIndex, callId);
+            traceCall(callId, { generationState: "generated" });
+          },
+          onToolCallRequestFailure: (modelRoundIndex, callId) => {
+            toolGeneration.failure(modelRoundIndex, callId);
+            traceCall(callId, { generationState: "failed", executionState: "not_executed" });
+          },
           onToolCallRequestFinalized: (_roundIndex, callId, info) => {
             emitter.registerRequest(callId, info.toolCallRequest);
             emitter.emitRequest(callId, info.toolCallRequest);
             toolGeneration.finalized(callId);
+            traceCall(callId, {
+              generationState: "finalized",
+              providerRequestId: info.toolCallRequest.id || undefined,
+              toolName: info.toolCallRequest.name,
+              proposedArgumentsFingerprint: telemetryFingerprint(info.toolCallRequest.arguments || {}),
+            });
           },
           onMessageCaptured: (message) => {
             activeActivity?.firstToken();
@@ -1010,6 +1150,7 @@ export function createPredictionLoopHandler(
             emitter.registerRequest(callId, request);
             const allowedTool = modelTools.find((tool) => tool.name === request.name);
             if (!allowedTool) {
+              traceCall(callId, { validationState: "denied_scope", executionState: "not_executed" });
               controller.deny("Tool withheld by the deterministic project-engine scope.");
               return;
             }
@@ -1020,6 +1161,13 @@ export function createPredictionLoopHandler(
             const proposedArguments = boundArguments || request.arguments || {};
             if (isObservationOnlyToolCall(allowedTool, { ...request, arguments: proposedArguments })) {
               toolGeneration.executing(callId);
+              traceCall(callId, {
+                validationState: "allowed",
+                approvalState: "not_required_observation",
+                executionState: "dispatched",
+                proposedArgumentsFingerprint: telemetryFingerprint(request.arguments || {}),
+                executedArgumentsFingerprint: telemetryFingerprint(proposedArguments),
+              });
               if (boundArguments) controller.allowAndOverrideParameters(proposedArguments);
               else controller.allow();
               return;
@@ -1031,7 +1179,10 @@ export function createPredictionLoopHandler(
               name: request.name,
               parameters: proposedArguments,
             });
-            if (decision.type === "deny") controller.deny(decision.denyReason);
+            if (decision.type === "deny") {
+              traceCall(callId, { approvalState: "denied", executionState: "not_executed" });
+              controller.deny(decision.denyReason);
+            }
             else {
               const confirmedArguments = decision.toolArgsOverride || proposedArguments;
               const reboundArguments = bindProjectArguments(
@@ -1044,6 +1195,13 @@ export function createPredictionLoopHandler(
                 controller.allowAndOverrideParameters(finalArguments);
               } else controller.allow();
               toolGeneration.executing(callId);
+              traceCall(callId, {
+                validationState: "allowed",
+                approvalState: "allowed",
+                executionState: "dispatched",
+                proposedArgumentsFingerprint: telemetryFingerprint(request.arguments || {}),
+                executedArgumentsFingerprint: telemetryFingerprint(finalArguments),
+              });
             }
           },
         },
@@ -1087,8 +1245,11 @@ export function createPredictionLoopHandler(
       }
       if (config.showDebugInfo) {
         const outputEvidence = messageEvidenceTelemetry(captured.messages);
+        const normalizedCaptured = normalizeMessages(captured.messages);
         ctl.debug({
           event: "direct_round_observation",
+          executionId,
+          modelInputId,
           roundIndex,
           finishReason: captured.finishReason || (captured.failure === undefined ? "unknown" : "failed"),
           continueAfterTools: captured.continueAfterTools,
@@ -1097,8 +1258,19 @@ export function createPredictionLoopHandler(
           modelInputLatestSemanticResultFingerprint: inputEvidence.results.at(-1)?.semanticResultFingerprint,
           calls: outputEvidence.calls,
           results: outputEvidence.results,
+          toolTrace: {
+            runtime: [...runtimeToolTrace.values()],
+            captured: inputAvailability.traceToolRound(normalizedCaptured, {
+              executionId, modelInputId, roundIndex,
+            }),
+          },
           modelNoteLifecycle: noteLifecycle,
         });
+      }
+      if (config.inputAvailabilityMode !== "off") {
+        historicalAvailabilityLedger.push(...inputAvailability.currentRawObservations(
+          normalizeMessages(captured.messages),
+        ));
       }
       if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
         const stagnation = toolStagnation.observe(captured.messages);

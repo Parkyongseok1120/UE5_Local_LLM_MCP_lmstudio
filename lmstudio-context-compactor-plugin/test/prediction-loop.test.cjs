@@ -10,6 +10,7 @@ const { createPredictionLoopHandler, handlePredictionLoop, __test } = require(".
 const { runOneToolRound } = require("../dist/round-loop.js");
 const { ContinuityNoteStore, NOTE_MARKER } = require("../dist/continuity-model-notes.js");
 const { ASSISTANT_MARKER } = require("../dist/continuity-assistant-evidence.js");
+const inputAvailability = require("../dist/input-availability.js");
 
 function fakeController(history, tokenSource, overrides = {}, tools = []) {
   const blocks = [];
@@ -1484,4 +1485,278 @@ test("streaming keeps a continuity footer out of the visible answer", async (t) 
   assert.equal(ctl.blocks.length, 1);
   assert.equal(ctl.blocks[0].text, "Visible answer.");
   assert.doesNotMatch(JSON.stringify(ctl.blocks), /continuity-note/u);
+});
+
+function availabilityHistory() {
+  const request = { id: "availability-read", type: "function", name: "read_file",
+    arguments: { path: "Assets/Code.cs" } };
+  const history = Chat.empty();
+  history.append("user", "Inspect the exact file version.");
+  history.append(ChatMessage.from({ role: "assistant", content: [
+    { type: "toolCallRequest", toolCallRequest: request },
+  ] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+    toolCallId: request.id, content: JSON.stringify({
+      ok: true, kind: "workspace_file_observation", projectIdentity: "project-a",
+      path: "Assets/Code.cs", sha256: "a".repeat(64), startLine: 1, endLine: 2,
+      returnedLineCount: 2, totalLines: 2, content: "line one\nline two",
+    }) }] }));
+  history.append("user", "Continue the review.");
+  return history;
+}
+
+test("T22 default availability observation traces final SDK input without changing it", async () => {
+  const history = availabilityHistory();
+  let receivedHistory;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, _tools, options) {
+      receivedHistory = chat;
+      options.onMessage(ChatMessage.create("assistant", "done"));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "observe" });
+  await handlePredictionLoop(ctl);
+
+  assert.equal(receivedHistory, history);
+  assert.doesNotMatch(receivedHistory.toString(), /Current model-input raw availability/u);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.match(measurement.executionId, /^[0-9a-f-]{36}$/u);
+  assert.match(measurement.modelInputId, /:prediction-1$/u);
+  assert.equal(measurement.inputAvailability.mode, "observe");
+  assert.equal(measurement.inputAvailability.entries[0].rawPresence, "full");
+  assert.deepEqual(measurement.inputAvailability.entries[0].rawRangesInThisInput, [[1, 2]]);
+  assert.equal(measurement.inputAvailability.hostInputVerification, "unknown");
+});
+
+test("B mode injects only current-input facts and reports measured prompt overhead", async () => {
+  const history = availabilityHistory();
+  let receivedHistory;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(prompt) { return prompt.includes("Current model-input raw availability") ? 180 : 100; },
+    async act(chat, _tools, options) {
+      receivedHistory = chat;
+      options.onMessage(ChatMessage.create("assistant", "done"));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "inject" });
+  await handlePredictionLoop(ctl);
+
+  assert.match(receivedHistory.toString(), /Current model-input raw availability/u);
+  assert.match(receivedHistory.toString(), /"rawPresence":"full"/u);
+  assert.doesNotMatch(receivedHistory.toString(), /needsReRead|reviewCompleted|nextAction/u);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.inputAvailability.metadataTokens, 80);
+  assert.equal(measurement.finalInputTokens, 180);
+});
+
+test("T10 injected metadata participates in the final budget gate", async () => {
+  const history = availabilityHistory();
+  let called = false;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 32768; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(prompt) { return prompt.includes("Current model-input raw availability") ? 40000 : 100; },
+    async act() { called = true; },
+  };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "inject" });
+  await assert.rejects(() => handlePredictionLoop(ctl), /CONTEXT_BUDGET_EXCEEDED/u);
+  assert.equal(called, false);
+});
+
+test("T14 injected facts do not block a model-selected reread", async () => {
+  const history = availabilityHistory();
+  const request = { id: "reread", type: "function", name: "read_file",
+    arguments: { path: "Assets/Code.cs" } };
+  let allowed = false;
+  const tool = { name: "read_file", description: "Read one file.",
+    parametersJsonSchema: { type: "object", properties: { path: { type: "string" } } },
+    pluginIdentifier: "mcp/unity-tools" };
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, options) {
+      await options.guardToolCall(0, 91, {
+        toolCallRequest: request,
+        allow() { allowed = true; },
+        allowAndOverrideParameters() { allowed = true; },
+        deny(reason) { throw new Error(reason); },
+      });
+      options.onMessage(ChatMessage.create("assistant", "The reread remains model-selected."));
+    },
+  };
+  const ctl = fakeController(history, selectedModel,
+    { inputAvailabilityMode: "inject", projectEngine: "unity", projectIdentity: "C:\\Game" }, [tool]);
+  await handlePredictionLoop(ctl);
+  assert.equal(allowed, true);
+});
+
+test("availability off mode leaves both model input and availability telemetry disabled", async () => {
+  const history = availabilityHistory();
+  let receivedHistory;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, _tools, options) {
+      receivedHistory = chat;
+      options.onMessage(ChatMessage.create("assistant", "done"));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "off" });
+  await handlePredictionLoop(ctl);
+  assert.equal(receivedHistory, history);
+  assert.deepEqual(ctl.debugValues.find(value => value.event === "direct_context_measurement")
+    .inputAvailability, { mode: "off" });
+});
+
+test("T09 compaction retains the newest completed tool exchange for its first consumer", () => {
+  const history = Chat.empty();
+  history.append("user", "Inspect the files.");
+  for (let index = 1; index <= 5; index += 1) {
+    const id = `read-${index}`;
+    history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+      toolCallRequest: { id, type: "function", name: "read_file",
+        arguments: { path: `Assets/File${index}.cs` } } }] }));
+    history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: id,
+      content: JSON.stringify({ ok: true, kind: "workspace_file_observation", projectIdentity: "project-a",
+        path: `Assets/File${index}.cs`, sha256: String(index).repeat(64).slice(0, 64),
+        startLine: 1, endLine: 2, totalLines: 2, content: `file ${index} line 1\nfile ${index} line 2` }) }] }));
+  }
+  const historical = inputAvailability.currentRawObservations(__test.normalizeHistory(history));
+  const compacted = __test.buildCompactedHistory(history, 0, {
+    recentCompleteTurns: 0, maxCheckpointChars: 12000, maxToolResultChars: 1200,
+  }, { maxCurrentTurnMessages: 2 });
+  const projected = inputAvailability.projectInputAvailability(
+    __test.normalizeHistory(compacted.history), historical, { modelInputId: "exec:prediction-next" },
+  );
+  const latest = projected.entries.find(entry => entry.path === "Assets/File5.cs");
+  assert.equal(latest.rawPresence, "full");
+  assert.equal(projected.entries.filter(entry => entry.rawPresence === "full").length, 1);
+});
+
+test("a new handler recomputes current availability instead of restoring a prior-input flag", async () => {
+  const checkpoint = {
+    schemaVersion: 2,
+    compactionGeneration: 4,
+    authority: "factual_memory_only",
+    latestUserMessage: "Continue.",
+    activeObjective: null,
+    currentWorkStatus: {
+      recentToolOutcomes: [],
+      gitObservations: [],
+      modifiedOrObservedFiles: [{
+        canonicalProject: "C:\\Game",
+        canonicalProjectRoot: "C:\\Game",
+        canonicalPath: "C:\\Game\\Assets\\Code.cs",
+        path: "Assets/Code.cs",
+        sha256AtObservation: "a".repeat(64),
+        observedLineRanges: [{ startLine: 1, endLine: 2 }],
+        totalLinesAtObservation: 2,
+        readCoverageState: "complete",
+      }],
+    },
+  };
+  const history = Chat.from([
+    { role: "system", content: `[Direct continuity state v2]\n${JSON.stringify(checkpoint)}` },
+    { role: "user", content: "Continue." },
+  ]);
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, options) { options.onMessage(ChatMessage.create("assistant", "done")); },
+  };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "observe" });
+  await createPredictionLoopHandler()(ctl);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.inputAvailability.entries[0].rawPresence, "none");
+  assert.deepEqual(measurement.inputAvailability.entries[0].rawRangesInThisInput, []);
+});
+
+test("T16 real cancellation distinguishes no result from a received partial result", async () => {
+  const beforeResultAbort = new AbortController();
+  const beforeReason = new Error("cancel before result");
+  const before = await runOneToolRound({
+    async act(_chat, _tools, options) {
+      const request = { id: "before", type: "function", name: "read_file",
+        arguments: { path: "Assets/Before.cs" } };
+      options.onMessage(ChatMessage.from({ role: "assistant", content: [
+        { type: "toolCallRequest", toolCallRequest: request },
+      ] }));
+      beforeResultAbort.abort(beforeReason);
+      throw beforeReason;
+    },
+  }, Chat.empty(), [], beforeResultAbort.signal,
+  { onToolCallRequestFinalized() {}, guardToolCall() {} });
+  assert.equal(before.failure, beforeReason);
+  const beforeChat = Chat.empty();
+  for (const message of before.messages) beforeChat.append(message);
+  assert.equal(inputAvailability.traceToolRound(__test.normalizeHistory(beforeChat), {
+    executionId: "cancel-before", modelInputId: "cancel-before:prediction-1", roundIndex: 0,
+  }).results.length, 0);
+
+  const partialAbort = new AbortController();
+  const partialReason = new Error("cancel after partial result");
+  const partial = await runOneToolRound({
+    async act(_chat, _tools, options) {
+      const requests = ["one", "two"].map(id => ({ id, type: "function", name: "read_file",
+        arguments: { path: `Assets/${id}.cs` } }));
+      options.onMessage(ChatMessage.from({ role: "assistant", content: requests.map(toolCallRequest => (
+        { type: "toolCallRequest", toolCallRequest }
+      )) }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+        toolCallId: "one", content: JSON.stringify({ ok: true, kind: "workspace_file_observation",
+          projectIdentity: "project-a", path: "Assets/one.cs", sha256: "1".repeat(64),
+          startLine: 1, endLine: 1, totalLines: 1, content: "one" }) }] }));
+      partialAbort.abort(partialReason);
+      throw partialReason;
+    },
+  }, Chat.empty(), [], partialAbort.signal,
+  { onToolCallRequestFinalized() {}, guardToolCall() {} });
+  assert.equal(partial.failure, partialReason);
+  const partialChat = Chat.empty();
+  for (const message of partial.messages) partialChat.append(message);
+  const trace = inputAvailability.traceToolRound(__test.normalizeHistory(partialChat), {
+    executionId: "cancel-partial", modelInputId: "cancel-partial:prediction-1", roundIndex: 0,
+  });
+  assert.equal(trace.results.length, 1);
+  assert.equal(trace.results[0].executionState, "succeeded");
+  assert.equal(trace.requests.length, 2);
+});
+
+test("tool-generation failure telemetry is causal and never promoted to a result", async () => {
+  const history = Chat.from([{ role: "user", content: "Try a tool call." }]);
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, options) {
+      options.onToolCallRequestStart(0, 44, {});
+      options.onToolCallRequestNameReceived(0, 44, "read_file");
+      options.onToolCallRequestArgumentFragmentGenerated(0, 44, "{");
+      options.onToolCallRequestFailure(0, 44, new Error("malformed arguments"));
+      options.onMessage(ChatMessage.create("assistant", "I could not form the tool call."));
+    },
+  };
+  const tool = { name: "read_file", description: "Read.", parametersJsonSchema: { type: "object" } };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "observe" }, [tool]);
+  await handlePredictionLoop(ctl);
+  const observation = ctl.debugValues.find(value => value.event === "direct_round_observation");
+  assert.equal(observation.toolTrace.runtime[0].generationState, "failed");
+  assert.equal(observation.toolTrace.runtime[0].executionState, "not_executed");
+  assert.equal(observation.toolTrace.runtime[0].causalModelInputId, observation.modelInputId);
+  assert.equal(observation.toolTrace.captured.results.length, 0);
 });

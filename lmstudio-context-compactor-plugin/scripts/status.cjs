@@ -15,6 +15,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/attachment-tools.ts",
   "src/direct-compaction-core.js",
   "src/compaction-tool-memory.js",
+  "src/input-availability.js",
   "src/continuity-assistant-evidence.js",
   "src/continuity-file-observations.js",
   "src/continuity-memory.js",

@@ -68,6 +68,15 @@ export const directConfigSchematics = createConfigSchematics()
     ],
   }, "warn")
   .field("generationRepeatCount", "numeric", { displayName: "Text repetition threshold", subtitle: "Consecutive copies required; each repeated block must be at least 80 characters." }, 3)
+  .field("inputAvailabilityMode", "select", {
+    displayName: "Current input availability",
+    subtitle: "Observe records final SDK input facts without changing the prompt. Inject adds the same bounded facts for an A/B experiment; it never blocks or selects tools.",
+    options: [
+      { value: "observe", displayName: "Observe (recommended)" },
+      { value: "inject", displayName: "Inject facts (experimental)" },
+      { value: "off", displayName: "Off" },
+    ],
+  }, "observe")
   .field("separateAttachments", "boolean", { displayName: "Separate document input (experimental)", subtitle: "Requires this preprocessor before document RAG. Preserve typed document references instead of injecting the full document." }, false)
   .field("reviewProgress", "boolean", { displayName: "Review continuity notes (experimental)", subtitle: "Allow bounded assistant review claims tied to observed file versions. Claims are not verified completion." }, false)
   .build();
