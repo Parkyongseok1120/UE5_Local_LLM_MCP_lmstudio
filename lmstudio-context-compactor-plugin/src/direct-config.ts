@@ -40,7 +40,17 @@ export const directConfigSchematics = createConfigSchematics()
   )
   .field("softRemainingTokens", "numeric", { displayName: "Soft threshold", subtitle: "Compact when estimated remaining context falls below this value." }, 14000)
   .field("hardRemainingTokens", "numeric", { displayName: "Hard threshold", subtitle: "At this threshold retain the current request, the newest unread tool exchange, and factual memory." }, 8000)
-  .field("maxOutputReserve", "numeric", { displayName: "Output reserve", subtitle: "Tokens reserved for the selected model's next response." }, 8192)
+  .field("maxOutputReserve", "numeric", { displayName: "Output reserve", subtitle: "Tokens reserved for the selected model's next response and used as its explicit generation cap." }, 8192)
+  .field("outputRecoveryMode", "select", {
+    displayName: "Output-limit recovery",
+    subtitle: "After a normal visible report hits its explicit output cap, allow at most one concise tool-free rewrite from the evidence already collected.",
+    options: [
+      { value: "on", displayName: "On (one rewrite)" },
+      { value: "off", displayName: "Off" },
+    ],
+  }, "on")
+  .field("outputRecoveryMaxTokens", "numeric", { displayName: "Recovery output limit", subtitle: "Maximum predicted tokens for the single normal-mode tool-free rewrite; 0 uses the general output reserve." }, 0)
+  .field("outputRecoverySeconds", "numeric", { displayName: "Recovery seconds", subtitle: "Maximum time for the single normal-mode tool-free rewrite." }, 45)
   .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra allowance for prompt-template and token-estimation variance." }, 1536)
   .field("assumedContextLength", "numeric", { displayName: "Fallback context length", subtitle: "Used only when the selected token source cannot report its context length." }, 65536)
   .field("recentCompleteTurns", "numeric", { displayName: "Recent complete turns", subtitle: "Prior completed user turns retained verbatim after soft compaction." }, 2)

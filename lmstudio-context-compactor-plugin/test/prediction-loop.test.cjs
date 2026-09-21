@@ -1161,7 +1161,7 @@ test("bounded audit exposes read-only research tools and gives the same model on
       actCount += 1;
       if (actCount === 1) {
         assert.deepEqual(tools.map(tool => tool.name), ["read_file"]);
-        assert.equal(Object.hasOwn(options, "maxTokens"), false);
+        assert.equal(options.maxTokens, 8192);
         await options.guardToolCall(0, 501, {
           toolCallRequest: request,
           allow() {},
@@ -1255,6 +1255,179 @@ test("bounded audit converts research output exhaustion into one tool-free final
   assert.equal(finalizations.length, 1);
   assert.equal(finalizations[0].toolCount, 0);
   assert.equal(finalizations[0].deliveryState, "complete");
+});
+
+test("normal rounds send the explicit generation cap that was used as the reserve", async () => {
+  const history = Chat.from([{ role: "user", content: "Answer within the configured cap." }]);
+  let receivedOptions;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, options) {
+      receivedOptions = options;
+      options.onPredictionCompleted({ stats: {
+        stopReason: "eosFound", promptTokensCount: 100, predictedTokensCount: 20,
+        totalTokensCount: 120,
+      } });
+      options.onMessage(ChatMessage.create("assistant", "bounded answer"));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, {
+    maxOutputReserve: 3072,
+    outputRecoveryMode: "off",
+  });
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(receivedOptions.maxTokens, 3072);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.outputReserve, 3072);
+  assert.equal(measurement.requestedMaxTokens, 3072);
+  assert.equal(measurement.appliedMaxTokens, 3072);
+  assert.equal(measurement.capSource, "configured");
+});
+
+test("the default recovery cap follows a larger configured output reserve instead of silently lowering it", () => {
+  const ctl = fakeController(Chat.empty(), {}, { maxOutputReserve: 16384 });
+  const config = __test.readConfig(ctl);
+  assert.equal(config.maxOutputReserve, 16384);
+  assert.equal(config.outputRecoveryMaxTokens, 16384);
+});
+
+test("normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back", async () => {
+  const history = Chat.from([{ role: "user", content: "Inspect the evidence and report." }]);
+  let actCount = 0;
+  let recoveryHistory;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, tools, options) {
+      actCount += 1;
+      if (actCount === 1) {
+        assert.deepEqual(tools, []);
+        assert.equal(options.maxTokens, 4096);
+        options.onPredictionCompleted({ stats: {
+          stopReason: "maxPredictedTokensReached", promptTokensCount: 100,
+          predictedTokensCount: 4096, totalTokensCount: 4196,
+        } });
+        options.onMessage(ChatMessage.create("assistant", "PARTIAL-REPORT-MUST-NOT-BE-REPEATED"));
+        return {};
+      }
+      recoveryHistory = Chat.from(chat);
+      assert.deepEqual(tools, []);
+      assert.equal(options.maxTokens, 2048);
+      assert.doesNotMatch(recoveryHistory.toString(), /PARTIAL-REPORT-MUST-NOT-BE-REPEATED/u);
+      options.onPredictionCompleted({ stats: {
+        stopReason: "eosFound", promptTokensCount: 100, predictedTokensCount: 120,
+        totalTokensCount: 220,
+      } });
+      options.onMessage(ChatMessage.create("assistant", "COMPLETE-FINAL-REPORT"));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, {
+    outputRecoveryMode: "on",
+    outputRecoveryMaxTokens: 2048,
+  });
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(actCount, 2);
+  assert.ok(recoveryHistory);
+  assert.equal(ctl.blocks.at(-1).text, "COMPLETE-FINAL-REPORT");
+  assert.equal(ctl.blocks.some(block => block.text.includes("PARTIAL-REPORT-MUST-NOT-BE-REPEATED")), true);
+  const scheduled = ctl.debugValues.find(value => value.event === "output_recovery_scheduled");
+  assert.equal(scheduled.outputLimitStage, "visible_report");
+  assert.equal(scheduled.partialReportPreservedInGui, true);
+  assert.equal(scheduled.recoveryModelInputId.endsWith(":output-recovery-1"), true);
+  const recovery = ctl.debugValues.find(value => value.event === "output_recovery");
+  assert.equal(recovery.deliveryState, "complete");
+  assert.equal(recovery.completionAccepted, true);
+  assert.equal(recovery.toolCount, 0);
+});
+
+test("a recovery that reaches its own limit is recorded once and is never retried recursively", async () => {
+  const history = Chat.from([{ role: "user", content: "Produce a complete report." }]);
+  let actCount = 0;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, options) {
+      actCount += 1;
+      options.onPredictionCompleted({ stats: {
+        stopReason: "maxPredictedTokensReached", promptTokensCount: 100,
+        predictedTokensCount: actCount === 1 ? 4096 : 2048,
+        totalTokensCount: actCount === 1 ? 4196 : 2148,
+      } });
+      options.onMessage(ChatMessage.create("assistant", actCount === 1 ? "first partial" : "second partial"));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, {
+    outputRecoveryMode: "on", outputRecoveryMaxTokens: 2048,
+  });
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(actCount, 2);
+  const recovery = ctl.debugValues.find(value => value.event === "output_recovery");
+  assert.equal(recovery.deliveryState, "truncated");
+  assert.equal(recovery.completionAccepted, false);
+  assert.equal(ctl.debugValues.filter(value => value.event === "output_recovery").length, 1);
+  assert.match(ctl.statuses.at(-1).state.text, /출력 한도/u);
+});
+
+test("reasoning-only and tool-argument output limits do not enter report recovery", async () => {
+  const runCase = async (kind) => {
+    const history = Chat.from([{ role: "user", content: `Trigger ${kind} limit.` }]);
+    let actCount = 0;
+    const request = { id: `${kind}-call`, type: "function", name: "read_file", arguments: { path: "A.cpp" } };
+    const selectedModel = {
+      identifier: "selected-model",
+      async getContextLength() { return 65536; },
+      async applyPromptTemplate(chat) { return chat.toString(); },
+      async countTokens() { return 100; },
+      async act(_chat, _tools, options) {
+        actCount += 1;
+        if (kind === "reasoning") {
+          options.onPredictionFragment({ roundIndex: 0, content: "thinking", reasoningType: "reasoning",
+            tokensCount: 9, containsDrafted: false, isStructural: false });
+        } else {
+          options.onToolCallRequestStart(0, 811, {});
+          options.onToolCallRequestNameReceived(0, 811, "read_file");
+          options.onToolCallRequestArgumentFragmentGenerated(0, 811, "{\\\"path\\\":");
+        }
+        options.onPredictionCompleted({ stats: {
+          stopReason: "maxPredictedTokensReached", promptTokensCount: 100,
+          predictedTokensCount: 4096, totalTokensCount: 4196,
+        } });
+        return {};
+      },
+    };
+    const ctl = fakeController(history, selectedModel, {
+      outputRecoveryMode: "on",
+    }, kind === "tool" ? [{ name: "read_file", description: "Read", parametersJsonSchema: { type: "object" },
+      pluginIdentifier: "mcp/unreal-agent" }] : []);
+
+    await handlePredictionLoop(ctl);
+
+    assert.equal(actCount, 1);
+    assert.equal(ctl.debugValues.some(value => value.event === "output_recovery"), false);
+    const observation = ctl.debugValues.find(value => value.event === "direct_round_observation");
+    assert.equal(observation.outputLimitStage, kind === "reasoning" ? "reasoning" : "tool_arguments");
+    if (kind === "reasoning") assert.equal(observation.predictionUsage.toolArgumentChars, 0);
+    else assert.ok(observation.predictionUsage.toolArgumentChars > 0);
+  };
+
+  await runCase("reasoning");
+  await runCase("tool");
 });
 
 test("bounded audit makes zero final model calls after user cancellation", async () => {
@@ -1599,6 +1772,52 @@ test("final context fitness is exact at the reserve boundary", async () => {
   const exceeded = await __test.measureContext(source, history, config, []);
   assert.equal(exceeded.remainingTokens, -1);
   assert.equal(exceeded.fit, false);
+});
+
+test("context measurement reports tool schema cost separately from full prompt tokens", async () => {
+  let countCall = 0;
+  const source = {
+    async getContextLength() { return 10000; },
+    async applyPromptTemplate() { return "prompt-with-tools"; },
+    async countTokens() {
+      countCall += 1;
+      return countCall === 1 ? 8000 : 17;
+    },
+  };
+  const measured = await __test.measureContext(source, Chat.from([{ role: "user", content: "Inspect" }]), {
+    assumedContextLength: 10000, maxOutputReserve: 1500, safetyMarginTokens: 500,
+  }, [{ name: "read_file", description: "Read", parametersJsonSchema: { type: "object" } }]);
+  assert.ok(measured.toolSchemaChars > 0);
+  assert.equal(measured.toolSchemaTokens, 17);
+  assert.equal(measured.toolSchemaTokenMeasurement, "exact");
+  assert.equal(measured.inputTokens, 8000);
+});
+
+test("generation budget resolver clamps only to measured headroom and rejects unsafe space", () => {
+  assert.deepEqual(__test.resolveGenerationBudget({
+    desiredMaxTokens: 8192, contextLength: 10000, inputTokens: 1200, safetyMarginTokens: 608,
+    minimumTokens: 256,
+  }), {
+    desiredMaxTokens: 8192,
+    appliedMaxTokens: 8192,
+    headroomTokens: 8192,
+    fit: true,
+    clampedToHeadroom: false,
+  });
+  assert.deepEqual(__test.resolveGenerationBudget({
+    desiredMaxTokens: 8192, contextLength: 10000, inputTokens: 5000, safetyMarginTokens: 1000,
+    minimumTokens: 256,
+  }), {
+    desiredMaxTokens: 8192,
+    appliedMaxTokens: 4000,
+    headroomTokens: 4000,
+    fit: true,
+    clampedToHeadroom: true,
+  });
+  assert.equal(__test.resolveGenerationBudget({
+    desiredMaxTokens: 8192, contextLength: 10000, inputTokens: 9800, safetyMarginTokens: 100,
+    minimumTokens: 256,
+  }).fit, false);
 });
 
 test("reserve pressure gets one adaptive tool-free final report instead of an immediate rejection", async () => {

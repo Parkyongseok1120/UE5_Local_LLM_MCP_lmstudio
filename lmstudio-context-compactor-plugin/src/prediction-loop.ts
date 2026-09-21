@@ -10,7 +10,7 @@ import {
   type ToolCallRequest,
 } from "@lmstudio/sdk";
 import crypto from "node:crypto";
-import { selectMeasuredCandidate, boundPastReasoning } from "./context-budget";
+import { resolveGenerationBudget, selectMeasuredCandidate, boundPastReasoning } from "./context-budget";
 import { attachmentBoundary } from "./attachment-boundary";
 import { createAttachmentContext } from "./attachment-tools";
 import { directConfigSchematics } from "./direct-config";
@@ -166,6 +166,9 @@ type InputAvailabilityProjection = {
 export type ContextMeasurement = {
   contextLength: number;
   inputTokens: number;
+  toolSchemaChars: number;
+  toolSchemaTokens: number | null;
+  toolSchemaTokenMeasurement: "none" | "estimate" | "exact";
   outputReserve: number;
   remainingTokens: number;
   exact: boolean;
@@ -183,6 +186,9 @@ type DirectConfig = {
   softRemainingTokens: number;
   hardRemainingTokens: number;
   maxOutputReserve: number;
+  outputRecoveryMode: OutputRecoveryMode;
+  outputRecoveryMaxTokens: number;
+  outputRecoverySeconds: number;
   safetyMarginTokens: number;
   assumedContextLength: number;
   recentCompleteTurns: number;
@@ -204,10 +210,13 @@ type DirectConfig = {
 type StagnationAction = "off" | "warn" | "pause";
 type InputAvailabilityMode = "off" | "observe" | "inject";
 type AuditCompletionMode = "off" | "bounded";
+type OutputRecoveryMode = "off" | "on";
 type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
+  | "output_recovery"
   | "research_round_limit" | "context_budget";
 type FinalDeliveryState = "complete" | "truncated" | "partial" | "no_answer";
 type FinalReportState = "report" | "partial_report" | "unresolved_tool_intent" | "no_answer";
+type OutputLimitStage = "reasoning" | "tool_arguments" | "visible_report" | "forced_final" | "unknown";
 
 const MIN_FINAL_OUTPUT_TOKENS = 256;
 
@@ -215,6 +224,7 @@ const BOUNDED_AUDIT_FINAL_INSTRUCTION = [
   "The user selected bounded audit completion and the research resource budget has ended.",
   "Do not request or imply another tool call.",
   "Using only the evidence already present in this input, provide the final report now.",
+  "Start with confirmed conclusions, key evidence, verification results, and unresolved scope; omit the investigation plan and repeated explanations.",
   "Clearly separate confirmed findings, counterevidence, and unresolved items.",
   "If the evidence is insufficient, say so directly instead of extending the investigation.",
 ].join(" ");
@@ -223,8 +233,17 @@ const CONTEXT_BUDGET_FINAL_INSTRUCTION = [
   "The next research round no longer fits the selected model's context budget.",
   "Do not request or imply another tool call.",
   "Using only the evidence already present in this input, provide the best final report that fits now.",
+  "Start with confirmed conclusions, key evidence, verification results, and unresolved scope; omit the investigation plan and repeated explanations.",
   "Clearly separate confirmed findings, counterevidence, and unresolved items.",
   "If the evidence is incomplete, state the limitation directly instead of extending the investigation.",
+].join(" ");
+
+const OUTPUT_RECOVERY_FINAL_INSTRUCTION = [
+  "The previous normal response reached its output limit before it finished.",
+  "Rewrite one short, self-contained final report now; do not continue the cut-off wording.",
+  "Use only evidence already present in this input and do not request, imply, or execute a tool call.",
+  "Put confirmed conclusions, the key supporting evidence, verification results, and unresolved scope first.",
+  "Do not claim that an unexecuted operation or an unverified investigation is complete.",
 ].join(" ");
 
 type RemoteToolLike = Tool & {
@@ -335,11 +354,17 @@ function auditCompletionMode(value: unknown): AuditCompletionMode {
   return value === "bounded" ? "bounded" : "off";
 }
 
+function outputRecoveryMode(value: unknown): OutputRecoveryMode {
+  return value === "off" ? "off" : "on";
+}
+
 function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
   const config = ctl.getPluginConfig(directConfigSchematics);
   const configuredEngine = String(config.get("projectEngine") || "auto");
   const projectEngine: ProjectEngineSetting = ["auto", "unity", "unreal", "mixed"].includes(configuredEngine)
     ? configuredEngine as ProjectEngineSetting : "auto";
+  const maxOutputReserve = numeric(config.get("maxOutputReserve"), 8192, 256, 131072);
+  const configuredRecoveryMaxTokens = numeric(config.get("outputRecoveryMaxTokens"), 0, 0, 131072);
   return {
     projectEngine,
     projectIdentity: String(config.get("projectIdentity") || "").trim().slice(0, 4096),
@@ -349,7 +374,10 @@ function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     pastReasoningTokens: numeric(config.get("pastReasoningTokens"), 0, 0, 16384),
     softRemainingTokens: numeric(config.get("softRemainingTokens"), 14000, 0, 1_000_000),
     hardRemainingTokens: numeric(config.get("hardRemainingTokens"), 8000, 0, 1_000_000),
-    maxOutputReserve: numeric(config.get("maxOutputReserve"), 8192, 256, 131072),
+    maxOutputReserve,
+    outputRecoveryMode: outputRecoveryMode(config.get("outputRecoveryMode")),
+    outputRecoveryMaxTokens: configuredRecoveryMaxTokens > 0 ? configuredRecoveryMaxTokens : maxOutputReserve,
+    outputRecoverySeconds: numeric(config.get("outputRecoverySeconds"), 45, 1, 600),
     safetyMarginTokens: numeric(config.get("safetyMarginTokens"), 1536, 0, 131072),
     assumedContextLength: numeric(config.get("assumedContextLength"), 65536, 2048, 4_000_000),
     recentCompleteTurns: numeric(config.get("recentCompleteTurns"), 2, 0, 20),
@@ -426,10 +454,15 @@ async function measureContext(
         : {}),
     },
   }));
+  const toolSchemaJson = toolDefinitions.length > 0 ? JSON.stringify(toolDefinitions) : "";
+  const toolSchemaChars = toolSchemaJson.length;
   let contextLength = config.assumedContextLength;
   let inputTokens = Math.ceil(
-    (history.toString().length + JSON.stringify(toolDefinitions).length) / 4,
+    (history.toString().length + toolSchemaChars) / 4,
   );
+  let toolSchemaTokens: number | null = toolSchemaChars > 0 ? Math.ceil(toolSchemaChars / 4) : 0;
+  let toolSchemaTokenMeasurement: ContextMeasurement["toolSchemaTokenMeasurement"] = toolSchemaChars > 0
+    ? "estimate" : "none";
   let exact = false;
   try {
     if (typeof source.getContextLength === "function") {
@@ -439,6 +472,16 @@ async function measureContext(
       const prompt = await source.applyPromptTemplate(history, { toolDefinitions });
       inputTokens = numeric(await source.countTokens(prompt), inputTokens, 0, 4_000_000);
       exact = true;
+      if (toolSchemaChars > 0) {
+        try {
+          toolSchemaTokens = numeric(
+            await source.countTokens(toolSchemaJson), toolSchemaTokens, 0, 4_000_000,
+          );
+          toolSchemaTokenMeasurement = "exact";
+        } catch {
+          // Full prompt measurement remains exact; standalone schema cost is estimated.
+        }
+      }
     }
   } catch {
     // A selected generator or experimental model handle may not expose token
@@ -450,6 +493,9 @@ async function measureContext(
   return {
     contextLength,
     inputTokens,
+    toolSchemaChars,
+    toolSchemaTokens,
+    toolSchemaTokenMeasurement,
     outputReserve,
     remainingTokens,
     exact,
@@ -709,7 +755,8 @@ function createToolGenerationTracker(ctl: PredictionLoopHandlerController) {
     state.controller.setState({ status: "error", text: "도구 호출 생성 실패" });
     statuses.delete(callId);
   };
-  return { start, name, argument, end, waitingForApproval, executing, finalized, failure };
+  const hasUnfinished = () => statuses.size > 0;
+  return { start, name, argument, end, waitingForApproval, executing, finalized, failure, hasUnfinished };
 }
 
 function createRoundActivityTracker(
@@ -827,6 +874,66 @@ function containsUnresolvedToolIntent(reportText: string, messages: Array<ChatMe
       && outer.start <= wrapper.start && outer.end >= wrapper.end
       && isLiteralRawToolWrapper(text, outer.start, outer.end));
   });
+}
+
+function visibleTextFromMessages(messages: Array<ChatMessage>): string {
+  return messages
+    .filter(message => message.isAssistantMessage())
+    .map(message => visibleAssistantOutput(message.getText()).visibleText)
+    .join("")
+    .trim();
+}
+
+function classifyOutputLimitStage(
+  captured: {
+    finishReason?: string;
+    messages: Array<ChatMessage>;
+    predictionUsage?: {
+      reasoningTokensCount?: number;
+      visibleTokensCount?: number;
+      visibleChars?: number;
+      rawToolIntentCandidate?: boolean;
+    };
+  },
+  finalizing: boolean,
+  toolGeneration: { hasUnfinished: () => boolean },
+): OutputLimitStage | undefined {
+  if (captured.finishReason !== "maxPredictedTokensReached") return undefined;
+  if (finalizing) return "forced_final";
+  if (toolGeneration.hasUnfinished()
+    || captured.messages.some(message => message.getToolCallRequests().length > 0)) {
+    return "tool_arguments";
+  }
+  const visibleTokens = Number(captured.predictionUsage?.visibleTokensCount || 0);
+  if (visibleTokens > 0 || visibleTextFromMessages(captured.messages)) return "visible_report";
+  if (Number(captured.predictionUsage?.reasoningTokensCount || 0) > 0) return "reasoning";
+  return "unknown";
+}
+
+function canRecoverOutputLimit(
+  captured: {
+    finishReason?: string;
+    failure?: unknown;
+    continueAfterTools: boolean;
+    messages: Array<ChatMessage>;
+    predictionUsage?: {
+      reasoningTokensCount?: number;
+      visibleTokensCount?: number;
+      visibleChars?: number;
+      rawToolIntentCandidate?: boolean;
+    };
+  },
+  toolGeneration: { hasUnfinished: () => boolean },
+): boolean {
+  if (captured.finishReason !== "maxPredictedTokensReached"
+    || captured.failure !== undefined || captured.continueAfterTools) return false;
+  if (captured.messages.some(message => message.getToolCallRequests().length > 0
+    || message.getToolCallResults().length > 0)) return false;
+  const reportText = visibleTextFromMessages(captured.messages);
+  return classifyOutputLimitStage(captured, false, toolGeneration) === "visible_report"
+    && (Boolean(reportText) || Number(captured.predictionUsage?.visibleChars || 0) > 0)
+    && captured.predictionUsage?.rawToolIntentCandidate !== true
+    && !containsUnresolvedToolIntent(reportText, captured.messages);
 }
 
 function classifyFinalDelivery(
@@ -971,16 +1078,24 @@ export function createPredictionLoopHandler(
       }
       const roundTools = finalizing ? [] : modelTools;
       let roundOutputReserve = finalizing
-        ? finalizationTrigger === "context_budget" && !boundedAudit
-          ? config.maxOutputReserve
-          : Math.min(config.maxOutputReserve, config.auditFinalMaxTokens)
+        ? finalizationTrigger === "output_recovery"
+          ? Math.min(config.maxOutputReserve, config.outputRecoveryMaxTokens)
+          : finalizationTrigger === "context_budget" && !boundedAudit
+            ? config.maxOutputReserve
+            : Math.min(config.maxOutputReserve, config.auditFinalMaxTokens)
         : config.maxOutputReserve;
+      const requestedOutputCap = roundOutputReserve;
+      let outputCapSource: "configured" | "headroom_clamp" = "configured";
       const roundScopeInstructions = finalizing
-        ? [...scopeInstructions, finalizationTrigger === "context_budget"
-          ? CONTEXT_BUDGET_FINAL_INSTRUCTION : BOUNDED_AUDIT_FINAL_INSTRUCTION]
+        ? [...scopeInstructions, finalizationTrigger === "output_recovery"
+          ? OUTPUT_RECOVERY_FINAL_INSTRUCTION
+          : finalizationTrigger === "context_budget"
+            ? CONTEXT_BUDGET_FINAL_INSTRUCTION : BOUNDED_AUDIT_FINAL_INSTRUCTION]
         : scopeInstructions;
       const modelInputId = finalizing
-        ? `${executionId}:final-report`
+        ? finalizationTrigger === "output_recovery"
+          ? `${executionId}:output-recovery-${finalizationAttempts}`
+          : `${executionId}:final-report`
         : `${executionId}:prediction-${roundIndex + 1}`;
       activeActivity = createRoundActivityTracker(ctl, roundIndex);
       const noteEnabled = Boolean(noteWorkingDirectory && objectiveFingerprint && !config.observeOnly);
@@ -1147,12 +1262,17 @@ export function createPredictionLoopHandler(
         }
       }
 
-      if (finalizing && finalMeasurement.remainingTokens < 0 && !config.observeOnly) {
-        const adaptiveFinalTokens = Math.trunc(
-          finalMeasurement.contextLength - finalMeasurement.inputTokens - config.safetyMarginTokens,
-        );
-        if (adaptiveFinalTokens >= MIN_FINAL_OUTPUT_TOKENS && adaptiveFinalTokens < roundOutputReserve) {
-          roundOutputReserve = adaptiveFinalTokens;
+      if (finalizing && !config.observeOnly) {
+        const resolvedBudget = resolveGenerationBudget({
+          desiredMaxTokens: roundOutputReserve,
+          contextLength: finalMeasurement.contextLength,
+          inputTokens: finalMeasurement.inputTokens,
+          safetyMarginTokens: config.safetyMarginTokens,
+          minimumTokens: MIN_FINAL_OUTPUT_TOKENS,
+        });
+        if (resolvedBudget.fit && resolvedBudget.appliedMaxTokens < roundOutputReserve) {
+          roundOutputReserve = resolvedBudget.appliedMaxTokens;
+          outputCapSource = "headroom_clamp";
           finalMeasurement = await measureRoundInput(modelInput);
         }
       }
@@ -1229,9 +1349,19 @@ export function createPredictionLoopHandler(
         messageCount: before.messageCount,
         inputTokens: before.inputTokens,
         remainingTokens: before.remainingTokens,
+        toolSchemaChars: before.toolSchemaChars,
+        toolSchemaTokens: before.toolSchemaTokens,
+        toolSchemaTokenMeasurement: before.toolSchemaTokenMeasurement,
         finalExactMeasurement: finalMeasurement.exact,
         finalInputTokens: finalMeasurement.inputTokens,
+        finalToolSchemaChars: finalMeasurement.toolSchemaChars,
+        finalToolSchemaTokens: finalMeasurement.toolSchemaTokens,
+        finalToolSchemaTokenMeasurement: finalMeasurement.toolSchemaTokenMeasurement,
         outputReserve: roundOutputReserve,
+        requestedMaxTokens: requestedOutputCap,
+        appliedMaxTokens: roundOutputReserve,
+        capSource: outputCapSource,
+        budgetMode: "explicit",
         finalRemainingTokens: finalMeasurement.remainingTokens,
         finalFit: finalMeasurement.fit,
         finalMessageCount: finalMeasurement.messageCount,
@@ -1242,7 +1372,9 @@ export function createPredictionLoopHandler(
         availableUnityTools: scope.availableUnityTools,
         availableUnrealTools: scope.availableUnrealTools,
         visibleToolCount: roundTools.length,
-        auditCompletionPhase: finalizing ? "finalize_once" : boundedAudit ? "research" : "off",
+        auditCompletionPhase: finalizing
+          ? finalizationTrigger === "output_recovery" ? "output_recovery" : "finalize_once"
+          : boundedAudit ? "research" : "off",
         auditFinalizationTrigger: finalizing ? finalizationTrigger : undefined,
         attachmentCount: attachmentContext.attachmentCount,
         inputAvailability: assembledInput.projection ? {
@@ -1298,13 +1430,15 @@ export function createPredictionLoopHandler(
       const phaseTimeoutSignal = finalizing
         ? finalizationTrigger === "context_budget" && !boundedAudit
           ? null
-          : AbortSignal.timeout(Math.max(1, config.auditFinalSeconds * 1000))
+          : AbortSignal.timeout(Math.max(1, (finalizationTrigger === "output_recovery"
+            ? config.outputRecoverySeconds : config.auditFinalSeconds) * 1000))
         : boundedAudit
           ? AbortSignal.timeout(Math.max(1, researchDeadlineAt - Date.now()))
           : null;
       const roundSignal = phaseTimeoutSignal
         ? AbortSignal.any([ctl.abortSignal, phaseTimeoutSignal])
         : ctl.abortSignal;
+      const historyBeforeRound = Chat.from(workingHistory);
       const captured = await runOneToolRound(
         tokenSource,
         modelInput,
@@ -1453,7 +1587,7 @@ export function createPredictionLoopHandler(
             }
           },
         },
-        finalizing ? { maxTokens: roundOutputReserve } : {},
+        { maxTokens: roundOutputReserve },
       );
       activeActivity.complete();
       activeActivity = null;
@@ -1492,6 +1626,7 @@ export function createPredictionLoopHandler(
         visibleHistory.append(visibleMessage);
         if (!displayedMessages.has(message)) emitter.emit(visibleMessage, textAlreadyStreamed);
       }
+      const outputLimitStage = classifyOutputLimitStage(captured, finalizing, toolGeneration);
       if (config.showDebugInfo) {
         const outputEvidence = messageEvidenceTelemetry(captured.messages);
         const normalizedCaptured = normalizeMessages(captured.messages);
@@ -1502,6 +1637,13 @@ export function createPredictionLoopHandler(
           roundIndex,
           finishReason: captured.finishReason || (captured.failure === undefined ? "unknown" : "failed"),
           predictionStats: captured.predictionStats,
+          predictionUsage: captured.predictionUsage,
+          outputLimitStage,
+          requestedMaxTokens: requestedOutputCap,
+          appliedMaxTokens: roundOutputReserve,
+          capSource: outputCapSource,
+          phase: finalizing ? "final_report" : "research",
+          attempt: finalizing ? finalizationAttempts : roundIndex + 1,
           continueAfterTools: captured.continueAfterTools,
           modelInputToolResultCount: inputEvidence.results.length,
           modelInputLatestResultFingerprint: inputEvidence.results.at(-1)?.resultFingerprint,
@@ -1553,10 +1695,12 @@ export function createPredictionLoopHandler(
         const finalDelivery = classifyFinalDelivery(reportText, captured, phaseTimedOut, captured.messages);
         const { deliveryState } = finalDelivery;
         if (config.showDebugInfo) ctl.debug({
-          event: "bounded_audit_finalization",
+          event: finalizationTrigger === "output_recovery"
+            ? "output_recovery" : "bounded_audit_finalization",
           executionId,
           modelInputId,
           trigger: finalizationTrigger,
+          phase: finalizationTrigger === "output_recovery" ? "output_recovery" : "finalize_once",
           attempt: finalizationAttempts,
           maxAttempts: 1,
           deliveryState,
@@ -1566,6 +1710,11 @@ export function createPredictionLoopHandler(
           rejectionReason: finalDelivery.rejectionReason,
           completionAccepted: deliveryState === "complete",
           predictionStats: captured.predictionStats,
+          predictionUsage: captured.predictionUsage,
+          outputLimitStage,
+          requestedMaxTokens: requestedOutputCap,
+          appliedMaxTokens: roundOutputReserve,
+          capSource: outputCapSource,
           toolCount: roundTools.length,
         });
         if (deliveryState !== "complete") ctl.createStatus({
@@ -1592,6 +1741,35 @@ export function createPredictionLoopHandler(
         finalizationTrigger = "research_output_limit";
         roundIndex += 1;
         continue;
+      }
+      if (!boundedAudit && config.outputRecoveryMode === "on"
+        && canRecoverOutputLimit(captured, toolGeneration)) {
+        // Keep the partial answer visible, but do not feed its cut-off prose
+        // back to the model. The recovery request rewrites from the same
+        // evidence that was available before the truncated report.
+        workingHistory = historyBeforeRound;
+        finalizationPending = true;
+        finalizationTrigger = "output_recovery";
+        if (config.showDebugInfo) ctl.debug({
+          event: "output_recovery_scheduled",
+          executionId,
+          sourceModelInputId: modelInputId,
+          recoveryAttempt: 1,
+          recoveryModelInputId: `${executionId}:output-recovery-1`,
+          outputLimitStage,
+          recoveryToolCount: 0,
+          partialReportPreservedInGui: true,
+        });
+        roundIndex += 1;
+        continue;
+      }
+      if (captured.finishReason === "maxPredictedTokensReached" && !captured.continueAfterTools) {
+        ctl.createStatus({
+          status: "canceled",
+          text: outputLimitStage === "tool_arguments"
+            ? "도구 호출 인수가 출력 한도에서 끝나 실행하지 않았습니다."
+            : "응답이 출력 한도에 도달해 완료로 처리하지 않았습니다.",
+        });
       }
       if (!captured.continueAfterTools) break;
       if (boundedAudit && (
@@ -1642,6 +1820,9 @@ export const __test = {
   serializedCheckpointCounts,
   ToolRoundStagnationDetector,
   GenerationRepetitionDetector,
+  resolveGenerationBudget,
+  classifyOutputLimitStage,
+  canRecoverOutputLimit,
   classifyFinalDelivery,
   containsUnresolvedToolIntent,
   modelHistoryMessage,

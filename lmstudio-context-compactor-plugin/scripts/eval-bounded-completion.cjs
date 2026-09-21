@@ -26,10 +26,13 @@ function sha256(value) {
 function structureEvaluation(run) {
   const finalizations = run.boundedFinalizations || [];
   const finalActs = (run.modelActs || []).filter(act => act.modelInputId.endsWith(":final-report"));
+  const recoveryActs = (run.modelActs || []).filter(act => act.modelInputId.includes(":output-recovery-"));
   const finalAct = finalActs.at(-1) || null;
+  const recoveryAct = recoveryActs.at(-1) || null;
   const finalActSequence = finalAct?.sequence || null;
-  const callsAfterFinal = finalActSequence === null ? 0 : (run.modelActs || [])
-    .filter(act => act.sequence > finalActSequence).length;
+  const terminalSequence = finalActSequence ?? recoveryAct?.sequence ?? null;
+  const callsAfterFinal = terminalSequence === null ? 0 : (run.modelActs || [])
+    .filter(act => act.sequence > terminalSequence).length;
   const bounded = run.auditCompletionMode === "bounded";
   const passed = bounded
     ? finalizations.length === 1
@@ -39,7 +42,10 @@ function structureEvaluation(run) {
       && callsAfterFinal === 0
       && finalizations[0].attempt === 1
       && finalizations[0].maxAttempts === 1
-    : finalizations.length === 0 && finalActs.length === 0;
+    : finalizations.length === 0
+      && recoveryActs.length <= 1
+      && (recoveryAct === null || recoveryAct.toolCount === 0)
+      && callsAfterFinal === 0;
   return {
     expectedMode: bounded ? "bounded" : "off",
     passed,
@@ -47,6 +53,9 @@ function structureEvaluation(run) {
     finalModelCallCount: finalActs.length,
     finalModelCallToolCount: finalAct?.toolCount ?? null,
     finalModelCallMaxTokens: finalAct?.maxTokens ?? null,
+    outputRecoveryModelCallCount: recoveryActs.length,
+    outputRecoveryModelCallToolCount: recoveryAct?.toolCount ?? null,
+    outputRecoveryModelCallMaxTokens: recoveryAct?.maxTokens ?? null,
     implementationCallsAttributedToFinalInput: run.boundedFinalToolCalls,
     modelCallsAfterFinal: callsAfterFinal,
     deliveryState: finalizations.at(-1)?.deliveryState || null,

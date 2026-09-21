@@ -229,8 +229,11 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
   const auditCompletionMode = runOptions.auditCompletionMode === "bounded" ? "bounded" : "off";
   const historyMode = runOptions.historyMode === "targeted" ? "targeted" : "pressure";
   const pressureProfile = String(runOptions.pressureProfile || "controlled");
+  const researchMaxTokens = Number(runOptions.researchMaxTokens || 0);
   const compactorConfig = {
     ...pressureProfileConfig(pressureProfile),
+    ...(Number.isSafeInteger(researchMaxTokens) && researchMaxTokens > 0
+      ? { maxOutputReserve: researchMaxTokens } : {}),
     ...(runOptions.compactorConfig || {}),
   };
   const history = buildInitialHistory(contractSelected ? contractText : "", historyMode);
@@ -274,7 +277,8 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
       if (runOptions.captureModelInputs === true) {
         recorder.modelInputTexts.set(modelInputId, inputSnapshot.toString());
       }
-      const maxTokens = options.maxTokens ?? Number(runOptions.researchMaxTokens || 1800);
+      const maxTokens = Number.isSafeInteger(Number(options.maxTokens))
+        ? Number(options.maxTokens) : null;
       recorder.modelActs.push({
         sequence: recorder.modelActs.length + 1,
         modelInputId,
@@ -282,7 +286,12 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
         toolNames: tools.map(item => item.name),
         maxTokens,
       });
-      return model.act(chat, tools, { ...options, temperature: 0, seed, maxTokens });
+      return model.act(chat, tools, {
+        ...options,
+        temperature: 0,
+        seed,
+        ...(maxTokens === null ? {} : { maxTokens }),
+      });
     },
   };
   const auditResearchSeconds = Number(runOptions.auditResearchSeconds ?? 100);
@@ -295,6 +304,7 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     auditResearchRounds: Number(runOptions.auditResearchRounds || 12),
     auditFinalSeconds,
     auditFinalMaxTokens: Number(runOptions.auditFinalMaxTokens || 4096),
+    outputRecoveryMode: runOptions.outputRecoveryMode === "on" ? "on" : "off",
     evaluationTimeoutMs: evaluationTimeoutSeconds * 1000,
     ...compactorConfig,
   };
@@ -310,7 +320,8 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     .filter(block => block.options?.style?.type !== "thinking")
     .map(block => block.text.trim()).filter(Boolean);
   const finalizations = ctl.debugValues.filter(value => value.event === "bounded_audit_finalization");
-  const visibleAnswer = selectVisibleAnswer(visibleBlocks, finalizations);
+  const outputRecoveries = ctl.debugValues.filter(value => value.event === "output_recovery");
+  const visibleAnswer = selectVisibleAnswer(visibleBlocks, finalizations, outputRecoveries);
   const measurements = ctl.debugValues.filter(value => value.event === "direct_context_measurement");
   const rounds = ctl.debugValues.filter(value => value.event === "direct_round_observation");
   const runtimeToolCalls = rounds.flatMap(round => round.toolTrace?.runtime || []);
@@ -388,9 +399,14 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     error,
     modelActs: recorder.modelActs,
     boundedFinalizations: finalizations,
+    outputRecoveries,
     boundedFinalModelCalls: recorder.modelActs.filter(act => act.modelInputId.endsWith(":final-report")).length,
+    outputRecoveryModelCalls: recorder.modelActs.filter(act => act.modelInputId.includes(":output-recovery-")).length,
     boundedFinalToolCalls: recorder.calls.filter(call => (
       String(call.causalModelInputId || "").endsWith(":final-report")
+    )).length,
+    outputRecoveryToolCalls: recorder.calls.filter(call => (
+      String(call.causalModelInputId || "").includes(":output-recovery-")
     )).length,
     trace: {
       executionId: measurements.at(-1)?.executionId || null,
@@ -406,15 +422,17 @@ function classifyRunOutcome(run) {
   const answer = String(run?.visibleAnswer || "").trim();
   const finishReason = String(run?.trace?.roundFinishReasons?.at(-1) || "unknown");
   const boundedFinalization = run?.boundedFinalizations?.at(-1) || null;
+  const outputRecovery = run?.outputRecoveries?.at(-1) || null;
+  const terminalDelivery = outputRecovery || boundedFinalization;
   let executionOutcome;
   if (run?.timedOut) executionOutcome = "timed_out";
-  else if (boundedFinalization?.finishReason === "final_timeout") executionOutcome = "timed_out";
+  else if (terminalDelivery?.finishReason === "final_timeout") executionOutcome = "timed_out";
   else if (finishReason === "userStopped") executionOutcome = "canceled";
   else if (run?.error) executionOutcome = "failed";
-  else if (boundedFinalization?.deliveryState === "no_answer") executionOutcome = "no_answer";
-  else if (boundedFinalization?.deliveryState === "truncated") executionOutcome = "truncated";
-  else if (boundedFinalization?.deliveryState === "partial") executionOutcome = "failed";
-  else if (boundedFinalization?.deliveryState === "complete") executionOutcome = "completed";
+  else if (terminalDelivery?.deliveryState === "no_answer") executionOutcome = "no_answer";
+  else if (terminalDelivery?.deliveryState === "truncated") executionOutcome = "truncated";
+  else if (terminalDelivery?.deliveryState === "partial") executionOutcome = "failed";
+  else if (terminalDelivery?.deliveryState === "complete") executionOutcome = "completed";
   else if (finishReason === "maxPredictedTokensReached") executionOutcome = "truncated";
   else if (!answer) executionOutcome = "no_answer";
   else executionOutcome = "completed";
@@ -429,8 +447,9 @@ function classifyRunOutcome(run) {
   };
 }
 
-function selectVisibleAnswer(visibleBlocks, finalizations) {
-  const selected = finalizations.length ? (visibleBlocks.at(-1) || "") : visibleBlocks.join("\n");
+function selectVisibleAnswer(visibleBlocks, finalizations, outputRecoveries = []) {
+  const selected = finalizations.length || outputRecoveries.length
+    ? (visibleBlocks.at(-1) || "") : visibleBlocks.join("\n");
   return selected.trim();
 }
 
@@ -477,6 +496,8 @@ async function main() {
   const identifier = valueAfter("--model", "swift-qwen3.8-27b");
   const mainPairs = integerAfter("--main-pairs", 5);
   const contractPairs = integerAfter("--contract-pairs", 1);
+  const researchMaxTokens = integerAfter("--research-max-tokens", 1800);
+  const outputRecoveryMode = process.argv.includes("--output-recovery") ? "on" : "off";
   const acOnly = process.argv.includes("--ac-only");
   const output = path.resolve(valueAfter("--output", path.join(process.cwd(), "audit-pressure-ab-ac.json")));
   const contractPath = path.resolve(__dirname, "../eval/AUDIT_TASK_CONTRACT.md");
@@ -500,7 +521,9 @@ async function main() {
   const runs = [];
   if (!acOnly) {
     for (const group of ["A", "B"]) {
-      const run = await oneRun(model, modelInfo, group, "pilot", 1, 4101, contractText);
+      const run = await oneRun(model, modelInfo, group, "pilot", 1, 4101, contractText, {
+        researchMaxTokens, outputRecoveryMode,
+      });
       runs.push(run);
       process.stdout.write(`${JSON.stringify({ phase: run.phase, group, pressureExposure: run.pressureExposure,
         compactions: run.compactionCount, calls: run.generatedToolCalls, score: run.answerEvaluation.score,
@@ -516,7 +539,9 @@ async function main() {
     for (let pairIndex = 1; pairIndex <= mainPairs; pairIndex += 1) {
       const groups = pairIndex % 2 === 0 ? ["B", "A"] : ["A", "B"];
       for (const group of groups) {
-        const run = await oneRun(model, modelInfo, group, "main-ab", pairIndex, 5000 + pairIndex, contractText);
+        const run = await oneRun(model, modelInfo, group, "main-ab", pairIndex, 5000 + pairIndex, contractText, {
+          researchMaxTokens, outputRecoveryMode,
+        });
         runs.push(run);
         process.stdout.write(`${JSON.stringify({ phase: run.phase, pairIndex, group,
           pressureExposure: run.pressureExposure, compactions: run.compactionCount,
@@ -529,7 +554,7 @@ async function main() {
     for (let pairIndex = 1; pairIndex <= contractPairs; pairIndex += 1) {
       for (const group of pairIndex % 2 === 0 ? ["C", "A"] : ["A", "C"]) {
         const run = await oneRun(model, modelInfo, group, "exploratory-ac", pairIndex,
-          6000 + pairIndex, contractText);
+          6000 + pairIndex, contractText, { researchMaxTokens, outputRecoveryMode });
         runs.push(run);
         process.stdout.write(`${JSON.stringify({ phase: run.phase, pairIndex, group,
           pressureExposure: run.pressureExposure, compactions: run.compactionCount,
@@ -592,7 +617,8 @@ async function main() {
       loadedContextLength: modelInfo.contextLength || null,
       maxContextLength: modelInfo.maxContextLength || null,
       temperature: 0,
-      maxTokens: 1800,
+      maxTokens: researchMaxTokens,
+      outputRecoveryMode,
       seedPolicy: "same seed within each comparison pair",
     },
     groups: {

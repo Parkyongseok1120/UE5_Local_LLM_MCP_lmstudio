@@ -93,7 +93,9 @@ function controller(history, tokenSource, tool, mode, recorder, configOverrides 
     showDebugInfo: true,
     softRemainingTokens: 14000,
     hardRemainingTokens: 8000,
-    maxOutputReserve: 2048,
+    // This is the explicit evaluation cap. The product now passes the same
+    // value as maxTokens; the wrapper must not silently replace it.
+    maxOutputReserve: 1200,
     safetyMarginTokens: 1024,
     assumedContextLength: 66816,
     recentCompleteTurns: 2,
@@ -106,6 +108,7 @@ function controller(history, tokenSource, tool, mode, recorder, configOverrides 
     generationRepetitionAction: "warn",
     generationRepeatCount: 3,
     inputAvailabilityMode: mode,
+    outputRecoveryMode: "off",
     reviewProgress: false,
     separateAttachments: false,
     ...configOverrides,
@@ -181,7 +184,6 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed) {
         ...options,
         temperature: 0,
         seed,
-        maxTokens: 1200,
       });
     },
   };

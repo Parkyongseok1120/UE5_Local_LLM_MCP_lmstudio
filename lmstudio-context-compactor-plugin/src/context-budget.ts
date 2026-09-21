@@ -2,6 +2,41 @@ import { Chat, ChatMessage } from "@lmstudio/sdk";
 
 const continuityText = require("./continuity-text.js") as { REASONING_SEPARATOR: string };
 
+export type GenerationBudget = {
+  desiredMaxTokens: number;
+  appliedMaxTokens: number;
+  headroomTokens: number;
+  fit: boolean;
+  clampedToHeadroom: boolean;
+};
+
+/**
+ * Resolve the cap that will be sent to .act() from the same measured input
+ * budget used by the compactor. A negative or already-reserved value is not
+ * subtracted twice: headroom is context - input - safety only.
+ */
+export function resolveGenerationBudget(options: {
+  desiredMaxTokens: number;
+  contextLength: number;
+  inputTokens: number;
+  safetyMarginTokens: number;
+  minimumTokens?: number;
+}): GenerationBudget {
+  const desiredMaxTokens = Math.max(0, Math.trunc(Number(options.desiredMaxTokens) || 0));
+  const headroomTokens = Math.trunc(
+    Number(options.contextLength) - Number(options.inputTokens) - Number(options.safetyMarginTokens),
+  );
+  const appliedMaxTokens = Math.max(0, Math.min(desiredMaxTokens, headroomTokens));
+  const minimumTokens = Math.max(1, Math.trunc(Number(options.minimumTokens) || 1));
+  return {
+    desiredMaxTokens,
+    appliedMaxTokens,
+    headroomTokens,
+    fit: appliedMaxTokens >= minimumTokens,
+    clampedToHeadroom: appliedMaxTokens < desiredMaxTokens,
+  };
+}
+
 // Candidate sizes need not be monotone: complete exchanges and checkpoints vary.
 // Measure a bounded set explicitly, rather than assuming binary-search ordering.
 export async function selectMeasuredCandidate<T>(

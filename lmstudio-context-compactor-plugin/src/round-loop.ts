@@ -35,6 +35,17 @@ export type CapturedRound = {
     predictedTokensCount?: number;
     totalTokensCount?: number;
   };
+  predictionUsage: {
+    fragmentCount: number;
+    reasoningTokensCount: number;
+    visibleTokensCount: number;
+    visibleChars: number;
+    rawToolIntentCandidate: boolean;
+    structuralTokensCount: number;
+    toolArgumentChars: number;
+    toolArgumentTokensCount: number | null;
+    unattributedTokensCount: number | null;
+  };
 };
 
 export async function runOneToolRound(
@@ -55,6 +66,17 @@ export async function runOneToolRound(
   let finishReason: string | undefined;
   let predictionStats: CapturedRound["predictionStats"];
   let fragmentAbortReason: Error | undefined;
+  const predictionUsage = {
+    fragmentCount: 0,
+    reasoningTokensCount: 0,
+    visibleTokensCount: 0,
+    visibleChars: 0,
+    rawToolIntentCandidate: false,
+    structuralTokensCount: 0,
+    toolArgumentChars: 0,
+    toolArgumentTokensCount: null as number | null,
+    unattributedTokensCount: null as number | null,
+  };
 
   const forwardAbort = () => {
     if (!roundAbort.signal.aborted) roundAbort.abort(parentSignal.reason);
@@ -69,12 +91,32 @@ export async function runOneToolRound(
       ...predictionOptions,
       ...actCallbacks,
       onPredictionFragment: (fragment) => {
+        const tokensCount = Number(fragment.tokensCount);
+        predictionUsage.fragmentCount += 1;
+        if (Number.isFinite(tokensCount) && tokensCount >= 0) {
+          if (fragment.reasoningType === "reasoning") predictionUsage.reasoningTokensCount += tokensCount;
+          else if (fragment.isStructural || fragment.reasoningType === "reasoningStartTag"
+            || fragment.reasoningType === "reasoningEndTag") predictionUsage.structuralTokensCount += tokensCount;
+          else predictionUsage.visibleTokensCount += tokensCount;
+        }
+        if (fragment.reasoningType !== "reasoning" && !fragment.isStructural
+          && fragment.reasoningType !== "reasoningStartTag" && fragment.reasoningType !== "reasoningEndTag") {
+          const visibleContent = String(fragment.content || "");
+          predictionUsage.visibleChars += visibleContent.length;
+          if (/<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu.test(visibleContent)) {
+            predictionUsage.rawToolIntentCandidate = true;
+          }
+        }
         actCallbacks.onPredictionFragment?.(fragment);
         const reason = abortAfterPredictionFragment?.(fragment);
         if (reason && !roundAbort.signal.aborted) {
           fragmentAbortReason = reason;
           roundAbort.abort(reason);
         }
+      },
+      onToolCallRequestArgumentFragmentGenerated: (roundIndex, callId, content) => {
+        predictionUsage.toolArgumentChars += String(content || "").length;
+        actCallbacks.onToolCallRequestArgumentFragmentGenerated?.(roundIndex, callId, content);
       },
       onPredictionCompleted: (result) => {
         const stats = (result as { stats?: {
@@ -115,6 +157,15 @@ export async function runOneToolRound(
     ...(fragmentAbortReason ? { finishReason: "generation_repetition_paused" }
       : finishReason === undefined ? {} : { finishReason }),
     ...(predictionStats ? { predictionStats } : {}),
+    predictionUsage: {
+      ...predictionUsage,
+      unattributedTokensCount: predictionStats?.predictedTokensCount === undefined
+        ? null
+        : Math.max(0, predictionStats.predictedTokensCount
+          - predictionUsage.reasoningTokensCount
+          - predictionUsage.visibleTokensCount
+          - predictionUsage.structuralTokensCount),
+    },
     ...(failure === undefined ? {} : { failure }),
   };
 }

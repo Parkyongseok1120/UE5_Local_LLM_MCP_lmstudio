@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const { ChatMessage } = require("@lmstudio/sdk");
 
 const {
   auditAnswerMatchesOracle,
@@ -171,6 +172,32 @@ test("targeted access baseline contains exact evidence without fixture-only line
   assert.doesNotMatch(text, /MissingCashPanel/u);
 });
 
+test("audit wrapper forwards the configured research cap instead of injecting a hidden generation limit", async () => {
+  const observed = [];
+  const model = {
+    identifier: "synthetic-model",
+    async getContextLength() { return 32768; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, options) {
+      observed.push(options.maxTokens);
+      options.onPredictionCompleted({ stats: {
+        stopReason: "eosFound", promptTokensCount: 100, predictedTokensCount: 20, totalTokensCount: 120,
+      } });
+      options.onMessage(ChatMessage.create("assistant", "Synthetic bounded answer."));
+      return {};
+    },
+  };
+  const run = await auditEval.oneRun(model, { contextLength: 32768 }, "A", "wrapper-test", 1, 7, "", {
+    inputAvailabilityMode: "off",
+    researchMaxTokens: 777,
+    outputRecoveryMode: "off",
+  });
+  assert.equal(run.error, null);
+  assert.deepEqual(observed, [777]);
+  assert.equal(run.modelActs[0].maxTokens, 777);
+});
+
 test("real-contract audit locators survive the synthetic compaction boundary", () => {
   const normalized = predictionTest.normalizeHistory(auditEval.buildInitialHistory());
   const checkpoint = compactionCore.buildCheckpoint(normalized, {
@@ -196,6 +223,7 @@ test("audit result collection preserves a finalization with no visible answer", 
   assert.equal(auditEval.selectVisibleAnswer([], [{ deliveryState: "no_answer" }]), "");
   assert.equal(auditEval.selectVisibleAnswer([" first ", " final "], [{}]), "final");
   assert.equal(auditEval.selectVisibleAnswer(["first", "second"], []), "first\nsecond");
+  assert.equal(auditEval.selectVisibleAnswer(["partial", "recovered"], [], [{}]), "recovered");
 });
 
 test("audit run outcomes are mutually exclusive and separate truncation from timeout", () => {
@@ -255,6 +283,40 @@ test("audit run outcomes are mutually exclusive and separate truncation from tim
   });
   assert.equal(boundedFinalTimeout.executionOutcome, "timed_out");
   assert.equal(boundedFinalTimeout.deliveryState, "partial");
+
+  const recovered = auditEval.classifyRunOutcome({
+    visibleAnswer: "recovered report",
+    outputRecoveries: [{ deliveryState: "complete", finishReason: "eosFound" }],
+    trace: { roundFinishReasons: ["maxPredictedTokensReached", "eosFound"] },
+    timedOut: false,
+    error: null,
+  });
+  assert.equal(recovered.executionOutcome, "completed");
+  assert.equal(recovered.deliveryState, "complete");
+});
+
+test("output recovery is a single tool-free terminal call and remains separate from bounded finalization", () => {
+  const recovered = boundedEval.structureEvaluation({
+    auditCompletionMode: "off",
+    boundedFinalizations: [],
+    boundedFinalToolCalls: 0,
+    modelActs: [
+      { sequence: 1, modelInputId: "exec:prediction-1", maxTokens: 4096 },
+      { sequence: 2, modelInputId: "exec:output-recovery-1", maxTokens: 2048, toolCount: 0 },
+    ],
+  });
+  assert.equal(recovered.passed, true);
+  assert.equal(recovered.outputRecoveryModelCallCount, 1);
+  assert.equal(recovered.outputRecoveryModelCallToolCount, 0);
+  assert.equal(recovered.outputRecoveryModelCallMaxTokens, 2048);
+  assert.equal(recovered.modelCallsAfterFinal, 0);
+
+  const boundedRecovery = boundedEval.structureEvaluation({
+    auditCompletionMode: "bounded",
+    boundedFinalizations: [],
+    modelActs: [{ sequence: 1, modelInputId: "exec:output-recovery-1", toolCount: 0 }],
+  });
+  assert.equal(boundedRecovery.passed, false);
 });
 
 test("bounded evaluation separates valid design from completed-report comparability", () => {
