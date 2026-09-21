@@ -6,7 +6,7 @@ const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { LMStudioClient } = require("@lmstudio/sdk");
-const { oneRun, summarize } = require("./eval-audit-pressure.cjs");
+const { oneRun, pressureProfileConfig, summarize } = require("./eval-audit-pressure.cjs");
 const fixture = require("./audit-pressure-fixture.cjs");
 
 function valueAfter(flag, fallback = "") {
@@ -54,14 +54,59 @@ function structureEvaluation(run) {
   };
 }
 
+function evaluateExperimentValidity(runs, {
+  baselineRunsRequested,
+  requestedPairs,
+  pressureProfile,
+  thresholdForcesEveryRound,
+}) {
+  const baselineRuns = runs.filter(run => run.group === "BASELINE");
+  const pressureRuns = runs.filter(run => run.group !== "BASELINE");
+  const completedOffReports = pressureRuns.filter(run => (
+    run.group === "OFF" && run.outcome?.executionOutcome === "completed"
+  )).length;
+  const completedBoundedReports = pressureRuns.filter(run => (
+    run.group === "BOUNDED" && run.outcome?.executionOutcome === "completed"
+  )).length;
+  const result = {
+    accessBaselineRecorded: baselineRuns.length === baselineRunsRequested,
+    accessBaselineNoCompaction: baselineRuns.every(run => run.compactionCount === 0),
+    accessBaselineReportsCompleted: baselineRuns.every(run => run.outcome?.executionOutcome === "completed"),
+    pressureExposureInEveryComparedRun: pressureRuns.every(run => run.pressureExposure),
+    pressureThresholdForcesEveryRound: thresholdForcesEveryRound,
+    structurallyValidComparedRuns: pressureRuns.every(run => run.structureEvaluation?.passed === true),
+    completedOffReports,
+    completedBoundedReports,
+    completedReportPairs: Math.min(completedOffReports, completedBoundedReports),
+    requestedPairs,
+  };
+  result.designValid = result.accessBaselineRecorded
+    && result.accessBaselineNoCompaction
+    && result.accessBaselineReportsCompleted
+    && result.pressureExposureInEveryComparedRun
+    && result.structurallyValidComparedRuns
+    && (pressureProfile === "forced" || thresholdForcesEveryRound === false);
+  result.completedReportQualityComparable = result.designValid
+    && result.completedReportPairs >= requestedPairs;
+  return result;
+}
+
 async function main() {
   const identifier = valueAfter("--model", "swift-qwen3.8-27b");
   const pairs = integerAfter("--pairs", 1);
+  const baselineRunsRequested = integerAfter("--baseline-runs", 1);
+  const pressureProfile = valueAfter("--pressure-profile", "controlled");
+  if (!["controlled", "forced"].includes(pressureProfile)) {
+    throw new Error(`--pressure-profile must be controlled or forced, received: ${pressureProfile}`);
+  }
   const researchSeconds = integerAfter("--research-seconds", 100);
-  const researchRounds = integerAfter("--research-rounds", 1);
-  const finalSeconds = integerAfter("--final-seconds", 70);
+  const researchRounds = integerAfter("--research-rounds", 12);
+  const finalSeconds = integerAfter("--final-seconds", researchSeconds);
   const finalMaxTokens = integerAfter("--final-max-tokens", 4096);
-  const researchMaxTokens = integerAfter("--research-max-tokens", 1800);
+  const researchMaxTokens = integerAfter("--research-max-tokens", finalMaxTokens);
+  const evaluationTimeoutSeconds = integerAfter(
+    "--run-timeout-seconds", Math.max(240, researchSeconds + finalSeconds + 30),
+  );
   const output = path.resolve(valueAfter(
     "--output", path.join(process.cwd(), "eval-results", "bounded-completion-ab.json"),
   ));
@@ -83,6 +128,31 @@ async function main() {
   const modelInfo = { ...loadedHandle, ...processInfo };
   const model = await client.llm.model(identifier);
   const runs = [];
+  for (let index = 1; index <= baselineRunsRequested; index += 1) {
+    const run = await oneRun(model, modelInfo, "BASELINE", "access-baseline", index,
+      6800 + index, "", {
+        inputAvailabilityMode: "observe",
+        auditContractSelected: false,
+        auditCompletionMode: "off",
+        historyMode: "targeted",
+        pressureProfile: "access-baseline",
+        researchMaxTokens: finalMaxTokens,
+        evaluationTimeoutSeconds,
+        captureModelInputs: true,
+      });
+    run.structureEvaluation = structureEvaluation(run);
+    runs.push(run);
+    process.stdout.write(`${JSON.stringify({
+      phase: run.phase,
+      group: run.group,
+      compactions: run.compactionCount,
+      outcome: run.outcome,
+      score: run.answerEvaluation.score,
+      maximumScore: run.answerEvaluation.maximumScore,
+      elapsedMs: run.elapsedMs,
+      error: run.error,
+    })}\n`);
+  }
   for (let pairIndex = 1; pairIndex <= pairs; pairIndex += 1) {
     const groups = pairIndex % 2 === 0 ? ["BOUNDED", "OFF"] : ["OFF", "BOUNDED"];
     for (const group of groups) {
@@ -91,11 +161,15 @@ async function main() {
           inputAvailabilityMode: "observe",
           auditContractSelected: false,
           auditCompletionMode: group === "BOUNDED" ? "bounded" : "off",
+          historyMode: "pressure",
+          pressureProfile,
           auditResearchSeconds: researchSeconds,
           auditResearchRounds: researchRounds,
           auditFinalSeconds: finalSeconds,
           auditFinalMaxTokens: finalMaxTokens,
           researchMaxTokens,
+          evaluationTimeoutSeconds,
+          captureModelInputs: true,
         });
       run.structureEvaluation = structureEvaluation(run);
       runs.push(run);
@@ -127,8 +201,23 @@ async function main() {
     path.resolve(__dirname, "audit-pressure-fixture.cjs"),
     __filename,
   ];
+  const baselineRuns = runs.filter(run => run.group === "BASELINE");
+  const pressureRuns = runs.filter(run => run.group !== "BASELINE");
+  const selectedProfileConfig = pressureProfileConfig(pressureProfile);
+  const loadedContextLength = Number(modelInfo.contextLength || 0);
+  const maximumConfiguredRemaining = loadedContextLength
+    ? loadedContextLength - selectedProfileConfig.maxOutputReserve - selectedProfileConfig.safetyMarginTokens
+    : null;
+  const thresholdForcesEveryRound = maximumConfiguredRemaining === null ? null
+    : selectedProfileConfig.softRemainingTokens > maximumConfiguredRemaining;
+  const experimentValidity = evaluateExperimentValidity(runs, {
+    baselineRunsRequested,
+    requestedPairs: pairs,
+    pressureProfile,
+    thresholdForcesEveryRound,
+  });
   const report = {
-    experiment: "bounded-audit-completion-off-on-A-B",
+    experiment: "evidence-access-baseline-and-bounded-audit-completion-off-on-A-B",
     generatedAt: new Date().toISOString(),
     sourceScope: "repository dist exercised directly; installed plugin and active chats were not modified",
     sourceHead: execFileSync("git", ["rev-parse", "HEAD"], {
@@ -170,34 +259,52 @@ async function main() {
       researchRounds,
       finalSeconds,
       finalMaxTokens,
-      onlyChangedVariable: "auditCompletionMode: off versus bounded",
+      evaluationTimeoutSeconds,
+      pressureProfile,
+      pressureProfileConfig: selectedProfileConfig,
+      maximumConfiguredRemaining,
+      pressureThresholdForcesEveryRound: thresholdForcesEveryRound,
+      modelInputSnapshots: "captured because this fixture is synthetic; do not enable for private production transcripts",
+      onlyChangedVariableWithinPressurePair: "auditCompletionMode: off versus bounded; both use the same per-call output limit",
+    },
+    accessBaseline: {
+      purpose: "Confirm report behavior when all exact evidence is current, no compaction is requested, and output opportunity is normal.",
+      requestedRuns: baselineRunsRequested,
+      summary: summarize(baselineRuns, "BASELINE"),
     },
     comparison: {
       requestedPairs: pairs,
       recordedPairs: Math.min(
-        runs.filter(run => run.group === "OFF").length,
-        runs.filter(run => run.group === "BOUNDED").length,
+        pressureRuns.filter(run => run.group === "OFF").length,
+        pressureRuns.filter(run => run.group === "BOUNDED").length,
       ),
       structurallyValidPairs: Math.min(
-        runs.filter(run => run.group === "OFF" && run.structureEvaluation.passed).length,
-        runs.filter(run => run.group === "BOUNDED" && run.structureEvaluation.passed).length,
+        pressureRuns.filter(run => run.group === "OFF" && run.structureEvaluation.passed).length,
+        pressureRuns.filter(run => run.group === "BOUNDED" && run.structureEvaluation.passed).length,
       ),
-      off: summarize(runs, "OFF"),
-      bounded: summarize(runs, "BOUNDED"),
+      off: summarize(pressureRuns, "OFF"),
+      bounded: summarize(pressureRuns, "BOUNDED"),
     },
+    experimentValidity,
     runs,
     interpretationBoundary: [
-      "This A/B changes only the optional bounded completion mode; metadata injection and the audit contract are disabled for both groups.",
+      "The access baseline is separate from the pressure pair and is not counted as an A/B member.",
+      "Within the pressure A/B, metadata injection and the audit contract are disabled, per-call output limits are equal, and only bounded completion policy changes.",
+      "The controlled profile requires real compaction exposure without configuring a soft threshold above the model's maximum possible remaining context.",
+      "The forced profile is a non-representative stress condition and is labeled as such.",
+      "Exact semantic Chat inputs are saved only because every source in this fixture is synthetic.",
       "One pair is a runtime wiring check, not an improvement-rate estimate.",
       "A structurally valid finalization does not by itself prove better report quality.",
       "Failed, timed-out, truncated, and no-answer runs remain in the report.",
+      "Design validity is separate from completed-report quality comparability; a timeout is retained as an outcome and cannot satisfy the latter.",
       "The fixture is synthetic and does not establish the direct cause of the original 865-line transcript.",
     ],
   };
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`);
-  process.stdout.write(`${JSON.stringify({ output, comparison: report.comparison })}\n`);
-  if (runs.some(run => !run.structureEvaluation.passed || run.error)) process.exitCode = 1;
+  process.stdout.write(`${JSON.stringify({ output, experimentValidity, comparison: report.comparison })}\n`);
+  if (!experimentValidity.completedReportQualityComparable
+    || runs.some(run => !run.structureEvaluation.passed || run.error)) process.exitCode = 1;
 }
 
 if (require.main === module) {
@@ -207,4 +314,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { structureEvaluation };
+module.exports = { evaluateExperimentValidity, structureEvaluation };

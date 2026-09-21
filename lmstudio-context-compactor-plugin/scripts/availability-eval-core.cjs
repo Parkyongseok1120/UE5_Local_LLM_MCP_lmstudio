@@ -137,38 +137,53 @@ function answerMatchesOracle(visibleAnswer, expected = {
 
 function auditAnswerMatchesOracle(visibleAnswer) {
   const text = String(visibleAnswer || "");
+  const flatText = text.replace(/\s+/gu, " ").trim();
+  const emptyChecks = {
+    resetLocation: null,
+    addMoneyLocation: null,
+    settlementDistinction: null,
+    directSearchNotConclusive: null,
+    serializedBinding: null,
+    selfRemoval: null,
+    lowerRemovalRisk: null,
+    runtimeUnknown: null,
+    runtimeMinimum: null,
+    runtimePremiseMatchesFixture: null,
+    noFabricatedPaymentFlow: null,
+    noFabricatedSerializedBinding: null,
+    noRuntimeOverclaim: null,
+  };
   if (!text.trim()) {
     return {
       pass: false,
       score: 0,
-      maximumScore: 10,
+      maximumScore: Object.keys(emptyChecks).length,
       applicableScore: 0,
       reportPresent: false,
-      checks: {
-        resetLocation: null,
-        addMoneyLocation: null,
-        settlementDistinction: null,
-        directSearchNotConclusive: null,
-        serializedBinding: null,
-        selfRemoval: null,
-        lowerRemovalRisk: null,
-        runtimeUnknown: null,
-        runtimeMinimum: null,
-        noRuntimeOverclaim: null,
-      },
+      rubricVersion: "synthetic-audit-oracle-v3",
+      checks: emptyChecks,
       reasons: ["not_evaluable:no_answer"],
       humanReviewRequired: true,
     };
   }
-  const resetLocation = /GuestManager(?:\.cs)?[^\n]{0,100}(?:line|줄|:)\s*189\b|(?:line|줄)\s*189\b[^\n]{0,100}GuestManager/iu.test(text);
-  const addMoneyLocation = /GuestManager(?:\.cs)?[^\n]{0,100}(?:line|줄|:)\s*1036\b|(?:line|줄)\s*1036\b[^\n]{0,100}GuestManager/iu.test(text);
-  const settlementDistinction = /(?:per[- ]?session|session|게스트|세션)[^\n]{0,160}(?:AddMoney|지급|wallet|지갑)[^\n]{0,200}(?:day[- ]?end|DailySales|일일|하루|보고|집계)|(?:day[- ]?end|DailySales|일일|하루|보고|집계)[^\n]{0,200}(?:per[- ]?session|session|게스트|세션)[^\n]{0,160}(?:AddMoney|지급|wallet|지갑)/iu.test(text);
-  const directSearchNotConclusive = /(?:direct\s*C#|C#\s*(?:reference|search)|직접\s*C#|C#\s*(?:검색|참조))[^\n]{0,180}(?:not\s+(?:enough|sufficient|prove)|insufficient|cannot|아니|불충분|단정|증명)[^\n]{0,180}(?:UI|absent|부재)|(?:UI|absent|부재)[^\n]{0,180}(?:direct\s*C#|직접\s*C#|C#\s*(?:검색|참조))[^\n]{0,180}(?:not|아니|불충분|단정)/iu.test(text);
-  const serializedBinding = /(?:ProjectLifeScope\.prefab|serialized|직렬화)[^\n]{0,220}(?:UICashPanel|AddCurrency)|(?:UICashPanel|AddCurrency)[^\n]{0,220}(?:ProjectLifeScope\.prefab|serialized|직렬화)/iu.test(text);
-  const selfRemoval = /self[- ]?removal|self\s+remov|자기\s*(?:자신을\s*)?제거|현재\s*리스너[^\n]{0,80}제거/iu.test(text);
-  const lowerRemovalRisk = /(?:lower|not[- ]?yet[- ]?visited|unvisited|낮은\s*인덱스|아직\s*(?:방문|호출)하지\s*않)[^\n]{0,220}(?:twice|duplicate|skip|두\s*번|중복|건너|누락)|(?:twice|duplicate|skip|두\s*번|중복|건너|누락)[^\n]{0,220}(?:lower|unvisited|낮은\s*인덱스|아직\s*(?:방문|호출)하지\s*않)/iu.test(text);
-  const runtimeUnknown = /(?:runtime|런타임)[^\n]{0,180}(?:unknown|unproven|not\s+proven|미확정|입증되지|단정할\s*수\s*없)|(?:unknown|unproven|not\s+proven|미확정|입증되지|단정할\s*수\s*없)[^\n]{0,180}(?:runtime|런타임|원인)/iu.test(text);
-  const runtimeMinimum = /(?:exact\s+log|정확한\s*로그|callback|콜백|AddCurrency)[^\n]{0,240}(?:active|활성|instance|인스턴스|amountText|assignment|할당)|(?:active|활성|instance|인스턴스|amountText|assignment|할당)[^\n]{0,240}(?:exact\s+log|정확한\s*로그|callback|콜백|AddCurrency)/iu.test(text);
+  const resetLocation = /GuestManager(?:\.cs)?\s*(?::|,)?\s*(?:(?:line|줄)\s*)?189\b|(?:line|줄)\s*189\b.{0,100}GuestManager/iu.test(flatText);
+  const addMoneyLocation = /GuestManager(?:\.cs)?.{0,260}(?:(?:line|L|줄)\s*)?1036\b|(?:line|L|줄)\s*1036\b.{0,140}GuestManager/iu.test(flatText);
+  const settlementDistinction = /(?:per[- ]?session|session|게스트|세션).{0,200}(?:AddMoney|지급|wallet|지갑).{0,240}(?:day[- ]?end|DailySales|일일|하루|보고|집계)|(?:day[- ]?end|DailySales|일일|하루|보고|집계).{0,240}(?:per[- ]?session|session|게스트|세션).{0,200}(?:AddMoney|지급|wallet|지갑)/iu.test(flatText);
+  const directSearchNotConclusive = /(?:(?:zero(?:-hit)?\s+)?(?:direct[- ]?)?C#(?:\s*(?:reference|search|검색|참조))?|직접\s*C#).{0,700}(?:not\s+(?:enough|sufficient|proof)|insufficient|proves?\s+nothing|cannot|아니|불충분|단정|증명).{0,700}(?:UI|wiring|binding|absent|absence|부재)|(?:UI|wiring|binding|absent|absence|부재).{0,700}(?:(?:zero(?:-hit)?\s+)?(?:direct[- ]?)?C#|직접\s*C#).{0,700}(?:not|아니|불충분|단정|proves?\s+nothing)/iu.test(flatText);
+  const noFabricatedSerializedBinding = !/\b(?:OnMoneyChanged|OnDayEnd|dayEnded)\b/u.test(text);
+  const serializedBindingNegated = /(?:no|not|without)\s+(?:(?:explicit|confirmed|live)\s+)?(?:serialized\s+listener|serialized\s+binding|listener\s+line|binding)|(?:does\s+not|doesn't)\s+confirm.{0,100}(?:listener|binding)/iu.test(flatText);
+  const serializedBinding = /ProjectLifeScope\.prefab/iu.test(flatText)
+    && /(?:m_PersistentCalls|m_MethodName|persistent\s+call).{0,220}AddCurrency|AddCurrency.{0,220}(?:m_PersistentCalls|m_MethodName|persistent\s+call)/iu.test(flatText)
+    && /UICashPanel|UI-CASH-PANEL-GUID/iu.test(flatText)
+    && !serializedBindingNegated
+    && noFabricatedSerializedBinding;
+  const selfRemoval = /self[- ]?removal|self\s+remov|자기\s*(?:자신을\s*)?제거|현재\s*리스너.{0,100}제거/iu.test(flatText);
+  const lowerRemovalRisk = /(?:lower|not[- ]?yet[- ]?visited|unvisited|낮은\s*인덱스|아직\s*(?:방문|호출)하지\s*않).{0,260}(?:twice|duplicate|skip|두\s*번|중복|건너|누락)|(?:twice|duplicate|skip|두\s*번|중복|건너|누락).{0,260}(?:lower|unvisited|낮은\s*인덱스|아직\s*(?:방문|호출)하지\s*않)/iu.test(flatText);
+  const runtimeUnknown = /(?:runtime|런타임).{0,220}(?:unknown|unproven|not\s+proven|미확정|입증되지|단정할\s*수\s*없)|(?:unknown|unproven|미확정|입증되지|단정할\s*수\s*없).{0,220}(?:runtime|런타임|원인)/iu.test(flatText);
+  const runtimeMinimum = /(?:exact\s+log|정확한\s*로그).{0,360}(?:AddCurrency|callback|콜백).{0,260}(?:active|활성).{0,100}(?:instance|인스턴스).{0,360}(?:coroutine|코루틴|amountText|assignment|할당)|(?:AddCurrency|callback|콜백).{0,260}(?:active|활성).{0,100}(?:instance|인스턴스).{0,360}(?:exact\s+log|정확한\s*로그).{0,360}(?:coroutine|코루틴|amountText|assignment|할당)/iu.test(flatText);
+  const runtimePremiseMatchesFixture = /(?:visible\s+money|money\s+value|보이는\s*(?:money|금액)|화면.{0,30}(?:money|금액)).{0,100}(?:does\s+not\s+change|did\s+not\s+change|unchanged|바뀌지|변하지)/iu.test(flatText)
+    && !/(?:no\s+exceptions?|wallet.{0,80}totals?.{0,80}consistent|totals?.{0,80}consistent)/iu.test(flatText);
+  const noFabricatedPaymentFlow = !/\b(?:PaidAmount|RecordSale|Visited)\b/u.test(text);
   const runtimeOverclaim = /(?:root\s*cause|원인)(?:은|가|:|\s+is)\s*(?:definitely|확실히|분명히|UICashPanel|coroutine|코루틴|inactive|비활성)/iu.test(text);
   const checks = {
     resetLocation,
@@ -180,6 +195,9 @@ function auditAnswerMatchesOracle(visibleAnswer) {
     lowerRemovalRisk,
     runtimeUnknown,
     runtimeMinimum,
+    runtimePremiseMatchesFixture,
+    noFabricatedPaymentFlow,
+    noFabricatedSerializedBinding,
     noRuntimeOverclaim: !runtimeOverclaim,
   };
   const reasons = Object.entries(checks)
@@ -191,6 +209,7 @@ function auditAnswerMatchesOracle(visibleAnswer) {
     maximumScore: Object.keys(checks).length,
     applicableScore: Object.keys(checks).length,
     reportPresent: true,
+    rubricVersion: "synthetic-audit-oracle-v3",
     checks,
     reasons,
     humanReviewRequired: true,

@@ -14,6 +14,7 @@ const {
 } = require("../scripts/eval-input-availability-ab.cjs");
 const pressureFixture = require("../scripts/audit-pressure-fixture.cjs");
 const auditEval = require("../scripts/eval-audit-pressure.cjs");
+const boundedEval = require("../scripts/eval-bounded-completion.cjs");
 const { reclassifyReport } = require("../scripts/reclassify-audit-results.cjs");
 const compactionCore = require("../src/direct-compaction-core.js");
 const predictionTest = require("../dist/prediction-loop.js").__test;
@@ -143,6 +144,31 @@ test("audit fixture has eight versioned sources and preserves the required exact
   assert.equal(payload.resolvedRootType, "active_project");
   assert.equal(payload.path, "project://Assets/03.Scripts/Tycoon/GuestManager.cs");
   assert.equal(payload.projectRelativePath, "Assets/03.Scripts/Tycoon/GuestManager.cs");
+  assert.equal(Object.hasOwn(payload, "returnedLineCount"), false);
+  assert.equal(oracleObservation(payload).verified, true);
+});
+
+test("audit pressure profiles distinguish normal compaction from threshold-forced stress", () => {
+  const controlled = auditEval.pressureProfileConfig("controlled");
+  const forced = auditEval.pressureProfileConfig("forced");
+  const loadedContextLength = 35328;
+  const controlledMaximumRemaining = loadedContextLength
+    - controlled.maxOutputReserve - controlled.safetyMarginTokens;
+  const forcedMaximumRemaining = loadedContextLength
+    - forced.maxOutputReserve - forced.safetyMarginTokens;
+  assert.ok(controlled.softRemainingTokens < controlledMaximumRemaining);
+  assert.ok(forced.softRemainingTokens > forcedMaximumRemaining);
+  assert.throws(() => auditEval.pressureProfileConfig("unknown"), /Unknown pressure profile/u);
+});
+
+test("targeted access baseline contains exact evidence without fixture-only line counts", () => {
+  const text = auditEval.buildInitialHistory("", "targeted").toString();
+  assert.match(text, /dailySales\.Reset\(\)/u);
+  assert.match(text, /AddMoney\(sessionTotal\)/u);
+  assert.match(text, /m_MethodName:\s*AddCurrency/u);
+  assert.match(text, /visible money value does not change/u);
+  assert.doesNotMatch(text, /returnedLineCount/u);
+  assert.doesNotMatch(text, /MissingCashPanel/u);
 });
 
 test("real-contract audit locators survive the synthetic compaction boundary", () => {
@@ -225,6 +251,38 @@ test("audit run outcomes are mutually exclusive and separate truncation from tim
   assert.equal(boundedFinalTimeout.deliveryState, "partial");
 });
 
+test("bounded evaluation separates valid design from completed-report comparability", () => {
+  const baseline = {
+    group: "BASELINE", compactionCount: 0,
+    outcome: { executionOutcome: "completed" },
+  };
+  const off = {
+    group: "OFF", pressureExposure: true,
+    structureEvaluation: { passed: true }, outcome: { executionOutcome: "completed" },
+  };
+  const boundedTimeout = {
+    group: "BOUNDED", pressureExposure: true,
+    structureEvaluation: { passed: true }, outcome: { executionOutcome: "timed_out" },
+  };
+  const options = {
+    baselineRunsRequested: 1, requestedPairs: 1,
+    pressureProfile: "controlled", thresholdForcesEveryRound: false,
+  };
+  const incomplete = boundedEval.evaluateExperimentValidity(
+    [baseline, off, boundedTimeout], options,
+  );
+  assert.equal(incomplete.designValid, true);
+  assert.equal(incomplete.completedReportQualityComparable, false);
+  assert.equal(incomplete.completedReportPairs, 0);
+
+  const complete = boundedEval.evaluateExperimentValidity([
+    baseline, off, { ...boundedTimeout, outcome: { executionOutcome: "completed" } },
+  ], options);
+  assert.equal(complete.designValid, true);
+  assert.equal(complete.completedReportQualityComparable, true);
+  assert.equal(complete.completedReportPairs, 1);
+});
+
 test("audit summaries do not count a timeout as success and mark zero-return reacquisition not evaluable", () => {
   const summary = auditEval.summarize([{
     group: "C",
@@ -281,9 +339,9 @@ test("audit answer rubric rewards bounded evidence updates and rejects runtime o
   const grounded = auditAnswerMatchesOracle([
     "GuestManager.cs:189 calls Reset; GuestManager.cs:1036 calls AddMoney.",
     "The per-session wallet payment is AddMoney, while DailySales day-end total is reporting only.",
-    "A direct C# search is not enough to declare the UI absent: ProjectLifeScope.prefab has a serialized binding to UICashPanel.AddCurrency.",
+    "A direct C# search is not enough to declare the UI absent: ProjectLifeScope.prefab has m_PersistentCalls with m_MethodName AddCurrency targeting UICashPanel.",
     "Self-removal of the current listener is tolerated, but removing a lower unvisited listener can invoke one twice or skip work.",
-    "The runtime cause remains unproven. Capture the exact log and whether AddCurrency callback ran on the active instance, plus amountText assignment.",
+    "The visible money value did not change, but the runtime cause remains unproven. Capture the exact log and whether AddCurrency callback ran on the active instance, plus coroutine completion and amountText assignment.",
   ].join("\n"));
   assert.equal(grounded.pass, true);
   assert.equal(grounded.humanReviewRequired, true);
@@ -295,3 +353,59 @@ test("audit answer rubric rewards bounded evidence updates and rejects runtime o
   assert.equal(overclaim.pass, false);
   assert.equal(overclaim.checks.noRuntimeOverclaim, false);
 });
+
+test("audit rubric accepts multiline caution but rejects invented evidence-rich details", () => {
+  const result = auditAnswerMatchesOracle([
+    "GuestManager.cs:189 calls Reset; GuestManager.cs:1036 calls AddMoney.",
+    "The per-session wallet payment is AddMoney, while DailySales day-end total is reporting only.",
+    "The direct C# search is not sufficient",
+    "to declare the UI absent. ProjectLifeScope.prefab serializes UICashPanel.AddCurrency.",
+    "It binds OnMoneyChanged and OnDayEnd using dayEnded.",
+    "Self-removal is tolerated; removing a lower unvisited listener can invoke it twice.",
+    "The visible money value did not change, although there were no exceptions and wallet totals were consistent.",
+    "Runtime cause is unproven. Capture the exact log, AddCurrency callback on the active instance, coroutine completion, and amountText assignment.",
+    "PaidAmount is passed to RecordSale and then marked Visited.",
+  ].join("\n"));
+  assert.equal(result.checks.directSearchNotConclusive, true);
+  assert.equal(result.checks.serializedBinding, false);
+  assert.equal(result.checks.noFabricatedSerializedBinding, false);
+  assert.equal(result.checks.noFabricatedPaymentFlow, false);
+  assert.equal(result.checks.runtimePremiseMatchesFixture, false);
+  assert.equal(result.pass, false);
+});
+
+test("audit rubric recognizes ranged exact locations and rejects a negated prefab finding", () => {
+  const ranged = auditAnswerMatchesOracle([
+    "GuestManager.cs:189 calls Reset.",
+    "GuestManager.cs:1034-1041 contains L1036 playerDataWriter.AddMoney(sessionTotal).",
+    "Per-session AddMoney is distinct from the DailySales day-end report.",
+    "A zero C# search proves nothing about UI wiring or absence.",
+    "ProjectLifeScope.prefab has m_PersistentCalls with m_MethodName AddCurrency targeting UICashPanel.",
+    "Self-removal is safe; lower unvisited removal can invoke the current listener twice.",
+    "The visible money value did not change and the runtime cause remains unproven.",
+    "Capture the exact log, AddCurrency callback on the active instance, coroutine completion, and amountText assignment.",
+  ].join("\n"));
+  assert.equal(ranged.checks.addMoneyLocation, true);
+  assert.equal(ranged.checks.directSearchNotConclusive, true);
+  assert.equal(ranged.checks.serializedBinding, true);
+  assert.equal(ranged.pass, true);
+
+  const negated = auditAnswerMatchesOracle([
+    rangedTextWithoutBinding(ranged),
+    "ProjectLifeScope.prefab is only a candidate. I found no explicit serialized listener line, so no confirmed binding is present.",
+  ].join("\n"));
+  assert.equal(negated.checks.serializedBinding, false);
+  assert.equal(negated.pass, false);
+});
+
+function rangedTextWithoutBinding(result) {
+  assert.equal(result.reportPresent, true);
+  return [
+    "GuestManager.cs:189 calls Reset; GuestManager.cs:1034-1041 contains L1036 AddMoney.",
+    "Per-session AddMoney differs from the DailySales day-end report.",
+    "A zero C# search proves nothing about UI wiring or absence.",
+    "Self-removal is safe; lower unvisited removal can invoke the current listener twice.",
+    "The visible money value did not change and runtime cause is unproven.",
+    "Capture the exact log, AddCurrency callback on the active instance, coroutine completion, and amountText assignment.",
+  ].join("\n");
+}

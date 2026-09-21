@@ -2,155 +2,111 @@
   "mode": "codegen",
   "claims": [
     {
-      "claim": "bounded 조사 호출이 maxPredictedTokensReached로 끝나면 최종 보고 기회 없이 루프가 종료되던 경로를, 도구 없는 최종 보고 1회로 연결했습니다.",
+      "claim": "bounded 조사 호출이 maxPredictedTokensReached로 끝나면 도구 없는 최종 보고를 정확히 한 번 시도하도록 종료 상태 전이를 연결했습니다.",
       "claimType": "state_transition",
       "verdict": "Bug",
       "severity": "P1",
       "proofLevel": "RuntimeVerified",
       "evidence": [
-        {
-          "kind": "project_source",
-          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1401",
-          "observation": "bounded 조사 단계의 stop reason이 maxPredictedTokensReached이면 finalizationPending을 설정하고 다음 루프에서 최종 보고 단계로 전환합니다."
-        },
-        {
-          "kind": "test",
-          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:1208",
-          "observation": "조사 출력 한도 도달 뒤 같은 모델을 도구 없이 정확히 한 번 호출하고 EOS 보고를 받는 회귀 테스트가 통과했습니다."
-        },
-        {
-          "kind": "runtime",
-          "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-ab-final-20260921.json",
-          "observation": "실제 swift-qwen3.8-27b bounded 실행은 최종 모델 호출 1회, 최종 도구 호출 0회, 이후 모델 호출 0회였고 eosFound로 종료됐습니다."
-        }
+        { "kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1401", "observation": "bounded 조사 단계의 stop reason이 maxPredictedTokensReached이면 finalizationPending을 설정합니다." },
+        { "kind": "test", "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:1222", "observation": "조사 출력 한도 도달 뒤 같은 모델을 도구 없이 한 번 호출하고 EOS 보고를 받는 회귀 테스트가 통과했습니다." },
+        { "kind": "runtime", "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-harness-v4-repeat-20260921.json", "observation": "반복 실모델 BOUNDED 실행은 최종 모델 호출 1회, 최종 도구 호출 0회, 이후 모델 호출 0회로 eosFound 완료했습니다." }
       ],
       "behaviorPath": [
-        {
-          "stage": "entry",
-          "stageStatus": "present",
-          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1267",
-          "symbol": "runOneToolRound"
-        },
-        {
-          "stage": "decision",
-          "stageStatus": "present",
-          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1401",
-          "symbol": "maxPredictedTokensReached finalization transition"
-        },
-        {
-          "stage": "dispatch",
-          "stageStatus": "present",
-          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:834",
-          "symbol": "single finalization attempt with roundTools=[]"
-        },
-        {
-          "stage": "observer",
-          "stageStatus": "present",
-          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1374",
-          "symbol": "bounded_audit_finalization telemetry"
-        }
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:822", "symbol": "finalizationPending" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1401", "symbol": "maxPredictedTokensReached transition" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:833", "symbol": "single tool-free finalization attempt" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1374", "symbol": "bounded_audit_finalization telemetry" }
       ],
       "counterEvidence": [
-        {
-          "kind": "runtime",
-          "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-ab-default-budget-20260921.json",
-          "observation": "수정 전 동일 기본 예산 실행은 bounded여도 최종 모델 호출이 0회인 채 maxPredictedTokensReached로 종료됐습니다."
-        }
+        { "kind": "runtime", "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-ab-default-budget-20260921.json", "observation": "수정 전 기본 예산 실행은 bounded여도 최종 모델 호출 0회인 채 maxPredictedTokensReached로 종료됐습니다." }
       ],
       "unknowns": []
     },
     {
-      "claim": "선택형 bounded 종료는 한 실제 A/B에서 최종 보고를 생성했지만, 보고서 정확도와 반복 완료율의 개선은 아직 충분히 입증되지 않았습니다.",
+      "claim": "실험 하네스는 실제 응답 계약, 비강제 압축 조건, 동일 출력 한도, 원문 입력 캡처, timeout과 완료 품질 비교 분리, 양방향 채점 오판 방지를 반영했습니다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        { "kind": "project_source", "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:24", "observation": "controlled, forced, access-baseline 압력 프로필을 분리하고 실제 Chat 입력 원문과 해시를 선택적으로 기록합니다." },
+        { "kind": "test", "location": "lmstudio-context-compactor-plugin/test/availability-eval.test.cjs:138", "observation": "returnedLineCount가 없는 실제형 fixture, 압력 구분, timeout 비교 불가, 채점기 오판 회귀를 검증합니다." },
+        { "kind": "runtime", "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-harness-v3-20260921.json", "observation": "controlled 실험은 threshold 강제 상태가 아니면서 OFF/BOUNDED 모두 실제 압축 노출과 oracle projection 일치를 기록했습니다." },
+        { "kind": "runtime", "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-harness-v2-20260921.json", "observation": "70초 최종 timeout 실행은 삭제하지 않고 partial/timed_out으로 보존했습니다." }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-bounded-completion.cjs:93", "symbol": "access baseline and controlled pressure pair" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-bounded-completion.cjs:213", "symbol": "design validity versus completed quality comparability" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:270", "symbol": "same model act with captured causal input" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/availability-eval-core.cjs:138", "symbol": "synthetic-audit-oracle-v3" }
+      ],
+      "counterEvidence": [
+        { "kind": "runtime", "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-harness-v3-20260921.json", "observation": "원본 v3의 이전 rubric은 정확한 범위형 AddMoney 인용을 놓치고 부정된 prefab 결론을 통과시켜 재채점이 필요했습니다." }
+      ],
+      "unknowns": [
+        "합성 fixture와 실제 프로젝트의 분포 차이는 측정하지 않았습니다.",
+        "정규식 rubric은 독립적인 결정론적 보조 지표이며 사람 검토를 대체하지 않습니다."
+      ]
+    },
+    {
+      "claim": "선택형 bounded 종료는 보고서 완주 지점을 안정화했지만 보고서 정확도 향상은 두 번의 실제 A/B에서 재현되지 않았습니다.",
       "claimType": "behavior",
       "verdict": "NeedsRuntimeProof",
       "severity": "P1",
       "proofLevel": "RuntimeVerified",
       "evidence": [
-        {
-          "kind": "runtime",
-          "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-ab-final-20260921.json",
-          "observation": "OFF는 압축 4회와 모델 호출 4회 뒤 답변 없이 maxPredictedTokensReached로 종료됐고, BOUNDED는 압축 5회와 모델 호출 5회 뒤 1,823토큰 보고서를 eosFound로 완료했습니다."
-        },
-        {
-          "kind": "runtime",
-          "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-ab-final-20260921.json",
-          "observation": "BOUNDED 최종 입력에는 19,766토큰이 남았고 oracle projection은 일치했으나 독립 답변 rubric은 6/10으로 통과하지 못했습니다."
-        }
+        { "kind": "runtime", "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-harness-v3-rescored-20260921.json", "observation": "첫 완료 쌍은 baseline 13/13, OFF 9/13, BOUNDED 11/13이었습니다. BOUNDED는 Reset 줄과 실제 prefab binding 결론을 틀렸습니다." },
+        { "kind": "runtime", "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-harness-v4-repeat-20260921.json", "observation": "반복 쌍은 baseline 13/13, OFF 11/13, BOUNDED 9/13으로 반대 방향이었고 세 실행 모두 정상 완료했습니다." }
       ],
       "behaviorPath": [
-        {
-          "stage": "entry",
-          "stageStatus": "present",
-          "location": "lmstudio-context-compactor-plugin/scripts/eval-bounded-completion.cjs:73",
-          "symbol": "same-model OFF/BOUNDED pair"
-        },
-        {
-          "stage": "decision",
-          "stageStatus": "present",
-          "location": "lmstudio-context-compactor-plugin/scripts/eval-bounded-completion.cjs:93",
-          "symbol": "auditCompletionMode만 조건별 변경"
-        },
-        {
-          "stage": "dispatch",
-          "stageStatus": "present",
-          "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:217",
-          "symbol": "동일 모델과 seed로 실제 act 호출"
-        },
-        {
-          "stage": "observer",
-          "stageStatus": "present",
-          "location": "lmstudio-context-compactor-plugin/scripts/eval-bounded-completion.cjs:107",
-          "symbol": "종료 구조, 결과 상태, 답변 rubric 기록"
-        }
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-bounded-completion.cjs:93", "symbol": "no-compaction exact-evidence baseline" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-bounded-completion.cjs:120", "symbol": "OFF versus BOUNDED completion policy" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:270", "symbol": "swift-qwen3.8-27b actual act" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-bounded-completion.cjs:213", "symbol": "completedReportQualityComparable and v3 rubric" }
       ],
       "counterEvidence": [
-        {
-          "kind": "runtime",
-          "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-ab-final-20260921.json",
-          "observation": "BOUNDED 보고서는 정확한 Reset/AddMoney 줄 위치, direct-search 결론, 최소 런타임 관찰 항목의 네 기준을 통과하지 못했습니다."
-        },
-        {
-          "kind": "runtime",
-          "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-ab-default-budget-corrected-20260921.json",
-          "observation": "직전 실행에서는 최종 보고가 70초 제한에 도달해 부분 출력에 그쳤으므로 동일 설정에서도 결과 변동이 있습니다."
-        }
+        { "kind": "runtime", "location": "lmstudio-context-compactor-plugin/eval-results/bounded-completion-harness-v4-repeat-20260921.json", "observation": "반복에서는 BOUNDED가 OFF보다 2점 낮아 첫 쌍의 우위를 재현하지 못했습니다." }
       ],
       "unknowns": [
-        "수정 후 완전한 A/B는 한 쌍뿐이므로 완료율이나 개선률을 추정할 수 없습니다.",
-        "다른 모델, seed, 실제 프로젝트 로그에서 같은 종료 효과가 유지되는지 확인하지 않았습니다."
+        "두 쌍만으로 정확도 개선률이나 책임 비율을 추정할 수 없습니다.",
+        "다른 모델, seed, 실제 프로젝트 로그에서 같은 완료 효과와 정확도 분포가 유지되는지 확인하지 않았습니다.",
+        "원래 865줄 로그의 raw payload 부재 때문에 그 로그의 직접 원인은 확정할 수 없습니다."
       ]
     }
   ],
   "existing": [
-    "기존 prediction loop의 단일 모델 선택, 컨텍스트 압축, Observe 가용성 계측, read-only 도구 분류",
+    "기존 단일 모델 선택, 컨텍스트 압축, Observe 가용성 계측, read-only 도구 분류",
     "기존 선택형 auditCompletionMode와 조사·최종 보고 예산 설정"
   ],
   "proposed": [
     "조사 출력 한도 도달을 기존 bounded 최종 보고 상태 전이에 연결",
-    "최종 단계 timeout을 사용자 취소와 구분해 final_timeout으로 기록",
-    "종료 모드만 바꾸는 실제 모델 A/B 평가 스크립트와 구조 계측 추가"
+    "정상 접근 baseline, controlled/forced 압력 프로필, 정확한 모델 입력 캡처",
+    "실제 응답 계약 기반 oracle와 synthetic-audit-oracle-v3 채점"
   ],
   "doNotDuplicate": [
     "새 planner, 의미적 충분성 자동 gate, 별도 판단 모델, 자동 재시도",
     "기존 압축기, current-input oracle, 단순 목표 연결 로직"
   ],
   "invariants": [
+    "Observe가 기본이고 Inject는 실험 옵션이며 Separate document input은 기본 비활성입니다.",
     "auditCompletionMode 기본값은 off입니다.",
-    "Separate document input은 양쪽 모두 비활성입니다.",
     "사용자 취소 뒤 최종 모델 호출은 0회입니다.",
     "최종 보고 시도는 최대 1회이고 도구는 0개입니다.",
     "실패, timeout, 잘림, 무응답 실행을 삭제하거나 성공으로 합치지 않습니다."
   ],
   "impactedSurfaces": [
     "src/prediction-loop.ts 종료 상태 전이와 telemetry",
-    "scripts/eval-audit-pressure.cjs의 실제 호출·결과 계측",
-    "scripts/eval-bounded-completion.cjs의 OFF/BOUNDED 실모델 A/B",
-    "prediction-loop와 availability 평가 테스트"
+    "scripts/audit-pressure-fixture.cjs 실제 line-range 응답 계약",
+    "scripts/eval-audit-pressure.cjs 압력 조건·입력 원문·인과 계측",
+    "scripts/eval-bounded-completion.cjs 기준선·실험 유효성·실모델 A/B",
+    "scripts/availability-eval-core.cjs 독립 oracle와 답변 rubric",
+    "관련 prediction-loop 및 availability 평가 테스트"
   ],
   "validationPlan": [
-    "조사 출력 한도에서 최종 보고 전환 회귀 테스트를 실행합니다.",
-    "실제 로드 모델에서 동일 fixture, seed, Observe, Separate OFF 조건으로 A/B를 실행합니다.",
-    "전체 압축기 테스트, 통합 패키지·설치 테스트, npm pack dry-run을 확인합니다.",
+    "전체 압축기 테스트 230개를 실행합니다.",
+    "실제 로드 모델에서 정상 접근 baseline과 controlled OFF/BOUNDED를 두 번 실행합니다.",
+    "통합 패키지·설치·상태 테스트와 npm pack dry-run을 확인합니다.",
     "evidence packet validator로 근거 형식을 검사합니다."
   ]
 }

@@ -4,17 +4,20 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { classifyRunOutcome, summarize } = require("./eval-audit-pressure.cjs");
+const { auditAnswerMatchesOracle } = require("./availability-eval-core.cjs");
 
 function reclassifyReport(report, sourcePath = "") {
   const runs = Array.isArray(report?.runs) ? report.runs.map(run => ({
     ...run,
+    sourceAnswerEvaluation: run.answerEvaluation || null,
+    answerEvaluation: auditAnswerMatchesOracle(run.visibleAnswer),
     outcome: classifyRunOutcome(run),
     legacyTimedOutFieldPresent: Object.hasOwn(run, "timedOut"),
   })) : [];
   const groups = [...new Set(runs.map(run => run.group).filter(Boolean))];
   return {
-    schemaVersion: 2,
-    classification: "non_mutating_saved_result_reclassification",
+    schemaVersion: 3,
+    classification: "non_mutating_saved_result_outcome_and_answer_reclassification",
     sourcePath: sourcePath || null,
     sourceGeneratedAt: report?.generatedAt || null,
     sourceHead: report?.sourceHead || null,
@@ -23,6 +26,7 @@ function reclassifyReport(report, sourcePath = "") {
       "Only fields stored in the source JSON are classified.",
       "A missing legacy timedOut field is not inferred from elapsed time or a userStopped finish reason.",
       "External server logs remain separate runtime evidence and are not merged into this file.",
+      "The source answer evaluation is preserved per run and the visible answer is rescored with the current deterministic rubric.",
     ],
     summaries: Object.fromEntries(groups.map(group => [group, summarize(runs, group)])),
     runs,

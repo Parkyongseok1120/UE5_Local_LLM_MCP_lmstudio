@@ -120,7 +120,6 @@ function readPayload(filePath, startLine = 1, endLine = Number.MAX_SAFE_INTEGER)
     sha256: file.sha256,
     startLine: start,
     endLine: end,
-    returnedLineCount: end - start + 1,
     totalLines: file.lines.length,
     truncated: end < requestedEnd || end < file.lines.length,
     nextStartLine: end < file.lines.length ? end + 1 : null,

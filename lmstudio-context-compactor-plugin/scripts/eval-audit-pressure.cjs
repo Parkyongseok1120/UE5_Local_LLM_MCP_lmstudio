@@ -21,6 +21,44 @@ const TOOL_SCHEMA = {
   additionalProperties: false,
 };
 
+const PRESSURE_PROFILES = Object.freeze({
+  controlled: Object.freeze({
+    softRemainingTokens: 14000,
+    hardRemainingTokens: 8000,
+    maxOutputReserve: 4096,
+    safetyMarginTokens: 1536,
+    recentCompleteTurns: 2,
+    compactAboveMessageCount: 24,
+    maxCheckpointChars: 22000,
+    maxToolResultChars: 1200,
+  }),
+  forced: Object.freeze({
+    softRemainingTokens: 38000,
+    hardRemainingTokens: 5000,
+    maxOutputReserve: 2200,
+    safetyMarginTokens: 800,
+    recentCompleteTurns: 0,
+    compactAboveMessageCount: 12,
+    maxCheckpointChars: 16000,
+    maxToolResultChars: 1400,
+  }),
+  "access-baseline": Object.freeze({
+    softRemainingTokens: 0,
+    hardRemainingTokens: 0,
+    maxOutputReserve: 4096,
+    safetyMarginTokens: 1536,
+    recentCompleteTurns: 2,
+    compactAboveMessageCount: 10000,
+    maxCheckpointChars: 22000,
+    maxToolResultChars: 1200,
+  }),
+});
+
+function pressureProfileConfig(name = "controlled") {
+  if (!Object.hasOwn(PRESSURE_PROFILES, name)) throw new Error(`Unknown pressure profile: ${name}`);
+  return { ...PRESSURE_PROFILES[name] };
+}
+
 function valueAfter(flag, fallback = "") {
   const index = process.argv.indexOf(flag);
   return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
@@ -45,14 +83,14 @@ function appendToolExchange(history, id, args, payload) {
   }] }));
 }
 
-function buildInitialHistory(contractText = "") {
+function buildInitialHistory(contractText = "", historyMode = "pressure") {
   const history = Chat.empty();
   const system = contractText
     ? `${fixture.SYSTEM_PROMPT}\n\nUSER-SELECTED AUDIT TASK CONTRACT:\n${contractText}`
     : fixture.SYSTEM_PROMPT;
   history.append("system", system);
   history.append("user", "Collect exact evidence for the synthetic settlement audit before my follow-up.");
-  const reads = [
+  const pressureReads = [
     ["Assets/03.Scripts/Tycoon/GuestManager.cs", 1, 220],
     ["Assets/03.Scripts/Tycoon/GuestManager.cs", 837, 1056],
     ["Assets/03.Scripts/Tycoon/DailySales.cs", 1, 180],
@@ -62,19 +100,33 @@ function buildInitialHistory(contractText = "") {
     ["Assets/03.Scripts/Tycoon/SettlementFlow.cs", 1, 180],
     ["Evidence/RuntimeObservation.md", 1, 90],
   ];
+  const targetedReads = [
+    ["Assets/03.Scripts/Tycoon/GuestManager.cs", 188, 190],
+    ["Assets/03.Scripts/Tycoon/GuestManager.cs", 1034, 1041],
+    ["Assets/03.Scripts/Tycoon/DailySales.cs", 20, 105],
+    ["Assets/03.Scripts/Player/PlayerDataSO.cs", 100, 112],
+    ["Assets/03.Scripts/UI/UICashPanel.cs", 50, 135],
+    ["Assets/ProjectLifeScope.prefab", 40, 125],
+    ["Assets/03.Scripts/Tycoon/SettlementFlow.cs", 25, 105],
+    ["Evidence/RuntimeObservation.md", 1, 25],
+  ];
+  const reads = historyMode === "targeted" ? targetedReads : pressureReads;
   reads.forEach(([filePath, startLine, endLine], index) => appendToolExchange(
     history,
     `prefetch-${index + 1}`,
     { path: filePath, startLine, endLine },
     fixture.readPayload(filePath, startLine, endLine),
   ));
-  appendToolExchange(history, "prefetch-failed", {
+  if (historyMode !== "targeted") appendToolExchange(history, "prefetch-failed", {
     path: "Assets/03.Scripts/UI/MissingCashPanel.cs", startLine: 1, endLine: 200,
   }, fixture.readPayload("Assets/03.Scripts/UI/MissingCashPanel.cs", 1, 200));
   history.append("user", fixture.AUDIT_QUESTION);
   appendToolExchange(history, "current-game-event", {
-    path: "Assets/03.Scripts/Event/GameEvent.cs", startLine: 1, endLine: 150,
-  }, fixture.readPayload("Assets/03.Scripts/Event/GameEvent.cs", 1, 150));
+    path: "Assets/03.Scripts/Event/GameEvent.cs",
+    startLine: historyMode === "targeted" ? 35 : 1,
+    endLine: historyMode === "targeted" ? 95 : 150,
+  }, fixture.readPayload("Assets/03.Scripts/Event/GameEvent.cs",
+    historyMode === "targeted" ? 35 : 1, historyMode === "targeted" ? 95 : 150));
   return history;
 }
 
@@ -87,15 +139,8 @@ function controller(history, tokenSource, tool, mode, recorder, configOverrides 
     projectIdentity: fixture.PROJECT_IDENTITY,
     observeOnly: false,
     showDebugInfo: true,
-    softRemainingTokens: 38000,
-    hardRemainingTokens: 5000,
-    maxOutputReserve: 2200,
-    safetyMarginTokens: 800,
+    ...pressureProfileConfig("controlled"),
     assumedContextLength: 66816,
-    recentCompleteTurns: 0,
-    compactAboveMessageCount: 12,
-    maxCheckpointChars: 16000,
-    maxToolResultChars: 1400,
     pastReasoningTokens: 0,
     toolStagnationAction: "warn",
     toolStagnationRounds: 5,
@@ -111,9 +156,10 @@ function controller(history, tokenSource, tool, mode, recorder, configOverrides 
     separateAttachments: false,
     ...configOverrides,
   };
+  const evaluationTimeoutMs = Math.max(1000, Number(configOverrides.evaluationTimeoutMs || 240000));
   const session = { tools: [tool], [Symbol.dispose]() {} };
   return {
-    abortSignal: AbortSignal.timeout(240000),
+    abortSignal: AbortSignal.timeout(evaluationTimeoutMs),
     guardAbort() { if (this.abortSignal.aborted) throw this.abortSignal.reason; },
     getPluginConfig() { return { get: key => config[key] }; },
     getWorkingDirectory() { return ""; },
@@ -162,6 +208,8 @@ function availabilityEvidence(measurements, modelInputs, initialHistory, calls) 
     comparisons.push({
       modelInputId: measurement.modelInputId,
       ...comparison,
+      productEntries: measurement.inputAvailability?.entries || [],
+      oracleEntries,
       currentFullCount: oracleEntries.filter(entry => entry.rawPresence === "full").length,
       currentPartialCount: oracleEntries.filter(entry => entry.rawPresence === "partial").length,
       currentAbsentCount: oracleEntries.filter(entry => entry.rawPresence === "none").length,
@@ -179,13 +227,20 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
   const mode = runOptions.inputAvailabilityMode || (group === "B" ? "inject" : "observe");
   const contractSelected = runOptions.auditContractSelected ?? group === "C";
   const auditCompletionMode = runOptions.auditCompletionMode === "bounded" ? "bounded" : "off";
-  const history = buildInitialHistory(contractSelected ? contractText : "");
+  const historyMode = runOptions.historyMode === "targeted" ? "targeted" : "pressure";
+  const pressureProfile = String(runOptions.pressureProfile || "controlled");
+  const compactorConfig = {
+    ...pressureProfileConfig(pressureProfile),
+    ...(runOptions.compactorConfig || {}),
+  };
+  const history = buildInitialHistory(contractSelected ? contractText : "", historyMode);
   const recorder = {
     latestMeasurement: null,
     activeModelInputId: null,
     modelInputs: new Map(),
     calls: [],
     modelActs: [],
+    modelInputTexts: new Map(),
   };
   const tool = rawFunctionTool({
     name: "read_file_range",
@@ -214,7 +269,11 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     act: (chat, tools, options) => {
       const modelInputId = recorder.latestMeasurement?.modelInputId || `unmatched:${recorder.modelInputs.size}`;
       recorder.activeModelInputId = modelInputId;
-      recorder.modelInputs.set(modelInputId, Chat.from(chat));
+      const inputSnapshot = Chat.from(chat);
+      recorder.modelInputs.set(modelInputId, inputSnapshot);
+      if (runOptions.captureModelInputs === true) {
+        recorder.modelInputTexts.set(modelInputId, inputSnapshot.toString());
+      }
       const maxTokens = options.maxTokens ?? Number(runOptions.researchMaxTokens || 1800);
       recorder.modelActs.push({
         sequence: recorder.modelActs.length + 1,
@@ -226,12 +285,18 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
       return model.act(chat, tools, { ...options, temperature: 0, seed, maxTokens });
     },
   };
+  const auditResearchSeconds = Number(runOptions.auditResearchSeconds ?? 100);
+  const auditFinalSeconds = Number(runOptions.auditFinalSeconds ?? auditResearchSeconds);
+  const evaluationTimeoutSeconds = Number(runOptions.evaluationTimeoutSeconds
+    ?? Math.max(240, auditResearchSeconds + auditFinalSeconds + 30));
   const completionConfig = {
     auditCompletionMode,
-    auditResearchSeconds: Number(runOptions.auditResearchSeconds || 100),
+    auditResearchSeconds,
     auditResearchRounds: Number(runOptions.auditResearchRounds || 12),
-    auditFinalSeconds: Number(runOptions.auditFinalSeconds || 70),
+    auditFinalSeconds,
     auditFinalMaxTokens: Number(runOptions.auditFinalMaxTokens || 4096),
+    evaluationTimeoutMs: evaluationTimeoutSeconds * 1000,
+    ...compactorConfig,
   };
   const ctl = controller(history, fixedModel, tool, mode, recorder, completionConfig);
   const started = Date.now();
@@ -262,9 +327,13 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     pairIndex,
     group,
     mode,
+    historyMode,
+    pressureProfile,
+    compactorConfig,
     auditContractSelected: contractSelected,
     auditCompletionMode,
     auditCompletionConfig: completionConfig,
+    evaluationTimeoutSeconds,
     seed,
     modelIdentifier: model.identifier,
     modelPath: modelInfo.path || null,
@@ -302,7 +371,19 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
       metadataTokens: value.inputAvailability?.metadataTokens ?? null,
       compactionAppliedCount: value.compactionAppliedCount,
       compactionAppliedModes: value.compactionAppliedModes,
+      inputAvailabilityEntries: value.inputAvailability?.entries || [],
     })),
+    ...(runOptions.captureModelInputs === true ? {
+      modelInputSnapshots: measurements.map(value => {
+        const text = recorder.modelInputTexts.get(value.modelInputId) || "";
+        return {
+          modelInputId: value.modelInputId,
+          chars: text.length,
+          sha256: sha256(text),
+          text,
+        };
+      }),
+    } : {}),
     visibleAnswer,
     error,
     modelActs: recorder.modelActs,
@@ -571,4 +652,10 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildInitialHistory, classifyRunOutcome, oneRun, summarize };
+module.exports = {
+  buildInitialHistory,
+  classifyRunOutcome,
+  oneRun,
+  pressureProfileConfig,
+  summarize,
+};
