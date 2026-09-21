@@ -1,6 +1,6 @@
-# v1.4.0-beta1 변경 사항
+# v1.4.0-beta2 변경 사항
 
-v1.4.0-beta1은 Unity용 MCP와 Editor Bridge를 통합 배포본에 추가하고, LM Studio 대화 압축기의 프로젝트 구분·응답 표시·연속성 보존을 개선합니다. Unreal Direct 도구와 Unity 도구는 확인된 프로젝트 종류에 따라 분리해 노출합니다.
+v1.4.0-beta2는 beta1의 통합 배포를 바탕으로 대화 압축 종료 지점, 원문 가용성 계측, Git 관찰 결과, CI 릴리스 검증을 보정합니다. Unreal Direct 도구와 Unity 도구는 확인된 프로젝트 종류에 따라 분리해 노출합니다.
 
 ## 주요 변경 사항
 
@@ -13,21 +13,25 @@ v1.4.0-beta1은 Unity용 MCP와 Editor Bridge를 통합 배포본에 추가하�
 - Workspace Git 결과는 요청 경로 기준, 실제 repository 경로, base·head·현재 HEAD와 결과 완전성을 구조화해 반환합니다. 서버는 잘못된 경로를 추측 보정하거나 다음 도구와 완료 여부를 결정하지 않습니다.
 - 설치·업데이트 시 `codex/unreal-context-compactor`를 설치하고 저장된 기존 채팅에서 기본 활성화합니다. `UPDATE.bat`은 설치된 Unity MCP, Unreal Agent/RAG와 압축기를 함께 갱신하며 기존 프로젝트·엔진·인덱스·권한 설정을 보존합니다.
 - 릴리스 브랜치에서도 GitHub Actions가 실행되며 Unity MCP, Unreal Direct MCP, 대화 압축기, 휴대용 설치 패키지를 Windows·Ubuntu·macOS에서 검증합니다.
+- bounded 조사 출력이 한도에 도달해도 같은 모델의 도구 없는 최종 보고 기회를 최대 한 번 보장하며, 최종 timeout·취소·잘림을 별도 상태로 기록합니다.
+- 현재 SDK 입력을 기준으로 파일 버전·반환 범위·재획득 범위를 측정하고, Unreal line-range와 byte-window 계약을 구분합니다. 평가 oracle과 실제 제품 projection을 분리합니다.
+- Git 결과에 관찰된 author·committer와 repository 책임 범위를 혼합하지 않고, 확인되지 않은 책임자를 추정하지 않습니다.
+- 평가 하네스는 정상 접근 기준선, controlled 압력 조건, causal modelInputId, 실패·timeout 보존을 사용해 종료 동작과 보고서 정확도를 별도로 검증합니다.
 
 ## 구성별 버전
 
 | 구성 | 버전 |
 |---|---|
-| 통합 제품 | 1.4.0 beta 1 (`v1.4.0-beta1`) |
+| 통합 제품 | 1.4.0 beta 2 (`v1.4.0-beta2`) |
 | 휴대용 배포 구성 | 2.1.22 |
 | Unreal Node MCP | 0.3.23 |
 | Unity MCP·Editor Bridge | 1.4.0-beta.4 |
 | 근거 검토 서버 | 1.1.1 |
-| 대화 압축기 | 0.4.61 / revision 108 |
+| 대화 압축기 | 0.4.65 / revision 112 |
 
 ## Unity beta 범위
 
-Unity 구성 요소는 통합 제품 v1.4.0-beta1에 포함되는 beta 계열입니다. 구현 기준은 Unity 2022.3 이상에서 제공되는 공통 Editor API이며, 실제 Editor 통합 검증은 Unity 6000.3.14f1 Intel macOS 중심입니다. 다른 Unity 버전과 Windows·Linux Editor의 전체 통합 실행을 보장하지 않습니다.
+Unity 구성 요소는 통합 제품 v1.4.0-beta2에 포함되는 beta 계열입니다. 구현 기준은 Unity 2022.3 이상에서 제공되는 공통 Editor API이며, 실제 Editor 통합 검증은 Unity 6000.3.14f1 Intel macOS 중심입니다. 다른 Unity 버전과 Windows·Linux Editor의 전체 통합 실행을 보장하지 않습니다.
 
 서버와 Bridge는 내부 모델, Planner, 자동 수정 루프를 실행하지 않습니다. 모델이 선택한 명시적 도구 요청만 처리하며 파일 범위, 권한, receipt와 프로젝트·Editor 세션을 다시 확인합니다. 자세한 기능과 검증 범위는 [Unity 설치·지원 범위](Unity_Setup.md), [Unity 검증 기록](Unity_Validation.md)에 있습니다.
 
