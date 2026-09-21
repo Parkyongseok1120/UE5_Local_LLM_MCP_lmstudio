@@ -1293,6 +1293,50 @@ test("bounded audit makes zero final model calls after user cancellation", async
   assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
 });
 
+test("final delivery accepts only a known normal stop and a real report", () => {
+  const classify = (text, finishReason, extra = {}) => __test.classifyFinalDelivery(
+    text, { finishReason, ...extra }, false, [],
+  );
+  assert.deepEqual(classify("Report.", "eosFound"), {
+    deliveryState: "complete", reportState: "report",
+  });
+  assert.deepEqual(classify("Report.", "stopStringFound"), {
+    deliveryState: "complete", reportState: "report",
+  });
+  assert.deepEqual(classify("Partial report.", "generation_repetition_paused"), {
+    deliveryState: "partial", reportState: "partial_report",
+    rejectionReason: "unexpected_finish_reason:generation_repetition_paused",
+  });
+  assert.deepEqual(classify("Partial report.", "unknown"), {
+    deliveryState: "partial", reportState: "partial_report",
+    rejectionReason: "unexpected_finish_reason:unknown",
+  });
+  assert.deepEqual(classify("<tool_call>\n<function=git_log>\n</function>\n</tool_call>", "eosFound"), {
+    deliveryState: "partial", reportState: "unresolved_tool_intent",
+    rejectionReason: "unresolved_tool_intent",
+  });
+  assert.deepEqual(classify([
+    "<tool_call><function=git_diff_file></function></tool_call>",
+    "<tool_call><function=git_changed_files></function></tool_call>",
+    "<tool_call><function=git_read_file></function></tool_call>",
+  ].join("\n"), "eosFound"), {
+    deliveryState: "partial", reportState: "unresolved_tool_intent",
+    rejectionReason: "unresolved_tool_intent",
+  });
+  assert.deepEqual(classify("", "eosFound"), {
+    deliveryState: "no_answer", reportState: "no_answer",
+  });
+});
+
+test("structured final tool requests are never accepted as a completed report", () => {
+  const request = { id: "final-read", type: "function", name: "read_file", arguments: { path: "A.cpp" } };
+  const message = ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] });
+  const result = __test.classifyFinalDelivery("tool request", { finishReason: "eosFound" }, false, [message]);
+  assert.equal(result.deliveryState, "partial");
+  assert.equal(result.reportState, "unresolved_tool_intent");
+  assert.equal(result.rejectionReason, "unresolved_tool_intent");
+});
+
 test("a denied mutation call keeps the SDK confirmation call ID in emitted messages", async () => {
   const history = Chat.from([{ role: "user", content: "Do not run the proposed tool." }]);
   const request = {
@@ -1575,6 +1619,48 @@ test("reserve pressure gets one adaptive tool-free final report instead of an im
   assert.equal(finalMeasurement.finalRemainingTokens, 0);
 });
 
+test("context-budget finalization does not accept the model's raw multi-tool text as a report", async () => {
+  const history = Chat.from([{ role: "user", content: "Inspect the recorded evidence and finish." }]);
+  const tool = { name: "git_read_file", description: "Read a file", parametersJsonSchema: { type: "object" },
+    pluginIdentifier: "mcp/unreal-agent" };
+  const rawToolText = [
+    "<tool_call><function=git_diff_file></function></tool_call>",
+    "<tool_call><function=git_changed_files></function></tool_call>",
+    "<tool_call><function=git_read_file></function></tool_call>",
+  ].join("\n");
+  let called = 0;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 32768; },
+    async applyPromptTemplate(_chat, options = {}) {
+      return options.toolDefinitions?.length ? "with-tools" : "without-tools";
+    },
+    async countTokens(prompt) { return prompt === "with-tools" ? 30000 : 28000; },
+    async act(_chat, tools, options) {
+      called += 1;
+      assert.deepEqual(tools, []);
+      assert.match(options.maxTokens.toString(), /\d+/u);
+      options.onPredictionCompleted({ stats: {
+        stopReason: "eosFound", promptTokensCount: 28000, predictedTokensCount: 200,
+        totalTokensCount: 28200,
+      } });
+      options.onMessage(ChatMessage.create("assistant", rawToolText));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, {}, [tool]);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(called, 1);
+  const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
+  assert.equal(finalization.trigger, "context_budget");
+  assert.equal(finalization.deliveryState, "partial");
+  assert.equal(finalization.reportState, "unresolved_tool_intent");
+  assert.equal(finalization.rejectionReason, "unresolved_tool_intent");
+  assert.equal(finalization.completionAccepted, false);
+  assert.equal(ctl.statuses.at(-1).state.status, "canceled");
+});
+
 test("context-budget rescue keeps the normal output reserve when it fits", async () => {
   const history = Chat.from([{ role: "user", content: "Finish despite tool-schema pressure." }]);
   const tool = { name: "common_lookup", description: "Read-only lookup", parametersJsonSchema: { type: "object" },
@@ -1621,6 +1707,54 @@ test("context-budget rescue keeps the normal output reserve when it fits", async
   ));
   assert.equal(finalMeasurement.outputReserve, 8192);
   assert.equal(finalMeasurement.finalRemainingTokens, 5784);
+});
+
+test("bounded context-budget rescue keeps the bounded final token and timeout limits", async () => {
+  const history = Chat.from([{ role: "user", content: "Finish the bounded audit under context pressure." }]);
+  const tool = { name: "common_lookup", description: "Read-only lookup", parametersJsonSchema: { type: "object" },
+    pluginIdentifier: "mcp/other" };
+  let called = 0;
+  let finalMaxTokens;
+  let finalSignal;
+  let ctl;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 32768; },
+    async applyPromptTemplate(_chat, options = {}) {
+      return options.toolDefinitions?.length ? "with-tools" : "without-tools";
+    },
+    async countTokens(prompt) { return prompt === "with-tools" ? 30000 : 26000; },
+    async act(_chat, tools, options) {
+      called += 1;
+      assert.deepEqual(tools, []);
+      finalMaxTokens = options.maxTokens;
+      finalSignal = options.signal;
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 26000,
+        predictedTokensCount: 120, totalTokensCount: 26120 } });
+      options.onMessage(ChatMessage.create("assistant", "Bounded context rescue report."));
+    },
+  };
+  ctl = fakeController(history, selectedModel, {
+    auditCompletionMode: "bounded",
+    auditFinalSeconds: 70,
+    auditFinalMaxTokens: 4096,
+    maxOutputReserve: 8192,
+    safetyMarginTokens: 1024,
+  }, [tool]);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(called, 1);
+  assert.equal(finalMaxTokens, 4096);
+  assert.equal(finalSignal.aborted, false);
+  assert.notEqual(finalSignal, ctl.abortSignal);
+  const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
+  assert.equal(finalization.trigger, "context_budget");
+  assert.equal(finalization.deliveryState, "complete");
+  const finalMeasurement = ctl.debugValues.find(value => (
+    value.event === "direct_context_measurement" && value.auditCompletionPhase === "finalize_once"
+  ));
+  assert.equal(finalMeasurement.outputReserve, 4096);
 });
 
 test("an input with less than the minimum safe final output still skips the selected model call", async () => {

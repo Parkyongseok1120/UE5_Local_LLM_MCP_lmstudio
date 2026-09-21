@@ -206,6 +206,8 @@ type InputAvailabilityMode = "off" | "observe" | "inject";
 type AuditCompletionMode = "off" | "bounded";
 type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
   | "research_round_limit" | "context_budget";
+type FinalDeliveryState = "complete" | "truncated" | "partial" | "no_answer";
+type FinalReportState = "report" | "partial_report" | "unresolved_tool_intent" | "no_answer";
 
 const MIN_FINAL_OUTPUT_TOKENS = 256;
 
@@ -750,6 +752,64 @@ function visibleAssistantOutput(text: string): { visibleText: string; hasFooter:
     ? raw.slice(separatorIndex + REASONING_SEPARATOR.length) : raw);
 }
 
+function containsUnresolvedToolIntent(reportText: string, messages: Array<ChatMessage>): boolean {
+  if (messages.some(message => message.isAssistantMessage() && message.getToolCallRequests().length > 0)) return true;
+  const text = reportText.trim();
+  if (!text) return false;
+
+  // Qwen-compatible templates can emit several raw XML calls back-to-back.
+  // Treat a final answer made only of complete call wrappers as unresolved
+  // intent, but never parse or execute the contents here. Keeping the
+  // remainder check makes ordinary prose that merely mentions a marker safe.
+  const wrapperPatterns = [
+    /<tool_call>[\s\S]*?<\/tool_call>/giu,
+    /<function=[^>\r\n]+>[\s\S]*?<\/function>/giu,
+    /<\|(?:tool_call|python_tag)\|>[\s\S]*?<\|(?:eom|eot|end)\|>/giu,
+  ];
+  return wrapperPatterns.some((pattern) => {
+    const matches = text.match(pattern);
+    if (!matches || matches.length === 0) return false;
+    return text.replace(pattern, "").trim().length === 0;
+  });
+}
+
+function classifyFinalDelivery(
+  reportText: string,
+  captured: { failure?: unknown; finishReason?: string },
+  phaseTimedOut: boolean,
+  messages: Array<ChatMessage>,
+): { deliveryState: FinalDeliveryState; reportState: FinalReportState; rejectionReason?: string } {
+  const text = reportText.trim();
+  if (!text) return { deliveryState: "no_answer", reportState: "no_answer" };
+  const unresolvedToolIntent = containsUnresolvedToolIntent(text, messages);
+  let deliveryState: FinalDeliveryState;
+  let rejectionReason: string | undefined;
+  if (captured.finishReason === "maxPredictedTokensReached") {
+    deliveryState = "truncated";
+    rejectionReason = "max_predicted_tokens";
+  } else if (phaseTimedOut) {
+    deliveryState = "partial";
+    rejectionReason = "final_timeout";
+  } else if (captured.failure !== undefined) {
+    deliveryState = "partial";
+    rejectionReason = "generation_failure";
+  } else if (unresolvedToolIntent) {
+    deliveryState = "partial";
+    rejectionReason = "unresolved_tool_intent";
+  } else if (!["eosFound", "stopStringFound"].includes(captured.finishReason || "")) {
+    deliveryState = "partial";
+    rejectionReason = `unexpected_finish_reason:${captured.finishReason || "unknown"}`;
+  } else {
+    deliveryState = "complete";
+  }
+  return {
+    deliveryState,
+    reportState: unresolvedToolIntent ? "unresolved_tool_intent"
+      : deliveryState === "complete" ? "report" : "partial_report",
+    ...(rejectionReason ? { rejectionReason } : {}),
+  };
+}
+
 function modelHistoryMessage(message: ChatMessage): ChatMessage {
   if (!message.isAssistantMessage() || !message.getText()) return message;
   const extracted = modelNotes.splitVisibleAnswer(message.getText());
@@ -855,7 +915,7 @@ export function createPredictionLoopHandler(
       }
       const roundTools = finalizing ? [] : modelTools;
       let roundOutputReserve = finalizing
-        ? finalizationTrigger === "context_budget"
+        ? finalizationTrigger === "context_budget" && !boundedAudit
           ? config.maxOutputReserve
           : Math.min(config.maxOutputReserve, config.auditFinalMaxTokens)
         : config.maxOutputReserve;
@@ -1180,7 +1240,7 @@ export function createPredictionLoopHandler(
       const displayedMessages = new Set<ChatMessage>();
       const liveMessages = new Map<ChatMessage, { visibleMessage: ChatMessage; textStreamed: boolean }>();
       const phaseTimeoutSignal = finalizing
-        ? finalizationTrigger === "context_budget"
+        ? finalizationTrigger === "context_budget" && !boundedAudit
           ? null
           : AbortSignal.timeout(Math.max(1, config.auditFinalSeconds * 1000))
         : boundedAudit
@@ -1434,9 +1494,8 @@ export function createPredictionLoopHandler(
           .map(message => visibleAssistantOutput(message.getText()).visibleText)
           .join("")
           .trim();
-        const deliveryState = !reportText ? "no_answer"
-          : captured.finishReason === "maxPredictedTokensReached" ? "truncated"
-            : captured.failure === undefined && !phaseTimedOut ? "complete" : "partial";
+        const finalDelivery = classifyFinalDelivery(reportText, captured, phaseTimedOut, captured.messages);
+        const { deliveryState } = finalDelivery;
         if (config.showDebugInfo) ctl.debug({
           event: "bounded_audit_finalization",
           executionId,
@@ -1447,12 +1506,17 @@ export function createPredictionLoopHandler(
           deliveryState,
           phaseTimedOut,
           finishReason: phaseTimedOut ? "final_timeout" : captured.finishReason || "failed",
+          reportState: finalDelivery.reportState,
+          rejectionReason: finalDelivery.rejectionReason,
+          completionAccepted: deliveryState === "complete",
           predictionStats: captured.predictionStats,
           toolCount: roundTools.length,
         });
         if (deliveryState !== "complete") ctl.createStatus({
           status: deliveryState === "no_answer" ? "error" : "canceled",
-          text: deliveryState === "truncated"
+          text: finalDelivery.reportState === "unresolved_tool_intent"
+            ? "최종 단계에서 실행되지 않은 도구 호출 의도만 남아 보고서 완료로 처리하지 않았습니다."
+            : deliveryState === "truncated"
             ? "최종 보고가 출력 한도에 도달해 잘렸습니다. 완료로 처리하지 않았습니다."
             : deliveryState === "partial"
               ? "최종 보고가 제한 시간 안에 완료되지 않았습니다. 부분 출력으로 기록했습니다."
@@ -1522,6 +1586,8 @@ export const __test = {
   serializedCheckpointCounts,
   ToolRoundStagnationDetector,
   GenerationRepetitionDetector,
+  classifyFinalDelivery,
+  containsUnresolvedToolIntent,
   modelHistoryMessage,
   selectSoftCompaction,
 };

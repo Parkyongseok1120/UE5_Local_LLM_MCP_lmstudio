@@ -16,8 +16,19 @@ const gitDate = { type: "string", minLength: 10, maxLength: 64,
 const authorQuery = { type: "string", minLength: 1, maxLength: 320,
   description: "Literal Git author name or email fragment. This does not infer account aliases, code ownership, or work responsibility." };
 const comparison = { comparison: { type: "string", enum: ["range", "worktree", "staged"] }, base: string, head: string };
-const spec = (name, description, properties, required = []) => ({ name, description,
-  inputSchema: { type: "object", properties: { ...properties, project: string }, required, additionalProperties: false } });
+const rangeComparison = {
+  type: "object",
+  required: ["comparison", "base", "head"],
+  properties: { comparison: { const: "range" }, base: string, head: string },
+};
+const nonRangeComparison = {
+  type: "object",
+  required: ["comparison"],
+  properties: { comparison: { type: "string", enum: ["worktree", "staged"] } },
+  not: { anyOf: [{ required: ["base"] }, { required: ["head"] }] },
+};
+const spec = (name, description, properties, required = [], extra = {}) => ({ name, description,
+  inputSchema: { type: "object", properties: { ...properties, project: string }, required, additionalProperties: false, ...extra } });
 const GIT_ACTIONS = Object.freeze({ git_status: "status", git_log: "log", git_changed_files: "changed_files", git_diff_file: "diff_file", git_read_file: "read_file" });
 function workspaceToolDefinitions() {
   return [
@@ -25,8 +36,8 @@ function workspaceToolDefinitions() {
     spec("git_status", "Read scoped index/worktree status. Path filters are literal and relative to the bound workspace root, even when that workspace is nested inside a repository. Does not modify the index. Continue with nextCursor from the same snapshot.", { paths, ...paging }),
     spec("git_log", "Read commit metadata, including distinct author and committer identities, at a revision (default HEAD). Optional date and literal author filters are evidence filters, not code-ownership or responsibility inference. Path filters are literal and relative to the bound workspace root; do not include the repository-side project prefix. Returns full commit IDs; bounded immutable pages.",
       { revision: string, since: gitDate, until: gitDate, authorQuery, paths, ...paging }),
-    spec("git_changed_files", "List changed paths without a full diff. Explicit comparison required: range requires base/head; worktree/staged forbid both. Paths are workspace-relative literals. Continue with nextCursor.", { ...comparison, paths, ...paging }, ["comparison"]),
-    spec("git_diff_file", "Read the diff of one exact regular file at a literal workspace-relative path. range requires base/head; worktree/staged forbid both. Continue with cursor OR startLine. Never accepts directories.", { ...comparison, path: workspacePath, startLine: { type: "integer", minimum: 1 }, ...paging }, ["comparison", "path"]),
+    spec("git_changed_files", "List changed paths without a full diff. Explicit comparison required: range requires base/head; worktree/staged forbid both. Paths are workspace-relative literals. Continue with nextCursor.", { ...comparison, paths, ...paging }, ["comparison"], { oneOf: [rangeComparison, nonRangeComparison] }),
+    spec("git_diff_file", "Read the diff of one exact regular file at a literal workspace-relative path. range requires base/head; worktree/staged forbid both. Continue with cursor OR startLine. Never accepts directories.", { ...comparison, path: workspacePath, startLine: { type: "integer", minimum: 1 }, ...paging }, ["comparison", "path"], { oneOf: [rangeComparison, nonRangeComparison] }),
     spec("git_read_file", "Read source at one literal workspace-relative path from a pinned commit rather than the current worktree. Raw blob hash is evidence, not a mutation receipt. Only regular UTF-8 blobs. Continue with cursor OR startLine.", { revision: string, path: workspacePath, startLine: { type: "integer", minimum: 1 }, ...paging }, ["revision", "path"]),
   ];
 }
@@ -38,15 +49,27 @@ function createWorkspaceCapabilities({ resolveBinding }) {
     // resolution. This small validator covers only this closed schema family.
     const schema = schemas.get(name);
     const valid = (value, rule) => {
+      if (rule.const !== undefined) return value === rule.const;
+      if (rule.type === "object") {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+        if ((rule.required || []).some(key => value[key] === undefined)) return false;
+        if (rule.additionalProperties === false && Object.keys(value).some(key => !rule.properties?.[key])) return false;
+        if (!Object.entries(value).every(([key, item]) => !rule.properties?.[key] || valid(item, rule.properties[key]))) return false;
+        if (rule.oneOf && rule.oneOf.filter(candidate => valid(value, candidate)).length !== 1) return false;
+        if (rule.anyOf && !rule.anyOf.some(candidate => valid(value, candidate))) return false;
+        if (rule.not && valid(value, rule.not)) return false;
+        return true;
+      }
+      if (rule.oneOf) return rule.oneOf.filter(candidate => valid(value, candidate)).length === 1;
+      if (rule.anyOf) return rule.anyOf.some(candidate => valid(value, candidate));
+      if (rule.not && valid(value, rule.not)) return false;
       if (rule.type === "string") return typeof value === "string" && value.length >= (rule.minLength || 0)
         && value.length <= (rule.maxLength || Infinity) && (!rule.enum || rule.enum.includes(value));
       if (rule.type === "integer") return Number.isInteger(value) && value >= (rule.minimum ?? -Infinity) && value <= (rule.maximum ?? Infinity);
       if (rule.type === "array") return Array.isArray(value) && value.length <= rule.maxItems && value.every(item => valid(item, rule.items));
       return false;
     };
-    if (!schema || !args || typeof args !== "object" || Array.isArray(args)
-      || schema.required.some(key => args[key] === undefined)
-      || Object.entries(args).some(([key, value]) => !schema.properties[key] || !valid(value, schema.properties[key])))
+    if (!schema || !valid(args, schema))
       fail("invalid_arguments", `${name} arguments must match its declared schema`);
     const binding = await resolveBinding(args.project);
     const root = binding.root;

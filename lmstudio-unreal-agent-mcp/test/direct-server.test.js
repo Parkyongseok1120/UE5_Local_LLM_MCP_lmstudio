@@ -109,6 +109,14 @@ test("Workspace Git binds the selected Unreal project and rollback removes only 
   assert.equal(changes.queryPathBase, "workspace_root");
   assert.deepEqual(changes.requestedPaths, []);
   assert.deepEqual(changes.resolvedRepositoryPaths, ["."]);
+  const missingRange = payloadOf(await f.runtime.callTool("git_changed_files", {
+    project: f.projectFile, comparison: "range",
+  }));
+  assert.match(missingRange.errorCode, /invalid_argument/i);
+  const forbiddenRangeEndpoints = payloadOf(await f.runtime.callTool("git_changed_files", {
+    project: f.projectFile, comparison: "worktree", base,
+  }));
+  assert.match(forbiddenRangeEndpoints.errorCode, /invalid_argument/i);
   const invalid = payloadOf(await f.runtime.callTool("git_log", { limit: "bad" }));
   assert.match(invalid.errorCode, /invalid_argument/i);
   const rollback = createDirectRuntime({ workspaceRoot: f.workspaceRoot, configPath: f.runtime.configPath,
@@ -130,6 +138,14 @@ test("all Workspace Git schemas describe paths from the bound workspace root", (
       assert.match(pathsRule.description, /workspace root/iu, tool.name);
       assert.match(pathsRule.items.description, /workspace root/iu, tool.name);
     }
+  }
+  for (const name of ["git_changed_files", "git_diff_file"]) {
+    const tool = tools.find(item => item.name === name);
+    assert.ok(tool.inputSchema.oneOf, `${name} should publish conditional comparison branches`);
+    const range = tool.inputSchema.oneOf.find(branch => branch.properties?.comparison?.const === "range");
+    assert.deepStrictEqual(range.required, ["comparison", "base", "head"]);
+    const nonRange = tool.inputSchema.oneOf.find(branch => branch.properties?.comparison?.enum?.includes("worktree"));
+    assert.deepStrictEqual(nonRange.required, ["comparison"]);
   }
 });
 

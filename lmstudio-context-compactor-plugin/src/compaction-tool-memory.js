@@ -242,6 +242,7 @@ function parseToolResult(content) {
       const git = {};
       for (const key of ["action", "comparison", "base", "head", "currentHead", "blobOid", "path",
         "repositoryIdentity", "workspaceIdentity", "snapshotId", "hasMore", "complete", "incomplete",
+        "pageStart", "pageEnd", "pageHasMore", "sourceResultComplete",
         "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total", "observedAt", "sourceConsistency", "submoduleWorktrees",
         "since", "until", "authorQuery", "authorQuerySemantics", "identitySemantics",
         "queryPathBase", "requestedPathsCount", "requestedPathsOmitted", "requestedPathsSha256",
@@ -259,7 +260,8 @@ function parseToolResult(content) {
           ["status", "path", "oldPath", "similarity", "commit", "authoredAt", "authorName", "authorEmail",
             "committedAt", "committerName", "committerEmail", "subject"].filter(k => item?.[k] !== undefined)
             .map(k => [k, typeof item[k] === "string" ? item[k].slice(0, 400) : item[k]])));
-        git.omittedItems = Math.max(0, (decoded.value.items?.length || source.items.length) - git.items.length);
+        git.sourceOmittedItems = Math.max(0, (decoded.value.items?.length || source.items.length) - git.items.length);
+        git.omittedItems = git.sourceOmittedItems;
       }
       out.gitObservation = git;
       // Commit blob lines are not current-worktree coverage or a write receipt.
@@ -637,7 +639,9 @@ function durableGitObservation(value) {
   for (const key of [
     "action", "comparison", "base", "head", "currentHead", "blobOid", "path",
     "repositoryIdentity", "workspaceIdentity", "hasMore", "complete", "incomplete",
+    "pageStart", "pageEnd", "pageHasMore", "sourceResultComplete",
     "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total",
+    "since", "until", "authorQuery", "authorQuerySemantics", "identitySemantics",
     "sourceConsistency", "submoduleWorktrees", "queryPathBase", "requestedPaths",
     "requestedPathsCount", "requestedPathsOmitted", "requestedPathsSha256", "resolvedRepositoryPaths",
     "resolvedRepositoryPathsCount", "resolvedRepositoryPathsOmitted", "resolvedRepositoryPathsSha256",
@@ -645,12 +649,16 @@ function durableGitObservation(value) {
   ]) {
     if (value[key] !== undefined) retained[key] = value[key];
   }
+  const sourceOmittedItems = Number(value.sourceOmittedItems ?? value.omittedItems ?? 0);
+  const memoryOmittedItems = Number(value.memoryOmittedItems || 0);
+  retained.sourceOmittedItems = Math.max(0, sourceOmittedItems);
   if (Array.isArray(value.items)) {
     retained.items = value.items.slice(0, 4);
-    retained.omittedItems = Math.max(0, Number(value.omittedItems || 0) + value.items.length - retained.items.length);
+    retained.memoryOmittedItems = Math.max(0, memoryOmittedItems + value.items.length - retained.items.length);
   } else if (value.omittedItems !== undefined) {
-    retained.omittedItems = value.omittedItems;
+    retained.memoryOmittedItems = memoryOmittedItems;
   }
+  retained.omittedItems = retained.sourceOmittedItems + (retained.memoryOmittedItems || 0);
   return sanitizeStructuredDurableValue(retained);
 }
 

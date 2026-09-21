@@ -4,7 +4,7 @@ const fs = require("node:fs"), path = require("node:path"), os = require("node:o
 const { Chat, ChatMessage } = require("@lmstudio/sdk");
 const { AttachmentBoundary } = require("../dist/attachment-boundary");
 const { selectMeasuredCandidate, boundPastReasoning, REASONING_SEPARATOR } = require("../dist/context-budget");
-const { parseToolResult, serializeToolOutcomeRecords } = require("../dist/compaction-tool-memory");
+const { parseToolResult, serializeToolOutcomeRecords, stateMemory } = require("../dist/compaction-tool-memory");
 const notes = require("../dist/continuity-model-notes");
 
 test("signed document boundary survives restart, keeps images and rejects changed history", async t => {
@@ -84,11 +84,17 @@ test("old reasoning loses only structural reasoning, preserving newest reasoning
 test("Git memory preserves comparison identity but does not invent source coverage", () => {
   const parsed = parseToolResult(JSON.stringify({ kind: "git_observation", comparison: "range", action: "changed_files",
     base: "a".repeat(40), head: "b".repeat(40), repositoryIdentity: "repo", workspaceIdentity: "workspace",
+    pageStart: 201, pageEnd: 232, pageHasMore: false, sourceResultComplete: true,
     items: Array.from({ length: 100 }, (_, i) => ({ path: `Assets/${i}.cs`, status: "modified" })) }));
   const retained = JSON.parse(serializeToolOutcomeRecords([parsed], { maxToolResultChars: 1200 })[0]);
   assert.equal(retained.gitObservation.base, "a".repeat(40));
   assert.equal(retained.gitObservation.head, "b".repeat(40));
   assert.equal(retained.gitObservation.items.length + retained.gitObservation.omittedItems, 100);
+  assert.equal(retained.gitObservation.pageStart, 201);
+  assert.equal(retained.gitObservation.pageEnd, 232);
+  assert.equal(retained.gitObservation.pageHasMore, false);
+  assert.equal(retained.gitObservation.sourceResultComplete, true);
+  assert.equal(retained.gitObservation.sourceOmittedItems, 92);
   assert.equal(retained.files, undefined);
   const committed = parseToolResult(JSON.stringify({ kind: "git_observation", action: "read_file", path: "Assets/A.cs",
     canonicalProjectRoot: "C:/Projects/Game", projectIdentity: "f".repeat(64), head: "b".repeat(40), sha256: "a".repeat(64),
@@ -122,7 +128,16 @@ test("Git log memory preserves author and committer evidence without promoting r
   assert.equal(parsed.gitObservation.items[0].committerName, "Integrator");
   assert.equal(parsed.gitObservation.identitySemantics,
     "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility");
+  assert.equal(parsed.gitObservation.since, "2026-09-14");
+  assert.equal(parsed.gitObservation.authorQuery, "Yongseok");
+  assert.equal(parsed.gitObservation.authorQuerySemantics, "literal_name_or_email_fragment");
   assert.equal(parsed.responsiblePerson, undefined);
+  const durable = stateMemory([{ gitObservation: parsed.gitObservation }]).gitObservations[0];
+  assert.equal(durable.since, "2026-09-14");
+  assert.equal(durable.authorQuery, "Yongseok");
+  assert.equal(durable.authorQuerySemantics, "literal_name_or_email_fragment");
+  assert.equal(durable.identitySemantics,
+    "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility");
 });
 
 test("review claims require observed version and disappear after a new hash", () => {

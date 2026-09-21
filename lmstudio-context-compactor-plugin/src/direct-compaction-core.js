@@ -278,7 +278,9 @@ function compactEmergencyGitObservation(value) {
   for (const key of [
     "action", "comparison", "base", "head", "currentHead", "blobOid", "path",
     "repositoryIdentity", "workspaceIdentity", "hasMore", "complete", "incomplete",
+    "pageStart", "pageEnd", "pageHasMore", "sourceResultComplete",
     "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total",
+    "since", "until", "authorQuery", "authorQuerySemantics", "identitySemantics",
     "sourceConsistency", "submoduleWorktrees", "queryPathBase", "requestedPathsOmitted",
     "requestedPathsCount", "requestedPathsSha256", "resolvedRepositoryPathsOmitted",
     "resolvedRepositoryPathsCount", "resolvedRepositoryPathsSha256", "omittedItems", "canonicalProjectRoot", "canonicalProject",
@@ -292,10 +294,16 @@ function compactEmergencyGitObservation(value) {
     const omitted = value[key].length - compact[key].length;
     if (omitted > 0) compact[`${key}Omitted`] = Number(compact[`${key}Omitted`] || 0) + omitted;
   }
+  const sourceOmittedItems = Number(value.sourceOmittedItems ?? value.omittedItems ?? 0);
+  const priorMemoryOmittedItems = Number(value.memoryOmittedItems || 0);
+  compact.sourceOmittedItems = Math.max(0, sourceOmittedItems);
   if (Array.isArray(value.items) && value.items.length) {
     compact.items = value.items.slice(0, 1);
-    compact.omittedItems = Number(value.omittedItems || 0) + value.items.length - compact.items.length;
+    compact.memoryOmittedItems = Math.max(0, priorMemoryOmittedItems + value.items.length - compact.items.length);
+  } else {
+    compact.memoryOmittedItems = Math.max(0, priorMemoryOmittedItems);
   }
+  compact.omittedItems = compact.sourceOmittedItems + compact.memoryOmittedItems;
   return sanitizeStructuredDurableValue(compact);
 }
 

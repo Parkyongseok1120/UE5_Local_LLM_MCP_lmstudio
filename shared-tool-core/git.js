@@ -137,6 +137,8 @@ class VersionControl {
     const result = () => {
       const rows = item.rows.slice(offset, offset + count), hasMore = offset + count < item.rows.length;
       return { ...item.facts, snapshotId: item.id, consistency: "immutable_returned_snapshot", hasMore,
+        pageStart: offset + 1, pageEnd: offset + count, pageHasMore: hasMore,
+        sourceResultComplete: !item.facts.incomplete,
         nextCursor: hasMore ? this.cursor(item.id, offset + count) : null, truncated: hasMore, complete: !hasMore && !item.facts.incomplete,
         ...(item.isText ? { text: rows.join("\n"), startLine: offset + 1, endLine: count ? offset + count : null,
           returnedLineCount: count, totalLines: item.rows.length, nextStartLine: hasMore ? offset + count + 1 : null }
