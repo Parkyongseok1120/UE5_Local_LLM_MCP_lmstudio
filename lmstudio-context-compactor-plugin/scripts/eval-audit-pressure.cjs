@@ -310,7 +310,7 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     .filter(block => block.options?.style?.type !== "thinking")
     .map(block => block.text.trim()).filter(Boolean);
   const finalizations = ctl.debugValues.filter(value => value.event === "bounded_audit_finalization");
-  const visibleAnswer = (finalizations.length ? visibleBlocks.at(-1) : visibleBlocks.join("\n")).trim();
+  const visibleAnswer = selectVisibleAnswer(visibleBlocks, finalizations);
   const measurements = ctl.debugValues.filter(value => value.event === "direct_context_measurement");
   const rounds = ctl.debugValues.filter(value => value.event === "direct_round_observation");
   const runtimeToolCalls = rounds.flatMap(round => round.toolTrace?.runtime || []);
@@ -427,6 +427,11 @@ function classifyRunOutcome(run) {
         : executionOutcome === "truncated" ? "truncated" : "partial",
     finalFinishReason: finishReason,
   };
+}
+
+function selectVisibleAnswer(visibleBlocks, finalizations) {
+  const selected = finalizations.length ? (visibleBlocks.at(-1) || "") : visibleBlocks.join("\n");
+  return selected.trim();
 }
 
 function summarize(runs, group) {
@@ -657,5 +662,6 @@ module.exports = {
   classifyRunOutcome,
   oneRun,
   pressureProfileConfig,
+  selectVisibleAnswer,
   summarize,
 };

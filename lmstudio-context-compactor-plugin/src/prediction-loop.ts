@@ -166,6 +166,7 @@ type InputAvailabilityProjection = {
 export type ContextMeasurement = {
   contextLength: number;
   inputTokens: number;
+  outputReserve: number;
   remainingTokens: number;
   exact: boolean;
   messageCount: number;
@@ -203,6 +204,10 @@ type DirectConfig = {
 type StagnationAction = "off" | "warn" | "pause";
 type InputAvailabilityMode = "off" | "observe" | "inject";
 type AuditCompletionMode = "off" | "bounded";
+type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
+  | "research_round_limit" | "context_budget";
+
+const MIN_FINAL_OUTPUT_TOKENS = 256;
 
 const BOUNDED_AUDIT_FINAL_INSTRUCTION = [
   "The user selected bounded audit completion and the research resource budget has ended.",
@@ -210,6 +215,14 @@ const BOUNDED_AUDIT_FINAL_INSTRUCTION = [
   "Using only the evidence already present in this input, provide the final report now.",
   "Clearly separate confirmed findings, counterevidence, and unresolved items.",
   "If the evidence is insufficient, say so directly instead of extending the investigation.",
+].join(" ");
+
+const CONTEXT_BUDGET_FINAL_INSTRUCTION = [
+  "The next research round no longer fits the selected model's context budget.",
+  "Do not request or imply another tool call.",
+  "Using only the evidence already present in this input, provide the best final report that fits now.",
+  "Clearly separate confirmed findings, counterevidence, and unresolved items.",
+  "If the evidence is incomplete, state the limitation directly instead of extending the investigation.",
 ].join(" ");
 
 type RemoteToolLike = Tool & {
@@ -394,6 +407,7 @@ async function measureContext(
   history: Chat,
   config: DirectConfig,
   tools: Array<RemoteToolLike & { description?: string; parametersJsonSchema?: unknown }> = [],
+  options: { outputReserve?: number } = {},
 ): Promise<ContextMeasurement> {
   const source = tokenSource as {
     getContextLength?: () => Promise<number>;
@@ -429,10 +443,12 @@ async function measureContext(
     // measurement. Character estimation remains conservative, and the
     // configured message-count fallback independently protects this path.
   }
-  const remainingTokens = contextLength - inputTokens - config.maxOutputReserve - config.safetyMarginTokens;
+  const outputReserve = numeric(options.outputReserve, config.maxOutputReserve, 0, 131072);
+  const remainingTokens = contextLength - inputTokens - outputReserve - config.safetyMarginTokens;
   return {
     contextLength,
     inputTokens,
+    outputReserve,
     remainingTokens,
     exact,
     messageCount: history.length,
@@ -820,6 +836,7 @@ export function createPredictionLoopHandler(
   const researchStartedAt = Date.now();
   const researchDeadlineAt = researchStartedAt + config.auditResearchSeconds * 1000;
   let finalizationPending = false;
+  let finalizationTrigger: FinalizationTrigger | null = null;
   let finalizationAttempts = 0;
   let activeActivity: ReturnType<typeof createRoundActivityTracker> | null = null;
   const toolStagnation = new ToolRoundStagnationDetector();
@@ -828,6 +845,7 @@ export function createPredictionLoopHandler(
       ctl.guardAbort();
       if (boundedAudit && !finalizationPending && Date.now() >= researchDeadlineAt) {
         finalizationPending = true;
+        finalizationTrigger = "research_time_limit";
         continue;
       }
       const finalizing = finalizationPending;
@@ -836,8 +854,14 @@ export function createPredictionLoopHandler(
         finalizationAttempts += 1;
       }
       const roundTools = finalizing ? [] : modelTools;
+      let roundOutputReserve = finalizing
+        ? finalizationTrigger === "context_budget"
+          ? config.maxOutputReserve
+          : Math.min(config.maxOutputReserve, config.auditFinalMaxTokens)
+        : config.maxOutputReserve;
       const roundScopeInstructions = finalizing
-        ? [...scopeInstructions, BOUNDED_AUDIT_FINAL_INSTRUCTION]
+        ? [...scopeInstructions, finalizationTrigger === "context_budget"
+          ? CONTEXT_BUDGET_FINAL_INSTRUCTION : BOUNDED_AUDIT_FINAL_INSTRUCTION]
         : scopeInstructions;
       const modelInputId = finalizing
         ? `${executionId}:final-report`
@@ -850,7 +874,10 @@ export function createPredictionLoopHandler(
       const beforeInput = composeModelHistory(
         workingHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled,
       );
-      let before = await measureContext(tokenSource, beforeInput.history, config, roundTools);
+      const measureRoundInput = (history: Chat) => measureContext(
+        tokenSource, history, config, roundTools, { outputReserve: roundOutputReserve },
+      );
+      let before = await measureRoundInput(beforeInput.history);
       let modelHistory = workingHistory;
       let compacted = false;
       let compactionAppliedCount = 0;
@@ -864,7 +891,7 @@ export function createPredictionLoopHandler(
           modelHistory = workingHistory;
           before = await measureContext(tokenSource,
             composeModelHistory(workingHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled).history,
-            config, roundTools);
+            config, roundTools, { outputReserve: roundOutputReserve });
         }
       }
       if (core.shouldCompact(before, config)) {
@@ -876,13 +903,10 @@ export function createPredictionLoopHandler(
         if (!hard && before.exact) {
           const selected = await selectSoftCompaction(
             workingHistory, config, checkpointOptions,
-            async (candidateHistory) => measureContext(
-              tokenSource,
-              composeModelHistory(candidateHistory, noteEnabled ? activeNote : null,
-                config, roundScopeInstructions, noteEnabled).history,
-              config,
-              roundTools,
-            ),
+            async (candidateHistory) => measureRoundInput(composeModelHistory(
+              candidateHistory, noteEnabled ? activeNote : null,
+              config, roundScopeInstructions, noteEnabled,
+            ).history),
           );
           candidate = selected.candidate;
           compactionRetention = {
@@ -905,7 +929,7 @@ export function createPredictionLoopHandler(
             const measuredCandidate = composeModelHistory(
               candidate.history, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled,
             ).history;
-            const afterFirst = await measureContext(tokenSource, measuredCandidate, config, roundTools);
+            const afterFirst = await measureRoundInput(measuredCandidate);
             needsBoundedCurrentTurn = core.shouldCompact(afterFirst, config);
           }
           if (needsBoundedCurrentTurn) {
@@ -935,7 +959,7 @@ export function createPredictionLoopHandler(
         const baseComposition = composeModelHistory(
           sourceHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled,
         );
-        const baseMeasurement = await measureContext(tokenSource, baseComposition.history, config, roundTools);
+        const baseMeasurement = await measureRoundInput(baseComposition.history);
         let projection = config.inputAvailabilityMode === "off" ? null
           : inputAvailability.projectInputAvailability(
             normalizeHistory(baseComposition.history), historicalAvailabilityLedger, { modelInputId },
@@ -955,7 +979,7 @@ export function createPredictionLoopHandler(
           sourceHistory, noteEnabled ? activeNote : null, config,
           [...roundScopeInstructions, metadata], noteEnabled,
         );
-        let measurement = await measureContext(tokenSource, composition.history, config, roundTools);
+        let measurement = await measureRoundInput(composition.history);
         const finalProjection = inputAvailability.projectInputAvailability(
           normalizeHistory(composition.history), historicalAvailabilityLedger, { modelInputId },
         );
@@ -968,7 +992,7 @@ export function createPredictionLoopHandler(
             sourceHistory, noteEnabled ? activeNote : null, config,
             [...roundScopeInstructions, metadata], noteEnabled,
           );
-          measurement = await measureContext(tokenSource, composition.history, config, roundTools);
+          measurement = await measureRoundInput(composition.history);
         }
         projection = inputAvailability.projectInputAvailability(
           normalizeHistory(composition.history), historicalAvailabilityLedger, { modelInputId },
@@ -1007,7 +1031,41 @@ export function createPredictionLoopHandler(
         }
       }
 
+      if (finalizing && finalMeasurement.remainingTokens < 0 && !config.observeOnly) {
+        const adaptiveFinalTokens = Math.trunc(
+          finalMeasurement.contextLength - finalMeasurement.inputTokens - config.safetyMarginTokens,
+        );
+        if (adaptiveFinalTokens >= MIN_FINAL_OUTPUT_TOKENS && adaptiveFinalTokens < roundOutputReserve) {
+          roundOutputReserve = adaptiveFinalTokens;
+          finalMeasurement = await measureRoundInput(modelInput);
+        }
+      }
+
       if (finalMeasurement.remainingTokens < 0 && !config.observeOnly) {
+        if (!finalizing) {
+          if (config.showDebugInfo) ctl.debug({
+            event: "direct_context_budget_rescue",
+            executionId,
+            modelInputId,
+            roundIndex,
+            trigger: "context_budget",
+            compactionAppliedCount,
+            compactionAppliedModes,
+            exactMeasurement: finalMeasurement.exact,
+            contextLength: finalMeasurement.contextLength,
+            inputTokens: finalMeasurement.inputTokens,
+            requestedOutputReserve: roundOutputReserve,
+            safetyMargin: config.safetyMarginTokens,
+            remainingTokens: finalMeasurement.remainingTokens,
+            nextToolCount: 0,
+            maxFinalAttempts: 1,
+          });
+          activeActivity.complete();
+          activeActivity = null;
+          finalizationPending = true;
+          finalizationTrigger = "context_budget";
+          continue;
+        }
         if (config.showDebugInfo) ctl.debug({
           event: "direct_context_budget_rejected",
           executionId,
@@ -1019,14 +1077,19 @@ export function createPredictionLoopHandler(
           fit: false,
           contextLength: finalMeasurement.contextLength,
           inputTokens: finalMeasurement.inputTokens,
-          outputReserve: config.maxOutputReserve,
+          outputReserve: roundOutputReserve,
           safetyMargin: config.safetyMarginTokens,
           remainingTokens: finalMeasurement.remainingTokens,
+          availableOutputTokens: Math.trunc(
+            finalMeasurement.contextLength - finalMeasurement.inputTokens - config.safetyMarginTokens,
+          ),
+          minimumFinalOutputTokens: MIN_FINAL_OUTPUT_TOKENS,
+          finalizationTrigger,
           modelCallSkipped: true,
         });
         ctl.createStatus({
           status: "error",
-          text: "최소 연속성 컨텍스트도 선택한 모델의 입력 예산을 초과해 모델 호출을 중단했습니다.",
+          text: "도구 없는 최종 보고 입력에도 최소 출력 공간이 남지 않아 모델 호출을 중단했습니다.",
         });
         throw new Error(`CONTEXT_BUDGET_EXCEEDED: final model input exceeds the context budget by ${-finalMeasurement.remainingTokens} tokens`);
       }
@@ -1052,6 +1115,7 @@ export function createPredictionLoopHandler(
         remainingTokens: before.remainingTokens,
         finalExactMeasurement: finalMeasurement.exact,
         finalInputTokens: finalMeasurement.inputTokens,
+        outputReserve: roundOutputReserve,
         finalRemainingTokens: finalMeasurement.remainingTokens,
         finalFit: finalMeasurement.fit,
         finalMessageCount: finalMeasurement.messageCount,
@@ -1063,6 +1127,7 @@ export function createPredictionLoopHandler(
         availableUnrealTools: scope.availableUnrealTools,
         visibleToolCount: roundTools.length,
         auditCompletionPhase: finalizing ? "finalize_once" : boundedAudit ? "research" : "off",
+        auditFinalizationTrigger: finalizing ? finalizationTrigger : undefined,
         attachmentCount: attachmentContext.attachmentCount,
         inputAvailability: assembledInput.projection ? {
           mode: config.inputAvailabilityMode,
@@ -1114,11 +1179,13 @@ export function createPredictionLoopHandler(
       activeActivity.waitingForPrompt();
       const displayedMessages = new Set<ChatMessage>();
       const liveMessages = new Map<ChatMessage, { visibleMessage: ChatMessage; textStreamed: boolean }>();
-      const phaseTimeoutSignal = boundedAudit
-        ? AbortSignal.timeout(Math.max(1, finalizing
-          ? config.auditFinalSeconds * 1000
-          : researchDeadlineAt - Date.now()))
-        : null;
+      const phaseTimeoutSignal = finalizing
+        ? finalizationTrigger === "context_budget"
+          ? null
+          : AbortSignal.timeout(Math.max(1, config.auditFinalSeconds * 1000))
+        : boundedAudit
+          ? AbortSignal.timeout(Math.max(1, researchDeadlineAt - Date.now()))
+          : null;
       const roundSignal = phaseTimeoutSignal
         ? AbortSignal.any([ctl.abortSignal, phaseTimeoutSignal])
         : ctl.abortSignal;
@@ -1270,7 +1337,7 @@ export function createPredictionLoopHandler(
             }
           },
         },
-        finalizing ? { maxTokens: config.auditFinalMaxTokens } : {},
+        finalizing ? { maxTokens: roundOutputReserve } : {},
       );
       activeActivity.complete();
       activeActivity = null;
@@ -1374,6 +1441,7 @@ export function createPredictionLoopHandler(
           event: "bounded_audit_finalization",
           executionId,
           modelInputId,
+          trigger: finalizationTrigger,
           attempt: finalizationAttempts,
           maxAttempts: 1,
           deliveryState,
@@ -1395,18 +1463,23 @@ export function createPredictionLoopHandler(
       if (captured.failure !== undefined && !phaseTimedOut) throw captured.failure;
       if (phaseTimedOut) {
         finalizationPending = true;
+        finalizationTrigger = "research_timeout";
         roundIndex += 1;
         continue;
       }
       if (boundedAudit && captured.finishReason === "maxPredictedTokensReached") {
         finalizationPending = true;
+        finalizationTrigger = "research_output_limit";
         roundIndex += 1;
         continue;
       }
       if (!captured.continueAfterTools) break;
       if (boundedAudit && (
         roundIndex + 1 >= config.auditResearchRounds || Date.now() >= researchDeadlineAt
-      )) finalizationPending = true;
+      )) {
+        finalizationPending = true;
+        finalizationTrigger = "research_round_limit";
+      }
       roundIndex += 1;
     }
     if (activeNote && noteWorkingDirectory) {

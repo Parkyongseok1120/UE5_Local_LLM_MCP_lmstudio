@@ -69,7 +69,7 @@ PDF·Word·텍스트 첨부가 있으면 모델에 파일 이름, 첨부 ID, 형
 
 `Repeated tool rounds`와 `Within-generation repetition`은 서로 독립적입니다. 기본값은 둘 다 `Warn`이고, `Pause` 또는 `Off`를 선택할 수 있습니다. 도구 라운드는 기본 3회, 생성 텍스트는 80자 이상의 동일 블록이 기본 3회 연속될 때 감지합니다. 페이지 cursor가 전진하거나 파일 해시·결과 의미가 달라지면 도구 반복 횟수를 초기화합니다. `Observe only`에서는 두 감지기가 경고·중지 동작을 하지 않습니다.
 
-최종 모델 입력은 system/assistant 주입, 노출된 도구 스키마, 출력 reserve와 safety margin까지 합친 뒤 다시 측정합니다. 정확한 양수 적합성은 `true`, 양수 추정치는 `unknown`, 음수는 `false`로 보고합니다. 일반 모드에서 최소 보존 후보까지 음수면 `CONTEXT_BUDGET_EXCEEDED`로 모델 호출 전에 실패합니다. `Observe only`는 측정만 하고 기존 입력과 중지 동작을 바꾸지 않습니다.
+최종 모델 입력은 system/assistant 주입, 노출된 도구 스키마, 출력 reserve와 safety margin까지 합친 뒤 다시 측정합니다. 정확한 양수 적합성은 `true`, 양수 추정치는 `unknown`, 음수는 `false`로 보고합니다. 일반 조사 입력이 최소 보존 후보에서도 음수면 도구 정의를 제거한 최종 보고 입력으로 한 번 전환합니다. 이 컨텍스트 예산 구조 호출은 일반 호출의 출력 reserve를 유지하고 감사 모드의 별도 최종 시간 제한을 적용하지 않습니다. reserve가 모두 들어가지 않아도 safety margin 뒤에 256토큰 이상 남으면 정확한 가용량으로 낮춥니다. 최종 보고 입력조차 최소 출력 공간을 확보하지 못할 때만 `CONTEXT_BUDGET_EXCEEDED`로 모델 호출 전에 실패합니다. 최종 보고 시도는 최대 한 번이며 사용자 취소 뒤에는 새 호출을 만들지 않습니다. 선택형 bounded audit의 최종 출력 상한과 시간 제한은 그대로 해당 모드에만 적용됩니다. `Observe only`는 측정만 하고 기존 입력과 중지 동작을 바꾸지 않습니다.
 
 ## 플러그인 설치와 개발 검증
 

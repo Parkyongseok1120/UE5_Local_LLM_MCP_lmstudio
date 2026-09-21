@@ -192,6 +192,12 @@ test("empty audit answers are not rewarded for avoiding an overclaim", () => {
   assert.deepEqual(empty.reasons, ["not_evaluable:no_answer"]);
 });
 
+test("audit result collection preserves a finalization with no visible answer", () => {
+  assert.equal(auditEval.selectVisibleAnswer([], [{ deliveryState: "no_answer" }]), "");
+  assert.equal(auditEval.selectVisibleAnswer([" first ", " final "], [{}]), "final");
+  assert.equal(auditEval.selectVisibleAnswer(["first", "second"], []), "first\nsecond");
+});
+
 test("audit run outcomes are mutually exclusive and separate truncation from timeout", () => {
   const truncated = auditEval.classifyRunOutcome({
     visibleAnswer: "bounded report",

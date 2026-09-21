@@ -1156,7 +1156,7 @@ test("bounded audit exposes read-only research tools and gives the same model on
     identifier: "qwen/qwen3.8-27b",
     async getContextLength() { return 65536; },
     async applyPromptTemplate(chat) { return chat.toString(); },
-    async countTokens() { return 100; },
+    async countTokens(prompt) { return /research resource budget has ended/u.test(prompt) ? 60000 : 100; },
     async act(chat, tools, options) {
       actCount += 1;
       if (actCount === 1) {
@@ -1191,6 +1191,7 @@ test("bounded audit exposes read-only research tools and gives the same model on
     auditResearchSeconds: 100,
     auditFinalSeconds: 70,
     auditFinalMaxTokens: 4096,
+    maxOutputReserve: 8192,
   }, [readTool, mutationTool]);
 
   await handlePredictionLoop(ctl);
@@ -1203,6 +1204,10 @@ test("bounded audit exposes read-only research tools and gives the same model on
   assert.equal(finalization.toolCount, 0);
   assert.equal(finalization.deliveryState, "complete");
   assert.equal(finalization.predictionStats.predictedTokensCount, 40);
+  const finalMeasurement = ctl.debugValues.find(value => (
+    value.event === "direct_context_measurement" && value.auditCompletionPhase === "finalize_once"
+  ));
+  assert.equal(finalMeasurement.outputReserve, 4096);
 });
 
 test("bounded audit converts research output exhaustion into one tool-free final report", async () => {
@@ -1527,19 +1532,105 @@ test("final context fitness is exact at the reserve boundary", async () => {
   assert.equal(exceeded.fit, false);
 });
 
-test("negative final budget skips the selected model call", async () => {
+test("reserve pressure gets one adaptive tool-free final report instead of an immediate rejection", async () => {
   const history = Chat.from([
     { role: "system", content: "Preserve this policy." },
     { role: "user", content: "Review a very large history." },
-    { role: "assistant", content: "old ".repeat(2000) },
-    { role: "user", content: "Continue." },
   ]);
+  const tool = { name: "common_lookup", description: "Read-only lookup", parametersJsonSchema: { type: "object" },
+    pluginIdentifier: "mcp/other" };
+  let called = 0;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 32768; },
+    async applyPromptTemplate(_chat, options = {}) {
+      return options.toolDefinitions?.length ? "with-tools" : "without-tools";
+    },
+    async countTokens(prompt) { return prompt === "with-tools" ? 30000 : 28000; },
+    async act(chat, tools, options) {
+      called += 1;
+      assert.deepEqual(tools, []);
+      assert.equal(options.maxTokens, 3744);
+      assert.match(chat.toString(), /context budget/u);
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 28000,
+        predictedTokensCount: 100, totalTokensCount: 28100 } });
+      options.onMessage(ChatMessage.create("assistant", "Short final report."));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, {}, [tool]);
+  await handlePredictionLoop(ctl);
+  assert.equal(called, 1);
+  assert.equal(ctl.blocks.at(-1).text, "Short final report.");
+  const rescue = ctl.debugValues.find(value => value.event === "direct_context_budget_rescue");
+  assert.equal(rescue.trigger, "context_budget");
+  const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
+  assert.equal(finalization.trigger, "context_budget");
+  assert.equal(finalization.attempt, 1);
+  assert.equal(finalization.toolCount, 0);
+  assert.equal(finalization.deliveryState, "complete");
+  const finalMeasurement = ctl.debugValues.find(value => (
+    value.event === "direct_context_measurement" && value.auditCompletionPhase === "finalize_once"
+  ));
+  assert.equal(finalMeasurement.outputReserve, 3744);
+  assert.equal(finalMeasurement.finalRemainingTokens, 0);
+});
+
+test("context-budget rescue keeps the normal output reserve when it fits", async () => {
+  const history = Chat.from([{ role: "user", content: "Finish despite tool-schema pressure." }]);
+  const tool = { name: "common_lookup", description: "Read-only lookup", parametersJsonSchema: { type: "object" },
+    pluginIdentifier: "mcp/other" };
+  let called = 0;
+  let finalTools;
+  let finalMaxTokens;
+  let finalSignal;
+  let ctl;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 50000; },
+    async applyPromptTemplate(_chat, options = {}) {
+      return options.toolDefinitions?.length ? "with-tools" : "without-tools";
+    },
+    async countTokens(prompt) { return prompt === "with-tools" ? 43000 : 35000; },
+    async act(_chat, tools, options) {
+      called += 1;
+      finalTools = tools;
+      finalMaxTokens = options.maxTokens;
+      finalSignal = options.signal;
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 35000,
+        predictedTokensCount: 120, totalTokensCount: 35120 } });
+      options.onMessage(ChatMessage.create("assistant", "Final report with the normal output reserve."));
+    },
+  };
+  ctl = fakeController(history, selectedModel, {
+    maxOutputReserve: 8192,
+    auditFinalMaxTokens: 4096,
+    auditFinalSeconds: 1,
+  }, [tool]);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(called, 1);
+  assert.deepEqual(finalTools, []);
+  assert.equal(finalMaxTokens, 8192);
+  assert.equal(finalSignal.aborted, false);
+  const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
+  assert.equal(finalization.trigger, "context_budget");
+  assert.equal(finalization.deliveryState, "complete");
+  const finalMeasurement = ctl.debugValues.find(value => (
+    value.event === "direct_context_measurement" && value.auditCompletionPhase === "finalize_once"
+  ));
+  assert.equal(finalMeasurement.outputReserve, 8192);
+  assert.equal(finalMeasurement.finalRemainingTokens, 5784);
+});
+
+test("an input with less than the minimum safe final output still skips the selected model call", async () => {
+  const history = Chat.from([{ role: "user", content: "Review an irreducibly large input." }]);
   let called = false;
   const selectedModel = {
     identifier: "selected-model",
     async getContextLength() { return 32768; },
-    async applyPromptTemplate(chat) { return chat.toString(); },
-    async countTokens() { return 30000; },
+    async applyPromptTemplate() { return "oversized"; },
+    async countTokens() { return 32000; },
     async act() { called = true; },
   };
   const ctl = fakeController(history, selectedModel);
@@ -1548,6 +1639,7 @@ test("negative final budget skips the selected model call", async () => {
   const rejection = ctl.debugValues.find(value => value.event === "direct_context_budget_rejected");
   assert.equal(rejection.modelCallSkipped, true);
   assert.equal(rejection.fit, false);
+  assert.equal(rejection.finalizationTrigger, "context_budget");
 });
 
 test("tool-round stagnation requires equivalent calls and semantic results", () => {
