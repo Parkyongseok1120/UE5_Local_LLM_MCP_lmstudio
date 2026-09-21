@@ -77,6 +77,18 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "off", displayName: "Off" },
     ],
   }, "observe")
+  .field("auditCompletionMode", "select", {
+    displayName: "Bounded audit completion",
+    subtitle: "Optional read-only audit budget. When its research budget ends, the same model gets at most one tool-free opportunity to report from the evidence already collected.",
+    options: [
+      { value: "off", displayName: "Off (default)" },
+      { value: "bounded", displayName: "Bounded read-only audit (experimental)" },
+    ],
+  }, "off")
+  .field("auditResearchSeconds", "numeric", { displayName: "Audit research seconds", subtitle: "Maximum research time before the optional tool-free report opportunity." }, 100)
+  .field("auditResearchRounds", "numeric", { displayName: "Audit research rounds", subtitle: "Maximum completed research prediction rounds before the optional report opportunity." }, 12)
+  .field("auditFinalSeconds", "numeric", { displayName: "Audit report seconds", subtitle: "Maximum time for the single tool-free report opportunity." }, 70)
+  .field("auditFinalMaxTokens", "numeric", { displayName: "Audit report output limit", subtitle: "Predicted-token limit for the single tool-free report opportunity." }, 4096)
   .field("separateAttachments", "boolean", { displayName: "Separate document input (experimental)", subtitle: "Requires this preprocessor before document RAG. Preserve typed document references instead of injecting the full document." }, false)
   .field("reviewProgress", "boolean", { displayName: "Review continuity notes (experimental)", subtitle: "Allow bounded assistant review claims tied to observed file versions. Claims are not verified completion." }, false)
   .build();

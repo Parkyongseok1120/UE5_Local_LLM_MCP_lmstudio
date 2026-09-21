@@ -243,6 +243,7 @@ function parseToolResult(content) {
       for (const key of ["action", "comparison", "base", "head", "currentHead", "blobOid", "path",
         "repositoryIdentity", "workspaceIdentity", "snapshotId", "hasMore", "complete", "incomplete",
         "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total", "observedAt", "sourceConsistency", "submoduleWorktrees",
+        "since", "until", "authorQuery", "authorQuerySemantics", "identitySemantics",
         "queryPathBase", "requestedPathsCount", "requestedPathsOmitted", "requestedPathsSha256",
         "resolvedRepositoryPathsCount", "resolvedRepositoryPathsOmitted", "resolvedRepositoryPathsSha256"]) {
         if (source[key] !== undefined) git[key] = source[key];
@@ -255,7 +256,8 @@ function parseToolResult(content) {
       }
       if (Array.isArray(source.items)) {
         git.items = source.items.slice(0, 8).map(item => Object.fromEntries(
-          ["status", "path", "oldPath", "similarity", "commit", "subject"].filter(k => item?.[k] !== undefined)
+          ["status", "path", "oldPath", "similarity", "commit", "authoredAt", "authorName", "authorEmail",
+            "committedAt", "committerName", "committerEmail", "subject"].filter(k => item?.[k] !== undefined)
             .map(k => [k, typeof item[k] === "string" ? item[k].slice(0, 400) : item[k]])));
         git.omittedItems = Math.max(0, (decoded.value.items?.length || source.items.length) - git.items.length);
       }

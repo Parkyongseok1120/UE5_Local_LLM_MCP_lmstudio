@@ -46,6 +46,22 @@ function validRevision(value, name = "revision") {
     fail("invalid_revision", `${name} must be an explicit revision without options or whitespace`);
   return value;
 }
+function validDateFilter(value, name) {
+  if (typeof value !== "string" || value.length > 64
+    || !/^\d{4}-\d{2}-\d{2}(?:[Tt][0-2]\d:[0-5]\d(?::[0-6]\d(?:\.\d{1,9})?)?(?:[Zz]|[+-][0-2]\d:[0-5]\d))?$/u.test(value)
+    || Number.isNaN(Date.parse(value))) {
+    fail("invalid_arguments", `${name} must be YYYY-MM-DD or an RFC 3339 timestamp with timezone`);
+  }
+  return value;
+}
+function validAuthorQuery(value) {
+  if (typeof value !== "string" || !value.trim() || value.length > 320 || /[\0\r\n]/u.test(value))
+    fail("invalid_arguments", "authorQuery must be a non-empty bounded author name or email fragment");
+  return value;
+}
+function literalRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
 function comparisonArgs(a) {
   if (!["range", "worktree", "staged", "last_commit"].includes(a.comparison))
     fail("invalid_arguments", "Set comparison explicitly; range requires base/head, worktree and staged forbid them");
@@ -136,7 +152,7 @@ class VersionControl {
     if (a.cursor !== undefined && (typeof a.cursor !== "string" || !a.cursor || a.cursor.length > 4096))
       fail("invalid_cursor", "cursor must be a bounded string");
     if (!["status", "log", "diff", "changed_files", "diff_file", "read_file"].includes(a.action)) fail("invalid_arguments", "Unknown Git operation");
-    const fields = { status: ["paths"], log: ["paths", "revision"],
+    const fields = { status: ["paths"], log: ["paths", "revision", "since", "until", "authorQuery"],
       diff: ["paths", "comparison", "base", "head", "startLine"],
       changed_files: ["paths", "comparison", "base", "head"],
       diff_file: ["path", "comparison", "base", "head", "startLine"],
@@ -148,6 +164,11 @@ class VersionControl {
     if (["diff", "changed_files", "diff_file"].includes(a.action)) comparisonArgs(a);
     else if (a.comparison !== undefined || a.base !== undefined || a.head !== undefined) fail("invalid_arguments", "This operation forbids comparison/base/head");
     const s = this.scope(), paths = this.pathspecs(s.gitRoot, s.projectPrefix, a.path ? [a.path] : a.paths);
+    if (a.action === "log") {
+      if (a.since !== undefined) validDateFilter(a.since, "since");
+      if (a.until !== undefined) validDateFilter(a.until, "until");
+      if (a.authorQuery !== undefined) validAuthorQuery(a.authorQuery);
+    }
     if (["diff_file", "read_file"].includes(a.action) && !a.path) fail("invalid_arguments", "Exact path required");
     const { cursor, limit, byteBudget, startLine, ...semantic } = a;
     const query = JSON.stringify([s.repositoryIdentity, s.workspaceIdentity, Object.fromEntries(Object.entries(semantic).sort(([a], [b]) => a.localeCompare(b)))]);
@@ -184,8 +205,29 @@ class VersionControl {
       const head = run(gitRoot, ["rev-parse", "--verify", "-q", "HEAD^{commit}"], { optional: true }); facts.head = head ? line(head) : null;
     } else if (a.action === "log") {
       facts.head = this.resolve(s, a.revision || "HEAD");
-      const tokens = text(run(gitRoot, ["log", "--no-show-signature", "-n5001", "--format=%H%x00%aI%x00%s%x00", facts.head, "--", ...paths])).split("\0");
-      for (let i = 0; i + 2 < tokens.length; i += 3) rows.push({ commit: tokens[i].replace(/^\n/, ""), authoredAt: tokens[i + 1], subject: tokens[i + 2] });
+      const filters = [
+        ...(a.since ? [`--since=${a.since}`] : []),
+        ...(a.until ? [`--until=${a.until}`] : []),
+        ...(a.authorQuery ? [`--author=${literalRegex(a.authorQuery)}`] : []),
+      ];
+      Object.assign(facts, {
+        ...(a.since ? { since: a.since } : {}),
+        ...(a.until ? { until: a.until } : {}),
+        ...(a.authorQuery ? { authorQuery: a.authorQuery, authorQuerySemantics: "literal_name_or_email_fragment" } : {}),
+        identitySemantics: "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility",
+      });
+      const tokens = text(run(gitRoot, ["log", "--no-show-signature", "-n5001", ...filters,
+        "--format=%H%x00%aI%x00%an%x00%ae%x00%cI%x00%cn%x00%ce%x00%s%x00", facts.head, "--", ...paths])).split("\0");
+      for (let i = 0; i + 7 < tokens.length; i += 8) rows.push({
+        commit: tokens[i].replace(/^\n/, ""),
+        authoredAt: tokens[i + 1],
+        authorName: tokens[i + 2],
+        authorEmail: tokens[i + 3],
+        committedAt: tokens[i + 4],
+        committerName: tokens[i + 5],
+        committerEmail: tokens[i + 6],
+        subject: tokens[i + 7],
+      });
       facts.incomplete = rows.length > 5000; rows = rows.slice(0, 5000);
     } else if (a.action === "read_file") {
       facts.head = this.resolve(s, a.revision); facts.path = a.path;

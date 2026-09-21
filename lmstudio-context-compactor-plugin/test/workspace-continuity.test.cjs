@@ -97,6 +97,34 @@ test("Git memory preserves comparison identity but does not invent source covera
   assert.equal(committed.startLine, undefined); assert.equal(committed.gitObservation.sha256, "a".repeat(64));
 });
 
+test("Git log memory preserves author and committer evidence without promoting responsibility", () => {
+  const parsed = parseToolResult(JSON.stringify({
+    kind: "git_observation",
+    action: "log",
+    repositoryIdentity: "repo",
+    workspaceIdentity: "workspace",
+    since: "2026-09-14",
+    authorQuery: "Yongseok",
+    authorQuerySemantics: "literal_name_or_email_fragment",
+    identitySemantics: "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility",
+    items: [{
+      commit: "a".repeat(40),
+      authoredAt: "2026-09-14T09:00:00+09:00",
+      authorName: "Yongseok Park",
+      authorEmail: "yongseok@example.invalid",
+      committedAt: "2026-09-14T10:00:00+09:00",
+      committerName: "Integrator",
+      committerEmail: "integrator@example.invalid",
+      subject: "context work",
+    }],
+  }));
+  assert.equal(parsed.gitObservation.items[0].authorName, "Yongseok Park");
+  assert.equal(parsed.gitObservation.items[0].committerName, "Integrator");
+  assert.equal(parsed.gitObservation.identitySemantics,
+    "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility");
+  assert.equal(parsed.responsiblePerson, undefined);
+});
+
 test("review claims require observed version and disappear after a new hash", () => {
   const history = Chat.from([{ role: "user", content: "Review this project" }]);
   const add = (id, hash) => {

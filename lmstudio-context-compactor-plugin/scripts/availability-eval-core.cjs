@@ -137,6 +137,29 @@ function answerMatchesOracle(visibleAnswer, expected = {
 
 function auditAnswerMatchesOracle(visibleAnswer) {
   const text = String(visibleAnswer || "");
+  if (!text.trim()) {
+    return {
+      pass: false,
+      score: 0,
+      maximumScore: 10,
+      applicableScore: 0,
+      reportPresent: false,
+      checks: {
+        resetLocation: null,
+        addMoneyLocation: null,
+        settlementDistinction: null,
+        directSearchNotConclusive: null,
+        serializedBinding: null,
+        selfRemoval: null,
+        lowerRemovalRisk: null,
+        runtimeUnknown: null,
+        runtimeMinimum: null,
+        noRuntimeOverclaim: null,
+      },
+      reasons: ["not_evaluable:no_answer"],
+      humanReviewRequired: true,
+    };
+  }
   const resetLocation = /GuestManager(?:\.cs)?[^\n]{0,100}(?:line|줄|:)\s*189\b|(?:line|줄)\s*189\b[^\n]{0,100}GuestManager/iu.test(text);
   const addMoneyLocation = /GuestManager(?:\.cs)?[^\n]{0,100}(?:line|줄|:)\s*1036\b|(?:line|줄)\s*1036\b[^\n]{0,100}GuestManager/iu.test(text);
   const settlementDistinction = /(?:per[- ]?session|session|게스트|세션)[^\n]{0,160}(?:AddMoney|지급|wallet|지갑)[^\n]{0,200}(?:day[- ]?end|DailySales|일일|하루|보고|집계)|(?:day[- ]?end|DailySales|일일|하루|보고|집계)[^\n]{0,200}(?:per[- ]?session|session|게스트|세션)[^\n]{0,160}(?:AddMoney|지급|wallet|지갑)/iu.test(text);
@@ -166,6 +189,8 @@ function auditAnswerMatchesOracle(visibleAnswer) {
     pass: reasons.length === 0,
     score: Object.values(checks).filter(Boolean).length,
     maximumScore: Object.keys(checks).length,
+    applicableScore: Object.keys(checks).length,
+    reportPresent: true,
     checks,
     reasons,
     humanReviewRequired: true,

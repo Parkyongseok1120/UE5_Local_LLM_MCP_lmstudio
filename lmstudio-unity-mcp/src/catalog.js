@@ -22,6 +22,8 @@ const tools = [
   tool("unity_status", "Observe the bound project, Editor session, independent states and capabilities. Works offline.", {}),
   tool("unity_git", "Read exact Git evidence for the bound Unity project: status, commits, changed_files, diff_file, read_file at revision, or a bounded diff. Diff operations require explicit comparison; range requires base/head and other comparisons forbid them. Use nextCursor to read the same snapshot. Read-only; never stages, commits, checks out or selects what should be reviewed.",
     { action: enumeration("status", "log", "diff", "changed_files", "diff_file", "read_file"), comparison: enumeration("worktree", "staged", "last_commit", "range"), base: str, head: str, revision: str, path: str,
+      since: { type: "string", minLength: 10, maxLength: 64 }, until: { type: "string", minLength: 10, maxLength: 64 },
+      authorQuery: { type: "string", minLength: 1, maxLength: 320 },
       paths: array(str, 16), startLine: integer(1, 10000000), ...paging }, ["action"]),
   tool("list_directory", "List only direct children of one project directory. Assets, Packages and ProjectSettings are readable; '.' or './' is only an Assets-root alias. No recursion, file content or role inference; kind optionally filters files or directories.",
     { path: str, kind: enumeration("all", "files", "directories"), ...paging }, ["path"]),

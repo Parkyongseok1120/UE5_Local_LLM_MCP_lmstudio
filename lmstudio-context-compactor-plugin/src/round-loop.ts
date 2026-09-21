@@ -29,6 +29,12 @@ export type CapturedRound = {
   continueAfterTools: boolean;
   failure?: unknown;
   finishReason?: string;
+  predictionStats?: {
+    stopReason: string;
+    promptTokensCount?: number;
+    predictedTokensCount?: number;
+    totalTokensCount?: number;
+  };
 };
 
 export async function runOneToolRound(
@@ -37,6 +43,7 @@ export async function runOneToolRound(
   tools: Array<Tool>,
   parentSignal: AbortSignal,
   callbacks: RoundCallbacks,
+  predictionOptions: Pick<LLMActionOpts, "maxTokens"> = {},
 ): Promise<CapturedRound> {
   const messages: Array<ChatMessage> = [];
   const roundAbort = new AbortController();
@@ -46,6 +53,7 @@ export async function runOneToolRound(
   let boundaryRequested = false;
   let failure: unknown;
   let finishReason: string | undefined;
+  let predictionStats: CapturedRound["predictionStats"];
   let fragmentAbortReason: Error | undefined;
 
   const forwardAbort = () => {
@@ -58,6 +66,7 @@ export async function runOneToolRound(
     const { onMessageCaptured, abortAfterPredictionFragment, ...actCallbacks } = callbacks;
     await tokenSource.act(history, tools, {
       signal: roundAbort.signal,
+      ...predictionOptions,
       ...actCallbacks,
       onPredictionFragment: (fragment) => {
         actCallbacks.onPredictionFragment?.(fragment);
@@ -68,7 +77,20 @@ export async function runOneToolRound(
         }
       },
       onPredictionCompleted: (result) => {
-        finishReason = String((result as { stats?: { stopReason?: unknown } }).stats?.stopReason || "unknown");
+        const stats = (result as { stats?: {
+          stopReason?: unknown;
+          promptTokensCount?: unknown;
+          predictedTokensCount?: unknown;
+          totalTokensCount?: unknown;
+        } }).stats;
+        finishReason = String(stats?.stopReason || "unknown");
+        const finite = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : undefined;
+        predictionStats = {
+          stopReason: finishReason,
+          ...(finite(stats?.promptTokensCount) === undefined ? {} : { promptTokensCount: finite(stats?.promptTokensCount) }),
+          ...(finite(stats?.predictedTokensCount) === undefined ? {} : { predictedTokensCount: finite(stats?.predictedTokensCount) }),
+          ...(finite(stats?.totalTokensCount) === undefined ? {} : { totalTokensCount: finite(stats?.totalTokensCount) }),
+        };
       },
       onMessage: (message) => {
         messages.push(message);
@@ -92,6 +114,7 @@ export async function runOneToolRound(
     continueAfterTools: boundaryRequested,
     ...(fragmentAbortReason ? { finishReason: "generation_repetition_paused" }
       : finishReason === undefined ? {} : { finishReason }),
+    ...(predictionStats ? { predictionStats } : {}),
     ...(failure === undefined ? {} : { failure }),
   };
 }

@@ -1,8 +1,10 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const path = require("node:path");
 
 const PROJECT_IDENTITY = "C:\\SyntheticAudit\\AuditProject.uproject";
+const PROJECT_ROOT = path.win32.dirname(PROJECT_IDENTITY);
 
 function paddedSource(name, totalLines, inserts, preamble = []) {
   const lines = Array.from({ length: totalLines }, (_, index) => (
@@ -97,9 +99,10 @@ const files = [
 
 const FILES = new Map(files.map(file => [file.path, file]));
 
-function readPayload(path, startLine = 1, endLine = Number.MAX_SAFE_INTEGER) {
-  const file = FILES.get(String(path || ""));
-  if (!file) return { ok: false, errorCode: "NOT_FOUND", message: `Synthetic file not found: ${path}` };
+function readPayload(filePath, startLine = 1, endLine = Number.MAX_SAFE_INTEGER) {
+  const normalizedPath = String(filePath || "").replace(/^project:\/\//iu, "");
+  const file = FILES.get(normalizedPath);
+  if (!file) return { ok: false, errorCode: "NOT_FOUND", message: `Synthetic file not found: ${filePath}` };
   const start = Math.max(1, Math.min(file.lines.length, Math.trunc(Number(startLine) || 1)));
   const requestedEnd = Math.max(start, Math.trunc(Number(endLine) || file.lines.length));
   const end = Math.min(file.lines.length, requestedEnd, start + 219);
@@ -107,7 +110,13 @@ function readPayload(path, startLine = 1, endLine = Number.MAX_SAFE_INTEGER) {
     ok: true,
     kind: "workspace_file_observation",
     projectIdentity: PROJECT_IDENTITY,
-    path: file.path,
+    path: `project://${file.path}`,
+    resolvedRootType: "active_project",
+    projectRelativePath: file.path,
+    workspaceRelativePath: file.path,
+    absolutePath: path.win32.join(PROJECT_ROOT, ...file.path.split("/")),
+    activeProject: PROJECT_IDENTITY,
+    displayPath: `project://${file.path}`,
     sha256: file.sha256,
     startLine: start,
     endLine: end,
@@ -139,6 +148,7 @@ module.exports = {
   AUDIT_QUESTION,
   FILES,
   PROJECT_IDENTITY,
+  PROJECT_ROOT,
   SYSTEM_PROMPT,
   files,
   readPayload,

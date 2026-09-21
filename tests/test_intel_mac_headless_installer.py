@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_intel_mac_installer_dry_run(tmp_path: Path) -> None:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("Bash is unavailable on this host")
     project = tmp_path / "My Game"
     engine = tmp_path / "UE 5.7"
     project.mkdir()
@@ -23,7 +26,7 @@ def test_intel_mac_installer_dry_run(tmp_path: Path) -> None:
 
     completed = subprocess.run(
         [
-            "bash",
+            bash,
             str(ROOT / "install-intel-mac.sh"),
             "--project",
             str(uproject),

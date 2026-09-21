@@ -101,6 +101,49 @@ test("changed files pin commits, preserve rename and page one immutable snapshot
   const old = await f.call({ action: "read_file", revision: head, path: "Assets/New.cs" });
   assert.match(old.text, /class Example/); assert.equal(old.head, head);
 });
+test("git log returns author and committer evidence with bounded date and literal author filters", async t => {
+  const f = fixture(t);
+  const datedCommit = (file, subject, author, email, authoredAt, committedAt) => {
+    f.put(file, `${subject}\n`);
+    f.git("add", file);
+    execFileSync("git", ["commit", "-qm", subject, `--author=${author} <${email}>`], {
+      cwd: f.root,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_DATE: authoredAt,
+        GIT_COMMITTER_DATE: committedAt,
+      },
+    });
+  };
+  datedCommit("Assets/A.cs", "yongseok change", "Yongseok Park", "yongseok@example.invalid",
+    "2026-09-14T09:00:00+09:00", "2026-09-14T10:00:00+09:00");
+  datedCommit("Assets/B.cs", "other change", "Other Author", "other@example.invalid",
+    "2026-09-15T09:00:00+09:00", "2026-09-15T10:00:00+09:00");
+
+  const selected = await f.call({
+    action: "log",
+    since: "2026-09-14T00:00:00+09:00",
+    until: "2026-09-14T23:59:59+09:00",
+    authorQuery: "Yongseok Park",
+  });
+  assert.equal(selected.items.length, 1, JSON.stringify(selected));
+  assert.equal(selected.items[0].authorName, "Yongseok Park");
+  assert.equal(selected.items[0].authorEmail, "yongseok@example.invalid");
+  assert.equal(selected.items[0].committerName, "Test");
+  assert.equal(selected.items[0].committerEmail, "test@example.invalid");
+  assert.equal(selected.identitySemantics,
+    "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility");
+  assert.equal(selected.authorQuerySemantics, "literal_name_or_email_fragment");
+
+  const first = await f.call({ action: "log", limit: 1 });
+  assert(first.nextCursor);
+  assert.equal((await f.call({
+    action: "log", limit: 1, authorQuery: "Yongseok", cursor: first.nextCursor,
+  })).errorCode, "invalid_cursor");
+  assert.equal((await f.call({ action: "log", since: "2026/09/14" })).errorCode,
+    "invalid_arguments");
+});
 test("unborn status, root commit, literal paths and result budgets", async t => {
   const f = fixture(t);
   const unborn = await f.call({ action: "status" }); assert.equal(unborn.head, null, JSON.stringify(unborn));

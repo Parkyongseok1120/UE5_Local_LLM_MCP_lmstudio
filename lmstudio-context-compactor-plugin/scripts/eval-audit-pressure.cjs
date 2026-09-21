@@ -78,7 +78,7 @@ function buildInitialHistory(contractText = "") {
   return history;
 }
 
-function controller(history, tokenSource, tool, mode, recorder) {
+function controller(history, tokenSource, tool, mode, recorder, configOverrides = {}) {
   const blocks = [];
   const debugValues = [];
   const statuses = [];
@@ -102,8 +102,14 @@ function controller(history, tokenSource, tool, mode, recorder) {
     generationRepetitionAction: "warn",
     generationRepeatCount: 3,
     inputAvailabilityMode: mode,
+    auditCompletionMode: "off",
+    auditResearchSeconds: 100,
+    auditResearchRounds: 12,
+    auditFinalSeconds: 70,
+    auditFinalMaxTokens: 4096,
     reviewProgress: false,
     separateAttachments: false,
+    ...configOverrides,
   };
   const session = { tools: [tool], [Symbol.dispose]() {} };
   return {
@@ -169,10 +175,18 @@ function availabilityEvidence(measurements, modelInputs, initialHistory, calls) 
   return comparisons;
 }
 
-async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractText) {
-  const mode = group === "B" ? "inject" : "observe";
-  const history = buildInitialHistory(group === "C" ? contractText : "");
-  const recorder = { latestMeasurement: null, activeModelInputId: null, modelInputs: new Map(), calls: [] };
+async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractText, runOptions = {}) {
+  const mode = runOptions.inputAvailabilityMode || (group === "B" ? "inject" : "observe");
+  const contractSelected = runOptions.auditContractSelected ?? group === "C";
+  const auditCompletionMode = runOptions.auditCompletionMode === "bounded" ? "bounded" : "off";
+  const history = buildInitialHistory(contractSelected ? contractText : "");
+  const recorder = {
+    latestMeasurement: null,
+    activeModelInputId: null,
+    modelInputs: new Map(),
+    calls: [],
+    modelActs: [],
+  };
   const tool = rawFunctionTool({
     name: "read_file_range",
     description: "Read an exact line range from one of the eight synthetic audit files. Returns at most 220 lines.",
@@ -189,6 +203,9 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
       return payload;
     },
   });
+  // The real MCP supplies this identity. Keep the runtime fixture on the same
+  // read-only tool classification path when bounded completion is selected.
+  tool.pluginIdentifier = "mcp/unreal-agent";
   const fixedModel = {
     identifier: model.identifier,
     getContextLength: () => model.getContextLength(),
@@ -198,10 +215,25 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
       const modelInputId = recorder.latestMeasurement?.modelInputId || `unmatched:${recorder.modelInputs.size}`;
       recorder.activeModelInputId = modelInputId;
       recorder.modelInputs.set(modelInputId, Chat.from(chat));
-      return model.act(chat, tools, { ...options, temperature: 0, seed, maxTokens: 1800 });
+      const maxTokens = options.maxTokens ?? Number(runOptions.researchMaxTokens || 1800);
+      recorder.modelActs.push({
+        sequence: recorder.modelActs.length + 1,
+        modelInputId,
+        toolCount: tools.length,
+        toolNames: tools.map(item => item.name),
+        maxTokens,
+      });
+      return model.act(chat, tools, { ...options, temperature: 0, seed, maxTokens });
     },
   };
-  const ctl = controller(history, fixedModel, tool, mode, recorder);
+  const completionConfig = {
+    auditCompletionMode,
+    auditResearchSeconds: Number(runOptions.auditResearchSeconds || 100),
+    auditResearchRounds: Number(runOptions.auditResearchRounds || 12),
+    auditFinalSeconds: Number(runOptions.auditFinalSeconds || 70),
+    auditFinalMaxTokens: Number(runOptions.auditFinalMaxTokens || 4096),
+  };
+  const ctl = controller(history, fixedModel, tool, mode, recorder, completionConfig);
   const started = Date.now();
   let error = null;
   try {
@@ -209,11 +241,15 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
   } catch (caught) {
     error = String(caught?.stack || caught);
   }
-  const visibleAnswer = ctl.blocks
+  const visibleBlocks = ctl.blocks
     .filter(block => block.options?.style?.type !== "thinking")
-    .map(block => block.text).join("").trim();
+    .map(block => block.text.trim()).filter(Boolean);
+  const finalizations = ctl.debugValues.filter(value => value.event === "bounded_audit_finalization");
+  const visibleAnswer = (finalizations.length ? visibleBlocks.at(-1) : visibleBlocks.join("\n")).trim();
   const measurements = ctl.debugValues.filter(value => value.event === "direct_context_measurement");
   const rounds = ctl.debugValues.filter(value => value.event === "direct_round_observation");
+  const runtimeToolCalls = rounds.flatMap(round => round.toolTrace?.runtime || []);
+  const uniqueRuntimeCalls = new Map(runtimeToolCalls.map(call => [call.callKey, call]));
   const comparisons = availabilityEvidence(measurements, recorder.modelInputs, history, recorder.calls);
   const causalMetrics = evalCore.evaluateCausalCalls({
     initialMessages: history, modelInputs: recorder.modelInputs, calls: recorder.calls,
@@ -221,12 +257,14 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
   const firstAvailability = comparisons[0] || {};
   const rubric = evalCore.auditAnswerMatchesOracle(visibleAnswer);
   const timedOut = ctl.abortSignal.aborted;
-  return {
+  const run = {
     phase,
     pairIndex,
     group,
     mode,
-    auditContractSelected: group === "C",
+    auditContractSelected: contractSelected,
+    auditCompletionMode,
+    auditCompletionConfig: completionConfig,
     seed,
     modelIdentifier: model.identifier,
     modelPath: modelInfo.path || null,
@@ -243,7 +281,13 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     pressureExposure: measurements.some(value => value.compactionAppliedCount > 0)
       && Number(firstAvailability.currentFullCount || 0) > 0
       && Number(firstAvailability.currentAbsentCount || 0) > 0,
-    generatedToolCalls: recorder.calls.length,
+    generatedToolCalls: [...uniqueRuntimeCalls.values()].filter(call => (
+      call.generationState === "generated" || call.generationState === "finalized"
+    )).length,
+    dispatchedToolCalls: [...uniqueRuntimeCalls.values()].filter(call => (
+      call.executionState === "dispatched"
+    )).length,
+    implementationEnteredToolCalls: recorder.calls.length,
     callStatusCounts: causalMetrics.statusCounts,
     rangeMetricsByUnit: causalMetrics.byUnit,
     callMetrics: causalMetrics.perCall,
@@ -261,27 +305,81 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     })),
     visibleAnswer,
     error,
+    modelActs: recorder.modelActs,
+    boundedFinalizations: finalizations,
+    boundedFinalModelCalls: recorder.modelActs.filter(act => act.modelInputId.endsWith(":final-report")).length,
+    boundedFinalToolCalls: recorder.calls.filter(call => (
+      String(call.causalModelInputId || "").endsWith(":final-report")
+    )).length,
     trace: {
       executionId: measurements.at(-1)?.executionId || null,
       modelInputId: measurements.at(-1)?.modelInputId || null,
       roundFinishReasons: rounds.map(round => round.finishReason),
+      roundPredictionStats: rounds.map(round => round.predictionStats || null),
     },
+  };
+  return { ...run, outcome: classifyRunOutcome(run) };
+}
+
+function classifyRunOutcome(run) {
+  const answer = String(run?.visibleAnswer || "").trim();
+  const finishReason = String(run?.trace?.roundFinishReasons?.at(-1) || "unknown");
+  const boundedFinalization = run?.boundedFinalizations?.at(-1) || null;
+  let executionOutcome;
+  if (run?.timedOut) executionOutcome = "timed_out";
+  else if (boundedFinalization?.finishReason === "final_timeout") executionOutcome = "timed_out";
+  else if (finishReason === "userStopped") executionOutcome = "canceled";
+  else if (run?.error) executionOutcome = "failed";
+  else if (boundedFinalization?.deliveryState === "no_answer") executionOutcome = "no_answer";
+  else if (boundedFinalization?.deliveryState === "truncated") executionOutcome = "truncated";
+  else if (boundedFinalization?.deliveryState === "partial") executionOutcome = "failed";
+  else if (boundedFinalization?.deliveryState === "complete") executionOutcome = "completed";
+  else if (finishReason === "maxPredictedTokensReached") executionOutcome = "truncated";
+  else if (!answer) executionOutcome = "no_answer";
+  else executionOutcome = "completed";
+  return {
+    executionOutcome,
+    reportPresent: Boolean(answer),
+    reportCompleted: executionOutcome === "completed",
+    deliveryState: executionOutcome === "completed" ? "complete"
+      : !answer ? "no_answer"
+        : executionOutcome === "truncated" ? "truncated" : "partial",
+    finalFinishReason: finishReason,
   };
 }
 
 function summarize(runs, group) {
-  const selected = runs.filter(run => run.group === group);
+  const selected = runs.filter(run => run.group === group).map(run => ({
+    ...run,
+    outcome: run.outcome || classifyRunOutcome(run),
+  }));
+  const outcomeCounts = Object.fromEntries([
+    "completed", "truncated", "no_answer", "failed", "canceled", "timed_out",
+  ].map(outcome => [outcome, selected.filter(run => run.outcome.executionOutcome === outcome).length]));
+  const successfulRawReturns = selected.reduce((sum, run) => (
+    sum + Number(run.callStatusCounts?.succeeded || 0)
+  ), 0);
+  const measuredLineRuns = selected.filter(run => Number(run.rangeMetricsByUnit?.line?.returnedUnits || 0) > 0);
   return {
     n: selected.length,
     pressureExposureRuns: selected.filter(run => run.pressureExposure).length,
-    successfulRuns: selected.filter(run => !run.error).length,
-    errors: selected.filter(run => run.error).length,
-    timeouts: selected.filter(run => run.timedOut).length,
+    outcomeCounts,
+    successfulRuns: outcomeCounts.completed,
+    errors: outcomeCounts.failed,
+    timeouts: outcomeCounts.timed_out,
     totalCompactions: selected.reduce((sum, run) => sum + run.compactionCount, 0),
     generatedToolCalls: selected.reduce((sum, run) => sum + run.generatedToolCalls, 0),
+    dispatchedToolCalls: selected.reduce((sum, run) => sum + Number(run.dispatchedToolCalls || 0), 0),
+    implementationEnteredToolCalls: selected.reduce((sum, run) => (
+      sum + Number(run.implementationEnteredToolCalls ?? run.generatedToolCalls ?? 0)
+    ), 0),
+    successfulRawReturns,
     historicalReacquisitionLines: selected.reduce((sum, run) => (
       sum + Number(run.rangeMetricsByUnit.line?.historicalReacquisitionUnits || 0)
     ), 0),
+    historicalReacquisitionEvaluableRuns: measuredLineRuns.length,
+    historicalReacquisitionEvaluation: measuredLineRuns.length
+      ? "measured" : "not_evaluable_no_successful_line_return",
     groundedAnswers: selected.filter(run => run.answerEvaluation.pass).length,
     answerScores: selected.map(run => run.answerEvaluation.score),
     oracleProjectionMatches: selected.filter(run => run.availabilityProjectionMatchesOracle).length,
@@ -320,14 +418,14 @@ async function main() {
       runs.push(run);
       process.stdout.write(`${JSON.stringify({ phase: run.phase, group, pressureExposure: run.pressureExposure,
         compactions: run.compactionCount, calls: run.generatedToolCalls, score: run.answerEvaluation.score,
-        elapsedMs: run.elapsedMs, error: run.error })}\n`);
+        outcome: run.outcome, elapsedMs: run.elapsedMs, error: run.error })}\n`);
     }
   }
   const pilotExposureSatisfied = acOnly ? null : runs
     .filter(run => run.phase === "pilot")
     .every(run => run.pressureExposure);
   const pilotSuccessfulRuns = runs
-    .filter(run => run.phase === "pilot" && !run.error).length;
+    .filter(run => run.phase === "pilot" && run.outcome.executionOutcome === "completed").length;
   if (!acOnly && pilotExposureSatisfied) {
     for (let pairIndex = 1; pairIndex <= mainPairs; pairIndex += 1) {
       const groups = pairIndex % 2 === 0 ? ["B", "A"] : ["A", "B"];
@@ -337,7 +435,7 @@ async function main() {
         process.stdout.write(`${JSON.stringify({ phase: run.phase, pairIndex, group,
           pressureExposure: run.pressureExposure, compactions: run.compactionCount,
           calls: run.generatedToolCalls, score: run.answerEvaluation.score,
-          elapsedMs: run.elapsedMs, error: run.error })}\n`);
+          outcome: run.outcome, elapsedMs: run.elapsedMs, error: run.error })}\n`);
       }
     }
   }
@@ -350,7 +448,7 @@ async function main() {
         process.stdout.write(`${JSON.stringify({ phase: run.phase, pairIndex, group,
           pressureExposure: run.pressureExposure, compactions: run.compactionCount,
           calls: run.generatedToolCalls, score: run.answerEvaluation.score,
-          elapsedMs: run.elapsedMs, error: run.error })}\n`);
+          outcome: run.outcome, elapsedMs: run.elapsedMs, error: run.error })}\n`);
       }
     }
   }
@@ -421,9 +519,13 @@ async function main() {
         pilotExposureSatisfied,
         pilotSuccessfulRuns,
         requestedMainPairs: mainPairs,
-        completedMainPairs: Math.min(
+        recordedMainPairs: Math.min(
           mainRuns.filter(run => run.group === "A").length,
           mainRuns.filter(run => run.group === "B").length,
+        ),
+        completedReportPairs: Math.min(
+          mainRuns.filter(run => run.group === "A" && run.outcome.executionOutcome === "completed").length,
+          mainRuns.filter(run => run.group === "B" && run.outcome.executionOutcome === "completed").length,
         ),
         A: summarize(mainRuns, "A"),
         B: summarize(mainRuns, "B"),
@@ -431,9 +533,13 @@ async function main() {
       auditInstructionsAC: {
         exploratory: true,
         requestedPairs: contractPairs,
-        completedPairs: Math.min(
+        recordedPairs: Math.min(
           contractRuns.filter(run => run.group === "A").length,
           contractRuns.filter(run => run.group === "C").length,
+        ),
+        completedReportPairs: Math.min(
+          contractRuns.filter(run => run.group === "A" && run.outcome.executionOutcome === "completed").length,
+          contractRuns.filter(run => run.group === "C" && run.outcome.executionOutcome === "completed").length,
         ),
         A: summarize(contractRuns, "A"),
         C: summarize(contractRuns, "C"),
@@ -455,7 +561,7 @@ async function main() {
   fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`);
   process.stdout.write(`${JSON.stringify({ output, pilotExposureSatisfied,
     comparisons: report.comparisons })}\n`);
-  if (runs.some(run => run.error)) process.exitCode = 1;
+  if (runs.some(run => run.outcome.executionOutcome !== "completed")) process.exitCode = 1;
 }
 
 if (require.main === module) {
@@ -465,4 +571,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildInitialHistory, oneRun };
+module.exports = { buildInitialHistory, classifyRunOutcome, oneRun, summarize };

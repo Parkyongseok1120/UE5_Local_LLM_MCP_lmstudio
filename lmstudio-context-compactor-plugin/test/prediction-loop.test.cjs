@@ -1143,6 +1143,151 @@ test("tool generation, finalized requests, results, and the final answer update 
   assert.equal(toolStatus.removed, true);
 });
 
+test("bounded audit exposes read-only research tools and gives the same model one tool-free final report", async () => {
+  const history = Chat.from([{ role: "user", content: "Audit the project and report." }]);
+  const request = { id: "bounded-read", type: "function", name: "read_file",
+    arguments: { path: "project://Source/A.cpp" } };
+  const readTool = { name: "read_file", description: "Read source", parametersJsonSchema: { type: "object" },
+    pluginIdentifier: "mcp/unreal-agent" };
+  const mutationTool = { name: "write_file", description: "Write source", parametersJsonSchema: { type: "object" },
+    pluginIdentifier: "mcp/unreal-agent" };
+  let actCount = 0;
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, tools, options) {
+      actCount += 1;
+      if (actCount === 1) {
+        assert.deepEqual(tools.map(tool => tool.name), ["read_file"]);
+        assert.equal(Object.hasOwn(options, "maxTokens"), false);
+        await options.guardToolCall(0, 501, {
+          toolCallRequest: request,
+          allow() {},
+          allowAndOverrideParameters() {},
+          deny(reason) { throw new Error(reason); },
+        });
+        options.onToolCallRequestFinalized(0, 501, { toolCallRequest: request });
+        options.onMessage(ChatMessage.from({ role: "assistant",
+          content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+        options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+          toolCallId: request.id, content: JSON.stringify({ ok: true, content: "evidence" }) }] }));
+        options.onRoundEnd(0);
+        throw options.signal.reason;
+      }
+      assert.deepEqual(tools, []);
+      assert.equal(options.maxTokens, 4096);
+      assert.match(chat.toString(), /research resource budget has ended/u);
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 120,
+        predictedTokensCount: 40, totalTokensCount: 160 } });
+      options.onMessage(ChatMessage.create("assistant", "Bounded final report."));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, {
+    auditCompletionMode: "bounded",
+    auditResearchRounds: 1,
+    auditResearchSeconds: 100,
+    auditFinalSeconds: 70,
+    auditFinalMaxTokens: 4096,
+  }, [readTool, mutationTool]);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(actCount, 2);
+  assert.equal(ctl.blocks.at(-1).text, "Bounded final report.");
+  const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
+  assert.equal(finalization.attempt, 1);
+  assert.equal(finalization.maxAttempts, 1);
+  assert.equal(finalization.toolCount, 0);
+  assert.equal(finalization.deliveryState, "complete");
+  assert.equal(finalization.predictionStats.predictedTokensCount, 40);
+});
+
+test("bounded audit converts research output exhaustion into one tool-free final report", async () => {
+  const history = Chat.from([{ role: "user", content: "Audit until the research output limit." }]);
+  const readTool = { name: "read_file", description: "Read source", parametersJsonSchema: { type: "object" },
+    pluginIdentifier: "mcp/unreal-agent" };
+  let actCount = 0;
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, tools, options) {
+      actCount += 1;
+      if (actCount === 1) {
+        assert.deepEqual(tools.map(tool => tool.name), ["read_file"]);
+        options.onPredictionCompleted({ stats: { stopReason: "maxPredictedTokensReached",
+          promptTokensCount: 100, predictedTokensCount: 1800, totalTokensCount: 1900 } });
+        return {};
+      }
+      assert.deepEqual(tools, []);
+      assert.equal(options.maxTokens, 4096);
+      assert.match(chat.toString(), /research resource budget has ended/u);
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 120,
+        predictedTokensCount: 60, totalTokensCount: 180 } });
+      options.onMessage(ChatMessage.create("assistant", "Report after research exhaustion."));
+      return {};
+    },
+  };
+  const ctl = fakeController(history, selectedModel, {
+    auditCompletionMode: "bounded",
+    auditResearchRounds: 12,
+    auditResearchSeconds: 100,
+    auditFinalSeconds: 70,
+    auditFinalMaxTokens: 4096,
+  }, [readTool]);
+
+  await handlePredictionLoop(ctl);
+
+  assert.equal(actCount, 2);
+  assert.equal(ctl.blocks.at(-1).text, "Report after research exhaustion.");
+  const rounds = ctl.debugValues.filter(value => value.event === "direct_round_observation");
+  assert.deepEqual(rounds.map(round => round.finishReason), ["maxPredictedTokensReached", "eosFound"]);
+  const finalizations = ctl.debugValues.filter(value => value.event === "bounded_audit_finalization");
+  assert.equal(finalizations.length, 1);
+  assert.equal(finalizations[0].toolCount, 0);
+  assert.equal(finalizations[0].deliveryState, "complete");
+});
+
+test("bounded audit makes zero final model calls after user cancellation", async () => {
+  const history = Chat.from([{ role: "user", content: "Audit until canceled." }]);
+  const request = { id: "cancel-read", type: "function", name: "read_file",
+    arguments: { path: "project://Source/A.cpp" } };
+  const tool = { name: "read_file", description: "Read source", parametersJsonSchema: { type: "object" },
+    pluginIdentifier: "mcp/unreal-agent" };
+  const rootAbort = new AbortController();
+  const cancelReason = new Error("user canceled bounded audit");
+  let actCount = 0;
+  const selectedModel = {
+    identifier: "qwen/qwen3.8-27b",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, options) {
+      actCount += 1;
+      options.onToolCallRequestFinalized(0, 601, { toolCallRequest: request });
+      options.onMessage(ChatMessage.from({ role: "assistant",
+        content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+        toolCallId: request.id, content: JSON.stringify({ ok: true }) }] }));
+      options.onRoundEnd(0);
+      rootAbort.abort(cancelReason);
+      throw options.signal.reason;
+    },
+  };
+  const ctl = fakeController(history, selectedModel, {
+    auditCompletionMode: "bounded", auditResearchRounds: 1,
+  }, [tool]);
+  ctl.abortSignal = rootAbort.signal;
+
+  await assert.rejects(handlePredictionLoop(ctl), error => error === cancelReason);
+  assert.equal(actCount, 1);
+  assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
+});
+
 test("a denied mutation call keeps the SDK confirmation call ID in emitted messages", async () => {
   const history = Chat.from([{ role: "user", content: "Do not run the proposed tool." }]);
   const request = {
@@ -1327,6 +1472,7 @@ test("round telemetry records the SDK finish reason without exposing result bodi
     { onToolCallRequestFinalized() {}, async guardToolCall() {} },
   );
   assert.equal(captured.finishReason, "eosFound");
+  assert.deepEqual(captured.predictionStats, { stopReason: "eosFound" });
 });
 
 test("semantic result fingerprints ignore random snapshot metadata but retain evidence changes", () => {

@@ -193,10 +193,24 @@ type DirectConfig = {
   generationRepetitionAction: StagnationAction;
   generationRepeatCount: number;
   inputAvailabilityMode: InputAvailabilityMode;
+  auditCompletionMode: AuditCompletionMode;
+  auditResearchSeconds: number;
+  auditResearchRounds: number;
+  auditFinalSeconds: number;
+  auditFinalMaxTokens: number;
 };
 
 type StagnationAction = "off" | "warn" | "pause";
 type InputAvailabilityMode = "off" | "observe" | "inject";
+type AuditCompletionMode = "off" | "bounded";
+
+const BOUNDED_AUDIT_FINAL_INSTRUCTION = [
+  "The user selected bounded audit completion and the research resource budget has ended.",
+  "Do not request or imply another tool call.",
+  "Using only the evidence already present in this input, provide the final report now.",
+  "Clearly separate confirmed findings, counterevidence, and unresolved items.",
+  "If the evidence is insufficient, say so directly instead of extending the investigation.",
+].join(" ");
 
 type RemoteToolLike = Tool & {
   name: string;
@@ -302,6 +316,10 @@ function inputAvailabilityMode(value: unknown): InputAvailabilityMode {
   return value === "off" || value === "inject" ? value : "observe";
 }
 
+function auditCompletionMode(value: unknown): AuditCompletionMode {
+  return value === "bounded" ? "bounded" : "off";
+}
+
 function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
   const config = ctl.getPluginConfig(directConfigSchematics);
   const configuredEngine = String(config.get("projectEngine") || "auto");
@@ -328,6 +346,11 @@ function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     generationRepetitionAction: stagnationAction(config.get("generationRepetitionAction")),
     generationRepeatCount: numeric(config.get("generationRepeatCount"), 3, 2, 10),
     inputAvailabilityMode: inputAvailabilityMode(config.get("inputAvailabilityMode")),
+    auditCompletionMode: auditCompletionMode(config.get("auditCompletionMode")),
+    auditResearchSeconds: numeric(config.get("auditResearchSeconds"), 100, 1, 3600),
+    auditResearchRounds: numeric(config.get("auditResearchRounds"), 12, 1, 100),
+    auditFinalSeconds: numeric(config.get("auditFinalSeconds"), 70, 1, 600),
+    auditFinalMaxTokens: numeric(config.get("auditFinalMaxTokens"), 4096, 256, 32768),
   };
 }
 
@@ -755,7 +778,10 @@ export function createPredictionLoopHandler(
   const scopedRemoteTools = config.observeOnly
     ? toolSession.tools as Array<ScopedTool>
     : filterToolsForScope(toolSession.tools as Array<ScopedTool>, scope);
-  const modelTools = [...scopedRemoteTools, ...attachmentContext.tools] as Array<RemoteToolLike>;
+  const allModelTools = [...scopedRemoteTools, ...attachmentContext.tools] as Array<RemoteToolLike>;
+  const modelTools = config.auditCompletionMode === "bounded"
+    ? allModelTools.filter(tool => isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} }))
+    : allModelTools;
   const scopeInstructions = config.observeOnly ? [] : [
     ...(scope.availableUnityTools + scope.availableUnrealTools > 0
       ? [renderToolScopeInstruction(scope)] : []),
@@ -790,21 +816,41 @@ export function createPredictionLoopHandler(
   }
   let workingHistory = originalHistory;
   let roundIndex = 0;
+  const boundedAudit = config.auditCompletionMode === "bounded";
+  const researchStartedAt = Date.now();
+  const researchDeadlineAt = researchStartedAt + config.auditResearchSeconds * 1000;
+  let finalizationPending = false;
+  let finalizationAttempts = 0;
   let activeActivity: ReturnType<typeof createRoundActivityTracker> | null = null;
   const toolStagnation = new ToolRoundStagnationDetector();
   try {
     while (true) {
       ctl.guardAbort();
-      const modelInputId = `${executionId}:prediction-${roundIndex + 1}`;
+      if (boundedAudit && !finalizationPending && Date.now() >= researchDeadlineAt) {
+        finalizationPending = true;
+        continue;
+      }
+      const finalizing = finalizationPending;
+      if (finalizing) {
+        if (finalizationAttempts >= 1) break;
+        finalizationAttempts += 1;
+      }
+      const roundTools = finalizing ? [] : modelTools;
+      const roundScopeInstructions = finalizing
+        ? [...scopeInstructions, BOUNDED_AUDIT_FINAL_INSTRUCTION]
+        : scopeInstructions;
+      const modelInputId = finalizing
+        ? `${executionId}:final-report`
+        : `${executionId}:prediction-${roundIndex + 1}`;
       activeActivity = createRoundActivityTracker(ctl, roundIndex);
       const noteEnabled = Boolean(noteWorkingDirectory && objectiveFingerprint && !config.observeOnly);
       if (noteEnabled && activeNote) {
         activeNote = modelNotes.reconcileStoredNote(activeNote, visibleHistory.getMessagesArray());
       }
       const beforeInput = composeModelHistory(
-        workingHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
+        workingHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled,
       );
-      let before = await measureContext(tokenSource, beforeInput.history, config, modelTools);
+      let before = await measureContext(tokenSource, beforeInput.history, config, roundTools);
       let modelHistory = workingHistory;
       let compacted = false;
       let compactionAppliedCount = 0;
@@ -817,8 +863,8 @@ export function createPredictionLoopHandler(
           workingHistory = await boundPastReasoning(workingHistory, config.pastReasoningTokens, text => counter.countTokens!(text));
           modelHistory = workingHistory;
           before = await measureContext(tokenSource,
-            composeModelHistory(workingHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled).history,
-            config, modelTools);
+            composeModelHistory(workingHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled).history,
+            config, roundTools);
         }
       }
       if (core.shouldCompact(before, config)) {
@@ -833,9 +879,9 @@ export function createPredictionLoopHandler(
             async (candidateHistory) => measureContext(
               tokenSource,
               composeModelHistory(candidateHistory, noteEnabled ? activeNote : null,
-                config, scopeInstructions, noteEnabled).history,
+                config, roundScopeInstructions, noteEnabled).history,
               config,
-              modelTools,
+              roundTools,
             ),
           );
           candidate = selected.candidate;
@@ -857,9 +903,9 @@ export function createPredictionLoopHandler(
           let needsBoundedCurrentTurn = candidate.history === workingHistory;
           if (!needsBoundedCurrentTurn) {
             const measuredCandidate = composeModelHistory(
-              candidate.history, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
+              candidate.history, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled,
             ).history;
-            const afterFirst = await measureContext(tokenSource, measuredCandidate, config, modelTools);
+            const afterFirst = await measureContext(tokenSource, measuredCandidate, config, roundTools);
             needsBoundedCurrentTurn = core.shouldCompact(afterFirst, config);
           }
           if (needsBoundedCurrentTurn) {
@@ -887,9 +933,9 @@ export function createPredictionLoopHandler(
       workingHistory = modelHistory;
       const assembleModelInput = async (sourceHistory: Chat) => {
         const baseComposition = composeModelHistory(
-          sourceHistory, noteEnabled ? activeNote : null, config, scopeInstructions, noteEnabled,
+          sourceHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled,
         );
-        const baseMeasurement = await measureContext(tokenSource, baseComposition.history, config, modelTools);
+        const baseMeasurement = await measureContext(tokenSource, baseComposition.history, config, roundTools);
         let projection = config.inputAvailabilityMode === "off" ? null
           : inputAvailability.projectInputAvailability(
             normalizeHistory(baseComposition.history), historicalAvailabilityLedger, { modelInputId },
@@ -907,9 +953,9 @@ export function createPredictionLoopHandler(
         let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
         let composition = composeModelHistory(
           sourceHistory, noteEnabled ? activeNote : null, config,
-          [...scopeInstructions, metadata], noteEnabled,
+          [...roundScopeInstructions, metadata], noteEnabled,
         );
-        let measurement = await measureContext(tokenSource, composition.history, config, modelTools);
+        let measurement = await measureContext(tokenSource, composition.history, config, roundTools);
         const finalProjection = inputAvailability.projectInputAvailability(
           normalizeHistory(composition.history), historicalAvailabilityLedger, { modelInputId },
         );
@@ -920,9 +966,9 @@ export function createPredictionLoopHandler(
           metadata = finalMetadata;
           composition = composeModelHistory(
             sourceHistory, noteEnabled ? activeNote : null, config,
-            [...scopeInstructions, metadata], noteEnabled,
+            [...roundScopeInstructions, metadata], noteEnabled,
           );
-          measurement = await measureContext(tokenSource, composition.history, config, modelTools);
+          measurement = await measureContext(tokenSource, composition.history, config, roundTools);
         }
         projection = inputAvailability.projectInputAvailability(
           normalizeHistory(composition.history), historicalAvailabilityLedger, { modelInputId },
@@ -1015,7 +1061,8 @@ export function createPredictionLoopHandler(
         projectIdentity: scope.projectIdentity || undefined,
         availableUnityTools: scope.availableUnityTools,
         availableUnrealTools: scope.availableUnrealTools,
-        visibleToolCount: modelTools.length,
+        visibleToolCount: roundTools.length,
+        auditCompletionPhase: finalizing ? "finalize_once" : boundedAudit ? "research" : "off",
         attachmentCount: attachmentContext.attachmentCount,
         inputAvailability: assembledInput.projection ? {
           mode: config.inputAvailabilityMode,
@@ -1067,11 +1114,19 @@ export function createPredictionLoopHandler(
       activeActivity.waitingForPrompt();
       const displayedMessages = new Set<ChatMessage>();
       const liveMessages = new Map<ChatMessage, { visibleMessage: ChatMessage; textStreamed: boolean }>();
+      const phaseTimeoutSignal = boundedAudit
+        ? AbortSignal.timeout(Math.max(1, finalizing
+          ? config.auditFinalSeconds * 1000
+          : researchDeadlineAt - Date.now()))
+        : null;
+      const roundSignal = phaseTimeoutSignal
+        ? AbortSignal.any([ctl.abortSignal, phaseTimeoutSignal])
+        : ctl.abortSignal;
       const captured = await runOneToolRound(
         tokenSource,
         modelInput,
-        modelTools,
-        ctl.abortSignal,
+        roundTools,
+        roundSignal,
         {
           onPromptProcessingProgress: activeActivity.progress,
           onFirstToken: activeActivity.firstToken,
@@ -1158,7 +1213,7 @@ export function createPredictionLoopHandler(
             // The SDK does not invoke onToolCallRequestFinalized for denied
             // calls, so register the stable call ID at the confirmation edge.
             emitter.registerRequest(callId, request);
-            const allowedTool = modelTools.find((tool) => tool.name === request.name);
+            const allowedTool = roundTools.find((tool) => tool.name === request.name);
             if (!allowedTool) {
               traceCall(callId, { validationState: "denied_scope", executionState: "not_executed" });
               controller.deny("Tool withheld by the deterministic project-engine scope.");
@@ -1185,7 +1240,7 @@ export function createPredictionLoopHandler(
             toolGeneration.waitingForApproval(callId);
             const decision = await ctl.requestConfirmToolCall({
               callId,
-              pluginIdentifier: toolPluginIdentifier(modelTools, request.name),
+              pluginIdentifier: toolPluginIdentifier(roundTools, request.name),
               name: request.name,
               parameters: proposedArguments,
             });
@@ -1215,6 +1270,7 @@ export function createPredictionLoopHandler(
             }
           },
         },
+        finalizing ? { maxTokens: config.auditFinalMaxTokens } : {},
       );
       activeActivity.complete();
       activeActivity = null;
@@ -1262,6 +1318,7 @@ export function createPredictionLoopHandler(
           modelInputId,
           roundIndex,
           finishReason: captured.finishReason || (captured.failure === undefined ? "unknown" : "failed"),
+          predictionStats: captured.predictionStats,
           continueAfterTools: captured.continueAfterTools,
           modelInputToolResultCount: inputEvidence.results.length,
           modelInputLatestResultFingerprint: inputEvidence.results.at(-1)?.resultFingerprint,
@@ -1302,8 +1359,54 @@ export function createPredictionLoopHandler(
           if (pause) captured.continueAfterTools = false;
         }
       }
-      if (captured.failure !== undefined) throw captured.failure;
+      if (ctl.abortSignal.aborted) throw ctl.abortSignal.reason || captured.failure;
+      const phaseTimedOut = phaseTimeoutSignal?.aborted === true;
+      if (finalizing) {
+        const reportText = captured.messages
+          .filter(message => message.isAssistantMessage())
+          .map(message => visibleAssistantOutput(message.getText()).visibleText)
+          .join("")
+          .trim();
+        const deliveryState = !reportText ? "no_answer"
+          : captured.finishReason === "maxPredictedTokensReached" ? "truncated"
+            : captured.failure === undefined && !phaseTimedOut ? "complete" : "partial";
+        if (config.showDebugInfo) ctl.debug({
+          event: "bounded_audit_finalization",
+          executionId,
+          modelInputId,
+          attempt: finalizationAttempts,
+          maxAttempts: 1,
+          deliveryState,
+          phaseTimedOut,
+          finishReason: phaseTimedOut ? "final_timeout" : captured.finishReason || "failed",
+          predictionStats: captured.predictionStats,
+          toolCount: roundTools.length,
+        });
+        if (deliveryState !== "complete") ctl.createStatus({
+          status: deliveryState === "no_answer" ? "error" : "canceled",
+          text: deliveryState === "truncated"
+            ? "최종 보고가 출력 한도에 도달해 잘렸습니다. 완료로 처리하지 않았습니다."
+            : deliveryState === "partial"
+              ? "최종 보고가 제한 시간 안에 완료되지 않았습니다. 부분 출력으로 기록했습니다."
+              : "최종 보고가 생성되지 않았습니다. 완료로 처리하지 않았습니다.",
+        });
+        break;
+      }
+      if (captured.failure !== undefined && !phaseTimedOut) throw captured.failure;
+      if (phaseTimedOut) {
+        finalizationPending = true;
+        roundIndex += 1;
+        continue;
+      }
+      if (boundedAudit && captured.finishReason === "maxPredictedTokensReached") {
+        finalizationPending = true;
+        roundIndex += 1;
+        continue;
+      }
       if (!captured.continueAfterTools) break;
+      if (boundedAudit && (
+        roundIndex + 1 >= config.auditResearchRounds || Date.now() >= researchDeadlineAt
+      )) finalizationPending = true;
       roundIndex += 1;
     }
     if (activeNote && noteWorkingDirectory) {
