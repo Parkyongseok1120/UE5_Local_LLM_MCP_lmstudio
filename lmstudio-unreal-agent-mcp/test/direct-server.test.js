@@ -14,6 +14,7 @@ const {
   createDirectRuntime,
   toolDefinitions,
 } = require("../src/direct-server.js");
+const { createWorkspaceCapabilities } = require("../../shared-tool-core/workspace.js");
 
 const CONTROL_FIELD_PATTERN = /taskAuthorization|ownerCapability|routeHash|toolRoute|serverControl|synthesisReadiness|claimLedger/;
 
@@ -124,6 +125,30 @@ test("Workspace Git binds the selected Unreal project and rollback removes only 
   assert(!rollback.tools.some(tool => tool.name === "git_log"));
   assert.equal(payloadOf(await rollback.callTool("git_log", {})).errorCode, "UNKNOWN_TOOL");
   assert(rollback.tools.some(tool => tool.name === "read_file"));
+});
+
+test("Workspace comparison endpoints are rejected before binding", async () => {
+  let bindingCalls = 0;
+  const workspace = createWorkspaceCapabilities({
+    resolveBinding: async () => {
+      bindingCalls += 1;
+      throw new Error("resolveBinding must not run for invalid comparison endpoints");
+    },
+  });
+
+  for (const name of ["git_changed_files", "git_diff_file"]) {
+    for (const args of [
+      { comparison: "worktree", base: "HEAD" },
+      { comparison: "staged", head: "HEAD" },
+    ]) {
+      const request = name === "git_diff_file" ? { path: "Source/DirectFixture/DirectFixture.cpp", ...args } : args;
+      await assert.rejects(
+        workspace(name, request),
+        error => error?.code === "invalid_arguments",
+      );
+    }
+  }
+  assert.equal(bindingCalls, 0);
 });
 
 test("all Workspace Git schemas describe paths from the bound workspace root", () => {

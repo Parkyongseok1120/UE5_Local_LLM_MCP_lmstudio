@@ -25,7 +25,12 @@ const nonRangeComparison = {
   type: "object",
   required: ["comparison"],
   properties: { comparison: { type: "string", enum: ["worktree", "staged"] } },
-  not: { anyOf: [{ required: ["base"] }, { required: ["head"] }] },
+  // Keep the nested branches object-shaped so the closed validator below
+  // applies the same required-field rule as the published JSON schema.
+  not: { anyOf: [
+    { type: "object", required: ["base"] },
+    { type: "object", required: ["head"] },
+  ] },
 };
 const spec = (name, description, properties, required = [], extra = {}) => ({ name, description,
   inputSchema: { type: "object", properties: { ...properties, project: string }, required, additionalProperties: false, ...extra } });

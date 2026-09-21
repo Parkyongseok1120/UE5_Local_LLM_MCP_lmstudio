@@ -110,6 +110,95 @@ test("changed files pin commits, preserve rename and page one immutable snapshot
   const old = await f.call({ action: "read_file", revision: head, path: "Assets/New.cs" });
   assert.match(old.text, /class Example/); assert.equal(old.head, head);
 });
+
+test("immutable changed-file fixtures deliver all 232 rows after the first 200", async t => {
+  const f = fixture(t);
+  for (let index = 1; index <= 232; index += 1) f.put(`Assets/Fixture-${index}.cs`, `base-${index}\n`);
+  const base = f.commit("232 base files");
+  for (let index = 1; index <= 232; index += 1) f.put(`Assets/Fixture-${index}.cs`, `head-${index}\n`);
+  const head = f.commit("232 changed files");
+  const query = { action: "changed_files", comparison: "range", base, head, limit: 200, byteBudget: 32768 };
+  const first = await f.call(query);
+  const second = await f.call({ ...query, cursor: first.nextCursor });
+
+  assert.equal(first.items.length, 200);
+  assert.equal(first.pageStart, 1);
+  assert.equal(first.pageEnd, 200);
+  assert.equal(first.pageHasMore, true);
+  assert.equal(second.items.length, 32);
+  assert.equal(second.pageStart, 201);
+  assert.equal(second.pageEnd, 232);
+  assert.equal(second.pageHasMore, false);
+  assert.equal(second.sourceResultComplete, true);
+  assert.equal(new Set([...first.items, ...second.items].map(item => item.path)).size, 232);
+});
+
+test("650-row Git paging advances by returned pages under the changed-files default budget", async t => {
+  const f = fixture(t);
+  for (let index = 1; index <= 650; index += 1) f.put(`Assets/Pressure-${index}.cs`, `base-${index}\n`);
+  const base = f.commit("650 base files");
+  for (let index = 1; index <= 650; index += 1) f.put(`Assets/Pressure-${index}.cs`, `head-${index}\n`);
+  const head = f.commit("650 changed files");
+  const query = { action: "changed_files", comparison: "range", base, head, limit: 200 };
+  const rows = [];
+  const pageStarts = [];
+  let cursor;
+  do {
+    const page = await f.call(cursor ? { ...query, cursor } : query);
+    assert.equal(page.errorCode, undefined, JSON.stringify(page));
+    if (pageStarts.length === 0) assert(page.items.length < 200, JSON.stringify(page));
+    pageStarts.push(page.pageStart);
+    rows.push(...page.items);
+    cursor = page.nextCursor;
+    if (!cursor) assert.equal(page.pageHasMore, false);
+  } while (cursor);
+
+  assert.equal(rows.length, 650);
+  assert.equal(new Set(rows.map(item => item.path)).size, 650);
+  assert.equal(pageStarts[0], 1);
+  assert.deepEqual(pageStarts, [...pageStarts].sort((left, right) => left - right));
+});
+
+test("Git cursors distinguish query mismatch, TTL, cache eviction, and server restart", async t => {
+  const f = fixture(t);
+  const paths = [];
+  for (let index = 1; index <= 10; index += 1) {
+    const relative = `Assets/Cursor-${index}.cs`;
+    paths.push(relative);
+    f.put(relative, `base-${index}\n`);
+  }
+  const base = f.commit("cursor base");
+  for (const relative of paths) f.put(relative, `head-${relative}\n`);
+  const head = f.commit("cursor head");
+  const query = { action: "changed_files", comparison: "range", base, head, paths: [...paths, "Assets/Not-present.cs"], limit: 1 };
+  const first = await f.call(query);
+  assert(first.nextCursor);
+  assert.equal((await f.call({ ...query, paths, cursor: first.nextCursor })).errorCode, "invalid_cursor");
+
+  const originalNow = Date.now;
+  try {
+    Date.now = () => originalNow() + 300001;
+    assert.equal((await f.call({ ...query, cursor: first.nextCursor })).errorCode, "snapshot_expired");
+  } finally {
+    Date.now = originalNow;
+  }
+
+  const restarted = new VersionControl({ root: f.root });
+  assert.throws(
+    () => restarted.call({ ...query, cursor: first.nextCursor }),
+    error => error?.code === "invalid_cursor",
+  );
+
+  for (let index = 1; index <= 8; index += 1) {
+    const page = await f.call({
+      ...query,
+      paths: [...paths, `Assets/Unique-${index}.cs`],
+    });
+    assert(page.nextCursor);
+  }
+  assert.equal((await f.call({ ...query, cursor: first.nextCursor })).errorCode, "snapshot_expired");
+});
+
 test("git log returns author and committer evidence with bounded date and literal author filters", async t => {
   const f = fixture(t);
   const datedCommit = (file, subject, author, email, authoredAt, committedAt) => {

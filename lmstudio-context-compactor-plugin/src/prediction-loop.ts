@@ -752,24 +752,80 @@ function visibleAssistantOutput(text: string): { visibleText: string; hasFooter:
     ? raw.slice(separatorIndex + REASONING_SEPARATOR.length) : raw);
 }
 
+const RAW_TOOL_WRAPPER_PATTERNS = [
+  /<tool_call>[\s\S]*?<\/tool_call>/giu,
+  /<function=[^>\r\n]+>[\s\S]*?<\/function>/giu,
+  /<\|(?:tool_call|python_tag)\|>[\s\S]*?<\|(?:eom|eot|end)\|>/giu,
+];
+
+function isInsideMarkdownFence(text: string, index: number): boolean {
+  let cursor = 0;
+  let fence: { marker: string; length: number } | null = null;
+  while (cursor < index) {
+    const lineEnd = text.indexOf("\n", cursor);
+    const end = lineEnd < 0 ? text.length : lineEnd;
+    const line = text.slice(cursor, end);
+    const marker = /^\s{0,3}(`{3,}|~{3,})/u.exec(line)?.[1];
+    if (marker) {
+      const kind = marker[0];
+      if (!fence) fence = { marker: kind, length: marker.length };
+      else if (fence.marker === kind && marker.length >= fence.length) fence = null;
+    }
+    cursor = lineEnd < 0 ? text.length : lineEnd + 1;
+  }
+  return fence !== null;
+}
+
+function isLiteralRawToolWrapper(text: string, start: number, end: number): boolean {
+  if (isInsideMarkdownFence(text, start)) return true;
+  const lineStart = Math.max(0, text.lastIndexOf("\n", start - 1) + 1);
+  const lineEndIndex = text.indexOf("\n", end);
+  const lineEnd = lineEndIndex < 0 ? text.length : lineEndIndex;
+  const line = text.slice(lineStart, lineEnd);
+  const relativeStart = start - lineStart;
+  const relativeEnd = end - lineStart;
+  const before = line.slice(0, relativeStart);
+  const after = line.slice(relativeEnd);
+  if (/^\s{0,3}>/u.test(line)) return true;
+
+  const trimmedBefore = before.trimEnd();
+  const trimmedAfter = after.trimStart();
+  const leftQuote = /(?:["“'‘])$/u.test(trimmedBefore);
+  const rightQuote = /^(?:["”'’])/u.test(trimmedAfter);
+  if (leftQuote && rightQuote) return true;
+  if (/(?:example|for example|e\.g\.|citation|quoted|인용|예시)\s*[:：,]?\s*$/iu.test(
+    text.slice(Math.max(0, start - 120), start),
+  )) return true;
+
+  // Inline Markdown code is a literal example, not a request to dispatch.
+  const inlineBefore = before.lastIndexOf("`");
+  const inlineAfter = after.indexOf("`");
+  return inlineBefore >= 0 && inlineAfter >= 0;
+}
+
 function containsUnresolvedToolIntent(reportText: string, messages: Array<ChatMessage>): boolean {
   if (messages.some(message => message.isAssistantMessage() && message.getToolCallRequests().length > 0)) return true;
   const text = reportText.trim();
   if (!text) return false;
 
-  // Qwen-compatible templates can emit several raw XML calls back-to-back.
-  // Treat a final answer made only of complete call wrappers as unresolved
-  // intent, but never parse or execute the contents here. Keeping the
-  // remainder check makes ordinary prose that merely mentions a marker safe.
-  const wrapperPatterns = [
-    /<tool_call>[\s\S]*?<\/tool_call>/giu,
-    /<function=[^>\r\n]+>[\s\S]*?<\/function>/giu,
-    /<\|(?:tool_call|python_tag)\|>[\s\S]*?<\|(?:eom|eot|end)\|>/giu,
-  ];
-  return wrapperPatterns.some((pattern) => {
-    const matches = text.match(pattern);
-    if (!matches || matches.length === 0) return false;
-    return text.replace(pattern, "").trim().length === 0;
+  // Qwen-compatible templates can emit raw XML calls after ordinary prose.
+  // Only wrappers explicitly marked as code, quotation, citation, or a
+  // Markdown block are treated as literal examples. Everything else remains
+  // unresolved intent. This classifier never parses or executes the XML.
+  const wrappers = RAW_TOOL_WRAPPER_PATTERNS.flatMap(pattern => [...text.matchAll(pattern)]
+    .map(match => {
+      const start = match.index ?? -1;
+      return { start, end: start + match[0].length };
+    })
+    .filter(wrapper => wrapper.start >= 0));
+  return wrappers.some(wrapper => {
+    if (isLiteralRawToolWrapper(text, wrapper.start, wrapper.end)) return false;
+    // The inner <function=...> match is part of the same literal outer
+    // wrapper in common Qwen XML. Do not let that nested match override the
+    // outer code/quotation classification.
+    return !wrappers.some(outer => outer !== wrapper
+      && outer.start <= wrapper.start && outer.end >= wrapper.end
+      && isLiteralRawToolWrapper(text, outer.start, outer.end));
   });
 }
 

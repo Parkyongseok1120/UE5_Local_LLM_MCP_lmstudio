@@ -131,7 +131,11 @@ class VersionControl {
     this.cache.set(id, item); return item;
   }
   page(item, a, offset) {
-    const limit = a.limit ?? (item.isText ? 200 : 100), budget = a.byteBudget ?? 32768;
+    const limit = a.limit ?? (item.isText ? 200 : 100);
+    // Large immutable changed-file lists already expose signed cursors and
+    // pageHasMore. Keep those results small enough for a following model
+    // input without changing the default budget for source text or diffs.
+    const budget = a.byteBudget ?? (item.facts.action === "changed_files" ? 4096 : 32768);
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail("invalid_arguments", "limit must be 1..200");
     let count = Math.min(limit, item.rows.length - offset);
     const result = () => {

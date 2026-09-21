@@ -1560,6 +1560,37 @@ test("bounded current-turn retention keeps the newest unread tool exchange compl
   assertNoDurableFileCapability(result);
 });
 
+test("a five-call newest exchange stays paired even when the message cap is two", () => {
+  const requests = Array.from({ length: 5 }, (_, index) => ({
+    id: `multi-${index + 1}`,
+    type: "function",
+    name: "git_changed_files",
+    arguments: { comparison: "worktree" },
+  }));
+  const history = [
+    message("system", "system"),
+    message("user", "Return the complete changed-file list."),
+    message("assistant", "Requesting five pages.", { toolRequests: requests }),
+    ...requests.map((request, index) => message("tool", "", {
+      toolResults: [{
+        toolCallId: request.id,
+        content: JSON.stringify({
+          status: "observed",
+          pageStart: index * 130 + 1,
+          pageEnd: Math.min(650, (index + 1) * 130),
+          pageHasMore: index < requests.length - 1,
+          items: Array.from({ length: 10 }, (_, row) => ({ path: `Assets/File-${index}-${row}.cpp` })),
+        }),
+      }],
+    })),
+  ];
+  const result = core.buildCheckpoint(history, { recentCompleteTurns: 0, maxCurrentTurnMessages: 2 });
+
+  assert.deepEqual(result.retainedIndexes, [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(result.retainedIndexes.filter(index => index >= 2).length, 6);
+  assert.equal(result.omittedMessageCount, 0);
+});
+
 test("successive bounded compactions serialize each tool outcome exactly once", () => {
   let history = [message("user", "Inspect every file, then report.")];
   let lastResult = null;

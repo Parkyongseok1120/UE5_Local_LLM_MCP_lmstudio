@@ -1323,6 +1323,31 @@ test("final delivery accepts only a known normal stop and a real report", () => 
     deliveryState: "partial", reportState: "unresolved_tool_intent",
     rejectionReason: "unresolved_tool_intent",
   });
+  assert.deepEqual(classify(
+    "다음 페이지를 읽겠습니다.\n<tool_call><function=git_log></function></tool_call>",
+    "eosFound",
+  ), {
+    deliveryState: "partial", reportState: "unresolved_tool_intent",
+    rejectionReason: "unresolved_tool_intent",
+  });
+  assert.deepEqual(classify(
+    "정상적인 코드 예시: `<tool_call><function=git_log></function></tool_call>`",
+    "eosFound",
+  ), {
+    deliveryState: "complete", reportState: "report",
+  });
+  assert.deepEqual(classify(
+    "문서 인용: \"<tool_call><function=git_log></function></tool_call>\"",
+    "eosFound",
+  ), {
+    deliveryState: "complete", reportState: "report",
+  });
+  assert.deepEqual(classify(
+    "예시:\n```xml\n<tool_call><function=git_log></function></tool_call>\n```",
+    "eosFound",
+  ), {
+    deliveryState: "complete", reportState: "report",
+  });
   assert.deepEqual(classify("", "eosFound"), {
     deliveryState: "no_answer", reportState: "no_answer",
   });
