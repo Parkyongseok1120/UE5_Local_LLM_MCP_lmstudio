@@ -23,9 +23,12 @@ active chats remain separate runtime boundaries and are not replaced by the patc
 
 ## Decision and trust boundary
 
-Keep `legacy` as the default. `deterministic` enables archive/projection/window
-selection; `hybrid` additionally permits one tools=[] local call per accepted
-compaction event. This explicitly extends the previous no-extra-LLM-call contract.
+Make `hybrid` the installed default. It enables archive/projection/window
+selection and additionally permits one tools=[] local call per accepted
+compaction event. `deterministic` keeps the archive/window path without the
+semantic handoff, while explicit `legacy` preserves the previous behavior for
+compatibility. This explicitly extends the previous no-extra-LLM-call contract
+only for the new default and the opt-in hybrid mode.
 All summary predictions use the selected model, explicit cap and shared deadline;
 BOUNDED does not receive additional summary calls. No cloud service or planner.
 

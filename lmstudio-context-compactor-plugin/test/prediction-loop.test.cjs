@@ -20,6 +20,9 @@ function fakeController(history, tokenSource, overrides = {}, tools = []) {
   const config = {
     projectEngine: "auto",
     projectIdentity: "",
+    // Keep existing fixture scenarios on the compatibility path. Fresh config
+    // behavior is covered separately by the explicit undefined-value test.
+    contextManagementMode: "legacy",
     observeOnly: false,
     showDebugInfo: true,
     softRemainingTokens: 14000,
@@ -1302,6 +1305,13 @@ test("the default recovery cap follows a larger configured output reserve instea
   const config = __test.readConfig(ctl);
   assert.equal(config.maxOutputReserve, 16384);
   assert.equal(config.outputRecoveryMaxTokens, 16384);
+});
+
+test("new compactor configuration defaults to hybrid while explicit legacy remains compatible", () => {
+  const fresh = __test.readConfig(fakeController(Chat.empty(), {}, { contextManagementMode: undefined }));
+  assert.equal(fresh.contextManagementMode, "hybrid");
+  const legacy = __test.readConfig(fakeController(Chat.empty(), {}, { contextManagementMode: "legacy" }));
+  assert.equal(legacy.contextManagementMode, "legacy");
 });
 
 test("normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back", async () => {

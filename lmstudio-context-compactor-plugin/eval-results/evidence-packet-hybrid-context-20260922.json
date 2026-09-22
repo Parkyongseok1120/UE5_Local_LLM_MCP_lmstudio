@@ -253,7 +253,7 @@
     "semantic summary는 assistant claim이고 실행·빌드·승인·전체 검토 사실을 만들 수 없습니다.",
     "raw tool-call 문자열의 인수를 파싱·이어붙이기·직접 실행하지 않으며 fresh retry는 검증된 read-only 도구에 한 번만 허용됩니다.",
     "summary 비용은 전체 호출 비용에 포함되며 budget/deadline을 초기화하지 않습니다.",
-    "legacy가 기본이며 rollback은 legacy 선택으로 가능하고 설치본/활성 채팅 검증은 별도입니다."
+    "hybrid가 새 설치의 기본이며 explicit legacy 선택으로 rollback할 수 있고 기존 채팅의 저장된 legacy 값은 덮어쓰지 않으며 설치본/활성 채팅 검증은 별도입니다."
   ],
   "impactedSurfaces": [
     "lmstudio-context-compactor-plugin/.lmstudio/entry.ts",

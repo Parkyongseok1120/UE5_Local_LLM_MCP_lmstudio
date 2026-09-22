@@ -34,13 +34,13 @@ export const directConfigSchematics = createConfigSchematics()
   )
   .field("contextManagementMode", "select", {
     displayName: "Working context",
-    subtitle: "Legacy keeps deterministic compaction unchanged. Deterministic adds scoped evidence archive, bounded result views, and a measured working window. Hybrid also permits one tool-free local semantic handoff per accepted compaction.",
+    subtitle: "Hybrid is the installed default: deterministic scoped evidence archive, bounded result views, measured working window, and at most one tool-free local semantic handoff per accepted compaction. Legacy remains available for an explicit compatibility choice.",
     options: [
-      { value: "legacy", displayName: "Legacy (default)" },
+      { value: "hybrid", displayName: "Hybrid (default)" },
       { value: "deterministic", displayName: "Deterministic archive/window" },
-      { value: "hybrid", displayName: "Hybrid semantic handoff" },
+      { value: "legacy", displayName: "Legacy (compatibility)" },
     ],
-  }, "legacy")
+  }, "hybrid")
   .field("workingInputTargetTokens", "numeric", { displayName: "Working input target", subtitle: "Experimental full templated input target after compaction, including system and tool definitions. Mandatory input is never removed merely to meet it." }, 10000)
   .field("workingInputTriggerTokens", "numeric", { displayName: "Working input trigger", subtitle: "Start target-based compaction above this full templated input size; kept separate from the post-compaction target." }, 12048)
   .field("toolResultProjectionChars", "numeric", { displayName: "Archived result excerpt", subtitle: "Maximum archived observation excerpt exposed in a model-facing tool-result projection." }, 512)

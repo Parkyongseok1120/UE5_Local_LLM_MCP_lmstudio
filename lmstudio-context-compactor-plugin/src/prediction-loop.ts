@@ -243,6 +243,7 @@ type InputAvailabilityMode = "off" | "observe" | "inject";
 type AuditCompletionMode = "off" | "bounded";
 type OutputRecoveryMode = "off" | "on";
 type ContextManagementMode = "legacy" | "deterministic" | "hybrid";
+const DEFAULT_CONTEXT_MANAGEMENT_MODE: ContextManagementMode = "hybrid";
 type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
   | "output_recovery"
   | "research_round_limit" | "context_budget";
@@ -403,7 +404,8 @@ function outputRecoveryMode(value: unknown): OutputRecoveryMode {
 }
 
 function contextManagementMode(value: unknown): ContextManagementMode {
-  return value === "deterministic" || value === "hybrid" ? value : "legacy";
+  return value === "legacy" || value === "deterministic" || value === "hybrid"
+    ? value : DEFAULT_CONTEXT_MANAGEMENT_MODE;
 }
 
 function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
