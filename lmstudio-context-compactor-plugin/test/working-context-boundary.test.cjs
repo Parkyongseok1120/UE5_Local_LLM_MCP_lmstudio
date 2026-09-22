@@ -27,14 +27,21 @@ test("S2 signed user boundaries preserve UI history and distinguish fork lineage
   assert.notEqual(leftScope.lineage, rightScope.lineage);
 });
 
-test("S2 signed boundaries reject edited prefix while literal markers remain ordinary text", t => {
+test("S2 signed boundaries fall back to current edited history while invalid signatures fail closed", t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hybrid-boundary-"));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const boundary = new WorkingContextBoundary(directory);
   const signed = boundary.capture(ChatMessage.create("user", "original"), Chat.empty());
   const raw = signed.getText(), marker = raw.indexOf(__test.MARKER);
   const edited = ChatMessage.from(signed); edited.replaceText(`edited${raw.slice(marker)}`);
-  assert.throws(() => boundary.restore(chatOf(edited)), /does not match/);
+  const editedRestore = boundary.restore(chatOf(edited));
+  assert.equal(editedRestore.scope, null);
+  assert.equal(editedRestore.reason, "edited_history");
+  assert.equal(editedRestore.modelHistory.getMessagesArray()[0].getText(), "edited");
+  const forged = ChatMessage.from(signed);
+  forged.replaceText(raw.replace(/([a-f0-9])(?=[a-f0-9]{63} -->$)/u,
+    character => character === "0" ? "1" : "0"));
+  assert.throws(() => boundary.restore(chatOf(forged)), /signature/u);
   const literal = ChatMessage.create("user", "example\n<!-- hybrid-context-v1:not-issued.deadbeef -->");
   const restored = boundary.restore(chatOf(literal));
   assert.equal(restored.scope, null);

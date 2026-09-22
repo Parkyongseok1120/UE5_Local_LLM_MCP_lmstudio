@@ -32,9 +32,10 @@ export class WorkingContextBoundary {
     return fs.readFileSync(target);
   }
 
-  restore(history: Chat): { modelHistory: Chat; scope: Scope | null } {
+  restore(history: Chat): { modelHistory: Chat; scope: Scope | null; reason: string } {
     const input = history.getMessagesArray(), output = Chat.empty();
     let scope: Scope | null = null;
+    let fallbackReason = "";
     for (let index = 0; index < input.length; index += 1) {
       const source = input[index], copy = ChatMessage.from(source), raw = copy.getText();
       const normalizedRaw = raw.replace(ATTACHMENT, "");
@@ -42,25 +43,41 @@ export class WorkingContextBoundary {
       if (start >= 0) {
         const envelope = normalizedRaw.slice(start + MARKER.length);
         const match = envelope.length <= 1400 ? /^([A-Za-z0-9_-]+)\.([a-f0-9]{64}) -->$/u.exec(envelope) : null;
-        const expected = match ? crypto.createHmac("sha256", this.key()).update(match[1]).digest("hex") : "";
-        if (match && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(match[2]))) {
-          const value = JSON.parse(Buffer.from(match[1], "base64url").toString("utf8"));
-          const visible = normalizedRaw.slice(0, start);
-          const valid = value?.version === 1
-            && typeof value.conversation === "string" && /^[a-f0-9-]{36}$/u.test(value.conversation)
-            && typeof value.lineage === "string" && /^[a-f0-9-]{36}$/u.test(value.lineage)
-            && (value.parentLineage === null || /^[a-f0-9-]{36}$/u.test(value.parentLineage))
-            && value.request === digest(visible)
-            && value.prefix === normalizedFingerprint(input.slice(0, index))
-            && (!scope || (value.conversation === scope.conversation && value.parentLineage === scope.lineage));
-          if (!valid) throw new Error("Hybrid context reference does not match this request lineage");
-          scope = { conversation: value.conversation, lineage: value.lineage, parentLineage: value.parentLineage };
-          copy.replaceText(visible);
+        if (!match) {
+          output.append(copy);
+          continue;
+        }
+        const expected = crypto.createHmac("sha256", this.key()).update(match[1]).digest("hex");
+        if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(match[2]))) {
+          throw new Error("Hybrid context signature_invalid");
+        }
+        let value: Record<string, unknown>;
+        try { value = JSON.parse(Buffer.from(match[1], "base64url").toString("utf8")); }
+        catch { throw new Error("Hybrid context scope_mismatch"); }
+        const visible = normalizedRaw.slice(0, start);
+        const shapeValid = value?.version === 1
+          && typeof value.conversation === "string" && /^[a-f0-9-]{36}$/u.test(value.conversation)
+          && typeof value.lineage === "string" && /^[a-f0-9-]{36}$/u.test(value.lineage)
+          && (value.parentLineage === null || typeof value.parentLineage === "string"
+            && /^[a-f0-9-]{36}$/u.test(value.parentLineage));
+        if (!shapeValid) throw new Error("Hybrid context scope_mismatch");
+        copy.replaceText(visible);
+        if (scope && value.conversation !== scope.conversation) {
+          throw new Error("Hybrid context scope_mismatch");
+        }
+        if (value.request !== digest(visible)) fallbackReason ||= "edited_history";
+        else if (value.prefix !== normalizedFingerprint(input.slice(0, index))) fallbackReason ||= "stale_prefix";
+        else if (scope && value.parentLineage !== scope.lineage) fallbackReason ||= "new_fork";
+        if (!fallbackReason) {
+          scope = { conversation: String(value.conversation), lineage: String(value.lineage),
+            parentLineage: value.parentLineage === null ? null : String(value.parentLineage) };
+        } else {
+          scope = null;
         }
       }
       output.append(copy);
     }
-    return { modelHistory: output, scope };
+    return { modelHistory: output, scope, reason: fallbackReason || (scope ? "verified" : "no_marker") };
   }
 
   capture(message: ChatMessage, previous: Chat): ChatMessage {

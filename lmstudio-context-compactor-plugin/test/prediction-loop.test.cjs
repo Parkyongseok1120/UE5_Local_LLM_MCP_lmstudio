@@ -715,13 +715,19 @@ test("observe-only remains the explicit no-mutation mode", async () => {
     async countTokens() { return 30000; },
     async act(chat) { receivedHistory = chat; return {}; },
   };
-  const ctl = fakeController(history, selectedModel, { observeOnly: true });
+  const ctl = fakeController(history, selectedModel, {
+    observeOnly: true,
+    contextManagementMode: "hybrid",
+    workingInputTriggerTokens: 12048,
+    workingInputTargetTokens: 10000,
+  });
   await handlePredictionLoop(ctl);
 
   assert.equal(receivedHistory, history);
   const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
   assert.equal(measurement.observeOnly, true);
   assert.equal(measurement.compacted, false);
+  assert.equal(measurement.workingContext.mode, "legacy");
 });
 
 test("observe-only does not filter tools or bind project arguments", async () => {
@@ -1864,46 +1870,107 @@ test("reserve pressure gets one adaptive tool-free final report instead of an im
   assert.equal(finalMeasurement.finalRemainingTokens, 0);
 });
 
-test("context-budget finalization does not accept the model's raw multi-tool text as a report", async () => {
-  const history = Chat.from([{ role: "user", content: "Inspect the recorded evidence and finish." }]);
-  const tool = { name: "git_read_file", description: "Read a file", parametersJsonSchema: { type: "object" },
-    pluginIdentifier: "mcp/unreal-agent" };
-  const rawToolText = [
-    "<tool_call><function=git_diff_file></function></tool_call>",
-    "<tool_call><function=git_changed_files></function></tool_call>",
-    "<tool_call><function=git_read_file></function></tool_call>",
-  ].join("\n");
+test("Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes", async () => {
+  const history = Chat.from([{ role: "user", content: "LeeDongHun이 9월 20일부터 한 작업들을 조회 후 작업당 상세히 알려줘" }]);
+  for (const [id, name, marker, argumentsValue] of [
+    ["prior-log", "git_log", "LOG_RESULT_SENTINEL", { author: "LeeDongHun", since: "2026-09-20" }],
+    ["prior-files", "git_changed_files", "CHANGED_FILES_SENTINEL", { commit: "abc123" }],
+  ]) {
+    history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+      id, type: "function", name, arguments: argumentsValue,
+    } }] }));
+    history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: id,
+      content: JSON.stringify({ ok: true, status: "complete", marker }) }] }));
+  }
+  const tools = ["git_log", "git_changed_files", "git_diff_file"].map(name => ({ name,
+    description: `Read-only ${name}`, parametersJsonSchema: { type: "object" },
+    pluginIdentifier: "mcp/unreal-agent" }));
+  const rawToolText = Array.from({ length: 10 }, (_, index) => (
+    `<tool_call><function=git_diff_file><parameter=path>File${index}.cs</parameter></function></tool_call>`
+  )).join("\n");
   let called = 0;
   const selectedModel = {
     identifier: "selected-model",
-    async getContextLength() { return 32768; },
-    async applyPromptTemplate(_chat, options = {}) {
+    async getContextLength() { return 33500; },
+    async applyPromptTemplate(chat, options = {}) {
+      if (chat.toString().includes("DIFF_RESULT_SENTINEL")) return "post-result";
+      if (options.toolDefinitions?.length === 1) return "retry-tools";
       return options.toolDefinitions?.length ? "with-tools" : "without-tools";
     },
-    async countTokens(prompt) { return prompt === "with-tools" ? 30000 : 28000; },
-    async act(_chat, tools, options) {
+    async countTokens(prompt) { return prompt === "with-tools" ? 30000
+      : prompt === "without-tools" ? 28000 : 20000; },
+    async act(chat, roundTools, options) {
       called += 1;
-      assert.deepEqual(tools, []);
-      assert.match(options.maxTokens.toString(), /\d+/u);
-      options.onPredictionCompleted({ stats: {
-        stopReason: "eosFound", promptTokensCount: 28000, predictedTokensCount: 200,
-        totalTokensCount: 28200,
-      } });
-      options.onMessage(ChatMessage.create("assistant", rawToolText));
+      if (called === 1) {
+        assert.deepEqual(roundTools, []);
+        options.onPredictionFragment({ roundIndex: 0, content: rawToolText, reasoningType: "none",
+          isStructural: false, tokenCount: 900 });
+        options.onPredictionCompleted({ stats: {
+          stopReason: "eosFound", promptTokensCount: 28000, predictedTokensCount: 900,
+          totalTokensCount: 28900,
+        } });
+        options.onMessage(ChatMessage.create("assistant", rawToolText));
+        return;
+      }
+      if (called === 2) {
+        assert.deepEqual(roundTools.map(tool => tool.name), ["git_diff_file"]);
+        assert.match(chat.toString(), /freshly emit only valid structured read-only tool requests/u);
+        assert.match(chat.toString(), /CHANGED_FILES_SENTINEL/u);
+        const request = { id: "fresh-diff-1", type: "function", name: "git_diff_file",
+          arguments: { base: "a", head: "b", path: "Assets/PlayPhaseExecution.cs" } };
+        await options.guardToolCall(0, 901, { toolCallRequest: request,
+          allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+        options.onToolCallRequestFinalized(0, 901, { toolCallRequest: request });
+        options.onMessage(ChatMessage.from({ role: "assistant", content: [
+          { type: "toolCallRequest", toolCallRequest: request },
+        ] }));
+        options.onMessage(ChatMessage.from({ role: "tool", content: [
+          { type: "toolCallResult", toolCallId: request.id,
+            content: JSON.stringify({ ok: true, status: "complete", marker: "DIFF_RESULT_SENTINEL" }) },
+        ] }));
+        options.onRoundEnd(0);
+        throw options.signal.reason;
+      }
+      assert.deepEqual(roundTools.map(tool => tool.name).filter(name => name !== "evidence_first_read_context"),
+        tools.map(tool => tool.name));
+      assert.match(chat.toString(), /DIFF_RESULT_SENTINEL/u);
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 20000,
+        predictedTokensCount: 400, totalTokensCount: 20400 } });
+      options.onMessage(ChatMessage.create("assistant", "근거 기반 LeeDongHun 작업 상세 최종 보고"));
     },
   };
-  const ctl = fakeController(history, selectedModel, {}, [tool]);
+  const ctl = fakeController(history, selectedModel, { contextManagementMode: "hybrid" }, tools);
 
   await handlePredictionLoop(ctl);
 
-  assert.equal(called, 1);
+  assert.equal(called, 3);
   const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
   assert.equal(finalization.trigger, "context_budget");
   assert.equal(finalization.deliveryState, "partial");
   assert.equal(finalization.reportState, "unresolved_tool_intent");
   assert.equal(finalization.rejectionReason, "unresolved_tool_intent");
   assert.equal(finalization.completionAccepted, false);
-  assert.equal(ctl.statuses.at(-1).state.status, "canceled");
+  const retry = ctl.debugValues.find(value => value.event === "fresh_tool_planning_retry_scheduled");
+  assert.equal(retry.attempt, 1);
+  assert.equal(retry.structuredToolRequestCount, 0);
+  assert.equal(retry.actualDispatchCount, 0);
+  assert.equal(retry.actualResultCount, 0);
+  const retryRound = ctl.debugValues.find(value => value.event === "direct_round_observation"
+    && value.modelInputId?.includes(":tool-planning-retry-"));
+  assert.equal(retryRound.structuredToolRequestCount, 1);
+  assert.equal(retryRound.actualDispatchCount, 1);
+  assert.equal(retryRound.actualResultCount, 1);
+  assert.match(ctl.blocks.at(-1).text, /근거 기반 LeeDongHun/u);
+});
+
+test("raw tool text cut by the output cap is classified as tool-argument generation", () => {
+  const message = ChatMessage.create("assistant", "<tool_call><function=git_diff_file>");
+  const stage = __test.classifyOutputLimitStage({
+    finishReason: "maxPredictedTokensReached",
+    messages: [message],
+    predictionUsage: { rawToolIntentCandidate: true, visibleTokensCount: 20, visibleChars: 40 },
+  }, false, { hasUnfinished: () => false });
+  assert.equal(stage, "tool_arguments");
 });
 
 function archivedObservationHistory(resultSize = 24000) {
@@ -1962,6 +2029,37 @@ test("deterministic working context projects a completed large result and expose
   assert.equal(observation.workingContextExposure[0].stage, "generation_completed_after_input");
 });
 
+test("image content keeps prediction alive and skips only the durable working-window commit", async () => {
+  const history = Chat.from({ messages: [{ role: "user", content: [
+    { type: "text", text: "Inspect the Git evidence and keep this image." },
+    { type: "file", identifier: "image-fixture", fileType: "image", name: "screen.png", sizeBytes: 64 },
+  ] }] });
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    id: "image-git-call", type: "function", name: "evidence_first_git_page", arguments: { page: 0 },
+  } }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "image-git-call",
+    content: JSON.stringify({ ok: true, status: "complete", kind: "git_observation",
+      rows: ["x".repeat(24000)] }) }] }));
+  let received;
+  const model = exactCountingModel(async (chat, _tools, options) => {
+    received = chat;
+    options.onMessage(ChatMessage.create("assistant", "image-safe answer"));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 2000, predictedTokensCount: 20 } });
+  });
+  const tool = { name: "evidence_first_git_page", pluginIdentifier: "mcp/evidence-first",
+    description: "read git page", parametersJsonSchema: { type: "object" } };
+  const ctl = fakeController(history, model, { contextManagementMode: "deterministic",
+    workingInputTargetTokens: 3000, workingInputTriggerTokens: 3500,
+    toolResultProjectionChars: 512, softRemainingTokens: 1000, hardRemainingTokens: 500 }, [tool]);
+  await createPredictionLoopHandler()(ctl);
+  assert.equal(received.getMessagesArray().some(message => message.hasFiles()), true);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.workingContext.projectionApplied, true);
+  assert.equal(measurement.workingContext.windowCommitted, false);
+  assert.equal(measurement.workingContext.windowCommitSkippedReason, "unsupported_typed_content");
+  assert.equal(ctl.blocks.at(-1).text, "image-safe answer");
+});
+
 test("working input target reports the mandatory floor without deleting the current request", async () => {
   const request = `mandatory-current-request:${"z".repeat(14000)}`;
   const history = Chat.from([{ role: "system", content: "required system" }, { role: "user", content: request }]);
@@ -2011,6 +2109,9 @@ test("hybrid context makes one tool-free semantic handoff and keeps it out of vi
   assert.equal(calls.length, 2);
   assert.equal(calls[0].toolCount, 0);
   assert.equal(calls[0].maxTokens, 700);
+  assert.match(calls[0].chat, /verifiedEvidence/u);
+  assert.match(calls[0].chat, /evidenceId/u);
+  assert.match(calls[0].chat, /pageHasMore/u);
   assert.equal(calls[1].toolCount, 2);
   assert.equal(ctl.blocks.at(-1).text, "normal visible answer");
   assert.doesNotMatch(ctl.blocks.map(block => block.text).join(""), /Keep Git paging bounded/);

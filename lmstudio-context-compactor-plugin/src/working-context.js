@@ -1,9 +1,10 @@
 "use strict";
 
 const { Chat, ChatMessage, rawFunctionTool } = require("@lmstudio/sdk");
-const { EvidenceArchive, hash, redact, atomicWrite, readFile, safeDirectory } = require("./evidence-archive.js");
+const { EvidenceArchive, hash, redact, atomicWrite, readFile } = require("./evidence-archive.js");
 const path = require("node:path");
 const modelNotes = require("./continuity-model-notes.js");
+const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
 const { REASONING_SEPARATOR } = require("./continuity-text.js");
 
 function serialize(history) {
@@ -20,14 +21,96 @@ function serialize(history) {
 function deserialize(messages) { const chat = Chat.empty(); for (const m of messages) chat.append(ChatMessage.from(m)); return chat; }
 
 function exchangeIndex(history) {
-  const requests = new Map(), results = new Map();
-  for (const m of history.getMessagesArray()) {
-    for (const r of m.getToolCallRequests()) requests.set(r.id, [...(requests.get(r.id) || []), r]);
-    for (const r of m.getToolCallResults()) results.set(r.toolCallId, [...(results.get(r.toolCallId) || []), r]);
+  const matches = new Map();
+  let active = null, ambiguous = false;
+  const messages = history.getMessagesArray();
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const message = messages[messageIndex], requests = message.getToolCallRequests();
+    if (requests.length) {
+      if (active && active.consumed.size !== active.requests.size) ambiguous = true;
+      const byId = new Map();
+      for (const request of requests) {
+        if (!request.id || byId.has(request.id)) ambiguous = true;
+        else byId.set(request.id, request);
+      }
+      active = { requests: byId, consumed: new Set() };
+    }
+    const results = message.getToolCallResults();
+    for (let resultIndex = 0; resultIndex < results.length; resultIndex++) {
+      const result = results[resultIndex], id = result.toolCallId;
+      if (!active || !id || !active.requests.has(id) || active.consumed.has(id)) {
+        ambiguous = true;
+        continue;
+      }
+      active.consumed.add(id);
+      matches.set(`${messageIndex}:${resultIndex}`, active.requests.get(id));
+    }
+    if (active && active.consumed.size === active.requests.size) active = null;
   }
-  const ambiguous = [...new Set([...requests.keys(), ...results.keys()])].some(id => !id
-    || requests.get(id)?.length !== 1 || results.get(id)?.length !== 1);
-  return { requests, results, ambiguous };
+  if (active && active.consumed.size !== active.requests.size) ambiguous = true;
+  return { matches, ambiguous };
+}
+
+const identityFields = ["repositoryIdentity", "workspaceIdentity", "projectIdentity", "canonicalProjectRoot",
+  "canonicalProject", "path", "action", "comparison", "base", "head", "currentHead", "blobOid"];
+
+function sourceIdentity(payload) {
+  const identity = {};
+  for (const key of identityFields) if (payload[key] !== undefined) identity[key] = payload[key];
+  return redact(identity);
+}
+
+function semanticFacts(payload) {
+  const facts = {};
+  for (const key of ["kind", "ok", "status", "errorCode", "pageStart", "pageEnd", "pageHasMore",
+    "hasMore", "sourceResultComplete", "returnedRange", "lineRange", "startLine", "endLine",
+    "totalLines", "returnedCount", "total"]) {
+    if (payload[key] !== undefined) facts[key] = payload[key];
+  }
+  if (facts.pageHasMore === undefined && payload.hasMore !== undefined) facts.pageHasMore = payload.hasMore;
+  if (facts.sourceResultComplete === undefined && payload.hasMore !== undefined) {
+    facts.sourceResultComplete = payload.hasMore === false;
+  }
+  return redact(facts);
+}
+
+function serializedResultContent(content) {
+  return typeof content === "string" ? content : JSON.stringify(content);
+}
+
+function collectEvidenceRefs(value, output = new Map()) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectEvidenceRefs(item, output);
+    return output;
+  }
+  if (!value || typeof value !== "object") return output;
+  const ref = value.archiveRef && typeof value.archiveRef === "object" ? value.archiveRef : value;
+  const evidenceId = typeof ref.evidenceId === "string" ? ref.evidenceId
+    : typeof ref.ref === "string" && ref.ref.startsWith("ev_") ? ref.ref : "";
+  if (/^ev_[a-f0-9]{64}$/u.test(evidenceId) && /^[a-f0-9]{64}$/u.test(String(ref.version || ""))) {
+    output.set(evidenceId, String(ref.version));
+  }
+  for (const item of Object.values(value)) collectEvidenceRefs(item, output);
+  return output;
+}
+
+function liveEvidenceRefs(history) {
+  const refs = new Map();
+  for (const message of history.getMessagesArray()) {
+    for (const result of message.getToolCallResults()) {
+      const decoded = decodeToolResultRecord(result.content);
+      if (decoded.value) collectEvidenceRefs(decoded.value, refs);
+    }
+    const text = message.getText();
+    const marker = text.indexOf("[Direct continuity state v2]");
+    if (marker >= 0) {
+      const jsonStart = text.indexOf("{", marker);
+      if (jsonStart >= 0) {
+        try { collectEvidenceRefs(JSON.parse(text.slice(jsonStart)), refs); } catch { /* Not a complete checkpoint. */ }
+      }
+    }
+  }
+  return refs;
 }
 
 class WorkingContext {
@@ -48,12 +131,30 @@ class WorkingContext {
   windowFile(lineage) { return lineage ? `window-${lineage}.json` : "window.json"; }
 
   summaryRefs() {
-    const refs = new Set();
-    for (const [id] of this.refs) {
-      const loaded = this.archive.load(id), call = loaded.ok ? loaded.record.metadata?.providerRequestId : null;
-      if (typeof call === "string" && call) refs.add(`tool-call:${call}`);
+    return new Set(this.summaryEvidence().map(item => item.ref));
+  }
+
+  summaryEvidence(maxItems = 8, maxChars = 6000) {
+    const output = [];
+    const entries = [...this.refs].reverse();
+    for (const [id, version] of entries) {
+      const loaded = this.archive.load(id);
+      if (!loaded.ok || loaded.record.archivedBodyHash !== version) continue;
+      const record = loaded.record, call = record.metadata?.providerRequestId;
+      if (typeof call !== "string" || !call) continue;
+      const decoded = decodeToolResultRecord(record.body);
+      const semantic = decoded.value || {};
+      const excerpt = JSON.stringify(redact(semantic)).slice(0, 640);
+      const item = { ref: `tool-call:${call}`, evidenceId: id, version,
+        source: record.metadata?.toolName || record.metadata?.sourceKind || "observation",
+        sourceIdentityDigest: hash(record.metadata?.sourceIdentity || {}),
+        verifiedExcerpt: excerpt,
+        facts: record.metadata?.semanticFacts || semanticFacts(semantic) };
+      if (JSON.stringify([...output, item]).length > maxChars) continue;
+      output.push(item);
+      if (output.length >= maxItems) break;
     }
-    return refs;
+    return output.reverse();
   }
 
   project(history, isObservation, metadata = {}, maxChars = 2048) {
@@ -61,35 +162,48 @@ class WorkingContext {
     if (index.ambiguous) return { history, changed: false, reason: "pending_or_ambiguous_exchange" };
     const projected = Chat.empty();
     let changed = false, archiveFailed = false;
-    for (const message of history.getMessagesArray()) {
+    const messages = history.getMessagesArray();
+    for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+      const message = messages[messageIndex];
       const results = message.getToolCallResults();
       if (!results.length) { projected.append(message); continue; }
-      const copies = results.map(result => {
-        const request = index.requests.get(result.toolCallId)?.[0];
+      const copies = results.map((result, resultIndex) => {
+        const request = index.matches.get(`${messageIndex}:${resultIndex}`);
         if (!request || !isObservation(request)) return result;
-        let parsed;
-        try { parsed = JSON.parse(result.content); } catch { return result; }
+        const originalEnvelope = serializedResultContent(result.content);
+        const decoded = decodeToolResultRecord(originalEnvelope), parsed = decoded.value;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
           || parsed.kind === "archived_tool_result_projection" || parsed.kind === "historical_evidence_range") return result;
         // The caller's known observation classification alone is not execution proof.
         if (parsed.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(parsed.status)) return result;
-        const saved = this.archive.put(result.content, { ...metadata,
-          callKey: `${metadata.executionId || "history"}:${result.toolCallId}`,
+        // A projection has fixed identity/range metadata. Avoid archiving and
+        // replacing small observations that cannot become cheaper overall.
+        if (originalEnvelope.length <= Math.max(maxChars, 1024)) return result;
+        const identity = sourceIdentity(parsed), facts = semanticFacts(parsed);
+        const saved = this.archive.put(originalEnvelope, { ...metadata,
+          callKey: `${metadata.executionId || "history"}:${metadata.roundIndex ?? "history"}:${result.toolCallId}`,
           providerRequestId: result.toolCallId, toolName: request.name,
           sourceKind: parsed.kind || "observation", sourceVersion: parsed.sha256 || parsed.head || null,
-          semanticQuery: request.arguments, resultStatus: parsed.status ?? parsed.ok ?? "unknown",
+          sourceIdentity: identity, semanticQueryDigest: hash(request.arguments || {}), semanticFacts: facts,
+          resultStatus: parsed.status ?? parsed.ok ?? "unknown",
           errorCode: parsed.errorCode ?? null,
           operationId: parsed.operationId ?? null,
           buildAttempt: parsed.buildAttempt ?? parsed.attemptId ?? null,
-          originRanges: parsed.returnedRange || parsed.lineRange || parsed.page || null });
+          originRanges: parsed.returnedRange || parsed.lineRange || parsed.page
+            || (parsed.pageStart !== undefined || parsed.pageEnd !== undefined ? [parsed.pageStart, parsed.pageEnd] : null) },
+        { liveRefs: new Set(this.refs.keys()) });
         if (!saved.ok) { archiveFailed = true; return result; }
         const record = saved.record;
-        this.refs.set(record.evidenceId, record.archivedBodyHash);
-        if (result.content.length <= maxChars) return result;
-        const projectedEnd = Math.min(maxChars, record.body.length);
+        const semanticBody = JSON.stringify(redact(parsed));
+        let projectedEnd = Math.min(maxChars, semanticBody.length);
+        const directSemanticBody = originalEnvelope.trim() === JSON.stringify(parsed);
         const projection = { kind: "archived_tool_result_projection", originalCallId: result.toolCallId,
+          toolName: request.name,
           resultStatus: parsed.status ?? parsed.ok ?? "unknown", errorCode: parsed.errorCode ?? null,
-          sourceRange: parsed.returnedRange || parsed.lineRange || null,
+          sourceIdentity: identity, sourceIdentityDigest: hash(identity),
+          sourceVersion: parsed.sha256 || parsed.head || null,
+          sourceRange: parsed.returnedRange || parsed.lineRange
+            || (parsed.pageStart !== undefined || parsed.pageEnd !== undefined ? [parsed.pageStart, parsed.pageEnd] : null),
           sourceCollectionComplete: parsed.sourceResultComplete ?? "unknown",
           pageHasMore: parsed.pageHasMore ?? parsed.hasMore ?? "unknown",
           ...(typeof parsed.nextCursor === "string" && parsed.nextCursor
@@ -97,13 +211,31 @@ class WorkingContext {
           archiveRef: { evidenceId: record.evidenceId, version: record.archivedBodyHash, archiveState: record.archiveState },
           sourceHash: record.sourceHash, redacted: record.redacted,
           rangeUnit: record.rangeUnit, archivedRanges: record.archivedRanges,
-          projectedRawRanges: record.redacted ? [] : [[0, projectedEnd]],
-          projectedSanitizedRanges: record.redacted ? [[0, projectedEnd]] : [],
-          omittedRanges: [[projectedEnd, record.body.length]],
+          projectedRawRanges: [],
+          projectedSanitizedRanges: [],
+          omittedRanges: [],
           fullRawProvided: false, currentFile: false, grantsMutation: false,
-          excerpt: record.body.slice(0, projectedEnd) };
+          excerpt: "" };
+        const fixedCost = JSON.stringify(projection).length;
+        projectedEnd = Math.min(projectedEnd, Math.max(0, originalEnvelope.length - fixedCost - 1));
+        projection.projectedRawRanges = directSemanticBody && !record.redacted ? [[0, projectedEnd]] : [];
+        projection.projectedSanitizedRanges = [[0, projectedEnd]];
+        projection.omittedRanges = [[Math.min(projectedEnd, record.body.length), record.body.length]];
+        projection.excerpt = semanticBody.slice(0, projectedEnd);
+        let projectedContent = JSON.stringify(projection);
+        while (projectedContent.length >= originalEnvelope.length && projectedEnd > 0) {
+          projectedEnd = Math.max(0, projectedEnd
+            - Math.max(16, projectedContent.length - originalEnvelope.length + 16));
+          projection.projectedRawRanges = directSemanticBody && !record.redacted ? [[0, projectedEnd]] : [];
+          projection.projectedSanitizedRanges = [[0, projectedEnd]];
+          projection.omittedRanges = [[Math.min(projectedEnd, record.body.length), record.body.length]];
+          projection.excerpt = semanticBody.slice(0, projectedEnd);
+          projectedContent = JSON.stringify(projection);
+        }
+        if (projectedContent.length >= originalEnvelope.length) return result;
+        this.refs.set(record.evidenceId, record.archivedBodyHash);
         changed = true;
-        return { ...result, content: JSON.stringify(projection) };
+        return { ...result, content: projectedContent };
       });
       projected.append(ChatMessage.from({ role: "tool", content: copies.map(r => ({ type: "toolCallResult", ...r })) }));
     }
@@ -130,7 +262,8 @@ class WorkingContext {
   captureExposure(history, modelInputId, completed = false) {
     for (const message of history.getMessagesArray()) for (const result of message.getToolCallResults()) {
       try {
-        const value = JSON.parse(result.content);
+        const value = decodeToolResultRecord(result.content).value;
+        if (!value) continue;
         if (value.kind === "archived_tool_result_projection") {
           this.exposure.set(`${modelInputId}:${result.toolCallId}`, { modelInputId, callId: result.toolCallId,
             source: "model_facing_projection",
@@ -143,7 +276,7 @@ class WorkingContext {
             source: "archive_rehydration", currentSourceRead: false,
             stage: completed ? "generation_completed_after_input" : "included_in_sdk_input",
             hostInputVerification: "unknown", returnedRange: value.returnedRange,
-            fullRawProvided: value.hasMore === false && value.redacted === false,
+            fullRawProvided: value.fullRawProvided === true,
             redacted: value.redacted, evidenceId: value.evidenceId });
         }
       } catch { /* No archive view. */ }
@@ -153,8 +286,9 @@ class WorkingContext {
   commit(source, candidate, measurement, expectedPrefix, modelFingerprint) {
     try {
       const prefix = serialize(source), replacement = serialize(candidate);
+      const liveRefs = liveEvidenceRefs(candidate);
       if (hash(prefix) !== expectedPrefix || !measurement.exact || measurement.remainingTokens < 0
-        || !this.refsValid() || exchangeIndex(candidate).ambiguous) return false;
+        || !this.refsValid([...liveRefs]) || exchangeIndex(candidate).ambiguous) return false;
       // Never persist live receipt/secret material or raw reasoning in a window.
       if (JSON.stringify(redact(replacement)) !== JSON.stringify(replacement)
         || replacement.some(m => m.content.some(p => p.type === "text" && p.text.includes(REASONING_SEPARATOR)))) return false;
@@ -162,11 +296,14 @@ class WorkingContext {
         generation: this.generation + 1, parentWindowId: this.manifest?.windowId || null,
         lineage: this.lineage, parentLineage: this.parentLineage,
         sourcePrefixHash: expectedPrefix, sourceLength: prefix.length,
-        replacement, refs: [...this.refs], note: this.note,
+        replacement, refs: [...liveRefs], note: this.note,
         lastSummaryInput: this.lastSummaryInput, modelFingerprint, measurement };
       const manifest = { ...body, digest: hash(body) };
-      if (this.archive.directory) atomicWrite(this.archive.directory, this.windowFile(this.lineage), manifest);
-      this.manifest = manifest; this.generation = body.generation;
+      if (this.archive.directory) {
+        this.archive.ensureDirectory(true);
+        atomicWrite(this.archive.directory, this.windowFile(this.lineage), manifest);
+      }
+      this.manifest = manifest; this.generation = body.generation; this.refs = liveRefs;
       return true;
     } catch { return false; }
   }
@@ -175,7 +312,7 @@ class WorkingContext {
     try {
       let manifest = this.manifest;
       if (this.archive.directory) {
-        safeDirectory(this.archive.directory);
+        this.archive.ensureDirectory();
         manifest = JSON.parse(readFile(path.join(this.archive.directory, this.windowFile(this.parentLineage)), this.archive.options.maxBytes));
       }
       if (!manifest) return { history: source, reason: "no_manifest" };

@@ -64,6 +64,7 @@ const workingContextModule = require("./working-context.js") as {
       expectedPrefix: string, modelFingerprint: string): boolean;
     captureExposure(history: Chat, modelInputId: string, completed?: boolean): void;
     summaryRefs(): Set<string>;
+    summaryEvidence(maxItems?: number, maxChars?: number): Array<Record<string, unknown>>;
   };
   serialize(history: Chat): Array<unknown>;
   validateSemanticNote(text: string, refs: Set<string>, generation: number,
@@ -275,6 +276,18 @@ const OUTPUT_RECOVERY_FINAL_INSTRUCTION = [
   "Use only evidence already present in this input and do not request, imply, or execute a tool call.",
   "Put confirmed conclusions, the key supporting evidence, verification results, and unresolved scope first.",
   "Do not claim that an unexecuted operation or an unverified investigation is complete.",
+].join(" ");
+
+const READ_ONLY_BATCH_INSTRUCTION = [
+  "For independent read-only investigation, request a reasonable batch and consume its results before planning the next batch.",
+  "For large multi-file work, avoid generating an unnecessarily large set of tool arguments in one prediction.",
+  "Do not repeat an already successful read unless the required range or source version is different.",
+].join(" ");
+
+const FRESH_TOOL_PLANNING_RETRY_INSTRUCTION = [
+  "The prior response left unexecuted raw tool-like text. Do not continue or repair that text.",
+  "Using the original user goal and the evidence already present, freshly emit only valid structured read-only tool requests for the missing evidence.",
+  "Do not request writes, builds, mutations, or an already successful identical read.",
 ].join(" ");
 
 type RemoteToolLike = Tool & {
@@ -594,6 +607,7 @@ function targetRemainingForInput(measurement: ContextMeasurement, config: Direct
 }
 
 function shouldCompactContext(measurement: ContextMeasurement, config: DirectConfig): boolean {
+  if (config.observeOnly) return false;
   return core.shouldCompact(measurement, config)
     || (config.contextManagementMode !== "legacy" && measurement.exact
       && measurement.inputTokens > config.workingInputTriggerTokens);
@@ -940,6 +954,26 @@ function visibleTextFromMessages(messages: Array<ChatMessage>): string {
     .trim();
 }
 
+function rawReadOnlyIntentToolNames(text: string, tools: Array<RemoteToolLike>): Array<string> {
+  if (!containsUnresolvedToolIntent(text, [])) return [];
+  const names = [...text.matchAll(/<function=([A-Za-z0-9_.:-]+)>/gu)].map(match => match[1]);
+  if (!names.length) return [];
+  const unique = [...new Set(names)];
+  return unique.every(name => {
+    const tool = tools.find(candidate => candidate.name === name);
+    return Boolean(tool && isObservationOnlyToolCall(tool, { name, arguments: {} }));
+  }) ? unique : [];
+}
+
+function completedRequestFingerprints(history: Chat): Set<string> {
+  const completedIds = new Set(history.getMessagesArray().flatMap(message => (
+    message.getToolCallResults().map(result => String(result.toolCallId || "")).filter(Boolean)
+  )));
+  return new Set(history.getMessagesArray().flatMap(message => message.getToolCallRequests())
+    .filter(request => completedIds.has(String(request.id || "")))
+    .map(request => telemetryFingerprint({ name: request.name, arguments: request.arguments || {} })));
+}
+
 function classifyOutputLimitStage(
   captured: {
     finishReason?: string;
@@ -955,6 +989,10 @@ function classifyOutputLimitStage(
   toolGeneration: { hasUnfinished: () => boolean },
 ): OutputLimitStage | undefined {
   if (captured.finishReason !== "maxPredictedTokensReached") return undefined;
+  if (captured.predictionUsage?.rawToolIntentCandidate === true
+    && !captured.messages.some(message => message.getToolCallRequests().length > 0)) {
+    return "tool_arguments";
+  }
   if (finalizing) return "forced_final";
   if (toolGeneration.hasUnfinished()
     || captured.messages.some(message => message.getToolCallRequests().length > 0)) {
@@ -1048,6 +1086,7 @@ async function generateSemanticHandoff(options: {
   priorNote: ContinuityNote | null;
   latestUser: string;
   refs: Set<string>;
+  evidence: Array<Record<string, unknown>>;
   generation: number;
   parentWindow: string | null;
 }) {
@@ -1069,6 +1108,7 @@ async function generateSemanticHandoff(options: {
       assistantCheckpoint: options.checkpoint.assistantCheckpoint.slice(0, 6000),
       priorAssistantClaim: options.priorNote,
       allowedRefs: [...options.refs],
+      verifiedEvidence: options.evidence,
     }) },
   ]);
   const measured = await measureContext(options.tokenSource, input, options.config, [], {
@@ -1129,12 +1169,17 @@ export function createPredictionLoopHandler(
   const attachments = config.observeOnly ? { modelHistory: pulledHistory, attachmentHistory: pulledHistory }
     : attachmentBoundary.restore(pulledHistory, client);
   const contextBoundary = config.contextManagementMode === "legacy" || config.observeOnly
-    ? { modelHistory: attachments.modelHistory, scope: null }
+    ? { modelHistory: attachments.modelHistory, scope: null, reason: "disabled" }
     : contextBoundaryStore.restore(attachments.modelHistory);
   const cleanAttachmentHistory = config.contextManagementMode === "legacy" || config.observeOnly
     ? attachments.attachmentHistory
     : contextBoundaryStore.restore(attachments.attachmentHistory).modelHistory;
   const originalHistory = contextBoundary.modelHistory;
+  if (config.showDebugInfo && config.contextManagementMode !== "legacy" && !config.observeOnly) ctl.debug({
+    event: "working_context_boundary_restore",
+    status: contextBoundary.reason || "unknown",
+    reused: Boolean(contextBoundary.scope),
+  });
   const tokenSource = await ctl.tokenSource();
   if (selectedSourceIsThisPlugin(tokenSource)) {
     throw new Error("Select the actual Qwen/LLM in LM Studio. The context compactor is middleware, not a chat model.");
@@ -1179,6 +1224,9 @@ export function createPredictionLoopHandler(
     ...(scope.availableUnityTools + scope.availableUnrealTools > 0
       ? [renderToolScopeInstruction(scope)] : []),
     ...(attachmentContext.instruction ? [attachmentContext.instruction] : []),
+    ...(config.contextManagementMode !== "legacy"
+      && modelTools.some(tool => isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} }))
+      ? [READ_ONLY_BATCH_INSTRUCTION] : []),
   ];
   const emitter = createMessageEmitter(ctl, modelTools);
   const visibleHistory = Chat.from(originalHistory);
@@ -1229,6 +1277,10 @@ export function createPredictionLoopHandler(
   let finalizationPending = false;
   let finalizationTrigger: FinalizationTrigger | null = null;
   let finalizationAttempts = 0;
+  let toolPlanningRetryAttempts = 0;
+  let toolPlanningRetryPending = false;
+  let toolPlanningRetryToolNames = new Set<string>();
+  let toolPlanningRetryBlockedFingerprints = new Set<string>();
   let activeActivity: ReturnType<typeof createRoundActivityTracker> | null = null;
   const toolStagnation = new ToolRoundStagnationDetector();
   try {
@@ -1240,6 +1292,7 @@ export function createPredictionLoopHandler(
         continue;
       }
       const finalizing = finalizationPending;
+      const toolPlanningRetryRound = !finalizing && toolPlanningRetryPending;
       if (finalizing) {
         if (finalizationAttempts >= 1) break;
         finalizationAttempts += 1;
@@ -1265,7 +1318,9 @@ export function createPredictionLoopHandler(
           archive: workingContext.archive.stats,
         });
       }
-      const roundTools = finalizing ? [] : modelTools;
+      const roundTools = finalizing ? [] : toolPlanningRetryRound
+        ? modelTools.filter(tool => toolPlanningRetryToolNames.has(tool.name))
+        : modelTools;
       let roundOutputReserve = finalizing
         ? finalizationTrigger === "output_recovery"
           ? Math.min(config.maxOutputReserve, config.outputRecoveryMaxTokens)
@@ -1280,12 +1335,14 @@ export function createPredictionLoopHandler(
           ? OUTPUT_RECOVERY_FINAL_INSTRUCTION
           : finalizationTrigger === "context_budget"
             ? CONTEXT_BUDGET_FINAL_INSTRUCTION : BOUNDED_AUDIT_FINAL_INSTRUCTION]
-        : scopeInstructions;
+        : [...scopeInstructions, ...(toolPlanningRetryRound ? [FRESH_TOOL_PLANNING_RETRY_INSTRUCTION] : [])];
       const modelInputId = finalizing
         ? finalizationTrigger === "output_recovery"
           ? `${executionId}:output-recovery-${finalizationAttempts}`
           : `${executionId}:final-report`
-        : `${executionId}:prediction-${roundIndex + 1}`;
+        : toolPlanningRetryRound
+          ? `${executionId}:tool-planning-retry-${toolPlanningRetryAttempts}`
+          : `${executionId}:prediction-${roundIndex + 1}`;
       activeActivity = createRoundActivityTracker(ctl, roundIndex);
       const noteEnabled = Boolean(noteWorkingDirectory && objectiveFingerprint && !config.observeOnly);
       if (noteEnabled && activeNote) {
@@ -1382,11 +1439,14 @@ export function createPredictionLoopHandler(
           maxCheckpointChars: config.maxCheckpointChars,
           maxToolResultChars: config.maxToolResultChars,
         }) : null);
+      const summaryEvidence = workingContext ? workingContext.summaryEvidence() : [];
+      const summaryRefs = new Set(summaryEvidence.map(item => String(item.ref || "")).filter(Boolean));
       const semanticEventKey = workingContext && semanticCheckpoint
         ? workingContextModule.hash({
           checkpoint: semanticCheckpoint.checkpoint,
           assistantCheckpoint: semanticCheckpoint.assistantCheckpoint,
-          refs: [...workingContext.summaryRefs()].sort(),
+          refs: [...summaryRefs].sort(),
+          evidence: summaryEvidence,
           latestUser: [...visibleHistory.getMessagesArray()].reverse()
             .find(message => message.isUserMessage())?.getText() || "",
         }) : "";
@@ -1406,7 +1466,8 @@ export function createPredictionLoopHandler(
           priorNote: activeNote,
           latestUser: [...visibleHistory.getMessagesArray()].reverse()
             .find(message => message.isUserMessage())?.getText() || "",
-          refs: workingContext.summaryRefs(),
+          refs: summaryRefs,
+          evidence: summaryEvidence,
           generation: roundIndex + 1,
           parentWindow: null,
         });
@@ -1604,7 +1665,7 @@ export function createPredictionLoopHandler(
         throw new Error(`CONTEXT_BUDGET_EXCEEDED: final model input exceeds the context budget by ${-finalMeasurement.remainingTokens} tokens`);
       }
 
-      const workingInputTargetActive = config.contextManagementMode !== "legacy";
+      const workingInputTargetActive = config.contextManagementMode !== "legacy" && !config.observeOnly;
       let mandatoryFloorMeasurement: ContextMeasurement | null = null;
       if (workingInputTargetActive) {
         const mandatoryCandidate = buildCompactedHistory(workingHistory, 0, config, {
@@ -1616,21 +1677,28 @@ export function createPredictionLoopHandler(
       const mandatoryFloorExceedsTarget = Boolean(mandatoryFloorMeasurement?.exact
         && mandatoryFloorMeasurement.inputTokens > config.workingInputTargetTokens);
       let workingWindowCommitted = false;
+      let windowCommitSkippedReason: string | null = null;
       if (workingContext && (projectionApplied || compacted || restoredWindowApplied) && finalMeasurement.exact
         && finalMeasurement.remainingTokens >= 0) {
-        const sourceFingerprint = workingContextModule.hash(workingContextModule.serialize(visibleHistory));
-        workingWindowCommitted = workingContext.commit(
-          visibleHistory,
-          workingHistory,
-          finalMeasurement,
-          sourceFingerprint,
-          workingContextModule.hash({
-            model: String((tokenSource as { identifier?: unknown }).identifier || "unknown"),
-            contextLength: finalMeasurement.contextLength,
-            tools: roundTools.map(tool => ({ name: tool.name, schema: tool.parametersJsonSchema })),
-            target: config.workingInputTargetTokens,
-          }),
-        );
+        try {
+          const sourceFingerprint = workingContextModule.hash(workingContextModule.serialize(visibleHistory));
+          workingWindowCommitted = workingContext.commit(
+            visibleHistory,
+            workingHistory,
+            finalMeasurement,
+            sourceFingerprint,
+            workingContextModule.hash({
+              model: String((tokenSource as { identifier?: unknown }).identifier || "unknown"),
+              contextLength: finalMeasurement.contextLength,
+              tools: roundTools.map(tool => ({ name: tool.name, schema: tool.parametersJsonSchema })),
+              target: config.workingInputTargetTokens,
+            }),
+          );
+          if (!workingWindowCommitted) windowCommitSkippedReason = "commit_validation_rejected";
+        } catch (error) {
+          windowCommitSkippedReason = error instanceof Error && error.message === "typed_files_not_serializable"
+            ? "unsupported_typed_content" : "fingerprint_unavailable";
+        }
       }
 
       const retainedIndexes = compactionCheckpoint?.retainedIndexes || [];
@@ -1680,6 +1748,7 @@ export function createPredictionLoopHandler(
           projectionApplied,
           restoredWindowApplied,
           windowCommitted: workingWindowCommitted,
+          windowCommitSkippedReason,
           archive: workingContext.archive.stats,
           semanticCost: workingContext.cost,
           exact: finalMeasurement.exact,
@@ -1861,6 +1930,12 @@ export function createPredictionLoopHandler(
               allowedTool as ScopedTool, request, projectBindingIdentity,
             );
             const proposedArguments = boundArguments || request.arguments || {};
+            const retryFingerprint = telemetryFingerprint({ name: request.name, arguments: proposedArguments });
+            if (toolPlanningRetryRound && toolPlanningRetryBlockedFingerprints.has(retryFingerprint)) {
+              traceCall(callId, { validationState: "denied_duplicate_retry", executionState: "not_executed" });
+              controller.deny("Fresh tool-planning retry cannot repeat an already successful identical read.");
+              return;
+            }
             if (isObservationOnlyToolCall(allowedTool, { ...request, arguments: proposedArguments })) {
               toolGeneration.executing(callId);
               traceCall(callId, {
@@ -1948,8 +2023,50 @@ export function createPredictionLoopHandler(
         if (!displayedMessages.has(message)) emitter.emit(visibleMessage, textAlreadyStreamed);
       }
       const outputLimitStage = classifyOutputLimitStage(captured, finalizing, toolGeneration);
+      if (toolPlanningRetryRound) toolPlanningRetryPending = false;
+      const outputEvidence = messageEvidenceTelemetry(captured.messages);
+      const rawIntentText = visibleTextFromMessages(captured.messages);
+      const rawIntentToolNames = rawReadOnlyIntentToolNames(rawIntentText, allModelTools);
+      const runtimeDispatchCount = [...runtimeToolTrace.values()]
+        .filter(value => value.executionState === "dispatched").length;
+      const structuredToolRequestCount = outputEvidence.calls.length;
+      const actualResultCount = outputEvidence.results.length;
+      const freshToolPlanningRetryEligible = !boundedAudit && toolPlanningRetryAttempts < 1
+        && captured.failure === undefined && !ctl.abortSignal.aborted
+        && phaseTimeoutSignal?.aborted !== true && Date.now() < researchDeadlineAt
+        && finalMeasurement.remainingTokens >= MIN_FINAL_OUTPUT_TOKENS
+        && captured.predictionUsage.rawToolIntentCandidate === true
+        && rawIntentToolNames.length > 0 && structuredToolRequestCount === 0
+        && runtimeDispatchCount === 0 && actualResultCount === 0;
+      const scheduleFreshToolPlanningRetry = () => {
+        workingHistory = historyBeforeRound;
+        finalizationPending = false;
+        finalizationTrigger = null;
+        toolPlanningRetryAttempts += 1;
+        toolPlanningRetryPending = true;
+        toolPlanningRetryToolNames = new Set(rawIntentToolNames);
+        toolPlanningRetryBlockedFingerprints = completedRequestFingerprints(historyBeforeRound);
+        if (config.showDebugInfo) ctl.debug({
+          event: "fresh_tool_planning_retry_scheduled",
+          executionId,
+          sourceModelInputId: modelInputId,
+          retryModelInputId: `${executionId}:tool-planning-retry-${toolPlanningRetryAttempts}`,
+          attempt: toolPlanningRetryAttempts,
+          maxAttempts: 1,
+          finishReason: captured.finishReason || "unknown",
+          outputLimitStage,
+          requestedMaxTokens: requestedOutputCap,
+          appliedMaxTokens: roundOutputReserve,
+          inputTokens: finalMeasurement.inputTokens,
+          remainingTokens: finalMeasurement.remainingTokens,
+          finalizationTrigger: "raw_tool_intent",
+          structuredToolRequestCount,
+          rawToolIntentToolNames: rawIntentToolNames,
+          actualDispatchCount: runtimeDispatchCount,
+          actualResultCount,
+        });
+      };
       if (config.showDebugInfo) {
-        const outputEvidence = messageEvidenceTelemetry(captured.messages);
         const normalizedCaptured = normalizeMessages(captured.messages);
         ctl.debug({
           event: "direct_round_observation",
@@ -1963,6 +2080,15 @@ export function createPredictionLoopHandler(
           requestedMaxTokens: requestedOutputCap,
           appliedMaxTokens: roundOutputReserve,
           capSource: outputCapSource,
+          inputTokens: finalMeasurement.inputTokens,
+          remainingTokens: finalMeasurement.remainingTokens,
+          finalizationTrigger: finalizing ? finalizationTrigger : undefined,
+          structuredToolRequestCount,
+          rawToolIntentCandidate: captured.predictionUsage.rawToolIntentCandidate,
+          rawToolIntentFirstFragment: captured.predictionUsage.rawToolIntentFirstFragment,
+          rawToolIntentFirstVisibleChar: captured.predictionUsage.rawToolIntentFirstVisibleChar,
+          actualDispatchCount: runtimeDispatchCount,
+          actualResultCount,
           phase: finalizing ? "final_report" : "research",
           attempt: finalizing ? finalizationAttempts : roundIndex + 1,
           continueAfterTools: captured.continueAfterTools,
@@ -2041,6 +2167,12 @@ export function createPredictionLoopHandler(
           capSource: outputCapSource,
           toolCount: roundTools.length,
         });
+        if (deliveryState !== "complete" && finalDelivery.reportState === "unresolved_tool_intent"
+          && freshToolPlanningRetryEligible) {
+          scheduleFreshToolPlanningRetry();
+          roundIndex += 1;
+          continue;
+        }
         if (deliveryState !== "complete") ctl.createStatus({
           status: deliveryState === "no_answer" ? "error" : "canceled",
           text: finalDelivery.reportState === "unresolved_tool_intent"
@@ -2057,6 +2189,11 @@ export function createPredictionLoopHandler(
       if (phaseTimedOut) {
         finalizationPending = true;
         finalizationTrigger = "research_timeout";
+        roundIndex += 1;
+        continue;
+      }
+      if (freshToolPlanningRetryEligible) {
+        scheduleFreshToolPlanningRetry();
         roundIndex += 1;
         continue;
       }
@@ -2093,6 +2230,13 @@ export function createPredictionLoopHandler(
           text: outputLimitStage === "tool_arguments"
             ? "도구 호출 인수가 출력 한도에서 끝나 실행하지 않았습니다."
             : "응답이 출력 한도에 도달해 완료로 처리하지 않았습니다.",
+        });
+      }
+      if (toolPlanningRetryRound && captured.predictionUsage.rawToolIntentCandidate
+        && !captured.continueAfterTools) {
+        ctl.createStatus({
+          status: "canceled",
+          text: "읽기 전용 도구 계획 재시도에서도 structured 도구 요청이 생성되지 않아 중단했습니다.",
         });
       }
       if (!captured.continueAfterTools) break;

@@ -6,6 +6,11 @@ Baseline: `7ad2a26493de20c821a040959a12d25e96fb67fa`, parent
 Luna's explicit generation caps, single report recovery and canonical-report
 selection are part of this baseline. No installed plugin is replaced.
 
+Integration-hardening audit baseline: `a8e9cee435fa21bc8ebb40ef4a4e1f75fef1d861`
+on `v1.4.0-beta-2`, with parent `7ad2a26493de20c821a040959a12d25e96fb67fa`.
+The working tree was clean before this hardening patch. The installed plugin and
+active chats remain separate runtime boundaries and are not replaced by the patch.
+
 ## Existing / reuse / extend / new
 
 | Kind | Owner and contract |
@@ -30,15 +35,19 @@ deterministic/hybrid mode, its registered prompt preprocessor issues a signed,
 opaque conversation ID and a fresh lineage ID for each user turn, binding the
 parent lineage, normalized prior-history hash, workspace and repository. The
 prediction loop verifies and strips this marker before model input, and restores a
-window only when the parent manifest and exact prefix hash agree. Edited history,
-copied/forged markers, a changed project/worktree or an unknown parent fail closed.
+window only when the parent manifest and exact prefix hash agree. Invalid
+signatures and cross-scope markers fail closed. A valid marker attached to edited
+history or a new same-conversation fork rejects the stale window but continues
+from the current full history under a new lineage.
 The hidden marker remains in the host/UI transcript; original messages are not
 deleted or rewritten. A branch that starts from the same verified parent receives
 a distinct child lineage on its next user turn, while host-native fork metadata is
 still unavailable and is not claimed. If the preprocessor or signed scope is not
 available, archives and windows remain invocation-local and report `session_only`.
 
-Archive only completed, unambiguous observation exchanges. Mutation/build and
+Archive only completed, causally paired observation exchanges. Provider request
+IDs may repeat in later `.act()` invocations; duplicates are ambiguous only inside
+the same request batch. Mutation/build and
 unknown tools stay intact. Keep original GUI messages; change only model-facing
 copies after archive integrity verification. Projections contain original call ID,
 status/error, exact archived and projected ranges, omitted ranges and archive ID.
@@ -49,7 +58,25 @@ Sanitization changes are explicit and never described as byte-identical raw.
 Use bounded local files below the existing compactor state root when a verified
 scope is available, otherwise bounded memory. TTL, byte/file quotas, schema/hash
 checks and scope separation fail closed. Lookup accepts only opaque IDs and bounded
-UTF-16 ranges, not paths. A failed archive must not authorize raw eviction.
+UTF-16 ranges, not paths. Its whole serialized response, including metadata, is
+bounded; EOF and complete raw coverage are separate fields. A failed archive must
+not authorize raw eviction.
+
+The deterministic checkpoint carries a bounded `historicalEvidence` index with
+evidence ID/version, source identity and ranges; it never copies archive bodies.
+Semantic handoff receives only verified bounded excerpts and deterministic facts
+for its allowed refs. Unsupported typed/image content skips only the durable
+window commit and records `unsupported_typed_content`; prediction and the original
+history continue unchanged. Observe Only bypasses projection, archive substitution,
+window restore/commit, semantic handoff and target-triggered compaction.
+
+If a report leaves raw `<tool_call>` text without any structured request,
+dispatch, result, timeout or cancellation, the plugin may make one fresh planning
+round only when every named tool is observation-only and budget remains. It does
+not parse or execute the raw arguments. The retry exposes only those read-only
+tool definitions, rejects an identical previously successful read and asks the
+model to generate a new structured request. Mutation/build calls, BOUNDED mode and
+recursive retries are excluded.
 
 Compaction trigger and target differ: full input target 10000 tokens, trigger
 target + 2048 tokens (hysteresis), measured after all instructions and tool schemas.
@@ -65,6 +92,10 @@ separately and included in experiment totals. Shorter input alone is not success
 Keep A=Luna, B=deterministic, C=hybrid under identical model/template/cap/scope.
 Schema optimization D requires measured schema-dominance evidence; it is not
 enabled speculatively. Existing note files remain readable; new state is versioned.
+Archive roots are canonicalized once so macOS system aliases are accepted, while
+links inside the canonical archive root remain forbidden. Expired/dead records may
+be reclaimed deterministically, but manifest-referenced evidence is never evicted
+for quota.
 Rollback selects legacy; no transcript rewrite or deletion is required. Delete only
 the explicitly identified hybrid-v1 scoped directory to remove archived data.
 

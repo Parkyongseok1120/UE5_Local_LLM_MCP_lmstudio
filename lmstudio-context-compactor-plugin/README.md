@@ -23,7 +23,7 @@
 
 공통 Git 도구, 호환 경로와 기본 비활성 실험 옵션은 [Workspace 기능과 호환 경계](../docs/Workspace_Capabilities.md)를 참고하세요.
 
-이 범위 처리는 문자열 규칙, 파일 표식, 도구 스키마만 사용합니다. 별도 LLM 호출, 계획 생성, 자동 도구 순서, 실패 후 자동 재시도는 없습니다. `read_file` 등의 호출 횟수 제한도 추가하지 않습니다.
+이 범위 처리는 문자열 규칙, 파일 표식, 도구 스키마만 사용합니다. Legacy에서는 별도 LLM 호출, 계획 생성, 자동 도구 순서, 실패 후 자동 재시도가 없습니다. Deterministic/Hybrid에서 raw tool-call 문자열만 남고 structured request가 하나도 만들어지지 않은 경우에는 아래의 제한적 read-only fresh planning retry가 적용될 수 있습니다. `read_file` 등의 고정 호출 횟수 제한은 추가하지 않습니다.
 
 ## 출력 표시
 
@@ -39,15 +39,19 @@
 
 ## 재조회 가능한 working context (실험적)
 
-`Working context`의 기본값은 `Legacy`입니다. `Deterministic archive/window`를 선택하면 완료된 read-only 도구 결과를 현재 대화·fork·workspace·repository 범위의 로컬 archive에 먼저 보관하고 hash를 다시 검증한 뒤, 큰 결과만 bounded projection으로 바꿉니다. projection은 원래 call ID, status/error, 실제 반환 범위, 모델에 제공한 발췌 범위, 생략 범위와 `evidenceId`/version을 유지합니다. 전체 raw를 제공했다고 표시하지 않습니다. `evidence_first_read_context`는 정확한 ID와 version, 제한된 문자 범위만 받고 과거 반환 자료를 다시 읽습니다. 파일 경로를 받지 않으며 현재 파일의 수정 권한이나 fresh-read receipt를 만들지 않습니다.
+`Working context`의 기본값은 `Legacy`입니다. `Deterministic archive/window`를 선택하면 완료된 read-only 도구 결과를 현재 대화·fork·workspace·repository 범위의 로컬 archive에 먼저 보관하고 hash를 다시 검증한 뒤, 큰 결과만 bounded projection으로 바꿉니다. 직접 JSON, MCP text block, `structuredContent`처럼 SDK가 반환할 수 있는 envelope은 공통 decoder로 의미 payload를 얻되, archive에는 원래 provider envelope을 보관합니다. projection은 원래 call ID, tool 이름, status/error, source identity/hash/version, 실제 반환 범위, 모델에 제공한 발췌 범위, 생략 범위와 `evidenceId`/version을 유지합니다. 전체 raw를 제공했다고 표시하지 않습니다. `evidence_first_read_context`는 정확한 ID와 version, 제한된 문자 범위만 받고 과거 반환 자료를 다시 읽습니다. 응답 전체는 metadata를 포함해 byte budget 안에 맞추며 EOF 도달과 전체 원문 제공을 별도로 표시합니다. 파일 경로를 받지 않으며 현재 파일의 수정 권한이나 fresh-read receipt를 만들지 않습니다.
 
 pending/중복 call ID, 실행 효과가 불명확한 결과, write/build 결과는 projection하지 않습니다. archive 저장·hash·TTL·quota·scope 검증이 실패하면 원문을 유지합니다. receipt, approval capability, API token, Git cursor 같은 임시 값은 archive에서 제거하고 `redacted`와 원본/보관 hash를 구분합니다. Git cursor는 archive ID가 아니며 추측하거나 재구성하지 않습니다.
 
-서명된 숨은 user-turn marker가 대화와 parent/child lineage를 연결합니다. 다음 턴에는 이전 compacted prefix와 새 delta만 모델 입력으로 재조립하고, 사용자 메시지 수정·fork·프로젝트 변경·손상된 manifest는 별도 lineage 또는 기존 history fallback으로 처리합니다. 원래 GUI transcript를 삭제하지 않습니다. archive와 window는 `~/.lmstudio/unreal-context-compactor/hybrid-v1` 아래에 저장되며 `Legacy`로 되돌리면 즉시 사용을 중단합니다. 데이터를 없애려면 LM Studio를 종료한 뒤 이 `hybrid-v1` 디렉터리만 삭제합니다. 기존 `notes-v1`과 채팅 파일은 migration 대상이 아닙니다.
+서명된 숨은 user-turn marker가 대화와 parent/child lineage를 연결합니다. 다음 턴에는 이전 compacted prefix와 새 delta만 모델 입력으로 재조립합니다. 유효하게 서명된 marker라도 사용자 메시지 수정·새 fork·stale prefix이면 저장 window를 적용하지 않고 현재 전체 history로 안전하게 계속합니다. 서명 위조와 대화·workspace·repository scope 불일치는 fail-closed입니다. 원래 GUI transcript를 삭제하지 않습니다. archive와 window는 `~/.lmstudio/unreal-context-compactor/hybrid-v1` 아래에 저장되며 `Legacy`로 되돌리면 즉시 사용을 중단합니다. 데이터를 없애려면 LM Studio를 종료한 뒤 이 `hybrid-v1` 디렉터리만 삭제합니다. 기존 `notes-v1`과 채팅 파일은 migration 대상이 아닙니다.
 
 압축 시작값 `Working input trigger`와 압축 후 `Working input target`은 별도이며 기본값은 각각 12,048/10,000 tokens입니다. system, 현재 요청, 필요한 protocol, 도구 정의를 포함한 최종 template를 선택 모델 tokenizer로 측정합니다. 필수 입력이 target을 넘으면 `mandatoryFloorTokens`를 기록하고 필수 내용을 유지합니다. Luna의 generation reserve/cap/safety 계산은 그대로 적용합니다.
 
-`Hybrid semantic handoff`는 deterministic 경로에 더해 accepted compaction 이벤트마다 최대 한 번, 같은 로컬 모델을 `tools=[]`로 호출합니다. 출력은 출처가 확인된 결정·배제 가설·열린 질문 JSON만 받을 수 있고 assistant claim으로 주입됩니다. length/timeout/cancel/invalid JSON/unknown refs는 저장하지 않으며 이전 note와 deterministic facts를 사용합니다. 이 호출의 prompt/output/time은 `semanticCost`에 포함되고 BOUNDED 중에는 실행하지 않습니다. 전체 설계·rollback·검증 gate는 [ADR-hybrid-context.md](docs/ADR-hybrid-context.md)에 있습니다.
+`Hybrid semantic handoff`는 deterministic 경로에 더해 accepted compaction 이벤트마다 최대 한 번, 같은 로컬 모델을 `tools=[]`로 호출합니다. 입력에는 archive ID만 주지 않고 해당 ref에서 검증한 bounded evidence excerpt와 deterministic facts를 함께 넣습니다. 출력은 그 근거를 인용한 결정·배제 가설·열린 질문 JSON만 받을 수 있고 assistant claim으로 주입됩니다. length/timeout/cancel/invalid JSON/unknown refs는 저장하지 않으며 이전 note와 deterministic facts를 사용합니다. 이 호출의 prompt/output/time은 `semanticCost`에 포함되고 BOUNDED 중에는 실행하지 않습니다. 전체 설계·rollback·검증 gate는 [ADR-hybrid-context.md](docs/ADR-hybrid-context.md)에 있습니다.
+
+archive projection이 다음 압축에서 모델 입력 밖으로 나가더라도 체크포인트의 bounded `historicalEvidence` 색인이 evidence ID/version, source identity와 범위를 유지합니다. 색인은 원문을 복제하지 않으며 다음 턴에서 정확한 ID와 범위로 재조회하기 위한 근거만 제공합니다. image 등 지원하지 않는 typed content가 있으면 durable window commit만 `unsupported_typed_content`로 건너뛰고 해당 prediction과 원래 typed history는 그대로 진행합니다. `Observe only`는 projection, archive 치환, window restore/commit, semantic handoff와 target-triggered compaction을 모두 우회합니다.
+
+Deterministic/Hybrid 조사 중 한 prediction이 raw `<tool_call>` 문자열만 남기고 structured request·dispatch·result를 하나도 만들지 못했을 때, 이름이 확인된 모든 도구가 read-only이고 취소·timeout·BOUNDED·예산 소진 상태가 아니면 fresh tool-planning round를 최대 한 번 허용합니다. 잘린 XML/JSON 인수를 파싱하거나 실행하지 않고, 원래 사용자 목표와 이미 확보한 근거로 새 structured request를 생성하게 합니다. retry에는 해당 read-only 도구만 노출하고 이미 성공한 동일 read를 재실행하지 않습니다. write/build/mutation, 불명확한 도구명, 재귀 retry는 대상이 아닙니다. 대형 다중 파일 조사는 고정된 작은 호출 수로 자르지 않고 합리적인 batch를 실행한 뒤 결과를 소비하고 다음 batch를 요청하도록 모델 지침을 제공합니다.
 
 원래 system 지침은 체크포인트와 내부적으로 구분해 보존합니다. 압축을 반복해도 Qwen 계열 입력에는 하나의 선행 system 메시지만 만들며, 원래 지침과 최신 체크포인트가 각각 한 번만 들어갑니다. 사용자·도구 본문에 체크포인트 표식이 문자 그대로 있어도 생성 체크포인트로 분류하지 않습니다.
 

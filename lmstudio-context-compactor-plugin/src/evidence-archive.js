@@ -32,14 +32,11 @@ function redact(value, depth = 0) {
 function safeDirectory(directory, create = false) {
   const resolved = path.resolve(directory);
   if (create) fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
-  let current = resolved;
-  for (;;) {
-    const stat = fs.lstatSync(current);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe_directory");
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
+  const stat = fs.lstatSync(resolved);
+  // The trusted storage root is canonicalized by EvidenceArchive. Reject a
+  // link at the archive directory itself, while allowing OS-level aliases in
+  // ancestors such as macOS /var -> /private/var.
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("unsafe_directory");
   return resolved;
 }
 
@@ -70,8 +67,53 @@ class EvidenceArchive {
     this.options = { maxBytes: 8 * 1024 * 1024, maxRecords: 128, ttlMs: 24 * 3600 * 1000, ...options };
     this.now = options.now || Date.now;
     this.records = new Map();
-    this.directory = options.durable ? path.join(options.root || path.join(os.homedir(), ".lmstudio", "unreal-context-compactor", "hybrid-v1"), this.scope) : null;
+    this.root = null;
+    this.directory = null;
+    if (options.durable) {
+      const requestedRoot = path.resolve(options.root || path.join(os.homedir(), ".lmstudio", "unreal-context-compactor", "hybrid-v1"));
+      fs.mkdirSync(requestedRoot, { recursive: true, mode: 0o700 });
+      const canonicalRoot = fs.realpathSync.native(requestedRoot);
+      const rootStat = fs.statSync(canonicalRoot);
+      if (!rootStat.isDirectory()) throw new Error("unsafe_archive_root");
+      this.root = canonicalRoot;
+      this.directory = path.join(canonicalRoot, this.scope);
+    }
     this.stats = { captured: 0, reads: 0, returnedChars: 0, unavailable: 0 };
+  }
+
+  ensureDirectory(create = false) {
+    if (!this.directory || !this.root) return null;
+    const rootStat = fs.lstatSync(this.root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("unsafe_archive_root");
+    const directory = safeDirectory(this.directory, create);
+    const canonicalDirectory = fs.realpathSync.native(directory);
+    const relative = path.relative(this.root, canonicalDirectory);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("unsafe_directory");
+    if (path.resolve(canonicalDirectory) !== path.resolve(directory)) throw new Error("unsafe_directory");
+    return directory;
+  }
+
+  entries() {
+    if (!this.directory) return [...this.records].map(([key, record]) => ({ key, record,
+      bytes: Buffer.byteLength(JSON.stringify(record)) }));
+    this.ensureDirectory(true);
+    return fs.readdirSync(this.directory).filter(name => /^ev_[a-f0-9]{64}\.json$/u.test(name)).map(name => {
+      const key = name.slice(0, -5);
+      const text = readFile(path.join(this.directory, name), this.options.maxBytes);
+      let record = null;
+      try { record = JSON.parse(text); } catch { /* Count malformed records but never trust them. */ }
+      return { key, record, bytes: Buffer.byteLength(text) };
+    });
+  }
+
+  removeEntry(id) {
+    if (!ID.test(id)) return false;
+    if (!this.directory) return this.records.delete(id);
+    const target = path.join(this.directory, `${id}.json`);
+    if (!fs.existsSync(target)) return false;
+    readFile(target, this.options.maxBytes);
+    fs.unlinkSync(target);
+    return true;
   }
 
   load(id) {
@@ -79,7 +121,7 @@ class EvidenceArchive {
     try {
       let record = this.records.get(id);
       if (this.directory) {
-        safeDirectory(this.directory);
+        this.ensureDirectory();
         record = JSON.parse(readFile(path.join(this.directory, `${id}.json`), this.options.maxBytes));
       }
       if (!record) return { ok: false, errorCode: "unavailable" };
@@ -93,7 +135,7 @@ class EvidenceArchive {
     } catch { return { ok: false, errorCode: "unavailable" }; }
   }
 
-  put(body, metadata = {}) {
+  put(body, metadata = {}, lifecycle = {}) {
     if (typeof body !== "string" || Buffer.byteLength(body) > this.options.maxBytes / 2) return { ok: false, errorCode: "quota" };
     try {
       const sanitized = redact(body);
@@ -108,15 +150,28 @@ class EvidenceArchive {
         archiveState: this.directory ? "durable" : "session_only", metadata: safeMetadata, body: sanitized };
       record.recordHash = hash(record);
       const bytes = Buffer.byteLength(JSON.stringify(record));
-      let entries = [...this.records].map(([key, item]) => ({ key, bytes: Buffer.byteLength(JSON.stringify(item)) }));
-      if (this.directory) {
-        safeDirectory(this.directory, true);
-        entries = fs.readdirSync(this.directory).filter(name => /^ev_[a-f0-9]{64}\.json$/u.test(name))
-          .map(name => ({ key: name.slice(0, -5), bytes: Buffer.byteLength(readFile(path.join(this.directory, name), this.options.maxBytes)) }));
+      const liveRefs = lifecycle.liveRefs instanceof Set ? lifecycle.liveRefs : new Set(lifecycle.liveRefs || []);
+      let entries = this.entries();
+      const expiredDead = entries.filter(entry => !liveRefs.has(entry.key)
+        && Number.isFinite(entry.record?.createdAt)
+        && this.now() - entry.record.createdAt >= this.options.ttlMs);
+      for (const entry of expiredDead) this.removeEntry(entry.key);
+      entries = this.entries();
+      const overQuota = () => entries.length >= this.options.maxRecords
+        || entries.reduce((n, entry) => n + entry.bytes, 0) + bytes > this.options.maxBytes;
+      // Deterministically reclaim only dead records. A manifest-referenced
+      // record remains protected even after TTL so a failed re-read is
+      // explicit rather than silently pointing at unrelated evidence.
+      const reclaimable = entries.filter(entry => !liveRefs.has(entry.key)).sort((left, right) => (
+        Number(left.record?.createdAt || 0) - Number(right.record?.createdAt || 0)
+        || left.key.localeCompare(right.key)
+      ));
+      while (overQuota() && reclaimable.length) {
+        const victim = reclaimable.shift();
+        this.removeEntry(victim.key);
+        entries = entries.filter(entry => entry.key !== victim.key);
       }
-      // Refuse quota overflow instead of evicting evidence referenced by a live window.
-      if (entries.length >= this.options.maxRecords || entries.reduce((n, e) => n + e.bytes, 0) + bytes > this.options.maxBytes)
-        return { ok: false, errorCode: "quota" };
+      if (overQuota()) return { ok: false, errorCode: "quota" };
       if (this.directory) atomicWrite(this.directory, `${id}.json`, record);
       else this.records.set(id, record);
       const verified = this.load(id);
@@ -134,12 +189,40 @@ class EvidenceArchive {
     const r = loaded.record;
     if (version !== r.archivedBodyHash) return { ok: false, errorCode: "version_mismatch" };
     if (start > r.body.length) return { ok: false, errorCode: "invalid_range" };
-    const end = Math.min(r.body.length, start + maxChars);
+    const identity = r.metadata?.sourceIdentity || {};
+    const base = { ok: true, kind: "historical_evidence_range", evidenceId: id, version,
+      originalCallId: r.metadata?.providerRequestId,
+      sourceHash: r.sourceHash, sourceVersion: r.metadata?.sourceVersion,
+      sourceIdentity: identity, sourceIdentityDigest: hash(identity),
+      toolName: r.metadata?.toolName, resultStatus: r.metadata?.resultStatus,
+      errorCode: r.metadata?.errorCode ?? null,
+      sourceRange: r.metadata?.originRanges,
+      redacted: r.redacted, currentFile: false, grantsMutation: false,
+      rangeUnit: r.rangeUnit, totalChars: r.body.length, availableRange: [0, r.body.length] };
+    const totalBudget = Math.max(512, maxChars);
+    const overhead = JSON.stringify({ ...base, returnedRange: [start, start], hasMore: true,
+      reachedEnd: false, fullRawProvided: false, coverageState: "partial", content: "" }).length;
+    const contentBudget = Math.max(0, totalBudget - overhead);
+    let end = Math.min(r.body.length, start + contentBudget);
+    const response = () => {
+      const reachedEnd = end === r.body.length;
+      const fullRawProvided = start === 0 && reachedEnd && r.redacted === false;
+      return { ...base, returnedRange: [start, end], hasMore: !reachedEnd, reachedEnd,
+        fullRawProvided, coverageState: fullRawProvided ? "complete" : "partial",
+        content: r.body.slice(start, end) };
+    };
+    let result = response(), serialized = JSON.stringify(result);
+    while (serialized.length > totalBudget && end > start) {
+      end = Math.max(start, end - Math.max(16, serialized.length - totalBudget + 16));
+      result = response();
+      serialized = JSON.stringify(result);
+    }
+    if (serialized.length > totalBudget) {
+      return { ok: false, errorCode: "response_budget_too_small", evidenceId: id,
+        currentFile: false, grantsMutation: false };
+    }
     this.stats.returnedChars += end - start;
-    return { ok: true, kind: "historical_evidence_range", evidenceId: id, version,
-      sourceHash: r.sourceHash, redacted: r.redacted, currentFile: false, grantsMutation: false,
-      rangeUnit: r.rangeUnit, returnedRange: [start, end], totalChars: r.body.length,
-      hasMore: end < r.body.length, metadata: r.metadata, content: r.body.slice(start, end) };
+    return result;
   }
 }
 

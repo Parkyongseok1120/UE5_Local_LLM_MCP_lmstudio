@@ -64,7 +64,7 @@ function sanitizePriorContinuityState(value) {
   if (work?.lastAssistantUpdate?.text) {
     work.lastAssistantUpdate.text = sanitizeDerivedOperationalText(work.lastAssistantUpdate.text);
   }
-  for (const key of ["recentToolOutcomes", "gitObservations", "recentBuildOrTestState"]) {
+  for (const key of ["recentToolOutcomes", "gitObservations", "historicalEvidence", "recentBuildOrTestState"]) {
     if (Array.isArray(work?.[key])) {
       work[key] = work[key].map((item) => sanitizeDerivedOperationalRecord(item));
     }
@@ -240,6 +240,11 @@ function buildContinuityMemory(messages, facts, options = {}) {
       previousWork.gitObservations,
       facts.gitObservations,
       8,
+    ),
+    historicalEvidence: mergeRecentDistinct(
+      previousWork.historicalEvidence,
+      facts.historicalEvidence,
+      16,
     ),
     modifiedOrObservedFiles: coalesceFileObservations(
       [...previousFileObservations, ...currentFileObservations],

@@ -41,6 +41,8 @@ export type CapturedRound = {
     visibleTokensCount: number;
     visibleChars: number;
     rawToolIntentCandidate: boolean;
+    rawToolIntentFirstFragment: number | null;
+    rawToolIntentFirstVisibleChar: number | null;
     structuralTokensCount: number;
     toolArgumentChars: number;
     toolArgumentTokensCount: number | null;
@@ -72,6 +74,8 @@ export async function runOneToolRound(
     visibleTokensCount: 0,
     visibleChars: 0,
     rawToolIntentCandidate: false,
+    rawToolIntentFirstFragment: null as number | null,
+    rawToolIntentFirstVisibleChar: null as number | null,
     structuralTokensCount: 0,
     toolArgumentChars: 0,
     toolArgumentTokensCount: null as number | null,
@@ -105,6 +109,8 @@ export async function runOneToolRound(
           predictionUsage.visibleChars += visibleContent.length;
           if (/<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu.test(visibleContent)) {
             predictionUsage.rawToolIntentCandidate = true;
+            predictionUsage.rawToolIntentFirstFragment ??= predictionUsage.fragmentCount;
+            predictionUsage.rawToolIntentFirstVisibleChar ??= predictionUsage.visibleChars - visibleContent.length;
           }
         }
         actCallbacks.onPredictionFragment?.(fragment);
