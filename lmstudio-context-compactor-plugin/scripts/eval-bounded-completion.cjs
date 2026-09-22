@@ -25,7 +25,7 @@ function sha256(value) {
 
 function structureEvaluation(run) {
   const finalizations = run.boundedFinalizations || [];
-  const finalActs = (run.modelActs || []).filter(act => act.modelInputId.endsWith(":final-report"));
+  const finalActs = (run.modelActs || []).filter(act => /:final-report(?:-\d+)?$/u.test(act.modelInputId));
   const recoveryActs = (run.modelActs || []).filter(act => act.modelInputId.includes(":output-recovery-"));
   const finalAct = finalActs.at(-1) || null;
   const recoveryAct = recoveryActs.at(-1) || null;

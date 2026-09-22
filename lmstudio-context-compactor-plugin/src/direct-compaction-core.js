@@ -639,7 +639,7 @@ function shouldCompact(measurement, options = {}) {
   if (options.observeOnly === true) return false;
   const messageCount = Number(measurement.messageCount || 0);
   const remaining = Number(measurement.remainingTokens);
-  const softRemaining = Math.max(0, Number(options.softRemainingTokens || 14000));
+  const softRemaining = Math.max(0, Number(options.softRemainingTokens || 6000));
   const fallbackCount = Math.max(4, Number(options.compactAboveMessageCount || 24));
   if (measurement.exact === false && messageCount >= fallbackCount) return true;
   if (Number.isFinite(remaining)) return remaining <= softRemaining;

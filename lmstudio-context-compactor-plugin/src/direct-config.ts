@@ -41,8 +41,8 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "legacy", displayName: "Legacy (compatibility)" },
     ],
   }, "hybrid")
-  .field("workingInputTargetTokens", "numeric", { displayName: "Working input target", subtitle: "Experimental full templated input target after compaction, including system and tool definitions. Mandatory input is never removed merely to meet it." }, 10000)
-  .field("workingInputTriggerTokens", "numeric", { displayName: "Working input trigger", subtitle: "Start target-based compaction above this full templated input size; kept separate from the post-compaction target." }, 12048)
+  .field("workingInputTargetTokens", "numeric", { displayName: "Working input target", subtitle: "Full templated input target after compaction, including system and tool definitions. Mandatory input is never removed merely to meet it." }, 18000)
+  .field("workingInputTriggerTokens", "numeric", { displayName: "Working input trigger", subtitle: "Start target-based compaction above this full templated input size; kept separate from the post-compaction target." }, 22000)
   .field("toolResultProjectionChars", "numeric", { displayName: "Archived result excerpt", subtitle: "Maximum archived observation excerpt exposed in a model-facing tool-result projection." }, 512)
   .field("semanticSummaryMaxTokens", "numeric", { displayName: "Semantic handoff output", subtitle: "Maximum output tokens for the single tool-free local summary call per accepted compaction." }, 1024)
   .field("semanticSummarySeconds", "numeric", { displayName: "Semantic handoff seconds", subtitle: "Timeout for the optional local summary call. Invalid or interrupted summaries are discarded." }, 30)
@@ -52,8 +52,8 @@ export const directConfigSchematics = createConfigSchematics()
     { displayName: "Show debug info", subtitle: "Show per-round context measurements in the chat." },
     true,
   )
-  .field("softRemainingTokens", "numeric", { displayName: "Soft threshold", subtitle: "Compact when estimated remaining context falls below this value." }, 14000)
-  .field("hardRemainingTokens", "numeric", { displayName: "Hard threshold", subtitle: "At this threshold retain the current request, the newest unread tool exchange, and factual memory." }, 8000)
+  .field("softRemainingTokens", "numeric", { displayName: "Soft threshold", subtitle: "Compact when remaining context after the applied output cap and safety margin falls below this value." }, 6000)
+  .field("hardRemainingTokens", "numeric", { displayName: "Hard threshold", subtitle: "At this remaining-context threshold, retain the current request, newest unread tool exchange, and factual memory." }, 3000)
   .field("maxOutputReserve", "numeric", { displayName: "Output reserve", subtitle: "Tokens reserved for the selected model's next response and used as its explicit generation cap." }, 8192)
   .field("outputRecoveryMode", "select", {
     displayName: "Output-limit recovery",
@@ -64,9 +64,9 @@ export const directConfigSchematics = createConfigSchematics()
     ],
   }, "on")
   .field("outputRecoveryMaxTokens", "numeric", { displayName: "Recovery output limit", subtitle: "Maximum predicted tokens for the single normal-mode tool-free rewrite; 0 uses the general output reserve." }, 0)
-  .field("outputRecoverySeconds", "numeric", { displayName: "Recovery seconds", subtitle: "Maximum time for the single normal-mode tool-free rewrite." }, 45)
-  .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra allowance for prompt-template and token-estimation variance." }, 1536)
-  .field("assumedContextLength", "numeric", { displayName: "Fallback context length", subtitle: "Used only when the selected token source cannot report its context length." }, 65536)
+  .field("outputRecoverySeconds", "numeric", { displayName: "Recovery seconds", subtitle: "Maximum time for the single normal-mode tool-free rewrite." }, 90)
+  .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra allowance for prompt-template and token-estimation variance." }, 2048)
+  .field("assumedContextLength", "numeric", { displayName: "Fallback context length", subtitle: "38,912-token trial fallback used only when the selected token source cannot report its loaded context length; it never overrides a reported value." }, 38912)
   .field("recentCompleteTurns", "numeric", { displayName: "Recent complete turns", subtitle: "Prior completed user turns retained verbatim after soft compaction." }, 2)
   .field("compactAboveMessageCount", "numeric", { displayName: "Fallback message threshold", subtitle: "Used only when exact token measurement is unavailable." }, 24)
   .field("maxCheckpointChars", "numeric", { displayName: "Memory size", subtitle: "Maximum deterministic factual-memory characters." }, 22000)

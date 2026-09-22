@@ -97,8 +97,12 @@ deadline; BOUNDED retains its explicit deadline. Successful-read deduplication i
 causal to a request/result batch: failed results, reused provider IDs, historical
 indexes and legitimate archive range reads do not count as completed current reads.
 
-Compaction trigger and target differ: full input target 10000 tokens, trigger
-target + 2048 tokens (hysteresis), measured after all instructions and tool schemas.
+Compaction trigger and target differ: the 38,912-context installed starting profile
+uses a full input target of 18,000 tokens and a 22,000-token trigger, measured after
+all instructions and tool schemas. Its soft/hard remaining thresholds are 6,000/3,000,
+with an 8,192 output cap and 2,048 safety margin. The 38,912 value is only a fallback
+when the selected token source does not report its loaded context; it never overrides
+the reported context length.
 Retain mandatory system/current user/pending protocol even when target is
 impossible. Record exact=false if tokenizer/template counting fails. Summary claims
 are assistant messages, never system facts, execution success, approval or review

@@ -1,0 +1,161 @@
+{
+  "mode": "codegen",
+  "baseline": {
+    "reviewedHead": "ae0c01ce264ab7461f92ae14500ced744572ea5e",
+    "branch": "v1.4.0-beta-2",
+    "initialWorktree": "clean",
+    "runtimeFailure": "context_budget -> tools=[] final -> raw git_diff x4 -> no structured dispatch/result -> unresolved_tool_intent"
+  },
+  "existing": [
+    "measureContext, resolveGenerationBudget, buildCompactedHistory와 기존 tool scope/observation 판별",
+    "raw tool intent의 fragment/final-text 감지와 fresh planning retry 최대 1회",
+    "Hybrid archive/window, first-consumer Git raw 보존, projection-only semantic 차단",
+    "Luna output recovery, BOUNDED final 1회, 취소/timeout/pause 및 mutation 승인 경계"
+  ],
+  "proposed": [
+    "context_budget finalization 전에 실제 registry의 작은 Git/evidence read-only 후보를 조립하고 같은 tokenizer/budget resolver로 fit를 재측정",
+    "미등록 raw git_diff를 실행·치환하지 않고 현재 Git 조사 목표와 등록 catalog를 이용한 단일 fresh structured re-plan",
+    "실패 입력 remaining 대신 prospective retry candidate의 input/applied cap/safety로 retry eligibility 판정",
+    "bounded recovery episode와 terminal report attempt를 분리해 final-repair-result-repressure 뒤 사용자 보고가 사라지는 경로 차단",
+    "실제 감축 없는 compaction 및 동일 semantic event의 반복 summary 차단과 archive semantic ref 검증 유지",
+    "Hybrid 기본값과 38,912 시작 프로필의 18K/22K/6K/3K/8192/2048 수치 검증"
+  ],
+  "doNotDuplicate": [
+    "새 Planner, 새 executor, raw XML parser, git_diff alias를 만들지 않음",
+    "ae0c01ce의 first-consumer, semantic projection gate, fragment detection, causal read, pagination 및 비용 telemetry를 재구현하지 않음",
+    "기존 workspace public schema, project binding, guard, VersionControl paging을 그대로 재사용"
+  ],
+  "claims": [
+    {
+      "claim": "현재 정상 연구 입력이 context budget에 맞지 않으면 작은 등록 read-only 후보를 측정하지 않고 곧바로 tool-free finalization으로 전환합니다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "사용자 제공 RuntimeVerified 재현",
+          "observation": "실제 조사에서 context_budget 뒤 tools=[] final에 진입하고 raw git_diff 네 개가 남았습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1375-1421,1706-1729",
+          "observation": "finalizing이면 roundTools가 빈 배열이며 non-final input remaining이 음수이면 reduced catalog 측정 없이 context_budget finalizationPending을 설정합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "src/prediction-loop.ts:1667", "symbol": "assembled normal research input" },
+        { "stage": "decision", "stageStatus": "present", "location": "src/prediction-loop.ts:1706", "symbol": "negative remainingTokens" },
+        { "stage": "dispatch", "stageStatus": "expected_missing", "location": "src/prediction-loop.ts:1707", "symbol": "measured reduced read-only candidate" },
+        { "stage": "observer", "stageStatus": "present", "location": "src/prediction-loop.ts:1727", "symbol": "context_budget finalization with nextToolCount=0" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1457-1688",
+          "observation": "기존 normal/emergency compaction은 먼저 수행되지만 도구 schema를 줄인 prospective candidate는 없습니다."
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "claim": "미등록 raw git_diff는 실행되지 않지만 현재 exact-name retry 판정은 등록 catalog를 이용한 안전한 새 계획 기회도 차단합니다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "사용자 제공 RuntimeVerified 재현",
+          "observation": "raw git_diff x4, structured dispatch/result 0, unresolved intent 종료가 관찰됐습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:963-1052",
+          "observation": "raw 이름 전부가 현재 tool 이름과 정확히 일치하는 observation일 때만 이름을 반환하고 0개면 tools_not_safe입니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/workspace.js:37-46",
+          "observation": "공개 Git diff 도구명은 git_diff_file이며 git_diff는 없습니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "src/prediction-loop.ts:2130", "symbol": "final raw assistant text" },
+        { "stage": "decision", "stageStatus": "present", "location": "src/prediction-loop.ts:963", "symbol": "exact raw name lookup" },
+        { "stage": "dispatch", "stageStatus": "expected_missing", "location": "src/prediction-loop.ts:2153", "symbol": "registered-catalog fresh planning" },
+        { "stage": "observer", "stageStatus": "present", "location": "src/prediction-loop.ts:2312", "symbol": "unresolved tool intent status" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/prediction-loop.ts:2009-2075",
+          "observation": "structured 요청은 scope/binding/guard를 통과해야 하므로 새 계획이 생성돼도 raw text가 직접 실행되지는 않습니다."
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "claim": "첫 final을 소비한 뒤 fresh repair와 실제 read 결과가 생겨도 재압력 시 finalizationAttempts 때문에 terminal report 없이 종료할 수 있습니다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1356-1379,2153-2160",
+          "observation": "finalizationAttempts는 첫 final에서 증가하며 retry 예약은 pending/trigger만 지우고 counter를 유지합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "src/prediction-loop.ts:1377", "symbol": "first finalization attempt" },
+        { "stage": "decision", "stageStatus": "present", "location": "src/prediction-loop.ts:2306", "symbol": "raw repair scheduled" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "src/prediction-loop.ts:1923", "symbol": "fresh read-only planning round" },
+        { "stage": "observer", "stageStatus": "expected_missing", "location": "src/prediction-loop.ts:1378", "symbol": "post-repair terminal report" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/prediction-loop.ts:2342-2361",
+          "observation": "visible report output recovery는 별도 1회가 있으나 raw tool repair 후 재압력의 final delivery 소유권은 해결하지 않습니다."
+        }
+      ],
+      "unknowns": []
+    }
+  ],
+  "invariants": [
+    "Hybrid가 설치 기본값으로 유지됩니다.",
+    "raw XML/JSON과 미등록 git_diff는 파싱·치환·직접 실행하지 않습니다.",
+    "fresh planning/corrective re-plan은 합쳐 최대 1회이며 recovery episode도 최대 1개입니다.",
+    "recovery에서 실제 등록·현재 scope·observation-only로 확인된 도구만 노출합니다.",
+    "write/build/mutation, pending/ambiguous side effect, 취소/timeout/pause/Observe Only/BOUNDED는 자동 research repair 대상이 아닙니다.",
+    "BOUNDED final 최대 1회와 Luna output recovery 최대 1회를 유지합니다.",
+    "최신 unread evidence는 token fit를 위해 projection할 때 archive ID/version/source range/status를 유지합니다."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/direct-config.ts",
+    "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+    "lmstudio-context-compactor-plugin/test/working-context.test.cjs",
+    "lmstudio-context-compactor-plugin/test/workspace-continuity.test.cjs",
+    "lmstudio-context-compactor-plugin/README.md",
+    "lmstudio-context-compactor-plugin/docs/ADR-hybrid-context.md"
+  ],
+  "validationPlan": [
+    "evidence packet validator를 codegen 모드로 통과",
+    "공개 Unity workspace schema와 실제 임시 Git subprocess로 raw git_diff x4 -> fresh git_diff_file -> report 통합 회귀",
+    "full no-fit/reduced fit, reduced no-fit, prior remaining 0/new candidate fit, final-repair-result-repressure 회귀",
+    "mutation/cancel/timeout/pause/Observe Only/BOUNDED/output recovery 상한 회귀",
+    "semantic archive refs attach/reconcile/persist/restore 및 invalid ref 거부 회귀",
+    "npm test --prefix lmstudio-context-compactor-plugin",
+    "npm test --prefix lmstudio-unity-mcp",
+    "npm test --prefix lmstudio-unreal-agent-mcp",
+    "python -m pytest -q",
+    "git diff --check 및 source-layout status"
+  ]
+}

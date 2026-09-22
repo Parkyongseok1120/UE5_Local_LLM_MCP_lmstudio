@@ -97,7 +97,7 @@ test("prediction loop calls the directly selected model with compacted history",
     identifier: "qwen/qwen3.8-27b",
     async getContextLength() { return 32768; },
     async applyPromptTemplate(chat) { return chat.toString(); },
-    async countTokens() { return 25000; },
+    async countTokens(prompt) { return String(prompt).includes("Context memory") ? 10000 : 25000; },
     async act(chat, tools, options) {
       receivedHistory = chat;
       assert.deepEqual(tools, []);
@@ -510,7 +510,7 @@ test("hidden model notes survive a new user turn as assistant judgment and leave
   let hardInput;
   const thirdModel = { ...firstModel,
     async getContextLength() { return 32768; },
-    async countTokens() { return 25000; },
+    async countTokens(prompt) { return String(prompt).includes("Context memory") ? 10000 : 25000; },
     async act(chat, _tools, options) {
       hardInput = chat;
       options.onMessage(ChatMessage.create("assistant", `Resolved.${'\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n{}\n</continuity-note>'}`));
@@ -695,7 +695,7 @@ test("handler activation ignores a legacy nested enabled=false value", async () 
     identifier: "qwen/qwen3.8-27b",
     async getContextLength() { return 32768; },
     async applyPromptTemplate(chat) { return chat.toString(); },
-    async countTokens() { return 25000; },
+    async countTokens(prompt) { return String(prompt).includes("Context memory") ? 10000 : 25000; },
     async act(chat) { receivedHistory = chat; return {}; },
   };
   const ctl = fakeController(history, selectedModel, { enabled: false });
@@ -1310,8 +1310,18 @@ test("the default recovery cap follows a larger configured output reserve instea
 });
 
 test("new compactor configuration defaults to hybrid and preserves every explicit mode", () => {
-  const fresh = __test.readConfig(fakeController(Chat.empty(), {}, { contextManagementMode: undefined }));
+  const freshController = fakeController(Chat.empty(), {});
+  freshController.getPluginConfig = () => ({ get() { return undefined; } });
+  const fresh = __test.readConfig(freshController);
   assert.equal(fresh.contextManagementMode, "hybrid");
+  assert.equal(fresh.workingInputTargetTokens, 18000);
+  assert.equal(fresh.workingInputTriggerTokens, 22000);
+  assert.equal(fresh.softRemainingTokens, 6000);
+  assert.equal(fresh.hardRemainingTokens, 3000);
+  assert.equal(fresh.maxOutputReserve, 8192);
+  assert.equal(fresh.safetyMarginTokens, 2048);
+  assert.equal(fresh.assumedContextLength, 38912);
+  assert.equal(fresh.outputRecoverySeconds, 90);
   for (const mode of ["legacy", "deterministic", "hybrid"]) {
     const explicit = __test.readConfig(fakeController(Chat.empty(), {}, { contextManagementMode: mode }));
     assert.equal(explicit.contextManagementMode, mode);
@@ -1777,18 +1787,22 @@ test("final assistant message can authorize fresh planning when fragment callbac
   assert.equal(captured.predictionUsage.rawToolIntentCandidate, false);
   assert.equal(__test.containsUnresolvedToolIntent(raw, captured.messages), true);
   assert.equal(__test.freshToolPlanningRetryDecision({
-    boundedAudit: false, observeOnly: false, attempts: 0, failure: captured.failure,
+    boundedAudit: false, observeOnly: false, planningAllowed: true, attempts: 0, failure: captured.failure,
     aborted: false, phaseTimedOut: false, finishReason: captured.finishReason,
-    remainingTokens: 10000, finalRawToolIntent: true, rawIntentToolCount: 1,
+    finalRawToolIntent: true, candidateFit: true, candidateToolCount: 1, candidateExact: true,
+    unknownNameCount: 0, registeredButWithheldCount: 0, registeredUnsafeCount: 0,
+    unsafeUnknownCount: 0, catalogueCorrectionAllowed: false,
     structuredToolRequestCount: 0, runtimeDispatchCount: 0, actualResultCount: 0,
   }).eligible, true);
 });
 
 test("fresh read-only planning retry has no hidden audit deadline in normal mode", () => {
   const base = {
-    boundedAudit: false, observeOnly: false, attempts: 0, failure: undefined,
-    aborted: false, phaseTimedOut: false, finishReason: "eosFound", remainingTokens: 10000,
-    finalRawToolIntent: true, rawIntentToolCount: 1, structuredToolRequestCount: 0,
+    boundedAudit: false, observeOnly: false, planningAllowed: true, attempts: 0, failure: undefined,
+    aborted: false, phaseTimedOut: false, finishReason: "eosFound",
+    finalRawToolIntent: true, candidateFit: true, candidateToolCount: 1, candidateExact: true,
+    unknownNameCount: 0, registeredButWithheldCount: 0, registeredUnsafeCount: 0,
+    unsafeUnknownCount: 0, catalogueCorrectionAllowed: false, structuredToolRequestCount: 0,
     runtimeDispatchCount: 0, actualResultCount: 0,
   };
   const originalNow = Date.now;
@@ -1804,6 +1818,37 @@ test("fresh read-only planning retry has no hidden audit deadline in normal mode
   assert.equal(__test.freshToolPlanningRetryDecision({ ...base,
     finishReason: "generation_repetition_paused" }).reason, "explicit_pause");
   assert.equal(__test.freshToolPlanningRetryDecision({ ...base, attempts: 1 }).reason, "already_retried");
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base, aborted: true }).reason, "canceled");
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base, candidateFit: false }).reason,
+    "retry_candidate_no_fit");
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base, planningAllowed: false }).reason,
+    "final_report_repair_forbidden");
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base,
+    unknownNameCount: 1, catalogueCorrectionAllowed: false }).reason, "unregistered_tool_name");
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base,
+    unsafeUnknownCount: 1 }).reason, "unsafe_unknown_tool_name");
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base,
+    registeredButWithheldCount: 1 }).reason, "registered_but_not_exposed");
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base,
+    registeredUnsafeCount: 1 }).reason, "registered_but_unsafe");
+});
+
+test("raw intent classification never aliases unknown or withheld mutation names", () => {
+  const readTool = { name: "git_diff_file", description: "read", parametersJsonSchema: { type: "object" } };
+  const mutationTool = { name: "write_file", description: "write", parametersJsonSchema: { type: "object" } };
+  const fourUnknownDiffs = Array.from({ length: 4 }, (_, index) =>
+    `<tool_call><function=git_diff><parameter=path>Assets/F${index}.cs</parameter></function></tool_call>`).join("\n");
+  const unknown = __test.classifyRawToolIntent(fourUnknownDiffs, [readTool], [readTool, mutationTool]);
+  assert.deepEqual(unknown.names, ["git_diff"]);
+  assert.deepEqual(unknown.unknownNames, ["git_diff"]);
+  assert.deepEqual(unknown.knownReadOnlyNames, []);
+
+  const withheld = __test.classifyRawToolIntent(
+    "<tool_call><function=write_file></function></tool_call>", [readTool], [readTool, mutationTool]);
+  assert.deepEqual(withheld.registeredUnsafeNames, ["write_file"]);
+  const unsafeUnknown = __test.classifyRawToolIntent(
+    "<tool_call><function=git_commit></function></tool_call>", [readTool], [readTool, mutationTool]);
+  assert.deepEqual(unsafeUnknown.unsafeUnknownNames, ["git_commit"]);
 });
 
 test("completed read fingerprints require a causal successful result and current raw content", () => {
@@ -1838,9 +1883,12 @@ test("semantic result fingerprints ignore random snapshot metadata but retain ev
   const first = { kind: "git_observation", snapshotId: "random-a", observedAt: "2026-01-01T00:00:00Z",
     action: "changed_files", items: [{ path: "Assets/A.cs", status: "modified" }] };
   const sameMeaning = { ...first, snapshotId: "random-b", observedAt: "2026-01-02T00:00:00Z" };
+  const nextCompactionGeneration = { ...sameMeaning, compactionGeneration: 9 };
   const newEvidence = { ...sameMeaning, items: [{ path: "Assets/B.cs", status: "modified" }] };
   assert.notEqual(__test.telemetryFingerprint(first), __test.telemetryFingerprint(sameMeaning));
   assert.equal(__test.telemetryFingerprint(first, true), __test.telemetryFingerprint(sameMeaning, true));
+  assert.equal(__test.telemetryFingerprint(first, true),
+    __test.telemetryFingerprint(nextCompactionGeneration, true));
   assert.notEqual(__test.telemetryFingerprint(first, true), __test.telemetryFingerprint(newEvidence, true));
 });
 
@@ -1975,6 +2023,200 @@ test("reserve pressure gets one adaptive tool-free final report instead of an im
   assert.equal(finalMeasurement.finalRemainingTokens, 0);
 });
 
+function gitRecoveryTestTools(extraTools = []) {
+  const definitions = workspaceToolDefinitions().filter(definition =>
+    ["git_log", "git_changed_files", "git_diff_file"].includes(definition.name));
+  return [...definitions.map(definition => ({
+    name: definition.name,
+    description: definition.description,
+    parametersJsonSchema: definition.inputSchema,
+    pluginIdentifier: "mcp/unity-tools",
+    implementation: async args => ({ ok: true, kind: "git_observation", status: "complete", args }),
+  })), ...extraTools];
+}
+
+function measuredCataloguePrompt(chat, options = {}) {
+  return JSON.stringify({ text: chat.toString(), tools: (options.toolDefinitions || []).map(tool => tool.function.name) });
+}
+
+test("context budget measures a narrowed registered Git catalogue before tools-disabled finalization", async () => {
+  const history = Chat.from([{ role: "user", content: "Git 커밋과 변경 파일을 조회해서 근거를 정리해줘" }]);
+  const tools = gitRecoveryTestTools([{ name: "write_file", description: "mutation",
+    parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unity-tools" }]);
+  let actCount = 0;
+  const model = {
+    identifier: "measured-catalogue-model",
+    async getContextLength() { return 38912; },
+    applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(prompt) {
+      const text = String(prompt);
+      if (text.startsWith("[")) return 100;
+      const parsed = JSON.parse(text);
+      return parsed.tools.includes("write_file") ? 30000 : 25000;
+    },
+    async act(chat, roundTools, options) {
+      actCount += 1;
+      assert.equal(roundTools.some(tool => tool.name === "write_file"), false);
+      assert.equal(roundTools.some(tool => tool.name === "git_diff_file"), true);
+      assert.match(chat.toString(), /measured read-only recovery catalogue/u);
+      assert.equal(options.maxTokens, 4096);
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 25000,
+        predictedTokensCount: 120, totalTokensCount: 25120 } });
+      options.onMessage(ChatMessage.create("assistant", "측정된 읽기 전용 후보로 조사 보고를 완료했습니다."));
+    },
+  };
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "hybrid", maxOutputReserve: 8192, safetyMarginTokens: 2048,
+    assumedContextLength: 38912, softRemainingTokens: 6000, hardRemainingTokens: 3000,
+  }, tools);
+  await handlePredictionLoop(ctl);
+
+  assert.equal(actCount, 1);
+  const rescue = ctl.debugValues.find(value => value.event === "direct_context_budget_rescue");
+  assert.equal(rescue.remainingTokens, -1328);
+  assert.equal(rescue.candidateExactMeasurement, true);
+  assert.equal(rescue.candidateInputTokens, 25000);
+  assert.equal(rescue.candidateFit, true);
+  assert.equal(rescue.nextToolCount, 4);
+  assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
+  const identity = ctl.debugValues.find(value => value.event === "direct_runtime_identity");
+  assert.equal(identity.runtimeSourceRevision, 113);
+  assert.match(identity.installedSourceFingerprint, /^[a-f0-9]{64}$/u);
+  assert.match(identity.installedDistFingerprint, /^[a-f0-9]{64}$/u);
+  assert.match(identity.toolRegistryFingerprint, /^[a-f0-9]{64}$/u);
+});
+
+test("context budget uses FINAL_REPORT_ONLY when the measured narrowed catalogue still does not fit", async () => {
+  const history = Chat.from([{ role: "user", content: "Git 커밋 diff를 조회해서 알려줘" }]);
+  const tools = gitRecoveryTestTools([{ name: "write_file", description: "mutation",
+    parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unity-tools" }]);
+  let actCount = 0;
+  const model = {
+    identifier: "no-fit-catalogue-model",
+    async getContextLength() { return 38912; },
+    applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(prompt) {
+      const text = String(prompt);
+      if (text.startsWith("[")) return 100;
+      const parsed = JSON.parse(text);
+      if (parsed.text.includes("phase=FINAL_REPORT_ONLY")) return 25000;
+      return parsed.tools.includes("write_file") ? 38000 : 37000;
+    },
+    async act(chat, roundTools, options) {
+      actCount += 1;
+      assert.deepEqual(roundTools, []);
+      assert.match(chat.toString(), /phase=FINAL_REPORT_ONLY/u);
+      assert.match(chat.toString(), /tools_available=false/u);
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 25000,
+        predictedTokensCount: 100, totalTokensCount: 25100 } });
+      options.onMessage(ChatMessage.create("assistant", "추가 조회 공간이 없어 현재 근거 범위만 보고합니다."));
+    },
+  };
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "hybrid", maxOutputReserve: 8192, safetyMarginTokens: 2048,
+    assumedContextLength: 38912, softRemainingTokens: 6000, hardRemainingTokens: 3000,
+  }, tools);
+  await handlePredictionLoop(ctl);
+
+  assert.equal(actCount, 1);
+  const rescue = ctl.debugValues.find(value => value.event === "direct_context_budget_rescue");
+  assert.equal(rescue.candidateInputTokens, 37000);
+  assert.equal(rescue.candidateFit, false);
+  const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
+  assert.equal(finalization.modelInputId.endsWith(":final-report-1"), true);
+  assert.equal(finalization.toolCount, 0);
+  assert.equal(finalization.deliveryState, "complete");
+});
+
+test("final raw git_diff repair uses a newly measured candidate and preserves a second terminal report", async () => {
+  const history = Chat.from([{ role: "user", content: "Git 변경 파일을 조회한 뒤 파일별 diff 근거로 상세 보고해줘" }]);
+  let structuredExecutions = 0;
+  const tools = gitRecoveryTestTools([{ name: "write_file", description: "mutation",
+    parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unity-tools" }]);
+  const diffTool = tools.find(tool => tool.name === "git_diff_file");
+  diffTool.implementation = async args => {
+    structuredExecutions += 1;
+    return { ok: true, kind: "git_observation", status: "complete", marker: "REAL_REPAIR_RESULT", args };
+  };
+  const raw = Array.from({ length: 4 }, (_, index) =>
+    `<tool_call><function=git_diff><parameter=path>Assets/File${index}.cs</parameter></function></tool_call>`).join("\n");
+  let actCount = 0;
+  const model = {
+    identifier: "final-repair-repressure-model",
+    async getContextLength() { return 38912; },
+    applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(prompt) {
+      const text = String(prompt);
+      if (text.startsWith("[")) return 100;
+      const parsed = JSON.parse(text);
+      if (parsed.text.includes("phase=FINAL_REPORT_ONLY")) {
+        return parsed.text.includes("REAL_REPAIR_RESULT") ? 25000 : 28672;
+      }
+      if (parsed.text.includes("prior raw text named unregistered tools")) return 25000;
+      if (parsed.text.includes("measured read-only recovery catalogue")) return 37000;
+      return 38000;
+    },
+    async act(chat, roundTools, options) {
+      actCount += 1;
+      if (actCount === 1) {
+        assert.deepEqual(roundTools, []);
+        assert.match(chat.toString(), /phase=FINAL_REPORT_ONLY/u);
+        options.onPredictionCompleted({ stats: { stopReason: "maxPredictedTokensReached",
+          promptTokensCount: 28672, predictedTokensCount: 8192, totalTokensCount: 36864 } });
+        options.onMessage(ChatMessage.create("assistant", raw));
+        return;
+      }
+      if (actCount === 2) {
+        assert.equal(roundTools.some(tool => tool.name === "git_diff_file"), true);
+        assert.equal(roundTools.some(tool => tool.name === "git_diff"), false);
+        assert.match(chat.toString(), /unregistered tools \(git_diff\)/u);
+        const request = { id: "repaired-diff", type: "function", name: "git_diff_file",
+          arguments: { comparison: "range", base: "base", head: "head", path: "Assets/File0.cs" } };
+        await options.guardToolCall(0, 7001, { toolCallRequest: request,
+          allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+        options.onToolCallRequestFinalized(0, 7001, { toolCallRequest: request });
+        const result = await diffTool.implementation(request.arguments);
+        options.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+          toolCallRequest: request }] }));
+        options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+          toolCallId: request.id, content: JSON.stringify(result) }] }));
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 25000,
+          predictedTokensCount: 120, totalTokensCount: 25120 } });
+        options.onRoundEnd(0);
+        throw options.signal.reason;
+      }
+      assert.deepEqual(roundTools, []);
+      assert.match(chat.toString(), /phase=FINAL_REPORT_ONLY/u);
+      assert.match(chat.toString(), /REAL_REPAIR_RESULT/u);
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 25000,
+        predictedTokensCount: 300, totalTokensCount: 25300 } });
+      options.onMessage(ChatMessage.create("assistant", "복구된 구조화 Git 결과를 근거로 최종 보고합니다."));
+    },
+  };
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "hybrid", maxOutputReserve: 8192, safetyMarginTokens: 2048,
+    assumedContextLength: 38912, softRemainingTokens: 6000, hardRemainingTokens: 3000,
+  }, tools);
+  await handlePredictionLoop(ctl);
+
+  assert.equal(actCount, 3);
+  assert.equal(structuredExecutions, 1);
+  const retry = ctl.debugValues.find(value => value.event === "fresh_tool_planning_retry_scheduled");
+  assert.equal(retry.remainingTokens, 0);
+  assert.equal(retry.retryCandidateInputTokens, 25000);
+  assert.equal(retry.retryCandidateFit, true);
+  assert.equal(retry.eligibilityReason, "eligible_registered_catalogue_replan");
+  assert.deepEqual(retry.unknownRawToolNames, ["git_diff"]);
+  assert.equal(retry.actualDispatchCount, 0);
+  assert.equal(retry.actualResultCount, 0);
+  const finalizations = ctl.debugValues.filter(value => value.event === "bounded_audit_finalization");
+  assert.deepEqual(finalizations.map(value => value.modelInputId.split(":").at(-1)),
+    ["final-report-1", "final-report-2"]);
+  assert.equal(finalizations[0].completionAccepted, false);
+  assert.equal(finalizations[1].completionAccepted, true);
+  assert.match(ctl.blocks.at(-1).text, /최종 보고/u);
+});
+
 test("Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes", async () => {
   const history = Chat.from([{ role: "user", content: "LeeDongHun이 9월 20일부터 한 작업들을 조회 후 작업당 상세히 알려줘" }]);
   for (const [id, name, marker, argumentsValue] of [
@@ -1999,7 +2241,7 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
   let called = 0;
   const selectedModel = {
     identifier: "selected-model",
-    async getContextLength() { return 33500; },
+    async getContextLength() { return 65536; },
     async applyPromptTemplate(chat, options = {}) {
       if (chat.toString().includes("DIFF_RESULT_SENTINEL")) return "post-result";
       if (options.toolDefinitions?.length === 1) return "retry-tools";
@@ -2010,7 +2252,8 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
     async act(chat, roundTools, options) {
       called += 1;
       if (called === 1) {
-        assert.deepEqual(roundTools, []);
+        assert.deepEqual(roundTools.map(tool => tool.name).filter(name => name !== "evidence_first_read_context"),
+          tools.map(tool => tool.name));
         options.onPredictionFragment({ roundIndex: 0, content: rawToolText, reasoningType: "none",
           isStructural: false, tokenCount: 900 });
         options.onPredictionCompleted({ stats: {
@@ -2039,8 +2282,7 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
         options.onRoundEnd(0);
         throw options.signal.reason;
       }
-      assert.deepEqual(roundTools.map(tool => tool.name).filter(name => name !== "evidence_first_read_context"),
-        tools.map(tool => tool.name));
+      assert.equal(roundTools.some(tool => tool.name === "git_diff_file"), true);
       assert.match(chat.toString(), /DIFF_RESULT_SENTINEL/u);
       options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 20000,
         predictedTokensCount: 400, totalTokensCount: 20400 } });
@@ -2052,12 +2294,6 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
   await handlePredictionLoop(ctl);
 
   assert.equal(called, 3);
-  const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
-  assert.equal(finalization.trigger, "context_budget");
-  assert.equal(finalization.deliveryState, "partial");
-  assert.equal(finalization.reportState, "unresolved_tool_intent");
-  assert.equal(finalization.rejectionReason, "unresolved_tool_intent");
-  assert.equal(finalization.completionAccepted, false);
   const retry = ctl.debugValues.find(value => value.event === "fresh_tool_planning_retry_scheduled");
   assert.equal(retry.attempt, 1);
   assert.equal(retry.structuredToolRequestCount, 0);
@@ -2071,23 +2307,30 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
   assert.match(ctl.blocks.at(-1).text, /근거 기반 LeeDongHun/u);
 });
 
-test("Human-Bartender flow uses public schemas and actual temporary Git through fresh planning retry", async t => {
+test("Unity-marked project uses public schemas and actual temporary Git for four raw git_diff repairs", async t => {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "compactor-real-git-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.mkdirSync(path.join(root, "Source"), { recursive: true });
-  const project = path.join(root, "HumanBartender.uproject");
-  fs.writeFileSync(project, "{}\n");
+  fs.mkdirSync(path.join(root, "Assets"), { recursive: true });
+  fs.mkdirSync(path.join(root, "Packages"), { recursive: true });
+  fs.mkdirSync(path.join(root, "ProjectSettings"), { recursive: true });
+  fs.writeFileSync(path.join(root, "Packages", "manifest.json"), "{\"dependencies\":{}}\n");
+  fs.writeFileSync(path.join(root, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.0.1f1\n");
   const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true }).trim();
   git("init", "-q");
   git("config", "user.name", "Fixture Committer");
   git("config", "user.email", "fixture@example.invalid");
   git("config", "core.autocrlf", "false");
-  fs.writeFileSync(path.join(root, "Source", "Drink.cpp"), "int Price = 1;\n");
+  const changedPaths = ["Assets/Drink.cs", "Assets/Receipt.cs", "Assets/Inventory.cs", "Assets/Payment.cs"];
+  for (const [index, relative] of changedPaths.entries()) {
+    fs.writeFileSync(path.join(root, ...relative.split("/")), `public class Fixture${index} { public int Value = 1; }\n`);
+  }
   git("add", ".");
   git("commit", "-qm", "base");
   const base = git("rev-parse", "HEAD");
-  fs.writeFileSync(path.join(root, "Source", "Drink.cpp"), "int Price = 2; // REAL_DIFF_SENTINEL\n");
-  fs.writeFileSync(path.join(root, "Source", "Receipt.cpp"), "void PrintReceipt() {}\n");
+  for (const [index, relative] of changedPaths.entries()) {
+    fs.writeFileSync(path.join(root, ...relative.split("/")),
+      `public class Fixture${index} { public int Value = 2; } // REAL_DIFF_SENTINEL_${index}\n`);
+  }
   git("add", ".");
   execFileSync("git", ["commit", "-qm", "결제와 영수증 흐름 개선",
     "--author=yongseokpark <yongseok@example.invalid>"], {
@@ -2098,28 +2341,35 @@ test("Human-Bartender flow uses public schemas and actual temporary Git through 
   const head = git("rev-parse", "HEAD");
 
   const capability = createWorkspaceCapabilities({ resolveBinding: async () => ({
-    root, engine: "unreal", projectIdentity: project,
+    root, engine: "unity", projectIdentity: root,
   }) });
   const definitions = workspaceToolDefinitions().filter(definition =>
     ["git_log", "git_changed_files", "git_diff_file"].includes(definition.name));
   let actualGitExecutions = 0;
-  const tools = definitions.map(definition => ({
+  let mutationExecutions = 0;
+  const tools = [...definitions.map(definition => ({
     name: definition.name,
     description: definition.description,
     parametersJsonSchema: definition.inputSchema,
-    pluginIdentifier: "mcp/unreal-agent",
+    pluginIdentifier: "mcp/unity-tools",
     implementation: async args => {
       actualGitExecutions += 1;
       return capability(definition.name, args);
     },
-  }));
+  })), { name: "write_file", description: "Fixture mutation that must never enter automatic repair.",
+    parametersJsonSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    pluginIdentifier: "mcp/unity-tools", implementation: async () => {
+      mutationExecutions += 1;
+      throw new Error("write_file must not execute in this read-only fixture");
+    } }];
   await assert.rejects(() => capability("git_diff_file", {
-    project, base, head, path: "Source/Drink.cpp",
+    project: root, base, head, path: changedPaths[0],
   }), error => error?.code === "invalid_arguments");
 
   const history = Chat.from([{ role: "user",
     content: "yongseokpark가 9월 20일부터 한 작업을 조회하고 작업당 상세히 알려줘" }]);
-  const rawDiffIntent = "<tool_call><function=git_diff_file><parameter=path>Source/Drink.cpp</parameter></function></tool_call>";
+  const rawDiffIntent = changedPaths.map(relative =>
+    `<tool_call><function=git_diff><parameter=path>${relative}</parameter></function></tool_call>`).join("\n");
   const actualResults = [];
   let actCount = 0;
   let totalPromptTokens = 0;
@@ -2127,9 +2377,18 @@ test("Human-Bartender flow uses public schemas and actual temporary Git through 
   const startedAt = Date.now();
   const model = {
     identifier: "integration-model-stub",
-    async getContextLength() { return 65536; },
-    async applyPromptTemplate(chat) { return chat.toString(); },
-    async countTokens(text) { return Math.ceil(String(text).length / 4); },
+    async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat, options = {}) {
+      return JSON.stringify({ text: chat.toString(),
+        tools: (options.toolDefinitions || []).map(tool => tool.function.name) });
+    },
+    async countTokens(prompt) {
+      const text = String(prompt);
+      if (text.startsWith("[")) return 100;
+      const parsed = JSON.parse(text);
+      if (parsed.text.includes(changedPaths[0])) return parsed.tools.includes("write_file") ? 38000 : 25000;
+      return 500;
+    },
     async act(chat, roundTools, options) {
       actCount += 1;
       const dispatch = async (name, args, id, sdkCallId) => {
@@ -2164,7 +2423,9 @@ test("Human-Bartender flow uses public schemas and actual temporary Git through 
         }, "real-files", 1002);
       }
       if (actCount === 3) {
-        assert.match(chat.toString(), /Source\/Drink\.cpp/u);
+        assert.match(chat.toString(), /Assets\/Drink\.cs/u);
+        assert.equal(roundTools.some(tool => tool.name === "write_file"), false);
+        assert.match(chat.toString(), /measured read-only recovery catalogue/u);
         for (const content of rawDiffIntent) options.onPredictionFragment({ content, roundIndex: 0,
           reasoningType: "none", isStructural: false, tokensCount: 1, containsDrafted: false });
         options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 700,
@@ -2175,12 +2436,36 @@ test("Human-Bartender flow uses public schemas and actual temporary Git through 
         return;
       }
       if (actCount === 4) {
-        assert.deepEqual(roundTools.map(tool => tool.name), ["git_diff_file"]);
-        return dispatch("git_diff_file", {
-          comparison: "range", base, head, path: "Source/Drink.cpp", byteBudget: 4096,
-        }, "real-diff", 1003);
+        assert.equal(roundTools.some(tool => tool.name === "git_diff_file"), true);
+        assert.equal(roundTools.some(tool => tool.name === "git_diff"), false);
+        assert.match(chat.toString(), /unregistered tools \(git_diff\)/u);
+        const tool = roundTools.find(candidate => candidate.name === "git_diff_file");
+        for (const [index, relative] of changedPaths.entries()) {
+          let effectiveArgs = { comparison: "range", base, head, path: relative, byteBudget: 4096 };
+          const request = { id: `real-diff-${index}`, type: "function", name: "git_diff_file",
+            arguments: effectiveArgs };
+          await options.guardToolCall(0, 1003 + index, { toolCallRequest: request,
+            allow() {}, allowAndOverrideParameters(value) { effectiveArgs = value; },
+            deny(reason) { assert.fail(reason); } });
+          options.onToolCallRequestFinalized(0, 1003 + index,
+            { toolCallRequest: { ...request, arguments: effectiveArgs } });
+          const result = await tool.implementation(effectiveArgs);
+          actualResults.push(result);
+          options.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+            toolCallRequest: { ...request, arguments: effectiveArgs } }] }));
+          options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+            toolCallId: request.id, content: JSON.stringify(result) }] }));
+        }
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 900,
+          predictedTokensCount: 160, totalTokensCount: 1060 } });
+        totalPromptTokens += 900;
+        totalPredictedTokens += 160;
+        options.onRoundEnd(0);
+        throw options.signal.reason;
       }
-      assert.match(chat.toString(), /REAL_DIFF_SENTINEL/u);
+      for (let index = 0; index < changedPaths.length; index += 1) {
+        assert.match(chat.toString(), new RegExp(`REAL_DIFF_SENTINEL_${index}`, "u"));
+      }
       options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 900,
         predictedTokensCount: 120, totalTokensCount: 1020 } });
       totalPromptTokens += 900;
@@ -2190,28 +2475,39 @@ test("Human-Bartender flow uses public schemas and actual temporary Git through 
     },
   };
   const ctl = fakeController(history, model, {
-    contextManagementMode: "hybrid", projectEngine: "unreal", projectIdentity: project,
-    workingInputTargetTokens: 10000, workingInputTriggerTokens: 12048,
-    maxOutputReserve: 8192, safetyMarginTokens: 1536,
+    contextManagementMode: "hybrid", projectEngine: "auto", projectIdentity: "",
+    workingInputTargetTokens: 18000, workingInputTriggerTokens: 22000,
+    softRemainingTokens: 6000, hardRemainingTokens: 3000,
+    maxOutputReserve: 8192, safetyMarginTokens: 2048, assumedContextLength: 38912,
   }, tools);
+  ctl.getWorkingDirectory = () => root;
   await handlePredictionLoop(ctl);
 
   assert.equal(actCount, 5);
-  assert.equal(actualGitExecutions, 3);
+  assert.equal(actualGitExecutions, 6);
+  assert.equal(mutationExecutions, 0);
   assert.equal(actualResults.every(result => result.kind === "git_observation"), true);
   assert.equal(actualResults[0].items[0].subject, "결제와 영수증 흐름 개선");
-  assert.equal(actualResults[1].items.some(item => item.path === "Source/Drink.cpp"), true);
-  assert.match(actualResults[2].text, /REAL_DIFF_SENTINEL/u);
+  assert.equal(actualResults[1].items.some(item => item.path === changedPaths[0]), true);
+  for (const [index, result] of actualResults.slice(2).entries()) {
+    assert.match(result.text, new RegExp(`REAL_DIFF_SENTINEL_${index}`, "u"));
+  }
   assert.match(ctl.blocks.at(-1).text, /실제 Git 근거/u);
   const retry = ctl.debugValues.find(value => value.event === "fresh_tool_planning_retry_scheduled");
   assert.equal(retry.streamRawToolIntentCandidate, true);
   assert.equal(retry.finalRawToolIntent, true);
-  assert.equal(retry.eligibilityReason, "eligible_read_only_fresh_planning");
+  assert.equal(retry.eligibilityReason, "eligible_registered_catalogue_replan");
+  assert.deepEqual(retry.unknownRawToolNames, ["git_diff"]);
   const retryRound = ctl.debugValues.find(value => value.event === "direct_round_observation"
     && value.modelInputId?.includes(":tool-planning-retry-"));
-  assert.equal(retryRound.structuredToolRequestCount, 1);
-  assert.equal(retryRound.actualDispatchCount, 1);
-  assert.equal(retryRound.actualResultCount, 1);
+  assert.equal(retryRound.structuredToolRequestCount, 4);
+  assert.equal(retryRound.actualDispatchCount, 4);
+  assert.equal(retryRound.actualResultCount, 4);
+  const rescue = ctl.debugValues.find(value => value.event === "direct_context_budget_rescue");
+  assert.equal(rescue.fullToolCount, 5);
+  assert.equal(rescue.narrowedToolCount, 4);
+  assert.equal(rescue.candidateInputTokens, 25000);
+  assert.equal(rescue.candidateFit, true);
   const finalObservation = ctl.debugValues.filter(value => value.event === "direct_round_observation").at(-1);
   assert.equal(finalObservation.executionCost.knownPromptTokensIncludingSummary, totalPromptTokens);
   assert.equal(finalObservation.executionCost.knownPredictedTokensIncludingSummary, totalPredictedTokens);

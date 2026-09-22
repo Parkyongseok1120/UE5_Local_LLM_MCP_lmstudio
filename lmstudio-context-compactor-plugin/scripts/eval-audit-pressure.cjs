@@ -425,10 +425,10 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     modelActs: recorder.modelActs,
     boundedFinalizations: finalizations,
     outputRecoveries,
-    boundedFinalModelCalls: recorder.modelActs.filter(act => act.modelInputId.endsWith(":final-report")).length,
+    boundedFinalModelCalls: recorder.modelActs.filter(act => /:final-report(?:-\d+)?$/u.test(act.modelInputId)).length,
     outputRecoveryModelCalls: recorder.modelActs.filter(act => act.modelInputId.includes(":output-recovery-")).length,
     boundedFinalToolCalls: recorder.calls.filter(call => (
-      String(call.causalModelInputId || "").endsWith(":final-report")
+      /:final-report(?:-\d+)?$/u.test(String(call.causalModelInputId || ""))
     )).length,
     outputRecoveryToolCalls: recorder.calls.filter(call => (
       String(call.causalModelInputId || "").includes(":output-recovery-")
