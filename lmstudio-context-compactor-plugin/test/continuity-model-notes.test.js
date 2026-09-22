@@ -134,7 +134,7 @@ test("project scope and refs require unambiguous tool observations", () => {
 
   const repeated = messages({ role: "user", content: "Investigate this Unity project." },
     ...pair("read-a", projectA, identityA), ...pair("read-a", projectA, identityA));
-  assert.equal(notes.attachScope(draft, fingerprint, repeated).decisions[0].refs, undefined);
+  assert.equal(notes.attachScope(draft, fingerprint, repeated).decisions.length, 0);
 
   const enveloped = messages({ role: "user", content: "Investigate this Unity project." },
     { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
@@ -149,4 +149,12 @@ test("project scope and refs require unambiguous tool observations", () => {
   notes.objectiveFingerprint(enveloped), enveloped);
   assert.equal(envelopedNote.scope.projectIdentity, `unity:${identityA}`);
   assert.deepEqual(envelopedNote.decisions[0].refs, ["tool-call:read-envelope"]);
+
+  const archiveRef = "tool-call:archive-0123456789abcdef0123456789abcdef";
+  const archived = notes.attachScope({ decisions: [{ statement: "Retain the archived decision",
+    rationale: "The bounded archive excerpt supports it", refs: [archiveRef] }] },
+  fingerprint, historyA, new Set([archiveRef]));
+  assert.deepEqual(archived.decisions[0].refs, [archiveRef]);
+  assert.deepEqual(notes.reconcileStoredNote(archived, historyA, new Set([archiveRef])), archived);
+  assert.equal(notes.reconcileStoredNote(archived, historyA).decisions.length, 0);
 });

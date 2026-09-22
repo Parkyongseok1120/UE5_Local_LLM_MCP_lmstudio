@@ -29,6 +29,9 @@ test("status verifies every direct prediction-loop source and its index wiring",
     "src/direct-compaction-core.js",
     "src/compaction-tool-memory.js",
     "src/input-availability.js",
+    "src/evidence-archive.js",
+    "src/working-context.js",
+    "src/working-context-boundary.ts",
     "src/continuity-assistant-evidence.js",
     "src/continuity-file-observations.js",
     "src/continuity-memory.js",
@@ -54,6 +57,27 @@ test("status fails closed when a direct runtime source is absent", () => {
     const result = inspect(root);
     assert.equal(result.ok, false);
     assert.deepEqual(result.missing, ["src/prediction-loop.ts"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("status fails closed when the package entry does not register the prompt preprocessor", () => {
+  const source = path.resolve(__dirname, "..");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "compactor-status-entry-"));
+  try {
+    for (const relative of ["manifest.json", "package.json", ".lmstudio/entry.ts", ...DIRECT_SOURCE_FILES]) {
+      const from = path.join(source, relative);
+      const to = path.join(root, relative);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(from, to);
+    }
+    const entryPath = path.join(root, ".lmstudio", "entry.ts");
+    const entry = fs.readFileSync(entryPath, "utf8");
+    fs.writeFileSync(entryPath, entry.replace("host.setPromptPreprocessor(handler);", "throw new Error(\"disabled\");"));
+    const result = inspect(root);
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join("; "), /prompt preprocessor/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

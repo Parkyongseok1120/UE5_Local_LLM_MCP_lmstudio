@@ -9,6 +9,9 @@ import {
 
 type TokenSource = LLM | LLMGeneratorHandle;
 
+const RAW_TOOL_INTENT_PATTERN = /<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu;
+const RAW_TOOL_INTENT_CARRY_CHARS = 96;
+
 type RoundCallbacks = {
   onToolCallRequestFinalized: NonNullable<LLMActionOpts["onToolCallRequestFinalized"]>;
   guardToolCall: NonNullable<LLMActionOpts["guardToolCall"]>;
@@ -35,16 +38,27 @@ export type CapturedRound = {
     predictedTokensCount?: number;
     totalTokensCount?: number;
   };
+  timing: {
+    actElapsedMs: number;
+    promptProcessingMs: number | null;
+  };
   predictionUsage: {
     fragmentCount: number;
     reasoningTokensCount: number;
     visibleTokensCount: number;
     visibleChars: number;
     rawToolIntentCandidate: boolean;
+    rawToolIntentFirstFragment: number | null;
+    rawToolIntentFirstVisibleChar: number | null;
     structuralTokensCount: number;
     toolArgumentChars: number;
     toolArgumentTokensCount: number | null;
     unattributedTokensCount: number | null;
+    sdkToolRequestStartedCount: number;
+    sdkToolRequestNamedCount: number;
+    sdkToolRequestEndedCount: number;
+    sdkToolRequestFinalizedCount: number;
+    sdkToolRequestFailureCount: number;
   };
 };
 
@@ -56,6 +70,8 @@ export async function runOneToolRound(
   callbacks: RoundCallbacks,
   predictionOptions: Pick<LLMActionOpts, "maxTokens"> = {},
 ): Promise<CapturedRound> {
+  const actStartedAt = Date.now();
+  let firstTokenAt: number | null = null;
   const messages: Array<ChatMessage> = [];
   const roundAbort = new AbortController();
   const boundaryReason = new Error("LM Studio context-compactor round boundary");
@@ -66,16 +82,24 @@ export async function runOneToolRound(
   let finishReason: string | undefined;
   let predictionStats: CapturedRound["predictionStats"];
   let fragmentAbortReason: Error | undefined;
+  let visibleFragmentTail = "";
   const predictionUsage = {
     fragmentCount: 0,
     reasoningTokensCount: 0,
     visibleTokensCount: 0,
     visibleChars: 0,
     rawToolIntentCandidate: false,
+    rawToolIntentFirstFragment: null as number | null,
+    rawToolIntentFirstVisibleChar: null as number | null,
     structuralTokensCount: 0,
     toolArgumentChars: 0,
     toolArgumentTokensCount: null as number | null,
     unattributedTokensCount: null as number | null,
+    sdkToolRequestStartedCount: 0,
+    sdkToolRequestNamedCount: 0,
+    sdkToolRequestEndedCount: 0,
+    sdkToolRequestFinalizedCount: 0,
+    sdkToolRequestFailureCount: 0,
   };
 
   const forwardAbort = () => {
@@ -85,12 +109,17 @@ export async function runOneToolRound(
   else parentSignal.addEventListener("abort", forwardAbort, { once: true });
 
   try {
-    const { onMessageCaptured, abortAfterPredictionFragment, ...actCallbacks } = callbacks;
+    const { onMessageCaptured, abortAfterPredictionFragment, onFirstToken, ...actCallbacks } = callbacks;
     await tokenSource.act(history, tools, {
       signal: roundAbort.signal,
       ...predictionOptions,
       ...actCallbacks,
+      onFirstToken: (...args) => {
+        firstTokenAt ??= Date.now();
+        onFirstToken?.(...args);
+      },
       onPredictionFragment: (fragment) => {
+        firstTokenAt ??= Date.now();
         const tokensCount = Number(fragment.tokensCount);
         predictionUsage.fragmentCount += 1;
         if (Number.isFinite(tokensCount) && tokensCount >= 0) {
@@ -102,10 +131,17 @@ export async function runOneToolRound(
         if (fragment.reasoningType !== "reasoning" && !fragment.isStructural
           && fragment.reasoningType !== "reasoningStartTag" && fragment.reasoningType !== "reasoningEndTag") {
           const visibleContent = String(fragment.content || "");
+          const visibleCharsBeforeFragment = predictionUsage.visibleChars;
           predictionUsage.visibleChars += visibleContent.length;
-          if (/<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu.test(visibleContent)) {
+          const candidate = `${visibleFragmentTail}${visibleContent}`;
+          const rawMatch = RAW_TOOL_INTENT_PATTERN.exec(candidate);
+          if (rawMatch) {
             predictionUsage.rawToolIntentCandidate = true;
+            predictionUsage.rawToolIntentFirstFragment ??= predictionUsage.fragmentCount;
+            predictionUsage.rawToolIntentFirstVisibleChar ??= Math.max(0,
+              visibleCharsBeforeFragment - visibleFragmentTail.length + rawMatch.index);
           }
+          visibleFragmentTail = candidate.slice(-RAW_TOOL_INTENT_CARRY_CHARS);
         }
         actCallbacks.onPredictionFragment?.(fragment);
         const reason = abortAfterPredictionFragment?.(fragment);
@@ -117,6 +153,26 @@ export async function runOneToolRound(
       onToolCallRequestArgumentFragmentGenerated: (roundIndex, callId, content) => {
         predictionUsage.toolArgumentChars += String(content || "").length;
         actCallbacks.onToolCallRequestArgumentFragmentGenerated?.(roundIndex, callId, content);
+      },
+      onToolCallRequestStart: (...args) => {
+        predictionUsage.sdkToolRequestStartedCount += 1;
+        actCallbacks.onToolCallRequestStart?.(...args);
+      },
+      onToolCallRequestNameReceived: (...args) => {
+        predictionUsage.sdkToolRequestNamedCount += 1;
+        actCallbacks.onToolCallRequestNameReceived?.(...args);
+      },
+      onToolCallRequestEnd: (...args) => {
+        predictionUsage.sdkToolRequestEndedCount += 1;
+        actCallbacks.onToolCallRequestEnd?.(...args);
+      },
+      onToolCallRequestFailure: (...args) => {
+        predictionUsage.sdkToolRequestFailureCount += 1;
+        actCallbacks.onToolCallRequestFailure?.(...args);
+      },
+      onToolCallRequestFinalized: (...args) => {
+        predictionUsage.sdkToolRequestFinalizedCount += 1;
+        actCallbacks.onToolCallRequestFinalized?.(...args);
       },
       onPredictionCompleted: (result) => {
         const stats = (result as { stats?: {
@@ -165,6 +221,10 @@ export async function runOneToolRound(
           - predictionUsage.reasoningTokensCount
           - predictionUsage.visibleTokensCount
           - predictionUsage.structuralTokensCount),
+    },
+    timing: {
+      actElapsedMs: Math.max(0, Date.now() - actStartedAt),
+      promptProcessingMs: firstTokenAt === null ? null : Math.max(0, firstTokenAt - actStartedAt),
     },
     ...(failure === undefined ? {} : { failure }),
   };

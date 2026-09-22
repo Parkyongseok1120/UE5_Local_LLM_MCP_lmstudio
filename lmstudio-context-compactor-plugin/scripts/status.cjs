@@ -16,6 +16,9 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/direct-compaction-core.js",
   "src/compaction-tool-memory.js",
   "src/input-availability.js",
+  "src/evidence-archive.js",
+  "src/working-context.js",
+  "src/working-context-boundary.ts",
   "src/continuity-assistant-evidence.js",
   "src/continuity-file-observations.js",
   "src/continuity-memory.js",
@@ -35,16 +38,23 @@ function inspect(root = path.resolve(__dirname, "..")) {
   ];
   const missing = required.filter((relative) => !fs.existsSync(path.join(root, relative)));
   let index = "";
+  let entry = "";
   try { index = fs.readFileSync(path.join(root, "src", "index.ts"), "utf8"); } catch { /* reported below */ }
+  try { entry = fs.readFileSync(path.join(root, ".lmstudio", "entry.ts"), "utf8"); } catch { /* reported below */ }
   const directWiring = index.includes("./prediction-loop")
     && index.includes("./direct-config")
+    && index.includes("./working-context-boundary")
+    && /withPromptPreprocessor\s*\(/.test(index)
     && /withPredictionLoopHandler\s*\(\s*createPredictionLoopHandler\s*\(/.test(index);
+  const preprocessorHostWiring = /withPromptPreprocessor\s*\(\s*handler\s*\)/.test(entry)
+    && /host\.setPromptPreprocessor\s*\(\s*handler\s*\)/.test(entry);
   const legacyWiring = /withGenerator\s*\(|["']\.\/generator["']|["']\.\/compaction-core["']/.test(index);
   const issues = [];
   if (missing.length) issues.push(`missing: ${missing.join(", ")}`);
   if (index && !directWiring) issues.push("src/index.ts does not register the direct prediction-loop handler");
+  if (entry && !preprocessorHostWiring) issues.push(".lmstudio/entry.ts does not register the prompt preprocessor with the host");
   if (legacyWiring) issues.push("src/index.ts still registers a removed legacy handler");
-  const sourceLayoutVerified = missing.length === 0 && directWiring && !legacyWiring;
+  const sourceLayoutVerified = missing.length === 0 && directWiring && preprocessorHostWiring && !legacyWiring;
   return {
     ok: sourceLayoutVerified,
     sourceLayoutVerified,

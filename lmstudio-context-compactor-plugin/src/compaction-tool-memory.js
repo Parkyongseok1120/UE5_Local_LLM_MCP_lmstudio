@@ -185,14 +185,20 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
 const MAX_TOOL_RESULT_CONTENT_CHARS = 4 * 1024 * 1024;
 
 function decodeToolResultRecord(content) {
-  const text = String(content || "").trim();
-  if (!text) return { error: "empty" };
-  if (text.length > MAX_TOOL_RESULT_CONTENT_CHARS) return { error: "oversized" };
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return { error: "malformed" };
+  let value = content;
+  if (typeof content === "string") {
+    const text = content.trim();
+    if (!text) return { error: "empty" };
+    if (text.length > MAX_TOOL_RESULT_CONTENT_CHARS) return { error: "oversized" };
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return { error: "malformed" };
+    }
+  } else if (!isRecord(content) && !Array.isArray(content)) {
+    return { error: content === null || content === undefined ? "empty" : "unsupported_value" };
+  } else if (JSON.stringify(content).length > MAX_TOOL_RESULT_CONTENT_CHARS) {
+    return { error: "oversized" };
   }
 
   // LM Studio serializes MCP CallToolResult.content as an array of content
@@ -226,6 +232,66 @@ function decodeToolResultRecord(content) {
   return isRecord(value) ? { value } : { error: "unsupported_value" };
 }
 
+function historicalEvidenceObservation(source) {
+  if (!isRecord(source)) return null;
+  const archiveRef = isRecord(source.archiveRef) ? source.archiveRef : source;
+  const evidenceId = typeof archiveRef.evidenceId === "string" ? archiveRef.evidenceId : "";
+  const version = typeof archiveRef.version === "string" ? archiveRef.version : "";
+  if (!/^ev_[a-f0-9]{64}$/u.test(evidenceId) || !/^[a-f0-9]{64}$/u.test(version)) return null;
+  const identity = isRecord(source.sourceIdentity) ? source.sourceIdentity : {};
+  return sanitizeStructuredDurableValue({
+    kind: "historical_evidence_index",
+    ref: evidenceId,
+    evidenceId,
+    version,
+    originalCallId: source.originalCallId,
+    toolName: source.toolName,
+    originalEnvelopeChars: source.originalEnvelopeChars,
+    originalEnvelopeBytes: source.originalEnvelopeBytes,
+    sourceIdentity: identity,
+    sourceIdentityDigest: source.sourceIdentityDigest,
+    sourceVersion: source.sourceVersion,
+    sourceHash: source.sourceHash,
+    resultStatus: source.resultStatus ?? source.status,
+    errorCode: source.errorCode ?? null,
+    sourceAction: source.sourceAction ?? source.action,
+    sourceSince: source.sourceSince ?? source.since,
+    sourceUntil: source.sourceUntil ?? source.until,
+    sourceAuthorQuery: source.sourceAuthorQuery ?? source.authorQuery,
+    sourceAuthorQuerySemantics: source.sourceAuthorQuerySemantics ?? source.authorQuerySemantics,
+    sourcePageStart: source.sourcePageStart ?? source.pageStart,
+    sourcePageEnd: source.sourcePageEnd ?? source.pageEnd,
+    sourcePageHasMore: source.sourcePageHasMore ?? source.pageHasMore,
+    pageHasMore: source.sourcePageHasMore ?? source.pageHasMore,
+    sourceResultComplete: source.sourceCollectionComplete ?? source.sourceResultComplete,
+    sourceReturnedCount: source.sourceReturnedCount ?? source.returnedCount,
+    sourceTotal: source.sourceTotal ?? source.total,
+    returnedRange: source.sourceRange ?? source.returnedRange,
+    archiveReturnedRange: source.kind === "historical_evidence_range" ? source.returnedRange : undefined,
+    archiveNextOffset: source.kind === "historical_evidence_range" ? source.nextOffset : undefined,
+    archiveHasMore: source.kind === "historical_evidence_range"
+      ? source.archiveHasMore ?? source.hasMore : undefined,
+    archiveReachedEnd: source.kind === "historical_evidence_range"
+      ? source.archiveReachedEnd ?? source.reachedEnd : undefined,
+    availableRange: source.availableRange,
+    archivedRange: Array.isArray(source.archivedRanges) ? source.archivedRanges
+      : source.totalChars !== undefined ? [[0, source.totalChars]] : undefined,
+    projectedRange: Array.isArray(source.projectedRawRanges)
+      ? source.projectedRawRanges : source.returnedRange,
+    projectedBodyRanges: Array.isArray(source.projectedBodyRanges) ? source.projectedBodyRanges : undefined,
+    omittedBodyRanges: Array.isArray(source.omittedBodyRanges) ? source.omittedBodyRanges : undefined,
+    bodyField: source.bodyField,
+    bodyRangeUnit: source.bodyRangeUnit,
+    bodyTotalChars: source.bodyTotalChars,
+    bodyOmittedChars: source.bodyOmittedChars,
+    bodyComplete: source.bodyComplete === true,
+    omittedRange: Array.isArray(source.omittedRanges) ? source.omittedRanges : undefined,
+    redacted: source.redacted === true,
+    currentFile: false,
+    grantsMutation: false,
+  });
+}
+
 function parseToolResult(content) {
   const decoded = decodeToolResultRecord(content);
   if (decoded.error === "empty") return { summary: "empty tool result" };
@@ -237,6 +303,10 @@ function parseToolResult(content) {
   try {
     const source = stripControl(decoded.value);
     const out = {};
+    if (source.kind === "archived_tool_result_projection" || source.kind === "historical_evidence_range") {
+      const historicalEvidence = historicalEvidenceObservation(source);
+      return historicalEvidence ? { historicalEvidence } : { summary: "invalid historical evidence reference omitted" };
+    }
     // Git comparisons are repository observations, never file read/review coverage.
     if (source.kind === "git_observation" || source.action && source.comparison && source.canonicalProjectRoot) {
       const git = {};
@@ -666,8 +736,10 @@ function stateMemory(outcomes) {
   const files = [];
   const builds = [];
   const gitObservations = [];
+  const historicalEvidence = [];
   let activeProject = null;
   for (const item of parsedOutcomes(outcomes)) {
+    if (isRecord(item.historicalEvidence)) historicalEvidence.push(item.historicalEvidence);
     if (isRecord(item.gitObservation)) {
       gitObservations.push(durableGitObservation({
         ...item.gitObservation,
@@ -720,6 +792,7 @@ function stateMemory(outcomes) {
     files: coalesceFileObservations(files.filter(Boolean), 64),
     builds: builds.slice(-4),
     gitObservations: gitObservations.slice(-8),
+    historicalEvidence: historicalEvidence.slice(-16),
     activeProject,
   };
 }
@@ -728,6 +801,7 @@ module.exports = {
   CONTROL_DIRECTIVES,
   INTERNAL_KEYS,
   decodeToolResultRecord,
+  historicalEvidenceObservation,
   parseToolResult,
   durableGitObservation,
   retainedFileFact,

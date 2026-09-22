@@ -224,15 +224,16 @@ function provenanceFromMessages(messages) {
   };
 }
 
-function verifiedRefs(draft, verifiedToolIds, provenance = {}) {
+function verifiedRefs(draft, verifiedToolIds, provenance = {}, additionalVerifiedRefs = new Set()) {
   const result = Object.fromEntries(["decisions", "rejectedHypotheses", "openQuestions"].map((key) => [
-    key, (draft[key] || []).map((item) => {
+    key, (draft[key] || []).flatMap((item) => {
       const { refs: _unverifiedRefs, ...body } = item;
       const refs = (item.refs || []).filter((ref) => {
         const match = /^tool-call:([A-Za-z0-9_-]{1,80})$/u.exec(ref);
-        return match && verifiedToolIds.has(match[1]);
+        return match && (verifiedToolIds.has(match[1]) || additionalVerifiedRefs.has(ref));
       });
-      return refs.length ? { ...body, refs } : body;
+      if (item.refs?.length && refs.length === 0) return [];
+      return [refs.length ? { ...body, refs } : body];
     }),
   ]));
   const records = [...(provenance.observations || new Map()).entries()].filter(([, value]) => value.kind !== "git_observation");
@@ -258,23 +259,24 @@ function verifiedRefs(draft, verifiedToolIds, provenance = {}) {
   return result;
 }
 
-function attachScope(draft, fingerprint, messages = []) {
+function attachScope(draft, fingerprint, messages = [], additionalVerifiedRefs = new Set()) {
   if (!draft || !fingerprint) return null;
   const validated = validateDraftNote(draft);
   if (!validated) return null;
   const provenance = provenanceFromMessages(messages);
   const note = { scope: { objectiveFingerprint: fingerprint,
     ...(provenance.projectIdentity ? { projectIdentity: provenance.projectIdentity } : {}) },
-  ...verifiedRefs(validated, provenance.verifiedToolIds, provenance) };
+  ...verifiedRefs(validated, provenance.verifiedToolIds, provenance, additionalVerifiedRefs) };
   return JSON.stringify(note).length <= MAX_NOTE_CHARS ? note : null;
 }
 
-function reconcileStoredNote(note, messages) {
+function reconcileStoredNote(note, messages, additionalVerifiedRefs = new Set()) {
   const validated = validateStoredNote(note);
   if (!validated) return null;
   const provenance = provenanceFromMessages(messages);
   if (validated.scope.projectIdentity && validated.scope.projectIdentity !== provenance.projectIdentity) return null;
-  const reconciled = { scope: validated.scope, ...verifiedRefs(validated, provenance.verifiedToolIds, provenance) };
+  const reconciled = { scope: validated.scope,
+    ...verifiedRefs(validated, provenance.verifiedToolIds, provenance, additionalVerifiedRefs) };
   return validateStoredNote(reconciled);
 }
 

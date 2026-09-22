@@ -111,6 +111,37 @@ test("changed files pin commits, preserve rename and page one immutable snapshot
   assert.match(old.text, /class Example/); assert.equal(old.head, head);
 });
 
+test("Git observations expose query, phase, cache and serialization timing without changing paging", async t => {
+  const f = fixture(t); f.put("Assets/Timed.cs", "base\n"); const base = f.commit("timing base");
+  f.put("Assets/Timed.cs", "head\n"); const head = f.commit("timing head");
+  const query = { action: "diff_file", comparison: "range", base, head, path: "Assets/Timed.cs",
+    byteBudget: 4096 };
+  const first = await f.call(query);
+  assert.equal(first.status, "observed", JSON.stringify(first));
+  assert.match(first.gitTiming.queryHash, /^[a-f0-9]{64}$/u);
+  assert.equal(first.gitTiming.cacheHit, false);
+  assert.ok(first.gitTiming.phaseMs.scope >= 0);
+  assert.ok(first.gitTiming.phaseMs.resolve >= 0);
+  assert.ok(first.gitTiming.phaseMs.ls_tree >= 0);
+  assert.ok(first.gitTiming.phaseMs.diff >= 0);
+  assert.ok(first.gitTiming.phaseMs.serialization >= 0);
+  assert.ok(first.gitTiming.payloadBytes > 0);
+  assert.ok(first.gitTiming.envelopeBytes > first.gitTiming.payloadBytes);
+  assert.equal(first.gitTiming.returnedRows, first.text.split("\n").length);
+  assert.equal(first.gitTiming.subprocessMs >= 0, true);
+  assert.equal(first.gitTiming.serializationBytes >= first.gitTiming.payloadBytes, true);
+
+  const invalidPaging = await f.call({ ...query, cursor: "not-a-cursor", startLine: 1 });
+  assert.equal(invalidPaging.errorCode, "invalid_arguments");
+  const firstPage = await f.call({ ...query, limit: 1 });
+  if (firstPage.nextCursor) {
+    const secondPage = await f.call({ ...query, cursor: firstPage.nextCursor });
+    assert.equal(secondPage.gitTiming.cacheHit, true);
+    assert.equal(secondPage.snapshotId, firstPage.snapshotId);
+    assert.equal(secondPage.gitTiming.queryHash, firstPage.gitTiming.queryHash);
+  }
+});
+
 test("immutable changed-file fixtures deliver all 232 rows after the first 200", async t => {
   const f = fixture(t);
   for (let index = 1; index <= 232; index += 1) f.put(`Assets/Fixture-${index}.cs`, `base-${index}\n`);
@@ -232,7 +263,7 @@ test("git log returns author and committer evidence with bounded date and litera
   assert.equal(selected.items[0].committerEmail, "test@example.invalid");
   assert.equal(selected.identitySemantics,
     "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility");
-  assert.equal(selected.authorQuerySemantics, "literal_name_or_email_fragment");
+  assert.equal(selected.authorQuerySemantics, "literal_fixed_string_name_or_email_fragment");
 
   const first = await f.call({ action: "log", limit: 1 });
   assert(first.nextCursor);
@@ -241,6 +272,31 @@ test("git log returns author and committer evidence with bounded date and litera
   })).errorCode, "invalid_cursor");
   assert.equal((await f.call({ action: "log", since: "2026/09/14" })).errorCode,
     "invalid_arguments");
+});
+
+test("git log authorQuery is a literal fixed string for regex metacharacters and non-ASCII", async t => {
+  const f = fixture(t);
+  const commitAs = (file, author, email) => {
+    f.put(file, `${author}\n`);
+    f.git("add", file);
+    execFileSync("git", ["commit", "-qm", author, `--author=${author} <${email}>`], {
+      cwd: f.root,
+      windowsHide: true,
+      env: { ...process.env, GIT_AUTHOR_DATE: "2026-09-14T09:00:00+09:00",
+        GIT_COMMITTER_DATE: "2026-09-14T10:00:00+09:00" },
+    });
+  };
+  commitAs("Assets/Plus.cs", "dev+qa", "plus@example.invalid");
+  commitAs("Assets/Regex.cs", "devvqa", "regex@example.invalid");
+  commitAs("Assets/Korean.cs", "박용석", "korean@example.invalid");
+
+  const plus = await f.call({ action: "log", authorQuery: "dev+qa" });
+  assert.deepEqual(plus.items.map(item => item.authorName), ["dev+qa"]);
+  const dottedEmail = await f.call({ action: "log", authorQuery: "plus@example.invalid" });
+  assert.deepEqual(dottedEmail.items.map(item => item.authorEmail), ["plus@example.invalid"]);
+  const korean = await f.call({ action: "log", authorQuery: "박용석" });
+  assert.deepEqual(korean.items.map(item => item.authorName), ["박용석"]);
+  assert.equal(plus.authorQuerySemantics, "literal_fixed_string_name_or_email_fragment");
 });
 test("unborn status, root commit, literal paths and result budgets", async t => {
   const f = fixture(t);

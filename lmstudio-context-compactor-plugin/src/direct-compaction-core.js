@@ -362,6 +362,7 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     currentWorkStatus: {
       recentToolOutcomes: [],
       gitObservations: [],
+      historicalEvidence: [],
       modifiedOrObservedFiles: [],
       recentBuildOrTestState: [],
     },
@@ -403,6 +404,7 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     currentWorkStatus: {
       recentToolOutcomes: [],
       gitObservations: [],
+      historicalEvidence: [],
       modifiedOrObservedFiles: [],
       recentBuildOrTestState: [],
     },
@@ -423,6 +425,9 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
   for (const observation of [...(candidate.currentWorkStatus?.gitObservations || [])].reverse()) {
     const compact = compactEmergencyGitObservation(observation);
     if (compact) addBounded(emergency.currentWorkStatus.gitObservations, compact, true);
+  }
+  for (const evidence of [...(candidate.currentWorkStatus?.historicalEvidence || [])].reverse()) {
+    addBounded(emergency.currentWorkStatus.historicalEvidence, evidence, true);
   }
   const files = candidate.currentWorkStatus?.modifiedOrObservedFiles || [];
   for (const file of [...files].reverse()) {
@@ -565,6 +570,7 @@ function buildCheckpoint(messagesInput, options = {}) {
     activeProject: state.activeProject,
     recentOlderToolOutcomes: outcomes,
     gitObservations: durableState.gitObservations,
+    historicalEvidence: durableState.historicalEvidence,
     modifiedOrObservedFiles: durableState.files,
     recentBuildOrTestState: durableState.builds,
     openQuestionEvidence: openQuestions,
@@ -633,7 +639,7 @@ function shouldCompact(measurement, options = {}) {
   if (options.observeOnly === true) return false;
   const messageCount = Number(measurement.messageCount || 0);
   const remaining = Number(measurement.remainingTokens);
-  const softRemaining = Math.max(0, Number(options.softRemainingTokens || 14000));
+  const softRemaining = Math.max(0, Number(options.softRemainingTokens || 6000));
   const fallbackCount = Math.max(4, Number(options.compactAboveMessageCount || 24));
   if (measurement.exact === false && messageCount >= fallbackCount) return true;
   if (Number.isFinite(remaining)) return remaining <= softRemaining;
