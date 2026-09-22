@@ -4,7 +4,7 @@
 
 | 구성 | 현재 표시 | 기준 파일 |
 |---|---|---|
-| 제품 | 1.4.0 beta 2 | [installer/manifest.json](../installer/manifest.json) |
+| 제품 | 1.4.0 beta 3 (`v1.4.0-beta3`) | [installer/manifest.json](../installer/manifest.json) |
 | Node 파일·실행 서버 | 0.3.23 | [package.json](../lmstudio-unreal-agent-mcp/package.json) |
 | Unity MCP·Editor Bridge | 1.4.0-beta.4 | [MCP package.json](../lmstudio-unity-mcp/package.json), [Bridge package.json](../unity-editor-bridge/package.json) |
 | 근거 검토 서버 | 1.1.1 | [evidence_packet_contract.py](../skills/evidence-first-code-audit/scripts/evidence_packet_contract.py), [evidence_first_mcp.py](../skills/evidence-first-code-audit/scripts/evidence_first_mcp.py) |
