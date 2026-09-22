@@ -9,6 +9,7 @@ const { Chat, ChatMessage } = require("@lmstudio/sdk");
 const { createPredictionLoopHandler, handlePredictionLoop, __test } = require("../dist/prediction-loop.js");
 const { runOneToolRound } = require("../dist/round-loop.js");
 const { ContinuityNoteStore, NOTE_MARKER } = require("../dist/continuity-model-notes.js");
+const { WorkingContextBoundary } = require("../dist/working-context-boundary.js");
 const { ASSISTANT_MARKER } = require("../dist/continuity-assistant-evidence.js");
 const inputAvailability = require("../dist/input-availability.js");
 const availabilityEval = require("../scripts/availability-eval-core.cjs");
@@ -1903,6 +1904,237 @@ test("context-budget finalization does not accept the model's raw multi-tool tex
   assert.equal(finalization.rejectionReason, "unresolved_tool_intent");
   assert.equal(finalization.completionAccepted, false);
   assert.equal(ctl.statuses.at(-1).state.status, "canceled");
+});
+
+function archivedObservationHistory(resultSize = 24000) {
+  const history = Chat.from([{ role: "system", content: "Preserve the current constraints." },
+    { role: "user", content: "Inspect the returned Git evidence." }]);
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    id: "call-archive-1", type: "function", name: "evidence_first_git_page", arguments: { page: 0 },
+  } }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "call-archive-1",
+    content: JSON.stringify({ ok: true, kind: "git_observation", status: "complete",
+      returnedRange: [0, resultSize], hasMore: true, body: "x".repeat(resultSize) }) }] }));
+  return history;
+}
+
+function exactCountingModel(onAct) {
+  return {
+    identifier: "qwen/qwen3.8-27b",
+    async getContextLength() { return 32768; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(String(text).length / 4); },
+    async act(chat, tools, options) { return onAct(chat, tools, options); },
+  };
+}
+
+test("deterministic working context projects a completed large result and exposes bounded rehydration", async () => {
+  const history = archivedObservationHistory();
+  let receivedHistory, receivedTools;
+  const model = exactCountingModel(async (chat, tools, options) => {
+    receivedHistory = chat; receivedTools = tools;
+    options.onMessage(ChatMessage.create("assistant", "bounded evidence answer"));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 2000, predictedTokensCount: 20 } });
+  });
+  const tools = [{ name: "evidence_first_git_page", pluginIdentifier: "mcp/evidence-first",
+    description: "read git page", parametersJsonSchema: { type: "object" } }];
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "deterministic", workingInputTargetTokens: 3000,
+    workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
+    softRemainingTokens: 1000, hardRemainingTokens: 500,
+  }, tools);
+  await createPredictionLoopHandler()(ctl);
+  const result = receivedHistory.getMessagesArray().flatMap(message => message.getToolCallResults())
+    .map(item => { try { return JSON.parse(item.content); } catch { return null; } })
+    .find(item => item?.kind === "archived_tool_result_projection");
+  assert.equal(result.fullRawProvided, false);
+  assert.equal(result.originalCallId, "call-archive-1");
+  assert.equal(result.pageHasMore, true);
+  assert.ok(result.omittedRanges[0][1] > result.projectedRawRanges[0][1]);
+  assert.ok(receivedTools.some(tool => tool.name === "evidence_first_read_context"));
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.workingContext.projectionApplied, true);
+  assert.equal(measurement.workingContext.targetMet, true);
+  assert.equal(measurement.workingContext.mandatoryFloorExceedsTarget, false);
+  assert.ok(measurement.workingContext.mandatoryFloorTokens > 0);
+  assert.ok(measurement.workingContext.mandatoryFloorTokens <= measurement.finalInputTokens);
+  const observation = ctl.debugValues.find(value => value.event === "direct_round_observation");
+  assert.equal(observation.workingContextExposure[0].stage, "generation_completed_after_input");
+});
+
+test("working input target reports the mandatory floor without deleting the current request", async () => {
+  const request = `mandatory-current-request:${"z".repeat(14000)}`;
+  const history = Chat.from([{ role: "system", content: "required system" }, { role: "user", content: request }]);
+  let received;
+  const model = exactCountingModel(async (chat, _tools, options) => {
+    received = chat;
+    options.onMessage(ChatMessage.create("assistant", "answer"));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound" } });
+  });
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "deterministic", workingInputTargetTokens: 2048,
+    workingInputTriggerTokens: 2048, maxOutputReserve: 1024, safetyMarginTokens: 512,
+    softRemainingTokens: 1000, hardRemainingTokens: 500,
+  });
+  await createPredictionLoopHandler()(ctl);
+  assert.match(received.toString(), /mandatory-current-request/);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.workingContext.targetMet, false);
+  assert.equal(measurement.workingContext.mandatoryFloorExceedsTarget, true);
+  assert.ok(measurement.workingContext.mandatoryFloorTokens > 2048);
+});
+
+test("hybrid context makes one tool-free semantic handoff and keeps it out of visible output", async () => {
+  const history = archivedObservationHistory();
+  const calls = [];
+  const model = exactCountingModel(async (chat, tools, options) => {
+    calls.push({ chat: chat.toString(), toolCount: tools.length, maxTokens: options.maxTokens });
+    if (chat.toString().includes("purpose=context_summary") || chat.toString().includes('"purpose":"context_summary"')) {
+      options.onMessage(ChatMessage.create("assistant", JSON.stringify({ decisions: [{
+        statement: "Keep Git paging bounded", rationale: "The returned page was large",
+        refs: ["tool-call:call-archive-1"],
+      }] })));
+      options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 800, predictedTokensCount: 60 } });
+      return;
+    }
+    options.onMessage(ChatMessage.create("assistant", "normal visible answer"));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 2200, predictedTokensCount: 30 } });
+  });
+  const tools = [{ name: "evidence_first_git_page", pluginIdentifier: "mcp/evidence-first",
+    description: "read git page", parametersJsonSchema: { type: "object" } }];
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "hybrid", workingInputTargetTokens: 3000,
+    workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
+    semanticSummaryMaxTokens: 700, softRemainingTokens: 1000, hardRemainingTokens: 500,
+  }, tools);
+  await createPredictionLoopHandler()(ctl);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].toolCount, 0);
+  assert.equal(calls[0].maxTokens, 700);
+  assert.equal(calls[1].toolCount, 2);
+  assert.equal(ctl.blocks.at(-1).text, "normal visible answer");
+  assert.doesNotMatch(ctl.blocks.map(block => block.text).join(""), /Keep Git paging bounded/);
+  const summary = ctl.debugValues.find(value => value.event === "semantic_handoff");
+  assert.equal(summary.accepted, true);
+  assert.equal(summary.toolCount, 0);
+  assert.equal(summary.cost.summaryCalls, 1);
+});
+
+test("invalid hybrid summary is discarded without retry or report recovery", async () => {
+  const history = archivedObservationHistory();
+  let calls = 0;
+  const model = exactCountingModel(async (chat, _tools, options) => {
+    calls++;
+    if (chat.toString().includes('"purpose":"context_summary"')) {
+      options.onMessage(ChatMessage.create("assistant", '{"decisions":['));
+      options.onPredictionCompleted?.({ stats: { stopReason: "maxPredictedTokensReached", predictedTokensCount: 700 } });
+      return;
+    }
+    options.onMessage(ChatMessage.create("assistant", "fallback answer"));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound" } });
+  });
+  const tools = [{ name: "evidence_first_git_page", pluginIdentifier: "mcp/evidence-first",
+    description: "read git page", parametersJsonSchema: { type: "object" } }];
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "hybrid", workingInputTargetTokens: 3000,
+    workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
+    semanticSummaryMaxTokens: 700, softRemainingTokens: 1000, hardRemainingTokens: 500,
+  }, tools);
+  await createPredictionLoopHandler()(ctl);
+  assert.equal(calls, 2);
+  const summaries = ctl.debugValues.filter(value => value.event === "semantic_handoff");
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0].accepted, false);
+  assert.equal(summaries[0].reason, "length");
+  assert.equal(ctl.debugValues.some(value => value.event === "output_recovery_scheduled"), false);
+});
+
+test("BOUNDED keeps its original call budget and does not start a hybrid summary", async () => {
+  const history = archivedObservationHistory();
+  let calls = 0;
+  const model = exactCountingModel(async (_chat, _tools, options) => {
+    calls++;
+    options.onMessage(ChatMessage.create("assistant", "bounded research answer"));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound" } });
+  });
+  const tool = { name: "evidence_first_git_page", pluginIdentifier: "mcp/evidence-first",
+    description: "read", parametersJsonSchema: { type: "object" } };
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "hybrid", auditCompletionMode: "bounded",
+    workingInputTargetTokens: 3000, workingInputTriggerTokens: 3500,
+    toolResultProjectionChars: 512, softRemainingTokens: 1000, hardRemainingTokens: 500,
+  }, [tool]);
+  await createPredictionLoopHandler()(ctl);
+  assert.equal(calls, 1);
+  assert.equal(ctl.debugValues.some(value => value.event === "semantic_handoff"), false);
+});
+
+test("cancellation during the hybrid summary prevents the normal model call", async () => {
+  const history = archivedObservationHistory();
+  const abort = new AbortController();
+  let calls = 0;
+  const model = exactCountingModel(async (_chat, _tools, _options) => {
+    calls++;
+    abort.abort(new Error("user canceled"));
+    throw abort.signal.reason;
+  });
+  const tool = { name: "evidence_first_git_page", pluginIdentifier: "mcp/evidence-first",
+    description: "read", parametersJsonSchema: { type: "object" } };
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "hybrid", workingInputTargetTokens: 3000,
+    workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
+    softRemainingTokens: 1000, hardRemainingTokens: 500,
+  }, [tool]);
+  ctl.abortSignal = abort.signal;
+  ctl.guardAbort = () => { if (abort.signal.aborted) throw abort.signal.reason; };
+  await assert.rejects(createPredictionLoopHandler()(ctl), /user canceled/);
+  assert.equal(calls, 1);
+  assert.equal(ctl.debugValues.filter(value => value.event === "semantic_handoff").length, 1);
+  assert.equal(ctl.blocks.some(block => block.text), false);
+});
+
+test("a signed next user turn restores the compacted prefix and appends only the new delta", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hybrid-product-reentry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const boundary = new WorkingContextBoundary(path.join(root, "boundary"));
+  const firstHistory = Chat.from([{ role: "system", content: "stable system" }]);
+  firstHistory.append(boundary.capture(ChatMessage.create("user", "inspect evidence"), firstHistory));
+  firstHistory.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    id: "turn-one-read", type: "function", name: "evidence_first_git_page", arguments: { page: 0 },
+  } }] }));
+  firstHistory.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "turn-one-read",
+    content: JSON.stringify({ ok: true, kind: "git_observation", body: "raw-evidence-".repeat(2500) }) }] }));
+  const tool = { name: "evidence_first_git_page", pluginIdentifier: "mcp/evidence-first",
+    description: "read", parametersJsonSchema: { type: "object" } };
+  const config = { contextManagementMode: "deterministic", workingInputTargetTokens: 3000,
+    workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
+    softRemainingTokens: 1000, hardRemainingTokens: 500 };
+  const firstModel = exactCountingModel(async (_chat, _tools, options) => {
+    options.onMessage(ChatMessage.create("assistant", "first answer"));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound" } });
+  });
+  const firstCtl = fakeController(firstHistory, firstModel, config, [tool]);
+  firstCtl.getWorkingDirectory = () => root;
+  await createPredictionLoopHandler(new ContinuityNoteStore(path.join(root, "notes")), undefined,
+    boundary, { root: path.join(root, "archive") })(firstCtl);
+  const hostHistory = Chat.from(firstHistory); hostHistory.append("assistant", "first answer");
+  hostHistory.append(boundary.capture(ChatMessage.create("user", "continue"), hostHistory));
+  let secondInput;
+  const secondModel = exactCountingModel(async (chat, _tools, options) => {
+    secondInput = chat.toString();
+    options.onMessage(ChatMessage.create("assistant", "second answer"));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound" } });
+  });
+  const secondCtl = fakeController(hostHistory, secondModel, config, [tool]);
+  secondCtl.getWorkingDirectory = () => root;
+  await createPredictionLoopHandler(new ContinuityNoteStore(path.join(root, "notes")), undefined,
+    boundary, { root: path.join(root, "archive") })(secondCtl);
+  assert.equal(secondCtl.debugValues.find(value => value.event === "working_context_restore").status,
+    "restored_remeasure_required");
+  assert.match(secondInput, /continue/);
+  assert.match(secondInput, /archived_tool_result_projection/);
+  assert.ok((secondInput.match(/raw-evidence-/g) || []).length < 50);
+  assert.doesNotMatch(secondInput, /hybrid-context-v1/);
 });
 
 test("context-budget rescue keeps the normal output reserve when it fits", async () => {

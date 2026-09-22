@@ -32,6 +32,20 @@ export const directConfigSchematics = createConfigSchematics()
     { displayName: "Observe only", subtitle: "Measure context pressure without changing the model-facing history." },
     false,
   )
+  .field("contextManagementMode", "select", {
+    displayName: "Working context",
+    subtitle: "Legacy keeps deterministic compaction unchanged. Deterministic adds scoped evidence archive, bounded result views, and a measured working window. Hybrid also permits one tool-free local semantic handoff per accepted compaction.",
+    options: [
+      { value: "legacy", displayName: "Legacy (default)" },
+      { value: "deterministic", displayName: "Deterministic archive/window" },
+      { value: "hybrid", displayName: "Hybrid semantic handoff" },
+    ],
+  }, "legacy")
+  .field("workingInputTargetTokens", "numeric", { displayName: "Working input target", subtitle: "Experimental full templated input target after compaction, including system and tool definitions. Mandatory input is never removed merely to meet it." }, 10000)
+  .field("workingInputTriggerTokens", "numeric", { displayName: "Working input trigger", subtitle: "Start target-based compaction above this full templated input size; kept separate from the post-compaction target." }, 12048)
+  .field("toolResultProjectionChars", "numeric", { displayName: "Archived result excerpt", subtitle: "Maximum archived observation excerpt exposed in a model-facing tool-result projection." }, 512)
+  .field("semanticSummaryMaxTokens", "numeric", { displayName: "Semantic handoff output", subtitle: "Maximum output tokens for the single tool-free local summary call per accepted compaction." }, 1024)
+  .field("semanticSummarySeconds", "numeric", { displayName: "Semantic handoff seconds", subtitle: "Timeout for the optional local summary call. Invalid or interrupted summaries are discarded." }, 30)
   .field(
     "showDebugInfo",
     "boolean",

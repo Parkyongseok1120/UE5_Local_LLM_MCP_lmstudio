@@ -1,0 +1,243 @@
+{
+  "mode": "codegen",
+  "baseline": {
+    "reviewedHead": "7ad2a26493de20c821a040959a12d25e96fb67fa",
+    "parent": "e7f4d85651a7654c6b247c038463d4e331247a2d",
+    "branch": "v1.4.0-beta-2",
+    "initialWorktree": "clean",
+    "installedPluginModified": false
+  },
+  "claims": [
+    {
+      "claim": "완료된 대형 observation 결과는 기존 도구 효과 판별을 재사용해 scope별 보관소에 저장한 뒤, call ID·실제 status/error·반환/생략 범위·archive ref를 가진 bounded projection으로 모델 입력에 제공됩니다. pending, mutation/build, unknown-effect 교환이나 보관 실패는 원문에서 제거되지 않습니다.",
+      "claimType": "data_flow",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "WorkingContext.project는 isObservationOnlyToolCall 분류 결과와 완료된 call/result pairing을 요구하고, archive 성공 뒤에만 bounded projection을 만듭니다. projection은 fullRawProvided=false와 원본/투영/생략 범위를 명시합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "observation": "EvidenceArchive는 opaque evidence ID, scope digest, version, hash, TTL/quota, bounded UTF-16 range read를 검증하며 임의 경로 입력을 받지 않습니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/working-context.test.cjs",
+          "observation": "최신 5-call pairing, 232/650 항목, pending/unknown/mutation 보존, hash/version/scope/range/TTL/quota 실패, restart와 secret/receipt/cursor 비영속화 회귀가 통과합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "createPredictionLoopHandler -> WorkingContext" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/tool-scope.ts", "symbol": "isObservationOnlyToolCall" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/working-context.js", "symbol": "project / createEvidenceTool" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "workingContext and direct_context_measurement telemetry" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "installed plugin and active LM Studio chat",
+          "observation": "설치본은 이번 작업에서 교체하지 않았고 활성 채팅 fingerprint를 host API로 확인하지 못했으므로, 운영 채팅에서 archive/projection이 실행됐다고 볼 수 없습니다."
+        }
+      ],
+      "unknowns": [
+        "최종 dist의 A/B/C N=1은 세 군 모두 30초 timeout이어서 bounded projection과 재조회 도구가 장기 과업 정확도를 얼마나 유지하는지 판정할 수 없습니다.",
+        "host가 보유한 현재 파일 내용과 archive의 역사적 반환 내용의 의미적 일치 여부는 archive hash만으로 증명되지 않습니다."
+      ]
+    },
+    {
+      "claim": "다음 사용자 턴은 UI transcript를 삭제하지 않고 서명된 conversation/lineage marker로 parent manifest와 정확한 prefix hash를 검증한 뒤 compacted prefix와 새 delta를 모델 입력에 조립합니다. 편집, 위조 marker, 다른 project/worktree, 잘못된 parent는 fail closed입니다.",
+      "claimType": "state_transition",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context-boundary.ts",
+          "observation": "prompt preprocessor는 HMAC 서명된 opaque conversation/lineage/parent/request/prefix/workspace/repository marker를 발급하고, prediction 입력에서 이를 검증·제거합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "manifest commit은 exact fit와 모든 evidence ref 검증 뒤 원자적으로 수행되며 restore는 source prefix hash, scope, lineage, schema와 replacement hash를 다시 검증합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/working-context-boundary.test.cjs and test/prediction-loop.test.cjs",
+          "observation": "서명된 연속 턴, 동일 parent의 distinct fork lineage, 편집/위조 거부, attachment marker 순서, 실제 handler의 compacted prefix+new delta 복원 회귀가 통과합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/index.ts", "symbol": "composed prompt preprocessor" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/working-context-boundary.ts", "symbol": "capture / restore" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/.lmstudio/entry.ts", "symbol": "host.setPromptPreprocessor" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/status.cjs", "symbol": "preprocessorHostWiring" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "framework_source",
+          "location": "@lmstudio/sdk 1.5.0 PluginContext",
+          "observation": "prediction context에는 documented host-native chat/fork ID가 없으므로 구현은 host-native identity를 주장하지 않고 plugin-issued signed lineage를 사용합니다."
+        }
+      ],
+      "unknowns": [
+        "LM Studio UI의 native fork 식별자와 plugin-issued lineage의 직접 매핑은 UNPROVEN입니다.",
+        "설치본을 갱신한 뒤 기존 활성 채팅에서 preprocessor가 어떤 시점부터 적용되는지는 실제 host 실행으로 확인해야 합니다."
+      ]
+    },
+    {
+      "claim": "hybrid 모드는 accepted compaction event마다 최대 한 번만 동일 로컬 모델의 tools=[] semantic handoff를 허용하고, 엄격한 JSON/ref 검증을 통과한 목표·결정·열린 질문만 assistant claim으로 저장합니다. length/timeout/cancel/invalid JSON/ref는 commit하지 않고 deterministic facts와 이전 note로 복귀합니다.",
+      "claimType": "state_transition",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "generateSemanticHandoff는 tools=[], explicit maxTokens/headroom, shared cancellation/deadline을 사용하고 hybrid+accepted compaction+non-BOUNDED 조건에서만 호출됩니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "validateSemanticNote는 decisions/rejectedHypotheses/openQuestions와 유효 evidence refs만 허용하고 build/review/approval 같은 실행 claim schema를 허용하지 않습니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs and test/working-context.test.cjs",
+          "observation": "성공 1회, length no-retry, 취소 시 main call 중단, BOUNDED skip, invalid ref/build schema 거부와 10회 결정/제약 갱신 보존 회귀가 통과합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/direct-config.ts", "symbol": "contextManagementMode=hybrid" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "accepted compaction event guard" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "generateSemanticHandoff tools=[]" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-hybrid-context.cjs", "symbol": "semanticSummaryCalls/Accepted and total token/time accounting" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "lmstudio-context-compactor-plugin/eval-results/hybrid-context-abc-final-n1-20260922.json",
+          "observation": "최종 dist N=1에서 A/B/C가 모두 30초 timeout이었고 C의 두 semantic call은 length와 전체 평가 취소로 모두 채택되지 않았습니다. 의미 정확도·완주율 개선은 입증되지 않았습니다."
+        }
+      ],
+      "unknowns": [
+        "동일 모델이 생성한 요약의 의미 정확도는 ref 존재와 JSON schema 통과만으로 보장되지 않습니다.",
+        "N=1 전 군 timeout 결과만으로 품질 향상률이나 비용 절감률을 보고할 수 없습니다."
+      ]
+    },
+    {
+      "claim": "압축 trigger와 full-input target을 분리하고 실제 tokenizer/template으로 system, 현재 요청, tool schema, actual output cap/reserve를 포함해 계수합니다. mandatory floor가 10000 tokens를 넘으면 필수 입력을 삭제하지 않고 target 미달을 telemetry에 기록하며 Luna generation budget와 단일 report recovery 계약을 유지합니다.",
+      "claimType": "data_flow",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "shouldCompactContext와 targetRemainingForInput은 trigger/target을 분리하고 measureRoundInput/selectSoftCompaction/resolveGenerationBudget를 재사용합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "deterministic projection 목표 도달, current request가 큰 mandatory floor인 경우 보존과 targetMet=false, Luna output recovery/BOUNDED/cancel 회귀가 통과합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/availability-eval.test.cjs",
+          "observation": "평가 결과가 full input before/after/target/floor와 summary prompt/predicted 비용을 분리 집계합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/direct-config.ts", "symbol": "workingInputTargetTokens / workingInputTriggerTokens" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "measureRoundInput / shouldCompactContext" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/context-budget.ts", "symbol": "resolveGenerationBudget" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs", "symbol": "fullInput and summary cost telemetry" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "active model tokenizer/template",
+          "observation": "정확 계수는 model.countTokens와 formatter가 성공한 호출에만 exact=true이며, host가 제공하지 않는 경우 unknown/estimated를 성공 수치로 바꾸지 않습니다."
+        }
+      ],
+      "unknowns": [
+        "직접 harness 모델의 loaded context 38912와 source/dist bundle은 기록했지만 현재 설치본·활성 채팅의 formatter/tokenizer와 실행 fingerprint는 검증되지 않았습니다.",
+        "10K 목표가 특정 실모델/도구 집합에서 최적이라는 결론은 A/B/C 측정 전까지 내리지 않습니다."
+      ]
+    }
+  ],
+  "existing": [
+    "buildCheckpoint/buildContinuityMemory/stateMemory와 deterministic continuity facts",
+    "measureContext/selectSoftCompaction/selectMeasuredCandidate와 resolveGenerationBudget",
+    "input-availability, tool-scope/isObservationOnlyToolCall, Git page/byteBudget/cursor/lookup",
+    "Luna explicit output cap, canonical final report, 단일 output recovery, 취소와 BOUNDED 제한"
+  ],
+  "reuse": [
+    "기존 compactor state root와 atomic file pattern",
+    "기존 complete exchange 보존 및 최신 call/result pairing",
+    "기존 tokenizer/template 측정과 generation headroom 계약",
+    "기존 attachment prompt-preprocessor 경계"
+  ],
+  "extend": [
+    "prediction-loop model-facing history assembly",
+    "continuity assistant-note validation과 telemetry/eval 결과",
+    "package entry의 prompt-preprocessor 등록 경로"
+  ],
+  "new": [
+    "bounded scoped evidence archive와 evidence_first_read_context 도구",
+    "대형 observation result projection과 atomic working-window manifest",
+    "plugin-signed conversation/lineage marker",
+    "opt-in tools=[] semantic handoff와 A/B/C 평가 harness"
+  ],
+  "doNotDuplicate": [
+    "새 Planner/InvestigationState/evidence-debt 상태머신",
+    "vector DB, cloud summary service, 별도 DB 서버",
+    "Git cursor 재조합 또는 archive ref와 cursor 통합",
+    "pending/ambiguous exchange 삭제, mutation/build 자동 재실행, raw XML 실행",
+    "pageHasMore를 완료 금지 gate로 사용하거나 Luna BOUNDED/output recovery 확대"
+  ],
+  "invariants": [
+    "archive 성공과 hash/scope/range 검증 전에 원문 교환을 모델 입력에서 제거하지 않습니다.",
+    "receipt, approval capability, secret, transient cursor는 durable archive/note/window에 저장하지 않습니다.",
+    "archive evidence는 과거 반환 내용이며 현재 파일의 수정 권한이나 최신 상태가 아닙니다.",
+    "UI/host transcript는 삭제하거나 compacted history로 덮어쓰지 않습니다.",
+    "mandatory system/current request/pending protocol을 삭제해 10000-token 목표를 맞추지 않습니다.",
+    "semantic summary는 assistant claim이고 실행·빌드·승인·전체 검토 사실을 만들 수 없습니다.",
+    "summary 비용은 전체 호출 비용에 포함되며 budget/deadline을 초기화하지 않습니다.",
+    "legacy가 기본이며 rollback은 legacy 선택으로 가능하고 설치본/활성 채팅 검증은 별도입니다."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/.lmstudio/entry.ts",
+    "lmstudio-context-compactor-plugin/src/index.ts",
+    "lmstudio-context-compactor-plugin/src/direct-config.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/src/working-context-boundary.ts",
+    "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs",
+    "lmstudio-context-compactor-plugin/scripts/eval-hybrid-context.cjs",
+    "lmstudio-context-compactor-plugin/scripts/status.cjs",
+    "lmstudio-context-compactor-plugin/docs/ADR-hybrid-context.md",
+    "lmstudio-context-compactor-plugin/test/working-context.test.cjs",
+    "lmstudio-context-compactor-plugin/test/working-context-boundary.test.cjs",
+    "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+    "lmstudio-context-compactor-plugin/test/availability-eval.test.cjs",
+    "lmstudio-context-compactor-plugin/test/status.test.cjs"
+  ],
+  "validationPlan": [
+    "npm test and npm run status in lmstudio-context-compactor-plugin",
+    "npm pack --dry-run --json and package entry TypeScript check",
+    "python -m pytest -q at repository root",
+    "Unity and Unreal package test suites",
+    "232/650 paging, invalid_cursor/snapshot_expired/restart fixture regressions",
+    "lms ps --json and source/dist/installed fingerprint comparison",
+    "same-model A/B/C harness with N, timeout, token/time/quality/failure reporting"
+  ]
+}

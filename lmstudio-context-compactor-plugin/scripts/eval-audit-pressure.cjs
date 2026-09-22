@@ -305,6 +305,13 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     auditFinalSeconds,
     auditFinalMaxTokens: Number(runOptions.auditFinalMaxTokens || 4096),
     outputRecoveryMode: runOptions.outputRecoveryMode === "on" ? "on" : "off",
+    contextManagementMode: ["deterministic", "hybrid"].includes(runOptions.contextManagementMode)
+      ? runOptions.contextManagementMode : "legacy",
+    workingInputTargetTokens: Number(runOptions.workingInputTargetTokens || 10000),
+    workingInputTriggerTokens: Number(runOptions.workingInputTriggerTokens || 12048),
+    toolResultProjectionChars: Number(runOptions.toolResultProjectionChars || 512),
+    semanticSummaryMaxTokens: Number(runOptions.semanticSummaryMaxTokens || 1024),
+    semanticSummarySeconds: Number(runOptions.semanticSummarySeconds || 30),
     evaluationTimeoutMs: evaluationTimeoutSeconds * 1000,
     ...compactorConfig,
   };
@@ -324,6 +331,7 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
   const visibleAnswer = selectVisibleAnswer(visibleBlocks, finalizations, outputRecoveries);
   const measurements = ctl.debugValues.filter(value => value.event === "direct_context_measurement");
   const rounds = ctl.debugValues.filter(value => value.event === "direct_round_observation");
+  const semanticHandoffs = ctl.debugValues.filter(value => value.event === "semantic_handoff");
   const runtimeToolCalls = rounds.flatMap(round => round.toolTrace?.runtime || []);
   const uniqueRuntimeCalls = new Map(runtimeToolCalls.map(call => [call.callKey, call]));
   const comparisons = availabilityEvidence(measurements, recorder.modelInputs, history, recorder.calls);
@@ -343,6 +351,7 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     compactorConfig,
     auditContractSelected: contractSelected,
     auditCompletionMode,
+    contextManagementMode: completionConfig.contextManagementMode,
     auditCompletionConfig: completionConfig,
     evaluationTimeoutSeconds,
     seed,
@@ -355,6 +364,22 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     predictionRounds: rounds.length,
     compressedPredictionCount: measurements.filter(value => value.compactionAppliedCount > 0).length,
     compactionCount: measurements.reduce((sum, value) => sum + Number(value.compactionAppliedCount || 0), 0),
+    fullInput: measurements.map(value => ({ modelInputId: value.modelInputId,
+      before: value.inputTokens, after: value.finalInputTokens,
+      target: value.workingContext?.inputTargetTokens ?? null,
+      mandatoryFloor: value.workingContext?.mandatoryFloorTokens ?? null,
+      mandatoryFloorExceedsTarget: value.workingContext?.mandatoryFloorExceedsTarget ?? null,
+      targetMet: value.workingContext?.targetMet ?? null,
+      schemaTokens: value.finalToolSchemaTokens,
+      projectionApplied: value.workingContext?.projectionApplied ?? false,
+      archive: value.workingContext?.archive || null })),
+    semanticHandoffs,
+    semanticSummaryCalls: semanticHandoffs.filter(value => value.modelCalled === true).length,
+    semanticSummaryAccepted: semanticHandoffs.filter(value => value.accepted).length,
+    totalPromptTokens: rounds.reduce((sum, value) => sum + Number(value.predictionStats?.promptTokensCount || 0), 0)
+      + semanticHandoffs.reduce((sum, value) => sum + Number(value.predictionStats?.promptTokensCount || 0), 0),
+    totalPredictedTokens: rounds.reduce((sum, value) => sum + Number(value.predictionStats?.predictedTokensCount || 0), 0)
+      + semanticHandoffs.reduce((sum, value) => sum + Number(value.predictionStats?.predictedTokensCount || 0), 0),
     firstInputCurrentFullCount: firstAvailability.currentFullCount ?? null,
     firstInputCurrentPartialCount: firstAvailability.currentPartialCount ?? null,
     firstInputCurrentAbsentCount: firstAvailability.currentAbsentCount ?? null,

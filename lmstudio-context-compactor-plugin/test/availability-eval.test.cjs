@@ -16,6 +16,7 @@ const {
 const pressureFixture = require("../scripts/audit-pressure-fixture.cjs");
 const auditEval = require("../scripts/eval-audit-pressure.cjs");
 const boundedEval = require("../scripts/eval-bounded-completion.cjs");
+const hybridEval = require("../scripts/eval-hybrid-context.cjs");
 const { reclassifyReport } = require("../scripts/reclassify-audit-results.cjs");
 const compactionCore = require("../src/direct-compaction-core.js");
 const predictionTest = require("../dist/prediction-loop.js").__test;
@@ -196,6 +197,27 @@ test("audit wrapper forwards the configured research cap instead of injecting a 
   assert.equal(run.error, null);
   assert.deepEqual(observed, [777]);
   assert.equal(run.modelActs[0].maxTokens, 777);
+});
+
+test("hybrid evaluator includes summary cost and mandatory-floor outcomes", () => {
+  const run = {
+    group: "C", outcome: { executionOutcome: "completed" }, pressureExposure: true,
+    compactionCount: 1, generatedToolCalls: 2, dispatchedToolCalls: 2,
+    implementationEnteredToolCalls: 2, callStatusCounts: { succeeded: 2 },
+    rangeMetricsByUnit: { line: { returnedUnits: 10, historicalReacquisitionUnits: 4 } },
+    answerEvaluation: { pass: true, score: 6 }, availabilityProjectionMatchesOracle: true,
+    elapsedMs: 100, fullInput: [{ after: 9800, targetMet: true, mandatoryFloorExceedsTarget: false, projectionApplied: true },
+      { after: 11000, targetMet: false, mandatoryFloorExceedsTarget: true, projectionApplied: false }],
+    semanticSummaryCalls: 1, semanticSummaryAccepted: 1,
+    totalPromptTokens: 12000, totalPredictedTokens: 1800,
+  };
+  const result = hybridEval.hybridSummary([run], "C");
+  assert.equal(result.n, 1);
+  assert.equal(result.medianFinalInputTokens, 11000);
+  assert.equal(result.mandatoryFloorExceedsTarget, 1);
+  assert.equal(result.projectedInputs, 1);
+  assert.equal(result.semanticSummaryCalls, 1);
+  assert.deepEqual(result.totalPromptTokens, [12000]);
 });
 
 test("real-contract audit locators survive the synthetic compaction boundary", () => {

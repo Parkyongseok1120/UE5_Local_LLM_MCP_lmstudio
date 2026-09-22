@@ -37,6 +37,18 @@
 
 `Inject facts (experimental)`은 같은 계측 결과를 짧은 system 사실 블록으로 추가하는 A/B 실험용입니다. `full`은 과거에 실제 반환된 비교 범위가 이번 SDK 입력에 같은 버전의 원문으로 모두 있다는 뜻일 뿐, 모델이 이해했거나 검토를 완료했다는 뜻이 아닙니다. 이 블록은 재조회 필요성·다음 도구·완료 여부를 결정하지 않고, 도구 호출을 차단하거나 캐시 결과로 대체하지 않습니다. 추가 후 전체 프롬프트를 다시 측정하며, 예산을 넘으면 한 번의 기존 긴급 압축과 재계산 뒤 명시적 예산 실패 경로를 사용합니다. 목록 상한으로 빠진 항목 수는 `omittedEntryCount`로 구분하며 목록 밖 자료를 현재 부재라고 단정하지 않습니다.
 
+## 재조회 가능한 working context (실험적)
+
+`Working context`의 기본값은 `Legacy`입니다. `Deterministic archive/window`를 선택하면 완료된 read-only 도구 결과를 현재 대화·fork·workspace·repository 범위의 로컬 archive에 먼저 보관하고 hash를 다시 검증한 뒤, 큰 결과만 bounded projection으로 바꿉니다. projection은 원래 call ID, status/error, 실제 반환 범위, 모델에 제공한 발췌 범위, 생략 범위와 `evidenceId`/version을 유지합니다. 전체 raw를 제공했다고 표시하지 않습니다. `evidence_first_read_context`는 정확한 ID와 version, 제한된 문자 범위만 받고 과거 반환 자료를 다시 읽습니다. 파일 경로를 받지 않으며 현재 파일의 수정 권한이나 fresh-read receipt를 만들지 않습니다.
+
+pending/중복 call ID, 실행 효과가 불명확한 결과, write/build 결과는 projection하지 않습니다. archive 저장·hash·TTL·quota·scope 검증이 실패하면 원문을 유지합니다. receipt, approval capability, API token, Git cursor 같은 임시 값은 archive에서 제거하고 `redacted`와 원본/보관 hash를 구분합니다. Git cursor는 archive ID가 아니며 추측하거나 재구성하지 않습니다.
+
+서명된 숨은 user-turn marker가 대화와 parent/child lineage를 연결합니다. 다음 턴에는 이전 compacted prefix와 새 delta만 모델 입력으로 재조립하고, 사용자 메시지 수정·fork·프로젝트 변경·손상된 manifest는 별도 lineage 또는 기존 history fallback으로 처리합니다. 원래 GUI transcript를 삭제하지 않습니다. archive와 window는 `~/.lmstudio/unreal-context-compactor/hybrid-v1` 아래에 저장되며 `Legacy`로 되돌리면 즉시 사용을 중단합니다. 데이터를 없애려면 LM Studio를 종료한 뒤 이 `hybrid-v1` 디렉터리만 삭제합니다. 기존 `notes-v1`과 채팅 파일은 migration 대상이 아닙니다.
+
+압축 시작값 `Working input trigger`와 압축 후 `Working input target`은 별도이며 기본값은 각각 12,048/10,000 tokens입니다. system, 현재 요청, 필요한 protocol, 도구 정의를 포함한 최종 template를 선택 모델 tokenizer로 측정합니다. 필수 입력이 target을 넘으면 `mandatoryFloorTokens`를 기록하고 필수 내용을 유지합니다. Luna의 generation reserve/cap/safety 계산은 그대로 적용합니다.
+
+`Hybrid semantic handoff`는 deterministic 경로에 더해 accepted compaction 이벤트마다 최대 한 번, 같은 로컬 모델을 `tools=[]`로 호출합니다. 출력은 출처가 확인된 결정·배제 가설·열린 질문 JSON만 받을 수 있고 assistant claim으로 주입됩니다. length/timeout/cancel/invalid JSON/unknown refs는 저장하지 않으며 이전 note와 deterministic facts를 사용합니다. 이 호출의 prompt/output/time은 `semanticCost`에 포함되고 BOUNDED 중에는 실행하지 않습니다. 전체 설계·rollback·검증 gate는 [ADR-hybrid-context.md](docs/ADR-hybrid-context.md)에 있습니다.
+
 원래 system 지침은 체크포인트와 내부적으로 구분해 보존합니다. 압축을 반복해도 Qwen 계열 입력에는 하나의 선행 system 메시지만 만들며, 원래 지침과 최신 체크포인트가 각각 한 번만 들어갑니다. 사용자·도구 본문에 체크포인트 표식이 문자 그대로 있어도 생성 체크포인트로 분류하지 않습니다.
 
 파일 관찰은 최근 도구 결과 표시 제한을 적용하기 전에 먼저 집계합니다. 같은 파일·같은 해시의 읽기 범위는 합치고, 해시·프로젝트·clone/worktree가 다르면 섞지 않습니다. 줄 범위 응답과 Unreal의 UTF-8 byte-window 응답은 서로 다른 단위로 검증하며, 보고된 범위만 있고 본문이 없는 결과는 같은 key의 정상 원문과 합쳐져도 검증된 원문 범위를 넓히지 않습니다. 현재 체크포인트는 최대 64개의 파일 관찰을 유지하며, 문자 예산 때문에 실제 직렬화에서 빠진 항목 수는 디버그 omission 메타데이터에 명시합니다. 검색 결과에는 실제 요청의 query, literal/regex 모드, root, 확장자/종류 필터, 결과 수, 스캔 수와 partial/complete/unknown 상태를 남깁니다. 불완전한 0건은 저장소 전체 부재로 해석하지 않습니다.
@@ -57,7 +69,7 @@ PDF·Word·텍스트 첨부가 있으면 모델에 파일 이름, 첨부 ID, 형
 
 사용자가 작성한 결제 영수증이나 `ReceiptActor`, `FPaymentReceipt` 같은 코드 이름까지 지우지는 않습니다. 파일 수정 표식을 재사용하라는 실행 지시와 일반 단어를 구분합니다.
 
-모델은 결론이 달라졌을 때만 짧은 `continuity-note` 꼬리말을 생성할 수 있습니다. 플러그인은 정해진 JSON 형식만 읽고 꼬리말을 사용자에게 보이는 답변에서 제거합니다. 결정·배제한 가설·열린 질문을 합쳐 최대 4개, 범위 정보를 포함해 최대 1,500자로 제한합니다. 각 판단에는 안정 ID와 `open` / `resolved` / `superseded` 상태가 붙으며, 상태 변경은 모델이 기존 ID를 명시적으로 갱신할 때만 반영합니다. 일반 답변의 “다음에 확인” 같은 문장은 영구 미해결 상태로 승격하지 않습니다. 다음 모델 입력에는 이전 모델의 판단이라는 표시와 함께 `assistant` 역할로 전달하며, 파일 관찰을 담은 `system` 체크포인트에는 합치지 않습니다. 추가 모델 호출이나 MCP 도구 호출은 발생하지 않습니다.
+모델은 결론이 달라졌을 때만 짧은 `continuity-note` 꼬리말을 생성할 수 있습니다. 플러그인은 정해진 JSON 형식만 읽고 꼬리말을 사용자에게 보이는 답변에서 제거합니다. 결정·배제한 가설·열린 질문을 합쳐 최대 4개, 범위 정보를 포함해 최대 1,500자로 제한합니다. 각 판단에는 안정 ID와 `open` / `resolved` / `superseded` 상태가 붙으며, 상태 변경은 모델이 기존 ID를 명시적으로 갱신할 때만 반영합니다. 일반 답변의 “다음에 확인” 같은 문장은 영구 미해결 상태로 승격하지 않습니다. 다음 모델 입력에는 이전 모델의 판단이라는 표시와 함께 `assistant` 역할로 전달하며, 파일 관찰을 담은 `system` 체크포인트에는 합치지 않습니다. Legacy/Deterministic는 이 note를 위해 추가 모델을 호출하지 않습니다. Hybrid만 위의 제한된 semantic handoff 호출을 사용합니다.
 
 기존 압축 기록에 있던 `lastAssistantUpdate`, assistant 진행 항목, assistant 대화 꼬리도 system 체크포인트에서 분리해 별도 assistant 기록으로 전달합니다. 이전 형식의 체크포인트는 읽되 새로 만들 때 역할을 분리합니다. 체크포인트 예산이 작으면 도구·파일 관찰을 우선하고 assistant 기록은 생략할 수 있습니다.
 
@@ -83,6 +95,7 @@ npm ci
 npm test
 npm run eval:availability-ab -- --model <loaded-model-id> --pilot-pairs 1 --pairs 5 --output <report.json>
 npm run eval:audit-pressure -- --model <loaded-model-id> --main-pairs 5 --contract-pairs 1 --output <report.json>
+npm run eval:hybrid-context -- --model <loaded-model-id> --pairs 5 --output <report.json>
 npm run dev
 ```
 
@@ -92,4 +105,4 @@ npm run dev
 
 `eval:audit-pressure`는 8개 파일 fixture에서 실제 압축 뒤 과거 원문 퇴출과 현재 원문 잔존을 독립 oracle로 먼저 확인합니다. 파일럿이 이 조건을 충족할 때만 A/B 본 반복을 실행합니다. A/B는 `Observe`와 `Inject`의 메타데이터 효과만 비교하고, A/C는 사용자가 선택한 `eval/AUDIT_TASK_CONTRACT.md`의 감사 지시 효과를 별도의 탐색 실험으로 비교합니다. 계약은 제품 하네스가 자동 주입하지 않으며, 실패·timeout·압축 미발생 실행도 보고서에서 삭제하지 않습니다. 재조회 반환량은 요청을 만든 `modelInputId`의 실제 입력 원문과 과거 원문 ledger를 각각 대조해 현재 입력 중첩·과거 근거 재획득·새 근거로 나눕니다.
 
-설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.64 / revision 111입니다.
+설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.66 / revision 113입니다.
