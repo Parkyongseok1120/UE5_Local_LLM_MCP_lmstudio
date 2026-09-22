@@ -38,6 +38,10 @@ export type CapturedRound = {
     predictedTokensCount?: number;
     totalTokensCount?: number;
   };
+  timing: {
+    actElapsedMs: number;
+    promptProcessingMs: number | null;
+  };
   predictionUsage: {
     fragmentCount: number;
     reasoningTokensCount: number;
@@ -61,6 +65,8 @@ export async function runOneToolRound(
   callbacks: RoundCallbacks,
   predictionOptions: Pick<LLMActionOpts, "maxTokens"> = {},
 ): Promise<CapturedRound> {
+  const actStartedAt = Date.now();
+  let firstTokenAt: number | null = null;
   const messages: Array<ChatMessage> = [];
   const roundAbort = new AbortController();
   const boundaryReason = new Error("LM Studio context-compactor round boundary");
@@ -93,12 +99,17 @@ export async function runOneToolRound(
   else parentSignal.addEventListener("abort", forwardAbort, { once: true });
 
   try {
-    const { onMessageCaptured, abortAfterPredictionFragment, ...actCallbacks } = callbacks;
+    const { onMessageCaptured, abortAfterPredictionFragment, onFirstToken, ...actCallbacks } = callbacks;
     await tokenSource.act(history, tools, {
       signal: roundAbort.signal,
       ...predictionOptions,
       ...actCallbacks,
+      onFirstToken: (...args) => {
+        firstTokenAt ??= Date.now();
+        onFirstToken?.(...args);
+      },
       onPredictionFragment: (fragment) => {
+        firstTokenAt ??= Date.now();
         const tokensCount = Number(fragment.tokensCount);
         predictionUsage.fragmentCount += 1;
         if (Number.isFinite(tokensCount) && tokensCount >= 0) {
@@ -180,6 +191,10 @@ export async function runOneToolRound(
           - predictionUsage.reasoningTokensCount
           - predictionUsage.visibleTokensCount
           - predictionUsage.structuralTokensCount),
+    },
+    timing: {
+      actElapsedMs: Math.max(0, Date.now() - actStartedAt),
+      promptProcessingMs: firstTokenAt === null ? null : Math.max(0, firstTokenAt - actStartedAt),
     },
     ...(failure === undefined ? {} : { failure }),
   };

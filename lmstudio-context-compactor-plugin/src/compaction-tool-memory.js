@@ -246,6 +246,8 @@ function historicalEvidenceObservation(source) {
     version,
     originalCallId: source.originalCallId,
     toolName: source.toolName,
+    originalEnvelopeChars: source.originalEnvelopeChars,
+    originalEnvelopeBytes: source.originalEnvelopeBytes,
     sourceIdentity: identity,
     sourceIdentityDigest: source.sourceIdentityDigest,
     sourceVersion: source.sourceVersion,
@@ -266,6 +268,7 @@ function historicalEvidenceObservation(source) {
     sourceTotal: source.sourceTotal ?? source.total,
     returnedRange: source.sourceRange ?? source.returnedRange,
     archiveReturnedRange: source.kind === "historical_evidence_range" ? source.returnedRange : undefined,
+    archiveNextOffset: source.kind === "historical_evidence_range" ? source.nextOffset : undefined,
     archiveHasMore: source.kind === "historical_evidence_range"
       ? source.archiveHasMore ?? source.hasMore : undefined,
     archiveReachedEnd: source.kind === "historical_evidence_range"
@@ -275,6 +278,13 @@ function historicalEvidenceObservation(source) {
       : source.totalChars !== undefined ? [[0, source.totalChars]] : undefined,
     projectedRange: Array.isArray(source.projectedRawRanges)
       ? source.projectedRawRanges : source.returnedRange,
+    projectedBodyRanges: Array.isArray(source.projectedBodyRanges) ? source.projectedBodyRanges : undefined,
+    omittedBodyRanges: Array.isArray(source.omittedBodyRanges) ? source.omittedBodyRanges : undefined,
+    bodyField: source.bodyField,
+    bodyRangeUnit: source.bodyRangeUnit,
+    bodyTotalChars: source.bodyTotalChars,
+    bodyOmittedChars: source.bodyOmittedChars,
+    bodyComplete: source.bodyComplete === true,
     omittedRange: Array.isArray(source.omittedRanges) ? source.omittedRanges : undefined,
     redacted: source.redacted === true,
     currentFile: false,

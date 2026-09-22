@@ -134,9 +134,23 @@ function messageEvidenceTelemetry(messages: Array<ChatMessage>) {
   }));
   const results = messages.flatMap(message => message.getToolCallResults()).map(result => {
     const content = resultContent(result);
+    const decoded = toolMemory.decodeToolResultRecord(content);
+    const value = decoded.value;
     return {
       resultFingerprint: telemetryFingerprint(content),
       semanticResultFingerprint: telemetryFingerprint(content, true),
+      resultChars: typeof content === "string" ? content.length : JSON.stringify(content || null).length,
+      resultBytes: Buffer.byteLength(typeof content === "string" ? content : JSON.stringify(content || null)),
+      ...(value?.gitTiming ? { gitTiming: value.gitTiming } : {}),
+      ...(value?.kind === "archived_tool_result_projection" ? {
+        viewMode: value.viewMode,
+        bodyField: value.bodyField,
+        bodyTotalChars: value.bodyTotalChars,
+        bodyOmittedChars: value.bodyOmittedChars,
+        projectedBodyRanges: value.projectedBodyRanges,
+        omittedBodyRanges: value.omittedBodyRanges,
+        archiveRef: value.archiveRef,
+      } : {}),
     };
   });
   return { calls, results };
@@ -197,7 +211,10 @@ type InputAvailabilityProjection = {
 
 export type ContextMeasurement = {
   contextLength: number;
+  contextLengthSource: "model" | "configured_fallback";
   inputTokens: number;
+  promptMeasurementSource: "templated_model_count" | "character_estimate";
+  templatedInputChars: number | null;
   toolSchemaChars: number;
   toolSchemaTokens: number | null;
   toolSchemaTokenMeasurement: "none" | "estimate" | "exact";
@@ -262,7 +279,6 @@ type OutputLimitStage = "reasoning" | "tool_arguments" | "visible_report" | "for
 const MIN_FINAL_OUTPUT_TOKENS = 256;
 const FIRST_CONSUMER_RAW_GIT_MAX_CHARS = 8192;
 const RESEARCH_RECOVERY_MAX_TOKENS = 4096;
-const RESEARCH_RECOVERY_MAX_TOOL_ROUNDS = 2;
 
 const BOUNDED_AUDIT_FINAL_INSTRUCTION = [
   "phase=FINAL_REPORT_ONLY; tools_available=false; research_must_not_continue=true; missing_evidence_must_be_reported_as_unresolved=true; do_not_emit_tool_syntax=true.",
@@ -312,12 +328,24 @@ const READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION = [
   "When the missing evidence is resolved or the bounded recovery is exhausted, provide the best evidence-based report and mark remaining scope unresolved.",
 ].join(" ");
 
+const RESEARCH_RECOVERY_FINAL_INSTRUCTION = [
+  "phase=FINAL_REPORT_ONLY; tools_available=false; research_must_not_continue=true; missing_evidence_must_be_reported_as_unresolved=true; do_not_emit_tool_syntax=true.",
+  "The bounded read-only source/archive recovery has ended or made no measurable progress.",
+  "Do not request or imply another tool call. Do not treat archive EOF as source completion when the source page says more remains.",
+  "Using only the evidence already present in this input, provide the best evidence-based report now.",
+  "Start with confirmed conclusions, key evidence, actual date/author and returned ranges, verification results, and unresolved scope; omit repeated investigation planning.",
+].join(" ");
+
 const READ_ONLY_RECOVERY_TOOL_NAMES = new Set([
   "git_status", "git_log", "git_changed_files", "git_diff_file", "git_read_file",
   "evidence_first_read_context",
 ]);
 
-const UNKNOWN_GIT_READ_NAME_PATTERN = /^git_(?:diff|show|status|log|changed_files|read_file)$/iu;
+function isUnregisteredGitReadIntent(name: string): boolean {
+  const normalized = String(name || "").trim();
+  if (!/^git_[a-z0-9_:-]+$/iu.test(normalized) || UNSAFE_UNKNOWN_NAME_PATTERN.test(normalized)) return false;
+  return /(?:diff|show|status|log|changed|read|file|history|commit)/iu.test(normalized);
+}
 const UNSAFE_UNKNOWN_NAME_PATTERN = /(?:write|edit|delete|remove|create|build|test|run|execute|apply|commit|push|merge|rebase|checkout|reset|clean|approve|mutation)/iu;
 
 type RemoteToolLike = Tool & {
@@ -598,9 +626,12 @@ async function measureContext(
   const toolSchemaJson = toolDefinitions.length > 0 ? JSON.stringify(toolDefinitions) : "";
   const toolSchemaChars = toolSchemaJson.length;
   let contextLength = config.assumedContextLength;
+  let contextLengthSource: ContextMeasurement["contextLengthSource"] = "configured_fallback";
   let inputTokens = Math.ceil(
     (history.toString().length + toolSchemaChars) / 4,
   );
+  let promptMeasurementSource: ContextMeasurement["promptMeasurementSource"] = "character_estimate";
+  let templatedInputChars: number | null = null;
   let toolSchemaTokens: number | null = toolSchemaChars > 0 ? Math.ceil(toolSchemaChars / 4) : 0;
   let toolSchemaTokenMeasurement: ContextMeasurement["toolSchemaTokenMeasurement"] = toolSchemaChars > 0
     ? "estimate" : "none";
@@ -608,10 +639,13 @@ async function measureContext(
   try {
     if (typeof source.getContextLength === "function") {
       contextLength = numeric(await source.getContextLength(), config.assumedContextLength, 2048, 4_000_000);
+      contextLengthSource = "model";
     }
     if (typeof source.applyPromptTemplate === "function" && typeof source.countTokens === "function") {
       const prompt = await source.applyPromptTemplate(history, { toolDefinitions });
+      templatedInputChars = String(prompt).length;
       inputTokens = numeric(await source.countTokens(prompt), inputTokens, 0, 4_000_000);
+      promptMeasurementSource = "templated_model_count";
       exact = true;
       if (toolSchemaChars > 0) {
         try {
@@ -632,7 +666,7 @@ async function measureContext(
   const outputReserve = numeric(options.outputReserve, config.maxOutputReserve, 0, 131072);
   const remainingTokens = contextLength - inputTokens - outputReserve - config.safetyMarginTokens;
   return {
-    contextLength,
+    contextLength, contextLengthSource, promptMeasurementSource, templatedInputChars,
     inputTokens,
     toolSchemaChars,
     toolSchemaTokens,
@@ -1140,7 +1174,8 @@ function catalogueCorrectionInstruction(
     FRESH_TOOL_PLANNING_RETRY_INSTRUCTION,
     `The prior raw text named unregistered tools (${unknown}); those names and their raw arguments were not executed or converted.`,
     `The measured registered read-only catalogue for this retry is: ${registered}.`,
-    "If a single-file Git diff is still required, generate a new structured git_diff_file request from the original user goal and verified evidence, using its published schema.",
+    "Generate new structured requests only from the published registry and schema. If a single-file Git diff or pinned source read is still required, use the public git_diff_file or git_read_file schema and the original verified scope.",
+    "Never execute, alias, or copy raw names such as git_show_file, git_diff, or raw version arguments into a structured request; the model must regenerate valid schema fields itself.",
   ].join(" ");
 }
 
@@ -1187,6 +1222,59 @@ function completedRequestFingerprints(history: Chat): Set<string> {
     }
   }
   return completed;
+}
+
+type RecoveryProgress = {
+  newResultCount: number;
+  usefulProgress: boolean;
+  errorCount: number;
+  duplicateCount: number;
+  coverage: Array<Record<string, unknown>>;
+};
+
+function observeRecoveryProgress(
+  messages: Array<ChatMessage>,
+  seen: Set<string>,
+): RecoveryProgress {
+  let newResultCount = 0;
+  let usefulProgress = false;
+  let errorCount = 0;
+  let duplicateCount = 0;
+  const coverage: Array<Record<string, unknown>> = [];
+  for (const message of messages) {
+    for (const result of message.getToolCallResults()) {
+      const decoded = toolMemory.decodeToolResultRecord(result.content);
+      const value = decoded.value;
+      const fingerprint = telemetryFingerprint(result.content, true);
+      const isNewResult = !seen.has(fingerprint);
+      if (isNewResult) { seen.add(fingerprint); newResultCount += 1; }
+      else duplicateCount += 1;
+      if (!value || typeof value !== "object") { errorCount += 1; continue; }
+      const status = String(value.status || "").toLowerCase();
+      const failed = value.ok === false || Boolean(value.errorCode)
+        || ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(status);
+      if (failed) { errorCount += 1; continue; }
+      const sourcePage = value.pageStart !== undefined || value.pageEnd !== undefined
+        || value.sourcePageStart !== undefined || value.sourcePageEnd !== undefined;
+      const archivePage = value.returnedRange !== undefined || value.archiveReturnedRange !== undefined
+        || value.startOffset !== undefined || value.nextOffset !== undefined;
+      if (isNewResult || sourcePage || archivePage || value.kind === "git_observation"
+        || value.kind === "historical_evidence_range") {
+        usefulProgress = true;
+        coverage.push({
+          kind: value.kind,
+          sourcePageStart: value.pageStart ?? value.sourcePageStart,
+          sourcePageEnd: value.pageEnd ?? value.sourcePageEnd,
+          sourcePageHasMore: value.pageHasMore ?? value.sourcePageHasMore,
+          returnedRange: value.returnedRange ?? value.archiveReturnedRange,
+          archiveHasMore: value.archiveHasMore,
+          archiveReachedEnd: value.archiveReachedEnd,
+          resultFingerprint: fingerprint,
+        });
+      }
+    }
+  }
+  return { newResultCount, usefulProgress, errorCount, duplicateCount, coverage };
 }
 
 type FreshToolPlanningRetryDecision = { eligible: boolean; reason: string };
@@ -1582,9 +1670,14 @@ export function createPredictionLoopHandler(
   let researchRecoveryToolNames = new Set<string>();
   let researchRecoveryOutputReserve = Math.min(config.maxOutputReserve, RESEARCH_RECOVERY_MAX_TOKENS);
   let researchRecoveryToolRounds = 0;
+  let researchRecoveryPaginationRounds = 0;
+  let researchRecoveryNoProgressRounds = 0;
+  let researchRecoverySeenEvidence = new Set<string>();
   let researchRecoveryReason = "";
+  let semanticSummaryCooldownUntilRound = -1;
   const executionCost = { modelCalls: 0, promptTokens: 0, predictedTokens: 0,
-    elapsedMs: 0, unknownUsageCalls: 0 };
+    elapsedMs: 0, promptProcessingMs: 0, generationElapsedMs: 0, unknownPromptProcessingCalls: 0,
+    unknownUsageCalls: 0 };
   let activeActivity: ReturnType<typeof createRoundActivityTracker> | null = null;
   const toolStagnation = new ToolRoundStagnationDetector();
   try {
@@ -1655,7 +1748,9 @@ export function createPredictionLoopHandler(
         ? [...scopeInstructions, finalizationTrigger === "output_recovery"
           ? OUTPUT_RECOVERY_FINAL_INSTRUCTION
           : finalizationTrigger === "context_budget"
-            ? CONTEXT_BUDGET_FINAL_INSTRUCTION : BOUNDED_AUDIT_FINAL_INSTRUCTION]
+            ? CONTEXT_BUDGET_FINAL_INSTRUCTION
+            : ["research_recovery_complete", "research_recovery_exhausted"].includes(finalizationTrigger || "")
+              ? RESEARCH_RECOVERY_FINAL_INSTRUCTION : BOUNDED_AUDIT_FINAL_INSTRUCTION]
         : [...scopeInstructions, ...(researchRecoveryRound
           ? [toolPlanningRetryRound ? toolPlanningRetryInstruction : READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION]
           : [])];
@@ -1790,8 +1885,10 @@ export function createPredictionLoopHandler(
         }, true) : "";
       const repeatedSemanticEvent = Boolean(workingContext && semanticEventKey
         && workingContext.lastSummaryInput === semanticEventKey);
+      const semanticSummaryCoolingDown = roundIndex < semanticSummaryCooldownUntilRound;
       if (workingContext && config.contextManagementMode === "hybrid" && compacted
-        && semanticCheckpoint && !repeatedSemanticEvent && !boundedAudit && !finalizing) {
+        && semanticCheckpoint && !repeatedSemanticEvent && !semanticSummaryCoolingDown
+        && !boundedAudit && !finalizing) {
         // Mark before dispatch: length, timeout, cancellation and invalid output
         // must not recursively retry the same semantic event on the next round.
         workingContext.lastSummaryInput = semanticEventKey;
@@ -1831,10 +1928,16 @@ export function createPredictionLoopHandler(
             workingContext.note = scoped;
           }
         }
+        if (!summary.note) semanticSummaryCooldownUntilRound = Math.max(
+          semanticSummaryCooldownUntilRound, roundIndex + 2,
+        );
+        else semanticSummaryCooldownUntilRound = -1;
         if (config.showDebugInfo) ctl.debug({
           event: "semantic_handoff",
           executionId,
           modelInputId: `${executionId}:semantic-summary-${roundIndex + 1}`,
+          roundIndex,
+          cooldownActive: semanticSummaryCoolingDown,
           purpose: "context_summary",
           toolCount: 0,
           accepted: Boolean(summary.note && activeNote),
@@ -1845,6 +1948,8 @@ export function createPredictionLoopHandler(
           predictionStats: summary.predictionStats,
           requestedMaxTokens: config.semanticSummaryMaxTokens,
           appliedMaxTokens: summary.budget?.appliedMaxTokens,
+          cooldownUntilRound: semanticSummaryCooldownUntilRound >= 0
+            ? semanticSummaryCooldownUntilRound : undefined,
           cost: workingContext.cost,
         });
         ctl.guardAbort();
@@ -1853,11 +1958,29 @@ export function createPredictionLoopHandler(
           event: "semantic_handoff",
           executionId,
           modelInputId: `${executionId}:semantic-summary-${roundIndex + 1}`,
+          roundIndex,
+          cooldownActive: semanticSummaryCoolingDown,
           purpose: "context_summary",
           toolCount: 0,
           accepted: false,
           reason: "duplicate_event_not_retried",
           modelCalled: false,
+          cost: workingContext.cost,
+        });
+      } else if (workingContext && semanticSummaryCoolingDown && (compacted || projectionApplied)
+        && !boundedAudit && !finalizing && config.showDebugInfo) {
+        ctl.debug({
+          event: "semantic_handoff",
+          executionId,
+          modelInputId: `${executionId}:semantic-summary-${roundIndex + 1}`,
+          roundIndex,
+          cooldownActive: semanticSummaryCoolingDown,
+          purpose: "context_summary",
+          toolCount: 0,
+          accepted: false,
+          reason: "failure_cooldown",
+          modelCalled: false,
+          cooldownUntilRound: semanticSummaryCooldownUntilRound,
           cost: workingContext.cost,
         });
       } else if (workingContext && projectionApplied && !compacted && !boundedAudit && !finalizing
@@ -1866,6 +1989,8 @@ export function createPredictionLoopHandler(
           event: "semantic_handoff",
           executionId,
           modelInputId: `${executionId}:semantic-summary-${roundIndex + 1}`,
+          roundIndex,
+          cooldownActive: semanticSummaryCoolingDown,
           purpose: "context_summary",
           toolCount: 0,
           accepted: false,
@@ -2018,6 +2143,9 @@ export function createPredictionLoopHandler(
           researchRecoveryToolNames = new Set(recoveryProfile.tools.map(tool => tool.name));
           researchRecoveryOutputReserve = recoveryCandidate.budget.appliedMaxTokens;
           researchRecoveryToolRounds = 0;
+          researchRecoveryPaginationRounds = 0;
+          researchRecoveryNoProgressRounds = 0;
+          researchRecoverySeenEvidence = new Set<string>();
           researchRecoveryReason = "context_budget";
           activeActivity.complete();
           activeActivity = null;
@@ -2025,26 +2153,61 @@ export function createPredictionLoopHandler(
         }
       }
       if (finalMeasurement.remainingTokens < 0 && workingContext && !finalizing && !config.observeOnly) {
-        const budgetProjection = workingContext.project(workingHistory, request => {
+        const projectionObservation = (request: ToolCallRequest) => {
           const tool = allModelTools.find(candidate => candidate.name === request.name);
           return Boolean(tool && isObservationOnlyToolCall(tool, request));
-        }, { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result",
-          preserveUnconsumedRawGitMaxChars: 0,
-        }, config.toolResultProjectionChars);
-        if (budgetProjection.changed) {
-          workingHistory = budgetProjection.history;
-          modelHistory = budgetProjection.history;
+        };
+        // First measure a complete first-consumer batch while retaining every
+        // unconsumed Git page that is individually within the existing raw
+        // threshold. This is deliberately a candidate: only the measured
+        // whole batch is accepted. If it does not fit, the second pass may
+        // project those results, but it must use the body-first view above.
+        const batchCandidate = workingContext.project(workingHistory, projectionObservation,
+          { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result",
+            preserveUnconsumedRawGitMaxChars: FIRST_CONSUMER_RAW_GIT_MAX_CHARS },
+          config.toolResultProjectionChars);
+        if (batchCandidate.changed) {
+          workingHistory = batchCandidate.history;
+          modelHistory = batchCandidate.history;
           projectionApplied = true;
           assembledInput = await assembleModelInput(workingHistory);
           modelComposition = assembledInput.composition;
           modelInput = assembledInput.history;
           finalMeasurement = assembledInput.measurement;
+        }
+        const batchCandidateMeasurement = finalMeasurement;
+        if (config.showDebugInfo) ctl.debug({
+          event: "working_context_first_consumer_batch",
+          executionId,
+          roundIndex,
+          changed: batchCandidate.changed,
+          reason: batchCandidate.reason,
+          candidateInputTokens: batchCandidateMeasurement.inputTokens,
+          candidateRemainingTokens: batchCandidateMeasurement.remainingTokens,
+          candidateExact: batchCandidateMeasurement.exact,
+          fit: batchCandidateMeasurement.remainingTokens >= 0,
+          rawThresholdChars: FIRST_CONSUMER_RAW_GIT_MAX_CHARS,
+          archive: workingContext.archive.stats,
+        });
+        if (batchCandidateMeasurement.remainingTokens < 0) {
+          const budgetProjection = workingContext.project(workingHistory, projectionObservation,
+            { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result",
+              preserveUnconsumedRawGitMaxChars: 0 }, config.toolResultProjectionChars);
+          if (budgetProjection.changed) {
+            workingHistory = budgetProjection.history;
+            modelHistory = budgetProjection.history;
+            projectionApplied = true;
+            assembledInput = await assembleModelInput(workingHistory);
+            modelComposition = assembledInput.composition;
+            modelInput = assembledInput.history;
+            finalMeasurement = assembledInput.measurement;
+          }
           if (config.showDebugInfo) ctl.debug({
             event: "working_context_projection",
             executionId,
             roundIndex,
-            changed: true,
-            archiveFailed: false,
+            changed: budgetProjection.changed,
+            archiveFailed: budgetProjection.archiveFailed === true,
             reason: "aggregate_prompt_budget_projection",
             finalInputTokens: finalMeasurement.inputTokens,
             finalRemainingTokens: finalMeasurement.remainingTokens,
@@ -2131,6 +2294,9 @@ export function createPredictionLoopHandler(
             researchRecoveryToolNames = new Set(recoveryProfile.tools.map(tool => tool.name));
             researchRecoveryOutputReserve = recoveryCandidate.budget.appliedMaxTokens;
             researchRecoveryToolRounds = 0;
+            researchRecoveryPaginationRounds = 0;
+            researchRecoveryNoProgressRounds = 0;
+            researchRecoverySeenEvidence = new Set<string>();
             researchRecoveryReason = "context_budget";
             activeActivity.complete();
             activeActivity = null;
@@ -2223,6 +2389,9 @@ export function createPredictionLoopHandler(
         compactionAppliedModes,
         observeOnly: config.observeOnly,
         exactMeasurement: before.exact,
+        contextLengthSource: before.contextLengthSource,
+        promptMeasurementSource: before.promptMeasurementSource,
+        templatedInputChars: before.templatedInputChars,
         messageCount: before.messageCount,
         inputTokens: before.inputTokens,
         remainingTokens: before.remainingTokens,
@@ -2230,6 +2399,9 @@ export function createPredictionLoopHandler(
         toolSchemaTokens: before.toolSchemaTokens,
         toolSchemaTokenMeasurement: before.toolSchemaTokenMeasurement,
         finalExactMeasurement: finalMeasurement.exact,
+        finalContextLengthSource: finalMeasurement.contextLengthSource,
+        finalPromptMeasurementSource: finalMeasurement.promptMeasurementSource,
+        finalTemplatedInputChars: finalMeasurement.templatedInputChars,
         finalInputTokens: finalMeasurement.inputTokens,
         finalToolSchemaChars: finalMeasurement.toolSchemaChars,
         finalToolSchemaTokens: finalMeasurement.toolSchemaTokens,
@@ -2242,6 +2414,13 @@ export function createPredictionLoopHandler(
         finalRemainingTokens: finalMeasurement.remainingTokens,
         finalFit: finalMeasurement.fit,
         finalMessageCount: finalMeasurement.messageCount,
+        postCompactionInputTokens: compacted || projectionApplied ? finalMeasurement.inputTokens : null,
+        postCompactionRemainingTokens: compacted || projectionApplied ? finalMeasurement.remainingTokens : null,
+        runtimeContext: {
+          effectiveContextTokens: "unknown",
+          cachedPrefixTokens: "unknown",
+          source: "sdk_stats_unavailable",
+        },
         workingContext: workingContext ? {
           mode: config.contextManagementMode,
           inputTargetTokens: config.workingInputTargetTokens,
@@ -2503,6 +2682,11 @@ export function createPredictionLoopHandler(
       const roundModelElapsedMs = Date.now() - roundModelStartedAt;
       executionCost.modelCalls += 1;
       executionCost.elapsedMs += roundModelElapsedMs;
+      if (captured.timing.promptProcessingMs === null) executionCost.unknownPromptProcessingCalls += 1;
+      else {
+        executionCost.promptProcessingMs += captured.timing.promptProcessingMs;
+        executionCost.generationElapsedMs += Math.max(0, roundModelElapsedMs - captured.timing.promptProcessingMs);
+      }
       const promptTokens = Number(captured.predictionStats?.promptTokensCount);
       const predictedTokens = Number(captured.predictionStats?.predictedTokensCount);
       if (Number.isFinite(promptTokens)) executionCost.promptTokens += promptTokens;
@@ -2561,10 +2745,23 @@ export function createPredictionLoopHandler(
         && rawIntent.registeredUnsafeNames.length === 0
         ? modelTools.filter(tool => rawIntent.knownReadOnlyNames.includes(tool.name)) : [];
       const gitRecoveryProfile = readOnlyRecoveryProfile(historyBeforeRound, modelTools);
+      const archivedProjectionPresent = workingHistory.getMessagesArray().some(message => (
+        message.getToolCallResults().some(result => (
+          toolMemory.decodeToolResultRecord(result.content).value?.kind === "archived_tool_result_projection"
+        ))
+      ));
+      const archiveReader = archivedProjectionPresent
+        ? modelTools.find(tool => tool.name === "evidence_first_read_context") : undefined;
+      const includeArchiveReader = (tools: Array<RemoteToolLike>) => (
+        archiveReader && !tools.some(tool => tool.name === archiveReader.name)
+          ? [...tools, archiveReader] : tools
+      );
       const catalogueCorrectionAllowed = rawIntent.unknownNames.length > 0
-        && rawIntent.unknownNames.every(name => UNKNOWN_GIT_READ_NAME_PATTERN.test(name))
+        && rawIntent.unknownNames.every(isUnregisteredGitReadIntent)
         && gitRecoveryProfile.eligible;
-      const retryTools = rawIntent.unknownNames.length > 0 ? gitRecoveryProfile.tools : exactRawTools;
+      const retryTools = includeArchiveReader(
+        rawIntent.unknownNames.length > 0 ? gitRecoveryProfile.tools : exactRawTools,
+      );
       const retryInstruction = rawIntent.unknownNames.length > 0
         ? catalogueCorrectionInstruction(rawIntent, retryTools)
         : FRESH_TOOL_PLANNING_RETRY_INSTRUCTION;
@@ -2572,6 +2769,8 @@ export function createPredictionLoopHandler(
         .filter(value => value.executionState === "dispatched").length;
       const structuredToolRequestCount = outputEvidence.calls.length;
       const actualResultCount = outputEvidence.results.length;
+      const recoveryProgress = researchRecoveryRound
+        ? observeRecoveryProgress(captured.messages, researchRecoverySeenEvidence) : null;
       const planningAllowed = !(finalizing && finalizationTrigger === "output_recovery");
       const shouldMeasureRetryCandidate = !boundedAudit && !config.observeOnly && planningAllowed
         && toolPlanningRetryAttempts < 1 && captured.failure === undefined
@@ -2627,6 +2826,10 @@ export function createPredictionLoopHandler(
         researchRecoveryToolNames = new Set(retryTools.map(tool => tool.name));
         researchRecoveryOutputReserve = retryCandidate?.budget.appliedMaxTokens
           || Math.min(config.maxOutputReserve, RESEARCH_RECOVERY_MAX_TOKENS);
+        researchRecoveryToolRounds = 0;
+        researchRecoveryPaginationRounds = 0;
+        researchRecoveryNoProgressRounds = 0;
+        researchRecoverySeenEvidence = new Set<string>();
         researchRecoveryReason = rawIntent.unknownNames.length > 0
           ? "catalogue_correction" : "raw_tool_intent";
         if (config.showDebugInfo) ctl.debug({
@@ -2678,6 +2881,9 @@ export function createPredictionLoopHandler(
             : toolPlanningRetryRound ? "fresh_planning_retry"
               : researchRecoveryRound ? "read_only_research_recovery" : "research",
           roundModelElapsedMs,
+          modelPrefillMs: captured.timing.promptProcessingMs,
+          modelGenerationElapsedMs: captured.timing.promptProcessingMs === null
+            ? null : Math.max(0, roundModelElapsedMs - captured.timing.promptProcessingMs),
           executionCost: {
             ...executionCost,
             summary: workingContext?.cost || null,
@@ -2707,6 +2913,9 @@ export function createPredictionLoopHandler(
           recoveryReason: researchRecoveryReason || undefined,
           recoveryAttempts: toolPlanningRetryAttempts,
           recoveryToolRounds: researchRecoveryToolRounds,
+          recoveryPaginationRounds: researchRecoveryPaginationRounds,
+          recoveryNoProgressRounds: researchRecoveryNoProgressRounds,
+          recoveryProgress,
           fullToolCount: modelTools.length,
           exposedToolNames: roundTools.map(tool => tool.name),
           structuredToolRequestCount,
@@ -2788,7 +2997,9 @@ export function createPredictionLoopHandler(
         const { deliveryState } = finalDelivery;
         if (config.showDebugInfo) ctl.debug({
           event: finalizationTrigger === "output_recovery"
-            ? "output_recovery" : "bounded_audit_finalization",
+            ? "output_recovery"
+            : ["research_recovery_complete", "research_recovery_exhausted"].includes(finalizationTrigger || "")
+              ? "research_recovery_finalization" : "bounded_audit_finalization",
           executionId,
           modelInputId,
           trigger: finalizationTrigger,
@@ -2844,24 +3055,83 @@ export function createPredictionLoopHandler(
         roundIndex += 1;
         continue;
       }
-      if (researchRecoveryRound && captured.continueAfterTools) {
+      if (researchRecoveryRound) {
         researchRecoveryToolRounds += 1;
-        if (researchRecoveryToolRounds >= RESEARCH_RECOVERY_MAX_TOOL_ROUNDS) {
+        const progressed = Boolean(recoveryProgress?.usefulProgress && recoveryProgress.newResultCount > 0);
+        if (progressed) {
+          researchRecoveryPaginationRounds += 1;
+          researchRecoveryNoProgressRounds = 0;
+        } else {
+          researchRecoveryNoProgressRounds += 1;
+        }
+        const maxPaginationRounds = Math.max(1, config.auditResearchRounds);
+        const noProgress = researchRecoveryNoProgressRounds >= 1;
+        const paginationBound = researchRecoveryPaginationRounds >= maxPaginationRounds;
+        const recoveryProducedEvidence = Boolean(
+          structuredToolRequestCount > 0
+          || actualResultCount > 0
+          || recoveryProgress?.newResultCount
+          || recoveryProgress?.errorCount,
+        );
+        const recoveryNeedsDedicatedFinal = Boolean(
+          finalRawToolIntent
+          || recoveryProgress?.errorCount
+          || (recoveryProducedEvidence && !progressed),
+        );
+        const recoveryCannotContinue = paginationBound && captured.continueAfterTools;
+        if ((noProgress && recoveryNeedsDedicatedFinal) || recoveryCannotContinue) {
           researchRecoveryProfileActive = false;
           finalizationPending = true;
-          finalizationTrigger = "research_recovery_complete";
+          finalizationTrigger = noProgress
+            ? "research_recovery_exhausted" : "research_recovery_complete";
           if (config.showDebugInfo) ctl.debug({
-            event: "read_only_research_recovery_completed",
+            event: noProgress
+              ? "read_only_research_recovery_exhausted"
+              : "read_only_research_recovery_completed",
             executionId,
             modelInputId,
             recoveryReason: researchRecoveryReason,
             toolRounds: researchRecoveryToolRounds,
-            maxToolRounds: RESEARCH_RECOVERY_MAX_TOOL_ROUNDS,
+            paginationRounds: researchRecoveryPaginationRounds,
+            maxPaginationRounds,
+            noProgressRounds: researchRecoveryNoProgressRounds,
+            recoveryProgress,
             nextPhase: "final_report",
           });
+          roundIndex += 1;
+          continue;
         }
-        roundIndex += 1;
-        continue;
+        if (paginationBound || (noProgress && !recoveryNeedsDedicatedFinal)) {
+          // A recovery round may itself produce a complete ordinary report.
+          // Stop exposing recovery tools, but do not spend another final-model
+          // call merely because no pagination result was emitted in that
+          // report round. Errors, duplicate evidence, and unresolved raw
+          // calls still take the dedicated evidence-backed final path above.
+          researchRecoveryProfileActive = false;
+        }
+        if (captured.continueAfterTools) {
+          if (!researchRecoveryProfileActive) {
+            finalizationPending = true;
+            finalizationTrigger = "research_recovery_complete";
+            roundIndex += 1;
+            continue;
+          }
+          roundIndex += 1;
+          continue;
+        }
+        // A recovery result that stopped with an error, duplicate, or no
+        // measurable coverage must still receive the evidence-backed final
+        // contract. Do not let the ordinary no-tools break path mark it as a
+        // successful task completion.
+        const recoveryReportText = visibleTextFromMessages(captured.messages).trim();
+        if (((!progressed && recoveryNeedsDedicatedFinal) || !recoveryReportText)
+          || recoveryProgress?.errorCount) {
+          researchRecoveryProfileActive = false;
+          finalizationPending = true;
+          finalizationTrigger = "research_recovery_exhausted";
+          roundIndex += 1;
+          continue;
+        }
       }
       if (boundedAudit && captured.finishReason === "maxPredictedTokensReached") {
         finalizationPending = true;

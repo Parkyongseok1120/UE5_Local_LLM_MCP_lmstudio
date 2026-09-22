@@ -111,6 +111,37 @@ test("changed files pin commits, preserve rename and page one immutable snapshot
   assert.match(old.text, /class Example/); assert.equal(old.head, head);
 });
 
+test("Git observations expose query, phase, cache and serialization timing without changing paging", async t => {
+  const f = fixture(t); f.put("Assets/Timed.cs", "base\n"); const base = f.commit("timing base");
+  f.put("Assets/Timed.cs", "head\n"); const head = f.commit("timing head");
+  const query = { action: "diff_file", comparison: "range", base, head, path: "Assets/Timed.cs",
+    byteBudget: 4096 };
+  const first = await f.call(query);
+  assert.equal(first.status, "observed", JSON.stringify(first));
+  assert.match(first.gitTiming.queryHash, /^[a-f0-9]{64}$/u);
+  assert.equal(first.gitTiming.cacheHit, false);
+  assert.ok(first.gitTiming.phaseMs.scope >= 0);
+  assert.ok(first.gitTiming.phaseMs.resolve >= 0);
+  assert.ok(first.gitTiming.phaseMs.ls_tree >= 0);
+  assert.ok(first.gitTiming.phaseMs.diff >= 0);
+  assert.ok(first.gitTiming.phaseMs.serialization >= 0);
+  assert.ok(first.gitTiming.payloadBytes > 0);
+  assert.ok(first.gitTiming.envelopeBytes > first.gitTiming.payloadBytes);
+  assert.equal(first.gitTiming.returnedRows, first.text.split("\n").length);
+  assert.equal(first.gitTiming.subprocessMs >= 0, true);
+  assert.equal(first.gitTiming.serializationBytes >= first.gitTiming.payloadBytes, true);
+
+  const invalidPaging = await f.call({ ...query, cursor: "not-a-cursor", startLine: 1 });
+  assert.equal(invalidPaging.errorCode, "invalid_arguments");
+  const firstPage = await f.call({ ...query, limit: 1 });
+  if (firstPage.nextCursor) {
+    const secondPage = await f.call({ ...query, cursor: firstPage.nextCursor });
+    assert.equal(secondPage.gitTiming.cacheHit, true);
+    assert.equal(secondPage.snapshotId, firstPage.snapshotId);
+    assert.equal(secondPage.gitTiming.queryHash, firstPage.gitTiming.queryHash);
+  }
+});
+
 test("immutable changed-file fixtures deliver all 232 rows after the first 200", async t => {
   const f = fixture(t);
   for (let index = 1; index <= 232; index += 1) f.put(`Assets/Fixture-${index}.cs`, `base-${index}\n`);

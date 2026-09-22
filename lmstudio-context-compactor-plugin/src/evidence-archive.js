@@ -210,7 +210,8 @@ class EvidenceArchive {
       sourceReturnedCount: sourceFacts.returnedCount,
       sourceTotal: sourceFacts.total,
       redacted: r.redacted, currentFile: false, grantsMutation: false,
-      rangeUnit: r.rangeUnit, totalChars: r.body.length, availableRange: [0, r.body.length] };
+      rangeUnit: r.rangeUnit, representation: "sanitized_archived_tool_envelope",
+      totalChars: r.body.length, availableRange: [0, r.body.length] };
     const totalBudget = Math.max(512, maxChars);
     const overhead = JSON.stringify({ ...base, returnedRange: [start, start], hasMore: true,
       reachedEnd: false, fullRawProvided: false, coverageState: "partial", content: "" }).length;
@@ -220,6 +221,7 @@ class EvidenceArchive {
       const reachedEnd = end === r.body.length;
       const fullRawProvided = start === 0 && reachedEnd && r.redacted === false;
       return { ...base, returnedRange: [start, end],
+        nextOffset: reachedEnd ? null : end,
         archiveHasMore: !reachedEnd, archiveReachedEnd: reachedEnd,
         hasMore: !reachedEnd, reachedEnd,
         fullRawProvided, coverageState: fullRawProvided ? "complete" : "partial",

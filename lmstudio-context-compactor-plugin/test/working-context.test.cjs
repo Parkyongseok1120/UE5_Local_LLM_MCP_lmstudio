@@ -243,6 +243,95 @@ test("P2 evidence reads bound metadata and distinguish EOF from complete raw cov
   assert.equal(Object.prototype.hasOwnProperty.call(tail, "metadata"), false);
 });
 
+test("regression: a 32KB Git diff keeps a body-first bounded view for its first consumer", () => {
+  const history = Chat.from([{ role: "user", content: "Inspect the complete Git diff body." }]);
+  const request = { id: "large-diff-first-consumer", type: "function", name: "git_diff_file",
+    arguments: { comparison: "range", base: "a".repeat(40), head: "b".repeat(40), path: "Source/Large.cpp" } };
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+    toolCallRequest: request }] }));
+  const payload = {
+    schemaVersion: 1, kind: "git_observation", status: "observed", ok: true, action: "diff_file",
+    comparison: "range", base: request.arguments.base, head: request.arguments.head,
+    currentHead: request.arguments.head, repositoryIdentity: "repository-identity-".repeat(8),
+    workspaceIdentity: "workspace-identity-".repeat(8), projectIdentity: "C:/Synthetic/Game.uproject",
+    canonicalProjectRoot: "C:/Synthetic", queryPathBase: "workspace_root",
+    requestedPaths: Array.from({ length: 8 }, (_, index) => `Source/VeryLongPath/${index}-${"x".repeat(180)}.cpp`),
+    requestedPathsCount: 8, requestedPathsOmitted: 0, resolvedRepositoryPaths: [],
+    resolvedRepositoryPathsCount: 1, resolvedRepositoryPathsOmitted: 0,
+    observedAt: "2026-09-22T10:00:00.000Z",
+    sourceConsistency: "bounded_collection_not_atomic_filesystem_snapshot",
+    path: request.arguments.path, pageStart: 1, pageEnd: 900, pageHasMore: false,
+    sourceResultComplete: true, returnedRange: [1, 900],
+    text: `@@ -1,3 +1,900 @@\nDIFF_BODY_SENTINEL\n${"int changed_line;\\n".repeat(1800)}`,
+  };
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+    toolCallId: request.id, content: JSON.stringify(payload) }] }));
+  assert.ok(JSON.stringify(payload).length > 32768);
+  const context = new WorkingContext(scope);
+  const projected = context.project(history, () => true,
+    { executionId: "failure-fixture", preserveUnconsumedRawGitMaxChars: 0 }, 512);
+  const value = JSON.parse(projected.history.getMessagesArray().at(-1).getToolCallResults()[0].content);
+  assert.equal(projected.changed, true);
+  assert.equal(value.kind, "archived_tool_result_projection");
+  assert.match(value.excerpt, /DIFF_BODY_SENTINEL/u);
+  assert.equal(value.bodyField, "text");
+  assert.equal(value.viewMode, "body_first_bounded");
+  assert.equal(value.fullRawProvided, false);
+  assert.ok(value.bodyTotalChars > value.excerpt.length);
+  assert.equal(value.bodyComplete, false);
+  assert.deepEqual(value.projectedBodyRanges[0], [0, value.excerpt.length]);
+  assert.ok(value.archiveRef?.evidenceId);
+});
+
+test("regression: the 8192-character first-consumer boundary is exact for direct and MCP envelopes", () => {
+  const contentAt = (target, envelope) => {
+    let body = "x".repeat(target);
+    let content = "";
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const payload = { ok: true, kind: "git_observation", status: "observed", action: "diff_file",
+        text: body, path: "Assets/Boundary.cs", pageHasMore: false };
+      content = envelope === "direct" ? JSON.stringify(payload)
+        : JSON.stringify({ content: [{ type: "text", text: JSON.stringify(payload) }] });
+      const delta = target - content.length;
+      if (delta === 0) return content;
+      body = delta > 0 ? body + "x".repeat(delta) : body.slice(0, Math.max(0, body.length + delta));
+    }
+    assert.equal(content.length, target);
+    return content;
+  };
+  for (const envelope of ["direct", "mcp"]) {
+    for (const target of [8191, 8192, 8193]) {
+      const history = Chat.from([{ role: "user", content: `boundary ${envelope} ${target}` }]);
+      const request = { type: "function", id: `${envelope}-${target}`, name: "git_diff_file",
+        arguments: { comparison: "range", base: "base", head: "head", path: "Assets/Boundary.cs" } };
+      const content = contentAt(target, envelope);
+      assert.equal(content.length, target);
+      history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+        toolCallRequest: request }] }));
+      history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+        toolCallId: request.id, content }] }));
+      const context = new WorkingContext({ ...scope, lineage: `${envelope}-${target}` });
+      const projected = context.project(history, () => true,
+        { executionId: "boundary", preserveUnconsumedRawGitMaxChars: 8192 }, 512);
+      const result = projected.history.getMessagesArray().at(-1).getToolCallResults()[0];
+      if (target <= 8192) {
+        assert.equal(projected.changed, false);
+        assert.equal(result.content, content);
+      } else {
+        const value = JSON.parse(result.content);
+        assert.equal(projected.changed, true);
+        assert.equal(value.viewMode, "body_first_bounded");
+        assert.equal(value.bodyField, "text");
+        assert.equal(value.originalEnvelopeChars, 8193);
+        assert.equal(value.originalEnvelopeBytes, Buffer.byteLength(content));
+        assert.equal(value.bodyRangeUnit, "utf16_code_units");
+        assert.ok(value.projectedBodyRanges[0][1] > 0);
+        assert.ok(value.omittedBodyRanges[0][1] > value.projectedBodyRanges[0][1]);
+      }
+    }
+  }
+});
+
 test("Git source page continuation survives archive EOF as a separate contract", () => {
   const history = Chat.from([{ role: "user", content: "Inspect page one." }]);
   const request = { type: "function", id: "page-25-of-232", name: "git_changed_files",
@@ -265,6 +354,8 @@ test("Git source page continuation survives archive EOF as a separate contract",
   const read = context.archive.read(projection.archiveRef.evidenceId, projection.archiveRef.version, 0, 8192);
   assert.equal(read.archiveReachedEnd, true);
   assert.equal(read.archiveHasMore, false);
+  assert.equal(read.nextOffset, null);
+  assert.equal(read.representation, "sanitized_archived_tool_envelope");
   assert.equal(read.sourcePageHasMore, true);
   assert.equal(read.sourceReturnedCount, 25);
   assert.equal(read.sourceTotal, 232);
@@ -277,6 +368,15 @@ test("Git source page continuation survives archive EOF as a separate contract",
   assert.equal(memory.historicalEvidence[0].sourcePageHasMore, true);
   assert.equal(memory.historicalEvidence[0].archiveReachedEnd, true);
   assert.equal(memory.historicalEvidence[0].archiveHasMore, false);
+
+  const chunkOne = context.archive.read(projection.archiveRef.evidenceId, projection.archiveRef.version, 0, 2048);
+  const chunkTwo = context.archive.read(projection.archiveRef.evidenceId, projection.archiveRef.version,
+    chunkOne.nextOffset, 2048);
+  assert.equal(chunkOne.archiveReachedEnd, false);
+  assert.equal(chunkOne.archiveHasMore, true);
+  assert.equal(chunkTwo.returnedRange[0], chunkOne.nextOffset);
+  assert.equal(chunkTwo.archiveReachedEnd, false);
+  assert.equal(chunkTwo.sourcePageHasMore, true);
 });
 
 test("P2 provider request IDs may repeat in separate completed causal batches", () => {

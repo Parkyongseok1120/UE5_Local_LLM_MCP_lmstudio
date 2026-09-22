@@ -93,6 +93,14 @@ function semanticEvidenceView(payload, maxChars = 640) {
   return JSON.stringify(view).slice(0, maxChars);
 }
 
+function gitBodyView(payload) {
+  if (typeof payload.text === "string") return { field: "text", body: redact(payload.text) };
+  if (typeof payload.body === "string") return { field: "body", body: redact(payload.body) };
+  if (Array.isArray(payload.items)) return { field: "items", body: JSON.stringify(redact(payload.items)) };
+  if (Array.isArray(payload.rows)) return { field: "rows", body: JSON.stringify(redact(payload.rows)) };
+  return null;
+}
+
 function rawExposureKey(request, result, originalEnvelope) {
   return hash([request.name, request.arguments || {}, String(result.toolCallId || ""), originalEnvelope]);
 }
@@ -226,11 +234,17 @@ class WorkingContext {
           preservedFirstConsumer = true;
           return result;
         }
+        const bodyView = parsed.kind === "git_observation" ? gitBodyView(parsed) : null;
         const semanticBody = JSON.stringify(redact(parsed));
+        const boundedBody = bodyView?.body || semanticBody;
+        const bodyFirst = Boolean(bodyView);
         let projectedEnd = Math.min(maxChars, semanticBody.length);
         const directSemanticBody = originalEnvelope.trim() === JSON.stringify(parsed);
         const projection = { kind: "archived_tool_result_projection", originalCallId: result.toolCallId,
           toolName: request.name,
+          ...(bodyFirst ? { viewMode: "body_first_bounded", bodyField: bodyView.field } : {}),
+          originalEnvelopeChars: originalEnvelope.length,
+          originalEnvelopeBytes: Buffer.byteLength(originalEnvelope),
           resultStatus: parsed.status ?? parsed.ok ?? "unknown", errorCode: parsed.errorCode ?? null,
           sourceIdentity: identity, sourceIdentityDigest: hash(identity),
           sourceVersion: parsed.sha256 || parsed.head || null,
@@ -253,25 +267,49 @@ class WorkingContext {
           archiveRef: { evidenceId: record.evidenceId, version: record.archivedBodyHash, archiveState: record.archiveState },
           sourceHash: record.sourceHash, redacted: record.redacted,
           rangeUnit: record.rangeUnit, archivedRanges: record.archivedRanges,
+          bodyRangeUnit: record.rangeUnit,
           projectedRawRanges: [],
           projectedSanitizedRanges: [],
+          projectedBodyRanges: [],
           omittedRanges: [],
+          omittedBodyRanges: [],
+          bodyTotalChars: bodyFirst ? boundedBody.length : undefined,
+          bodyOmittedChars: bodyFirst ? boundedBody.length : undefined,
+          bodyComplete: false,
           fullRawProvided: false, currentFile: false, grantsMutation: false,
           excerpt: "" };
         const fixedCost = JSON.stringify(projection).length;
-        projectedEnd = Math.min(projectedEnd, Math.max(0, originalEnvelope.length - fixedCost - 1));
-        projection.projectedRawRanges = directSemanticBody && !record.redacted ? [[0, projectedEnd]] : [];
-        projection.projectedSanitizedRanges = [[0, projectedEnd]];
-        projection.omittedRanges = [[Math.min(projectedEnd, record.body.length), record.body.length]];
-        projection.excerpt = semanticBody.slice(0, projectedEnd);
-        let projectedContent = JSON.stringify(projection);
-        while (projectedContent.length >= originalEnvelope.length && projectedEnd > 0) {
-          projectedEnd = Math.max(0, projectedEnd
-            - Math.max(16, projectedContent.length - originalEnvelope.length + 16));
+        projectedEnd = Math.min(bodyFirst ? maxChars : projectedEnd,
+          Math.max(0, originalEnvelope.length - fixedCost - 1));
+        if (!bodyFirst) {
           projection.projectedRawRanges = directSemanticBody && !record.redacted ? [[0, projectedEnd]] : [];
           projection.projectedSanitizedRanges = [[0, projectedEnd]];
           projection.omittedRanges = [[Math.min(projectedEnd, record.body.length), record.body.length]];
           projection.excerpt = semanticBody.slice(0, projectedEnd);
+        } else {
+          projection.omittedRanges = [[0, record.body.length]];
+          projection.projectedBodyRanges = [[0, Math.min(projectedEnd, boundedBody.length)]];
+          projection.omittedBodyRanges = [[Math.min(projectedEnd, boundedBody.length), boundedBody.length]];
+          projection.bodyOmittedChars = Math.max(0, boundedBody.length - projectedEnd);
+          projection.bodyComplete = projection.bodyOmittedChars === 0;
+          projection.excerpt = boundedBody.slice(0, projectedEnd);
+        }
+        let projectedContent = JSON.stringify(projection);
+        while (projectedContent.length >= originalEnvelope.length && projectedEnd > 0) {
+          projectedEnd = Math.max(0, projectedEnd
+            - Math.max(16, projectedContent.length - originalEnvelope.length + 16));
+          if (!bodyFirst) {
+            projection.projectedRawRanges = directSemanticBody && !record.redacted ? [[0, projectedEnd]] : [];
+            projection.projectedSanitizedRanges = [[0, projectedEnd]];
+            projection.omittedRanges = [[Math.min(projectedEnd, record.body.length), record.body.length]];
+            projection.excerpt = semanticBody.slice(0, projectedEnd);
+          } else {
+            projection.projectedBodyRanges = [[0, Math.min(projectedEnd, boundedBody.length)]];
+            projection.omittedBodyRanges = [[Math.min(projectedEnd, boundedBody.length), boundedBody.length]];
+            projection.bodyOmittedChars = Math.max(0, boundedBody.length - projectedEnd);
+            projection.bodyComplete = projection.bodyOmittedChars === 0;
+            projection.excerpt = boundedBody.slice(0, projectedEnd);
+          }
           projectedContent = JSON.stringify(projection);
         }
         if (projectedContent.length >= originalEnvelope.length) return result;
