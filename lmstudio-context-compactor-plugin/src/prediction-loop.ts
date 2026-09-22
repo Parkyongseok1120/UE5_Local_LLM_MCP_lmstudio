@@ -80,6 +80,9 @@ type ContinuityNote = {
   reviewClaims?: Array<unknown>;
 };
 const { REASONING_SEPARATOR } = require("./continuity-text.js") as { REASONING_SEPARATOR: string };
+const toolMemory = require("./compaction-tool-memory.js") as {
+  decodeToolResultRecord(content: unknown): { value?: Record<string, unknown>; error?: string };
+};
 const inputAvailability = require("./input-availability.js") as {
   currentRawObservations(messages: Array<NormalizedMessage>): Array<Record<string, unknown>>;
   historicalAvailabilityFromMemory(memory: unknown): Array<Record<string, unknown>>;
@@ -252,6 +255,7 @@ type FinalReportState = "report" | "partial_report" | "unresolved_tool_intent" |
 type OutputLimitStage = "reasoning" | "tool_arguments" | "visible_report" | "forced_final" | "unknown";
 
 const MIN_FINAL_OUTPUT_TOKENS = 256;
+const FIRST_CONSUMER_RAW_GIT_MAX_CHARS = 8192;
 
 const BOUNDED_AUDIT_FINAL_INSTRUCTION = [
   "The user selected bounded audit completion and the research resource budget has ended.",
@@ -968,12 +972,84 @@ function rawReadOnlyIntentToolNames(text: string, tools: Array<RemoteToolLike>):
 }
 
 function completedRequestFingerprints(history: Chat): Set<string> {
-  const completedIds = new Set(history.getMessagesArray().flatMap(message => (
-    message.getToolCallResults().map(result => String(result.toolCallId || "")).filter(Boolean)
-  )));
-  return new Set(history.getMessagesArray().flatMap(message => message.getToolCallRequests())
-    .filter(request => completedIds.has(String(request.id || "")))
-    .map(request => telemetryFingerprint({ name: request.name, arguments: request.arguments || {} })));
+  const completed = new Set<string>();
+  let active: Map<string, ToolCallRequest> | null = null;
+  const consumed = new Set<string>();
+  for (const message of history.getMessagesArray()) {
+    const requests = message.getToolCallRequests();
+    if (requests.length) {
+      active = new Map();
+      consumed.clear();
+      for (const request of requests) {
+        const id = String(request.id || "");
+        if (!id || active.has(id)) {
+          active = null;
+          break;
+        }
+        active.set(id, request);
+      }
+    }
+    if (!active) continue;
+    for (const result of message.getToolCallResults()) {
+      const id = String(result.toolCallId || "");
+      const request = active.get(id);
+      if (!request || consumed.has(id)) continue;
+      consumed.add(id);
+      const decoded = toolMemory.decodeToolResultRecord(result.content);
+      const value = decoded.value;
+      const status = String(value?.status || "").toLowerCase();
+      const currentRaw = value && !["archived_tool_result_projection", "historical_evidence_index"].includes(
+        String(value.kind || ""),
+      );
+      const succeeded = currentRaw && value?.ok !== false && !value?.errorCode
+        && !["error", "failed", "timeout", "timed_out", "canceled", "cancelled"].includes(status);
+      if (succeeded) completed.add(telemetryFingerprint({
+        name: request.name,
+        arguments: request.arguments || {},
+      }));
+    }
+    if (active && consumed.size === active.size) {
+      active = null;
+      consumed.clear();
+    }
+  }
+  return completed;
+}
+
+type FreshToolPlanningRetryDecision = { eligible: boolean; reason: string };
+
+function freshToolPlanningRetryDecision(options: {
+  boundedAudit: boolean;
+  observeOnly: boolean;
+  attempts: number;
+  failure: unknown;
+  aborted: boolean;
+  phaseTimedOut: boolean;
+  finishReason?: string;
+  remainingTokens: number;
+  finalRawToolIntent: boolean;
+  rawIntentToolCount: number;
+  structuredToolRequestCount: number;
+  runtimeDispatchCount: number;
+  actualResultCount: number;
+}): FreshToolPlanningRetryDecision {
+  if (options.boundedAudit) return { eligible: false, reason: "bounded_mode" };
+  if (options.observeOnly) return { eligible: false, reason: "observe_only" };
+  if (options.attempts >= 1) return { eligible: false, reason: "already_retried" };
+  if (options.failure !== undefined) return { eligible: false, reason: "generation_failure" };
+  if (options.aborted) return { eligible: false, reason: "canceled" };
+  if (options.phaseTimedOut) return { eligible: false, reason: "timeout" };
+  if (options.finishReason === "generation_repetition_paused") {
+    return { eligible: false, reason: "explicit_pause" };
+  }
+  if (options.remainingTokens < MIN_FINAL_OUTPUT_TOKENS) return { eligible: false, reason: "no_headroom" };
+  if (!options.finalRawToolIntent) return { eligible: false, reason: "no_final_raw_tool_intent" };
+  if (options.rawIntentToolCount === 0) return { eligible: false, reason: "tools_not_safe" };
+  if (options.structuredToolRequestCount > 0) return { eligible: false, reason: "structured_request_present" };
+  if (options.runtimeDispatchCount > 0 || options.actualResultCount > 0) {
+    return { eligible: false, reason: "dispatch_or_result_present" };
+  }
+  return { eligible: true, reason: "eligible_read_only_fresh_planning" };
 }
 
 function classifyOutputLimitStage(
@@ -991,7 +1067,8 @@ function classifyOutputLimitStage(
   toolGeneration: { hasUnfinished: () => boolean },
 ): OutputLimitStage | undefined {
   if (captured.finishReason !== "maxPredictedTokensReached") return undefined;
-  if (captured.predictionUsage?.rawToolIntentCandidate === true
+  const finalRawToolIntent = containsUnresolvedToolIntent(visibleTextFromMessages(captured.messages), captured.messages);
+  if ((captured.predictionUsage?.rawToolIntentCandidate === true || finalRawToolIntent)
     && !captured.messages.some(message => message.getToolCallRequests().length > 0)) {
     return "tool_arguments";
   }
@@ -1283,6 +1360,8 @@ export function createPredictionLoopHandler(
   let toolPlanningRetryPending = false;
   let toolPlanningRetryToolNames = new Set<string>();
   let toolPlanningRetryBlockedFingerprints = new Set<string>();
+  const executionCost = { modelCalls: 0, promptTokens: 0, predictedTokens: 0,
+    elapsedMs: 0, unknownUsageCalls: 0 };
   let activeActivity: ReturnType<typeof createRoundActivityTracker> | null = null;
   const toolStagnation = new ToolRoundStagnationDetector();
   try {
@@ -1305,7 +1384,9 @@ export function createPredictionLoopHandler(
           const tool = allModelTools.find(candidate => candidate.name === request.name);
           return Boolean(tool && isObservationOnlyToolCall(tool, request));
         }, { executionId, roundIndex, modelInputId: `${executionId}:prediction-${roundIndex + 1}`,
-          proofLevel: "returned_tool_result" }, config.toolResultProjectionChars);
+          proofLevel: "returned_tool_result",
+          preserveUnconsumedRawGitMaxChars: FIRST_CONSUMER_RAW_GIT_MAX_CHARS,
+        }, config.toolResultProjectionChars);
         if (projected.changed) {
           workingHistory = projected.history;
           projectionApplied = true;
@@ -1435,12 +1516,7 @@ export function createPredictionLoopHandler(
         }
       }
       workingHistory = modelHistory;
-      const semanticCheckpoint = compactionCheckpoint || (projectionApplied
-        ? core.buildCheckpoint(normalizeHistory(workingHistory), {
-          recentCompleteTurns: config.recentCompleteTurns,
-          maxCheckpointChars: config.maxCheckpointChars,
-          maxToolResultChars: config.maxToolResultChars,
-        }) : null);
+      const semanticCheckpoint = compactionCheckpoint;
       const summaryEvidence = workingContext ? workingContext.summaryEvidence() : [];
       const summaryRefs = new Set(summaryEvidence.map(item => String(item.ref || "")).filter(Boolean));
       const semanticEventKey = workingContext && semanticCheckpoint
@@ -1454,7 +1530,7 @@ export function createPredictionLoopHandler(
         }) : "";
       const repeatedSemanticEvent = Boolean(workingContext && semanticEventKey
         && workingContext.lastSummaryInput === semanticEventKey);
-      if (workingContext && config.contextManagementMode === "hybrid" && (projectionApplied || compacted)
+      if (workingContext && config.contextManagementMode === "hybrid" && compacted
         && semanticCheckpoint && !repeatedSemanticEvent && !boundedAudit && !finalizing) {
         // Mark before dispatch: length, timeout, cancellation and invalid output
         // must not recursively retry the same semantic event on the next round.
@@ -1519,6 +1595,19 @@ export function createPredictionLoopHandler(
           toolCount: 0,
           accepted: false,
           reason: "duplicate_event_not_retried",
+          modelCalled: false,
+          cost: workingContext.cost,
+        });
+      } else if (workingContext && projectionApplied && !compacted && !boundedAudit && !finalizing
+        && config.showDebugInfo) {
+        ctl.debug({
+          event: "semantic_handoff",
+          executionId,
+          modelInputId: `${executionId}:semantic-summary-${roundIndex + 1}`,
+          purpose: "context_summary",
+          toolCount: 0,
+          accepted: false,
+          reason: "routine_projection_without_compaction",
           modelCalled: false,
           cost: workingContext.cost,
         });
@@ -1830,6 +1919,7 @@ export function createPredictionLoopHandler(
         : ctl.abortSignal;
       const historyBeforeRound = Chat.from(workingHistory);
       workingContext?.captureExposure(modelInput, modelInputId, false);
+      const roundModelStartedAt = Date.now();
       const captured = await runOneToolRound(
         tokenSource,
         modelInput,
@@ -1986,6 +2076,16 @@ export function createPredictionLoopHandler(
         },
         { maxTokens: roundOutputReserve },
       );
+      const roundModelElapsedMs = Date.now() - roundModelStartedAt;
+      executionCost.modelCalls += 1;
+      executionCost.elapsedMs += roundModelElapsedMs;
+      const promptTokens = Number(captured.predictionStats?.promptTokensCount);
+      const predictedTokens = Number(captured.predictionStats?.predictedTokensCount);
+      if (Number.isFinite(promptTokens)) executionCost.promptTokens += promptTokens;
+      if (Number.isFinite(predictedTokens)) executionCost.predictedTokens += predictedTokens;
+      if (!Number.isFinite(promptTokens) || !Number.isFinite(predictedTokens)) {
+        executionCost.unknownUsageCalls += 1;
+      }
       if (captured.failure === undefined) workingContext?.captureExposure(modelInput, modelInputId, true);
       activeActivity.complete();
       activeActivity = null;
@@ -2028,18 +2128,28 @@ export function createPredictionLoopHandler(
       if (toolPlanningRetryRound) toolPlanningRetryPending = false;
       const outputEvidence = messageEvidenceTelemetry(captured.messages);
       const rawIntentText = visibleTextFromMessages(captured.messages);
+      const finalRawToolIntent = containsUnresolvedToolIntent(rawIntentText, captured.messages);
       const rawIntentToolNames = rawReadOnlyIntentToolNames(rawIntentText, allModelTools);
       const runtimeDispatchCount = [...runtimeToolTrace.values()]
         .filter(value => value.executionState === "dispatched").length;
       const structuredToolRequestCount = outputEvidence.calls.length;
       const actualResultCount = outputEvidence.results.length;
-      const freshToolPlanningRetryEligible = !boundedAudit && toolPlanningRetryAttempts < 1
-        && captured.failure === undefined && !ctl.abortSignal.aborted
-        && phaseTimeoutSignal?.aborted !== true && Date.now() < researchDeadlineAt
-        && finalMeasurement.remainingTokens >= MIN_FINAL_OUTPUT_TOKENS
-        && captured.predictionUsage.rawToolIntentCandidate === true
-        && rawIntentToolNames.length > 0 && structuredToolRequestCount === 0
-        && runtimeDispatchCount === 0 && actualResultCount === 0;
+      const retryDecision = freshToolPlanningRetryDecision({
+        boundedAudit,
+        observeOnly: config.observeOnly,
+        attempts: toolPlanningRetryAttempts,
+        failure: captured.failure,
+        aborted: ctl.abortSignal.aborted,
+        phaseTimedOut: phaseTimeoutSignal?.aborted === true,
+        finishReason: captured.finishReason,
+        remainingTokens: finalMeasurement.remainingTokens,
+        finalRawToolIntent,
+        rawIntentToolCount: rawIntentToolNames.length,
+        structuredToolRequestCount,
+        runtimeDispatchCount,
+        actualResultCount,
+      });
+      const freshToolPlanningRetryEligible = retryDecision.eligible;
       const scheduleFreshToolPlanningRetry = () => {
         workingHistory = historyBeforeRound;
         finalizationPending = false;
@@ -2063,6 +2173,9 @@ export function createPredictionLoopHandler(
           remainingTokens: finalMeasurement.remainingTokens,
           finalizationTrigger: "raw_tool_intent",
           structuredToolRequestCount,
+          eligibilityReason: retryDecision.reason,
+          streamRawToolIntentCandidate: captured.predictionUsage.rawToolIntentCandidate,
+          finalRawToolIntent,
           rawToolIntentToolNames: rawIntentToolNames,
           actualDispatchCount: runtimeDispatchCount,
           actualResultCount,
@@ -2078,6 +2191,25 @@ export function createPredictionLoopHandler(
           finishReason: captured.finishReason || (captured.failure === undefined ? "unknown" : "failed"),
           predictionStats: captured.predictionStats,
           predictionUsage: captured.predictionUsage,
+          callPurpose: finalizing
+            ? finalizationTrigger === "output_recovery" ? "output_recovery" : "final"
+            : toolPlanningRetryRound ? "fresh_planning_retry" : "research",
+          roundModelElapsedMs,
+          executionCost: {
+            ...executionCost,
+            summary: workingContext?.cost || null,
+            executionElapsedMs: Date.now() - researchStartedAt,
+            modelCallsIncludingSummary: executionCost.modelCalls
+              + Number(workingContext?.cost.summaryCalls || 0),
+            unknownUsageCallsIncludingSummary: executionCost.unknownUsageCalls
+              + Number(workingContext?.cost.unknownUsageCalls || 0),
+            knownPromptTokensIncludingSummary: executionCost.promptTokens
+              + Number(workingContext?.cost.summaryPromptTokens || 0),
+            knownPredictedTokensIncludingSummary: executionCost.predictedTokens
+              + Number(workingContext?.cost.summaryPredictedTokens || 0),
+            elapsedMsIncludingSummary: executionCost.elapsedMs
+              + Number(workingContext?.cost.summaryMs || 0),
+          },
           outputLimitStage,
           requestedMaxTokens: requestedOutputCap,
           appliedMaxTokens: roundOutputReserve,
@@ -2087,8 +2219,10 @@ export function createPredictionLoopHandler(
           finalizationTrigger: finalizing ? finalizationTrigger : undefined,
           structuredToolRequestCount,
           rawToolIntentCandidate: captured.predictionUsage.rawToolIntentCandidate,
+          finalRawToolIntent,
           rawToolIntentFirstFragment: captured.predictionUsage.rawToolIntentFirstFragment,
           rawToolIntentFirstVisibleChar: captured.predictionUsage.rawToolIntentFirstVisibleChar,
+          freshToolPlanningRetry: retryDecision,
           actualDispatchCount: runtimeDispatchCount,
           actualResultCount,
           phase: finalizing ? "final_report" : "research",
@@ -2295,6 +2429,8 @@ export const __test = {
   canRecoverOutputLimit,
   classifyFinalDelivery,
   containsUnresolvedToolIntent,
+  completedRequestFingerprints,
+  freshToolPlanningRetryDecision,
   modelHistoryMessage,
   selectSoftCompaction,
 };

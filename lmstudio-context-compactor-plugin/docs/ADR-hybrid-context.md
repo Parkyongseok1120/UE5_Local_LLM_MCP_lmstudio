@@ -57,6 +57,10 @@ status/error, exact archived and projected ranges, omitted ranges and archive ID
 Archive ranges are historical returned text, never current-file permission or a
 claim to possess unreturned Git pages. Receipts/capabilities/secrets are not stored.
 Sanitization changes are explicit and never described as byte-identical raw.
+Archive capture and model-facing replacement are separate decisions. A completed,
+successful Git observation up to 8192 characters remains raw until one model call
+has had an opportunity to consume it; archiving it does not by itself justify an
+immediate metadata-only projection.
 
 Use bounded local files below the existing compactor state root when a verified
 scope is available, otherwise bounded memory. TTL, byte/file quotas, schema/hash
@@ -64,6 +68,9 @@ checks and scope separation fail closed. Lookup accepts only opaque IDs and boun
 UTF-16 ranges, not paths. Its whole serialized response, including metadata, is
 bounded; EOF and complete raw coverage are separate fields. A failed archive must
 not authorize raw eviction.
+Archive pagination (`archiveHasMore`, `archiveReachedEnd`) and source Git pagination
+(`sourcePageHasMore`, `sourceResultComplete`) are separate contracts. Reaching the
+end of one archived result never proves that all source pages were fetched.
 
 The deterministic checkpoint carries a bounded `historicalEvidence` index with
 evidence ID/version, source identity and ranges; it never copies archive bodies.
@@ -72,6 +79,9 @@ for its allowed refs. Unsupported typed/image content skips only the durable
 window commit and records `unsupported_typed_content`; prediction and the original
 history continue unchanged. Observe Only bypasses projection, archive substitution,
 window restore/commit, semantic handoff and target-triggered compaction.
+Projection alone does not schedule semantic handoff. Hybrid permits at most one
+such call only when that prediction accepted a real compaction checkpoint. Its
+cost is included in cumulative model-call, token and elapsed-time telemetry.
 
 If a report leaves raw `<tool_call>` text without any structured request,
 dispatch, result, timeout or cancellation, the plugin may make one fresh planning
@@ -80,6 +90,12 @@ not parse or execute the raw arguments. The retry exposes only those read-only
 tool definitions, rejects an identical previously successful read and asks the
 model to generate a new structured request. Mutation/build calls, BOUNDED mode and
 recursive retries are excluded.
+Detection carries a bounded suffix across stream fragments, but eligibility is
+decided from the final assistant text so ordinary code examples and quotations do
+not become executions. Normal mode is not gated by the audit harness's 100-second
+deadline; BOUNDED retains its explicit deadline. Successful-read deduplication is
+causal to a request/result batch: failed results, reused provider IDs, historical
+indexes and legitimate archive range reads do not count as completed current reads.
 
 Compaction trigger and target differ: full input target 10000 tokens, trigger
 target + 2048 tokens (hysteresis), measured after all instructions and tool schemas.

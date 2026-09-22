@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const { Chat, ChatMessage } = require("@lmstudio/sdk");
 const { createPredictionLoopHandler, handlePredictionLoop, __test } = require("../dist/prediction-loop.js");
@@ -13,6 +14,7 @@ const { WorkingContextBoundary } = require("../dist/working-context-boundary.js"
 const { ASSISTANT_MARKER } = require("../dist/continuity-assistant-evidence.js");
 const inputAvailability = require("../dist/input-availability.js");
 const availabilityEval = require("../scripts/availability-eval-core.cjs");
+const { workspaceToolDefinitions, createWorkspaceCapabilities } = require("../../shared-tool-core/workspace.js");
 
 function fakeController(history, tokenSource, overrides = {}, tools = []) {
   const blocks = [];
@@ -1307,11 +1309,13 @@ test("the default recovery cap follows a larger configured output reserve instea
   assert.equal(config.outputRecoveryMaxTokens, 16384);
 });
 
-test("new compactor configuration defaults to hybrid while explicit legacy remains compatible", () => {
+test("new compactor configuration defaults to hybrid and preserves every explicit mode", () => {
   const fresh = __test.readConfig(fakeController(Chat.empty(), {}, { contextManagementMode: undefined }));
   assert.equal(fresh.contextManagementMode, "hybrid");
-  const legacy = __test.readConfig(fakeController(Chat.empty(), {}, { contextManagementMode: "legacy" }));
-  assert.equal(legacy.contextManagementMode, "legacy");
+  for (const mode of ["legacy", "deterministic", "hybrid"]) {
+    const explicit = __test.readConfig(fakeController(Chat.empty(), {}, { contextManagementMode: mode }));
+    assert.equal(explicit.contextManagementMode, mode);
+  }
 });
 
 test("normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back", async () => {
@@ -1739,6 +1743,97 @@ test("round telemetry records the SDK finish reason without exposing result bodi
   assert.deepEqual(captured.predictionStats, { stopReason: "eosFound" });
 });
 
+test("raw tool intent streaming detection is invariant across tag splits", async () => {
+  const raw = "<tool_call><function=git_diff_file><parameter=path>Assets/A.cs</parameter></function></tool_call>";
+  const partitions = [
+    [raw],
+    ["<", "tool", "_call", "><function=git_diff_file>", raw.slice(raw.indexOf("<parameter="))],
+    [...raw],
+  ];
+  for (const parts of partitions) {
+    const captured = await runOneToolRound({
+      async act(_chat, _tools, options) {
+        for (const content of parts) options.onPredictionFragment({ content, roundIndex: 0,
+          reasoningType: "none", isStructural: false, tokensCount: 1, containsDrafted: false });
+        options.onMessage(ChatMessage.create("assistant", raw));
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound", predictedTokensCount: parts.length } });
+      },
+    }, Chat.empty(), [], new AbortController().signal,
+    { onToolCallRequestFinalized() {}, guardToolCall() {} });
+    assert.equal(captured.predictionUsage.rawToolIntentCandidate, true, `parts=${parts.length}`);
+    assert.equal(__test.containsUnresolvedToolIntent(raw, captured.messages), true);
+  }
+});
+
+test("final assistant message can authorize fresh planning when fragment callbacks are absent", async () => {
+  const raw = "<tool_call><function=git_diff_file></function></tool_call>";
+  const captured = await runOneToolRound({
+    async act(_chat, _tools, options) {
+      options.onMessage(ChatMessage.create("assistant", raw));
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", predictedTokensCount: 20 } });
+    },
+  }, Chat.empty(), [], new AbortController().signal,
+  { onToolCallRequestFinalized() {}, guardToolCall() {} });
+  assert.equal(captured.predictionUsage.rawToolIntentCandidate, false);
+  assert.equal(__test.containsUnresolvedToolIntent(raw, captured.messages), true);
+  assert.equal(__test.freshToolPlanningRetryDecision({
+    boundedAudit: false, observeOnly: false, attempts: 0, failure: captured.failure,
+    aborted: false, phaseTimedOut: false, finishReason: captured.finishReason,
+    remainingTokens: 10000, finalRawToolIntent: true, rawIntentToolCount: 1,
+    structuredToolRequestCount: 0, runtimeDispatchCount: 0, actualResultCount: 0,
+  }).eligible, true);
+});
+
+test("fresh read-only planning retry has no hidden audit deadline in normal mode", () => {
+  const base = {
+    boundedAudit: false, observeOnly: false, attempts: 0, failure: undefined,
+    aborted: false, phaseTimedOut: false, finishReason: "eosFound", remainingTokens: 10000,
+    finalRawToolIntent: true, rawIntentToolCount: 1, structuredToolRequestCount: 0,
+    runtimeDispatchCount: 0, actualResultCount: 0,
+  };
+  const originalNow = Date.now;
+  try {
+    for (const elapsedSeconds of [99, 101, 300]) {
+      Date.now = () => 1_000_000 + elapsedSeconds * 1000;
+      assert.deepEqual(__test.freshToolPlanningRetryDecision(base), {
+        eligible: true, reason: "eligible_read_only_fresh_planning",
+      });
+    }
+  } finally { Date.now = originalNow; }
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base, observeOnly: true }).reason, "observe_only");
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base,
+    finishReason: "generation_repetition_paused" }).reason, "explicit_pause");
+  assert.equal(__test.freshToolPlanningRetryDecision({ ...base, attempts: 1 }).reason, "already_retried");
+});
+
+test("completed read fingerprints require a causal successful result and current raw content", () => {
+  const history = Chat.empty();
+  const append = (id, pathValue, result) => {
+    history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+      toolCallRequest: { id, type: "function", name: "evidence_first_read_context",
+        arguments: { evidenceId: pathValue, version: "v", startOffset: 0 } } }] }));
+    if (result) history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+      toolCallId: id, content: JSON.stringify(result) }] }));
+  };
+  append("reused", "success", { ok: true, kind: "historical_evidence_range", content: "raw evidence" });
+  append("failed", "failure", { ok: false, errorCode: "timeout" });
+  append("reused", "pending", null);
+  const completed = __test.completedRequestFingerprints(history);
+  const fingerprint = evidenceId => __test.telemetryFingerprint({ name: "evidence_first_read_context",
+    arguments: { evidenceId, version: "v", startOffset: 0 } });
+  assert.equal(completed.has(fingerprint("success")), true);
+  assert.equal(completed.has(fingerprint("failure")), false);
+  assert.equal(completed.has(fingerprint("pending")), false);
+
+  const compacted = Chat.empty();
+  compacted.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+    toolCallRequest: { id: "archived", type: "function", name: "evidence_first_read_context",
+      arguments: { evidenceId: "success", version: "v", startOffset: 0 } } }] }));
+  compacted.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "archived",
+    content: JSON.stringify({ ok: true, kind: "historical_evidence_index", evidenceId: "success" }) }] }));
+  assert.equal(__test.completedRequestFingerprints(compacted).has(fingerprint("success")), false);
+});
+
 test("semantic result fingerprints ignore random snapshot metadata but retain evidence changes", () => {
   const first = { kind: "git_observation", snapshotId: "random-a", observedAt: "2026-01-01T00:00:00Z",
     action: "changed_files", items: [{ path: "Assets/A.cs", status: "modified" }] };
@@ -1883,8 +1978,9 @@ test("reserve pressure gets one adaptive tool-free final report instead of an im
 test("Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes", async () => {
   const history = Chat.from([{ role: "user", content: "LeeDongHun이 9월 20일부터 한 작업들을 조회 후 작업당 상세히 알려줘" }]);
   for (const [id, name, marker, argumentsValue] of [
-    ["prior-log", "git_log", "LOG_RESULT_SENTINEL", { author: "LeeDongHun", since: "2026-09-20" }],
-    ["prior-files", "git_changed_files", "CHANGED_FILES_SENTINEL", { commit: "abc123" }],
+    ["prior-log", "git_log", "LOG_RESULT_SENTINEL", { authorQuery: "LeeDongHun", since: "2026-09-20" }],
+    ["prior-files", "git_changed_files", "CHANGED_FILES_SENTINEL",
+      { comparison: "range", base: "abc123", head: "def456" }],
   ]) {
     history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
       id, type: "function", name, arguments: argumentsValue,
@@ -1892,8 +1988,10 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
     history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: id,
       content: JSON.stringify({ ok: true, status: "complete", marker }) }] }));
   }
+  const publicDefinitions = new Map(workspaceToolDefinitions().map(definition => [definition.name, definition]));
   const tools = ["git_log", "git_changed_files", "git_diff_file"].map(name => ({ name,
-    description: `Read-only ${name}`, parametersJsonSchema: { type: "object" },
+    description: publicDefinitions.get(name).description,
+    parametersJsonSchema: publicDefinitions.get(name).inputSchema,
     pluginIdentifier: "mcp/unreal-agent" }));
   const rawToolText = Array.from({ length: 10 }, (_, index) => (
     `<tool_call><function=git_diff_file><parameter=path>File${index}.cs</parameter></function></tool_call>`
@@ -1927,7 +2025,7 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
         assert.match(chat.toString(), /freshly emit only valid structured read-only tool requests/u);
         assert.match(chat.toString(), /CHANGED_FILES_SENTINEL/u);
         const request = { id: "fresh-diff-1", type: "function", name: "git_diff_file",
-          arguments: { base: "a", head: "b", path: "Assets/PlayPhaseExecution.cs" } };
+          arguments: { comparison: "range", base: "a", head: "b", path: "Assets/PlayPhaseExecution.cs" } };
         await options.guardToolCall(0, 901, { toolCallRequest: request,
           allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
         options.onToolCallRequestFinalized(0, 901, { toolCallRequest: request });
@@ -1973,6 +2071,160 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
   assert.match(ctl.blocks.at(-1).text, /근거 기반 LeeDongHun/u);
 });
 
+test("Human-Bartender flow uses public schemas and actual temporary Git through fresh planning retry", async t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "compactor-real-git-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "Source"), { recursive: true });
+  const project = path.join(root, "HumanBartender.uproject");
+  fs.writeFileSync(project, "{}\n");
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true }).trim();
+  git("init", "-q");
+  git("config", "user.name", "Fixture Committer");
+  git("config", "user.email", "fixture@example.invalid");
+  git("config", "core.autocrlf", "false");
+  fs.writeFileSync(path.join(root, "Source", "Drink.cpp"), "int Price = 1;\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD");
+  fs.writeFileSync(path.join(root, "Source", "Drink.cpp"), "int Price = 2; // REAL_DIFF_SENTINEL\n");
+  fs.writeFileSync(path.join(root, "Source", "Receipt.cpp"), "void PrintReceipt() {}\n");
+  git("add", ".");
+  execFileSync("git", ["commit", "-qm", "결제와 영수증 흐름 개선",
+    "--author=yongseokpark <yongseok@example.invalid>"], {
+    cwd: root, windowsHide: true,
+    env: { ...process.env, GIT_AUTHOR_DATE: "2026-09-20T10:00:00+09:00",
+      GIT_COMMITTER_DATE: "2026-09-20T11:00:00+09:00" },
+  });
+  const head = git("rev-parse", "HEAD");
+
+  const capability = createWorkspaceCapabilities({ resolveBinding: async () => ({
+    root, engine: "unreal", projectIdentity: project,
+  }) });
+  const definitions = workspaceToolDefinitions().filter(definition =>
+    ["git_log", "git_changed_files", "git_diff_file"].includes(definition.name));
+  let actualGitExecutions = 0;
+  const tools = definitions.map(definition => ({
+    name: definition.name,
+    description: definition.description,
+    parametersJsonSchema: definition.inputSchema,
+    pluginIdentifier: "mcp/unreal-agent",
+    implementation: async args => {
+      actualGitExecutions += 1;
+      return capability(definition.name, args);
+    },
+  }));
+  await assert.rejects(() => capability("git_diff_file", {
+    project, base, head, path: "Source/Drink.cpp",
+  }), error => error?.code === "invalid_arguments");
+
+  const history = Chat.from([{ role: "user",
+    content: "yongseokpark가 9월 20일부터 한 작업을 조회하고 작업당 상세히 알려줘" }]);
+  const rawDiffIntent = "<tool_call><function=git_diff_file><parameter=path>Source/Drink.cpp</parameter></function></tool_call>";
+  const actualResults = [];
+  let actCount = 0;
+  let totalPromptTokens = 0;
+  let totalPredictedTokens = 0;
+  const startedAt = Date.now();
+  const model = {
+    identifier: "integration-model-stub",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(String(text).length / 4); },
+    async act(chat, roundTools, options) {
+      actCount += 1;
+      const dispatch = async (name, args, id, sdkCallId) => {
+        const tool = roundTools.find(candidate => candidate.name === name);
+        assert.ok(tool, `${name} must be exposed`);
+        let effectiveArgs = args;
+        const request = { id, type: "function", name, arguments: args };
+        await options.guardToolCall(0, sdkCallId, { toolCallRequest: request,
+          allow() {}, allowAndOverrideParameters(value) { effectiveArgs = value; },
+          deny(reason) { assert.fail(reason); } });
+        options.onToolCallRequestFinalized(0, sdkCallId, { toolCallRequest: { ...request, arguments: effectiveArgs } });
+        const result = await tool.implementation(effectiveArgs);
+        actualResults.push(result);
+        options.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+          toolCallRequest: { ...request, arguments: effectiveArgs } }] }));
+        options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+          toolCallId: id, content: JSON.stringify(result) }] }));
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 500,
+          predictedTokensCount: 40, totalTokensCount: 540 } });
+        totalPromptTokens += 500;
+        totalPredictedTokens += 40;
+        options.onRoundEnd(0);
+        throw options.signal.reason;
+      };
+      if (actCount === 1) return dispatch("git_log", {
+        since: "2026-09-20T00:00:00+09:00", authorQuery: "yongseokpark", limit: 25,
+      }, "real-log", 1001);
+      if (actCount === 2) {
+        assert.match(chat.toString(), /결제와 영수증 흐름 개선/u);
+        return dispatch("git_changed_files", {
+          comparison: "range", base, head, limit: 25,
+        }, "real-files", 1002);
+      }
+      if (actCount === 3) {
+        assert.match(chat.toString(), /Source\/Drink\.cpp/u);
+        for (const content of rawDiffIntent) options.onPredictionFragment({ content, roundIndex: 0,
+          reasoningType: "none", isStructural: false, tokensCount: 1, containsDrafted: false });
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 700,
+          predictedTokensCount: rawDiffIntent.length, totalTokensCount: 700 + rawDiffIntent.length } });
+        totalPromptTokens += 700;
+        totalPredictedTokens += rawDiffIntent.length;
+        options.onMessage(ChatMessage.create("assistant", rawDiffIntent));
+        return;
+      }
+      if (actCount === 4) {
+        assert.deepEqual(roundTools.map(tool => tool.name), ["git_diff_file"]);
+        return dispatch("git_diff_file", {
+          comparison: "range", base, head, path: "Source/Drink.cpp", byteBudget: 4096,
+        }, "real-diff", 1003);
+      }
+      assert.match(chat.toString(), /REAL_DIFF_SENTINEL/u);
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 900,
+        predictedTokensCount: 120, totalTokensCount: 1020 } });
+      totalPromptTokens += 900;
+      totalPredictedTokens += 120;
+      options.onMessage(ChatMessage.create("assistant",
+        "실제 Git 근거에 따르면 결제 가격 변경과 영수증 파일 추가가 확인되었습니다."));
+    },
+  };
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "hybrid", projectEngine: "unreal", projectIdentity: project,
+    workingInputTargetTokens: 10000, workingInputTriggerTokens: 12048,
+    maxOutputReserve: 8192, safetyMarginTokens: 1536,
+  }, tools);
+  await handlePredictionLoop(ctl);
+
+  assert.equal(actCount, 5);
+  assert.equal(actualGitExecutions, 3);
+  assert.equal(actualResults.every(result => result.kind === "git_observation"), true);
+  assert.equal(actualResults[0].items[0].subject, "결제와 영수증 흐름 개선");
+  assert.equal(actualResults[1].items.some(item => item.path === "Source/Drink.cpp"), true);
+  assert.match(actualResults[2].text, /REAL_DIFF_SENTINEL/u);
+  assert.match(ctl.blocks.at(-1).text, /실제 Git 근거/u);
+  const retry = ctl.debugValues.find(value => value.event === "fresh_tool_planning_retry_scheduled");
+  assert.equal(retry.streamRawToolIntentCandidate, true);
+  assert.equal(retry.finalRawToolIntent, true);
+  assert.equal(retry.eligibilityReason, "eligible_read_only_fresh_planning");
+  const retryRound = ctl.debugValues.find(value => value.event === "direct_round_observation"
+    && value.modelInputId?.includes(":tool-planning-retry-"));
+  assert.equal(retryRound.structuredToolRequestCount, 1);
+  assert.equal(retryRound.actualDispatchCount, 1);
+  assert.equal(retryRound.actualResultCount, 1);
+  const finalObservation = ctl.debugValues.filter(value => value.event === "direct_round_observation").at(-1);
+  assert.equal(finalObservation.executionCost.knownPromptTokensIncludingSummary, totalPromptTokens);
+  assert.equal(finalObservation.executionCost.knownPredictedTokensIncludingSummary, totalPredictedTokens);
+  assert.equal(finalObservation.executionCost.modelCalls, 5);
+  assert.equal(finalObservation.executionCost.modelCallsIncludingSummary, 5);
+  assert.equal(finalObservation.executionCost.unknownUsageCallsIncludingSummary, 0);
+  assert.equal(finalObservation.executionCost.elapsedMsIncludingSummary >= 0, true);
+  assert.equal(finalObservation.executionCost.executionElapsedMs
+    >= finalObservation.executionCost.elapsedMsIncludingSummary, true);
+  assert.equal(Date.now() - startedAt >= finalObservation.executionCost.elapsedMsIncludingSummary, true);
+  assert.equal(Date.now() - startedAt >= finalObservation.executionCost.executionElapsedMs, true);
+});
+
 test("raw tool text cut by the output cap is classified as tool-argument generation", () => {
   const message = ChatMessage.create("assistant", "<tool_call><function=git_diff_file>");
   const stage = __test.classifyOutputLimitStage({
@@ -1983,8 +2235,12 @@ test("raw tool text cut by the output cap is classified as tool-argument generat
   assert.equal(stage, "tool_arguments");
 });
 
-function archivedObservationHistory(resultSize = 24000) {
+function archivedObservationHistory(resultSize = 24000, withCompressiblePriorTurn = false) {
   const history = Chat.from([{ role: "system", content: "Preserve the current constraints." },
+    ...(withCompressiblePriorTurn ? [
+      { role: "user", content: "Earlier completed request." },
+      { role: "assistant", content: `Earlier answer ${"old ".repeat(8000)}` },
+    ] : []),
     { role: "user", content: "Inspect the returned Git evidence." }]);
   history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
     id: "call-archive-1", type: "function", name: "evidence_first_git_page", arguments: { page: 0 },
@@ -2037,6 +2293,45 @@ test("deterministic working context projects a completed large result and expose
   assert.ok(measurement.workingContext.mandatoryFloorTokens <= measurement.finalInputTokens);
   const observation = ctl.debugValues.find(value => value.event === "direct_round_observation");
   assert.equal(observation.workingContextExposure[0].stage, "generation_completed_after_input");
+});
+
+test("low-pressure Git page stays raw for its first consumer without a semantic round trip", async () => {
+  const history = Chat.from([{ role: "user", content: "Summarize the returned commits before reading anything again." }]);
+  const request = { id: "small-git-page", type: "function", name: "git_log",
+    arguments: { since: "2026-09-14", authorQuery: "yongseokpark" } };
+  const items = Array.from({ length: 18 }, (_, index) => ({
+    commit: String(index).padStart(40, "a"), authoredAt: `2026-09-${String(14 + index % 7).padStart(2, "0")}T10:00:00+09:00`,
+    authorName: "yongseokpark", authorEmail: "yongseok@example.invalid",
+    subject: `USER_VISIBLE_SUBJECT_${index}_${"detail".repeat(5)}`,
+  }));
+  const rawResult = JSON.stringify({ ok: true, kind: "git_observation", status: "observed", action: "log",
+    since: "2026-09-14", authorQuery: "yongseokpark", pageStart: 1, pageEnd: items.length,
+    pageHasMore: false, sourceResultComplete: true, returnedCount: items.length, total: items.length, items });
+  assert.ok(rawResult.length > 2500 && rawResult.length < 8192, rawResult.length);
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+    toolCallId: request.id, content: rawResult }] }));
+  let modelCalls = 0;
+  const model = exactCountingModel(async (chat, _tools, options) => {
+    modelCalls += 1;
+    assert.match(chat.toString(), /USER_VISIBLE_SUBJECT_17/u);
+    assert.doesNotMatch(chat.toString(), /archived_tool_result_projection/u);
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 1800,
+      predictedTokensCount: 40 } });
+    options.onMessage(ChatMessage.create("assistant", "The returned commit subjects were consumed directly."));
+  });
+  const tool = { name: "git_log", pluginIdentifier: "mcp/unreal-agent", description: "Read Git log",
+    parametersJsonSchema: { type: "object" } };
+  const ctl = fakeController(history, model, {
+    contextManagementMode: "hybrid", workingInputTargetTokens: 10000,
+    workingInputTriggerTokens: 12048, softRemainingTokens: 1000, hardRemainingTokens: 500,
+  }, [tool]);
+  await createPredictionLoopHandler()(ctl);
+  assert.equal(modelCalls, 1);
+  assert.equal(ctl.debugValues.some(value => value.event === "semantic_handoff" && value.modelCalled), false);
+  const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
+  assert.equal(measurement.workingContext.projectionApplied, false);
+  assert.equal(measurement.workingContext.archive.captured, 1);
 });
 
 test("image content keeps prediction alive and skips only the durable working-window commit", async () => {
@@ -2093,14 +2388,16 @@ test("working input target reports the mandatory floor without deleting the curr
 });
 
 test("hybrid context makes one tool-free semantic handoff and keeps it out of visible output", async () => {
-  const history = archivedObservationHistory();
+  const history = archivedObservationHistory(24000, true);
   const calls = [];
   const model = exactCountingModel(async (chat, tools, options) => {
     calls.push({ chat: chat.toString(), toolCount: tools.length, maxTokens: options.maxTokens });
     if (chat.toString().includes("purpose=context_summary") || chat.toString().includes('"purpose":"context_summary"')) {
+      const allowedRef = /"allowedRefs":\["([^"]+)"/u.exec(chat.toString())?.[1];
+      assert.ok(allowedRef);
       options.onMessage(ChatMessage.create("assistant", JSON.stringify({ decisions: [{
         statement: "Keep Git paging bounded", rationale: "The returned page was large",
-        refs: ["tool-call:call-archive-1"],
+        refs: [allowedRef],
       }] })));
       options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 800, predictedTokensCount: 60 } });
       return;
@@ -2132,7 +2429,7 @@ test("hybrid context makes one tool-free semantic handoff and keeps it out of vi
 });
 
 test("invalid hybrid summary is discarded without retry or report recovery", async () => {
-  const history = archivedObservationHistory();
+  const history = archivedObservationHistory(24000, true);
   let calls = 0;
   const model = exactCountingModel(async (chat, _tools, options) => {
     calls++;
@@ -2161,7 +2458,7 @@ test("invalid hybrid summary is discarded without retry or report recovery", asy
 });
 
 test("BOUNDED keeps its original call budget and does not start a hybrid summary", async () => {
-  const history = archivedObservationHistory();
+  const history = archivedObservationHistory(24000, true);
   let calls = 0;
   const model = exactCountingModel(async (_chat, _tools, options) => {
     calls++;
@@ -2181,7 +2478,7 @@ test("BOUNDED keeps its original call budget and does not start a hybrid summary
 });
 
 test("cancellation during the hybrid summary prevents the normal model call", async () => {
-  const history = archivedObservationHistory();
+  const history = archivedObservationHistory(24000, true);
   const abort = new AbortController();
   let calls = 0;
   const model = exactCountingModel(async (_chat, _tools, _options) => {

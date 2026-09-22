@@ -1,0 +1,197 @@
+{
+  "mode": "codegen",
+  "baseline": {
+    "reviewedHead": "d13c1e589d6100fc10903cb8962e714a0c4789c1",
+    "branch": "v1.4.0-beta-2",
+    "initialWorktree": "clean",
+    "installedPluginModified": false
+  },
+  "claims": [
+    {
+      "claim": "작은 Git 결과는 보관과 모델 입력 치환을 분리하여 8192자 이하이면 첫 소비 입력에 원문을 유지하고, projection만 발생한 라운드는 semantic handoff를 호출하지 않습니다. 실제 compaction이 일어난 Hybrid 라운드만 기존 단일 semantic handoff 후보가 됩니다.",
+      "claimType": "data_flow",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "WorkingContext.project는 실제 Git envelope을 archive에 검증 저장한 뒤 first-consumer exposure가 없고 bounded 크기이면 원문을 유지하며, generation 완료 뒤 causal request/result/content fingerprint를 소비 상태로 기록합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "semanticCheckpoint와 dispatch 조건은 projectionApplied가 아니라 실제 compactionCheckpoint/compacted 상태를 요구합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "2.5K자보다 큰 bounded Git page가 첫 모델 입력에 subject를 포함한 raw로 남고 semantic model call 0회인 회귀와, 실제 compaction에서만 semantic 1회인 회귀가 통과합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "WorkingContext.project before model input" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/working-context.js", "symbol": "preserveUnconsumedRawGitMaxChars and consumedRawResults" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "direct_context_measurement and semantic_handoff telemetry" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "active LM Studio Hybrid chat",
+          "observation": "설치본과 실모델에서 전체 작업 비용이 감소했는지는 이번 로컬 제품 통합 테스트만으로 확인되지 않습니다."
+        }
+      ],
+      "unknowns": [
+        "8192자 first-consumer 경계가 모든 모델 tokenizer와 도구 집합에서 최적인지는 실모델 비교가 필요합니다."
+      ]
+    },
+    {
+      "claim": "raw tool intent 복구는 fragment 경계와 무관한 bounded carry 및 최종 assistant 문자열 판정을 함께 사용하고, 일반 모드에서 BOUNDED auditResearchSeconds를 숨은 deadline으로 사용하지 않습니다. ObserveOnly, 취소, timeout, generation pause, 이미 한 번 재시도한 상태는 명시 reason code로 거부합니다.",
+      "claimType": "state_transition",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "observation": "96자 rolling carry가 분할된 tool_call/function 표식을 감지하고 최초 fragment/visible offset을 기록합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "freshToolPlanningRetryDecision은 일반 모드에서 audit research deadline을 검사하지 않고 maxAttempts=1, final raw 판정, read-only tool subset, zero dispatch/result, headroom, cancel/timeout/pause를 검사합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "한 chunk, tag split, 문자 단위, fragment callback 없음, 99/101/300초, ObserveOnly/pause/already-retried 조건과 실제 임시 Git fresh planning 완주 회귀가 통과합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/round-loop.ts", "symbol": "onPredictionFragment and onMessage" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "freshToolPlanningRetryDecision" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "single fresh planning round with verified read-only tool names" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "fresh_tool_planning_retry_scheduled and executionCost telemetry" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "d13c1e5 server timing rows",
+          "observation": "첨부 시간 기록에는 plugin modelInputId와 retry reason code가 없어 과거 실패가 정확히 100초 gate 때문이었다고 확정할 수 없습니다."
+        }
+      ],
+      "unknowns": [
+        "동일 Swift Qwen3.8 27B 설치본에서의 실제 finishReason과 fragment 경계는 재실행 전까지 UNPROVEN입니다."
+      ]
+    },
+    {
+      "claim": "성공한 동일 read 판정은 전체 history의 provider ID 합집합이 아니라 같은 causal batch의 request/result와 실제 성공 payload를 연결합니다. 현재 입력이 projection 또는 historical index뿐이면 raw가 없는 정당한 archive 재조회를 차단하지 않습니다. Archive EOF/hasMore와 원래 Git source page continuation/total은 별도 필드로 보존됩니다.",
+      "claimType": "data_flow",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "completedRequestFingerprints는 causal batch, 중복 ID, result success/error, current raw kind를 검사합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js and src/compaction-tool-memory.js",
+          "observation": "historical range 응답과 durable adapter가 sourcePageHasMore/sourceTotal과 archiveHasMore/archiveReachedEnd를 별도 보존하며 archive hasMore를 source pageHasMore fallback으로 쓰지 않습니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs and test/working-context.test.cjs",
+          "observation": "실패 read, 재사용 provider ID의 pending request, current raw 퇴출 뒤 index, 25/232 source page의 archive EOF 및 checkpoint memory 회귀가 통과합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "captured tool history before fresh retry" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "completedRequestFingerprints" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js", "symbol": "EvidenceArchive.read" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js", "symbol": "historicalEvidenceObservation" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "active chat archive store",
+          "observation": "기존 설치본에 만들어진 archive record의 semanticFacts에 없는 source metadata는 새 코드가 소급 복원할 수 없습니다."
+        }
+      ],
+      "unknowns": [
+        "기존 archive schemaVersion 1 자료 중 source metadata가 없던 record는 unknown을 유지합니다."
+      ]
+    },
+    {
+      "claim": "공개 workspace schema와 실제 VersionControl을 연결한 임시 Git 통합에서 log와 changed-files를 실행하고, 문자 단위 raw diff intent를 실행하지 않은 채 단 한 번의 fresh planning으로 유효한 structured git_diff_file을 dispatch하여 실제 diff 결과와 최종 보고까지 완료합니다. Git authorQuery는 fixed-string으로 실행되어 dev+qa와 devvqa를 구분합니다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/workspace.js and shared-tool-core/git.js",
+          "observation": "workspace closed schema가 comparison/base/head를 실행 전 검증하고 Git log는 --fixed-strings와 literal authorQuery를 사용합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "실제 임시 repository와 createWorkspaceCapabilities를 사용한 Human-Bartender 흐름이 Git 실행 3회, fresh retry 1회, mutation/build 0회로 최종 보고까지 완료하며 누적 prompt/predicted/time telemetry를 검증합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unity-mcp/test/git.test.js",
+          "observation": "실제 Git subprocess에서 dev+qa, devvqa, 점이 있는 email, 비ASCII 작성자를 literal fixed-string으로 구분합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "shared-tool-core/workspace.js", "symbol": "workspaceToolDefinitions and closed validator" },
+        { "stage": "decision", "stageStatus": "present", "location": "shared-tool-core/git.js", "symbol": "VersionControl.call argument and literal author validation" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "shared-tool-core/git.js", "symbol": "execFileSync git log/diff with literal pathspecs" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs", "symbol": "actual result assertions and cumulative executionCost" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "LM Studio SDK transport and live local model",
+          "observation": "통합 테스트의 모델은 stub이며 SDK/MCP transport와 실제 38912-context 모델은 실행하지 않았습니다."
+        }
+      ],
+      "unknowns": [
+        "실모델의 작업 완주율, token 비용, cache 효과와 wall time 개선은 UNPROVEN입니다."
+      ]
+    }
+  ],
+  "invariants": [
+    "raw XML/JSON tool arguments를 파싱·복원·직접 실행하지 않습니다.",
+    "fresh planning retry는 검증된 read-only tool subset으로 최대 한 번입니다.",
+    "mutation/build/unknown-effect 호출은 자동 재실행하지 않습니다.",
+    "사용자 취소·timeout·ObserveOnly·BOUNDED와 기존 Luna output recovery 제한을 유지합니다.",
+    "archive hash는 현재 파일 write 권한이나 fresh receipt가 아닙니다."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/round-loop.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+    "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+    "shared-tool-core/git.js",
+    "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+    "lmstudio-context-compactor-plugin/test/working-context.test.cjs",
+    "lmstudio-unity-mcp/test/git.test.js"
+  ],
+  "validationPlan": [
+    "npm test --prefix lmstudio-context-compactor-plugin",
+    "npm test --prefix lmstudio-unity-mcp",
+    "npm test --prefix lmstudio-unreal-agent-mcp",
+    "python -m pytest -q",
+    "python evidence-first-code-audit/scripts/validate_evidence_packet.py evidence-packet-cost-recovery-20260922.json",
+    "git diff --check",
+    "실제 설치본·활성 채팅·Swift Qwen3.8 27B 비교는 별도 승인 환경에서 수행하고 그 전에는 UNPROVEN으로 유지"
+  ]
+}

@@ -111,7 +111,7 @@ test("Git log memory preserves author and committer evidence without promoting r
     workspaceIdentity: "workspace",
     since: "2026-09-14",
     authorQuery: "Yongseok",
-    authorQuerySemantics: "literal_name_or_email_fragment",
+    authorQuerySemantics: "literal_fixed_string_name_or_email_fragment",
     identitySemantics: "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility",
     items: [{
       commit: "a".repeat(40),
@@ -130,12 +130,12 @@ test("Git log memory preserves author and committer evidence without promoting r
     "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility");
   assert.equal(parsed.gitObservation.since, "2026-09-14");
   assert.equal(parsed.gitObservation.authorQuery, "Yongseok");
-  assert.equal(parsed.gitObservation.authorQuerySemantics, "literal_name_or_email_fragment");
+  assert.equal(parsed.gitObservation.authorQuerySemantics, "literal_fixed_string_name_or_email_fragment");
   assert.equal(parsed.responsiblePerson, undefined);
   const durable = stateMemory([{ gitObservation: parsed.gitObservation }]).gitObservations[0];
   assert.equal(durable.since, "2026-09-14");
   assert.equal(durable.authorQuery, "Yongseok");
-  assert.equal(durable.authorQuerySemantics, "literal_name_or_email_fragment");
+  assert.equal(durable.authorQuerySemantics, "literal_fixed_string_name_or_email_fragment");
   assert.equal(durable.identitySemantics,
     "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility");
 });

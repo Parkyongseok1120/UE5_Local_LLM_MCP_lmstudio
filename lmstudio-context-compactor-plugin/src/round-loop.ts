@@ -9,6 +9,9 @@ import {
 
 type TokenSource = LLM | LLMGeneratorHandle;
 
+const RAW_TOOL_INTENT_PATTERN = /<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu;
+const RAW_TOOL_INTENT_CARRY_CHARS = 96;
+
 type RoundCallbacks = {
   onToolCallRequestFinalized: NonNullable<LLMActionOpts["onToolCallRequestFinalized"]>;
   guardToolCall: NonNullable<LLMActionOpts["guardToolCall"]>;
@@ -68,6 +71,7 @@ export async function runOneToolRound(
   let finishReason: string | undefined;
   let predictionStats: CapturedRound["predictionStats"];
   let fragmentAbortReason: Error | undefined;
+  let visibleFragmentTail = "";
   const predictionUsage = {
     fragmentCount: 0,
     reasoningTokensCount: 0,
@@ -106,12 +110,17 @@ export async function runOneToolRound(
         if (fragment.reasoningType !== "reasoning" && !fragment.isStructural
           && fragment.reasoningType !== "reasoningStartTag" && fragment.reasoningType !== "reasoningEndTag") {
           const visibleContent = String(fragment.content || "");
+          const visibleCharsBeforeFragment = predictionUsage.visibleChars;
           predictionUsage.visibleChars += visibleContent.length;
-          if (/<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu.test(visibleContent)) {
+          const candidate = `${visibleFragmentTail}${visibleContent}`;
+          const rawMatch = RAW_TOOL_INTENT_PATTERN.exec(candidate);
+          if (rawMatch) {
             predictionUsage.rawToolIntentCandidate = true;
             predictionUsage.rawToolIntentFirstFragment ??= predictionUsage.fragmentCount;
-            predictionUsage.rawToolIntentFirstVisibleChar ??= predictionUsage.visibleChars - visibleContent.length;
+            predictionUsage.rawToolIntentFirstVisibleChar ??= Math.max(0,
+              visibleCharsBeforeFragment - visibleFragmentTail.length + rawMatch.index);
           }
+          visibleFragmentTail = candidate.slice(-RAW_TOOL_INTENT_CARRY_CHARS);
         }
         actCallbacks.onPredictionFragment?.(fragment);
         const reason = abortAfterPredictionFragment?.(fragment);

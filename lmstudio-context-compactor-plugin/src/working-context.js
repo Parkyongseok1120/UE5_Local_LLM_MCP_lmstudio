@@ -62,7 +62,8 @@ function sourceIdentity(payload) {
 
 function semanticFacts(payload) {
   const facts = {};
-  for (const key of ["kind", "ok", "status", "errorCode", "pageStart", "pageEnd", "pageHasMore",
+  for (const key of ["kind", "ok", "status", "errorCode", "action", "comparison", "base", "head",
+    "since", "until", "authorQuery", "authorQuerySemantics", "pageStart", "pageEnd", "pageHasMore",
     "hasMore", "sourceResultComplete", "returnedRange", "lineRange", "startLine", "endLine",
     "totalLines", "returnedCount", "total"]) {
     if (payload[key] !== undefined) facts[key] = payload[key];
@@ -72,6 +73,28 @@ function semanticFacts(payload) {
     facts.sourceResultComplete = payload.hasMore === false;
   }
   return redact(facts);
+}
+
+function semanticEvidenceView(payload, maxChars = 640) {
+  const facts = semanticFacts(payload);
+  if (payload.kind !== "git_observation") return JSON.stringify(redact(payload)).slice(0, maxChars);
+  const view = { ...facts };
+  if (Array.isArray(payload.items)) {
+    view.items = [];
+    for (const item of payload.items) {
+      const next = { ...view, items: [...view.items, redact(item)] };
+      if (JSON.stringify(next).length > maxChars) break;
+      view.items.push(redact(item));
+    }
+    view.itemsOmitted = Math.max(0, payload.items.length - view.items.length);
+  } else if (typeof payload.text === "string") {
+    view.text = payload.text.slice(0, Math.max(0, maxChars - JSON.stringify(view).length - 32));
+  }
+  return JSON.stringify(view).slice(0, maxChars);
+}
+
+function rawExposureKey(request, result, originalEnvelope) {
+  return hash([request.name, request.arguments || {}, String(result.toolCallId || ""), originalEnvelope]);
 }
 
 function serializedResultContent(content) {
@@ -125,6 +148,7 @@ class WorkingContext {
     this.lineage = options.lineage || null;
     this.parentLineage = options.parentLineage || null;
     this.lastSummaryInput = "";
+    this.consumedRawResults = new Set();
     this.cost = { summaryCalls: 0, summaryPromptTokens: 0, summaryPredictedTokens: 0, summaryMs: 0, unknownUsageCalls: 0 };
   }
 
@@ -144,8 +168,8 @@ class WorkingContext {
       if (typeof call !== "string" || !call) continue;
       const decoded = decodeToolResultRecord(record.body);
       const semantic = decoded.value || {};
-      const excerpt = JSON.stringify(redact(semantic)).slice(0, 640);
-      const item = { ref: `tool-call:${call}`, evidenceId: id, version,
+      const excerpt = semanticEvidenceView(semantic, 640);
+      const item = { ref: `tool-call:archive-${hash([id, version]).slice(0, 32)}`, evidenceId: id, version,
         source: record.metadata?.toolName || record.metadata?.sourceKind || "observation",
         sourceIdentityDigest: hash(record.metadata?.sourceIdentity || {}),
         verifiedExcerpt: excerpt,
@@ -161,7 +185,7 @@ class WorkingContext {
     const index = exchangeIndex(history);
     if (index.ambiguous) return { history, changed: false, reason: "pending_or_ambiguous_exchange" };
     const projected = Chat.empty();
-    let changed = false, archiveFailed = false;
+    let changed = false, archiveFailed = false, preservedFirstConsumer = false;
     const messages = history.getMessagesArray();
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
       const message = messages[messageIndex];
@@ -177,11 +201,11 @@ class WorkingContext {
         // The caller's known observation classification alone is not execution proof.
         if (parsed.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(parsed.status)) return result;
         // A projection has fixed identity/range metadata. Avoid archiving and
-        // replacing small observations that cannot become cheaper overall.
+        // replacing tiny observations that cannot become cheaper overall.
         if (originalEnvelope.length <= Math.max(maxChars, 1024)) return result;
         const identity = sourceIdentity(parsed), facts = semanticFacts(parsed);
         const saved = this.archive.put(originalEnvelope, { ...metadata,
-          callKey: `${metadata.executionId || "history"}:${metadata.roundIndex ?? "history"}:${result.toolCallId}`,
+          callKey: `${metadata.executionId || "history"}:history-${messageIndex}:result-${resultIndex}:${result.toolCallId}`,
           providerRequestId: result.toolCallId, toolName: request.name,
           sourceKind: parsed.kind || "observation", sourceVersion: parsed.sha256 || parsed.head || null,
           sourceIdentity: identity, semanticQueryDigest: hash(request.arguments || {}), semanticFacts: facts,
@@ -194,6 +218,14 @@ class WorkingContext {
         { liveRefs: new Set(this.refs.keys()) });
         if (!saved.ok) { archiveFailed = true; return result; }
         const record = saved.record;
+        this.refs.set(record.evidenceId, record.archivedBodyHash);
+        const preserveLimit = Number(metadata.preserveUnconsumedRawGitMaxChars || 0);
+        if (parsed.kind === "git_observation" && preserveLimit > 0
+          && originalEnvelope.length <= preserveLimit
+          && !this.consumedRawResults.has(rawExposureKey(request, result, originalEnvelope))) {
+          preservedFirstConsumer = true;
+          return result;
+        }
         const semanticBody = JSON.stringify(redact(parsed));
         let projectedEnd = Math.min(maxChars, semanticBody.length);
         const directSemanticBody = originalEnvelope.trim() === JSON.stringify(parsed);
@@ -205,6 +237,16 @@ class WorkingContext {
           sourceRange: parsed.returnedRange || parsed.lineRange
             || (parsed.pageStart !== undefined || parsed.pageEnd !== undefined ? [parsed.pageStart, parsed.pageEnd] : null),
           sourceCollectionComplete: parsed.sourceResultComplete ?? "unknown",
+          sourcePageStart: parsed.pageStart,
+          sourcePageEnd: parsed.pageEnd,
+          sourcePageHasMore: parsed.pageHasMore ?? parsed.hasMore ?? "unknown",
+          sourceReturnedCount: parsed.returnedCount,
+          sourceTotal: parsed.total,
+          sourceAction: parsed.action,
+          sourceSince: parsed.since,
+          sourceUntil: parsed.until,
+          sourceAuthorQuery: parsed.authorQuery,
+          sourceAuthorQuerySemantics: parsed.authorQuerySemantics,
           pageHasMore: parsed.pageHasMore ?? parsed.hasMore ?? "unknown",
           ...(typeof parsed.nextCursor === "string" && parsed.nextCursor
             ? { transport: { nextCursor: parsed.nextCursor, durable: false, guessed: false } } : {}),
@@ -233,13 +275,14 @@ class WorkingContext {
           projectedContent = JSON.stringify(projection);
         }
         if (projectedContent.length >= originalEnvelope.length) return result;
-        this.refs.set(record.evidenceId, record.archivedBodyHash);
         changed = true;
         return { ...result, content: projectedContent };
       });
       projected.append(ChatMessage.from({ role: "tool", content: copies.map(r => ({ type: "toolCallResult", ...r })) }));
     }
-    return { history: changed ? projected : history, changed, archiveFailed, reason: archiveFailed ? "partial_archive_failure" : "verified" };
+    return { history: changed ? projected : history, changed, archiveFailed,
+      reason: archiveFailed ? "partial_archive_failure"
+        : preservedFirstConsumer ? "first_consumer_raw_git_preserved" : "verified" };
   }
 
   tool() {
@@ -260,7 +303,13 @@ class WorkingContext {
   }); }
 
   captureExposure(history, modelInputId, completed = false) {
-    for (const message of history.getMessagesArray()) for (const result of message.getToolCallResults()) {
+    const index = exchangeIndex(history);
+    const messages = history.getMessagesArray();
+    for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+      const message = messages[messageIndex];
+      const results = message.getToolCallResults();
+      for (let resultIndex = 0; resultIndex < results.length; resultIndex++) {
+        const result = results[resultIndex];
       try {
         const value = decodeToolResultRecord(result.content).value;
         if (!value) continue;
@@ -278,8 +327,19 @@ class WorkingContext {
             hostInputVerification: "unknown", returnedRange: value.returnedRange,
             fullRawProvided: value.fullRawProvided === true,
             redacted: value.redacted, evidenceId: value.evidenceId });
+        } else {
+          const request = index.matches.get(`${messageIndex}:${resultIndex}`);
+          if (!request) continue;
+          const originalEnvelope = serializedResultContent(result.content);
+          const key = rawExposureKey(request, result, originalEnvelope);
+          this.exposure.set(`${modelInputId}:${result.toolCallId}`, { modelInputId, callId: result.toolCallId,
+            source: "current_raw_tool_result",
+            stage: completed ? "generation_completed_after_input" : "included_in_sdk_input",
+            hostInputVerification: "unknown", rawChars: originalEnvelope.length });
+          if (completed) this.consumedRawResults.add(key);
         }
       } catch { /* No archive view. */ }
+      }
     }
   }
 

@@ -243,6 +243,42 @@ test("P2 evidence reads bound metadata and distinguish EOF from complete raw cov
   assert.equal(Object.prototype.hasOwnProperty.call(tail, "metadata"), false);
 });
 
+test("Git source page continuation survives archive EOF as a separate contract", () => {
+  const history = Chat.from([{ role: "user", content: "Inspect page one." }]);
+  const request = { type: "function", id: "page-25-of-232", name: "git_changed_files",
+    arguments: { comparison: "range", base: "base", head: "head", limit: 25 } };
+  const items = Array.from({ length: 25 }, (_, index) => ({ status: "modified",
+    path: `Assets/Long-Path-${index}-${"x".repeat(80)}.cs` }));
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+    toolCallRequest: request }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+    toolCallId: request.id, content: JSON.stringify({ ok: true, kind: "git_observation", status: "observed",
+      action: "changed_files", comparison: "range", base: "base", head: "head",
+      pageStart: 1, pageEnd: 25, pageHasMore: true, sourceResultComplete: true,
+      returnedCount: 25, total: 232, items }) }] }));
+  const context = new WorkingContext({ ...scope, lineage: "source-vs-archive" });
+  const projected = context.project(history, () => true, { executionId: "exec", roundIndex: 1 }, 512);
+  assert.equal(projected.changed, true);
+  const projection = JSON.parse(projected.history.getMessagesArray().at(-1).getToolCallResults()[0].content);
+  assert.equal(projection.sourcePageHasMore, true);
+  assert.equal(projection.sourceTotal, 232);
+  const read = context.archive.read(projection.archiveRef.evidenceId, projection.archiveRef.version, 0, 8192);
+  assert.equal(read.archiveReachedEnd, true);
+  assert.equal(read.archiveHasMore, false);
+  assert.equal(read.sourcePageHasMore, true);
+  assert.equal(read.sourceReturnedCount, 25);
+  assert.equal(read.sourceTotal, 232);
+  const parsed = parseToolResult(JSON.stringify(read));
+  assert.equal(parsed.historicalEvidence.sourcePageHasMore, true);
+  assert.equal(parsed.historicalEvidence.pageHasMore, true);
+  assert.equal(parsed.historicalEvidence.archiveReachedEnd, true);
+  assert.equal(parsed.historicalEvidence.archiveHasMore, false);
+  const memory = stateMemory([parsed]);
+  assert.equal(memory.historicalEvidence[0].sourcePageHasMore, true);
+  assert.equal(memory.historicalEvidence[0].archiveReachedEnd, true);
+  assert.equal(memory.historicalEvidence[0].archiveHasMore, false);
+});
+
 test("P2 provider request IDs may repeat in separate completed causal batches", () => {
   const history = Chat.from([{ role: "user", content: "inspect twice" }]);
   for (let round = 0; round < 2; round++) {

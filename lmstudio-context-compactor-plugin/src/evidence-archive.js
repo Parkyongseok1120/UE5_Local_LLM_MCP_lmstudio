@@ -190,6 +190,7 @@ class EvidenceArchive {
     if (version !== r.archivedBodyHash) return { ok: false, errorCode: "version_mismatch" };
     if (start > r.body.length) return { ok: false, errorCode: "invalid_range" };
     const identity = r.metadata?.sourceIdentity || {};
+    const sourceFacts = r.metadata?.semanticFacts || {};
     const base = { ok: true, kind: "historical_evidence_range", evidenceId: id, version,
       originalCallId: r.metadata?.providerRequestId,
       sourceHash: r.sourceHash, sourceVersion: r.metadata?.sourceVersion,
@@ -197,6 +198,17 @@ class EvidenceArchive {
       toolName: r.metadata?.toolName, resultStatus: r.metadata?.resultStatus,
       errorCode: r.metadata?.errorCode ?? null,
       sourceRange: r.metadata?.originRanges,
+      sourceAction: sourceFacts.action,
+      sourceSince: sourceFacts.since,
+      sourceUntil: sourceFacts.until,
+      sourceAuthorQuery: sourceFacts.authorQuery,
+      sourceAuthorQuerySemantics: sourceFacts.authorQuerySemantics,
+      sourcePageStart: sourceFacts.pageStart,
+      sourcePageEnd: sourceFacts.pageEnd,
+      sourcePageHasMore: sourceFacts.pageHasMore,
+      sourceResultComplete: sourceFacts.sourceResultComplete,
+      sourceReturnedCount: sourceFacts.returnedCount,
+      sourceTotal: sourceFacts.total,
       redacted: r.redacted, currentFile: false, grantsMutation: false,
       rangeUnit: r.rangeUnit, totalChars: r.body.length, availableRange: [0, r.body.length] };
     const totalBudget = Math.max(512, maxChars);
@@ -207,7 +219,9 @@ class EvidenceArchive {
     const response = () => {
       const reachedEnd = end === r.body.length;
       const fullRawProvided = start === 0 && reachedEnd && r.redacted === false;
-      return { ...base, returnedRange: [start, end], hasMore: !reachedEnd, reachedEnd,
+      return { ...base, returnedRange: [start, end],
+        archiveHasMore: !reachedEnd, archiveReachedEnd: reachedEnd,
+        hasMore: !reachedEnd, reachedEnd,
         fullRawProvided, coverageState: fullRawProvided ? "complete" : "partial",
         content: r.body.slice(start, end) };
     };

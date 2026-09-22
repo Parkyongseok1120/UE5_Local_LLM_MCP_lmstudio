@@ -59,9 +59,6 @@ function validAuthorQuery(value) {
     fail("invalid_arguments", "authorQuery must be a non-empty bounded author name or email fragment");
   return value;
 }
-function literalRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
 function comparisonArgs(a) {
   if (!["range", "worktree", "staged", "last_commit"].includes(a.comparison))
     fail("invalid_arguments", "Set comparison explicitly; range requires base/head, worktree and staged forbid them");
@@ -214,12 +211,13 @@ class VersionControl {
       const filters = [
         ...(a.since ? [`--since=${a.since}`] : []),
         ...(a.until ? [`--until=${a.until}`] : []),
-        ...(a.authorQuery ? [`--author=${literalRegex(a.authorQuery)}`] : []),
+        ...(a.authorQuery ? ["--fixed-strings", `--author=${a.authorQuery}`] : []),
       ];
       Object.assign(facts, {
         ...(a.since ? { since: a.since } : {}),
         ...(a.until ? { until: a.until } : {}),
-        ...(a.authorQuery ? { authorQuery: a.authorQuery, authorQuerySemantics: "literal_name_or_email_fragment" } : {}),
+        ...(a.authorQuery ? { authorQuery: a.authorQuery,
+          authorQuerySemantics: "literal_fixed_string_name_or_email_fragment" } : {}),
         identitySemantics: "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility",
       });
       const tokens = text(run(gitRoot, ["log", "--no-show-signature", "-n5001", ...filters,

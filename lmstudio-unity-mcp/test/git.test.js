@@ -232,7 +232,7 @@ test("git log returns author and committer evidence with bounded date and litera
   assert.equal(selected.items[0].committerEmail, "test@example.invalid");
   assert.equal(selected.identitySemantics,
     "author_and_committer_metadata_only_not_code_ownership_or_work_responsibility");
-  assert.equal(selected.authorQuerySemantics, "literal_name_or_email_fragment");
+  assert.equal(selected.authorQuerySemantics, "literal_fixed_string_name_or_email_fragment");
 
   const first = await f.call({ action: "log", limit: 1 });
   assert(first.nextCursor);
@@ -241,6 +241,31 @@ test("git log returns author and committer evidence with bounded date and litera
   })).errorCode, "invalid_cursor");
   assert.equal((await f.call({ action: "log", since: "2026/09/14" })).errorCode,
     "invalid_arguments");
+});
+
+test("git log authorQuery is a literal fixed string for regex metacharacters and non-ASCII", async t => {
+  const f = fixture(t);
+  const commitAs = (file, author, email) => {
+    f.put(file, `${author}\n`);
+    f.git("add", file);
+    execFileSync("git", ["commit", "-qm", author, `--author=${author} <${email}>`], {
+      cwd: f.root,
+      windowsHide: true,
+      env: { ...process.env, GIT_AUTHOR_DATE: "2026-09-14T09:00:00+09:00",
+        GIT_COMMITTER_DATE: "2026-09-14T10:00:00+09:00" },
+    });
+  };
+  commitAs("Assets/Plus.cs", "dev+qa", "plus@example.invalid");
+  commitAs("Assets/Regex.cs", "devvqa", "regex@example.invalid");
+  commitAs("Assets/Korean.cs", "박용석", "korean@example.invalid");
+
+  const plus = await f.call({ action: "log", authorQuery: "dev+qa" });
+  assert.deepEqual(plus.items.map(item => item.authorName), ["dev+qa"]);
+  const dottedEmail = await f.call({ action: "log", authorQuery: "plus@example.invalid" });
+  assert.deepEqual(dottedEmail.items.map(item => item.authorEmail), ["plus@example.invalid"]);
+  const korean = await f.call({ action: "log", authorQuery: "박용석" });
+  assert.deepEqual(korean.items.map(item => item.authorName), ["박용석"]);
+  assert.equal(plus.authorQuerySemantics, "literal_fixed_string_name_or_email_fragment");
 });
 test("unborn status, root commit, literal paths and result budgets", async t => {
   const f = fixture(t);
