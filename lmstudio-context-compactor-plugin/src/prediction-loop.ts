@@ -90,6 +90,7 @@ const toolMemory = require("./compaction-tool-memory.js") as {
 const inputAvailability = require("./input-availability.js") as {
   currentRawObservations(messages: Array<NormalizedMessage>): Array<Record<string, unknown>>;
   historicalAvailabilityFromMemory(memory: unknown): Array<Record<string, unknown>>;
+  normalizeRanges(ranges: Array<unknown>): Array<[number, number]>;
   projectInputAvailability(messages: Array<NormalizedMessage>, historical: Array<Record<string, unknown>>,
     options: { modelInputId: string; maxEntries?: number }): InputAvailabilityProjection;
   renderInputAvailabilityMetadata(projection: InputAvailabilityProjection): string;
@@ -100,6 +101,7 @@ const inputAvailability = require("./input-availability.js") as {
 
 const VOLATILE_OBSERVATION_KEYS = new Set([
   "observedAt", "lastObservedAt", "snapshotCapturedAt", "snapshotId", "nextCursor", "compactionGeneration",
+  "gitTiming",
 ]);
 
 function canonicalTelemetryValue(value: unknown, semantic = false): unknown {
@@ -116,6 +118,10 @@ function telemetryFingerprint(value: unknown, semantic = false): string {
   if (typeof value === "string") {
     try { parsed = JSON.parse(value); } catch { parsed = value; }
   }
+  if (semantic) {
+    const decoded = toolMemory.decodeToolResultRecord(parsed);
+    if (decoded.value) parsed = decoded.value;
+  }
   const serialized = JSON.stringify(canonicalTelemetryValue(parsed, semantic));
   return crypto.createHash("sha256")
     .update(serialized === undefined ? "undefined" : serialized)
@@ -127,20 +133,70 @@ function resultContent(result: unknown): unknown {
   return (result as { content?: unknown }).content;
 }
 
+const PUBLIC_PAGED_GIT_READ_TOOLS = new Set([
+  "git_status", "git_log", "git_changed_files", "git_diff_file", "git_read_file",
+]);
+
+function readResultReservation(name: string, argumentsValue: unknown): Record<string, unknown> | null {
+  const args = argumentsValue && typeof argumentsValue === "object"
+    ? argumentsValue as Record<string, unknown> : {};
+  const limit = Number.isSafeInteger(Number(args.limit)) && Number(args.limit) > 0
+    ? Number(args.limit) : undefined;
+  const cursorPresent = typeof args.cursor === "string" && args.cursor.length > 0;
+  if (PUBLIC_PAGED_GIT_READ_TOOLS.has(name)) {
+    const defaultByteBudget = name === "git_changed_files" ? 4096 : 32768;
+    const requestedByteBudget = Number.isSafeInteger(Number(args.byteBudget))
+      && Number(args.byteBudget) >= 1024 ? Number(args.byteBudget) : defaultByteBudget;
+    return {
+      kind: "git_public_read",
+      requestedLimit: limit,
+      effectiveByteBudget: requestedByteBudget,
+      byteBudgetSource: args.byteBudget === undefined ? "tool_default" : "request",
+      cursorPresent,
+      ...(cursorPresent ? { cursorFingerprint: telemetryFingerprint(args.cursor) } : {}),
+    };
+  }
+  if (name === "evidence_first_read_context") {
+    const requestedMaxChars = Number.isSafeInteger(Number(args.maxChars))
+      && Number(args.maxChars) > 0 ? Number(args.maxChars) : 4096;
+    return {
+      kind: "archive_read",
+      effectiveMaxChars: requestedMaxChars,
+      maxCharsSource: args.maxChars === undefined ? "tool_default" : "request",
+      cursorPresent: false,
+    };
+  }
+  return null;
+}
+
 function messageEvidenceTelemetry(messages: Array<ChatMessage>) {
   const calls = messages.flatMap(message => message.getToolCallRequests()).map(request => ({
+    toolCallId: request.id,
     toolName: request.name,
     argumentsFingerprint: telemetryFingerprint(request.arguments || {}),
+    resultReservation: readResultReservation(request.name, request.arguments || {}),
   }));
   const results = messages.flatMap(message => message.getToolCallResults()).map(result => {
     const content = resultContent(result);
     const decoded = toolMemory.decodeToolResultRecord(content);
     const value = decoded.value;
     return {
+      toolCallId: result.toolCallId,
       resultFingerprint: telemetryFingerprint(content),
       semanticResultFingerprint: telemetryFingerprint(content, true),
       resultChars: typeof content === "string" ? content.length : JSON.stringify(content || null).length,
       resultBytes: Buffer.byteLength(typeof content === "string" ? content : JSON.stringify(content || null)),
+      resultStatus: value?.status,
+      resultOk: value?.ok,
+      errorCode: value?.errorCode,
+      kind: value?.kind,
+      pageStart: value?.pageStart ?? value?.sourcePageStart,
+      pageEnd: value?.pageEnd ?? value?.sourcePageEnd,
+      pageHasMore: value?.pageHasMore ?? value?.sourcePageHasMore,
+      returnedRange: value?.returnedRange ?? value?.archiveReturnedRange,
+      archiveHasMore: value?.archiveHasMore,
+      archiveReachedEnd: value?.archiveReachedEnd,
+      nextCursorPresent: typeof value?.nextCursor === "string" && value.nextCursor.length > 0,
       ...(value?.gitTiming ? { gitTiming: value.gitTiming } : {}),
       ...(value?.kind === "archived_tool_result_projection" ? {
         viewMode: value.viewMode,
@@ -153,7 +209,26 @@ function messageEvidenceTelemetry(messages: Array<ChatMessage>) {
       } : {}),
     };
   });
-  return { calls, results };
+  const requestedByteBudget = calls.reduce((total, call) => (
+    total + Number((call.resultReservation as Record<string, unknown> | null)?.effectiveByteBudget || 0)
+  ), 0);
+  const requestedMaxChars = calls.reduce((total, call) => (
+    total + Number((call.resultReservation as Record<string, unknown> | null)?.effectiveMaxChars || 0)
+  ), 0);
+  return {
+    calls,
+    results,
+    batchReservation: {
+      callCount: calls.length,
+      publicReadCallCount: calls.filter(call => call.resultReservation !== null).length,
+      requestedByteBudget,
+      requestedMaxChars,
+      unknownReturnLimitCallCount: calls.filter(call => call.resultReservation === null).length,
+      actualResultChars: results.reduce((total, result) => total + result.resultChars, 0),
+      actualResultBytes: results.reduce((total, result) => total + result.resultBytes, 0),
+      actualResultCount: results.length,
+    },
+  };
 }
 
 function serializedCheckpointCounts(checkpoint: string) {
@@ -218,6 +293,8 @@ export type ContextMeasurement = {
   toolSchemaChars: number;
   toolSchemaTokens: number | null;
   toolSchemaTokenMeasurement: "none" | "estimate" | "exact";
+  toolSchemaFingerprint: string;
+  templatedInputFingerprint: string | null;
   outputReserve: number;
   remainingTokens: number;
   exact: boolean;
@@ -310,7 +387,9 @@ const OUTPUT_RECOVERY_FINAL_INSTRUCTION = [
 ].join(" ");
 
 const READ_ONLY_BATCH_INSTRUCTION = [
+  "When a registered tool is exposed, use the host SDK's structured tool-call interface; never print XML, pseudo-XML, JSON, or other tool syntax as assistant text.",
   "For independent read-only investigation, request a reasonable batch and consume its results before planning the next batch.",
+  "Use the published read tool's limit, byteBudget, page, and cursor contract. Reserve the complete returned envelope for the next model input across the whole batch; after results arrive, the host will remeasure the exact template before another prediction.",
   "For large multi-file work, avoid generating an unnecessarily large set of tool arguments in one prediction.",
   "Do not repeat an already successful read unless the required range or source version is different.",
 ].join(" ");
@@ -578,7 +657,7 @@ class ToolRoundStagnationDetector {
       return { repeated: false, count: 0, fingerprint: "" };
     }
     const fingerprint = telemetryFingerprint({
-      calls: evidence.calls,
+      calls: evidence.calls.map(call => ({ toolName: call.toolName, argumentsFingerprint: call.argumentsFingerprint })),
       results: evidence.results.map(result => result.semanticResultFingerprint),
     });
     this.count = fingerprint === this.previous ? this.count + 1 : 1;
@@ -601,6 +680,17 @@ function normalizeHistory(history: Chat): Array<NormalizedMessage> {
   return normalizeMessages(history.getMessagesArray());
 }
 
+function toolDefinitionSurface(tools: Array<RemoteToolLike>): Array<Record<string, unknown>> {
+  return tools.map(tool => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      ...(tool.description ? { description: tool.description } : {}),
+      ...(tool.parametersJsonSchema ? { parameters: tool.parametersJsonSchema } : {}),
+    },
+  }));
+}
+
 async function measureContext(
   tokenSource: unknown,
   history: Chat,
@@ -613,18 +703,10 @@ async function measureContext(
     applyPromptTemplate?: (chat: Chat, opts?: { toolDefinitions?: Array<LLMTool> }) => Promise<string>;
     countTokens?: (text: string) => Promise<number>;
   };
-  const toolDefinitions: Array<LLMTool> = tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      ...(tool.description ? { description: tool.description } : {}),
-      ...(tool.parametersJsonSchema
-        ? { parameters: tool.parametersJsonSchema as LLMTool["function"]["parameters"] }
-        : {}),
-    },
-  }));
+  const toolDefinitions: Array<LLMTool> = toolDefinitionSurface(tools) as Array<LLMTool>;
   const toolSchemaJson = toolDefinitions.length > 0 ? JSON.stringify(toolDefinitions) : "";
   const toolSchemaChars = toolSchemaJson.length;
+  const toolSchemaFingerprint = telemetryFingerprint(toolDefinitions);
   let contextLength = config.assumedContextLength;
   let contextLengthSource: ContextMeasurement["contextLengthSource"] = "configured_fallback";
   let inputTokens = Math.ceil(
@@ -635,6 +717,7 @@ async function measureContext(
   let toolSchemaTokens: number | null = toolSchemaChars > 0 ? Math.ceil(toolSchemaChars / 4) : 0;
   let toolSchemaTokenMeasurement: ContextMeasurement["toolSchemaTokenMeasurement"] = toolSchemaChars > 0
     ? "estimate" : "none";
+  let templatedInputFingerprint: string | null = null;
   let exact = false;
   try {
     if (typeof source.getContextLength === "function") {
@@ -644,6 +727,7 @@ async function measureContext(
     if (typeof source.applyPromptTemplate === "function" && typeof source.countTokens === "function") {
       const prompt = await source.applyPromptTemplate(history, { toolDefinitions });
       templatedInputChars = String(prompt).length;
+      templatedInputFingerprint = telemetryFingerprint(String(prompt));
       inputTokens = numeric(await source.countTokens(prompt), inputTokens, 0, 4_000_000);
       promptMeasurementSource = "templated_model_count";
       exact = true;
@@ -671,6 +755,8 @@ async function measureContext(
     toolSchemaChars,
     toolSchemaTokens,
     toolSchemaTokenMeasurement,
+    toolSchemaFingerprint,
+    templatedInputFingerprint,
     outputReserve,
     remainingTokens,
     exact,
@@ -1065,6 +1151,14 @@ function containsUnresolvedToolIntent(reportText: string, messages: Array<ChatMe
   });
 }
 
+function hasUnexecutedRawToolSyntax(text: string): boolean {
+  if (containsUnresolvedToolIntent(text, [])) return true;
+  const match = /<(?:tool_call|function=)|\|(?:tool_call|python_tag)\|/iu.exec(text);
+  if (!match || match.index === undefined) return false;
+  const lineEnd = text.indexOf("\n", match.index);
+  return !isLiteralRawToolWrapper(text, match.index, lineEnd < 0 ? text.length : lineEnd);
+}
+
 function visibleTextFromMessages(messages: Array<ChatMessage>): string {
   return messages
     .filter(message => message.isAssistantMessage())
@@ -1179,6 +1273,17 @@ function catalogueCorrectionInstruction(
   ].join(" ");
 }
 
+function archiveOnlyRecoveryInstruction(tools: Array<RemoteToolLike>): string {
+  const registered = tools.map(tool => tool.name).slice(0, 12).join(", ");
+  return [
+    FRESH_TOOL_PLANNING_RETRY_INSTRUCTION,
+    "The prior output contained only an archive-reader intent. It was not executed or converted.",
+    `Use the measured registered read-only catalogue for the verified Git investigation: ${registered}.`,
+    "You may rehydrate the exact archived evidence first, then continue with the public Git source reader such as git_changed_files when the source page has more coverage.",
+    "Generate fresh structured requests only from the published registry and JSON schema. Do not execute raw XML or invent aliases.",
+  ].join(" ");
+}
+
 function completedRequestFingerprints(history: Chat): Set<string> {
   const completed = new Set<string>();
   let active: Map<string, ToolCallRequest> | null = null;
@@ -1224,28 +1329,233 @@ function completedRequestFingerprints(history: Chat): Set<string> {
   return completed;
 }
 
+type RecoveryCoverageRange = [number, number];
+type RecoveryCoverageLedger = Map<string, Array<RecoveryCoverageRange>>;
+type RecoveryCoverageDescriptor = {
+  category: "source" | "archive";
+  key: string;
+  range: RecoveryCoverageRange;
+  rangeUnit: string;
+  sourceVersion?: string;
+  sourceIdentity?: string;
+};
+
+function finiteCoverageInteger(value: unknown): number | null {
+  return Number.isSafeInteger(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+}
+
+function normalizedCoverageRanges(ranges: Array<RecoveryCoverageRange>): Array<RecoveryCoverageRange> {
+  return inputAvailability.normalizeRanges(ranges as Array<unknown>);
+}
+
+function subtractCoverageRanges(
+  candidate: RecoveryCoverageRange,
+  prior: Array<RecoveryCoverageRange>,
+): Array<RecoveryCoverageRange> {
+  let remaining: Array<RecoveryCoverageRange> = [candidate];
+  for (const [coveredStart, coveredEnd] of normalizedCoverageRanges(prior)) {
+    remaining = remaining.flatMap(([start, end]) => {
+      if (coveredEnd < start || coveredStart > end) return [[start, end]];
+      const parts: Array<RecoveryCoverageRange> = [];
+      if (start < coveredStart) parts.push([start, coveredStart - 1]);
+      if (coveredEnd < end) parts.push([coveredEnd + 1, end]);
+      return parts;
+    });
+  }
+  return normalizedCoverageRanges(remaining);
+}
+
+function coverageSourceIdentity(value: Record<string, unknown>): string {
+  const explicit = value.sourceIdentityDigest || value.repositoryIdentity || value.workspaceIdentity
+    || value.projectIdentity || value.canonicalProjectRoot;
+  if (explicit) return typeof explicit === "string" ? explicit : telemetryFingerprint(explicit, true);
+  if (value.sourceIdentity && typeof value.sourceIdentity === "object") {
+    return telemetryFingerprint(value.sourceIdentity, true);
+  }
+  return "unknown-source";
+}
+
+function coverageSourceVersion(value: Record<string, unknown>): string {
+  const explicit = value.sourceVersion || value.sourceHash || value.sha256 || value.blobOid
+    || value.head || value.version;
+  if (explicit) return String(explicit);
+  if (value.base || value.comparison || value.revision) {
+    return telemetryFingerprint({ base: value.base, head: value.head,
+      comparison: value.comparison, revision: value.revision }, true);
+  }
+  return "unknown-version";
+}
+
+function coverageQueryKey(value: Record<string, unknown>): string {
+  return telemetryFingerprint({
+    sourceIdentity: coverageSourceIdentity(value),
+    sourceVersion: coverageSourceVersion(value),
+    action: value.sourceAction || value.action || value.toolName || value.kind || "observation",
+    path: value.path || value.sourcePath || value.workspaceRelativePath || "",
+    comparison: value.comparison,
+    base: value.base,
+    head: value.head,
+    revision: value.revision,
+    since: value.sourceSince ?? value.since,
+    until: value.sourceUntil ?? value.until,
+    authorQuery: value.sourceAuthorQuery ?? value.authorQuery,
+    paths: value.paths || value.requestedPaths || value.queryPath,
+  }, true);
+}
+
+function coverageRange(value: Record<string, unknown>, category: "source" | "archive"):
+  { range: RecoveryCoverageRange; rangeUnit: string } {
+  const returned = value.returnedRange ?? value.archiveReturnedRange;
+  if (Array.isArray(returned) && returned.length >= 2) {
+    const start = finiteCoverageInteger(returned[0]);
+    const end = finiteCoverageInteger(returned[1]);
+    if (start !== null && end !== null && end >= start) {
+      const exclusive = category === "archive" && (value.nextOffset !== undefined
+        || value.archiveHasMore !== undefined || value.archiveReachedEnd !== undefined);
+      return { range: [start, exclusive && end > start ? end - 1 : end],
+        rangeUnit: String(value.rangeUnit || (exclusive ? "utf16_code_units" : "unknown")) };
+    }
+  }
+  const offsetStart = finiteCoverageInteger(value.startOffset ?? value.offsetBytes);
+  const offsetEnd = finiteCoverageInteger(value.nextOffset ?? value.nextOffsetBytes);
+  if (offsetStart !== null && offsetEnd !== null && offsetEnd >= offsetStart) {
+    return { range: [offsetStart, Math.max(offsetStart, offsetEnd - 1)],
+      rangeUnit: value.offsetBytes !== undefined ? "utf8_byte" : "utf16_code_units" };
+  }
+  const pageStart = finiteCoverageInteger(value.pageStart ?? value.sourcePageStart);
+  const pageEnd = finiteCoverageInteger(value.pageEnd ?? value.sourcePageEnd);
+  if (pageStart !== null && pageEnd !== null && pageEnd >= pageStart) {
+    return { range: [pageStart, pageEnd], rangeUnit: "page" };
+  }
+  const lineStart = finiteCoverageInteger(value.startLine);
+  const lineEnd = finiteCoverageInteger(value.endLine);
+  if (lineStart !== null && lineEnd !== null && lineEnd >= lineStart) {
+    return { range: [lineStart, lineEnd], rangeUnit: "line" };
+  }
+  return { range: [0, 0], rangeUnit: "observation" };
+}
+
+function recoveryCoverageDescriptors(value: Record<string, unknown>): Array<RecoveryCoverageDescriptor> {
+  const kind = String(value.kind || "");
+  if (kind === "archived_tool_result_projection") return [];
+  if (kind === "historical_evidence_range") {
+    const archiveRef = value.archiveRef && typeof value.archiveRef === "object"
+      ? value.archiveRef as Record<string, unknown> : {};
+    const evidenceId = String(value.evidenceId || archiveRef.evidenceId || "unknown-evidence");
+    const version = String(value.version || archiveRef.version || "unknown-version");
+    const ranged = coverageRange(value, "archive");
+    return [{ category: "archive", key: telemetryFingerprint({ evidenceId, version,
+      rangeUnit: ranged.rangeUnit }, true), range: ranged.range, rangeUnit: ranged.rangeUnit,
+      sourceVersion: version, sourceIdentity: evidenceId }];
+  }
+  const isSourceObservation = kind === "git_observation" || Boolean(
+    value.action || value.sourceAction || value.pageStart !== undefined || value.sourcePageStart !== undefined,
+  );
+  if (!isSourceObservation) return [];
+  const ranged = coverageRange(value, "source");
+  const sourceIdentity = coverageSourceIdentity(value);
+  const sourceVersion = coverageSourceVersion(value);
+  return [{ category: "source", key: coverageQueryKey(value), range: ranged.range,
+    rangeUnit: ranged.rangeUnit, sourceVersion, sourceIdentity }];
+}
+
+function projectionCoverageDescriptors(value: Record<string, unknown>): Array<RecoveryCoverageDescriptor> {
+  const descriptors: Array<RecoveryCoverageDescriptor> = [];
+  const archiveRef = value.archiveRef && typeof value.archiveRef === "object"
+    ? value.archiveRef as Record<string, unknown> : {};
+  const evidenceId = String(archiveRef.evidenceId || value.evidenceId || "unknown-evidence");
+  const version = String(archiveRef.version || value.version || "unknown-version");
+  const ranges = value.projectedBodyRanges || value.projectedRawRanges || value.projectedSanitizedRanges;
+  if (Array.isArray(ranges)) for (const candidate of ranges) {
+    if (!Array.isArray(candidate) || candidate.length < 2) continue;
+    const start = finiteCoverageInteger(candidate[0]);
+    const end = finiteCoverageInteger(candidate[1]);
+    if (start === null || end === null || end < start) continue;
+    descriptors.push({ category: "archive", key: telemetryFingerprint({ evidenceId, version,
+      rangeUnit: value.bodyRangeUnit || value.rangeUnit || "utf16_code_units" }, true),
+    range: [start, end], rangeUnit: String(value.bodyRangeUnit || value.rangeUnit || "utf16_code_units"),
+    sourceVersion: version, sourceIdentity: evidenceId });
+  }
+  const sourceStart = finiteCoverageInteger(value.sourcePageStart);
+  const sourceEnd = finiteCoverageInteger(value.sourcePageEnd);
+  if (sourceStart !== null && sourceEnd !== null && sourceEnd >= sourceStart) {
+    const sourceIdentity = coverageSourceIdentity(value);
+    const sourceVersion = coverageSourceVersion(value);
+    descriptors.push({ category: "source", key: coverageQueryKey(value), range: [sourceStart, sourceEnd],
+      rangeUnit: "page", sourceVersion, sourceIdentity });
+  }
+  return descriptors;
+}
+
+function recordRecoveryCoverage(
+  ledger: RecoveryCoverageLedger,
+  descriptor: RecoveryCoverageDescriptor,
+): { uncovered: Array<RecoveryCoverageRange>; overlapped: boolean } {
+  const prior = ledger.get(descriptor.key) || [];
+  const uncovered = subtractCoverageRanges(descriptor.range, prior);
+  const overlapped = prior.some(([start, end]) => start <= descriptor.range[1] && end >= descriptor.range[0]);
+  ledger.set(descriptor.key, normalizedCoverageRanges([...prior, descriptor.range]));
+  return { uncovered, overlapped };
+}
+
+function seedRecoveryProgress(history: Chat): {
+  fingerprints: Set<string>; coverage: RecoveryCoverageLedger;
+} {
+  const fingerprints = new Set<string>();
+  const coverage: RecoveryCoverageLedger = new Map();
+  for (const message of history.getMessagesArray()) {
+    for (const result of message.getToolCallResults()) {
+      fingerprints.add(telemetryFingerprint(result.content));
+      const value = toolMemory.decodeToolResultRecord(result.content).value;
+      if (!value || typeof value !== "object") continue;
+      if (value.kind === "archived_tool_result_projection") {
+        for (const descriptor of projectionCoverageDescriptors(value)) recordRecoveryCoverage(coverage, descriptor);
+        continue;
+      }
+      const status = String(value.status || "").toLowerCase();
+      const failed = value.ok === false || Boolean(value.errorCode)
+        || ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(status);
+      if (failed) continue;
+      for (const descriptor of recoveryCoverageDescriptors(value)) recordRecoveryCoverage(coverage, descriptor);
+    }
+  }
+  return { fingerprints, coverage };
+}
+
 type RecoveryProgress = {
   newResultCount: number;
+  newResponseFingerprintCount: number;
+  newSuccessfulObservationCount: number;
+  newSourceUnits: number;
+  newArchiveUnits: number;
+  currentInputAvailabilityGain: number;
   usefulProgress: boolean;
+  progressed: boolean;
   errorCount: number;
   duplicateCount: number;
+  partialOverlapCount: number;
   coverage: Array<Record<string, unknown>>;
 };
 
 function observeRecoveryProgress(
   messages: Array<ChatMessage>,
   seen: Set<string>,
+  coverageLedger: RecoveryCoverageLedger = new Map(),
 ): RecoveryProgress {
   let newResultCount = 0;
-  let usefulProgress = false;
+  let newSuccessfulObservationCount = 0;
+  let newSourceUnits = 0;
+  let newArchiveUnits = 0;
+  let currentInputAvailabilityGain = 0;
   let errorCount = 0;
   let duplicateCount = 0;
+  let partialOverlapCount = 0;
   const coverage: Array<Record<string, unknown>> = [];
   for (const message of messages) {
     for (const result of message.getToolCallResults()) {
       const decoded = toolMemory.decodeToolResultRecord(result.content);
       const value = decoded.value;
-      const fingerprint = telemetryFingerprint(result.content, true);
+      const fingerprint = telemetryFingerprint(result.content);
       const isNewResult = !seen.has(fingerprint);
       if (isNewResult) { seen.add(fingerprint); newResultCount += 1; }
       else duplicateCount += 1;
@@ -1254,27 +1564,35 @@ function observeRecoveryProgress(
       const failed = value.ok === false || Boolean(value.errorCode)
         || ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(status);
       if (failed) { errorCount += 1; continue; }
-      const sourcePage = value.pageStart !== undefined || value.pageEnd !== undefined
-        || value.sourcePageStart !== undefined || value.sourcePageEnd !== undefined;
-      const archivePage = value.returnedRange !== undefined || value.archiveReturnedRange !== undefined
-        || value.startOffset !== undefined || value.nextOffset !== undefined;
-      if (isNewResult || sourcePage || archivePage || value.kind === "git_observation"
-        || value.kind === "historical_evidence_range") {
-        usefulProgress = true;
+      const descriptors = recoveryCoverageDescriptors(value);
+      let resultAddedCoverage = false;
+      for (const descriptor of descriptors) {
+        const delta = recordRecoveryCoverage(coverageLedger, descriptor);
+        if (delta.uncovered.length) {
+          resultAddedCoverage = true;
+          const span = delta.uncovered.reduce((total, [start, end]) => total + end - start + 1, 0);
+          currentInputAvailabilityGain += span;
+          if (descriptor.category === "source") newSourceUnits += 1;
+          else newArchiveUnits += 1;
+        } else if (delta.overlapped) partialOverlapCount += 1;
         coverage.push({
+          category: descriptor.category,
           kind: value.kind,
-          sourcePageStart: value.pageStart ?? value.sourcePageStart,
-          sourcePageEnd: value.pageEnd ?? value.sourcePageEnd,
-          sourcePageHasMore: value.pageHasMore ?? value.sourcePageHasMore,
-          returnedRange: value.returnedRange ?? value.archiveReturnedRange,
-          archiveHasMore: value.archiveHasMore,
-          archiveReachedEnd: value.archiveReachedEnd,
+          sourceIdentity: descriptor.sourceIdentity,
+          sourceVersion: descriptor.sourceVersion,
+          rangeUnit: descriptor.rangeUnit,
+          range: descriptor.range,
+          uncoveredRanges: delta.uncovered,
           resultFingerprint: fingerprint,
         });
       }
+      if (resultAddedCoverage) newSuccessfulObservationCount += 1;
     }
   }
-  return { newResultCount, usefulProgress, errorCount, duplicateCount, coverage };
+  const progressed = newSourceUnits > 0 || newArchiveUnits > 0 || currentInputAvailabilityGain > 0;
+  return { newResultCount, newResponseFingerprintCount: newResultCount, newSuccessfulObservationCount,
+    newSourceUnits, newArchiveUnits, currentInputAvailabilityGain,
+    usefulProgress: progressed, progressed, errorCount, duplicateCount, partialOverlapCount, coverage };
 }
 
 type FreshToolPlanningRetryDecision = { eligible: boolean; reason: string };
@@ -1387,6 +1705,60 @@ function canRecoverOutputLimit(
     && !containsUnresolvedToolIntent(reportText, captured.messages);
 }
 
+type ToolCallBoundary = {
+  state: string;
+  rawToolIntent: boolean;
+  structuredRequestCount: number;
+  sdkStartedCount: number;
+  sdkFinalizedCount: number;
+  guardAllowedCount: number;
+  dispatchCount: number;
+  resultCount: number;
+};
+
+function classifyToolCallBoundary(options: {
+  rawToolIntent: boolean;
+  outputLimitStage?: OutputLimitStage;
+  structuredRequestCount: number;
+  sdkStartedCount: number;
+  sdkFinalizedCount: number;
+  sdkFailureCount: number;
+  guardAllowedCount: number;
+  guardDeniedCount: number;
+  dispatchCount: number;
+  resultCount: number;
+}): ToolCallBoundary {
+  let state = "no_tool_request";
+  if (options.rawToolIntent && options.structuredRequestCount === 0) {
+    if (options.sdkStartedCount > 0 && options.sdkFinalizedCount === 0) state = "sdk_tool_event_not_finalized";
+    else if (options.outputLimitStage === "tool_arguments") state = "raw_text_at_tool_argument_limit";
+    else state = "provider_returned_raw_tool_text_without_structured_event";
+  } else if (options.structuredRequestCount > 0 && options.sdkFinalizedCount === 0) {
+    state = "captured_structured_message_without_sdk_finalization";
+  } else if (options.sdkFinalizedCount > 0 && options.guardDeniedCount > 0) {
+    state = "guard_denied_before_provider_execution";
+  } else if (options.sdkFinalizedCount > 0 && options.guardAllowedCount === 0) {
+    state = "guard_not_allowed_or_not_observed";
+  } else if (options.guardAllowedCount > 0 && options.dispatchCount === 0) {
+    state = "guard_allowed_without_provider_dispatch";
+  } else if (options.dispatchCount > 0 && options.resultCount === 0) {
+    state = "provider_dispatch_without_result";
+  } else if (options.resultCount > 0) {
+    state = "structured_request_dispatched_and_result_received";
+  } else if (options.sdkFailureCount > 0) {
+    state = "sdk_tool_event_failed";
+  } else if (options.structuredRequestCount > 0) {
+    state = "structured_request_captured";
+  }
+  return { state, rawToolIntent: options.rawToolIntent,
+    structuredRequestCount: options.structuredRequestCount,
+    sdkStartedCount: options.sdkStartedCount,
+    sdkFinalizedCount: options.sdkFinalizedCount,
+    guardAllowedCount: options.guardAllowedCount,
+    dispatchCount: options.dispatchCount,
+    resultCount: options.resultCount };
+}
+
 function classifyFinalDelivery(
   reportText: string,
   captured: { failure?: unknown; finishReason?: string },
@@ -1422,6 +1794,62 @@ function classifyFinalDelivery(
       : deliveryState === "complete" ? "report" : "partial_report",
     ...(rejectionReason ? { rejectionReason } : {}),
   };
+}
+
+function evidenceBackedPartialReport(history: Chat, currentMessages: Array<ChatMessage>, reason: string): {
+  text: string;
+  evidenceCount: number;
+  errorCount: number;
+} {
+  const facts: Array<string> = [];
+  const errors: Array<string> = [];
+  const seen = new Set<string>();
+  for (const message of [...history.getMessagesArray(), ...currentMessages]) {
+    for (const result of message.getToolCallResults()) {
+      const value = toolMemory.decodeToolResultRecord(result.content).value;
+      if (!value || typeof value !== "object") continue;
+      const status = String(value.status || "").toLowerCase();
+      const failed = value.ok === false || Boolean(value.errorCode)
+        || ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(status);
+      if (failed) {
+        const error = String(value.errorCode || value.status || "unknown_error").slice(0, 120);
+        if (!errors.includes(error)) errors.push(error);
+        continue;
+      }
+      const kind = String(value.kind || "");
+      let fact = "";
+      if (kind === "historical_evidence_range") {
+        const id = String(value.evidenceId || "unknown-evidence").slice(0, 80);
+        const range = Array.isArray(value.returnedRange) ? JSON.stringify(value.returnedRange) : "unknown-range";
+        fact = `archive ${id} range ${range}`;
+      } else if (kind === "archived_tool_result_projection") {
+        const id = String((value.archiveRef as Record<string, unknown> | undefined)?.evidenceId
+          || "unknown-evidence").slice(0, 80);
+        const range = Array.isArray(value.projectedBodyRanges)
+          ? JSON.stringify(value.projectedBodyRanges) : "unknown-range";
+        fact = `archived projection ${id} body range ${range}`;
+      } else if (kind === "git_observation" || value.action || value.sourceAction) {
+        const action = String(value.action || value.sourceAction || "read").slice(0, 80);
+        const target = String(value.path || value.sourcePath || "workspace").slice(0, 160);
+        const pageStart = value.pageStart ?? value.sourcePageStart;
+        const pageEnd = value.pageEnd ?? value.sourcePageEnd;
+        const page = pageStart !== undefined || pageEnd !== undefined
+          ? ` page ${String(pageStart ?? "?")}–${String(pageEnd ?? "?")}` : "";
+        fact = `${action} ${target}${page}`;
+      }
+      if (fact && !seen.has(fact)) { seen.add(fact); facts.push(fact); }
+      if (facts.length >= 8) break;
+    }
+    if (facts.length >= 8) break;
+  }
+  const lines = ["부분 조사 보고 (미완료)", "확인된 근거:"];
+  if (facts.length) for (const fact of facts) lines.push(`- ${fact}`);
+  else lines.push("- 현재 입력에서 구조화된 성공 결과를 확인하지 못했습니다.");
+  lines.push("미확인/중단 범위:");
+  lines.push(`- ${String(reason || "조사 복구가 진행되지 않음").slice(0, 240)}`);
+  if (errors.length) lines.push(`- 도구 오류: ${errors.slice(0, 4).join(", ")}`);
+  lines.push("- 이 출력은 안전한 부분 보고이며 전체 조사 완료로 처리하지 않았습니다.");
+  return { text: lines.join("\n"), evidenceCount: facts.length, errorCount: errors.length };
 }
 
 function modelHistoryMessage(message: ChatMessage): ChatMessage {
@@ -1673,6 +2101,12 @@ export function createPredictionLoopHandler(
   let researchRecoveryPaginationRounds = 0;
   let researchRecoveryNoProgressRounds = 0;
   let researchRecoverySeenEvidence = new Set<string>();
+  let researchRecoveryCoverage: RecoveryCoverageLedger = new Map();
+  const seedResearchRecoveryTracking = (history: Chat) => {
+    const seeded = seedRecoveryProgress(history);
+    researchRecoverySeenEvidence = seeded.fingerprints;
+    researchRecoveryCoverage = seeded.coverage;
+  };
   let researchRecoveryReason = "";
   let semanticSummaryCooldownUntilRound = -1;
   const executionCost = { modelCalls: 0, promptTokens: 0, predictedTokens: 0,
@@ -1735,6 +2169,7 @@ export function createPredictionLoopHandler(
       const roundTools = finalizing ? [] : researchRecoveryRound
         ? modelTools.filter(tool => researchRecoveryToolNames.has(tool.name))
         : modelTools;
+      const actToolSurfaceFingerprint = telemetryFingerprint(toolDefinitionSurface(roundTools));
       let roundOutputReserve = finalizing
         ? finalizationTrigger === "output_recovery"
           ? Math.min(config.maxOutputReserve, config.outputRecoveryMaxTokens)
@@ -2145,7 +2580,7 @@ export function createPredictionLoopHandler(
           researchRecoveryToolRounds = 0;
           researchRecoveryPaginationRounds = 0;
           researchRecoveryNoProgressRounds = 0;
-          researchRecoverySeenEvidence = new Set<string>();
+          seedResearchRecoveryTracking(workingHistory);
           researchRecoveryReason = "context_budget";
           activeActivity.complete();
           activeActivity = null;
@@ -2296,7 +2731,7 @@ export function createPredictionLoopHandler(
             researchRecoveryToolRounds = 0;
             researchRecoveryPaginationRounds = 0;
             researchRecoveryNoProgressRounds = 0;
-            researchRecoverySeenEvidence = new Set<string>();
+            seedResearchRecoveryTracking(workingHistory);
             researchRecoveryReason = "context_budget";
             activeActivity.complete();
             activeActivity = null;
@@ -2406,6 +2841,10 @@ export function createPredictionLoopHandler(
         finalToolSchemaChars: finalMeasurement.toolSchemaChars,
         finalToolSchemaTokens: finalMeasurement.toolSchemaTokens,
         finalToolSchemaTokenMeasurement: finalMeasurement.toolSchemaTokenMeasurement,
+        toolSchemaFingerprint: finalMeasurement.toolSchemaFingerprint,
+        actToolSurfaceFingerprint,
+        toolSurfaceMatchesMeasured: finalMeasurement.toolSchemaFingerprint === actToolSurfaceFingerprint,
+        templatedInputFingerprint: finalMeasurement.templatedInputFingerprint,
         outputReserve: roundOutputReserve,
         requestedMaxTokens: requestedOutputCap,
         appliedMaxTokens: roundOutputReserve,
@@ -2481,6 +2920,7 @@ export function createPredictionLoopHandler(
           ...serializedCounts,
           serialization: compactionCheckpoint.serializationDiagnostics,
           inputToolResultCount: inputEvidence.results.length,
+          inputBatchReservation: inputEvidence.batchReservation,
           inputLatestToolResultFingerprint: inputEvidence.results.at(-1)?.resultFingerprint,
           inputLatestSemanticResultFingerprint: inputEvidence.results.at(-1)?.semanticResultFingerprint,
           retention: compactionRetention,
@@ -2706,6 +3146,11 @@ export function createPredictionLoopHandler(
         if (message.isAssistantMessage() && message.getText()) {
           const extracted = modelNotes.splitVisibleAnswer(message.getText());
           historyMessage = modelHistoryMessage(message);
+          if (hasUnexecutedRawToolSyntax(visibleAssistantOutput(historyMessage.getText()).visibleText)) {
+            const sanitized = ChatMessage.from(historyMessage);
+            sanitized.replaceText("[Unexecuted raw tool-call text omitted from subsequent model input; no tool was dispatched.]");
+            historyMessage = sanitized;
+          }
           if (!live) {
             const streamed = stream.consumeAssistant(message.getText());
             const fallback = visibleAssistantOutput(message.getText());
@@ -2759,18 +3204,45 @@ export function createPredictionLoopHandler(
       const catalogueCorrectionAllowed = rawIntent.unknownNames.length > 0
         && rawIntent.unknownNames.every(isUnregisteredGitReadIntent)
         && gitRecoveryProfile.eligible;
+      const archiveOnlyRecoveryAllowed = rawIntent.names.length > 0
+        && rawIntent.unknownNames.length === 0
+        && rawIntent.registeredButWithheldNames.length === 0
+        && rawIntent.registeredUnsafeNames.length === 0
+        && rawIntent.knownReadOnlyNames.length > 0
+        && rawIntent.knownReadOnlyNames.every(name => name === "evidence_first_read_context")
+        && gitRecoveryProfile.eligible;
       const retryTools = includeArchiveReader(
-        rawIntent.unknownNames.length > 0 ? gitRecoveryProfile.tools : exactRawTools,
+        rawIntent.unknownNames.length > 0 || archiveOnlyRecoveryAllowed
+          ? gitRecoveryProfile.tools : exactRawTools,
       );
       const retryInstruction = rawIntent.unknownNames.length > 0
         ? catalogueCorrectionInstruction(rawIntent, retryTools)
+        : archiveOnlyRecoveryAllowed
+          ? archiveOnlyRecoveryInstruction(retryTools)
         : FRESH_TOOL_PLANNING_RETRY_INSTRUCTION;
       const runtimeDispatchCount = [...runtimeToolTrace.values()]
         .filter(value => value.executionState === "dispatched").length;
+      const guardAllowedCount = [...runtimeToolTrace.values()]
+        .filter(value => value.validationState === "allowed").length;
+      const guardDeniedCount = [...runtimeToolTrace.values()]
+        .filter(value => String(value.validationState || "").startsWith("denied")
+          || value.approvalState === "denied").length;
       const structuredToolRequestCount = outputEvidence.calls.length;
       const actualResultCount = outputEvidence.results.length;
+      const toolCallBoundary = classifyToolCallBoundary({
+        rawToolIntent: finalRawToolIntent,
+        outputLimitStage,
+        structuredRequestCount: structuredToolRequestCount,
+        sdkStartedCount: captured.predictionUsage.sdkToolRequestStartedCount,
+        sdkFinalizedCount: captured.predictionUsage.sdkToolRequestFinalizedCount,
+        sdkFailureCount: captured.predictionUsage.sdkToolRequestFailureCount,
+        guardAllowedCount,
+        guardDeniedCount,
+        dispatchCount: runtimeDispatchCount,
+        resultCount: actualResultCount,
+      });
       const recoveryProgress = researchRecoveryRound
-        ? observeRecoveryProgress(captured.messages, researchRecoverySeenEvidence) : null;
+        ? observeRecoveryProgress(captured.messages, researchRecoverySeenEvidence, researchRecoveryCoverage) : null;
       const planningAllowed = !(finalizing && finalizationTrigger === "output_recovery");
       const shouldMeasureRetryCandidate = !boundedAudit && !config.observeOnly && planningAllowed
         && toolPlanningRetryAttempts < 1 && captured.failure === undefined
@@ -2829,9 +3301,10 @@ export function createPredictionLoopHandler(
         researchRecoveryToolRounds = 0;
         researchRecoveryPaginationRounds = 0;
         researchRecoveryNoProgressRounds = 0;
-        researchRecoverySeenEvidence = new Set<string>();
-        researchRecoveryReason = rawIntent.unknownNames.length > 0
-          ? "catalogue_correction" : "raw_tool_intent";
+        seedResearchRecoveryTracking(historyBeforeRound);
+        researchRecoveryReason = archiveOnlyRecoveryAllowed
+          ? "archive_only_catalogue"
+          : rawIntent.unknownNames.length > 0 ? "catalogue_correction" : "raw_tool_intent";
         if (config.showDebugInfo) ctl.debug({
           event: "fresh_tool_planning_retry_scheduled",
           executionId,
@@ -2843,6 +3316,7 @@ export function createPredictionLoopHandler(
           outputLimitStage,
           requestedMaxTokens: requestedOutputCap,
           appliedMaxTokens: roundOutputReserve,
+          contextLength: finalMeasurement.contextLength,
           inputTokens: finalMeasurement.inputTokens,
           remainingTokens: finalMeasurement.remainingTokens,
           retryCandidateExactMeasurement: retryCandidate?.assembled.measurement.exact ?? null,
@@ -2858,6 +3332,7 @@ export function createPredictionLoopHandler(
           finalRawToolIntent,
           rawToolIntentNames: rawIntent.names,
           knownReadOnlyRawToolNames: rawIntent.knownReadOnlyNames,
+          archiveOnlyRecoveryAllowed,
           unknownRawToolNames: rawIntent.unknownNames,
           registeredButWithheldRawToolNames: rawIntent.registeredButWithheldNames,
           registeredUnsafeRawToolNames: rawIntent.registeredUnsafeNames,
@@ -2903,8 +3378,16 @@ export function createPredictionLoopHandler(
           requestedMaxTokens: requestedOutputCap,
           appliedMaxTokens: roundOutputReserve,
           capSource: outputCapSource,
+          contextLength: finalMeasurement.contextLength,
           inputTokens: finalMeasurement.inputTokens,
           remainingTokens: finalMeasurement.remainingTokens,
+          toolSchemaChars: finalMeasurement.toolSchemaChars,
+          toolSchemaTokens: finalMeasurement.toolSchemaTokens,
+          toolSchemaTokenMeasurement: finalMeasurement.toolSchemaTokenMeasurement,
+          toolSchemaFingerprint: finalMeasurement.toolSchemaFingerprint,
+          actToolSurfaceFingerprint,
+          toolSurfaceMatchesMeasured: finalMeasurement.toolSchemaFingerprint === actToolSurfaceFingerprint,
+          templatedInputFingerprint: finalMeasurement.templatedInputFingerprint,
           finalizationTrigger: finalizing ? finalizationTrigger : undefined,
           finalizationPending,
           finalizationAttempts,
@@ -2919,6 +3402,16 @@ export function createPredictionLoopHandler(
           fullToolCount: modelTools.length,
           exposedToolNames: roundTools.map(tool => tool.name),
           structuredToolRequestCount,
+          sdkToolEvents: {
+            started: captured.predictionUsage.sdkToolRequestStartedCount,
+            named: captured.predictionUsage.sdkToolRequestNamedCount,
+            ended: captured.predictionUsage.sdkToolRequestEndedCount,
+            finalized: captured.predictionUsage.sdkToolRequestFinalizedCount,
+            failed: captured.predictionUsage.sdkToolRequestFailureCount,
+          },
+          guardAllowedCount,
+          guardDeniedCount,
+          toolCallBoundary,
           rawToolIntentCandidate: captured.predictionUsage.rawToolIntentCandidate,
           finalRawToolIntent,
           rawToolIntentFirstFragment: captured.predictionUsage.rawToolIntentFirstFragment,
@@ -2948,6 +3441,7 @@ export function createPredictionLoopHandler(
           modelInputLatestSemanticResultFingerprint: inputEvidence.results.at(-1)?.semanticResultFingerprint,
           calls: outputEvidence.calls,
           results: outputEvidence.results,
+          outputBatchReservation: outputEvidence.batchReservation,
           workingContextExposure: workingContext
             ? [...workingContext.exposure.values()].filter((entry: any) => entry.modelInputId === modelInputId)
             : [],
@@ -2993,8 +3487,37 @@ export function createPredictionLoopHandler(
           .map(message => visibleAssistantOutput(message.getText()).visibleText)
           .join("")
           .trim();
-        const finalDelivery = classifyFinalDelivery(reportText, captured, phaseTimedOut, captured.messages);
+        const classifiedFinalDelivery = classifyFinalDelivery(reportText, captured, phaseTimedOut, captured.messages);
+        const forceResearchPartial = finalizationTrigger === "research_recovery_exhausted"
+          && researchRecoveryNoProgressRounds > 0;
+        const finalDelivery = forceResearchPartial && classifiedFinalDelivery.deliveryState === "complete"
+          ? { ...classifiedFinalDelivery, deliveryState: "partial" as const,
+            reportState: "partial_report" as const, rejectionReason: "research_no_progress" }
+          : classifiedFinalDelivery;
         const { deliveryState } = finalDelivery;
+        const safePartialReportNeeded = deliveryState !== "complete"
+          && (finalDelivery.reportState === "unresolved_tool_intent"
+            || ["research_recovery_complete", "research_recovery_exhausted"].includes(finalizationTrigger || ""));
+        const safePartialReport = safePartialReportNeeded
+          ? evidenceBackedPartialReport(workingHistory, captured.messages,
+            finalDelivery.rejectionReason || finalizationTrigger || "research_incomplete")
+          : null;
+        if (safePartialReport) {
+          const block = ctl.createContentBlock({ roleOverride: "assistant" });
+          block.appendText(safePartialReport.text);
+          if (config.showDebugInfo) ctl.debug({
+            event: "partial_report_delivery",
+            executionId,
+            modelInputId,
+            finalizationTrigger,
+            reportDelivered: true,
+            taskCompleted: false,
+            evidenceCount: safePartialReport.evidenceCount,
+            errorCount: safePartialReport.errorCount,
+            reason: finalDelivery.rejectionReason || finalizationTrigger || "research_incomplete",
+          });
+        }
+        const reportDelivered = deliveryState === "complete" || Boolean(safePartialReport);
         if (config.showDebugInfo) ctl.debug({
           event: finalizationTrigger === "output_recovery"
             ? "output_recovery"
@@ -3014,6 +3537,8 @@ export function createPredictionLoopHandler(
           reportState: finalDelivery.reportState,
           rejectionReason: finalDelivery.rejectionReason,
           completionAccepted: deliveryState === "complete",
+          reportDelivered,
+          taskCompleted: deliveryState === "complete",
           predictionStats: captured.predictionStats,
           predictionUsage: captured.predictionUsage,
           outputLimitStage,
@@ -3021,6 +3546,17 @@ export function createPredictionLoopHandler(
           appliedMaxTokens: roundOutputReserve,
           capSource: outputCapSource,
           toolCount: roundTools.length,
+          toolCallBoundary,
+          sdkToolEvents: {
+            started: captured.predictionUsage.sdkToolRequestStartedCount,
+            named: captured.predictionUsage.sdkToolRequestNamedCount,
+            ended: captured.predictionUsage.sdkToolRequestEndedCount,
+            finalized: captured.predictionUsage.sdkToolRequestFinalizedCount,
+            failed: captured.predictionUsage.sdkToolRequestFailureCount,
+          },
+          guardAllowedCount,
+          guardDeniedCount,
+          outputBatchReservation: outputEvidence.batchReservation,
           rawToolIntentNames: rawIntent.names,
           unknownRawToolNames: rawIntent.unknownNames,
           retryEligibilityReason: retryDecision.reason,
@@ -3033,7 +3569,9 @@ export function createPredictionLoopHandler(
         }
         if (deliveryState !== "complete") ctl.createStatus({
           status: deliveryState === "no_answer" ? "error" : "canceled",
-          text: finalDelivery.reportState === "unresolved_tool_intent"
+          text: safePartialReport
+            ? "조사 복구가 완료되지 않아 근거가 있는 부분 보고만 전달했습니다. 전체 완료로 처리하지 않았습니다."
+            : finalDelivery.reportState === "unresolved_tool_intent"
             ? "최종 단계에서 실행되지 않은 도구 호출 의도만 남아 보고서 완료로 처리하지 않았습니다."
             : deliveryState === "truncated"
             ? "최종 보고가 출력 한도에 도달해 잘렸습니다. 완료로 처리하지 않았습니다."
@@ -3057,7 +3595,7 @@ export function createPredictionLoopHandler(
       }
       if (researchRecoveryRound) {
         researchRecoveryToolRounds += 1;
-        const progressed = Boolean(recoveryProgress?.usefulProgress && recoveryProgress.newResultCount > 0);
+        const progressed = recoveryProgress?.progressed === true;
         if (progressed) {
           researchRecoveryPaginationRounds += 1;
           researchRecoveryNoProgressRounds = 0;
@@ -3070,7 +3608,7 @@ export function createPredictionLoopHandler(
         const recoveryProducedEvidence = Boolean(
           structuredToolRequestCount > 0
           || actualResultCount > 0
-          || recoveryProgress?.newResultCount
+          || recoveryProgress?.newSuccessfulObservationCount
           || recoveryProgress?.errorCount,
         );
         const recoveryNeedsDedicatedFinal = Boolean(
@@ -3251,6 +3789,8 @@ export const __test = {
   classifyRawToolIntent,
   readOnlyRecoveryProfile,
   completedRequestFingerprints,
+  observeRecoveryProgress,
+  seedRecoveryProgress,
   freshToolPlanningRetryDecision,
   modelHistoryMessage,
   selectSoftCompaction,

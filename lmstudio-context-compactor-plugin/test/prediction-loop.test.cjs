@@ -2277,7 +2277,10 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
         ] }));
         options.onMessage(ChatMessage.from({ role: "tool", content: [
           { type: "toolCallResult", toolCallId: request.id,
-            content: JSON.stringify({ ok: true, status: "complete", marker: "DIFF_RESULT_SENTINEL" }) },
+            content: JSON.stringify({ ok: true, kind: "git_observation", status: "complete",
+              action: "diff_file", repositoryIdentity: "fixture-repository", workspaceIdentity: "fixture-workspace",
+              head: "b", path: request.arguments.path, pageStart: 1, pageEnd: 1, pageHasMore: false,
+              marker: "DIFF_RESULT_SENTINEL" }) },
         ] }));
         options.onRoundEnd(0);
         throw options.signal.reason;
@@ -2528,6 +2531,10 @@ test("Unity-marked project uses public schemas and actual temporary Git for mixe
   assert.equal(retryRound.structuredToolRequestCount, 5);
   assert.equal(retryRound.actualDispatchCount, 5);
   assert.equal(retryRound.actualResultCount, 5);
+  assert.equal(retryRound.toolCallBoundary.state, "structured_request_dispatched_and_result_received");
+  assert.equal(retryRound.toolSurfaceMatchesMeasured, true);
+  assert.equal(retryRound.outputBatchReservation.requestedByteBudget, 49152);
+  assert.equal(retryRound.outputBatchReservation.actualResultCount, 5);
   const rescue = ctl.debugValues.find(value => value.event === "direct_context_budget_rescue");
   assert.equal(rescue.fullToolCount, 6);
   assert.equal(rescue.narrowedToolCount, 5);
@@ -2556,6 +2563,117 @@ test("raw tool text cut by the output cap is classified as tool-argument generat
   assert.equal(stage, "tool_arguments");
 });
 
+test("initial raw tool output records the provider boundary when the measured structured catalogue fits", async () => {
+  const history = Chat.from([{ role: "user", content: "Read the Git changed files and report the evidence." }]);
+  const definition = workspaceToolDefinitions().find(tool => tool.name === "git_changed_files");
+  const tools = [{ name: definition.name, description: definition.description,
+    parametersJsonSchema: definition.inputSchema, pluginIdentifier: "mcp/unity-tools" }];
+  let calls = 0;
+  const model = {
+    identifier: "boundary-fixture-model",
+    async getContextLength() { return 32768; },
+    async applyPromptTemplate(chat, options = {}) {
+      return JSON.stringify({ text: chat.toString(), tools: (options.toolDefinitions || []).map(tool => tool.function.name) });
+    },
+    async countTokens(prompt) { return String(prompt).startsWith("[") ? 100 : 3000; },
+    async act(chat, roundTools, options) {
+      calls += 1;
+      assert.ok(roundTools.some(tool => tool.name === "git_changed_files"));
+      assert.match(chat.toString(), /structured tool-call interface/u);
+      if (calls === 1) {
+        const raw = "<tool_call><function=git_changed_files></function></tool_call>";
+        options.onPredictionFragment?.({ content: raw,
+          reasoningType: "none", isStructural: false, tokensCount: 12 });
+        options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 3000,
+          predictedTokensCount: 12, totalTokensCount: 3012 } });
+        options.onMessage(ChatMessage.create("assistant", raw));
+        return;
+      }
+      assert.doesNotMatch(chat.toString(), /<tool_call>/u,
+        "raw tool text must not be restored into the fresh structured-planning input");
+      options.onMessage(ChatMessage.create("assistant", "The structured boundary fixture stopped safely."));
+      options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 3000,
+        predictedTokensCount: 20, totalTokensCount: 3020 } });
+    },
+  };
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid",
+    assumedContextLength: 32768, softRemainingTokens: 1000, hardRemainingTokens: 500,
+  }, tools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  const first = ctl.debugValues.find(value => value.event === "direct_round_observation"
+    && value.roundIndex === 0);
+  assert.equal(first.toolCallBoundary.state, "provider_returned_raw_tool_text_without_structured_event");
+  assert.equal(first.toolCallBoundary.structuredRequestCount, 0);
+  assert.equal(first.toolCallBoundary.sdkStartedCount, 0);
+  assert.equal(first.toolCallBoundary.guardAllowedCount, 0);
+  assert.equal(first.toolCallBoundary.dispatchCount, 0);
+  assert.equal(first.toolCallBoundary.resultCount, 0);
+  assert.equal(first.toolSurfaceMatchesMeasured, true);
+  assert.equal(first.exposedToolNames.includes("git_changed_files"), true);
+  assert.equal(first.toolSchemaTokens > 0, true);
+  assert.deepEqual(first.outputBatchReservation, {
+    callCount: 0, publicReadCallCount: 0, requestedByteBudget: 0, requestedMaxChars: 0,
+    unknownReturnLimitCallCount: 0, actualResultChars: 0, actualResultBytes: 0, actualResultCount: 0,
+  });
+  assert.equal(first.inputTokens < first.contextLength, true,
+    JSON.stringify({ inputTokens: first.inputTokens, contextLength: first.contextLength,
+      remainingTokens: first.remainingTokens, measurement: first.toolSchemaTokens }));
+  assert.equal(first.remainingTokens >= 0, true);
+  assert.equal(first.outputLimitStage, undefined);
+});
+
+test("no-progress recovery delivers a safe partial report without task completion", async () => {
+  const history = Chat.from([{ role: "user", content: "Investigate Git changed files and report only verified evidence." }]);
+  const definition = workspaceToolDefinitions().find(tool => tool.name === "git_changed_files");
+  const tool = { name: definition.name, description: definition.description,
+    parametersJsonSchema: definition.inputSchema, pluginIdentifier: "mcp/unity-tools" };
+  let calls = 0;
+  const model = exactCountingModel(async (chat, tools, options) => {
+    calls += 1;
+    if (calls === 1) {
+      options.onMessage(ChatMessage.create("assistant",
+        "<tool_call><function=git_diff></function></tool_call>"));
+      options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 30 } });
+      return;
+    }
+    if (calls === 2) {
+      assert.equal(tools.some(candidate => candidate.name === "git_changed_files"), true);
+      const request = { id: "no-progress-read", type: "function", name: "git_changed_files",
+        arguments: { comparison: "range", base: "base", head: "head", limit: 1 } };
+      await options.guardToolCall(0, 1701, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onToolCallRequestFinalized(0, 1701, { toolCallRequest: request });
+      options.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+        toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+        toolCallId: request.id, content: JSON.stringify({ ok: false, status: "error",
+          errorCode: "invalid_cursor", message: "cursor belongs to another query" }) }] }));
+      options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 40 } });
+      options.onRoundEnd(0);
+      throw options.signal.reason;
+    }
+    assert.deepEqual(tools, []);
+    options.onMessage(ChatMessage.create("assistant", "The available evidence is incomplete; the investigation did not make verified progress."));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 35 } });
+  });
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid",
+    softRemainingTokens: 1000, hardRemainingTokens: 500,
+  }, [tool]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 3);
+  const partial = ctl.debugValues.find(value => value.event === "partial_report_delivery");
+  assert.equal(partial.reportDelivered, true);
+  assert.equal(partial.taskCompleted, false);
+  assert.equal(partial.reason, "research_no_progress");
+  assert.match(ctl.blocks.at(-1).text, /부분 조사 보고 \(미완료\)/u);
+  assert.match(ctl.blocks.at(-1).text, /invalid_cursor/u);
+  const finalization = ctl.debugValues.find(value => value.event === "research_recovery_finalization");
+  assert.equal(finalization.completionAccepted, false);
+  assert.equal(finalization.taskCompleted, false);
+  assert.equal(ctl.statuses.at(-1).state.status, "canceled");
+});
+
 function archivedObservationHistory(resultSize = 24000, withCompressiblePriorTurn = false) {
   const history = Chat.from([{ role: "system", content: "Preserve the current constraints." },
     ...(withCompressiblePriorTurn ? [
@@ -2571,6 +2689,188 @@ function archivedObservationHistory(resultSize = 24000, withCompressiblePriorTur
       returnedRange: [0, resultSize], hasMore: true, body: "x".repeat(resultSize) }) }] }));
   return history;
 }
+
+function recoveryResultMessage(values) {
+  const items = Array.isArray(values) ? values : [values];
+  return ChatMessage.from({ role: "tool", content: items.map((value, index) => ({
+    type: "toolCallResult", toolCallId: value.callId || `recovery-result-${index}`,
+    content: typeof value === "string" ? value : JSON.stringify(value),
+  })) });
+}
+
+test("recovery progress counts new source/archive coverage, not response fingerprints", () => {
+  const seen = new Set();
+  const coverage = new Map();
+  const sourcePage = {
+    ok: true, kind: "git_observation", status: "observed", action: "changed_files",
+    repositoryIdentity: "repo-fixture", workspaceIdentity: "workspace-fixture",
+    comparison: "range", base: "base-fixture", head: "head-fixture",
+    pageStart: 1, pageEnd: 25, pageHasMore: true, returnedCount: 25, total: 232,
+    gitTiming: { totalMs: 10, queryHash: "same-query" },
+  };
+  const first = __test.observeRecoveryProgress([recoveryResultMessage(sourcePage)], seen, coverage);
+  assert.equal(first.progressed, true);
+  assert.equal(first.newSuccessfulObservationCount, 1);
+  assert.equal(first.newSourceUnits, 1);
+  assert.equal(first.newArchiveUnits, 0);
+
+  const mcpSamePage = ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+    toolCallId: "mcp-same-page", content: JSON.stringify([{ type: "text", text: JSON.stringify({
+      ...sourcePage, gitTiming: { totalMs: 11, transport: "mcp-envelope" },
+    }) }]) }] });
+  const mcpProgress = __test.observeRecoveryProgress([mcpSamePage], seen, coverage);
+  assert.equal(mcpProgress.newSuccessfulObservationCount, 0);
+  assert.equal(mcpProgress.newSourceUnits, 0);
+  assert.equal(mcpProgress.progressed, false);
+
+  const timingOnly = { ...sourcePage,
+    snapshotId: "new-snapshot", nextCursor: "new-transport-token",
+    gitTiming: { totalMs: 900, queryHash: "same-query", serializationMs: 880 } };
+  const second = __test.observeRecoveryProgress([recoveryResultMessage(timingOnly)], seen, coverage);
+  assert.equal(second.newResultCount, 1, "the transport response may be new for diagnostics");
+  assert.equal(second.newSuccessfulObservationCount, 0);
+  assert.equal(second.newSourceUnits, 0);
+  assert.equal(second.partialOverlapCount, 1);
+  assert.equal(second.progressed, false);
+
+  const contained = { ...sourcePage, pageStart: 5, pageEnd: 20,
+    gitTiming: { totalMs: 901, queryHash: "same-query" } };
+  const third = __test.observeRecoveryProgress([recoveryResultMessage(contained)], seen, coverage);
+  assert.equal(third.newSuccessfulObservationCount, 0);
+  assert.equal(third.newSourceUnits, 0);
+  assert.equal(third.partialOverlapCount, 1);
+  assert.equal(third.progressed, false);
+
+  const mixed = recoveryResultMessage([
+    { ...sourcePage, callId: "duplicate-success", gitTiming: { totalMs: 902 } },
+    { ok: false, status: "error", errorCode: "invalid_cursor", callId: "new-error", message: "invalid cursor" },
+  ]);
+  const fourth = __test.observeRecoveryProgress([mixed], seen, coverage);
+  assert.equal(fourth.newSuccessfulObservationCount, 0);
+  assert.equal(fourth.newSourceUnits, 0);
+  assert.equal(fourth.errorCount, 1);
+  assert.equal(fourth.progressed, false);
+});
+
+test("archive-only raw recovery exposes the verified Git source catalogue and reaches a real source page", async t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "compactor-archive-source-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "tracked.txt"), "before\n");
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true }).trim();
+  git("init", "-q");
+  git("config", "user.name", "Fixture Committer");
+  git("config", "user.email", "fixture@example.invalid");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD");
+  fs.writeFileSync(path.join(root, "tracked.txt"), "after\n");
+  fs.writeFileSync(path.join(root, "added.txt"), "added\n");
+  git("add", ".");
+  git("commit", "-qm", "source continuation");
+  const head = git("rev-parse", "HEAD");
+
+  const capability = createWorkspaceCapabilities({ resolveBinding: async () => ({
+    root, engine: "unity", projectIdentity: root,
+  }) });
+  const definition = workspaceToolDefinitions().find(tool => tool.name === "git_changed_files");
+  const sourceTool = {
+    name: definition.name, description: definition.description, parametersJsonSchema: definition.inputSchema,
+    pluginIdentifier: "mcp/unity-tools", implementation: async args => capability("git_changed_files", args),
+  };
+  const history = Chat.from([{ role: "system", content: "Preserve evidence and continue read-only Git investigation." },
+    { role: "user", content: "Continue the Git changed-files investigation from the returned evidence." }]);
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    id: "archive-only-prior", type: "function", name: "evidence_first_read_context",
+    arguments: { evidenceId: "pending", version: "pending" },
+  } }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "archive-only-prior",
+    content: JSON.stringify({ ok: true, kind: "git_observation", status: "observed", action: "changed_files",
+      repositoryIdentity: "fixture-repository", workspaceIdentity: "fixture-workspace",
+      comparison: "range", base, head, pageStart: 1, pageEnd: 1, pageHasMore: true,
+      returnedCount: 1, total: 2, body: "OLD_SOURCE_EVIDENCE_".repeat(1600) }) }] }));
+
+  let calls = 0;
+  let retryToolNames = [];
+  let archiveReadCount = 0;
+  let sourceReadCount = 0;
+  const model = exactCountingModel(async (chat, tools, options) => {
+    calls += 1;
+    if (calls === 1) {
+      options.onMessage(ChatMessage.create("assistant",
+        "<tool_call><function=evidence_first_read_context><parameter=evidenceId>pending</parameter></function></tool_call>"));
+      options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 40 } });
+      return;
+    }
+    retryToolNames = tools.map(tool => tool.name);
+    assert.equal(retryToolNames.includes("git_changed_files"), true);
+    assert.equal(retryToolNames.includes("evidence_first_read_context"), true);
+    assert.equal(retryToolNames.includes("git_diff_file"), false);
+    if (calls === 2) {
+      const projection = chat.getMessagesArray().flatMap(message => message.getToolCallResults())
+        .map(result => { try { return JSON.parse(result.content); } catch { return null; } })
+        .find(value => value?.kind === "archived_tool_result_projection");
+      assert.ok(projection?.archiveRef?.evidenceId);
+      const archiveTool = tools.find(tool => tool.name === "evidence_first_read_context");
+      const request = { id: "archive-only-reread", type: "function", name: "evidence_first_read_context",
+        arguments: { evidenceId: projection.archiveRef.evidenceId, version: projection.archiveRef.version,
+          startOffset: 0, maxChars: 2048 } };
+      await options.guardToolCall(0, 1601, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onToolCallRequestFinalized(0, 1601, { toolCallRequest: request });
+      const result = await archiveTool.implementation(request.arguments, {
+        signal: options.signal, status() {}, warn() {}, callId: 1601,
+      });
+      assert.equal(result.kind, "historical_evidence_range");
+      archiveReadCount += 1;
+      options.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+        toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+        toolCallId: request.id, content: JSON.stringify(result) }] }));
+      options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 80 } });
+      options.onRoundEnd(0);
+      throw options.signal.reason;
+    }
+    if (calls === 3) {
+      assert.match(chat.toString(), /historical_evidence_range/u);
+      const tool = tools.find(candidate => candidate.name === "git_changed_files");
+      const request = { id: "source-after-archive", type: "function", name: "git_changed_files",
+        arguments: { comparison: "range", base, head, limit: 1, byteBudget: 4096 } };
+      await options.guardToolCall(0, 1602, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onToolCallRequestFinalized(0, 1602, { toolCallRequest: request });
+      const result = await tool.implementation(request.arguments);
+      assert.equal(result.kind, "git_observation");
+      assert.equal(result.pageStart, 1);
+      sourceReadCount += 1;
+      options.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+        toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+        toolCallId: request.id, content: JSON.stringify(result) }] }));
+      options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 80 } });
+      options.onRoundEnd(0);
+      throw options.signal.reason;
+    }
+    assert.match(chat.toString(), /added.txt/u);
+    options.onMessage(ChatMessage.create("assistant", "Archive evidence was rehydrated, then the real Git source page was read."));
+    options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 40 } });
+  });
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid",
+    workingInputTargetTokens: 10000, workingInputTriggerTokens: 12048,
+    softRemainingTokens: 1000, hardRemainingTokens: 500,
+  }, [sourceTool]);
+  ctl.getWorkingDirectory = () => root;
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 4);
+  assert.equal(archiveReadCount, 1);
+  assert.equal(sourceReadCount, 1);
+  const retry = ctl.debugValues.find(value => value.event === "fresh_tool_planning_retry_scheduled");
+  assert.deepEqual(retry.recoveryToolNames, ["git_changed_files", "evidence_first_read_context"]);
+  const recoveryRounds = ctl.debugValues.filter(value => value.event === "direct_round_observation"
+    && value.phase === "read_only_research_recovery");
+  assert.equal(recoveryRounds.some(value => value.actualResultCount === 1
+    && value.exposedToolNames.includes("git_changed_files")), true);
+  assert.match(ctl.blocks.at(-1).text, /real Git source page/u);
+});
 
 function exactCountingModel(onAct) {
   return {

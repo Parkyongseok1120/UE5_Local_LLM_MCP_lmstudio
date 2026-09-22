@@ -1,0 +1,176 @@
+{
+  "mode": "codegen",
+  "baseline": {
+    "reviewedHead": "7eabf943e7ba750770d5e760b2dac06f961a820a",
+    "branch": "v1.4.0-beta-2",
+    "initialWorktree": "clean",
+    "installedPluginModified": "unknown"
+  },
+  "claims": [
+    {
+      "claim": "결정적 initial-boundary fixture에서는 측정된 prompt와 공개 Git schema가 context에 맞는데도 provider가 구조화 SDK request 없이 raw tool-call 문자열만 반환합니다. 이 사례의 최초 소실 지점은 compaction/no-fit가 아니라 provider structured-tool boundary 이전이며, 실제 LM Studio provider에서 동일한지 여부는 아직 runtime proof가 없습니다.",
+      "claimType": "behavior",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "measureContext는 실제 applyPromptTemplate/countTokens 결과와 공개 tool definition surface를 기록하고, direct_round_observation은 modelInputId별 inputTokens, remainingTokens, requested/applied cap, exposed tools, SDK event 수, guard 수, dispatch/result 수를 함께 기록합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "observation": "runOneToolRound가 SDK tool request start/name/end/finalized/failure callback을 predictionUsage 카운터로 전달하며, prediction-loop의 toolCallBoundary가 이 값과 raw/structured/guard/provider result를 연결합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "initial raw tool output fixture는 32768 context, 3000 inputTokens, exposed git_changed_files, remainingTokens >= 0 조건에서 structuredRequestCount=0, SDK start/finalized=0, guard/dispatch/result=0, toolSurfaceMatchesMeasured=true를 확인합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "createPredictionLoopHandler -> runOneToolRound" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "measureContext and classifyToolCallBoundary" },
+        { "stage": "dispatch", "stageStatus": "expected_missing", "location": "initial raw tool output fixture", "symbol": "no structured request, guard approval, or provider dispatch" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs", "symbol": "direct_round_observation toolCallBoundary assertions" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "active LM Studio chat and loaded provider",
+          "observation": "이번 실행에서는 active chat activation, LM Studio model generation, SDK callback stream, and provider-side tool dispatch를 직접 연결하지 못했습니다. 실제 설치본에서 structured request가 처음 사라지는 위치는 UNPROVEN입니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "별도 actual temporary Git fixture에서는 fresh structured retry가 공개 schema를 사용해 5개 request를 dispatch하고 5개 result를 수신하므로 registry/capability 경로 자체는 동작합니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델의 template parser 또는 SDK provider가 raw text를 생성한 exact internal stage",
+        "실제 설치본과 활성 채팅이 현재 source/dist와 같은 fingerprint를 로드하는지 여부",
+        "실제 모델에서 동일 조건의 raw 발생률과 완주율"
+      ]
+    },
+    {
+      "claim": "archive-only raw intent는 archive reader 하나로 고립되지 않고, 검증된 Git read-only catalogue와 archive reader를 함께 사용해 archive rehydration 뒤 source pagination을 계속할 수 있습니다. recovery progress는 response fingerprint가 아니라 성공한 source/archive 범위의 새 coverage로 계산합니다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "archiveOnlyRecoveryAllowed 경로는 evidence_first_read_context만 raw로 남은 Git read task에서 git_changed_files를 포함한 read-only recovery profile을 선택하고 archive reader를 유지합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "RecoveryCoverageLedger는 source identity/version/query/range와 archive evidenceId/version/range를 분리하고, timing/snapshot/nextCursor 변화나 contained overlap을 새 coverage로 세지 않습니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "실제 임시 Git repository와 createWorkspaceCapabilities를 연결한 archive-only fixture가 archive read 1회, git_changed_files source read 1회, archive reader와 source reader 동시 노출, 실제 source page 수신을 검증합니다. coverage fixture는 232 page의 [1,25]만 최초 진행으로 세고 timing-only/contained/duplicate-success+new-error를 no-progress로 판정합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "raw intent classification and recovery profile selection" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "archiveOnlyRecoveryAllowed and RecoveryCoverageLedger" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs", "symbol": "evidence_first_read_context then git_changed_files implementations" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "recoveryProgress.progressed and partial report telemetry" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "existing durable archives and live MCP transport",
+          "observation": "기존 archive record의 누락 metadata, 실제 server cursor TTL/eviction, live transport의 envelope shape는 결정적 fixture만으로 전부 검증할 수 없습니다."
+        }
+      ],
+      "unknowns": [
+        "실제 서버 재시작·TTL eviction에서의 cursor 원인별 분류 결과",
+        "설치본 archive schema가 현재 source와 일치하는지 여부"
+      ]
+    },
+    {
+      "claim": "raw tool syntax는 실행하거나 structured arguments로 복원하지 않고 다음 model input에서 안전한 marker로 치환되며, read-only recovery가 measurable progress를 만들지 못하면 근거 기반 부분 보고만 전달하고 task-complete로 승격하지 않습니다.",
+      "claimType": "state_transition",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "hasUnexecutedRawToolSyntax 판정 뒤 raw assistant history text를 실행 가능한 형태로 남기지 않고 no-dispatch marker로 치환하며, fresh retry는 published registry/schema에서 새 structured request만 허용합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "research_recovery_exhausted에서 no-progress가 있으면 complete delivery를 partial_report로 낮추고, evidenceBackedPartialReport와 taskCompleted=false telemetry를 생성합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "raw XML 다음 round 재주입 금지, 일반 코드/인용 raw 예제 보존, invalid_cursor no-progress 부분 보고, raw Git retry의 mutation/build 0회 회귀가 통과합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "captured assistant messages and final raw intent classification" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "freshToolPlanningRetryDecision and research recovery progress gate" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "only newly generated registered read-only structured calls" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts", "symbol": "partial_report_delivery and research_recovery_finalization" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "live model response formatting",
+          "observation": "실모델에서 raw syntax가 fragment callback 없이 도착하거나 provider가 structured callback을 일부만 보낸 경우의 모든 변형은 아직 runtime에서 측정하지 않았습니다."
+        }
+      ],
+      "unknowns": [
+        "모델별 raw wrapper 변형과 SDK callback 순서",
+        "GUI streaming에서 marker가 사용자에게 보이는지 여부"
+      ]
+    }
+  ],
+  "existing": [
+    "기존 measureContext/selectSoftCompaction/selectMeasuredCandidate와 generation budget/no-fit 처리",
+    "기존 input-availability, tool-scope/isObservationOnlyToolCall, public workspace schema와 shared-tool-core Git paging",
+    "기존 archive/working-context, BOUNDED, Luna output recovery, cancellation과 mutation/build guard"
+  ],
+  "proposed": [
+    "초기 structured/raw boundary telemetry와 SDK callback counter 연결",
+    "archive-only catalogue 복구와 coverage-based no-progress 판정",
+    "raw history 비실행 marker와 안전한 partial report delivery"
+  ],
+  "doNotDuplicate": [
+    "새 InvestigationState, Planner, 강제 evidence-debt 상태머신",
+    "기존 compactor, archive, input-availability, Git VersionControl paging의 재구현",
+    "raw XML/JSON 실행·인수 복원·mutation/build 자동 재실행",
+    "compaction 수치나 retry 횟수를 공간 충분한 raw failure의 임시 해법으로 변경"
+  ],
+  "invariants": [
+    "raw tool text는 실행하거나 structured arguments로 이어붙이지 않습니다.",
+    "fresh tool-planning retry는 검증된 read-only registry/schema와 최대 1회 제한을 유지합니다.",
+    "source page continuation과 archive EOF를 별도 사실로 유지합니다.",
+    "no-progress partial report는 전체 task completion이 아닙니다.",
+    "취소·timeout·BOUNDED·approval/receipt·mutation/build 경계를 유지합니다."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/round-loop.ts",
+    "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+    "lmstudio-context-compactor-plugin/eval-results/evidence-packet-initial-tool-boundary-20260923.json"
+  ],
+  "validationPlan": [
+    "npm run build --prefix lmstudio-context-compactor-plugin",
+    "npm test --prefix lmstudio-context-compactor-plugin",
+    "python -m pytest -q",
+    "git diff --check",
+    "실제 LM Studio 설치본·활성 chat·model/SDK/provider dispatch는 환경을 연결한 뒤 동일 modelInputId telemetry로 재검증하고 그 전까지 UNPROVEN 유지"
+  ]
+}

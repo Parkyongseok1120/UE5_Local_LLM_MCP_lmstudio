@@ -54,6 +54,11 @@ export type CapturedRound = {
     toolArgumentChars: number;
     toolArgumentTokensCount: number | null;
     unattributedTokensCount: number | null;
+    sdkToolRequestStartedCount: number;
+    sdkToolRequestNamedCount: number;
+    sdkToolRequestEndedCount: number;
+    sdkToolRequestFinalizedCount: number;
+    sdkToolRequestFailureCount: number;
   };
 };
 
@@ -90,6 +95,11 @@ export async function runOneToolRound(
     toolArgumentChars: 0,
     toolArgumentTokensCount: null as number | null,
     unattributedTokensCount: null as number | null,
+    sdkToolRequestStartedCount: 0,
+    sdkToolRequestNamedCount: 0,
+    sdkToolRequestEndedCount: 0,
+    sdkToolRequestFinalizedCount: 0,
+    sdkToolRequestFailureCount: 0,
   };
 
   const forwardAbort = () => {
@@ -143,6 +153,26 @@ export async function runOneToolRound(
       onToolCallRequestArgumentFragmentGenerated: (roundIndex, callId, content) => {
         predictionUsage.toolArgumentChars += String(content || "").length;
         actCallbacks.onToolCallRequestArgumentFragmentGenerated?.(roundIndex, callId, content);
+      },
+      onToolCallRequestStart: (...args) => {
+        predictionUsage.sdkToolRequestStartedCount += 1;
+        actCallbacks.onToolCallRequestStart?.(...args);
+      },
+      onToolCallRequestNameReceived: (...args) => {
+        predictionUsage.sdkToolRequestNamedCount += 1;
+        actCallbacks.onToolCallRequestNameReceived?.(...args);
+      },
+      onToolCallRequestEnd: (...args) => {
+        predictionUsage.sdkToolRequestEndedCount += 1;
+        actCallbacks.onToolCallRequestEnd?.(...args);
+      },
+      onToolCallRequestFailure: (...args) => {
+        predictionUsage.sdkToolRequestFailureCount += 1;
+        actCallbacks.onToolCallRequestFailure?.(...args);
+      },
+      onToolCallRequestFinalized: (...args) => {
+        predictionUsage.sdkToolRequestFinalizedCount += 1;
+        actCallbacks.onToolCallRequestFinalized?.(...args);
       },
       onPredictionCompleted: (result) => {
         const stats = (result as { stats?: {
