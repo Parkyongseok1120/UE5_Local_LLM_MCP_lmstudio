@@ -434,6 +434,9 @@ type RemoteToolLike = Tool & {
   parametersJsonSchema?: unknown;
 };
 
+// Only locally constructed tool objects can receive local read authority.
+const localObservationTools = new WeakSet<object>();
+
 const UNITY_OBSERVATION_TOOLS = new Set([
   "workspace_status", "git_status", "git_log", "git_changed_files", "git_diff_file", "git_read_file",
   "unity_references",
@@ -481,8 +484,10 @@ function isObservationOnlyToolCall(
   const args = request.arguments && typeof request.arguments === "object"
     ? request.arguments as Record<string, unknown> : {};
 
-  if (name === "read_attached_document") return true;
-  if (name.startsWith("evidence_first_")) return true;
+  if (name !== tool.name) return false;
+  if (localObservationTools.has(tool)) return true;
+  if (plugin === "mcp/evidence-first"
+    && ["evidence_first_contract", "evidence_first_validate", "evidence_first_status"].includes(name)) return true;
   if (plugin === "mcp/unity-tools" || plugin.endsWith("/unity-tools")) {
     if (UNITY_OBSERVATION_TOOLS.has(name)) return true;
     if (name === "unity_scene") return args.action === "list";
@@ -1341,7 +1346,7 @@ type RecoveryCoverageDescriptor = {
 };
 
 function finiteCoverageInteger(value: unknown): number | null {
-  return Number.isSafeInteger(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function normalizedCoverageRanges(ranges: Array<RecoveryCoverageRange>): Array<RecoveryCoverageRange> {
@@ -1404,7 +1409,7 @@ function coverageQueryKey(value: Record<string, unknown>): string {
 }
 
 function coverageRange(value: Record<string, unknown>, category: "source" | "archive"):
-  { range: RecoveryCoverageRange; rangeUnit: string } {
+  { range: RecoveryCoverageRange; rangeUnit: string } | null {
   const returned = value.returnedRange ?? value.archiveReturnedRange;
   if (Array.isArray(returned) && returned.length >= 2) {
     const start = finiteCoverageInteger(returned[0]);
@@ -1412,13 +1417,16 @@ function coverageRange(value: Record<string, unknown>, category: "source" | "arc
     if (start !== null && end !== null && end >= start) {
       const exclusive = category === "archive" && (value.nextOffset !== undefined
         || value.archiveHasMore !== undefined || value.archiveReachedEnd !== undefined);
-      return { range: [start, exclusive && end > start ? end - 1 : end],
+      if (exclusive && end === start) return null;
+      return { range: [start, exclusive ? end - 1 : end],
         rangeUnit: String(value.rangeUnit || (exclusive ? "utf16_code_units" : "unknown")) };
     }
+    return null;
   }
   const offsetStart = finiteCoverageInteger(value.startOffset ?? value.offsetBytes);
   const offsetEnd = finiteCoverageInteger(value.nextOffset ?? value.nextOffsetBytes);
   if (offsetStart !== null && offsetEnd !== null && offsetEnd >= offsetStart) {
+    if (offsetEnd === offsetStart) return null;
     return { range: [offsetStart, Math.max(offsetStart, offsetEnd - 1)],
       rangeUnit: value.offsetBytes !== undefined ? "utf8_byte" : "utf16_code_units" };
   }
@@ -1444,8 +1452,9 @@ function recoveryCoverageDescriptors(value: Record<string, unknown>): Array<Reco
     const evidenceId = String(value.evidenceId || archiveRef.evidenceId || "unknown-evidence");
     const version = String(value.version || archiveRef.version || "unknown-version");
     const ranged = coverageRange(value, "archive");
+    if (!ranged) return [];
     return [{ category: "archive", key: telemetryFingerprint({ evidenceId, version,
-      rangeUnit: ranged.rangeUnit }, true), range: ranged.range, rangeUnit: ranged.rangeUnit,
+      representation: "sanitized_archived_tool_envelope", rangeUnit: ranged.rangeUnit }, true), range: ranged.range, rangeUnit: ranged.rangeUnit,
       sourceVersion: version, sourceIdentity: evidenceId }];
   }
   const isSourceObservation = kind === "git_observation" || Boolean(
@@ -1453,9 +1462,11 @@ function recoveryCoverageDescriptors(value: Record<string, unknown>): Array<Reco
   );
   if (!isSourceObservation) return [];
   const ranged = coverageRange(value, "source");
+  if (!ranged) return [];
   const sourceIdentity = coverageSourceIdentity(value);
   const sourceVersion = coverageSourceVersion(value);
-  return [{ category: "source", key: coverageQueryKey(value), range: ranged.range,
+  return [{ category: "source", key: telemetryFingerprint({ query: coverageQueryKey(value),
+    rangeUnit: ranged.rangeUnit, representation: value.representation || "source" }, true), range: ranged.range,
     rangeUnit: ranged.rangeUnit, sourceVersion, sourceIdentity }];
 }
 
@@ -1465,15 +1476,18 @@ function projectionCoverageDescriptors(value: Record<string, unknown>): Array<Re
     ? value.archiveRef as Record<string, unknown> : {};
   const evidenceId = String(archiveRef.evidenceId || value.evidenceId || "unknown-evidence");
   const version = String(archiveRef.version || value.version || "unknown-version");
-  const ranges = value.projectedBodyRanges || value.projectedRawRanges || value.projectedSanitizedRanges;
+  const bodyRanges = Array.isArray(value.projectedBodyRanges) && value.projectedBodyRanges.length > 0;
+  const ranges = bodyRanges ? value.projectedBodyRanges : value.projectedSanitizedRanges;
+  const representation = bodyRanges ? `sanitized_body:${String(value.bodyField || "unknown")}`
+    : "sanitized_archived_tool_envelope";
   if (Array.isArray(ranges)) for (const candidate of ranges) {
     if (!Array.isArray(candidate) || candidate.length < 2) continue;
     const start = finiteCoverageInteger(candidate[0]);
     const end = finiteCoverageInteger(candidate[1]);
-    if (start === null || end === null || end < start) continue;
+    if (start === null || end === null || end <= start) continue;
     descriptors.push({ category: "archive", key: telemetryFingerprint({ evidenceId, version,
-      rangeUnit: value.bodyRangeUnit || value.rangeUnit || "utf16_code_units" }, true),
-    range: [start, end], rangeUnit: String(value.bodyRangeUnit || value.rangeUnit || "utf16_code_units"),
+      representation, rangeUnit: value.bodyRangeUnit || value.rangeUnit || "utf16_code_units" }, true),
+    range: [start, end - 1], rangeUnit: String(value.bodyRangeUnit || value.rangeUnit || "utf16_code_units"),
     sourceVersion: version, sourceIdentity: evidenceId });
   }
   const sourceStart = finiteCoverageInteger(value.sourcePageStart);
@@ -1481,7 +1495,8 @@ function projectionCoverageDescriptors(value: Record<string, unknown>): Array<Re
   if (sourceStart !== null && sourceEnd !== null && sourceEnd >= sourceStart) {
     const sourceIdentity = coverageSourceIdentity(value);
     const sourceVersion = coverageSourceVersion(value);
-    descriptors.push({ category: "source", key: coverageQueryKey(value), range: [sourceStart, sourceEnd],
+    descriptors.push({ category: "source", key: telemetryFingerprint({ query: coverageQueryKey(value),
+      rangeUnit: "page", representation: "source" }, true), range: [sourceStart, sourceEnd],
       rangeUnit: "page", sourceVersion, sourceIdentity });
   }
   return descriptors;
@@ -1508,6 +1523,9 @@ function seedRecoveryProgress(history: Chat): {
       fingerprints.add(telemetryFingerprint(result.content));
       const value = toolMemory.decodeToolResultRecord(result.content).value;
       if (!value || typeof value !== "object") continue;
+      const resultStatus = String(value.resultStatus ?? value.status ?? "").toLowerCase();
+      if (value.ok === false || value.resultStatus === false || value.errorCode
+        || ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(resultStatus)) continue;
       if (value.kind === "archived_tool_result_projection") {
         for (const descriptor of projectionCoverageDescriptors(value)) recordRecoveryCoverage(coverage, descriptor);
         continue;
@@ -1528,7 +1546,7 @@ type RecoveryProgress = {
   newSuccessfulObservationCount: number;
   newSourceUnits: number;
   newArchiveUnits: number;
-  currentInputAvailabilityGain: number;
+  currentInputAvailabilityGain: null;
   usefulProgress: boolean;
   progressed: boolean;
   errorCount: number;
@@ -1546,7 +1564,9 @@ function observeRecoveryProgress(
   let newSuccessfulObservationCount = 0;
   let newSourceUnits = 0;
   let newArchiveUnits = 0;
-  let currentInputAvailabilityGain = 0;
+  // No final-input view is supplied here; historical novelty cannot measure
+  // regained current availability (nor can unlike range units be summed).
+  const currentInputAvailabilityGain = null;
   let errorCount = 0;
   let duplicateCount = 0;
   let partialOverlapCount = 0;
@@ -1570,8 +1590,6 @@ function observeRecoveryProgress(
         const delta = recordRecoveryCoverage(coverageLedger, descriptor);
         if (delta.uncovered.length) {
           resultAddedCoverage = true;
-          const span = delta.uncovered.reduce((total, [start, end]) => total + end - start + 1, 0);
-          currentInputAvailabilityGain += span;
           if (descriptor.category === "source") newSourceUnits += 1;
           else newArchiveUnits += 1;
         } else if (delta.overlapped) partialOverlapCount += 1;
@@ -1589,7 +1607,7 @@ function observeRecoveryProgress(
       if (resultAddedCoverage) newSuccessfulObservationCount += 1;
     }
   }
-  const progressed = newSourceUnits > 0 || newArchiveUnits > 0 || currentInputAvailabilityGain > 0;
+  const progressed = newSourceUnits > 0 || newArchiveUnits > 0;
   return { newResultCount, newResponseFingerprintCount: newResultCount, newSuccessfulObservationCount,
     newSourceUnits, newArchiveUnits, currentInputAvailabilityGain,
     usefulProgress: progressed, progressed, errorCount, duplicateCount, partialOverlapCount, coverage };
@@ -1712,7 +1730,7 @@ type ToolCallBoundary = {
   sdkStartedCount: number;
   sdkFinalizedCount: number;
   guardAllowedCount: number;
-  dispatchCount: number;
+  dispatchCount: number | null;
   resultCount: number;
 };
 
@@ -1725,7 +1743,7 @@ function classifyToolCallBoundary(options: {
   sdkFailureCount: number;
   guardAllowedCount: number;
   guardDeniedCount: number;
-  dispatchCount: number;
+  dispatchCount: number | null;
   resultCount: number;
 }): ToolCallBoundary {
   let state = "no_tool_request";
@@ -1739,9 +1757,11 @@ function classifyToolCallBoundary(options: {
     state = "guard_denied_before_provider_execution";
   } else if (options.sdkFinalizedCount > 0 && options.guardAllowedCount === 0) {
     state = "guard_not_allowed_or_not_observed";
+  } else if (options.guardAllowedCount > 0 && options.dispatchCount === null && options.resultCount === 0) {
+    state = "guard_allowed_provider_execution_unknown";
   } else if (options.guardAllowedCount > 0 && options.dispatchCount === 0) {
     state = "guard_allowed_without_provider_dispatch";
-  } else if (options.dispatchCount > 0 && options.resultCount === 0) {
+  } else if (options.dispatchCount !== null && options.dispatchCount > 0 && options.resultCount === 0) {
     state = "provider_dispatch_without_result";
   } else if (options.resultCount > 0) {
     state = "structured_request_dispatched_and_result_received";
@@ -2004,10 +2024,10 @@ export function createPredictionLoopHandler(
       lineage: contextBoundary.scope?.lineage || null,
       parentLineage: contextBoundary.scope?.parentLineage || null,
     });
-  const registeredModelTools = [...toolSession.tools as Array<ScopedTool>, ...attachmentContext.tools,
-    ...(workingContext ? [workingContext.tool()] : [])] as Array<RemoteToolLike>;
-  const allModelTools = [...scopedRemoteTools, ...attachmentContext.tools,
-    ...(workingContext ? [workingContext.tool()] : [])] as Array<RemoteToolLike>;
+  const localTools = [...attachmentContext.tools, ...(workingContext ? [workingContext.tool()] : [])];
+  for (const tool of localTools) localObservationTools.add(tool);
+  const registeredModelTools = [...toolSession.tools as Array<ScopedTool>, ...localTools] as Array<RemoteToolLike>;
+  const allModelTools = [...scopedRemoteTools, ...localTools] as Array<RemoteToolLike>;
   const modelTools = config.auditCompletionMode === "bounded"
     ? allModelTools.filter(tool => isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} }))
     : allModelTools;
@@ -3076,7 +3096,7 @@ export function createPredictionLoopHandler(
               traceCall(callId, {
                 validationState: "allowed",
                 approvalState: "not_required_observation",
-                executionState: "dispatched",
+                executionState: "unknown", guardAllowed: true,
                 proposedArgumentsFingerprint: telemetryFingerprint(request.arguments || {}),
                 executedArgumentsFingerprint: telemetryFingerprint(proposedArguments),
               });
@@ -3110,7 +3130,7 @@ export function createPredictionLoopHandler(
               traceCall(callId, {
                 validationState: "allowed",
                 approvalState: "allowed",
-                executionState: "dispatched",
+                executionState: "unknown", guardAllowed: true,
                 proposedArgumentsFingerprint: telemetryFingerprint(request.arguments || {}),
                 executedArgumentsFingerprint: telemetryFingerprint(finalArguments),
               });
@@ -3134,7 +3154,9 @@ export function createPredictionLoopHandler(
       if (!Number.isFinite(promptTokens) || !Number.isFinite(predictedTokens)) {
         executionCost.unknownUsageCalls += 1;
       }
-      if (captured.failure === undefined) workingContext?.captureExposure(modelInput, modelInputId, true);
+      if (captured.predictionCompleted && captured.failure === undefined) {
+        workingContext?.captureExposure(modelInput, modelInputId, true);
+      }
       activeActivity.complete();
       activeActivity = null;
       let noteLifecycle = activeNote ? "injected_existing" : "absent";
@@ -3221,7 +3243,9 @@ export function createPredictionLoopHandler(
           ? archiveOnlyRecoveryInstruction(retryTools)
         : FRESH_TOOL_PLANNING_RETRY_INSTRUCTION;
       const runtimeDispatchCount = [...runtimeToolTrace.values()]
-        .filter(value => value.executionState === "dispatched").length;
+        // Conservative retry barrier: authorization may already have caused
+        // execution. This legacy count is a guard proxy, not provider proof.
+        .filter(value => value.guardAllowed === true).length;
       const guardAllowedCount = [...runtimeToolTrace.values()]
         .filter(value => value.validationState === "allowed").length;
       const guardDeniedCount = [...runtimeToolTrace.values()]
@@ -3238,7 +3262,7 @@ export function createPredictionLoopHandler(
         sdkFailureCount: captured.predictionUsage.sdkToolRequestFailureCount,
         guardAllowedCount,
         guardDeniedCount,
-        dispatchCount: runtimeDispatchCount,
+        dispatchCount: null,
         resultCount: actualResultCount,
       });
       const recoveryProgress = researchRecoveryRound
@@ -3337,7 +3361,8 @@ export function createPredictionLoopHandler(
           registeredButWithheldRawToolNames: rawIntent.registeredButWithheldNames,
           registeredUnsafeRawToolNames: rawIntent.registeredUnsafeNames,
           recoveryToolNames: retryTools.map(tool => tool.name),
-          actualDispatchCount: runtimeDispatchCount,
+          actualDispatchCount: null,
+          guardAllowedCount,
           actualResultCount,
         });
       };
@@ -3430,7 +3455,7 @@ export function createPredictionLoopHandler(
             toolNames: retryTools.map(tool => tool.name),
           } : null,
           freshToolPlanningRetry: retryDecision,
-          actualDispatchCount: runtimeDispatchCount,
+          actualDispatchCount: null,
           actualResultCount,
           phase: finalizing ? "final_report"
             : researchRecoveryRound ? "read_only_research_recovery" : "research",

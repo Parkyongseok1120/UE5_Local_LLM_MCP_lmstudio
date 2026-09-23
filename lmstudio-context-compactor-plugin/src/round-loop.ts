@@ -28,6 +28,7 @@ type RoundCallbacks = {
 };
 
 export type CapturedRound = {
+  predictionCompleted: boolean;
   messages: Array<ChatMessage>;
   continueAfterTools: boolean;
   failure?: unknown;
@@ -208,6 +209,8 @@ export async function runOneToolRound(
   }
 
   return {
+    predictionCompleted: Boolean(predictionStats && !fragmentAbortReason && !parentSignal.aborted
+      && !["userStopped", "unknown"].includes(predictionStats.stopReason)),
     messages,
     continueAfterTools: boundaryRequested,
     ...(fragmentAbortReason ? { finishReason: "generation_repetition_paused" }

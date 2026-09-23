@@ -94,6 +94,7 @@ function semanticEvidenceView(payload, maxChars = 640) {
 }
 
 function gitBodyView(payload) {
+  if (typeof payload.content === "string") return { field: "content", body: redact(payload.content) };
   if (typeof payload.text === "string") return { field: "text", body: redact(payload.text) };
   if (typeof payload.body === "string") return { field: "body", body: redact(payload.body) };
   if (Array.isArray(payload.items)) return { field: "items", body: JSON.stringify(redact(payload.items)) };
@@ -234,7 +235,7 @@ class WorkingContext {
           preservedFirstConsumer = true;
           return result;
         }
-        const bodyView = parsed.kind === "git_observation" ? gitBodyView(parsed) : null;
+        const bodyView = gitBodyView(parsed);
         const semanticBody = JSON.stringify(redact(parsed));
         const boundedBody = bodyView?.body || semanticBody;
         const bodyFirst = Boolean(bodyView);
