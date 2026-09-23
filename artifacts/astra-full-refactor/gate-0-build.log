@@ -1,0 +1,8 @@
+
+> unreal-context-compactor@0.4.66 build
+> npm run clean && tsc -p tsconfig.json
+
+
+> unreal-context-compactor@0.4.66 clean
+> node scripts/clean-dist.cjs
+

@@ -1,0 +1,30 @@
+{
+  "capturedAt": "2026-09-23 Asia/Seoul",
+  "repositoryStartSha": "3c4375fd3041da16b4e6af721c17fa2c230d2f50",
+  "headSha": "3c4375fd3041da16b4e6af721c17fa2c230d2f50",
+  "node": "v24.17.0",
+  "npm": "11.13.0",
+  "lmStudio": "0.4.25",
+  "lmStudioCliCommit": "69d945a",
+  "sdk": "1.5.0",
+  "plugin": "0.4.66",
+  "pluginRevision": 113,
+  "model": {
+    "identifier": "swift-qwen3.8-27b",
+    "displayName": "Swift Qwen3.8 27B",
+    "quantization": "Q4_K_S",
+    "contextLength": 38912,
+    "maxContextLength": 262144
+  },
+  "fingerprints": {
+    "identity": {
+      "runtimeSourceRevision": 113,
+      "installedSourceFingerprint": "30493712b08b9c60fa65171133e0fca39d8c9e2a08da12f3aeb965511230a637",
+      "installedDistFingerprint": "68b87f47c94bed29c1defbc9333a45830f90fd17799fdd4726849278552858c4"
+    },
+    "reproducible": true
+  },
+  "metricExcerpts": "runtime-metric-excerpts.txt",
+  "cumulativeStressStatus": "FAIL_STOPPED_ON_TRUNCATED_RESPONSE",
+  "cumulativeExactInputBeforeStop": 15300
+}

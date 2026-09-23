@@ -83,6 +83,17 @@ function recentConversationTail(messages, previousTail = [], options = {}) {
   }
   const deduped = [];
   for (const item of combined) {
+    // A serialized tail may have a shorter excerpt than the current message.
+    // Keep the current, richer occurrence instead of retaining every successive
+    // truncation as if it were new conversation evidence.
+    if (item.source === "current_history") {
+      for (let index = deduped.length - 1; index >= 0; index--) {
+        const prior = deduped[index];
+        const prefix = prior.text.replace(/\s*…\[truncated\]$/u, "");
+        if (prior.source === "prior_checkpoint" && prior.role === item.role
+          && (prior.text === item.text || (prefix.length >= 200 && item.text.startsWith(prefix)))) deduped.splice(index, 1);
+      }
+    }
     const previous = deduped.at(-1);
     if (previous && previous.role === item.role && previous.text === item.text) continue;
     deduped.push(item);

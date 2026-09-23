@@ -1,0 +1,3 @@
+{"cycle":1,"cumulativeExactInputTokens":11955,"promptExact":11955,"backendPromptEval":11955,"afterCompaction":11955,"preserved":true}
+{"cycle":2,"cumulativeExactInputTokens":27255,"promptExact":15300,"backendPromptEval":15300,"afterCompaction":15300,"preserved":true}
+{"cycle":3,"cumulativeExactInputTokens":43614,"promptExact":16359,"backendPromptEval":16359,"afterCompaction":16359,"preserved":true}

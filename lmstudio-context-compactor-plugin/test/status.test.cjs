@@ -17,30 +17,8 @@ test("status verifies every direct prediction-loop source and its index wiring",
   assert.equal(result.modelOwner, "lmstudio_selected_model");
   assert.equal(result.toolsOwner, "lmstudio_selected_model");
   assert.equal(result.runtimeActivationProven, false);
-  assert.deepEqual(DIRECT_SOURCE_FILES, [
-    "src/index.ts",
-    "src/prediction-loop.ts",
-    "src/context-budget.ts",
-    "src/attachment-boundary.ts",
-    "src/round-loop.ts",
-    "src/prediction-stream.ts",
-    "src/tool-scope.ts",
-    "src/attachment-tools.ts",
-    "src/direct-compaction-core.js",
-    "src/compaction-tool-memory.js",
-    "src/input-availability.js",
-    "src/evidence-archive.js",
-    "src/working-context.js",
-    "src/working-context-boundary.ts",
-    "src/continuity-assistant-evidence.js",
-    "src/continuity-file-observations.js",
-    "src/continuity-memory.js",
-    "src/continuity-model-notes.js",
-    "src/continuity-objectives.js",
-    "src/continuity-text.js",
-    "src/durable-memory-sanitizer.js",
-    "src/direct-config.ts",
-  ]);
+  assert.deepEqual([...DIRECT_SOURCE_FILES].sort(), fs.readdirSync(path.join(root, "src"))
+    .filter(name => /\.(?:ts|js)$/.test(name)).map(name => `src/${name}`).sort());
 });
 
 test("status fails closed when a direct runtime source is absent", () => {

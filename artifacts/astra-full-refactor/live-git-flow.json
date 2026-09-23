@@ -1,0 +1,1435 @@
+{
+  "status": "PASS",
+  "calls": [
+    "A",
+    "B",
+    "C"
+  ],
+  "duplicateReads": 0,
+  "failure": null,
+  "answer": "The user wants to use git_read_file to load files A, B, and C, report the three FACT values along with their filenames, and not re-read any of the files. Since these are independent reads, I can batch-process them all together in a single block.\n\n\n\n\n\nThe reads for A and B succeeded, but C failed with \"shared read result budget exhausted. Please split up the read batch and use the returned evidence before requesting any further requests.\"\n\nIn other words, I need to retry reading C on its own (not as a batch). The user said not to re-read files — since C hasn't been successfully read even once, it's fine to read it now. Let me try calling git_read_file for C by itself with an appropriate maxChars specified.\n\nA and B were read successfully; the shared budget blocked C in that batch. Reading C alone now:\n\n\n\n\nAll three files have been loaded exactly once each (C was attempted twice, but the first attempt failed with an error and no content was returned — it wasn't a successful load). Reporting the FACT values:\n\n- A: FACT-A: 731\n- B: FACT-B: 942\n- C: FACT-C: 513\n\nAll three files read (each successfully once; C's first attempt errored with no content, so it was retried solo):\n\n| File | FACT value |\n|------|-----------|\n| **A** | `FACT-A: 731` |\n| **B** | `FACT-B: 942` |\n| **C** | `FACT-C: 513` |",
+  "events": [
+    {
+      "event": "working_context_boundary_restore",
+      "status": "no_marker",
+      "reused": false
+    },
+    {
+      "event": "direct_runtime_identity",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "runtimeSourceRevision": 113,
+      "installedSourceFingerprint": "30493712b08b9c60fa65171133e0fca39d8c9e2a08da12f3aeb965511230a637",
+      "installedDistFingerprint": "68b87f47c94bed29c1defbc9333a45830f90fd17799fdd4726849278552858c4",
+      "modelIdentifier": "swift-qwen3.8-27b",
+      "toolRegistryFingerprint": "1fd9e772cf31a19cd7563280535818ee7d6c6a4886b65e60c54b5f8fbd881189",
+      "fullToolCount": 2,
+      "contextManagementMode": "deterministic",
+      "configuredWorkingInputTargetTokens": 6000,
+      "configuredWorkingInputTriggerTokens": 9000,
+      "configuredSoftRemainingTokens": 6000,
+      "configuredHardRemainingTokens": 3000,
+      "configuredMaxOutputReserve": 1024,
+      "configuredSafetyMarginTokens": 2048,
+      "configuredFallbackContextLength": 38912
+    },
+    {
+      "event": "working_context_restore",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "mode": "deterministic",
+      "status": "no_manifest",
+      "durable": false,
+      "conversationScopeVerified": false
+    },
+    {
+      "event": "context_low_water",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+      "roundIndex": 0,
+      "contextLength": 38912,
+      "configuredTargetTokens": 6000,
+      "configuredTriggerTokens": 9000,
+      "requiredGenerationReserve": 1024,
+      "safetyMarginTokens": 2048,
+      "mandatoryFloorTokens": 764,
+      "configuredLowWaterTokens": 6000,
+      "effectiveLowWaterTokens": 6000,
+      "effectiveHighWaterTokens": 9000,
+      "hardInputCeiling": 35840,
+      "reservedToolResultTokens": 4096,
+      "requiredPostToolOverhead": 1024,
+      "projectedNextInput": 5884,
+      "preDispatchCompaction": false,
+      "targetUnreachable": false,
+      "blockingComponent": null,
+      "tokenMetric": "exact_templated_model_input",
+      "beforeExactInputTokens": 764,
+      "candidateMeasurements": [],
+      "selectedCandidate": "unchanged",
+      "postHistoryTokens": 87,
+      "postProjectionTokens": 87,
+      "postMetadataTokens": 297,
+      "postToolSchemaTokens": 764,
+      "finalExactInputTokens": 764,
+      "targetDelta": -5236,
+      "compactionSucceeded": true,
+      "compactionRequested": false,
+      "metadataTokens": 0,
+      "toolSchemaTokens": 214,
+      "reclaimRatio": 0
+    },
+    {
+      "event": "direct_context_measurement",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+      "roundIndex": 0,
+      "compacted": false,
+      "compactionAppliedCount": 0,
+      "compactionAppliedModes": [],
+      "observeOnly": false,
+      "exactMeasurement": true,
+      "contextLengthSource": "model",
+      "promptMeasurementSource": "templated_model_count",
+      "templatedInputChars": 3423,
+      "messageCount": 2,
+      "inputTokens": 764,
+      "remainingTokens": 35076,
+      "toolSchemaChars": 936,
+      "toolSchemaTokens": 214,
+      "toolSchemaTokenMeasurement": "exact",
+      "finalExactMeasurement": true,
+      "finalContextLengthSource": "model",
+      "finalPromptMeasurementSource": "templated_model_count",
+      "finalTemplatedInputChars": 3423,
+      "finalInputTokens": 764,
+      "finalToolSchemaChars": 936,
+      "finalToolSchemaTokens": 214,
+      "finalToolSchemaTokenMeasurement": "exact",
+      "toolSchemaFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "actToolSurfaceFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "toolSurfaceMatchesMeasured": true,
+      "templatedInputFingerprint": "8aca06bb0dd3d59de4947ac75f09403bdfbcf7d1329bb5b57d85bb57a9afb29a",
+      "outputReserve": 1024,
+      "requestedMaxTokens": 1024,
+      "appliedMaxTokens": 1024,
+      "capSource": "configured",
+      "budgetMode": "explicit",
+      "finalRemainingTokens": 35076,
+      "finalFit": true,
+      "finalMessageCount": 2,
+      "postCompactionInputTokens": null,
+      "postCompactionRemainingTokens": null,
+      "runtimeContext": {
+        "effectiveContextTokens": "unknown",
+        "cachedPrefixTokens": "unknown",
+        "source": "sdk_stats_unavailable"
+      },
+      "workingContext": {
+        "mode": "deterministic",
+        "inputTargetTokens": 6000,
+        "inputTriggerTokens": 9000,
+        "targetMet": true,
+        "mandatoryFloorTokens": 764,
+        "mandatoryFloorExceedsTarget": false,
+        "projectionApplied": false,
+        "restoredWindowApplied": false,
+        "windowCommitted": false,
+        "windowCommitSkippedReason": null,
+        "archive": {
+          "captured": 7,
+          "reads": 0,
+          "returnedChars": 0,
+          "unavailable": 0
+        },
+        "semanticCost": {
+          "summaryCalls": 0,
+          "summaryPromptTokens": 0,
+          "summaryPredictedTokens": 0,
+          "summaryMs": 0,
+          "unknownUsageCalls": 0
+        },
+        "exact": true
+      },
+      "assistantNote": {
+        "protocol": "disabled",
+        "state": "absent",
+        "itemCount": 0,
+        "reviewClaimCount": 0,
+        "statusCounts": {
+          "open": 0,
+          "resolved": 0,
+          "superseded": 0
+        }
+      },
+      "projectEngine": "unreal",
+      "projectScopeSource": "config",
+      "availableUnityTools": 0,
+      "availableUnrealTools": 1,
+      "visibleToolCount": 2,
+      "visibleToolNames": [
+        "git_read_file",
+        "evidence_first_read_context"
+      ],
+      "fullToolCount": 2,
+      "recoveryProfileActive": false,
+      "recoveryAttempts": 0,
+      "recoveryToolRounds": 0,
+      "finalizationPending": false,
+      "finalizationTrigger": null,
+      "finalizationAttempts": 0,
+      "auditCompletionPhase": "research",
+      "attachmentCount": 0,
+      "inputAvailability": {
+        "mode": "inject",
+        "verificationBoundary": "final_sdk_chat",
+        "hostInputVerification": "unknown",
+        "entries": [],
+        "omittedEntryCount": 0,
+        "entryListComplete": true,
+        "metrics": {
+          "currentRawObservationCount": 0,
+          "unverifiableRawObservationCount": 0
+        },
+        "metadataChars": 0,
+        "metadataTokens": 0,
+        "metadataTokenMeasurement": "prompt_delta"
+      }
+    },
+    {
+      "event": "batch_budget",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+      "capacity": 34052,
+      "used": 11656,
+      "available": 22396,
+      "closed": true,
+      "entries": [
+        {
+          "id": "829660457640000",
+          "tokens": 5828,
+          "state": "consumed"
+        },
+        {
+          "id": "829660457640001",
+          "tokens": 5828,
+          "state": "consumed"
+        }
+      ],
+      "actualResultMetric": "utf8_bytes",
+      "actualResultBytes": 11520
+    },
+    {
+      "event": "direct_round_observation",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+      "roundIndex": 0,
+      "finishReason": "toolCalls",
+      "predictionStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 764,
+        "predictedTokensCount": 139,
+        "totalTokensCount": 903
+      },
+      "predictionUsage": {
+        "fragmentCount": 57,
+        "reasoningTokensCount": 56,
+        "visibleTokensCount": 0,
+        "visibleChars": 0,
+        "rawToolIntentCandidate": false,
+        "rawToolIntentFirstFragment": null,
+        "rawToolIntentFirstVisibleChar": null,
+        "structuralTokensCount": 0,
+        "toolArgumentChars": 36,
+        "toolArgumentTokensCount": null,
+        "unattributedTokensCount": 83,
+        "sdkToolRequestStartedCount": 3,
+        "sdkToolRequestNamedCount": 3,
+        "sdkToolRequestEndedCount": 3,
+        "sdkToolRequestFinalizedCount": 2,
+        "sdkToolRequestFailureCount": 0
+      },
+      "callPurpose": "research",
+      "roundModelElapsedMs": 3658,
+      "modelPrefillMs": 1308,
+      "modelGenerationElapsedMs": 2350,
+      "executionCost": {
+        "modelCalls": 1,
+        "promptTokens": 764,
+        "predictedTokens": 139,
+        "elapsedMs": 3658,
+        "promptProcessingMs": 1308,
+        "generationElapsedMs": 2350,
+        "unknownPromptProcessingCalls": 0,
+        "unknownUsageCalls": 0,
+        "summary": {
+          "summaryCalls": 0,
+          "summaryPromptTokens": 0,
+          "summaryPredictedTokens": 0,
+          "summaryMs": 0,
+          "unknownUsageCalls": 0
+        },
+        "executionElapsedMs": 3735,
+        "modelCallsIncludingSummary": 1,
+        "unknownUsageCallsIncludingSummary": 0,
+        "knownPromptTokensIncludingSummary": 764,
+        "knownPredictedTokensIncludingSummary": 139,
+        "elapsedMsIncludingSummary": 3658
+      },
+      "requestedMaxTokens": 1024,
+      "appliedMaxTokens": 1024,
+      "capSource": "configured",
+      "contextLength": 38912,
+      "inputTokens": 764,
+      "remainingTokens": 35076,
+      "toolSchemaChars": 936,
+      "toolSchemaTokens": 214,
+      "toolSchemaTokenMeasurement": "exact",
+      "toolSchemaFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "actToolSurfaceFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "toolSurfaceMatchesMeasured": true,
+      "templatedInputFingerprint": "8aca06bb0dd3d59de4947ac75f09403bdfbcf7d1329bb5b57d85bb57a9afb29a",
+      "finalizationPending": false,
+      "finalizationAttempts": 0,
+      "recoveryEpisodeStarted": false,
+      "recoveryProfileActive": false,
+      "recoveryAttempts": 0,
+      "recoveryToolRounds": 0,
+      "recoveryPaginationRounds": 0,
+      "recoveryNoProgressRounds": 0,
+      "recoveryProgress": null,
+      "fullToolCount": 2,
+      "exposedToolNames": [
+        "git_read_file",
+        "evidence_first_read_context"
+      ],
+      "structuredToolRequestCount": 3,
+      "sdkToolEvents": {
+        "started": 3,
+        "named": 3,
+        "ended": 3,
+        "finalized": 2,
+        "failed": 0
+      },
+      "guardAllowedCount": 2,
+      "guardDeniedCount": 1,
+      "toolCallBoundary": {
+        "state": "guard_denied_before_provider_execution",
+        "rawToolIntent": true,
+        "structuredRequestCount": 3,
+        "sdkStartedCount": 3,
+        "sdkFinalizedCount": 2,
+        "guardAllowedCount": 2,
+        "dispatchCount": null,
+        "resultCount": 3
+      },
+      "rawToolIntentCandidate": false,
+      "finalRawToolIntent": true,
+      "rawToolIntentFirstFragment": null,
+      "rawToolIntentFirstVisibleChar": null,
+      "rawToolIntentNames": [],
+      "unknownRawToolNames": [],
+      "registeredButWithheldRawToolNames": [],
+      "registeredUnsafeRawToolNames": [],
+      "retryCandidate": null,
+      "freshToolPlanningRetry": {
+        "eligible": false,
+        "reason": "bounded_mode"
+      },
+      "actualDispatchCount": null,
+      "actualResultCount": 3,
+      "phase": "research",
+      "attempt": 1,
+      "continueAfterTools": true,
+      "modelInputToolResultCount": 0,
+      "calls": [
+        {
+          "toolCallId": "T0fvaUmLOSe3A0aImWSDzEIYSYhJC8xX",
+          "toolName": "git_read_file",
+          "argumentsFingerprint": "5ce1ce85c4aaf184db41e109770c3400a6b21ace0f67e8bdf7f3516eb728afa3",
+          "resultReservation": {
+            "kind": "git_public_read",
+            "effectiveByteBudget": 32768,
+            "byteBudgetSource": "tool_default",
+            "cursorPresent": false
+          }
+        },
+        {
+          "toolCallId": "11D7uy8poG7oq09dHIPA7Z2u3ukcHVAM",
+          "toolName": "git_read_file",
+          "argumentsFingerprint": "c31764422bed4b3b72921dd59bb613bcfeec3047b2df4a83b51788a365fc86dc",
+          "resultReservation": {
+            "kind": "git_public_read",
+            "effectiveByteBudget": 32768,
+            "byteBudgetSource": "tool_default",
+            "cursorPresent": false
+          }
+        },
+        {
+          "toolCallId": "XjNcguAY3GTpVlg3VZwK7pH5GkPYZKh5",
+          "toolName": "git_read_file",
+          "argumentsFingerprint": "ad63364eefb9dcdc3e3e61020042a360d03010133890d92ee99640339f03762c",
+          "resultReservation": {
+            "kind": "git_public_read",
+            "effectiveByteBudget": 32768,
+            "byteBudgetSource": "tool_default",
+            "cursorPresent": false
+          }
+        }
+      ],
+      "results": [
+        {
+          "toolCallId": "T0fvaUmLOSe3A0aImWSDzEIYSYhJC8xX",
+          "resultFingerprint": "abfdca1115764f9e109fff978f3edfb07e9581c0b80a1bb12de90bd3f054a72e",
+          "semanticResultFingerprint": "abfdca1115764f9e109fff978f3edfb07e9581c0b80a1bb12de90bd3f054a72e",
+          "resultChars": 5700,
+          "resultBytes": 5700,
+          "resultOk": true,
+          "kind": "git_observation",
+          "nextCursorPresent": false
+        },
+        {
+          "toolCallId": "11D7uy8poG7oq09dHIPA7Z2u3ukcHVAM",
+          "resultFingerprint": "0a3fafe9f6c08c574e2c50ee478e2263c5078412511612834370f6db1e02dc2a",
+          "semanticResultFingerprint": "0a3fafe9f6c08c574e2c50ee478e2263c5078412511612834370f6db1e02dc2a",
+          "resultChars": 5700,
+          "resultBytes": 5700,
+          "resultOk": true,
+          "kind": "git_observation",
+          "nextCursorPresent": false
+        },
+        {
+          "toolCallId": "XjNcguAY3GTpVlg3VZwK7pH5GkPYZKh5",
+          "resultFingerprint": "15866b3b7e3d1f9fb9dd928634f4268bf8e7a2be57287b39218c7ec5f08ef6f5",
+          "semanticResultFingerprint": "15866b3b7e3d1f9fb9dd928634f4268bf8e7a2be57287b39218c7ec5f08ef6f5",
+          "resultChars": 120,
+          "resultBytes": 120,
+          "nextCursorPresent": false
+        }
+      ],
+      "outputBatchReservation": {
+        "callCount": 3,
+        "publicReadCallCount": 3,
+        "requestedByteBudget": 98304,
+        "requestedMaxChars": 0,
+        "unknownReturnLimitCallCount": 0,
+        "actualResultChars": 11520,
+        "actualResultBytes": 11520,
+        "actualResultCount": 3
+      },
+      "workingContextExposure": [],
+      "toolTrace": {
+        "runtime": [
+          {
+            "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:0:sdk-829660457640000",
+            "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+            "sdkCallId": 829660457640000,
+            "sdkPredictionRound": 0,
+            "generationState": "finalized",
+            "toolName": "git_read_file",
+            "argumentChars": 12,
+            "validationState": "allowed",
+            "approvalState": "not_required_observation",
+            "executionState": "unknown",
+            "guardAllowed": true,
+            "proposedArgumentsFingerprint": "43b7f133153e984c2273d49c98beb847432e08781bdc92440fec5d179d7fc5d2",
+            "executedArgumentsFingerprint": "5ce1ce85c4aaf184db41e109770c3400a6b21ace0f67e8bdf7f3516eb728afa3",
+            "reservedToolResultTokens": 25600,
+            "resultLimitBounded": true,
+            "providerRequestId": "T0fvaUmLOSe3A0aImWSDzEIYSYhJC8xX"
+          },
+          {
+            "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:0:sdk-829660457640001",
+            "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+            "sdkCallId": 829660457640001,
+            "sdkPredictionRound": 0,
+            "generationState": "finalized",
+            "toolName": "git_read_file",
+            "argumentChars": 12,
+            "validationState": "allowed",
+            "approvalState": "not_required_observation",
+            "executionState": "unknown",
+            "guardAllowed": true,
+            "proposedArgumentsFingerprint": "41aca07d6f981275b06ce7f7d31ddf6511cac66ef68ed2bc18829822f5a3496d",
+            "executedArgumentsFingerprint": "c31764422bed4b3b72921dd59bb613bcfeec3047b2df4a83b51788a365fc86dc",
+            "reservedToolResultTokens": 8452,
+            "resultLimitBounded": true,
+            "providerRequestId": "11D7uy8poG7oq09dHIPA7Z2u3ukcHVAM"
+          },
+          {
+            "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:0:sdk-829660457640002",
+            "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+            "sdkCallId": 829660457640002,
+            "sdkPredictionRound": 0,
+            "generationState": "generated",
+            "toolName": "git_read_file",
+            "argumentChars": 12,
+            "validationState": "denied_batch_budget",
+            "executionState": "not_executed"
+          }
+        ],
+        "captured": {
+          "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+          "roundIndex": 0,
+          "requests": [
+            {
+              "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:0:T0fvaUmLOSe3A0aImWSDzEIYSYhJC8xX:0",
+              "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+              "providerRequestId": "T0fvaUmLOSe3A0aImWSDzEIYSYhJC8xX",
+              "toolName": "git_read_file",
+              "generationState": "finalized",
+              "pairingState": "unique_provider_id",
+              "proposedArgumentsFingerprint": "e2ebd6e3a9dc5b4e266e7696082d8e48df7732db4bda110836a4c3caf1c5dbd0"
+            },
+            {
+              "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:0:11D7uy8poG7oq09dHIPA7Z2u3ukcHVAM:1",
+              "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+              "providerRequestId": "11D7uy8poG7oq09dHIPA7Z2u3ukcHVAM",
+              "toolName": "git_read_file",
+              "generationState": "finalized",
+              "pairingState": "unique_provider_id",
+              "proposedArgumentsFingerprint": "09b501f4ddd90dbc2ccda6163ddcea25a3ddff23428d237c8ef1ed7df138829b"
+            },
+            {
+              "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:0:XjNcguAY3GTpVlg3VZwK7pH5GkPYZKh5:2",
+              "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+              "providerRequestId": "XjNcguAY3GTpVlg3VZwK7pH5GkPYZKh5",
+              "toolName": "git_read_file",
+              "generationState": "finalized",
+              "pairingState": "unique_provider_id",
+              "proposedArgumentsFingerprint": "ad63364eefb9dcdc3e3e61020042a360d03010133890d92ee99640339f03762c"
+            }
+          ],
+          "results": [
+            {
+              "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:0:T0fvaUmLOSe3A0aImWSDzEIYSYhJC8xX:0",
+              "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+              "providerRequestId": "T0fvaUmLOSe3A0aImWSDzEIYSYhJC8xX",
+              "pairingState": "exact_provider_id",
+              "executionState": "succeeded",
+              "resultPayloadFingerprint": "cf735983e16a221bafc592b255062edc9a7758dfb81f0667dc5d9e6ad4c0d042",
+              "rawBodyState": "exact_range_body",
+              "sourceType": "worktree",
+              "projectIdentityDigest": "a49d2e499850e74c459d064c1f24d7114aa7860dcda8108f0c691121d6188752",
+              "path": "A",
+              "versionRef": "fixture-v1",
+              "returnedRanges": [
+                [
+                  1,
+                  1
+                ]
+              ],
+              "verifiedRawRanges": [
+                [
+                  1,
+                  1
+                ]
+              ]
+            },
+            {
+              "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:0:11D7uy8poG7oq09dHIPA7Z2u3ukcHVAM:1",
+              "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+              "providerRequestId": "11D7uy8poG7oq09dHIPA7Z2u3ukcHVAM",
+              "pairingState": "exact_provider_id",
+              "executionState": "succeeded",
+              "resultPayloadFingerprint": "ab7a39a6babaa7f662a9cfd50ae0b5e1403156e2d4227e7064d8e1bac84de5cc",
+              "rawBodyState": "exact_range_body",
+              "sourceType": "worktree",
+              "projectIdentityDigest": "a49d2e499850e74c459d064c1f24d7114aa7860dcda8108f0c691121d6188752",
+              "path": "B",
+              "versionRef": "fixture-v1",
+              "returnedRanges": [
+                [
+                  1,
+                  1
+                ]
+              ],
+              "verifiedRawRanges": [
+                [
+                  1,
+                  1
+                ]
+              ]
+            },
+            {
+              "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:0:XjNcguAY3GTpVlg3VZwK7pH5GkPYZKh5:2",
+              "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-1",
+              "providerRequestId": "XjNcguAY3GTpVlg3VZwK7pH5GkPYZKh5",
+              "pairingState": "exact_provider_id",
+              "executionState": "succeeded",
+              "resultPayloadFingerprint": "a57d2ff90ca6665989a851b76ddb26ab2c04e2d8affd520ffd17d004bdbececb",
+              "rawBodyState": "not_a_raw_file_result"
+            }
+          ]
+        }
+      },
+      "modelNoteLifecycle": "absent"
+    },
+    {
+      "event": "context_low_water",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+      "roundIndex": 1,
+      "contextLength": 38912,
+      "configuredTargetTokens": 6000,
+      "configuredTriggerTokens": 9000,
+      "requiredGenerationReserve": 1024,
+      "safetyMarginTokens": 2048,
+      "mandatoryFloorTokens": 3212,
+      "configuredLowWaterTokens": 6000,
+      "effectiveLowWaterTokens": 6000,
+      "effectiveHighWaterTokens": 9000,
+      "hardInputCeiling": 35840,
+      "reservedToolResultTokens": 4096,
+      "requiredPostToolOverhead": 1024,
+      "projectedNextInput": 8332,
+      "preDispatchCompaction": false,
+      "targetUnreachable": false,
+      "blockingComponent": null,
+      "tokenMetric": "exact_templated_model_input",
+      "beforeExactInputTokens": 3212,
+      "candidateMeasurements": [],
+      "selectedCandidate": "unchanged",
+      "postHistoryTokens": 2194,
+      "postProjectionTokens": 2194,
+      "postMetadataTokens": 2745,
+      "postToolSchemaTokens": 3212,
+      "finalExactInputTokens": 3212,
+      "targetDelta": -2788,
+      "compactionSucceeded": true,
+      "compactionRequested": false,
+      "metadataTokens": 341,
+      "toolSchemaTokens": 214,
+      "reclaimRatio": 0
+    },
+    {
+      "event": "direct_context_measurement",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+      "roundIndex": 1,
+      "compacted": false,
+      "compactionAppliedCount": 0,
+      "compactionAppliedModes": [],
+      "observeOnly": false,
+      "exactMeasurement": true,
+      "contextLengthSource": "model",
+      "promptMeasurementSource": "templated_model_count",
+      "templatedInputChars": 15728,
+      "messageCount": 4,
+      "inputTokens": 2871,
+      "remainingTokens": 32969,
+      "toolSchemaChars": 936,
+      "toolSchemaTokens": 214,
+      "toolSchemaTokenMeasurement": "exact",
+      "finalExactMeasurement": true,
+      "finalContextLengthSource": "model",
+      "finalPromptMeasurementSource": "templated_model_count",
+      "finalTemplatedInputChars": 16663,
+      "finalInputTokens": 3212,
+      "finalToolSchemaChars": 936,
+      "finalToolSchemaTokens": 214,
+      "finalToolSchemaTokenMeasurement": "exact",
+      "toolSchemaFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "actToolSurfaceFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "toolSurfaceMatchesMeasured": true,
+      "templatedInputFingerprint": "500dc9046abb629c11b4c11d0f4f68bb52b8a3fd95c0e0139104302cd777e298",
+      "outputReserve": 1024,
+      "requestedMaxTokens": 1024,
+      "appliedMaxTokens": 1024,
+      "capSource": "configured",
+      "budgetMode": "explicit",
+      "finalRemainingTokens": 32628,
+      "finalFit": true,
+      "finalMessageCount": 4,
+      "postCompactionInputTokens": null,
+      "postCompactionRemainingTokens": null,
+      "runtimeContext": {
+        "effectiveContextTokens": "unknown",
+        "cachedPrefixTokens": "unknown",
+        "source": "sdk_stats_unavailable"
+      },
+      "workingContext": {
+        "mode": "deterministic",
+        "inputTargetTokens": 6000,
+        "inputTriggerTokens": 9000,
+        "targetMet": true,
+        "mandatoryFloorTokens": 3212,
+        "mandatoryFloorExceedsTarget": false,
+        "projectionApplied": false,
+        "restoredWindowApplied": false,
+        "windowCommitted": false,
+        "windowCommitSkippedReason": null,
+        "archive": {
+          "captured": 7,
+          "reads": 0,
+          "returnedChars": 0,
+          "unavailable": 0
+        },
+        "semanticCost": {
+          "summaryCalls": 0,
+          "summaryPromptTokens": 0,
+          "summaryPredictedTokens": 0,
+          "summaryMs": 0,
+          "unknownUsageCalls": 0
+        },
+        "exact": true
+      },
+      "assistantNote": {
+        "protocol": "disabled",
+        "state": "absent",
+        "itemCount": 0,
+        "reviewClaimCount": 0,
+        "statusCounts": {
+          "open": 0,
+          "resolved": 0,
+          "superseded": 0
+        }
+      },
+      "projectEngine": "unreal",
+      "projectScopeSource": "config",
+      "availableUnityTools": 0,
+      "availableUnrealTools": 1,
+      "visibleToolCount": 2,
+      "visibleToolNames": [
+        "git_read_file",
+        "evidence_first_read_context"
+      ],
+      "fullToolCount": 2,
+      "recoveryProfileActive": false,
+      "recoveryAttempts": 0,
+      "recoveryToolRounds": 0,
+      "finalizationPending": false,
+      "finalizationTrigger": null,
+      "finalizationAttempts": 0,
+      "auditCompletionPhase": "research",
+      "attachmentCount": 0,
+      "inputAvailability": {
+        "mode": "inject",
+        "verificationBoundary": "final_sdk_chat",
+        "hostInputVerification": "unknown",
+        "entries": [
+          {
+            "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+            "verificationBoundary": "final_sdk_chat",
+            "hostInputVerification": "unknown",
+            "sourceType": "worktree",
+            "projectIdentityDigest": "a49d2e499850e74c459d064c1f24d7114aa7860dcda8108f0c691121d6188752",
+            "path": "A",
+            "versionRef": "fixture-v1",
+            "rangeUnit": "line",
+            "historicallyReturnedRanges": [
+              [
+                1,
+                1
+              ]
+            ],
+            "rawRangesInThisInput": [],
+            "rawPresence": "unknown",
+            "comparisonBasis": "historically_returned_ranges",
+            "bodyVerification": "exact_range_body"
+          },
+          {
+            "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+            "verificationBoundary": "final_sdk_chat",
+            "hostInputVerification": "unknown",
+            "sourceType": "worktree",
+            "projectIdentityDigest": "a49d2e499850e74c459d064c1f24d7114aa7860dcda8108f0c691121d6188752",
+            "path": "B",
+            "versionRef": "fixture-v1",
+            "rangeUnit": "line",
+            "historicallyReturnedRanges": [
+              [
+                1,
+                1
+              ]
+            ],
+            "rawRangesInThisInput": [],
+            "rawPresence": "unknown",
+            "comparisonBasis": "historically_returned_ranges",
+            "bodyVerification": "exact_range_body"
+          }
+        ],
+        "omittedEntryCount": 0,
+        "entryListComplete": true,
+        "metrics": {
+          "currentRawObservationCount": 0,
+          "unverifiableRawObservationCount": 2
+        },
+        "metadataChars": 933,
+        "metadataTokens": 341,
+        "metadataTokenMeasurement": "prompt_delta"
+      }
+    },
+    {
+      "event": "batch_budget",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+      "capacity": 31604,
+      "used": 5828,
+      "available": 25776,
+      "closed": true,
+      "entries": [
+        {
+          "id": "829660457640003",
+          "tokens": 5828,
+          "state": "consumed"
+        }
+      ],
+      "actualResultMetric": "utf8_bytes",
+      "actualResultBytes": 5700
+    },
+    {
+      "event": "direct_round_observation",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+      "roundIndex": 1,
+      "finishReason": "toolCalls",
+      "predictionStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 3212,
+        "predictedTokensCount": 167,
+        "totalTokensCount": 3379
+      },
+      "predictionUsage": {
+        "fragmentCount": 125,
+        "reasoningTokensCount": 102,
+        "visibleTokensCount": 22,
+        "visibleChars": 97,
+        "rawToolIntentCandidate": false,
+        "rawToolIntentFirstFragment": null,
+        "rawToolIntentFirstVisibleChar": null,
+        "structuralTokensCount": 0,
+        "toolArgumentChars": 27,
+        "toolArgumentTokensCount": null,
+        "unattributedTokensCount": 43,
+        "sdkToolRequestStartedCount": 1,
+        "sdkToolRequestNamedCount": 1,
+        "sdkToolRequestEndedCount": 1,
+        "sdkToolRequestFinalizedCount": 1,
+        "sdkToolRequestFailureCount": 0
+      },
+      "callPurpose": "research",
+      "roundModelElapsedMs": 7179,
+      "modelPrefillMs": 3678,
+      "modelGenerationElapsedMs": 3501,
+      "executionCost": {
+        "modelCalls": 2,
+        "promptTokens": 3976,
+        "predictedTokens": 306,
+        "elapsedMs": 10837,
+        "promptProcessingMs": 4986,
+        "generationElapsedMs": 5851,
+        "unknownPromptProcessingCalls": 0,
+        "unknownUsageCalls": 0,
+        "summary": {
+          "summaryCalls": 0,
+          "summaryPromptTokens": 0,
+          "summaryPredictedTokens": 0,
+          "summaryMs": 0,
+          "unknownUsageCalls": 0
+        },
+        "executionElapsedMs": 11050,
+        "modelCallsIncludingSummary": 2,
+        "unknownUsageCallsIncludingSummary": 0,
+        "knownPromptTokensIncludingSummary": 3976,
+        "knownPredictedTokensIncludingSummary": 306,
+        "elapsedMsIncludingSummary": 10837
+      },
+      "requestedMaxTokens": 1024,
+      "appliedMaxTokens": 1024,
+      "capSource": "configured",
+      "contextLength": 38912,
+      "inputTokens": 3212,
+      "remainingTokens": 32628,
+      "toolSchemaChars": 936,
+      "toolSchemaTokens": 214,
+      "toolSchemaTokenMeasurement": "exact",
+      "toolSchemaFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "actToolSurfaceFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "toolSurfaceMatchesMeasured": true,
+      "templatedInputFingerprint": "500dc9046abb629c11b4c11d0f4f68bb52b8a3fd95c0e0139104302cd777e298",
+      "finalizationPending": false,
+      "finalizationAttempts": 0,
+      "recoveryEpisodeStarted": false,
+      "recoveryProfileActive": false,
+      "recoveryAttempts": 0,
+      "recoveryToolRounds": 0,
+      "recoveryPaginationRounds": 0,
+      "recoveryNoProgressRounds": 0,
+      "recoveryProgress": null,
+      "fullToolCount": 2,
+      "exposedToolNames": [
+        "git_read_file",
+        "evidence_first_read_context"
+      ],
+      "structuredToolRequestCount": 1,
+      "sdkToolEvents": {
+        "started": 1,
+        "named": 1,
+        "ended": 1,
+        "finalized": 1,
+        "failed": 0
+      },
+      "guardAllowedCount": 1,
+      "guardDeniedCount": 0,
+      "toolCallBoundary": {
+        "state": "structured_request_dispatched_and_result_received",
+        "rawToolIntent": true,
+        "structuredRequestCount": 1,
+        "sdkStartedCount": 1,
+        "sdkFinalizedCount": 1,
+        "guardAllowedCount": 1,
+        "dispatchCount": null,
+        "resultCount": 1
+      },
+      "rawToolIntentCandidate": false,
+      "finalRawToolIntent": true,
+      "rawToolIntentFirstFragment": null,
+      "rawToolIntentFirstVisibleChar": null,
+      "rawToolIntentNames": [],
+      "unknownRawToolNames": [],
+      "registeredButWithheldRawToolNames": [],
+      "registeredUnsafeRawToolNames": [],
+      "retryCandidate": null,
+      "freshToolPlanningRetry": {
+        "eligible": false,
+        "reason": "bounded_mode"
+      },
+      "actualDispatchCount": null,
+      "actualResultCount": 1,
+      "phase": "research",
+      "attempt": 2,
+      "continueAfterTools": true,
+      "modelInputToolResultCount": 3,
+      "modelInputLatestResultFingerprint": "15866b3b7e3d1f9fb9dd928634f4268bf8e7a2be57287b39218c7ec5f08ef6f5",
+      "modelInputLatestSemanticResultFingerprint": "15866b3b7e3d1f9fb9dd928634f4268bf8e7a2be57287b39218c7ec5f08ef6f5",
+      "calls": [
+        {
+          "toolCallId": "o7T7kGzrFK6zg0HTsAxerjLhFbSVxHeu",
+          "toolName": "git_read_file",
+          "argumentsFingerprint": "bd8966918adf2e0dd57c042d156b191e876a0ed6b7528868ca35126583cb987a",
+          "resultReservation": {
+            "kind": "git_public_read",
+            "effectiveByteBudget": 32768,
+            "byteBudgetSource": "tool_default",
+            "cursorPresent": false
+          }
+        }
+      ],
+      "results": [
+        {
+          "toolCallId": "o7T7kGzrFK6zg0HTsAxerjLhFbSVxHeu",
+          "resultFingerprint": "b9c642c9e142cbd48e574c1eeb2154879c49d6f6986ebcaa9779395eeb6b7c14",
+          "semanticResultFingerprint": "b9c642c9e142cbd48e574c1eeb2154879c49d6f6986ebcaa9779395eeb6b7c14",
+          "resultChars": 5700,
+          "resultBytes": 5700,
+          "resultOk": true,
+          "kind": "git_observation",
+          "nextCursorPresent": false
+        }
+      ],
+      "outputBatchReservation": {
+        "callCount": 1,
+        "publicReadCallCount": 1,
+        "requestedByteBudget": 32768,
+        "requestedMaxChars": 0,
+        "unknownReturnLimitCallCount": 0,
+        "actualResultChars": 5700,
+        "actualResultBytes": 5700,
+        "actualResultCount": 1
+      },
+      "workingContextExposure": [
+        {
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+          "callId": "T0fvaUmLOSe3A0aImWSDzEIYSYhJC8xX",
+          "source": "current_raw_tool_result",
+          "stage": "generation_completed_after_input",
+          "hostInputVerification": "unknown",
+          "rawChars": 5700
+        },
+        {
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+          "callId": "11D7uy8poG7oq09dHIPA7Z2u3ukcHVAM",
+          "source": "current_raw_tool_result",
+          "stage": "generation_completed_after_input",
+          "hostInputVerification": "unknown",
+          "rawChars": 5700
+        },
+        {
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+          "callId": "XjNcguAY3GTpVlg3VZwK7pH5GkPYZKh5",
+          "source": "current_raw_tool_result",
+          "stage": "generation_completed_after_input",
+          "hostInputVerification": "unknown",
+          "rawChars": 120
+        }
+      ],
+      "toolTrace": {
+        "runtime": [
+          {
+            "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:1:sdk-829660457640003",
+            "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+            "sdkCallId": 829660457640003,
+            "sdkPredictionRound": 0,
+            "generationState": "finalized",
+            "toolName": "git_read_file",
+            "argumentChars": 27,
+            "validationState": "allowed",
+            "approvalState": "not_required_observation",
+            "executionState": "unknown",
+            "guardAllowed": true,
+            "proposedArgumentsFingerprint": "bd8966918adf2e0dd57c042d156b191e876a0ed6b7528868ca35126583cb987a",
+            "executedArgumentsFingerprint": "bd8966918adf2e0dd57c042d156b191e876a0ed6b7528868ca35126583cb987a",
+            "reservedToolResultTokens": 1792,
+            "resultLimitBounded": true,
+            "providerRequestId": "o7T7kGzrFK6zg0HTsAxerjLhFbSVxHeu"
+          }
+        ],
+        "captured": {
+          "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+          "roundIndex": 1,
+          "requests": [
+            {
+              "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:1:o7T7kGzrFK6zg0HTsAxerjLhFbSVxHeu:0",
+              "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+              "providerRequestId": "o7T7kGzrFK6zg0HTsAxerjLhFbSVxHeu",
+              "toolName": "git_read_file",
+              "generationState": "finalized",
+              "pairingState": "unique_provider_id",
+              "proposedArgumentsFingerprint": "eb272bdecf1d7dde2a0f038225a149ca09af8e945e547ff9ae5ac61444cd9b1f"
+            }
+          ],
+          "results": [
+            {
+              "callKey": "88d52989-e183-410f-801a-1271dff1a1fb:1:o7T7kGzrFK6zg0HTsAxerjLhFbSVxHeu:0",
+              "causalModelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-2",
+              "providerRequestId": "o7T7kGzrFK6zg0HTsAxerjLhFbSVxHeu",
+              "pairingState": "exact_provider_id",
+              "executionState": "succeeded",
+              "resultPayloadFingerprint": "c1e9148c74651383470ec98419bfe7f42b1eaaf373b04dba420e0ea26ba0fb0f",
+              "rawBodyState": "exact_range_body",
+              "sourceType": "worktree",
+              "projectIdentityDigest": "a49d2e499850e74c459d064c1f24d7114aa7860dcda8108f0c691121d6188752",
+              "path": "C",
+              "versionRef": "fixture-v1",
+              "returnedRanges": [
+                [
+                  1,
+                  1
+                ]
+              ],
+              "verifiedRawRanges": [
+                [
+                  1,
+                  1
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "modelNoteLifecycle": "absent"
+    },
+    {
+      "event": "working_context_projection",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "roundIndex": 2,
+      "changed": true,
+      "archiveFailed": false,
+      "reason": "first_consumer_raw_git_preserved",
+      "archive": {
+        "captured": 7,
+        "reads": 0,
+        "returnedChars": 0,
+        "unavailable": 0
+      }
+    },
+    {
+      "event": "context_low_water",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+      "roundIndex": 2,
+      "contextLength": 38912,
+      "configuredTargetTokens": 6000,
+      "configuredTriggerTokens": 9000,
+      "requiredGenerationReserve": 1024,
+      "safetyMarginTokens": 2048,
+      "mandatoryFloorTokens": 3549,
+      "configuredLowWaterTokens": 6000,
+      "effectiveLowWaterTokens": 6000,
+      "effectiveHighWaterTokens": 9000,
+      "hardInputCeiling": 35840,
+      "reservedToolResultTokens": 4096,
+      "requiredPostToolOverhead": 1024,
+      "projectedNextInput": 8669,
+      "preDispatchCompaction": false,
+      "targetUnreachable": false,
+      "blockingComponent": null,
+      "tokenMetric": "exact_templated_model_input",
+      "beforeExactInputTokens": 3549,
+      "candidateMeasurements": [],
+      "selectedCandidate": "unchanged",
+      "postHistoryTokens": 2642,
+      "postProjectionTokens": 2642,
+      "postMetadataTokens": 3082,
+      "postToolSchemaTokens": 3549,
+      "finalExactInputTokens": 3549,
+      "targetDelta": -2451,
+      "compactionSucceeded": true,
+      "compactionRequested": true,
+      "metadataTokens": 230,
+      "toolSchemaTokens": 214,
+      "reclaimRatio": 0
+    },
+    {
+      "event": "direct_context_measurement",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+      "roundIndex": 2,
+      "compacted": false,
+      "compactionAppliedCount": 0,
+      "compactionAppliedModes": [],
+      "observeOnly": false,
+      "exactMeasurement": true,
+      "contextLengthSource": "model",
+      "promptMeasurementSource": "templated_model_count",
+      "templatedInputChars": 14292,
+      "messageCount": 6,
+      "inputTokens": 3319,
+      "remainingTokens": 32521,
+      "toolSchemaChars": 936,
+      "toolSchemaTokens": 214,
+      "toolSchemaTokenMeasurement": "exact",
+      "finalExactMeasurement": true,
+      "finalContextLengthSource": "model",
+      "finalPromptMeasurementSource": "templated_model_count",
+      "finalTemplatedInputChars": 14967,
+      "finalInputTokens": 3549,
+      "finalToolSchemaChars": 936,
+      "finalToolSchemaTokens": 214,
+      "finalToolSchemaTokenMeasurement": "exact",
+      "toolSchemaFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "actToolSurfaceFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "toolSurfaceMatchesMeasured": true,
+      "templatedInputFingerprint": "1afd8cc17e809f63696836c3f03c686b5e0009d2149e74b49362a076fed0204f",
+      "outputReserve": 1024,
+      "requestedMaxTokens": 1024,
+      "appliedMaxTokens": 1024,
+      "capSource": "configured",
+      "budgetMode": "explicit",
+      "finalRemainingTokens": 32291,
+      "finalFit": true,
+      "finalMessageCount": 6,
+      "postCompactionInputTokens": 3549,
+      "postCompactionRemainingTokens": 32291,
+      "runtimeContext": {
+        "effectiveContextTokens": "unknown",
+        "cachedPrefixTokens": "unknown",
+        "source": "sdk_stats_unavailable"
+      },
+      "workingContext": {
+        "mode": "deterministic",
+        "inputTargetTokens": 6000,
+        "inputTriggerTokens": 9000,
+        "targetMet": true,
+        "mandatoryFloorTokens": 3549,
+        "mandatoryFloorExceedsTarget": false,
+        "projectionApplied": true,
+        "restoredWindowApplied": false,
+        "windowCommitted": false,
+        "windowCommitSkippedReason": "commit_validation_rejected",
+        "archive": {
+          "captured": 7,
+          "reads": 0,
+          "returnedChars": 0,
+          "unavailable": 0
+        },
+        "semanticCost": {
+          "summaryCalls": 0,
+          "summaryPromptTokens": 0,
+          "summaryPredictedTokens": 0,
+          "summaryMs": 0,
+          "unknownUsageCalls": 0
+        },
+        "exact": true
+      },
+      "assistantNote": {
+        "protocol": "disabled",
+        "state": "absent",
+        "itemCount": 0,
+        "reviewClaimCount": 0,
+        "statusCounts": {
+          "open": 0,
+          "resolved": 0,
+          "superseded": 0
+        }
+      },
+      "projectEngine": "unreal",
+      "projectScopeSource": "config",
+      "availableUnityTools": 0,
+      "availableUnrealTools": 1,
+      "visibleToolCount": 2,
+      "visibleToolNames": [
+        "git_read_file",
+        "evidence_first_read_context"
+      ],
+      "fullToolCount": 2,
+      "recoveryProfileActive": false,
+      "recoveryAttempts": 0,
+      "recoveryToolRounds": 0,
+      "finalizationPending": false,
+      "finalizationTrigger": null,
+      "finalizationAttempts": 0,
+      "auditCompletionPhase": "research",
+      "attachmentCount": 0,
+      "inputAvailability": {
+        "mode": "inject",
+        "verificationBoundary": "final_sdk_chat",
+        "hostInputVerification": "unknown",
+        "entries": [
+          {
+            "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+            "verificationBoundary": "final_sdk_chat",
+            "hostInputVerification": "unknown",
+            "sourceType": "worktree",
+            "projectIdentityDigest": "a49d2e499850e74c459d064c1f24d7114aa7860dcda8108f0c691121d6188752",
+            "path": "C",
+            "versionRef": "fixture-v1",
+            "rangeUnit": "line",
+            "historicallyReturnedRanges": [
+              [
+                1,
+                1
+              ]
+            ],
+            "rawRangesInThisInput": [],
+            "rawPresence": "unknown",
+            "comparisonBasis": "historically_returned_ranges",
+            "bodyVerification": "exact_range_body"
+          }
+        ],
+        "omittedEntryCount": 0,
+        "entryListComplete": true,
+        "metrics": {
+          "currentRawObservationCount": 0,
+          "unverifiableRawObservationCount": 1
+        },
+        "metadataChars": 673,
+        "metadataTokens": 230,
+        "metadataTokenMeasurement": "prompt_delta"
+      }
+    },
+    {
+      "event": "batch_budget",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+      "capacity": 31267,
+      "used": 0,
+      "available": 31267,
+      "closed": true,
+      "entries": [],
+      "actualResultMetric": "utf8_bytes",
+      "actualResultBytes": 0
+    },
+    {
+      "event": "direct_round_observation",
+      "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+      "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+      "roundIndex": 2,
+      "finishReason": "eosFound",
+      "predictionStats": {
+        "stopReason": "eosFound",
+        "promptTokensCount": 3549,
+        "predictedTokensCount": 165,
+        "totalTokensCount": 3714
+      },
+      "predictionUsage": {
+        "fragmentCount": 163,
+        "reasoningTokensCount": 75,
+        "visibleTokensCount": 87,
+        "visibleChars": 235,
+        "rawToolIntentCandidate": false,
+        "rawToolIntentFirstFragment": null,
+        "rawToolIntentFirstVisibleChar": null,
+        "structuralTokensCount": 0,
+        "toolArgumentChars": 0,
+        "toolArgumentTokensCount": null,
+        "unattributedTokensCount": 3,
+        "sdkToolRequestStartedCount": 0,
+        "sdkToolRequestNamedCount": 0,
+        "sdkToolRequestEndedCount": 0,
+        "sdkToolRequestFinalizedCount": 0,
+        "sdkToolRequestFailureCount": 0
+      },
+      "callPurpose": "research",
+      "roundModelElapsedMs": 7356,
+      "modelPrefillMs": 4367,
+      "modelGenerationElapsedMs": 2989,
+      "executionCost": {
+        "modelCalls": 3,
+        "promptTokens": 7525,
+        "predictedTokens": 471,
+        "elapsedMs": 18193,
+        "promptProcessingMs": 9353,
+        "generationElapsedMs": 8840,
+        "unknownPromptProcessingCalls": 0,
+        "unknownUsageCalls": 0,
+        "summary": {
+          "summaryCalls": 0,
+          "summaryPromptTokens": 0,
+          "summaryPredictedTokens": 0,
+          "summaryMs": 0,
+          "unknownUsageCalls": 0
+        },
+        "executionElapsedMs": 18601,
+        "modelCallsIncludingSummary": 3,
+        "unknownUsageCallsIncludingSummary": 0,
+        "knownPromptTokensIncludingSummary": 7525,
+        "knownPredictedTokensIncludingSummary": 471,
+        "elapsedMsIncludingSummary": 18193
+      },
+      "requestedMaxTokens": 1024,
+      "appliedMaxTokens": 1024,
+      "capSource": "configured",
+      "contextLength": 38912,
+      "inputTokens": 3549,
+      "remainingTokens": 32291,
+      "toolSchemaChars": 936,
+      "toolSchemaTokens": 214,
+      "toolSchemaTokenMeasurement": "exact",
+      "toolSchemaFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "actToolSurfaceFingerprint": "8f99cc15d3c576af92221264c6493507410bf234ba2804f0eaff746eeae0398c",
+      "toolSurfaceMatchesMeasured": true,
+      "templatedInputFingerprint": "1afd8cc17e809f63696836c3f03c686b5e0009d2149e74b49362a076fed0204f",
+      "finalizationPending": false,
+      "finalizationAttempts": 0,
+      "recoveryEpisodeStarted": false,
+      "recoveryProfileActive": false,
+      "recoveryAttempts": 0,
+      "recoveryToolRounds": 0,
+      "recoveryPaginationRounds": 0,
+      "recoveryNoProgressRounds": 0,
+      "recoveryProgress": null,
+      "fullToolCount": 2,
+      "exposedToolNames": [
+        "git_read_file",
+        "evidence_first_read_context"
+      ],
+      "structuredToolRequestCount": 0,
+      "sdkToolEvents": {
+        "started": 0,
+        "named": 0,
+        "ended": 0,
+        "finalized": 0,
+        "failed": 0
+      },
+      "guardAllowedCount": 0,
+      "guardDeniedCount": 0,
+      "toolCallBoundary": {
+        "state": "no_tool_request",
+        "rawToolIntent": false,
+        "structuredRequestCount": 0,
+        "sdkStartedCount": 0,
+        "sdkFinalizedCount": 0,
+        "guardAllowedCount": 0,
+        "dispatchCount": null,
+        "resultCount": 0
+      },
+      "rawToolIntentCandidate": false,
+      "finalRawToolIntent": false,
+      "rawToolIntentFirstFragment": null,
+      "rawToolIntentFirstVisibleChar": null,
+      "rawToolIntentNames": [],
+      "unknownRawToolNames": [],
+      "registeredButWithheldRawToolNames": [],
+      "registeredUnsafeRawToolNames": [],
+      "retryCandidate": null,
+      "freshToolPlanningRetry": {
+        "eligible": false,
+        "reason": "bounded_mode"
+      },
+      "actualDispatchCount": null,
+      "actualResultCount": 0,
+      "phase": "research",
+      "attempt": 3,
+      "continueAfterTools": false,
+      "modelInputToolResultCount": 4,
+      "modelInputLatestResultFingerprint": "b9c642c9e142cbd48e574c1eeb2154879c49d6f6986ebcaa9779395eeb6b7c14",
+      "modelInputLatestSemanticResultFingerprint": "b9c642c9e142cbd48e574c1eeb2154879c49d6f6986ebcaa9779395eeb6b7c14",
+      "calls": [],
+      "results": [],
+      "outputBatchReservation": {
+        "callCount": 0,
+        "publicReadCallCount": 0,
+        "requestedByteBudget": 0,
+        "requestedMaxChars": 0,
+        "unknownReturnLimitCallCount": 0,
+        "actualResultChars": 0,
+        "actualResultBytes": 0,
+        "actualResultCount": 0
+      },
+      "workingContextExposure": [
+        {
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+          "callId": "T0fvaUmLOSe3A0aImWSDzEIYSYhJC8xX",
+          "source": "model_facing_projection",
+          "stage": "generation_completed_after_input",
+          "hostInputVerification": "unknown",
+          "projectedRawRanges": [],
+          "projectedSanitizedRanges": [],
+          "fullRawProvided": false,
+          "evidenceId": "ev_e288928d512f27a8aa46fca4f8c92ed00bc2622c45d168545e4d244e619584ab"
+        },
+        {
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+          "callId": "11D7uy8poG7oq09dHIPA7Z2u3ukcHVAM",
+          "source": "model_facing_projection",
+          "stage": "generation_completed_after_input",
+          "hostInputVerification": "unknown",
+          "projectedRawRanges": [],
+          "projectedSanitizedRanges": [],
+          "fullRawProvided": false,
+          "evidenceId": "ev_173cec58ec6c2dcaf26a27c95140dcd8d414da597a2b2862e5313aa023cd77f6"
+        },
+        {
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+          "callId": "XjNcguAY3GTpVlg3VZwK7pH5GkPYZKh5",
+          "source": "current_raw_tool_result",
+          "stage": "generation_completed_after_input",
+          "hostInputVerification": "unknown",
+          "rawChars": 120
+        },
+        {
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+          "callId": "o7T7kGzrFK6zg0HTsAxerjLhFbSVxHeu",
+          "source": "current_raw_tool_result",
+          "stage": "generation_completed_after_input",
+          "hostInputVerification": "unknown",
+          "rawChars": 5700
+        }
+      ],
+      "toolTrace": {
+        "runtime": [],
+        "captured": {
+          "executionId": "88d52989-e183-410f-801a-1271dff1a1fb",
+          "modelInputId": "88d52989-e183-410f-801a-1271dff1a1fb:prediction-3",
+          "roundIndex": 2,
+          "requests": [],
+          "results": []
+        }
+      },
+      "modelNoteLifecycle": "absent"
+    },
+    {
+      "event": "execution_transitions",
+      "phase": "TERMINATED",
+      "transitions": [
+        {
+          "from": "RESEARCH",
+          "to": "TERMINATED",
+          "reason": "execution_finished",
+          "planningEffect": "commit_completed_only",
+          "evidenceEffect": "retain_returned"
+        }
+      ]
+    }
+  ],
+  "scope": "Repository-built handler with actual LM Studio model and synthetic Git read-only provider; installed GUI plugin and real editor state not modified."
+}

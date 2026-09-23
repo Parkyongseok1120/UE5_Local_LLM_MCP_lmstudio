@@ -1,0 +1,856 @@
+[
+  {
+    "names": [
+      "core"
+    ],
+    "line": 34,
+    "module": "context-ports"
+  },
+  {
+    "names": [
+      "modelNotes"
+    ],
+    "line": 39,
+    "module": "context-ports"
+  },
+  {
+    "names": [
+      "workingContextModule"
+    ],
+    "line": 54,
+    "module": "context-ports"
+  },
+  {
+    "names": [
+      "ContinuityNote"
+    ],
+    "line": 79,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "REASONING_SEPARATOR"
+    ],
+    "line": 86,
+    "module": "context-ports"
+  },
+  {
+    "names": [
+      "toolMemory"
+    ],
+    "line": 87,
+    "module": "context-ports"
+  },
+  {
+    "names": [
+      "inputAvailability"
+    ],
+    "line": 90,
+    "module": "context-ports"
+  },
+  {
+    "names": [
+      "VOLATILE_OBSERVATION_KEYS"
+    ],
+    "line": 102,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "canonicalTelemetryValue"
+    ],
+    "line": 107,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "telemetryFingerprint"
+    ],
+    "line": 116,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "resultContent"
+    ],
+    "line": 131,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "PUBLIC_PAGED_GIT_READ_TOOLS"
+    ],
+    "line": 136,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "readResultReservation"
+    ],
+    "line": 140,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "messageEvidenceTelemetry"
+    ],
+    "line": 172,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "serializedCheckpointCounts"
+    ],
+    "line": 234,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "NormalizedMessage"
+    ],
+    "line": 257,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "CheckpointResult"
+    ],
+    "line": 265,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "InputAvailabilityProjection"
+    ],
+    "line": 277,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "ContextMeasurement"
+    ],
+    "line": 287,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "DirectConfig"
+    ],
+    "line": 305,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "StagnationAction"
+    ],
+    "line": 342,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "InputAvailabilityMode"
+    ],
+    "line": 343,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "AuditCompletionMode"
+    ],
+    "line": 344,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "OutputRecoveryMode"
+    ],
+    "line": 345,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "ContextManagementMode"
+    ],
+    "line": 346,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "DEFAULT_CONTEXT_MANAGEMENT_MODE"
+    ],
+    "line": 347,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "FinalizationTrigger"
+    ],
+    "line": 348,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "FinalDeliveryState"
+    ],
+    "line": 352,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "FinalReportState"
+    ],
+    "line": 353,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "OutputLimitStage"
+    ],
+    "line": 354,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "MIN_FINAL_OUTPUT_TOKENS"
+    ],
+    "line": 356,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "FIRST_CONSUMER_RAW_GIT_MAX_CHARS"
+    ],
+    "line": 357,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "RESEARCH_RECOVERY_MAX_TOKENS"
+    ],
+    "line": 358,
+    "module": "execution-contracts"
+  },
+  {
+    "names": [
+      "BOUNDED_AUDIT_FINAL_INSTRUCTION"
+    ],
+    "line": 360,
+    "module": "execution-instructions"
+  },
+  {
+    "names": [
+      "CONTEXT_BUDGET_FINAL_INSTRUCTION"
+    ],
+    "line": 370,
+    "module": "execution-instructions"
+  },
+  {
+    "names": [
+      "OUTPUT_RECOVERY_FINAL_INSTRUCTION"
+    ],
+    "line": 380,
+    "module": "execution-instructions"
+  },
+  {
+    "names": [
+      "READ_ONLY_BATCH_INSTRUCTION"
+    ],
+    "line": 389,
+    "module": "execution-instructions"
+  },
+  {
+    "names": [
+      "FRESH_TOOL_PLANNING_RETRY_INSTRUCTION"
+    ],
+    "line": 397,
+    "module": "execution-instructions"
+  },
+  {
+    "names": [
+      "READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION"
+    ],
+    "line": 403,
+    "module": "execution-instructions"
+  },
+  {
+    "names": [
+      "RESEARCH_RECOVERY_FINAL_INSTRUCTION"
+    ],
+    "line": 410,
+    "module": "execution-instructions"
+  },
+  {
+    "names": [
+      "READ_ONLY_RECOVERY_TOOL_NAMES"
+    ],
+    "line": 418,
+    "module": "tool-capability-registry"
+  },
+  {
+    "names": [
+      "isUnregisteredGitReadIntent"
+    ],
+    "line": 423,
+    "module": "tool-capability-registry"
+  },
+  {
+    "names": [
+      "UNSAFE_UNKNOWN_NAME_PATTERN"
+    ],
+    "line": 428,
+    "module": "tool-capability-registry"
+  },
+  {
+    "names": [
+      "RemoteToolLike"
+    ],
+    "line": 430,
+    "module": "tool-capability-registry"
+  },
+  {
+    "names": [
+      "localObservationTools"
+    ],
+    "line": 438,
+    "module": "tool-capability-registry"
+  },
+  {
+    "names": [
+      "UNITY_OBSERVATION_TOOLS"
+    ],
+    "line": 440,
+    "module": "tool-capability-registry"
+  },
+  {
+    "names": [
+      "UNREAL_OBSERVATION_TOOLS"
+    ],
+    "line": 457,
+    "module": "tool-capability-registry"
+  },
+  {
+    "names": [
+      "isObservationOnlyToolCall"
+    ],
+    "line": 478,
+    "module": "tool-capability-registry"
+  },
+  {
+    "names": [
+      "numeric"
+    ],
+    "line": 507,
+    "module": "execution-config"
+  },
+  {
+    "names": [
+      "assistantNoteTelemetry"
+    ],
+    "line": 513,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "stagnationAction"
+    ],
+    "line": 531,
+    "module": "execution-config"
+  },
+  {
+    "names": [
+      "inputAvailabilityMode"
+    ],
+    "line": 535,
+    "module": "execution-config"
+  },
+  {
+    "names": [
+      "auditCompletionMode"
+    ],
+    "line": 539,
+    "module": "execution-config"
+  },
+  {
+    "names": [
+      "outputRecoveryMode"
+    ],
+    "line": 543,
+    "module": "execution-config"
+  },
+  {
+    "names": [
+      "RuntimeInstallationIdentity"
+    ],
+    "line": 547,
+    "module": "runtime-identity"
+  },
+  {
+    "names": [
+      "cachedRuntimeInstallationIdentity"
+    ],
+    "line": 553,
+    "module": "runtime-identity"
+  },
+  {
+    "names": [
+      "hashInstalledSourceTree"
+    ],
+    "line": 555,
+    "module": "runtime-identity"
+  },
+  {
+    "names": [
+      "runtimeInstallationIdentity"
+    ],
+    "line": 575,
+    "module": "runtime-identity"
+  },
+  {
+    "names": [
+      "contextManagementMode"
+    ],
+    "line": 601,
+    "module": "execution-config"
+  },
+  {
+    "names": [
+      "readConfig"
+    ],
+    "line": 606,
+    "module": "execution-config"
+  },
+  {
+    "names": [
+      "ToolRoundStagnationDetector"
+    ],
+    "line": 653,
+    "module": "evidence-telemetry"
+  },
+  {
+    "names": [
+      "normalizeMessages"
+    ],
+    "line": 674,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "normalizeHistory"
+    ],
+    "line": 684,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "toolDefinitionSurface"
+    ],
+    "line": 688,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "measureContext"
+    ],
+    "line": 699,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "buildCompactedHistory"
+    ],
+    "line": 773,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "CompactedHistory"
+    ],
+    "line": 803,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "SoftCompactionSelection"
+    ],
+    "line": 805,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "targetRemainingForInput"
+    ],
+    "line": 813,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "shouldCompactContext"
+    ],
+    "line": 819,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "selectSoftCompaction"
+    ],
+    "line": 826,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "composeModelHistory"
+    ],
+    "line": 854,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "selectedSourceIsThisPlugin"
+    ],
+    "line": 894,
+    "module": "prediction-ui"
+  },
+  {
+    "names": [
+      "toolPluginIdentifier"
+    ],
+    "line": 899,
+    "module": "prediction-ui"
+  },
+  {
+    "names": [
+      "createMessageEmitter"
+    ],
+    "line": 903,
+    "module": "prediction-ui"
+  },
+  {
+    "names": [
+      "createToolGenerationTracker"
+    ],
+    "line": 988,
+    "module": "prediction-ui"
+  },
+  {
+    "names": [
+      "createRoundActivityTracker"
+    ],
+    "line": 1042,
+    "module": "prediction-ui"
+  },
+  {
+    "names": [
+      "visibleAssistantOutput"
+    ],
+    "line": 1075,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "RAW_TOOL_WRAPPER_PATTERNS"
+    ],
+    "line": 1082,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "isInsideMarkdownFence"
+    ],
+    "line": 1088,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "isLiteralRawToolWrapper"
+    ],
+    "line": 1106,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "containsUnresolvedToolIntent"
+    ],
+    "line": 1133,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "hasUnexecutedRawToolSyntax"
+    ],
+    "line": 1159,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "visibleTextFromMessages"
+    ],
+    "line": 1167,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "RawToolIntentClassification"
+    ],
+    "line": 1175,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "rawToolIntentNames"
+    ],
+    "line": 1184,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "classifyRawToolIntent"
+    ],
+    "line": 1192,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "rawReadOnlyIntentToolNames"
+    ],
+    "line": 1224,
+    "module": "raw-tool-intent"
+  },
+  {
+    "names": [
+      "ReadOnlyRecoveryProfile"
+    ],
+    "line": 1233,
+    "module": "recovery-coordinator"
+  },
+  {
+    "names": [
+      "readOnlyRecoveryProfile"
+    ],
+    "line": 1239,
+    "module": "recovery-coordinator"
+  },
+  {
+    "names": [
+      "catalogueCorrectionInstruction"
+    ],
+    "line": 1266,
+    "module": "recovery-coordinator"
+  },
+  {
+    "names": [
+      "archiveOnlyRecoveryInstruction"
+    ],
+    "line": 1281,
+    "module": "recovery-coordinator"
+  },
+  {
+    "names": [
+      "completedRequestFingerprints"
+    ],
+    "line": 1292,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "RecoveryCoverageRange"
+    ],
+    "line": 1337,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "RecoveryCoverageLedger"
+    ],
+    "line": 1338,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "RecoveryCoverageDescriptor"
+    ],
+    "line": 1339,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "finiteCoverageInteger"
+    ],
+    "line": 1348,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "normalizedCoverageRanges"
+    ],
+    "line": 1352,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "subtractCoverageRanges"
+    ],
+    "line": 1356,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "coverageSourceIdentity"
+    ],
+    "line": 1373,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "coverageSourceVersion"
+    ],
+    "line": 1383,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "coverageQueryKey"
+    ],
+    "line": 1394,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "coverageRange"
+    ],
+    "line": 1411,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "recoveryCoverageDescriptors"
+    ],
+    "line": 1446,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "projectionCoverageDescriptors"
+    ],
+    "line": 1473,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "recordRecoveryCoverage"
+    ],
+    "line": 1505,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "seedRecoveryProgress"
+    ],
+    "line": 1516,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "RecoveryProgress"
+    ],
+    "line": 1543,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "observeRecoveryProgress"
+    ],
+    "line": 1558,
+    "module": "evidence-manager"
+  },
+  {
+    "names": [
+      "FreshToolPlanningRetryDecision"
+    ],
+    "line": 1616,
+    "module": "recovery-coordinator"
+  },
+  {
+    "names": [
+      "freshToolPlanningRetryDecision"
+    ],
+    "line": 1618,
+    "module": "recovery-coordinator"
+  },
+  {
+    "names": [
+      "classifyOutputLimitStage"
+    ],
+    "line": 1669,
+    "module": "delivery-controller"
+  },
+  {
+    "names": [
+      "canRecoverOutputLimit"
+    ],
+    "line": 1700,
+    "module": "delivery-controller"
+  },
+  {
+    "names": [
+      "ToolCallBoundary"
+    ],
+    "line": 1726,
+    "module": "tool-boundary"
+  },
+  {
+    "names": [
+      "classifyToolCallBoundary"
+    ],
+    "line": 1737,
+    "module": "tool-boundary"
+  },
+  {
+    "names": [
+      "classifyFinalDelivery"
+    ],
+    "line": 1782,
+    "module": "delivery-controller"
+  },
+  {
+    "names": [
+      "evidenceBackedPartialReport"
+    ],
+    "line": 1819,
+    "module": "delivery-controller"
+  },
+  {
+    "names": [
+      "modelHistoryMessage"
+    ],
+    "line": 1875,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "generateSemanticHandoff"
+    ],
+    "line": 1886,
+    "module": "context-manager"
+  },
+  {
+    "names": [
+      "createPredictionLoopHandler"
+    ],
+    "line": 1967,
+    "module": "prediction-loop"
+  },
+  {
+    "names": [
+      "handlePredictionLoop"
+    ],
+    "line": 3791,
+    "module": "prediction-loop"
+  },
+  {
+    "names": [
+      "__test"
+    ],
+    "line": 3793,
+    "module": "prediction-loop"
+  }
+]

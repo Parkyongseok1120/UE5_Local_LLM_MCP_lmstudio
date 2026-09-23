@@ -1,6 +1,7 @@
+import type { ChatMessage,Tool,ToolCallRequest } from "@lmstudio/sdk";
 import fs from "node:fs";
 import path from "node:path";
-import type { ChatMessage, Tool, ToolCallRequest } from "@lmstudio/sdk";
+import { capabilityScope } from "./tool-capability-registry";
 
 export type ProjectEngineSetting = "auto" | "unity" | "unreal" | "mixed";
 export type ResolvedProjectEngine = "unity" | "unreal" | "mixed" | "unknown";
@@ -19,16 +20,8 @@ export type ToolScope = {
   availableUnrealTools: number;
 };
 
-function normalizedPluginIdentifier(tool: Pick<ScopedTool, "pluginIdentifier">): string {
-  return String(tool.pluginIdentifier || "").trim().toLowerCase();
-}
-
 export function toolEngine(tool: Pick<ScopedTool, "pluginIdentifier">): "unity" | "unreal" | "common" {
-  const identifier = normalizedPluginIdentifier(tool);
-  if (identifier === "mcp/unity-tools" || identifier.endsWith("/unity-tools")) return "unity";
-  if (identifier === "mcp/unreal-agent" || identifier.endsWith("/unreal-agent")
-    || identifier === "mcp/unreal-rag" || identifier.endsWith("/unreal-rag")) return "unreal";
-  return "common";
+  return capabilityScope(tool);
 }
 
 function directoryProjectScope(directory: string): { engine: ResolvedProjectEngine; projectIdentity: string } {

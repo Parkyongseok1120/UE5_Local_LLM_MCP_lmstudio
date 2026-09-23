@@ -1,0 +1,125 @@
+{
+  "gates": [
+    {
+      "buildExit": 0,
+      "testExit": 0,
+      "focusedExit": 0,
+      "gate": "gate-0"
+    },
+    {
+      "gate": "gate-1",
+      "buildExit": 0,
+      "testExit": 0,
+      "focusedExit": 0
+    },
+    {
+      "gate": "gate-2",
+      "buildExit": 0,
+      "testExit": 0,
+      "focusedExit": 0
+    },
+    {
+      "gate": "gate-3",
+      "buildExit": 0,
+      "testExit": 0,
+      "focusedExit": 0
+    },
+    {
+      "gate": "gate-4",
+      "buildExit": 0,
+      "testExit": 0,
+      "focusedExit": 0
+    },
+    {
+      "gate": "gate-5",
+      "buildExit": 0,
+      "testExit": 0,
+      "focusedExit": 0
+    },
+    {
+      "gate": "gate-6",
+      "buildExit": 0,
+      "testExit": 0,
+      "focusedExit": 0
+    },
+    {
+      "gate": "gate-7",
+      "buildExit": 0,
+      "testExit": 0,
+      "focusedExit": 0
+    },
+    {
+      "gate": "gate-8",
+      "buildExit": 0,
+      "testExit": 0,
+      "focusedExit": 0
+    }
+  ],
+  "gate8": {
+    "command": "powershell -NoProfile -File artifacts/astra-full-refactor/run-gate.ps1 gate-8",
+    "pluginTests": 323,
+    "pluginFailures": 0,
+    "focusedTests": 16,
+    "focusedFailures": 0,
+    "exit": 0
+  },
+  "unity": {
+    "command": "npm test (lmstudio-unity-mcp)",
+    "passed": 34,
+    "failed": 0,
+    "skipped": 4,
+    "exit": 0
+  },
+  "unreal": {
+    "command": "npm test (lmstudio-unreal-mcp)",
+    "passed": 247,
+    "failed": 0,
+    "skipped": 1,
+    "exit": 0
+  },
+  "ratchetFixture": {
+    "command": "node scripts/astra-ratchet.cjs",
+    "exit": 0,
+    "cycles": 30,
+    "drift": 5
+  },
+  "ratchetLive": {
+    "command": "node scripts/astra-ratchet.cjs --live",
+    "exit": 0,
+    "cycles": 3,
+    "baselines": [
+      4737,
+      4733,
+      4733
+    ],
+    "drift": 4
+  },
+  "actualHandlerGit": {
+    "command": "node scripts/astra-live-flow.cjs --git",
+    "exit": 0,
+    "status": "PASS"
+  },
+  "actualHandlerFile": {
+    "command": "node scripts/astra-live-flow.cjs",
+    "exit": 0,
+    "status": "PASS"
+  },
+  "cumulative380K": {
+    "command": "node artifacts/astra-full-refactor/stress-to-380k.cjs",
+    "target": 380000,
+    "postCompactionInputBeforeStop": 15300,
+    "status": "FAIL_STOPPED_ON_TRUNCATED_RESPONSE",
+    "exit": 1
+  },
+  "finalBuild": {
+    "command": "npm run build",
+    "exit": 0,
+    "reproducible": true
+  },
+  "diffCheck": {
+    "command": "git diff --check",
+    "exit": 0
+  },
+  "overall": "FAIL",
+  "overallReason": "380K cumulative post-compaction runtime success was not demonstrated; measurement stopped on maxPredictedTokensReached without user-facing completion."
+}

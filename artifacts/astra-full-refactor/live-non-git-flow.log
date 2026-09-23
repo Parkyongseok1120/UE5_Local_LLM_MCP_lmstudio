@@ -1,0 +1,11 @@
+[LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 25
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+[LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 58
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+{"status":"PASS","calls":["A","B","C"],"failure":null}

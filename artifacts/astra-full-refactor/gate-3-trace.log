@@ -1,0 +1,376 @@
+START ASTRA RANGE: decoded body is not envelope coverage; continuation includes boundary
+END ASTRA RANGE: decoded body is not envelope coverage; continuation includes boundary
+START ASTRA RANGE: sanitized envelope fallback seeds [0,N), not [0,N]
+END ASTRA RANGE: sanitized envelope fallback seeds [0,N), not [0,N]
+START ASTRA RANGE: empty archive EOF is zero coverage
+END ASTRA RANGE: empty archive EOF is zero coverage
+START ASTRA GEN: large metadata cannot replace the generic content body
+END ASTRA GEN: large metadata cannot replace the generic content body
+START ASTRA RANGE: invalid typed endpoints cannot become zero
+END ASTRA RANGE: invalid typed endpoints cannot become zero
+START ASTRA RANGE: unlike source units remain separate
+END ASTRA RANGE: unlike source units remain separate
+START ASTRA RANGE: failed projected results never seed successful coverage
+END ASTRA RANGE: failed projected results never seed successful coverage
+START ASTRA CAP: exact registered provider tools, not name or prefix, confer read exemption
+END ASTRA CAP: exact registered provider tools, not name or prefix, confer read exemption
+START ASTRA TX: fragment pause without completed event cannot consume raw input
+END ASTRA TX: fragment pause without completed event cannot consume raw input
+START prediction loop calls the directly selected model with compacted history
+END prediction loop calls the directly selected model with compacted history
+START low-pressure history passes through without proxy model selection or sampling overrides
+END low-pressure history passes through without proxy model selection or sampling overrides
+START prediction loop exposes only the configured engine tools and common tools
+END prediction loop exposes only the configured engine tools and common tools
+START Qwen-compatible history has exactly one leading system message after scope injection
+END Qwen-compatible history has exactly one leading system message after scope injection
+START repeated compaction preserves invariant system instructions exactly once
+END repeated compaction preserves invariant system instructions exactly once
+START continuity marker text in user content is retained as user content
+END continuity marker text in user content is retained as user content
+START long multi-file review resumes after interruptions across four compactions
+END long multi-file review resumes after interruptions across four compactions
+START prediction loop denies a handcrafted tool call withheld by engine scope
+END prediction loop denies a handcrafted tool call withheld by engine scope
+START prediction loop binds Unreal mutation project arguments after confirmation overrides
+END prediction loop binds Unreal mutation project arguments after confirmation overrides
+START Unity and Unreal observation calls bypass the invisible host confirmation wait
+END Unity and Unreal observation calls bypass the invisible host confirmation wait
+START read-only Unity calls finish without asking the hidden confirmation UI
+END read-only Unity calls finish without asking the hidden confirmation UI
+START hidden model notes survive a new user turn as assistant judgment and leave visible answers clean
+END hidden model notes survive a new user turn as assistant judgment and leave visible answers clean
+START reserved note footers stay hidden when no stable working directory exists
+END reserved note footers stay hidden when no stable working directory exists
+START inexact measurement activates the configured message-count fallback
+END inexact measurement activates the configured message-count fallback
+START inexact fallback escalates a still-pressured current tool turn to bounded retention
+END inexact fallback escalates a still-pressured current tool turn to bounded retention
+START handler activation ignores a legacy nested enabled=false value
+END handler activation ignores a legacy nested enabled=false value
+START observe-only remains the explicit no-mutation mode
+END observe-only remains the explicit no-mutation mode
+START observe-only does not filter tools or bind project arguments
+END observe-only does not filter tools or bind project arguments
+START tool rounds are captured once, remeasured, and compacted before the next act
+END tool rounds are captured once, remeasured, and compacted before the next act
+START pressure trace measures eviction and historical reacquisition against the causal input
+END pressure trace measures eviction and historical reacquisition against the causal input
+START pause policy stops before a fourth equivalent tool round
+END pause policy stops before a fourth equivalent tool round
+START soft compaction keeps the largest complete tool tail that meets the token budget
+END soft compaction keeps the largest complete tool tail that meets the token budget
+START tool generation, finalized requests, results, and the final answer update the GUI without round buffering
+END tool generation, finalized requests, results, and the final answer update the GUI without round buffering
+START bounded audit exposes read-only research tools and gives the same model one tool-free final report
+END bounded audit exposes read-only research tools and gives the same model one tool-free final report
+START bounded audit converts research output exhaustion into one tool-free final report
+END bounded audit converts research output exhaustion into one tool-free final report
+START normal rounds send the explicit generation cap that was used as the reserve
+END normal rounds send the explicit generation cap that was used as the reserve
+START the default recovery cap follows a larger configured output reserve instead of silently lowering it
+END the default recovery cap follows a larger configured output reserve instead of silently lowering it
+START new compactor configuration defaults to hybrid and preserves every explicit mode
+END new compactor configuration defaults to hybrid and preserves every explicit mode
+START normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back
+END normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back
+START a recovery that reaches its own limit is recorded once and is never retried recursively
+END a recovery that reaches its own limit is recorded once and is never retried recursively
+START reasoning-only and tool-argument output limits do not enter report recovery
+END reasoning-only and tool-argument output limits do not enter report recovery
+START bounded audit makes zero final model calls after user cancellation
+END bounded audit makes zero final model calls after user cancellation
+START final delivery accepts only a known normal stop and a real report
+END final delivery accepts only a known normal stop and a real report
+START structured final tool requests are never accepted as a completed report
+END structured final tool requests are never accepted as a completed report
+START a denied mutation call keeps the SDK confirmation call ID in emitted messages
+END a denied mutation call keeps the SDK confirmation call ID in emitted messages
+START allowed ID-less tool calls register once across guard and finalized callbacks
+END allowed ID-less tool calls register once across guard and finalized callbacks
+START round control never swallows an external abort
+END round control never swallows an external abort
+START round control never swallows an unrelated lookalike error
+END round control never swallows an unrelated lookalike error
+START round telemetry records the SDK finish reason without exposing result bodies
+END round telemetry records the SDK finish reason without exposing result bodies
+START raw tool intent streaming detection is invariant across tag splits
+END raw tool intent streaming detection is invariant across tag splits
+START final assistant message can authorize fresh planning when fragment callbacks are absent
+END final assistant message can authorize fresh planning when fragment callbacks are absent
+START fresh read-only planning retry has no hidden audit deadline in normal mode
+END fresh read-only planning retry has no hidden audit deadline in normal mode
+START raw intent classification never aliases unknown or withheld mutation names
+END raw intent classification never aliases unknown or withheld mutation names
+START completed read fingerprints require a causal successful result and current raw content
+END completed read fingerprints require a causal successful result and current raw content
+START semantic result fingerprints ignore random snapshot metadata but retain evidence changes
+END semantic result fingerprints ignore random snapshot metadata but retain evidence changes
+START within-generation pause aborts only the owned round and reports a clean pause
+END within-generation pause aborts only the owned round and reports a clean pause
+START final context fitness is exact at the reserve boundary
+END final context fitness is exact at the reserve boundary
+START context measurement reports tool schema cost separately from full prompt tokens
+END context measurement reports tool schema cost separately from full prompt tokens
+START generation budget resolver clamps only to measured headroom and rejects unsafe space
+END generation budget resolver clamps only to measured headroom and rejects unsafe space
+START reserve pressure gets one adaptive tool-free final report instead of an immediate rejection
+END reserve pressure gets one adaptive tool-free final report instead of an immediate rejection
+START context budget measures a narrowed registered Git catalogue before tools-disabled finalization
+END context budget measures a narrowed registered Git catalogue before tools-disabled finalization
+START context budget uses FINAL_REPORT_ONLY when the measured narrowed catalogue still does not fit
+END context budget uses FINAL_REPORT_ONLY when the measured narrowed catalogue still does not fit
+START final raw git_diff repair uses a newly measured candidate and preserves a second terminal report
+END final raw git_diff repair uses a newly measured candidate and preserves a second terminal report
+START Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes
+END Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes
+START Unity-marked project uses public schemas and actual temporary Git for mixed raw Git repair
+END Unity-marked project uses public schemas and actual temporary Git for mixed raw Git repair
+START raw tool text cut by the output cap is classified as tool-argument generation
+END raw tool text cut by the output cap is classified as tool-argument generation
+START initial raw tool output records the provider boundary when the measured structured catalogue fits
+END initial raw tool output records the provider boundary when the measured structured catalogue fits
+START no-progress recovery delivers a safe partial report without task completion
+END no-progress recovery delivers a safe partial report without task completion
+START recovery progress counts new source/archive coverage, not response fingerprints
+END recovery progress counts new source/archive coverage, not response fingerprints
+START archive-only raw recovery exposes the verified Git source catalogue and reaches a real source page
+warning: in the working copy of 'tracked.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tracked.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'added.txt', LF will be replaced by CRLF the next time Git touches it
+END archive-only raw recovery exposes the verified Git source catalogue and reaches a real source page
+START deterministic working context projects a completed large result and exposes bounded rehydration
+END deterministic working context projects a completed large result and exposes bounded rehydration
+START raw Git replan keeps the archive reader beside the public source reader and consumes the archive
+END raw Git replan keeps the archive reader beside the public source reader and consumes the archive
+START low-pressure Git page stays raw for its first consumer without a semantic round trip
+END low-pressure Git page stays raw for its first consumer without a semantic round trip
+START aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only
+END aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only
+START image content keeps prediction alive and skips only the durable working-window commit
+END image content keeps prediction alive and skips only the durable working-window commit
+START working input target reports the mandatory floor without deleting the current request
+END working input target reports the mandatory floor without deleting the current request
+START hybrid context makes one tool-free semantic handoff and keeps it out of visible output
+END hybrid context makes one tool-free semantic handoff and keeps it out of visible output
+START invalid hybrid summary is discarded without retry or report recovery
+END invalid hybrid summary is discarded without retry or report recovery
+START a failed hybrid summary enters one-round cooldown while deterministic facts continue
+END a failed hybrid summary enters one-round cooldown while deterministic facts continue
+START BOUNDED keeps its original call budget and does not start a hybrid summary
+END BOUNDED keeps its original call budget and does not start a hybrid summary
+START cancellation during the hybrid summary prevents the normal model call
+END cancellation during the hybrid summary prevents the normal model call
+START a signed next user turn restores the compacted prefix and appends only the new delta
+END a signed next user turn restores the compacted prefix and appends only the new delta
+START context-budget rescue keeps the normal output reserve when it fits
+END context-budget rescue keeps the normal output reserve when it fits
+START bounded context-budget rescue keeps the bounded final token and timeout limits
+END bounded context-budget rescue keeps the bounded final token and timeout limits
+START an input with less than the minimum safe final output still skips the selected model call
+END an input with less than the minimum safe final output still skips the selected model call
+START tool-round stagnation requires equivalent calls and semantic results
+END tool-round stagnation requires equivalent calls and semantic results
+START within-generation repetition ignores long normal prose and detects repeated blocks
+END within-generation repetition ignores long normal prose and detects repeated blocks
+START the compactor cannot be selected recursively as the token source
+END the compactor cannot be selected recursively as the token source
+START prompt processing progress is visible before the first generated token
+END prompt processing progress is visible before the first generated token
+START prediction fragments stream reasoning into a thinking block and the answer into normal output
+END prediction fragments stream reasoning into a thinking block and the answer into normal output
+START a tool follow-up keeps raw reasoning in model history while the GUI stays separated
+END a tool follow-up keeps raw reasoning in model history while the GUI stays separated
+START plain answer fragments are appended once instead of waiting for the completed message
+END plain answer fragments are appended once instead of waiting for the completed message
+START streaming keeps a continuity footer out of the visible answer
+END streaming keeps a continuity footer out of the visible answer
+START T22 default availability observation traces final SDK input without changing it
+END T22 default availability observation traces final SDK input without changing it
+START B mode injects only current-input facts and reports measured prompt overhead
+END B mode injects only current-input facts and reports measured prompt overhead
+START T10 injected metadata participates in the final budget gate
+END T10 injected metadata participates in the final budget gate
+START T14 injected facts do not block a model-selected reread
+END T14 injected facts do not block a model-selected reread
+START availability off mode leaves both model input and availability telemetry disabled
+END availability off mode leaves both model input and availability telemetry disabled
+START T09 compaction retains the newest completed tool exchange for its first consumer
+END T09 compaction retains the newest completed tool exchange for its first consumer
+START a new handler recomputes current availability instead of restoring a prior-input flag
+END a new handler recomputes current availability instead of restoring a prior-input flag
+START T16 real cancellation distinguishes no result from a received partial result
+END T16 real cancellation distinguishes no result from a received partial result
+START tool-generation failure telemetry is causal and never promoted to a result
+END tool-generation failure telemetry is causal and never promoted to a result
+✔ ASTRA RANGE: decoded body is not envelope coverage; continuation includes boundary (15.6858ms)
+✔ ASTRA RANGE: sanitized envelope fallback seeds [0,N), not [0,N] (157.8433ms)
+✔ ASTRA RANGE: empty archive EOF is zero coverage (199.2079ms)
+✔ ASTRA GEN: large metadata cannot replace the generic content body (209.8314ms)
+✔ ASTRA RANGE: invalid typed endpoints cannot become zero (0.5737ms)
+✔ ASTRA RANGE: unlike source units remain separate (0.4502ms)
+✔ ASTRA RANGE: failed projected results never seed successful coverage (692.7863ms)
+✔ ASTRA CAP: exact registered provider tools, not name or prefix, confer read exemption (0.4954ms)
+✔ ASTRA TX: fragment pause without completed event cannot consume raw input (1.2594ms)
+✔ prediction loop calls the directly selected model with compacted history (22.6634ms)
+✔ low-pressure history passes through without proxy model selection or sampling overrides (3.0739ms)
+✔ prediction loop exposes only the configured engine tools and common tools (3.7577ms)
+✔ Qwen-compatible history has exactly one leading system message after scope injection (3.9468ms)
+✔ repeated compaction preserves invariant system instructions exactly once (7.5272ms)
+✔ continuity marker text in user content is retained as user content (2.2942ms)
+✔ long multi-file review resumes after interruptions across four compactions (11.8217ms)
+✔ prediction loop denies a handcrafted tool call withheld by engine scope (3.1085ms)
+✔ prediction loop binds Unreal mutation project arguments after confirmation overrides (2.8909ms)
+✔ Unity and Unreal observation calls bypass the invisible host confirmation wait (0.2475ms)
+✔ read-only Unity calls finish without asking the hidden confirmation UI (3.5679ms)
+✔ hidden model notes survive a new user turn as assistant judgment and leave visible answers clean (351.8183ms)
+✔ reserved note footers stay hidden when no stable working directory exists (2.6857ms)
+✔ inexact measurement activates the configured message-count fallback (3.6412ms)
+✔ inexact fallback escalates a still-pressured current tool turn to bounded retention (6.8993ms)
+✔ handler activation ignores a legacy nested enabled=false value (2.0752ms)
+✔ observe-only remains the explicit no-mutation mode (2.302ms)
+✔ observe-only does not filter tools or bind project arguments (1.6731ms)
+✖ tool rounds are captured once, remeasured, and compacted before the next act (8.3874ms)
+✔ pressure trace measures eviction and historical reacquisition against the causal input (21.6902ms)
+✔ pause policy stops before a fourth equivalent tool round (4.6995ms)
+✔ soft compaction keeps the largest complete tool tail that meets the token budget (1.6188ms)
+✔ tool generation, finalized requests, results, and the final answer update the GUI without round buffering (3.6128ms)
+✔ bounded audit exposes read-only research tools and gives the same model one tool-free final report (3.9623ms)
+✔ bounded audit converts research output exhaustion into one tool-free final report (2.3835ms)
+✔ normal rounds send the explicit generation cap that was used as the reserve (1.565ms)
+✔ the default recovery cap follows a larger configured output reserve instead of silently lowering it (0.1069ms)
+✔ new compactor configuration defaults to hybrid and preserves every explicit mode (0.1306ms)
+✔ normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back (2.1846ms)
+✔ a recovery that reaches its own limit is recorded once and is never retried recursively (1.9492ms)
+✔ reasoning-only and tool-argument output limits do not enter report recovery (2.8736ms)
+✔ bounded audit makes zero final model calls after user cancellation (2.4795ms)
+✔ final delivery accepts only a known normal stop and a real report (0.6093ms)
+✔ structured final tool requests are never accepted as a completed report (0.1344ms)
+✔ a denied mutation call keeps the SDK confirmation call ID in emitted messages (2.9837ms)
+✔ allowed ID-less tool calls register once across guard and finalized callbacks (3.2894ms)
+✔ round control never swallows an external abort (0.1794ms)
+✔ round control never swallows an unrelated lookalike error (0.1268ms)
+✔ round telemetry records the SDK finish reason without exposing result bodies (0.1308ms)
+✔ raw tool intent streaming detection is invariant across tag splits (0.3339ms)
+✔ final assistant message can authorize fresh planning when fragment callbacks are absent (0.1468ms)
+✔ fresh read-only planning retry has no hidden audit deadline in normal mode (0.1342ms)
+✔ raw intent classification never aliases unknown or withheld mutation names (0.3953ms)
+✔ completed read fingerprints require a causal successful result and current raw content (0.6885ms)
+✔ semantic result fingerprints ignore random snapshot metadata but retain evidence changes (0.1423ms)
+✔ within-generation pause aborts only the owned round and reports a clean pause (0.2036ms)
+✔ final context fitness is exact at the reserve boundary (0.2057ms)
+✔ context measurement reports tool schema cost separately from full prompt tokens (0.1857ms)
+✔ generation budget resolver clamps only to measured headroom and rejects unsafe space (0.0879ms)
+✔ reserve pressure gets one adaptive tool-free final report instead of an immediate rejection (2.3295ms)
+✔ context budget measures a narrowed registered Git catalogue before tools-disabled finalization (5.5649ms)
+✔ context budget uses FINAL_REPORT_ONLY when the measured narrowed catalogue still does not fit (4.1969ms)
+✔ final raw git_diff repair uses a newly measured candidate and preserves a second terminal report (10.107ms)
+✔ Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes (13.5436ms)
+✖ Unity-marked project uses public schemas and actual temporary Git for mixed raw Git repair (1339.2619ms)
+✔ raw tool text cut by the output cap is classified as tool-argument generation (0.1993ms)
+✔ initial raw tool output records the provider boundary when the measured structured catalogue fits (3.8213ms)
+✔ no-progress recovery delivers a safe partial report without task completion (4.7723ms)
+✔ recovery progress counts new source/archive coverage, not response fingerprints (0.6301ms)
+✔ archive-only raw recovery exposes the verified Git source catalogue and reaches a real source page (6113.6047ms)
+✔ deterministic working context projects a completed large result and exposes bounded rehydration (3156.3529ms)
+✔ raw Git replan keeps the archive reader beside the public source reader and consumes the archive (3062.2296ms)
+✔ low-pressure Git page stays raw for its first consumer without a semantic round trip (10.3813ms)
+✔ aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only (3921.6878ms)
+✔ image content keeps prediction alive and skips only the durable working-window commit (3078.4444ms)
+✔ working input target reports the mandatory floor without deleting the current request (4.5417ms)
+✔ hybrid context makes one tool-free semantic handoff and keeps it out of visible output (3100.0897ms)
+✔ invalid hybrid summary is discarded without retry or report recovery (3183.214ms)
+✔ a failed hybrid summary enters one-round cooldown while deterministic facts continue (7976.1885ms)
+✔ BOUNDED keeps its original call budget and does not start a hybrid summary (3143.3909ms)
+✔ cancellation during the hybrid summary prevents the normal model call (4557.263ms)
+✔ a signed next user turn restores the compacted prefix and appends only the new delta (5973.8578ms)
+✔ context-budget rescue keeps the normal output reserve when it fits (2.4936ms)
+✔ bounded context-budget rescue keeps the bounded final token and timeout limits (2.2071ms)
+✔ an input with less than the minimum safe final output still skips the selected model call (1.9568ms)
+✔ tool-round stagnation requires equivalent calls and semantic results (0.8792ms)
+✔ within-generation repetition ignores long normal prose and detects repeated blocks (0.2073ms)
+✔ the compactor cannot be selected recursively as the token source (0.1985ms)
+✔ prompt processing progress is visible before the first generated token (1.5859ms)
+✔ prediction fragments stream reasoning into a thinking block and the answer into normal output (1.8053ms)
+✔ a tool follow-up keeps raw reasoning in model history while the GUI stays separated (3.3405ms)
+✔ plain answer fragments are appended once instead of waiting for the completed message (1.6277ms)
+✔ streaming keeps a continuity footer out of the visible answer (51.1195ms)
+✔ T22 default availability observation traces final SDK input without changing it (2.6537ms)
+✔ B mode injects only current-input facts and reports measured prompt overhead (2.7614ms)
+✔ T10 injected metadata participates in the final budget gate (3.9262ms)
+✔ T14 injected facts do not block a model-selected reread (3.0901ms)
+✔ availability off mode leaves both model input and availability telemetry disabled (1.576ms)
+✔ T09 compaction retains the newest completed tool exchange for its first consumer (1.3714ms)
+✔ a new handler recomputes current availability instead of restoring a prior-input flag (1.917ms)
+✔ T16 real cancellation distinguishes no result from a received partial result (0.5386ms)
+✔ tool-generation failure telemetry is causal and never promoted to a result (1.689ms)
+ℹ tests 101
+ℹ suites 0
+ℹ pass 99
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 50559.0108
+
+✖ failing tests:
+
+test at artifacts\astra-full-refactor\diagnose-tests.cjs:9:11
+✖ tool rounds are captured once, remeasured, and compacted before the next act (8.3874ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   {
+  -     function: {
+  -       description: 'Read one project file.',
+  -       name: 'read_file',
+  -       parameters: {
+  -         additionalProperties: false,
+  -         properties: {
+  -           path: {
+  -             type: 'string'
+  -           }
+  -         },
+  -         required: [
+  -           'path'
+  -         ],
+  -         type: 'object'
+  -       }
+  -     },
+  -     type: 'function'
+  -   }
+  - ]
+  
+      at C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:870:12
+      at async rest.<computed> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\artifacts\astra-full-refactor\diagnose-tests.cjs:8:107)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [Array],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at artifacts\astra-full-refactor\diagnose-tests.cjs:9:11
+✖ Unity-marked project uses public schemas and actual temporary Git for mixed raw Git repair (1339.2619ms)
+  AssertionError [ERR_ASSERTION]: Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more.
+      at Object.deny (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2466:35)
+      at Object.guardToolCall (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:1068:44)
+      at Object.act (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2464:25)
+      at async runOneToolRound (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-loop.js:48:9)
+      at async C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:957:34
+      at async C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2516:3
+      at async rest.<computed> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\artifacts\astra-full-refactor\diagnose-tests.cjs:8:107)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: undefined,
+    operator: 'fail',
+    diff: 'simple'
+  }

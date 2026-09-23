@@ -522,7 +522,9 @@ function buildCheckpoint(messagesInput, options = {}) {
     extractPriorContinuityState(messages),
     extractPriorAssistantEvidence(messages),
   );
-  const semanticMessages = messages.filter((message) => !generatedAssistantCheckpoint(message));
+  // Prior memory is merged through previousState. Feeding generated memory
+  // back as conversational evidence recursively grows the next checkpoint.
+  const semanticMessages = messages.filter((message) => !generatedCheckpoint(message));
   const latestUserIndex = [...messages].reverse().find((message) => message.role === "user")?.index ?? -1;
   const latestUser = latestUserIndex >= 0 ? messages[latestUserIndex].text : String(previousState?.latestUserMessage || "");
   const tailStart = tailStartIndex(messages, options.recentCompleteTurns ?? 2);

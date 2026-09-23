@@ -163,6 +163,28 @@ class WorkingContext {
 
   windowFile(lineage) { return lineage ? `window-${lineage}.json` : "window.json"; }
 
+  captureReturned(history, isObservation, metadata = {}) {
+    const index = exchangeIndex(history);
+    let captured = 0;
+    const messages = history.getMessagesArray();
+    for (let mi = 0; mi < messages.length; mi++) {
+      const results = messages[mi].getToolCallResults();
+      for (let ri = 0; ri < results.length; ri++) {
+        const result = results[ri], request = index.matches.get(`${mi}:${ri}`);
+        if (!request || !isObservation(request)) continue;
+        const envelope = serializedResultContent(result.content);
+        const value = decodeToolResultRecord(envelope).value;
+        if (!value || ["archived_tool_result_projection", "historical_evidence_range"].includes(value.kind)) continue;
+        const saved = this.archive.put(envelope, { ...metadata, providerRequestId: result.toolCallId,
+          toolName: request.name, sourceKind: value.kind || "observation", sourceIdentity: sourceIdentity(value),
+          sourceVersion: value.sha256 || value.head || null, semanticFacts: semanticFacts(value),
+          resultStatus: value.status ?? value.ok ?? "unknown" }, { liveRefs: new Set(this.refs.keys()) });
+        if (saved.ok) { this.refs.set(saved.record.evidenceId, saved.record.archivedBodyHash); captured++; }
+      }
+    }
+    return captured;
+  }
+
   summaryRefs() {
     return new Set(this.summaryEvidence().map(item => item.ref));
   }
@@ -228,8 +250,8 @@ class WorkingContext {
         if (!saved.ok) { archiveFailed = true; return result; }
         const record = saved.record;
         this.refs.set(record.evidenceId, record.archivedBodyHash);
-        const preserveLimit = Number(metadata.preserveUnconsumedRawGitMaxChars || 0);
-        if (parsed.kind === "git_observation" && preserveLimit > 0
+        const preserveLimit = Number(metadata.preserveUnconsumedRawMaxChars ?? metadata.preserveUnconsumedRawGitMaxChars ?? 0);
+        if (preserveLimit > 0
           && originalEnvelope.length <= preserveLimit
           && !this.consumedRawResults.has(rawExposureKey(request, result, originalEnvelope))) {
           preservedFirstConsumer = true;

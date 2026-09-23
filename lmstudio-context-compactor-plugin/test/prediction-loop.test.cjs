@@ -480,7 +480,8 @@ test("hidden model notes survive a new user turn as assistant judgment and leave
     async applyPromptTemplate(chat) { return chat.toString(); },
     async countTokens() { return 100; },
     async act(_chat, _tools, options) {
-      options.onMessage(ChatMessage.create("assistant", `Visible answer.${footer}`));
+      options.onPredictionCompleted({stats:{stopReason:"eosFound"}});
+    options.onMessage(ChatMessage.create("assistant", `Visible answer.${footer}`));
     },
   };
   const first = fakeController(firstHistory, firstModel);
@@ -494,6 +495,7 @@ test("hidden model notes survive a new user turn as assistant judgment and leave
   let secondInput;
   const secondModel = { ...firstModel, async act(chat, _tools, options) {
     secondInput = chat;
+    options.onPredictionCompleted({stats:{stopReason:"eosFound"}});
     options.onMessage(ChatMessage.create("assistant", "Continued answer."));
   } };
   const second = fakeController(secondHistory, secondModel);
@@ -516,7 +518,8 @@ test("hidden model notes survive a new user turn as assistant judgment and leave
     async countTokens(prompt) { return String(prompt).includes("Context memory") ? 10000 : 25000; },
     async act(chat, _tools, options) {
       hardInput = chat;
-      options.onMessage(ChatMessage.create("assistant", `Resolved.${'\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n{}\n</continuity-note>'}`));
+      options.onPredictionCompleted({stats:{stopReason:"eosFound"}});
+    options.onMessage(ChatMessage.create("assistant", `Resolved.${'\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n{}\n</continuity-note>'}`));
     },
   };
   const third = fakeController(thirdHistory, thirdModel);
@@ -541,6 +544,7 @@ test("hidden model notes survive a new user turn as assistant judgment and leave
   let afterClearInput;
   const afterClearModel = { ...firstModel, async act(chat, _tools, options) {
     afterClearInput = chat;
+    options.onPredictionCompleted({stats:{stopReason:"eosFound"}});
     options.onMessage(ChatMessage.create("assistant", "No old note."));
   } };
   const afterClear = fakeController(afterClearHistory, afterClearModel);
@@ -553,6 +557,7 @@ test("hidden model notes survive a new user turn as assistant judgment and leave
   let changedInput;
   const changedModel = { ...firstModel, async act(chat, _tools, options) {
     changedInput = chat;
+    options.onPredictionCompleted({stats:{stopReason:"eosFound"}});
     options.onMessage(ChatMessage.create("assistant", "New answer."));
   } };
   const changed = fakeController(changedHistory, changedModel);
@@ -2401,7 +2406,9 @@ test("Unity-marked project uses public schemas and actual temporary Git for mixe
       const text = String(prompt);
       if (text.startsWith("[")) return 100;
       const parsed = JSON.parse(text);
-      if (parsed.text.includes(changedPaths[0])) return parsed.tools.includes("write_file") ? 38000 : 25000;
+      // The narrowed catalogue must leave room for the shared four-read batch,
+      // generation and next-input overhead; 25K cannot fit that contract.
+      if (parsed.text.includes(changedPaths[0])) return parsed.tools.includes("write_file") ? 38000 : 10000;
       return 500;
     },
     async act(chat, roundTools, options) {
@@ -2474,7 +2481,7 @@ test("Unity-marked project uses public schemas and actual temporary Git for mixe
             toolCallId: request.id, content: JSON.stringify(result) }] }));
         }
         const readTool = roundTools.find(candidate => candidate.name === "git_read_file");
-        const readArgs = { revision: head, path: changedPaths[0] };
+        const readArgs = { revision: head, path: changedPaths[0], byteBudget: 4096 };
         const readRequest = { id: "real-read-0", type: "function", name: "git_read_file",
           arguments: readArgs };
         await options.guardToolCall(0, 1007, { toolCallRequest: readRequest,
@@ -2540,12 +2547,12 @@ test("Unity-marked project uses public schemas and actual temporary Git for mixe
   assert.equal(retryRound.actualResultCount, 5);
   assert.equal(retryRound.toolCallBoundary.state, "structured_request_dispatched_and_result_received");
   assert.equal(retryRound.toolSurfaceMatchesMeasured, true);
-  assert.equal(retryRound.outputBatchReservation.requestedByteBudget, 49152);
+  assert.equal(retryRound.outputBatchReservation.requestedByteBudget, 20480);
   assert.equal(retryRound.outputBatchReservation.actualResultCount, 5);
   const rescue = ctl.debugValues.find(value => value.event === "direct_context_budget_rescue");
   assert.equal(rescue.fullToolCount, 6);
   assert.equal(rescue.narrowedToolCount, 5);
-  assert.equal(rescue.candidateInputTokens, 25000);
+  assert.equal(rescue.candidateInputTokens, 10000);
   assert.equal(rescue.candidateFit, true);
   const finalObservation = ctl.debugValues.filter(value => value.event === "direct_round_observation").at(-1);
   assert.equal(finalObservation.executionCost.knownPromptTokensIncludingSummary, totalPromptTokens);
@@ -3589,6 +3596,7 @@ test("a tool follow-up keeps raw reasoning in model history while the GUI stays 
       ] }));
       options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
         toolCallId: request.id, content: JSON.stringify({ status: "observed", path: "Assets/B.cs" }) }] }));
+      options.onPredictionCompleted({stats:{stopReason:"eosFound"}});
       options.onRoundEnd(0);
       throw options.signal.reason;
     },

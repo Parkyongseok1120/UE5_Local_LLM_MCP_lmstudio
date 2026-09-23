@@ -5,6 +5,23 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const DIRECT_SOURCE_FILES = Object.freeze([
+  "src/budget-broker.ts",
+  "src/context-manager.ts",
+  "src/context-ports.ts",
+  "src/delivery-controller.ts",
+  "src/evidence-manager.ts",
+  "src/evidence-telemetry.ts",
+  "src/execution-config.ts",
+  "src/execution-contracts.ts",
+  "src/execution-instructions.ts",
+  "src/execution-state.ts",
+  "src/prediction-ui.ts",
+  "src/raw-tool-intent.ts",
+  "src/recovery-coordinator.ts",
+  "src/runtime-identity.ts",
+  "src/tool-boundary.ts",
+  "src/tool-capability-registry.ts",
+
   "src/index.ts",
   "src/prediction-loop.ts",
   "src/context-budget.ts",
