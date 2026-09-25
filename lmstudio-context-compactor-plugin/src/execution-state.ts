@@ -1,6 +1,6 @@
 import { ChatMessage, type Chat } from "@lmstudio/sdk";
 import type { FinalizationTrigger } from "./execution-contracts";
-import type { CapturedRound } from "./round-loop";
+import { isCompletedPredictionReason, type CapturedRound } from "./round-loop";
 
 export type ExecutionPhase = "RESEARCH" | "READ_RECOVERY" | "TOOL_REPLAN"
   | "FINAL_DELIVERY" | "OUTPUT_RECOVERY" | "TERMINATED";
@@ -51,7 +51,7 @@ export class RoundTransaction {
   readonly returnedIds: Set<string>;
   constructor(readonly captured: CapturedRound, aborted: boolean) {
     this.planningCommitted = captured.predictionCompleted === true && !aborted && captured.failure === undefined
-      && ["eosFound", "stopStringFound"].includes(captured.finishReason || "");
+      && isCompletedPredictionReason(captured.finishReason);
     this.returnedIds = new Set(captured.messages.flatMap(m => m.getToolCallResults()).map(r => String(r.toolCallId)));
   }
   durable(message: ChatMessage): ChatMessage | null {

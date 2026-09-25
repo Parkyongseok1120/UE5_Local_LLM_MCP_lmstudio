@@ -1896,6 +1896,11 @@ def _install_context_compactor(
                 f"{installed_manifest}. Re-run without --skip-deps so the current revision "
                 "and production bundle can be built and synchronized."
             )
+    # lms installs its own dependency tree and may omit npm lifecycle scripts.
+    # Apply the version-checked compatibility fix to that actual runtime tree,
+    # after synchronization to a custom LM Studio home, before enabling it.
+    _run([npm, "run", "patch:sdk"], cwd=installed_manifest.parent,
+         dry_run=args.dry_run, timeout=30)
     availability = _configure_context_compactor_availability(
         args.lmstudio_home,
         dry_run=args.dry_run,

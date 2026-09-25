@@ -1,0 +1,72 @@
+✖ SDK toolCalls completes the input consumer, while its newly returned result stays pending (33.3801ms)
+✖ truncation, cancellation and unknown reasons never consume pending evidence (0.1411ms)
+✖ duplicate capture after consumption cannot re-pin a previously consumed result (0.7623ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 0
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 183.7921
+
+✖ failing tests:
+
+test at lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:15:1
+✖ SDK toolCalls completes the input consumer, while its newly returned result stays pending (33.3801ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:29:10)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:41:1
+✖ truncation, cancellation and unknown reasons never consume pending evidence (0.1411ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:44:74)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1306:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:897:18)
+      at Test.postRun (node:internal/test_runner/test:1447:19)
+      at Test.run (node:internal/test_runner/test:1372:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:46:1
+✖ duplicate capture after consumption cannot re-pin a previously consumed result (0.7623ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:51:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1306:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:897:18)
+      at Test.postRun (node:internal/test_runner/test:1447:19)
+      at Test.run (node:internal/test_runner/test:1372:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -10,6 +10,73 @@ const { WorkingContext, serialize, hash, validateSemanticNote } = require("../sr
 const { parseToolResult, stateMemory } = require("../src/compaction-tool-memory.js");
 const { buildCheckpoint } = require("../src/direct-compaction-core.js");
 const scope = { conversation: "chat-1", lineage: "fork-1", workspace: "workspace-1", repository: "worktree-1" };
+test("pending raw identity survives persistence sanitization, cancellation and restart", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pending-window-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const h = Chat.from([{ role: "user", content: "Remember the early fact." }]);
+  h.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    type: "function", id: "r", name: "read_file", arguments: { path: "a.txt" } } }] }));
+  h.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "r",
+    content: JSON.stringify({ ok: true, kind: "workspace_file_observation", path: "a.txt", hash: "source-hash",
+      startLine: 1, endLine: 16, receipt: "live-receipt", nextCursor: "live-cursor", text: "EARLY_FACT " + "x".repeat(4000) }) }] }));
+  const c = new WorkingContext(scope, { root, durable: true });
+  c.captureReturned(h, () => true);
+  const id = [...c.returnedRefs.keys()][0];
+  assert.equal(c.commit(h, h, { exact: true, inputTokens: 2000, remainingTokens: 5000 }, hash(serialize(h)), "model"), true, c.lastCommitReason);
+  assert.ok(h.toString().includes("live-cursor"), "live capability remains live");
+  assert.ok(!JSON.stringify(c.manifest).includes("live-cursor"));
+  assert.ok(!JSON.stringify(c.manifest).includes("live-receipt"));
+  assert.deepEqual(c.archive.catalog().entries[0].sourceRange, [1, 16]);
+  const restarted = new WorkingContext(scope, { root, durable: true });
+  const restored = restarted.restore(h);
+  assert.equal(restored.reason, "restored_remeasure_required");
+  assert.equal(restarted.returnedRefs.has(id), true, "commit is not consumer completion");
+  assert.throws(() => restarted.captureExposure(Chat.empty(), "cancel-retry", false), /PENDING_EVIDENCE_OMITTED/);
+  restarted.captureExposure(restored.history, "retry", false);
+  const projected = restarted.project(restored.history, () => true, {}, 256);
+  assert.equal(projected.changed, true);
+  assert.equal(restarted.archive.entries().length, 1, "sanitized replay retains the original archive identity");
+  restarted.captureExposure(projected.history, "retry", true);
+  assert.equal(restarted.returnedRefs.size, 0);
+  assert.equal(restarted.commit(h, projected.history, { exact: true, remainingTokens: 5000 }, hash(serialize(h)), "model"), true);
+  const again = new WorkingContext(scope, { root, durable: true });
+  assert.equal(again.restore(h).reason, "restored_remeasure_required");
+  assert.equal(again.returnedRefs.size, 0);
+  assert.equal(again.archive.read(id, again.archive.load(id).record.archivedBodyHash, 0, 8192).content.includes("EARLY_FACT"), true);
+});
+
+test("a returned historical page cannot be omitted or consumed by an older page with the same archive ID", () => {
+  const c = new WorkingContext(scope), h = Chat.from([{ role: "user", content: "Recover the early page" }]);
+  const saved = c.archive.put("EARLY_FACT").record;
+  function append(chat, id, startOffset) {
+    chat.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+      type: "function", id, name: "evidence_first_read_context", arguments: { evidenceId: saved.evidenceId, startOffset } } }] }));
+    chat.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: id,
+      content: JSON.stringify(c.archive.read(saved.evidenceId, saved.archivedBodyHash, startOffset, 4096)) }] }));
+  }
+  append(h, "old", 4); c.captureReturned(h, () => true); c.captureExposure(h, "old", true);
+  const next = Chat.from(h); append(next, "new", 0); c.captureReturned(next, () => true);
+  assert.equal(c.pendingHistoricalResults.size, 1);
+  assert.throws(() => c.captureExposure(h, "missing-new-page", false), /PENDING_EVIDENCE_OMITTED/);
+  assert.equal(c.commit(next, h, { exact: true, remainingTokens: 1000 }, hash(serialize(next)), "m"), false);
+  assert.equal(c.commit(next, next, { exact: true, remainingTokens: 1000 }, hash(serialize(next)), "m"), true);
+  assert.equal(c.restore(next).reason, "restored_remeasure_required");
+  assert.equal(c.pendingHistoricalResults.size, 1);
+  c.captureExposure(next, "retry", false); c.captureExposure(next, "retry", true);
+  c.captureReturned(next, () => true);
+  assert.equal(c.pendingHistoricalResults.size, 0, "duplicate callback does not reopen the consumer");
+  assert.equal(c.archive.entries().length, 1, "historical pages are not recursively archived");
+});
+
+test("archive read never claims success for a nonadvancing body page", () => {
+  const archive = new EvidenceArchive(scope);
+  const r = archive.put("x".repeat(10000), { sourceIdentity: { path: "long-name".repeat(70) } }).record;
+  for (let maxChars = 512; maxChars <= 2200; maxChars += 7) {
+    const value = archive.read(r.evidenceId, r.archivedBodyHash, 0, maxChars);
+    if (value.ok) { assert.ok(value.returnedRange[1] > 0); assert.ok(JSON.stringify(value).length <= maxChars); }
+    else assert.equal(value.errorCode, "response_budget_too_small");
+  }
+});
 function exchange(count = 5) {
   const h = Chat.from([{ role: "system", content: "Keep constraints." }, { role: "user", content: "Inspect every page." }]);
   h.append(ChatMessage.from({ role: "assistant", content: Array.from({ length: count }, (_, i) => ({
@@ -189,7 +256,10 @@ test("S1 a Git transport cursor is projected for the current round but never arc
   assert.doesNotMatch(archived.content, /opaque-server-token/);
   assert.equal(archived.redacted, true);
   assert.equal(c.commit(h, p.history, { exact: true, inputTokens: 1000, remainingTokens: 10000 },
-    hash(serialize(h)), "model"), false);
+    hash(serialize(h)), "model"), true);
+  assert.doesNotMatch(JSON.stringify(c.manifest), /opaque-server-token/);
+  assert.doesNotMatch(c.restore(h).history.toString(), /opaque-server-token/);
+  assert.match(p.history.toString(), /opaque-server-token/, "live transport is not changed by persistence");
 });
 
 test("S1 durable archive restarts, canonicalizes a trusted root alias and rejects internal links", t => {

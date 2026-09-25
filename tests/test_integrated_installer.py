@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import gui_installer_command
+from conftest import gui_installer_command, plant_compactor_sdk_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.py"
@@ -57,6 +57,37 @@ def _load_installer_module():
     return module
 
 
+def test_compactor_patches_installed_sdk_after_home_sync_before_activation(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    module = _load_installer_module()
+    events = []
+    args = SimpleNamespace(lmstudio_home=tmp_path / "custom-home", runtime_npm="npm",
+                           dry_run=False, skip_deps=True)
+    monkeypatch.setattr(module, "_resolve_lms_cli", lambda _: "lms")
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(module, "_run", lambda command, **kw: events.append((command, kw.get("cwd"))))
+    def sync(**kw):
+        events.append(("sync", kw["lmstudio_home"]))
+        return {"ready": True}
+    monkeypatch.setattr(module, "_ensure_context_compactor_on_disk", sync)
+    monkeypatch.setattr(module, "_configure_context_compactor_availability",
+                        lambda *a, **k: events.append(("activate", None)) or {})
+    result = module._install_context_compactor(args)
+    assert result["installed"] is True
+    assert events == [(["lms", "dev", "--install", "-y"], ROOT / "lmstudio-context-compactor-plugin"),
+                      ("sync", args.lmstudio_home),
+                      (["npm", "run", "patch:sdk"], module._context_compactor_install_path(args.lmstudio_home).parent),
+                      ("activate", None)]
+    def fail_patch(command, **kw):
+        if command[-1] == "patch:sdk":
+            raise RuntimeError("SDK patch target changed")
+    monkeypatch.setattr(module, "_run", fail_patch)
+    events.clear()
+    with pytest.raises(RuntimeError, match="SDK patch target changed"):
+        module._install_context_compactor(args)
+    assert all(event[0] != "activate" for event in events)
+
+
 def test_installer_profiles_are_manifest_driven() -> None:
     module = _load_installer_module()
     sys.modules.pop("integrated_install", None)
@@ -86,9 +117,9 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
     assert node_package["version"] == node_lock["version"] == "0.3.23"
     assert node_lock["packages"][""]["version"] == "0.3.23"
-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.66"
-    assert compactor_lock["packages"][""]["version"] == "0.4.66"
-    assert compactor_manifest["revision"] == 113
+    assert compactor_package["version"] == compactor_lock["version"] == "0.4.70"
+    assert compactor_lock["packages"][""]["version"] == "0.4.70"
+    assert compactor_manifest["revision"] == 117
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
@@ -562,6 +593,7 @@ def _plant_fake_lms(lmstudio_home: Path) -> None:
         / "unreal-context-compactor"
     )
     manifest = plugin_dir / "manifest.json"
+    plant_compactor_sdk_fixture(plugin_dir)
     bundle = plugin_dir / ".lmstudio" / "production.js"
     current_manifest = json.loads(
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")

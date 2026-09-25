@@ -1,0 +1,30 @@
+✖ a cheap source page cannot hide required archive rehydration starvation (1.4899ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 180.1056
+
+✖ failing tests:
+
+test at test\runtime-policy.test.cjs:14:1
+✖ a cheap source page cannot hide required archive rehydration starvation (1.4899ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  2048 !== 7168
+  
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\runtime-policy.test.cjs:21:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1306:25)
+      at Test.start (node:internal/test_runner/test:1177:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:385:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2048,
+    expected: 7168,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

@@ -62,19 +62,29 @@ class Files {
     try { new TextDecoder("utf-8", { fatal: true }).decode(read.buffer); } catch { fail("unsupported_encoding", "Only UTF-8 (with optional BOM) is supported"); }
     return { ...read, target, receipt: this.receipt(relative, read.hash) };
   }
-  async read(args) {
+  async read(args, envelope = value => value) {
     const s = await this.snapshot(args.path);
     const lines = s.content.split(/\r\n|\n|\r/);
     const start = args.startLine ?? 1;
     const limit = args.limit ?? 100;
     const selected = lines.slice(start - 1, start - 1 + limit);
-    const returnedLineCount = selected.length;
-    const endLine = returnedLineCount > 0 ? start + returnedLineCount - 1 : null;
-    const hasMore = start - 1 + returnedLineCount < lines.length;
-    return bounded({ status: "observed", path: args.path, receipt: s.receipt, receiptScope: "entire_file_bytes", hash: s.hash,
-      observedAt: new Date().toISOString(), startLine: start, endLine, returnedLineCount, totalLines: lines.length,
-      text: selected.join("\n"), hasMore, nextStartLine: hasMore ? start + returnedLineCount : null,
-      truncated: hasMore }, args.byteBudget);
+    const observedAt = new Date().toISOString();
+    const makePage = count => {
+      const endLine = count > 0 ? start + count - 1 : null;
+      const hasMore = start - 1 + count < lines.length;
+      return envelope({ status: "observed", path: args.path, receipt: s.receipt, receiptScope: "entire_file_bytes", hash: s.hash,
+        observedAt, startLine: start, endLine, returnedLineCount: count, totalLines: lines.length,
+        text: selected.slice(0, count).join("\n"), hasMore, nextStartLine: hasMore ? start + count : null,
+        truncated: hasMore });
+    };
+    const budget = args.byteBudget ?? 32768;
+    // Budget the actual transport envelope. Return whole lines with explicit
+    // continuation; a single oversized line still fails instead of clipping.
+    for (let count = selected.length; count > 0; count--) {
+      const result = makePage(count);
+      if (Buffer.byteLength(JSON.stringify(result)) <= budget) return result;
+    }
+    return bounded(makePage(Math.min(1, selected.length)), budget);
   }
   async mutate(args, transform, create = false) {
     if (!this.allowWrite) fail("edit_disabled", "Edit requires ALLOW_WRITE=1 in the host configuration");

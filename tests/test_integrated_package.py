@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
-from conftest import gui_installer_command
+from conftest import gui_installer_command, plant_compactor_sdk_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_integrated_package.py"
@@ -39,6 +39,7 @@ def _plant_fake_lms(lmstudio_home: Path) -> None:
         / "unreal-context-compactor"
     )
     manifest = plugin_dir / "manifest.json"
+    plant_compactor_sdk_fixture(plugin_dir)
     bundle = plugin_dir / ".lmstudio" / "production.js"
     current_manifest = json.loads(
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")

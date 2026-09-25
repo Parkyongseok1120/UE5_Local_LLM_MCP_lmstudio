@@ -1,0 +1,9 @@
+✔ production handler narrows before archive starvation and restores an early fact through the real guard (55.8218ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 240.3483

@@ -1,9 +1,12 @@
 {
   "name": "unreal-context-compactor",
-  "version": "0.4.66",
+  "version": "0.4.70",
   "private": true,
   "main": "dist/index.js",
   "scripts": {
+    "patch:sdk": "node scripts/patch-lmstudio-sdk.cjs",
+    "postinstall": "node scripts/patch-lmstudio-sdk.cjs",
+    "prebuild": "node scripts/patch-lmstudio-sdk.cjs",
     "dev": "lms dev",
     "clean": "node scripts/clean-dist.cjs",
     "build": "npm run clean && tsc -p tsconfig.json",
@@ -15,7 +18,7 @@
     "status": "node scripts/status.cjs"
   },
   "dependencies": {
-    "@lmstudio/sdk": "^1.5.0"
+    "@lmstudio/sdk": "1.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.8",

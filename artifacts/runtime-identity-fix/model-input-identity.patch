@@ -1,0 +1,21 @@
+--- a/lmstudio-context-compactor-plugin/src/prediction-loop.ts
++++ b/lmstudio-context-compactor-plugin/src/prediction-loop.ts
+@@ -279,6 +279,9 @@
+           : [...scopeInstructions, ...(researchRecoveryRound
+             ? [toolPlanningRetryRound ? toolPlanningRetryInstruction : READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION]
+             : [])];
++        // Input identity lives for the whole execution, not a recovery episode.
++        // RecoveryCoordinator.reset() may run between calls; roundIndex never resets.
++        // Keep this ID unchanged from measurement through exposure and completion.
+         const modelInputId = finalizing
+           ? execution.finalizationTrigger === "output_recovery"
+             ? `${executionId}:output-recovery-${deliveryController.attempts}`
+@@ -286,7 +289,7 @@
+           : toolPlanningRetryRound
+             ? `${executionId}:tool-planning-retry-${toolPlanningRetryAttempts}`
+             : researchRecoveryRound
+-              ? `${executionId}:research-recovery-${recoveryCoordinator.toolRounds + 1}`
++              ? `${executionId}:research-recovery-${roundIndex + 1}`
+               : `${executionId}:prediction-${roundIndex + 1}`;
+         activeActivity = createRoundActivityTracker(ctl, roundIndex);
+         const noteEnabled = Boolean(noteWorkingDirectory && objectiveFingerprint && !config.observeOnly);

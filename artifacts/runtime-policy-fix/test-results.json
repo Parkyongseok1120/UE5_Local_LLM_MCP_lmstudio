@@ -1,0 +1,83 @@
+{
+  "baseSha": "868dedf8069c5b6d015794e32e5435ad540db219",
+  "runtimeRevision": 115,
+  "commands": [
+    {
+      "cwd": "lmstudio-context-compactor-plugin",
+      "command": "npm test",
+      "exitCode": 0,
+      "passed": 355,
+      "skipped": 0,
+      "log": "test-compactor.log"
+    },
+    {
+      "cwd": "lmstudio-unity-mcp",
+      "command": "npm test",
+      "exitCode": 0,
+      "passed": 35,
+      "skipped": 4,
+      "log": "test-unity.log"
+    },
+    {
+      "cwd": "lmstudio-unreal-agent-mcp",
+      "command": "npm test",
+      "exitCode": 0,
+      "passed": 247,
+      "skipped": 1,
+      "log": "test-unreal.log"
+    },
+    {
+      "cwd": ".",
+      "command": "python -m pytest -q",
+      "exitCode": 0,
+      "passed": 1049,
+      "skipped": 19,
+      "log": "test-python.log"
+    },
+    {
+      "cwd": "lmstudio-context-compactor-plugin",
+      "command": "node --test test/runtime-policy.test.cjs",
+      "exitCode": 0,
+      "passed": 6,
+      "log": "test-policy.log"
+    },
+    {
+      "cwd": ".",
+      "command": "python -m pytest -q (before installer fixture update)",
+      "exitCode": 1,
+      "passed": 1034,
+      "failed": 16,
+      "skipped": 19,
+      "log": "test-python-final.log",
+      "reason": "Hermetic fake LMS installations lacked the newly required SDK patch fixture; fixed without weakening the production installer."
+    },
+    {
+      "cwd": ".",
+      "command": "python -m pytest -xq tests/test_integrated_installer.py tests/test_integrated_package.py",
+      "exitCode": 0,
+      "passed": 108,
+      "log": "test-installer-fixed.log"
+    },
+    {
+      "cwd": ".",
+      "command": "python -m pytest -q",
+      "exitCode": 0,
+      "passed": 1050,
+      "skipped": 19,
+      "log": "test-python-verified.log"
+    },
+    {
+      "cwd": ".",
+      "command": "UPDATE.bat (UPDATE_NO_PAUSE=1)",
+      "exitCode": 0,
+      "log": "update-batch-final.log",
+      "note": "Includes npm ci, compactor 355-test suite/build, lms install and installed SDK version-checked patch."
+    },
+    {
+      "cwd": ".",
+      "command": "git diff --check",
+      "exitCode": 0
+    }
+  ],
+  "liveStatus": "PENDING; revision114 observations preserved separately"
+}

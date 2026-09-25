@@ -112,6 +112,15 @@ function serializedResultContent(content) {
   return typeof content === "string" ? content : JSON.stringify(content);
 }
 
+function inputResultKeys(history) {
+  const index = exchangeIndex(history), keys = new Set();
+  history.getMessagesArray().forEach((message, mi) => message.getToolCallResults().forEach((result, ri) => {
+    const request = index.matches.get(`${mi}:${ri}`);
+    if (request) keys.add(rawExposureKey(request, result, serializedResultContent(result.content)));
+  }));
+  return keys;
+}
+
 function collectEvidenceRefs(value, output = new Map()) {
   if (Array.isArray(value)) {
     for (const item of value) collectEvidenceRefs(item, output);
@@ -155,6 +164,7 @@ class WorkingContext {
     this.generation = 0;
     this.refs = new Map();
     this.returnedRefs = new Map();
+    this.pendingHistoricalResults = new Set();
     this.rawRefs = new Map();
     this.lastCommitReason = null;
     this.exposure = new Map();
@@ -168,11 +178,26 @@ class WorkingContext {
 
   windowFile(lineage) { return lineage ? `window-${lineage}.json` : "window.json"; }
 
+  get hasArchivedEvidence() {
+    if (this.refs.size || this.returnedRefs.size || this.archive.stats.captured) return true;
+    // A restored window may no longer mention the earliest consumed pages.
+    // Discovery still needs a usable result budget for those scoped records.
+    try { return this.archive.entries().some(entry => this.archive.load(entry.key).ok); }
+    catch { return false; }
+  }
+
   archiveObservation(request, result, value, metadata = {}) {
     const canonical = evidenceIdentity.normalizeObservation(value, request,
       metadata.toolProviders?.[request.name] || value.provider || "unknown-provider");
     const envelope = serializedResultContent(result.content);
     const callKey = rawExposureKey(request, result, envelope);
+    // Restored sanitized envelopes keep their binding to the original record.
+    // Re-archiving them would change identity and strand a pending consumer.
+    const bound = this.rawRefs.get(callKey);
+    if (bound) {
+      const existing = this.archive.load(bound[0]);
+      if (existing.ok && existing.record.archivedBodyHash === bound[1]) return existing;
+    }
     const saved = this.archive.put(envelope, { ...metadata, callKey,
       providerRequestId: result.toolCallId, toolName: request.name,
       sourceKind: value.kind || "observation", sourceIdentity: sourceIdentity(value),
@@ -183,6 +208,7 @@ class WorkingContext {
         ? false : value.resultStatus ?? value.status ?? value.ok ?? "unknown",
       errorCode: value.errorCode ?? null, operationId: value.operationId ?? null,
       originRanges: value.range || value.returnedRange || value.lineRange || value.page
+        || (Number.isInteger(value.startLine) && Number.isInteger(value.endLine) ? [value.startLine, value.endLine] : null)
         || (value.pageStart !== undefined ? [value.pageStart, value.pageEnd] : null),
     }, { liveRefs: new Set([...this.refs.keys(), ...this.returnedRefs.keys()]) });
     if (saved.ok) {
@@ -207,12 +233,20 @@ class WorkingContext {
 
   reconcileRefs(history, consumed = false, requirePending = false) {
     const live = this.inputRefs(history);
+    const resultKeys = inputResultKeys(history);
     // A bounded candidate may not silently omit a result before its first
     // consumer. Keep it pinned and block that candidate with an explicit error.
-    if (requirePending && [...this.returnedRefs.keys()].some(id => !live.has(id))) {
+    if (requirePending && ([...this.returnedRefs.keys()].some(id => !live.has(id))
+      || [...this.pendingHistoricalResults].some(key => !resultKeys.has(key)))) {
       throw new Error("CONTEXT_PENDING_EVIDENCE_OMITTED");
     }
-    if (consumed) for (const id of live.keys()) this.returnedRefs.delete(id);
+    if (consumed) {
+      for (const key of resultKeys) {
+        if (this.pendingHistoricalResults.delete(key)) this.consumedRawResults.add(key);
+      }
+      for (const id of live.keys()) this.returnedRefs.delete(id);
+      for (const [key, [id]] of this.rawRefs) if (live.has(id)) this.consumedRawResults.add(key);
+    }
     this.refs = new Map([...(this.manifest?.refs || []), ...live, ...this.returnedRefs]);
     for (const [key, [id]] of this.rawRefs) if (!this.refs.has(id)) {
       this.rawRefs.delete(key); this.consumedRawResults.delete(key);
@@ -247,8 +281,17 @@ class WorkingContext {
         const result = results[ri], request = index.matches.get(`${mi}:${ri}`);
         if (!request || !isObservation(request)) continue;
         const envelope = serializedResultContent(result.content);
+        // Duplicate callbacks/replays cannot reopen a completed consumer.
+        if (this.consumedRawResults.has(rawExposureKey(request, result, envelope))) continue;
         const value = decodeToolResultRecord(envelope).value;
-        if (!value || ["archived_tool_result_projection", "historical_evidence_range"].includes(value.kind)) continue;
+        if (!value || value.kind === "archived_tool_result_projection") continue;
+        if (["historical_evidence_range", "historical_evidence_index"].includes(value.kind)) {
+          // Rehydration is a new returned page even when its source ID was
+          // consumed before. Pin that exact page until its first consumer;
+          // re-archiving it would create recursive archive envelopes.
+          this.pendingHistoricalResults.add(rawExposureKey(request, result, envelope));
+          continue;
+        }
         const saved = this.archiveObservation(request, result, value, metadata);
         if (saved.ok) { this.returnedRefs.set(saved.record.evidenceId, saved.record.archivedBodyHash); captured++; }
       }
@@ -299,7 +342,7 @@ class WorkingContext {
         const originalEnvelope = serializedResultContent(result.content);
         const decoded = decodeToolResultRecord(originalEnvelope), parsed = decoded.value;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
-          || parsed.kind === "archived_tool_result_projection" || parsed.kind === "historical_evidence_range") return result;
+          || ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(parsed.kind)) return result;
         // The caller's known observation classification alone is not execution proof.
         if (parsed.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(parsed.status)) return result;
         // A projection has fixed identity/range metadata. Avoid archiving and
@@ -332,7 +375,7 @@ class WorkingContext {
           sourceIdentity: identity, sourceIdentityDigest: record.metadata.sourceIdentityDigest,
           sourceVersion: record.metadata.sourceVersion, sourceQueryKey: record.metadata.sourceQueryKey,
           provider: record.metadata.provider, semanticQueryDigest: record.metadata.semanticQueryDigest,
-          sourceRange: parsed.returnedRange || parsed.lineRange
+          sourceRange: record.metadata.originRanges
             || (parsed.pageStart !== undefined || parsed.pageEnd !== undefined ? [parsed.pageStart, parsed.pageEnd] : null),
           sourceCollectionComplete: parsed.sourceResultComplete ?? "unknown",
           sourcePageStart: parsed.pageStart,
@@ -409,13 +452,16 @@ class WorkingContext {
 
   tool() {
     return rawFunctionTool({ name: "evidence_first_read_context",
-      description: "Read a bounded range of previously returned historical evidence by exact archive ID and version. This is not a fresh file read and grants no write/build approval. Missing/expired evidence may require the original source tool.",
+      description: "Read previously returned historical evidence by exact archive ID and version. Use action=catalog with an optional exact path to discover IDs lost from working context; continue catalog pages using nextOffset as startOffset. Then use action=read with the returned evidenceId and version. Historical access is not a fresh file read and grants no write/build approval.",
       parametersJsonSchema: { type: "object", additionalProperties: false,
-        properties: { evidenceId: { type: "string" }, version: { type: "string" },
+        properties: { action: { type: "string", enum: ["read", "catalog"] }, path: { type: "string" },
+          evidenceId: { type: "string" }, version: { type: "string" },
           startOffset: { type: "integer", minimum: 0 }, maxChars: { type: "integer", minimum: 1, maximum: 8192 } },
-        required: ["evidenceId", "version"] },
+        anyOf: [ { required: ["evidenceId", "version"], properties: { action: { const: "read" } } },
+          { required: ["action"], properties: { action: { const: "catalog" } } } ] },
       implementation: async (args, ctx) => {
         if (ctx.signal.aborted) throw ctx.signal.reason;
+        if (args.action === "catalog") return this.archive.catalog(args);
         return this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? 4096);
       } });
   }
@@ -469,15 +515,33 @@ class WorkingContext {
   commit(source, candidate, measurement, expectedPrefix, modelFingerprint) {
     this.lastCommitReason = null;
     try {
-      const prefix = serialize(source), replacement = serialize(candidate);
-      const liveRefs = liveEvidenceRefs(candidate);
+      const prefix = serialize(source);
       const candidateRefs = this.inputRefs(candidate);
+      const candidateKeys = inputResultKeys(candidate);
       const rejection = hash(prefix) !== expectedPrefix ? "source_prefix_changed"
         : !measurement.exact ? "measurement_not_exact" : measurement.remainingTokens < 0 ? "hard_limit"
-          : !this.refsValid([...liveRefs]) ? "archive_refs_unavailable"
+          : !this.refsValid([...candidateRefs]) ? "archive_refs_unavailable"
             : exchangeIndex(candidate).ambiguous ? "pending_or_ambiguous_exchange"
-              : [...this.returnedRefs.keys()].some(id => !candidateRefs.has(id)) ? "pending_evidence_omitted" : null;
+              : [...this.returnedRefs.keys()].some(id => !candidateRefs.has(id))
+                || [...this.pendingHistoricalResults].some(key => !candidateKeys.has(key)) ? "pending_evidence_omitted" : null;
       if (rejection) { this.lastCommitReason = rejection; return false; }
+      // Validate the exact live candidate first. Persistence owns sanitization;
+      // stripping capabilities before validation changes raw-envelope identity.
+      const persisted = this.persistable(candidate), replacement = serialize(persisted);
+      const rawBindings = [], consumedBindings = [], pendingHistoricalResults = [];
+      const index = exchangeIndex(candidate), persistedIndex = exchangeIndex(persisted), persistedMessages = persisted.getMessagesArray();
+      candidate.getMessagesArray().forEach((message, mi) => message.getToolCallResults().forEach((result, ri) => {
+        const request = index.matches.get(`${mi}:${ri}`);
+        if (!request) return;
+        const key = rawExposureKey(request, result, serializedResultContent(result.content));
+        const ref = this.rawRefs.get(key);
+        const cleanResult = persistedMessages[mi].getToolCallResults()[ri];
+        const cleanRequest = persistedIndex.matches.get(`${mi}:${ri}`);
+        const cleanKey = rawExposureKey(cleanRequest, cleanResult, serializedResultContent(cleanResult.content));
+        if (ref) rawBindings.push([cleanKey, ref]);
+        if (this.consumedRawResults.has(key)) consumedBindings.push(cleanKey);
+        if (this.pendingHistoricalResults.has(key)) pendingHistoricalResults.push(cleanKey);
+      }));
       // Never persist live receipt/secret material or raw reasoning in a window.
       if (JSON.stringify(redact(replacement)) !== JSON.stringify(replacement)
         || replacement.some(m => m.content.some(p => p.type === "text" && p.text.includes(REASONING_SEPARATOR)))) {
@@ -487,7 +551,8 @@ class WorkingContext {
         generation: this.generation + 1, parentWindowId: this.manifest?.windowId || null,
         lineage: this.lineage, parentLineage: this.parentLineage,
         sourcePrefixHash: expectedPrefix, sourceLength: prefix.length,
-        replacement, refs: [...liveRefs], note: this.note,
+        replacement, refs: [...candidateRefs], rawBindings, consumedBindings,
+        pendingRefs: [...this.returnedRefs], pendingHistoricalResults, note: this.note,
         lastSummaryInput: this.lastSummaryInput, modelFingerprint, measurement,
         measurementSubject: "live_candidate_before_persistence_sanitization", remeasureRequired: true };
       const manifest = { ...body, digest: hash(body) };
@@ -495,7 +560,7 @@ class WorkingContext {
         this.archive.ensureDirectory(true);
         atomicWrite(this.archive.directory, this.windowFile(this.lineage), manifest);
       }
-      this.manifest = manifest; this.generation = body.generation; this.refs = liveRefs;
+      this.manifest = manifest; this.generation = body.generation; this.refs = candidateRefs;
       return true;
     } catch (error) { this.lastCommitReason = error.message || "window_write_failed"; return false; }
   }
@@ -515,6 +580,10 @@ class WorkingContext {
         || hash(messages.slice(0, body.sourceLength)) !== body.sourcePrefixHash
         || !this.refsValid(body.refs)) return { history: source, reason: "invalid_scope_prefix_or_refs" };
       this.manifest = manifest; this.generation = body.generation; this.refs = new Map(body.refs); this.note = body.note;
+      this.rawRefs = new Map(body.rawBindings || []);
+      this.returnedRefs = new Map(body.pendingRefs || []);
+      this.pendingHistoricalResults = new Set(body.pendingHistoricalResults || []);
+      this.consumedRawResults = new Set(body.consumedBindings || []);
       this.lastSummaryInput = typeof body.lastSummaryInput === "string" ? body.lastSummaryInput : "";
       return { history: deserialize([...body.replacement, ...messages.slice(body.sourceLength)]), reason: "restored_remeasure_required" };
     } catch { return { history: source, reason: "unavailable" }; }

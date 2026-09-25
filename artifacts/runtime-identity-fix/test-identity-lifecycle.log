@@ -1,0 +1,11 @@
+✔ recovery re-entry never reuses a model input identity after the episode counter resets (71.1153ms)
+✔ canceled execution releases its session and a new execution cannot reuse its input identity (4.5077ms)
+✔ bounded audit makes zero final model calls after user cancellation (2.6179ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 275.2654

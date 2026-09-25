@@ -1,0 +1,158 @@
+warning: in the working copy of 'tracked.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tracked.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'added.txt', LF will be replaced by CRLF the next time Git touches it
+✔ ASTRA RANGE: decoded body is not envelope coverage; continuation includes boundary (16.5398ms)
+✔ ASTRA RANGE: sanitized envelope fallback seeds [0,N), not [0,N] (161.7791ms)
+✔ ASTRA RANGE: empty archive EOF is zero coverage (213.5085ms)
+✔ ASTRA GEN: large metadata cannot replace the generic content body (199.81ms)
+✔ ASTRA RANGE: invalid typed endpoints cannot become zero (0.7112ms)
+✔ ASTRA RANGE: unlike source units remain separate (0.5985ms)
+✔ ASTRA RANGE: failed projected results never seed successful coverage (597.324ms)
+✔ ASTRA CAP: exact registered provider tools, not name or prefix, confer read exemption (0.2487ms)
+✔ ASTRA TX: fragment pause without completed event cannot consume raw input (0.9884ms)
+✔ B04/O03 production handler rejects an inexact input before model dispatch or durable commit (22.1226ms)
+✖ hybrid handler consumes toolCalls inputs across repeated compaction and delivers EOS (5126.4281ms)
+✔ prediction loop calls the directly selected model with compacted history (2.6507ms)
+✔ low-pressure history passes through without proxy model selection or sampling overrides (1.3643ms)
+✔ prediction loop exposes only the configured engine tools and common tools (1.7669ms)
+✔ Qwen-compatible history has exactly one leading system message after scope injection (1.6797ms)
+✔ repeated compaction preserves invariant system instructions exactly once (4.3656ms)
+✔ continuity marker text in user content is retained as user content (0.635ms)
+✔ long multi-file review resumes after interruptions across four compactions (9.9437ms)
+✔ prediction loop denies a handcrafted tool call withheld by engine scope (2.0354ms)
+✔ prediction loop binds Unreal mutation project arguments after confirmation overrides (1.6488ms)
+✔ Unity and Unreal observation calls bypass the invisible host confirmation wait (0.1244ms)
+✔ read-only Unity calls finish without asking the hidden confirmation UI (1.6132ms)
+✔ hidden model notes survive a new user turn as assistant judgment and leave visible answers clean (268.8486ms)
+✔ reserved note footers stay hidden when no stable working directory exists (2.0151ms)
+✔ inexact measurement activates the configured message-count fallback (2.6771ms)
+✔ inexact fallback escalates a still-pressured current tool turn to bounded retention (7.0491ms)
+✔ handler activation ignores a legacy nested enabled=false value (1.9623ms)
+✔ observe-only remains the explicit no-mutation mode (1.8488ms)
+✔ observe-only does not filter tools or bind project arguments (1.3527ms)
+✔ tool rounds are captured once, remeasured, and compacted before the next act (9.1679ms)
+✔ pressure trace measures eviction and historical reacquisition against the causal input (15.7853ms)
+✔ pause policy stops before a fourth equivalent tool round (4.394ms)
+✔ soft compaction keeps the largest complete tool tail that meets the token budget (1.4675ms)
+✔ tool generation, finalized requests, results, and the final answer update the GUI without round buffering (3.4551ms)
+✔ bounded audit exposes read-only research tools and gives the same model one tool-free final report (3.4673ms)
+✔ bounded audit converts research output exhaustion into one tool-free final report (2.0687ms)
+✔ normal rounds send the explicit generation cap that was used as the reserve (1.295ms)
+✔ the default recovery cap follows a larger configured output reserve instead of silently lowering it (0.0611ms)
+✔ new compactor configuration defaults to hybrid and preserves every explicit mode (0.1013ms)
+✔ normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back (2.2295ms)
+✔ a recovery that reaches its own limit is recorded once and is never retried recursively (2.0057ms)
+✔ reasoning-only and tool-argument output limits do not enter report recovery (2.3773ms)
+✔ bounded audit makes zero final model calls after user cancellation (2.0075ms)
+✔ final delivery accepts only a known normal stop and a real report (0.6219ms)
+✔ structured final tool requests are never accepted as a completed report (0.1154ms)
+✔ a denied mutation call keeps the SDK confirmation call ID in emitted messages (4.1427ms)
+✔ allowed ID-less tool calls register once across guard and finalized callbacks (3.1802ms)
+✔ round control never swallows an external abort (0.1468ms)
+✔ round control never swallows an unrelated lookalike error (0.0967ms)
+✔ round telemetry records the SDK finish reason without exposing result bodies (0.1035ms)
+✔ raw tool intent streaming detection is invariant across tag splits (0.3103ms)
+✔ final assistant message can authorize fresh planning when fragment callbacks are absent (0.1263ms)
+✔ fresh read-only planning retry has no hidden audit deadline in normal mode (0.1323ms)
+✔ raw intent classification never aliases unknown or withheld mutation names (0.3581ms)
+✔ completed read fingerprints require a causal successful result and current raw content (0.6414ms)
+✔ semantic result fingerprints ignore random snapshot metadata but retain evidence changes (0.1126ms)
+✔ within-generation pause aborts only the owned round and reports a clean pause (0.1747ms)
+✔ final context fitness is exact at the reserve boundary (0.1806ms)
+✔ context measurement reports tool schema cost separately from full prompt tokens (0.1585ms)
+✔ generation budget resolver clamps only to measured headroom and rejects unsafe space (0.066ms)
+✔ reserve pressure gets one adaptive tool-free final report instead of an immediate rejection (2.2054ms)
+✔ context budget measures a narrowed registered Git catalogue before tools-disabled finalization (4.6722ms)
+✔ context budget uses FINAL_REPORT_ONLY when the measured narrowed catalogue still does not fit (4.3194ms)
+✔ final raw git_diff repair uses a newly measured candidate and preserves a second terminal report (11.0333ms)
+✔ Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes (16.9443ms)
+✔ Unity-marked project uses public schemas and actual temporary Git for mixed raw Git repair (3637.9797ms)
+✔ raw tool text cut by the output cap is classified as tool-argument generation (0.2201ms)
+✔ initial raw tool output records the provider boundary when the measured structured catalogue fits (4.4737ms)
+✔ no-progress recovery delivers a safe partial report without task completion (6.2631ms)
+✔ recovery progress counts new source/archive coverage, not response fingerprints (0.8741ms)
+✔ archive-only raw recovery exposes the verified Git source catalogue and reaches a real source page (6486.555ms)
+✔ deterministic working context projects a completed large result and exposes bounded rehydration (3077.9876ms)
+✔ raw Git replan keeps the archive reader beside the public source reader and consumes the archive (3053.4776ms)
+✔ low-pressure Git page stays raw for its first consumer without a semantic round trip (6.0973ms)
+✖ aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only (3800.0696ms)
+✔ image content keeps prediction alive and skips only the durable working-window commit (3050.5612ms)
+✔ working input target reports the mandatory floor without deleting the current request (2.8389ms)
+✔ hybrid context makes one tool-free semantic handoff and keeps it out of visible output (3156.3095ms)
+✔ invalid hybrid summary is discarded without retry or report recovery (3053.4516ms)
+✔ a failed hybrid summary enters one-round cooldown while deterministic facts continue (10248.3854ms)
+✔ BOUNDED keeps its original call budget and does not start a hybrid summary (3056.2022ms)
+✔ cancellation during the hybrid summary prevents the normal model call (3072.9843ms)
+✔ a signed next user turn restores the compacted prefix and appends only the new delta (5795.8619ms)
+✔ context-budget rescue keeps the normal output reserve when it fits (2.6771ms)
+✔ bounded context-budget rescue keeps the bounded final token and timeout limits (2.2161ms)
+✖ an input with less than the minimum safe final output still skips the selected model call (2.2169ms)
+✔ tool-round stagnation requires equivalent calls and semantic results (0.8529ms)
+✔ within-generation repetition ignores long normal prose and detects repeated blocks (0.1632ms)
+✔ the compactor cannot be selected recursively as the token source (0.1885ms)
+✔ prompt processing progress is visible before the first generated token (1.5436ms)
+✔ prediction fragments stream reasoning into a thinking block and the answer into normal output (1.4219ms)
+✔ a tool follow-up keeps raw reasoning in model history while the GUI stays separated (2.8829ms)
+✔ plain answer fragments are appended once instead of waiting for the completed message (1.297ms)
+✔ streaming keeps a continuity footer out of the visible answer (53.2759ms)
+✔ T22 default availability observation traces final SDK input without changing it (2.6353ms)
+✔ B mode injects only current-input facts and reports measured prompt overhead (2.4643ms)
+✔ T10 injected metadata participates in the final budget gate (3.2498ms)
+✔ T14 injected facts do not block a model-selected reread (2.5531ms)
+✔ availability off mode leaves both model input and availability telemetry disabled (1.519ms)
+✔ T09 compaction retains the newest completed tool exchange for its first consumer (1.105ms)
+✔ a new handler recomputes current availability instead of restoring a prior-input flag (1.5635ms)
+✔ T16 real cancellation distinguishes no result from a received partial result (0.5163ms)
+✔ tool-generation failure telemetry is causal and never promoted to a result (1.6674ms)
+ℹ tests 103
+ℹ suites 0
+ℹ pass 100
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 58566.4546
+
+✖ failing tests:
+
+test at test\prediction-loop.test.cjs:103:1
+✖ hybrid handler consumes toolCalls inputs across repeated compaction and delivers EOS (5126.4281ms)
+  AssertionError [ERR_ASSERTION]: [{"event":"context_low_water","executionId":"761ad3be-d32e-40db-9c54-e7b05d8543cb","modelInputId":"761ad3be-d32e-40db-9c54-e7b05d8543cb:prediction-9","roundIndex":8,"contextLength":38912,"configuredTargetTokens":18000,"configuredTriggerTokens":22000,"requiredGenerationReserve":8192,"safetyMarginTokens":2048,"mandatoryFloorTokens":13837,"configuredLowWaterTokens":12672,"effectiveLowWaterTokens":13837,"effectiveHighWaterTokens":16896,"hardInputCeiling":28672,"reservedToolResultTokens":3584,"requiredPostToolOverhead":8192,"projectedNextInput":28776,"preDispatchCompaction":true,"minimumReadResultTokens":2048,"nextActionFit":true,"targetUnreachable":true,"blockingComponent":"mandatory_objective_evidence_and_template","tokenMetric":"exact_templated_model_input","beforeExactInputTokens":17000,"candidateMeasurements":[{"candidate":"complete_exchange_cap_16","finalExactInputTokens":17000,"accepted":false},{"candidate":"complete_exchange_cap_8","finalExactInputTokens":16149,"accepted":false},{"candidate":"complete_exchange_cap_4","finalExactInputTokens":15173,"accepted":false},{"candidate":"complete_exchange_cap_2","finalExactInputTokens":14685,"accepted":false},{"candidate":"checkpoint_budget_1","finalExactInputTokens":14685,"accepted":false},{"candidate":"checkpoint_budget_0.5","finalExactInputTokens":14159,"accepted":false},{"candidate":"checkpoint_budget_0.25","finalExactInputTokens":13896,"accepted":false},{"candidate":"checkpoint_budget_0.125","finalExactInputTokens":13896,"accepted":false},{"candidate":"mandatory_floor","finalExactInputTokens":13837,"accepted":true}],"selectedCandidate":"mandatory_floor","postHistoryTokens":17519,"postProjectionTokens":16717,"postCompactionTokens":13556,"postMetadataTokens":13837,"postToolSchemaTokens":13837,"finalExactInputTokens":13837,"stageFingerprints":{"history":"5f942df61dd9d6e757579d8c1435d88cdb085afd8b476f24605cd60f23222840","projection":"3cd4d6bd0d7217b8fbb77eb0730d9df23360d7200e42e76409e34606af1e0e25","compaction":"6213b1c9c80d8b07068d0952617a2cac7b701446e91d61ca8c7a9c202051e7ce","metadata":"6c14ba40e45d76691b6bc86a6250116f8030c2616a3056b854ebdee6ba82c8d3","final":"6c14ba40e45d76691b6bc86a6250116f8030c2616a3056b854ebdee6ba82c8d3"},"measurementCost":{"measurementCalls":7,"measurementMs":0,"templateCalls":7,"tokenCountCalls":9,"contextLengthCalls":7,"cacheHits":8,"scope":"round_input_assembler","cacheScope":"same_round_model_handle"},"targetDelta":0,"compactionSucceeded":true,"compactionRequested":true,"lowTargetMet":true,"mandatoryFloorException":true,"hardFit":true,"disposition":"mandatory_floor_exception","canRun":true,"metadataTokens":0,"toolSchemaTokens":12283,"reclaimRatio":0.18605882352941178}]
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:128:10)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test\prediction-loop.test.cjs:3082:1
+✖ aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only (3800.0696ms)
+  Error: CONTEXT_BUDGET_EXCEEDED: final model input exceeds the context budget by 3088 tokens
+      at prepareRoundInput (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-input.js:175:19)
+      at async C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:284:34
+      at async TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3123:3)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7)
+
+test at test\prediction-loop.test.cjs:3490:1
+✖ an input with less than the minimum safe final output still skips the selected model call (2.2169ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'context_budget'
+  
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3506:10)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'context_budget',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

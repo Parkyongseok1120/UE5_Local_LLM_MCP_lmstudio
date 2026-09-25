@@ -1,0 +1,20 @@
+{
+  "modelInputId": "b7cbcab6-c3d3-4f3d-b3fa-1d9da9031802:research-recovery-8",
+  "roundIndex": 9,
+  "exactInputTokens": 20121,
+  "compacted": true,
+  "low": 20121,
+  "high": 22000,
+  "lowMet": true,
+  "mandatoryFloor": 20121,
+  "finishReason": "toolCalls",
+  "backendStats": {
+    "stopReason": "toolCalls",
+    "promptTokensCount": 20121,
+    "predictedTokensCount": 115,
+    "totalTokensCount": 20236
+  },
+  "prefillMs": 29470,
+  "cumulativeExactInputTokens": 490141,
+  "postCompactionCumulativeExactInputTokens": 384633
+}

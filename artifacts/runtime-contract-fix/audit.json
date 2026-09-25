@@ -1,0 +1,348 @@
+{
+  "mode": "architecture",
+  "existing": [
+    "PredictionLoop: 실행 단계 연결과 UI, 입력 준비, 복구 후보 선택도 함께 보유",
+    "ContextManager: 입력 조립, 압축 후보 측정, Low-water 검증, 영속 commit",
+    "WorkingContext: archive/ref pin, 첫 소비 상태, projection, 영속 window",
+    "BudgetBroker: 모델 예산과 라운드별 반환 예산 예약",
+    "ToolBoundary: scope/권한/예산 검사, SDK dispatch 승인",
+    "Files.read + Unity server: 파일 범위 조회와 최종 응답 메타데이터"
+  ],
+  "proposed": [
+    "정상 prediction 완료에 SDK toolCalls 포함; RoundTransaction은 동일 판정 재사용",
+    "소비된 raw/projection 결과의 중복 capture는 재고정하지 않음",
+    "파일 조회자가 완전한 줄 페이지를 선택하되 Unity adapter가 최종 envelope를 제공하여 동일 예산으로 측정"
+  ],
+  "doNotDuplicate": [
+    "DeliveryController의 최종 답변 판정",
+    "BudgetBroker의 예약/정확 입력 구분",
+    "범위/해시/continuation 계약",
+    "pending evidence 보호 검사"
+  ],
+  "invariants": [
+    "toolCalls 완료는 최종 보고 완료가 아님",
+    "새 반환 결과는 다음 소비자까지 보존",
+    "실패/취소/잘림은 소비 완료로 인정하지 않음",
+    "본문은 줄 중간에서 자르지 않으며 합친 페이지는 원문과 일치",
+    "exact input <= effective Low-water 검사를 우회하지 않음"
+  ],
+  "impactedSurfaces": [
+    "round-loop.ts",
+    "execution-state.ts",
+    "working-context.js",
+    "shared-tool-core/files.js",
+    "lmstudio-unity-mcp/src/server.js",
+    "lmstudio-unity-mcp/src/catalog.js",
+    "독립 회귀와 production handler 통합 테스트",
+    "설치 revision 114"
+  ],
+  "validationPlan": [
+    "기존 GUI 실패 로그와 실제 toolCalls stop reason 대조",
+    "수정 전 실패 재현",
+    "compactor/Unity/Unreal 회귀",
+    "기존 모델 38912 컨텍스트 GUI 380K 누적 테스트",
+    "이전 HEAD 868dedf 및 diff를 rollback 기준으로 보존"
+  ],
+  "claims": [
+    {
+      "claim": "SDK의 정상 toolCalls 종료를 미완료로 분류하여 이미 소비한 결과가 pending으로 남고 압축 후 예외를 유발했다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:isCompletedPredictionReason",
+          "observation": "수정 전 EOS/stopString만 정상 종료로 인정"
+        },
+        {
+          "kind": "runtime",
+          "location": "artifacts/runtime-contract-fix/before-runtime-events.json",
+          "observation": "GUI 실패 직전 라운드들의 stopReason은 toolCalls"
+        },
+        {
+          "kind": "runtime",
+          "location": "artifacts/runtime-contract-fix/before-errors.log",
+          "observation": "captureExposure -> reconcileRefs에서 예외"
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/runtime-contract-fix/test-compactor.log",
+          "observation": "toolCalls 입력 소비, 새 결과 pending, 반복 압축 후 EOS 통합 테스트 통과"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/round-loop.ts",
+          "symbol": "onPredictionCompleted(toolCalls)"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/round-loop.ts",
+          "symbol": "isCompletedPredictionReason"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts",
+          "symbol": "captureExposure completed 호출 여부"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "src/working-context.js",
+          "symbol": "reconcileRefs pending 검사"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/working-context.js:reconcileRefs",
+          "observation": "아직 소비하지 않은 실제 결과 누락은 계속 차단해야 함"
+        },
+        {
+          "kind": "test",
+          "location": "test/tool-round-lifecycle.test.cjs",
+          "observation": "취소/잘림 및 최종 보고를 별도 검사"
+        }
+      ],
+      "unknowns": [
+        "수정 전 모델이 실제로 각 사실을 이해했는지는 SDK 입력 노출 완료와 다르다."
+      ]
+    },
+    {
+      "claim": "파일 byteBudget 축소 시 줄 수를 조정하지 않고 전체 요청 범위와 두 단계 envelope를 각각 검사하여 작은 페이지로 가능한 읽기도 실패했다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/files.js:Files.read",
+          "observation": "기존 fixed limit 범위를 bounded로 검사"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unity-mcp/src/server.js:createRuntime.call",
+          "observation": "이후 workspace identity/range 메타데이터 추가 후 같은 예산 재검사"
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/runtime-contract-fix/test-unity.log",
+          "observation": "2048-byte 전체 envelope 페이지를 끝까지 합친 원문 일치와 oversized single-line 오류 통과"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/tool-boundary.ts",
+          "symbol": "reserveReadResult"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "shared-tool-core/files.js",
+          "symbol": "Files.read"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-unity-mcp/src/server.js",
+          "symbol": "fileObservation"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "shared-tool-core/files.js",
+          "symbol": "bounded response_budget_exceeded"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/files.js:bounded",
+          "observation": "한 줄조차 못 담는 예산에서의 명시적 오류는 유지"
+        },
+        {
+          "kind": "runtime",
+          "location": "artifacts/runtime-contract-fix/before-runtime-events.json",
+          "observation": "Shared read-result denial은 held 예약을 합산한 배치 안전 장치이며 그 자체는 잘못된 예산 초과가 아님"
+        }
+      ],
+      "unknowns": [
+        "모든 엔진 도구가 동일한 byteBudget 계약을 지원하지는 않는다."
+      ]
+    },
+    {
+      "claim": "PredictionLoop에 입력 긴급 압축과 복구 후보 측정/단계 선택이 여전히 남아 있어 orchestration 이외의 정책 소유가 완전히 분리되지 않았다.",
+      "claimType": "architecture",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "src/prediction-loop.ts:assembleRecoveryCandidate",
+          "observation": "inline budget clamp, regular/emergency compaction 및 low-water 후보 선택이 병존"
+        },
+        {
+          "kind": "project_source",
+          "location": "src/context-manager.ts:prepareWorkingInput/enforceLowWater",
+          "observation": "두 단계 후보 탐색이 서로 다른 진입 조건을 가짐"
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/budget-broker.ts",
+          "observation": "예산 계산 SSOT와 독립 테스트는 이미 존재"
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/runtime-contract-fix/test-compactor.log",
+          "observation": "기존 range/capability/exposure/dispatch 회귀 통과"
+        }
+      ],
+      "unknowns": [
+        "Unity 파일 조회 이외의 실제 엔진 작업과 다른 모델의 장기 실행은 이번 live 테스트 범위가 아니다."
+      ]
+    },
+    {
+      "claim": "같은 READ_RECOVERY 구간에서 압축 후 exact 입력과 mandatory floor가 함께 상승하여 안정된 Low 복귀를 검증하지 못한다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "artifacts/runtime-contract-fix/live-gui.json",
+          "observation": "첫 아홉 압축 입력: 19351,20274,21244,22063,21162,21956,22571,23303,23507. 각 값이 effectiveLow/mandatoryFloor와 같음."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:508",
+          "observation": "maxCurrentTurnMessages=0 후보도 생성된 checkpoint를 포함하여 floor로 측정"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:33",
+          "observation": "effectiveLow=max(configuredLow,mandatoryFloor)"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/context-manager.ts:enforceLowWater",
+          "symbol": "buildCompactedHistory floor candidate"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/budget-broker.ts:watermarks",
+          "symbol": "effectiveLowWaterTokens"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/runtime-contract-fix/live-gui.json",
+          "symbol": "completed prediction exact input and low-water"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/direct-compaction-core.js:599",
+          "observation": "checkpoint 문자 수 제한이 있으므로 무한 증가 자체가 증명된 것은 아님"
+        },
+        {
+          "kind": "runtime",
+          "location": "artifacts/runtime-contract-fix/live-gui.json",
+          "observation": "모든 해당 입력은 동적으로 상승한 effectiveLow를 충족; 새 사용자 턴 첫 입력은 17242로 하락"
+        }
+      ],
+      "unknowns": [
+        "장시간 후 checkpoint 포화 상태와 동일 단계 정상상태 baseline은 미확인; 새로운 사용자 턴 하락을 자동 compaction 안정성으로 취급하지 않음."
+      ]
+    },
+    {
+      "claim": "정상 모드의 연속 읽기가 다음 페이지를 반환하고 있는데도 auditResearchRounds 한도로 최종 보고 단계에 들어가 미완료 종료한다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1342",
+          "observation": "boundedAudit 여부와 무관하게 recoveryCoordinator.advance에 config.auditResearchRounds 전달"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:21",
+          "observation": "진행한 pagination 횟수가 maximum 이상이면 research_recovery_complete"
+        },
+        {
+          "kind": "runtime",
+          "location": "artifacts/runtime-contract-fix/live-gui-events.json",
+          "observation": "첫 실행12회 recovery 후 lastLine280/total680/hasMore=true, final report unresolved_tool_intent"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts:628",
+          "symbol": "blocked_next_action to FINAL_DELIVERY"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts",
+          "symbol": "fresh tool planning / READ_RECOVERY"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/recovery-coordinator.ts:21",
+          "symbol": "paginationBound"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts:1346",
+          "symbol": "finishResearch"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/runtime-contract-fix/live-gui-events.json",
+          "symbol": "partial_report_delivery unresolved_tool_intent"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/delivery-controller.ts:evaluate",
+          "observation": "부분 보고를 taskCompleted로 승격하지 않는 방어는 정상 동작"
+        },
+        {
+          "kind": "runtime",
+          "location": "artifacts/runtime-contract-fix/live-verification.json",
+          "observation": "반환된 페이지의 내용/해시/범위는 원문과 일치"
+        }
+      ],
+      "unknowns": [
+        "bounded recovery의 제한 자체는 안전 정책일 수 있으나 일반 장기 조회를 완료시키는 실행 정책과 연결되지 않았다."
+      ]
+    }
+  ]
+}

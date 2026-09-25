@@ -12,6 +12,24 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def plant_compactor_sdk_fixture(plugin_dir: Path) -> None:
+    """Fake LMS dependency tree with the real, version-checked patch command.
+
+    The actual upstream act loop is exercised separately by the Node suite.
+    Installer fixtures must still execute and validate their post-install patch.
+    """
+    scripts = plugin_dir / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs", scripts)
+    (plugin_dir / "package.json").write_text(json.dumps({"scripts": {
+        "patch:sdk": "node scripts/patch-lmstudio-sdk.cjs"}}), encoding="utf-8")
+    sdk = plugin_dir / "node_modules/@lmstudio/sdk"
+    (sdk / "dist").mkdir(parents=True, exist_ok=True)
+    (sdk / "package.json").write_text('{"version":"1.5.0"}', encoding="utf-8")
+    source = "handlePredictionEnd: endPacket => {\n                const predictionResult = makePredictionResult({"
+    for name in ["index.cjs", "index.mjs"]:
+        (sdk / "dist" / name).write_bytes(source.encode("utf-8"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 AGENT_MCP_ROOT = ROOT / "lmstudio-unreal-agent-mcp"

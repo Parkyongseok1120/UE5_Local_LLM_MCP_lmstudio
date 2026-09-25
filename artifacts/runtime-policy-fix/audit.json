@@ -1,0 +1,314 @@
+{
+  "mode": "architecture",
+  "existing": [
+    "PredictionLoop: 실행 단계 연결과 UI, 입력 준비, 복구 후보 선택도 함께 보유",
+    "ContextManager: 입력 조립, 압축 후보 측정, Low-water 검증, 영속 commit",
+    "WorkingContext: archive/ref pin, 첫 소비 상태, projection, 영속 window",
+    "BudgetBroker: 모델 예산과 라운드별 반환 예산 예약",
+    "ToolBoundary: scope/권한/예산 검사, SDK dispatch 승인",
+    "Files.read + Unity server: 파일 범위 조회와 최종 응답 메타데이터"
+  ],
+  "proposed": [
+    "필수 objective/constraint/progress capsule과 선택적 checkpoint 항목을 분리하고 exact input으로 선택적 예산을 줄인다.",
+    "기존 archive reader에 scoped catalog 조회를 추가하여 압축으로 ID가 모델 입력에서 사라져도 원문을 다시 찾는다.",
+    "일반 모드의 실제 source progress에는 audit pagination 한도를 적용하지 않으며 오류/무진전/취소 경계는 유지한다.",
+    "ContextManager와 입력 준비 모듈로 compaction 및 recovery candidate 정책을 모으고 loop는 실행 전이를 적용한다.",
+    "SDK 1.5.0 성공 종료에서 finished 표시를 보정하는 버전 검증 패치로 닫힌 채널 cancel을 막는다.",
+    "Semantic handoff는 제한 시간 종료를 정확히 분류하고 같은 실행에서 실패한 선택적 요약을 반복하지 않는다."
+  ],
+  "doNotDuplicate": [
+    "DeliveryController의 최종 답변 판정",
+    "BudgetBroker의 예약/정확 입력 구분",
+    "범위/해시/continuation 계약",
+    "pending evidence 보호 검사"
+  ],
+  "invariants": [
+    "toolCalls 완료는 최종 보고 완료가 아님",
+    "새 반환 결과는 다음 소비자까지 보존",
+    "실패/취소/잘림은 소비 완료로 인정하지 않음",
+    "본문은 줄 중간에서 자르지 않으며 합친 페이지는 원문과 일치",
+    "exact input <= effective Low-water 검사를 우회하지 않음",
+    "필수 목표/명시적 제약/최신 미소비 결과를 예산 때문에 버리지 않는다.",
+    "선택적 checkpoint는 mandatory floor를 올리지 않는다.",
+    "아카이브 검색은 현재 대화 scope의 검증된 과거 record만 반환한다.",
+    "도구 scope/range/exposure/dispatch 계측과 사용자 취소를 보존한다.",
+    "일반 조회의 진전은 최종 완료가 아니며 무진전은 무한 재시도로 숨기지 않는다."
+  ],
+  "impactedSurfaces": [
+    "round-loop.ts",
+    "execution-state.ts",
+    "working-context.js",
+    "shared-tool-core/files.js",
+    "lmstudio-unity-mcp/src/server.js",
+    "lmstudio-unity-mcp/src/catalog.js",
+    "독립 회귀와 production handler 통합 테스트",
+    "설치 revision 114"
+  ],
+  "validationPlan": [
+    "기존 GUI 실패 로그와 실제 toolCalls stop reason 대조",
+    "수정 전 실패 재현",
+    "compactor/Unity/Unreal 회귀",
+    "기존 모델 38912 컨텍스트 GUI 380K 누적 테스트",
+    "이전 HEAD 868dedf 및 diff를 rollback 기준으로 보존",
+    "동일 tool schema와 동등한 페이지를 사용한 최소 3-cycle 실제-handler 회귀",
+    "정상 조회 12회를 넘는 생산 handler 회귀 및 기존 bounded 제한 유지",
+    "SDK patch 적용 전후 완료/도구 실행/사용자 취소 검증",
+    "revision 115 설치 후 동일 GUI 모델에서 380K live 및 원문/최종 사실 검증"
+  ],
+  "claims": [
+    {
+      "claim": "입력 후보 선택 정책은 round-input으로, 최종 exact post-condition은 ContextManager로, 선택적 의미 요약은 semantic-handoff로 분리되었다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "observation": "ready/recover/finalize disposition 반환; loop는 전이 적용"
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/runtime-policy-fix/test-compactor.log",
+          "observation": "355 pass; 실제 handler 예산/최신 evidence/최종 전달 회귀"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts",
+          "symbol": "prepareRoundInput 호출"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/round-input.ts",
+          "symbol": "입력 후보와 recoveryDisposition"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/context-manager.ts",
+          "symbol": "enforceLowWater"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts",
+          "symbol": "ExecutionState transition"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "src/round-loop.ts",
+          "symbol": "runOneToolRound"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/prediction-loop.ts",
+          "observation": "1178줄의 UI/telemetry/SDK 연결은 남음; 모든 orchestration이 작다는 주장은 하지 않음"
+        }
+      ],
+      "unknowns": [
+        "유한한 회귀로 모든 모델 행동과 영구 실행을 증명하지 않는다."
+      ]
+    },
+    {
+      "claim": "선택적 checkpoint가 필수 floor를 올리지 않도록 분리했고, archive ID가 입력에서 사라져도 기존 reader의 scope 제한 catalog로 재탐색할 수 있다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "src/checkpoint-budget.js",
+          "observation": "필수 capsule와 선택적 whole records 분리"
+        },
+        {
+          "kind": "project_source",
+          "location": "src/evidence-archive.js",
+          "observation": "catalog: load를 통한 scope/TTL/integrity 검증 및 bounded 응답"
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/runtime-policy-fix/test-policy.log",
+          "observation": "65-page fixed derived LOW; 12 archived entries paginated rediscovery"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/context-manager.ts",
+          "symbol": "mandatory floor candidate"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/checkpoint-budget.js",
+          "symbol": "optional records fit budget"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/context-manager.ts",
+          "symbol": "final exact input <= effective LOW"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "src/working-context.js",
+          "symbol": "action=catalog then exact ID/version read"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "test/runtime-policy.test.cjs",
+          "symbol": "bounded historical-only entries and body verification"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/budget-broker.ts",
+          "observation": "실제 필수 입력이 configured LOW보다 크면 floor exception은 유지"
+        }
+      ],
+      "unknowns": [
+        "archive quota/TTL을 넘어선 과거 자료는 명시적 unavailable일 수 있다."
+      ]
+    },
+    {
+      "claim": "SDK 1.5.0 원본 internalAct는 정상 prediction end에서 finished를 설정하지 않아 round boundary abort가 닫힌 채널에 전달된다. 해당 lifecycle bit와 실제 설치 대상의 적용 경로를 보정했다.",
+      "claimType": "framework_semantics",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "framework_source",
+          "location": "@lmstudio/sdk@1.5.0/dist/index.cjs::internalAct",
+          "observation": "handleError와 abortListener는 finished를 설정하지만 원본 handlePredictionEnd는 누락"
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/patch-lmstudio-sdk.cjs",
+          "observation": "버전/대상 확인 후 두 배포 entry에 한 줄 보정"
+        },
+        {
+          "kind": "test",
+          "location": "test/runtime-policy.test.cjs",
+          "observation": "실제 upstream 함수 실행: before closed cancels=1, after=0; active cancel=1 유지"
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_installer.py::test_compactor_patches_installed_sdk_after_home_sync_before_activation",
+          "observation": "custom home 동기화 후 patch, patch 실패 시 활성화 금지"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "@lmstudio/sdk::internalAct",
+          "symbol": "handlePredictionEnd"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "scripts/patch-lmstudio-sdk.cjs",
+          "symbol": "finished=true"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "@lmstudio/sdk::abortListener",
+          "symbol": "완료된 prediction channel 취소 생략"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "install.py::_install_context_compactor",
+          "symbol": "설치 대상 patch:sdk"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/runtime-policy-fix/live-run.json",
+          "symbol": "실제 설치 SDK 패치 존재 및 SHA256 확인"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "framework_source",
+          "location": "@lmstudio/sdk::SimpleToolCallContext",
+          "observation": "도구 실행은 outer abort signal을 사용하므로 active tool cancellation은 별도 유지"
+        }
+      ],
+      "unknowns": [
+        "다른 SDK 버전에는 적용하지 않는다. 새 버전의 직접 소스를 재검토해야 한다."
+      ]
+    },
+    {
+      "claim": "일반 모드의 진전 있는 조회에는 audit pagination cap을 적용하지 않지만 bounded 모드, 무진전, 오류, 사용자 취소의 경계는 유지한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "src/recovery-coordinator.ts::advance",
+          "observation": "bounded 인자와 progress/error 별도 정책"
+        },
+        {
+          "kind": "test",
+          "location": "test/runtime-policy.test.cjs",
+          "observation": "정상 40페이지, bounded 12회, no-progress 종료"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts",
+          "symbol": "observeRecoveryProgress"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/recovery-coordinator.ts",
+          "symbol": "bounded && paginationRounds>=max"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "src/execution-state.ts",
+          "symbol": "finishResearch 또는 계속 조회"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "src/delivery-controller.ts",
+          "symbol": "최종 완료와 partial 전달 분리"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/delivery-controller.ts",
+          "observation": "진전 자체를 완료로 인정하지 않는 기존 방어 유지"
+        }
+      ],
+      "unknowns": [
+        "실제 모델이 스스로 조기에 답변하거나 오류를 내는 가능성은 남는다."
+      ]
+    }
+  ],
+  "scope": "Revision 115 implementation audit. Before-fix five findings remain in audit-plan.json and runtime-contract-fix."
+}

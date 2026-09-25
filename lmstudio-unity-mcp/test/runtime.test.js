@@ -221,6 +221,28 @@ test("query cursor detects changed state and UTF-8 budget is enforced", async t 
   f.put("Assets/large.txt", "한".repeat(3000));
   assert.equal((await f.call("read_file", { path: "Assets/large.txt", byteBudget: 1024 })).errorCode, "response_budget_exceeded");
 });
+
+test("read_file fits complete line pages including the final workspace envelope", async t => {
+  const f = fixture(t);
+  const lines = Array.from({length:80},(_,n)=>`${n}: 한글 😀 "quoted" \\ ${'x'.repeat(65)}`);
+  f.put('Assets/paged.txt',lines.join('\n'));
+  let startLine=1, pages=0, observed=[], digest;
+  do {
+    const value=await f.call('read_file',{path:'Assets/paged.txt',startLine,limit:80,byteBudget:2048});
+    assert.equal(value.errorCode,undefined,JSON.stringify(value));
+    assert.ok(Buffer.byteLength(JSON.stringify(value))<=2048);
+    assert.equal(value.kind,'workspace_file_observation');
+    assert.ok(value.returnedLineCount>0);
+    assert.equal(value.endLine,startLine+value.returnedLineCount-1);
+    assert.deepEqual(value.range,{unit:'line',start:startLine,end:value.endLine,total:80});
+    digest ??=value.hash;assert.equal(value.hash,digest);
+    observed.push(...value.text.split('\n'));pages++;
+    startLine=value.nextStartLine;
+    assert.equal(value.hasMore,startLine!==null);
+  } while(startLine!==null && pages<81);
+  assert.ok(pages>1 && pages<81);
+  assert.deepEqual(observed,lines);
+});
 test("RPC handshake binds identity and never emits discovery token", async t => {
   const f = fixture(t); let requests = 0;
   const secret = "a".repeat(64);

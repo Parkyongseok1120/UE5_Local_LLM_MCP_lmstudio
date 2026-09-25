@@ -1,0 +1,1947 @@
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 20%]
+..........................................................s............. [ 26%]
+........................................................................ [ 33%]
+.....................................................ssssssss........... [ 40%]
+.......................F.FFF...................F....F..FF.F.FFFFF.F..... [ 47%]
+...........................F.....s...................................... [ 53%]
+............................................................s........... [ 60%]
+....................................................ss.................. [ 67%]
+............................................s........................... [ 74%]
+............................................................s........... [ 80%]
+.....................................ss.......s......................... [ 87%]
+........................................................................ [ 94%]
+.....................................s.......................            [100%]
+================================== FAILURES ===================================
+_____________ test_launcher_selection_ignores_saved_custom_engine _____________
+
+args = Namespace(profile='standard', components=None, unity_project=None, unity_editor=None, unity_dotnet=None, unity_symbol_..._settings=None, lmstudio_url='http://localhost:1234/v1', _engine_selection='launcher', _workspace_root_defaulted=False)
+resolved_components = None
+
+    def install(
+        args: argparse.Namespace,
+        *,
+        resolved_components: tuple[str, set[str]] | None = None,
+    ) -> dict[str, Any]:
+        profile, components = resolved_components or _resolve_components(args)
+        # Real installs re-exec under Python 3.12 in main(); unit tests may call install()
+        # directly on older interpreters with --skip-runtime-bootstrap.
+        python_exe = Path(getattr(args, "runtime_python", None) or sys.executable).resolve()
+        if components == {"unity"}:
+            from installer.unity_install import install_unity
+            return install_unity(args, ROOT, Transaction, InstallLock)
+        if not (SKILL_SOURCE / "SKILL.md").is_file():
+            raise FileNotFoundError(f"skill source missing: {SKILL_SOURCE}")
+    
+        args.codex_home = args.codex_home.expanduser().resolve()
+        args.lmstudio_home = args.lmstudio_home.expanduser().resolve()
+        args.state_home = args.state_home.expanduser().resolve()
+        args.workspace_root = [path.expanduser().resolve() for path in args.workspace_root]
+        configured_engine = os.environ.get("UNREAL_ENGINE_ROOT", "").strip()
+        if "unreal" in components and not args.engine_root and configured_engine:
+            environment_engine = Path(configured_engine).expanduser().resolve()
+            if not _engine_root_is_valid(environment_engine):
+                raise ValueError(
+                    f"UNREAL_ENGINE_ROOT does not contain a usable Unreal Engine layout: {environment_engine}"
+                )
+            args.engine_root = environment_engine
+            args._engine_selection = "environment"
+        if args.active_project:
+            args.active_project = args.active_project.expanduser().resolve()
+            if not args.active_project.is_file() or args.active_project.suffix.lower() != ".uproject":
+                raise ValueError(f"active project must be an existing .uproject file: {args.active_project}")
+            if args.active_project.parent not in args.workspace_root:
+                args.workspace_root.append(args.active_project.parent)
+        if args.engine_root:
+            args.engine_root = args.engine_root.expanduser().resolve()
+            if not _engine_root_is_valid(args.engine_root):
+                raise ValueError(f"engine root does not contain a usable Unreal Engine layout: {args.engine_root}")
+        args.rule_path = [path.expanduser().resolve() for path in args.rule_path]
+        if args.cline_settings:
+            args.cline_settings = args.cline_settings.expanduser().resolve()
+    
+        unreal_node_exe: Path | None = None
+        unreal_agent_root: Path | None = None
+        unreal_agent_dependency: dict[str, Any] | None = None
+        if "unreal" in components:
+            node = str(getattr(args, "runtime_node", None) or "") or shutil.which("node")
+            if not node:
+                raise FileNotFoundError("Node.js 20+ is required for the Unreal adapter")
+            unreal_node_exe = Path(node).resolve()
+            version = subprocess.run(
+                [str(unreal_node_exe), "--version"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip().lstrip("v")
+            if int(version.split(".")[0]) < 20:
+                raise RuntimeError(f"Node.js 20+ required, found {version}")
+            unreal_agent_root = ROOT / "lmstudio-unreal-agent-mcp"
+            if not (unreal_agent_root / "src" / "direct-server.js").is_file():
+                raise FileNotFoundError("Unreal agent MCP source is missing")
+            if args.skip_deps:
+                unreal_agent_dependency = (
+                    {
+                        "ok": None,
+                        "entrypoint": UNREAL_AGENT_SDK_ENTRYPOINT,
+                        "source": "dry_run_not_checked",
+                    }
+                    if args.dry_run
+                    else _verify_unreal_agent_dependency(
+                        unreal_node_exe,
+                        unreal_agent_root,
+                        dependency_source="preinstalled_skip_deps",
+                    )
+                )
+    
+        allowed_roots = [args.codex_home, args.lmstudio_home, args.state_home, ROOT]
+        allowed_roots.extend(path.parent for path in args.rule_path)
+        if args.cline_settings:
+            allowed_roots.append(args.cline_settings.parent)
+        unity_args = None
+        if "unity" in components:
+            from installer.unity_install import install_unity
+            unity_args = copy.copy(args)
+            # Unreal's .uproject must never be used as the Unity project root.
+            unity_args.active_project = None
+            if not unity_args.unity_mcp_config and components & {"lmstudio", "unreal"}:
+                unity_args.unity_mcp_config = args.lmstudio_home / "mcp.json"
+            preflight_args = copy.copy(unity_args)
+            preflight_args.dry_run = True
+            unity_plan = install_unity(preflight_args, ROOT, Transaction, InstallLock)
+            allowed_roots.extend([Path(unity_plan["project"]) / "Packages", Path(unity_plan["mcpConfig"]).parent])
+        for root in allowed_roots:
+            _reject_filesystem_root(root, "managed install root")
+        tx = Transaction(args.state_home, allowed_roots, dry_run=args.dry_run)
+        lock = InstallLock(args.state_home, dry_run=args.dry_run)
+        installed_skill = args.codex_home / "skills" / SKILL_NAME
+        report: dict[str, Any] = {
+            "ok": False,
+            "profile": profile,
+            "components": sorted(components),
+            "safeMode": not args.enable_agent_mode,
+            "agentMode": args.enable_agent_mode,
+            "dryRun": args.dry_run,
+            "headlessLmLink": bool(args.headless_lmlink),
+            "platform": platform.system(),
+            "safetyNormalizations": [],
+            "portableRulePaths": [],
+            "clineSettingsPath": str(args.cline_settings) if args.cline_settings else None,
+            "activeProject": str(args.active_project) if args.active_project else None,
+            "projectSearchRoots": [str(path) for path in args.workspace_root],
+            "engineRoot": str(args.engine_root) if args.engine_root else None,
+        }
+        if unreal_agent_dependency is not None:
+            report["unrealAgentDependency"] = unreal_agent_dependency
+        external_actions_started: list[str] = []
+        lock.acquire()
+        try:
+            if "codex" in components or "lmstudio" in components or "cline" in components:
+                tx.replace_directory(SKILL_SOURCE, installed_skill)
+    
+            mcp_config: dict[str, Any] | None = None
+            mcp_path = args.lmstudio_home / "mcp.json"
+            if "lmstudio" in components or "unreal" in components:
+                mcp_config = _load_json(mcp_path, {"mcpServers": {}})
+                if not isinstance(mcp_config, dict):
+                    raise ValueError("LM Studio mcp.json must contain a JSON object")
+    
+            if not args.enable_agent_mode and mcp_config is not None:
+                existing_servers = mcp_config.get("mcpServers")
+                existing_agent = existing_servers.get("unreal-agent") if isinstance(existing_servers, dict) else None
+                existing_env = existing_agent.get("env") if isinstance(existing_agent, dict) else None
+                if isinstance(existing_env, dict):
+                    for key in ("ALLOW_WRITE", "ALLOW_COMMANDS", "ALLOW_UNREAL_BUILD"):
+                        if str(existing_env.get(key, "0")).strip().lower() not in {"", "0", "false", "no", "off"}:
+                            report["safetyNormalizations"].append(f"unreal-agent.env.{key}")
+                        existing_env[key] = "0"
+                    for key in ("VALIDATE_ON_WRITE", "VALIDATE_ON_WRITE_TIMEOUT_MS", "MCP_REQUIRE_PLAN_AUTH"):
+                        if key in existing_env:
+                            report["safetyNormalizations"].append(f"unreal-agent.env.{key}")
+                            existing_env.pop(key, None)
+    
+            evidence_entry = _evidence_mcp_entry(python_exe, installed_skill)
+            if "lmstudio" in components:
+                preset_target = args.lmstudio_home / "config-presets" / "evidence-first-code-audit.preset.json"
+                tx.write_file(preset_target, PRESET_SOURCE.read_bytes())
+                assert mcp_config is not None
+                _merge_mcp_entry(mcp_config, "evidence-first", evidence_entry)
+    
+            if "unreal" in components:
+                assert unreal_node_exe is not None
+                assert unreal_agent_root is not None
+                node_exe = unreal_node_exe
+                agent_root = unreal_agent_root
+                if not args.skip_deps:
+                    npm = str(getattr(args, "runtime_npm", None) or "") or shutil.which("npm")
+                    if not npm:
+                        raise FileNotFoundError("npm is required for the Unreal adapter")
+                    if not args.dry_run:
+                        external_actions_started.append("unreal-agent-npm-dependencies")
+                    _run(
+                        [npm, "ci", "--no-audit", "--no-fund"],
+                        cwd=agent_root,
+                        dry_run=args.dry_run,
+                        timeout=600,
+                    )
+                    report["unrealAgentDependency"] = (
+                        {
+                            "ok": None,
+                            "entrypoint": UNREAL_AGENT_SDK_ENTRYPOINT,
+                            "source": "dry_run_planned_npm_ci",
+                        }
+                        if args.dry_run
+                        else _verify_unreal_agent_dependency(
+                            node_exe,
+                            agent_root,
+                            dependency_source="npm_ci",
+                        )
+                    )
+    
+                shared_path = args.lmstudio_home / "config" / "unreal-workspace.json"
+                agent_path = args.lmstudio_home / "config" / "unreal-agent.json"
+                shared = _load_json(shared_path, {})
+                if not isinstance(shared, dict):
+                    raise ValueError("unreal-workspace.json must contain a JSON object")
+                previous_shared = copy.deepcopy(shared)
+                if args.active_project:
+                    shared["activeProject"] = str(args.active_project)
+                    if _editor_export_path_is_default_like(shared.get("editorExportDir")):
+                        shared["editorExportDir"] = str(_default_editor_export_path(args.active_project))
+                else:
+                    shared.setdefault("activeProject", None)
+                shared["projectSearchRoots"] = [str(path) for path in args.workspace_root]
+                engine_binding = bind_installer_engine(
+                    active_project=args.active_project,
+                    requested_engine_root=args.engine_root,
+                    selection=getattr(args, "_engine_selection", ""),
+                    shared_config=shared,
+                    workspace_root=ROOT,
+                    detect_engine_root_fn=_detect_engine_root,
+                )
+                association = engine_binding.association
+                args.engine_root = engine_binding.engine_root
+                _sync_installer_index_settings(
+                    shared,
+                    engine_binding.engine_root,
+                    state_home=args.state_home,
+                )
+                configured_index = Path(str(shared.get("indexPath") or "")).expanduser()
+                if not configured_index.is_absolute():
+                    configured_index = ROOT / configured_index
+                configured_index = configured_index.resolve()
+                managed_index_root = (args.state_home / "indexes").resolve()
+                if _is_within(configured_index, managed_index_root):
+                    candidates = _prior_rag_index_candidates(
+                        previous_shared=previous_shared,
+                        existing_mcp=mcp_config,
+                        state_home=args.state_home,
+                        namespace=str(shared.get("indexNamespace") or "unreal58"),
+                    )
+                    report["ragIndexMigration"] = _migrate_managed_rag_index(
+                        configured_index,
+                        candidates,
+                        dry_run=args.dry_run,
+                    )
+                else:
+                    report["ragIndexMigration"] = {
+                        **_rag_index_readiness(configured_index),
+                        "action": "user_selected_index",
+                        "owner": "user_selected_index",
+                    }
+                shared["defaultPlatform"] = _default_platform()
+                shared.setdefault("defaultConfiguration", "Development")
+                shared["indexingTier"] = args.index_tier
+                tx.write_file(shared_path, _json_bytes(shared))
+                report["activeProject"] = shared.get("activeProject")
+                report["projectSearchRoots"] = list(shared.get("projectSearchRoots") or [])
+                report["engineRoot"] = shared.get("defaultEngineRoot") or None
+                agent_payload = {
+                    "projectSearchRoots": [str(path) for path in args.workspace_root],
+                    "defaultEngineRoot": str(shared.get("defaultEngineRoot") or ""),
+                    "defaultPlatform": _default_platform(),
+                    "defaultConfiguration": "Development",
+                    "activeProject": shared.get("activeProject"),
+                }
+                tx.write_file(agent_path, _json_bytes(agent_payload))
+                assert mcp_config is not None
+                report["safetyNormalizations"].extend(
+                    f"mcpServers.{name}:removed_legacy_python_control"
+                    for name in _remove_legacy_python_control_entries(mcp_config)
+                )
+                for name, entry in _unreal_entries(
+                    args,
+                    python_exe,
+                    node_exe,
+                    shared_path,
+                    agent_path,
+                    context_compactor_advisory=("context_compactor" in components),
+                    engine_association=association,
+                    index_path=configured_index,
+                ).items():
+                    _merge_mcp_entry(mcp_config, name, entry)
+    
+            settings_path = args.lmstudio_home / "settings.json"
+            if settings_path.exists() and ("lmstudio" in components or "unreal" in components):
+                settings = _load_json(settings_path, {})
+                chat = settings.get("chat") if isinstance(settings, dict) else None
+                patterns = chat.get("skipToolConfirmationPatterns") if isinstance(chat, dict) else None
+                if isinstance(patterns, list):
+                    removed = [pattern for pattern in patterns if pattern in UNSAFE_AUTO_APPROVALS]
+                    if removed:
+                        report["safetyNormalizations"].extend(
+                            f"settings.chat.skipToolConfirmationPatterns:{pattern}" for pattern in removed
+                        )
+                        chat["skipToolConfirmationPatterns"] = [
+                            pattern for pattern in patterns if pattern not in UNSAFE_AUTO_APPROVALS
+                        ]
+                        tx.write_file(settings_path, _json_bytes(settings))
+    
+            if mcp_config is not None:
+                tx.write_file(mcp_path, _json_bytes(mcp_config))
+    
+            if "portable_rule" in components:
+                if not args.rule_path:
+                    raise ValueError("portable_rule component requires at least one --rule-path")
+                rule = (SKILL_SOURCE / "references" / "portable-rule.md").read_bytes()
+                for path in args.rule_path:
+                    tx.write_file(path, rule)
+                report["portableRulePaths"] = [str(path) for path in args.rule_path]
+    
+            if "cline" in components:
+                if not args.cline_settings:
+                    raise ValueError("cline component requires --cline-settings")
+                cline = _load_json(args.cline_settings, {"mcpServers": {}})
+                if not isinstance(cline, dict):
+                    raise ValueError("Cline settings must contain a JSON object")
+                if "unreal" in components:
+                    report["safetyNormalizations"].extend(
+                        f"cline.mcpServers.{name}:removed_legacy_python_control"
+                        for name in _remove_legacy_python_control_entries(cline)
+                    )
+                _merge_mcp_entry(cline, "evidence-first", evidence_entry)
+                if "unreal" in components and mcp_config:
+                    for name in ("unreal-rag", "unreal-agent"):
+                        _merge_mcp_entry(
+                            cline,
+                            name,
+                            _mcp_entry_for_frontend(
+                                mcp_config["mcpServers"][name],
+                                "cline",
+                            ),
+                        )
+                tx.write_file(args.cline_settings, _json_bytes(cline))
+    
+            if "context_compactor" in components:
+>               report["contextCompactor"] = _install_context_compactor(
+                    args, external_actions_started
+                )
+
+install.py:2242: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+install.py:1902: in _install_context_compactor
+    _run([npm, "run", "patch:sdk"], cwd=installed_manifest.parent,
+install.py:1492: in _run
+    subprocess.run(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+input = None, capture_output = False, timeout = 30, check = True
+popenargs = ('"C:\\Program Files\\nodejs\\npm.CMD" run patch:sdk',)
+kwargs = {'cwd': 'C:\\Users\\sster\\AppData\\Local\\Temp\\pytest-of-sster\\pytest-4068\\test_launcher_selection_ignore0\\lmstud...': <_io.TextIOWrapper name='<tempfile._TemporaryFileWrapper object at 0x000001FA9D92B770>' mode='r+' encoding='utf-8'>}
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+    
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+    
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+    
+        If timeout (seconds) is given and the process takes too long,
+         a TimeoutExpired exception will be raised.
+    
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+    
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+    
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+    
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+    
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '"C:\Program Files\nodejs\npm.CMD" run patch:sdk' returned non-zero exit status 4294963238.
+
+..\..\..\AppData\Local\Programs\Python\Python312\Lib\subprocess.py:571: CalledProcessError
+
+The above exception was the direct cause of the following exception:
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001FAA1D54890>
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_launcher_selection_ignore0')
+
+    def test_launcher_selection_ignores_saved_custom_engine(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        module = _load_installer_module()
+        lmstudio = tmp_path / "lmstudio"
+        stale_engine = tmp_path / "SavedCustomEngine"
+        detected_engine = tmp_path / "LauncherEngine"
+        for engine in (stale_engine, detected_engine):
+            (engine / "Engine" / "Source").mkdir(parents=True)
+        (lmstudio / "config").mkdir(parents=True)
+        _plant_fake_lms(lmstudio)
+        (lmstudio / "config" / "unreal-workspace.json").write_text(
+            json.dumps({"defaultEngineRoot": str(stale_engine)}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(module, "_detect_engine_root", lambda association: detected_engine)
+        args = module.build_parser().parse_args(
+            [
+                "--profile",
+                "standard",
+                "--yes",
+                "--skip-deps",
+                "--skip-runtime-bootstrap",
+                "--codex-home",
+                str(tmp_path / "codex"),
+                "--lmstudio-home",
+                str(lmstudio),
+                "--state-home",
+                str(tmp_path / "state"),
+                "--workspace-root",
+                str(tmp_path / "projects"),
+            ]
+        )
+        args._engine_selection = "launcher"
+    
+>       module.install(args)
+
+tests\test_integrated_installer.py:561: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+args = Namespace(profile='standard', components=None, unity_project=None, unity_editor=None, unity_dotnet=None, unity_symbol_..._settings=None, lmstudio_url='http://localhost:1234/v1', _engine_selection='launcher', _workspace_root_defaulted=False)
+resolved_components = None
+
+    def install(
+        args: argparse.Namespace,
+        *,
+        resolved_components: tuple[str, set[str]] | None = None,
+    ) -> dict[str, Any]:
+        profile, components = resolved_components or _resolve_components(args)
+        # Real installs re-exec under Python 3.12 in main(); unit tests may call install()
+        # directly on older interpreters with --skip-runtime-bootstrap.
+        python_exe = Path(getattr(args, "runtime_python", None) or sys.executable).resolve()
+        if components == {"unity"}:
+            from installer.unity_install import install_unity
+            return install_unity(args, ROOT, Transaction, InstallLock)
+        if not (SKILL_SOURCE / "SKILL.md").is_file():
+            raise FileNotFoundError(f"skill source missing: {SKILL_SOURCE}")
+    
+        args.codex_home = args.codex_home.expanduser().resolve()
+        args.lmstudio_home = args.lmstudio_home.expanduser().resolve()
+        args.state_home = args.state_home.expanduser().resolve()
+        args.workspace_root = [path.expanduser().resolve() for path in args.workspace_root]
+        configured_engine = os.environ.get("UNREAL_ENGINE_ROOT", "").strip()
+        if "unreal" in components and not args.engine_root and configured_engine:
+            environment_engine = Path(configured_engine).expanduser().resolve()
+            if not _engine_root_is_valid(environment_engine):
+                raise ValueError(
+                    f"UNREAL_ENGINE_ROOT does not contain a usable Unreal Engine layout: {environment_engine}"
+                )
+            args.engine_root = environment_engine
+            args._engine_selection = "environment"
+        if args.active_project:
+            args.active_project = args.active_project.expanduser().resolve()
+            if not args.active_project.is_file() or args.active_project.suffix.lower() != ".uproject":
+                raise ValueError(f"active project must be an existing .uproject file: {args.active_project}")
+            if args.active_project.parent not in args.workspace_root:
+                args.workspace_root.append(args.active_project.parent)
+        if args.engine_root:
+            args.engine_root = args.engine_root.expanduser().resolve()
+            if not _engine_root_is_valid(args.engine_root):
+                raise ValueError(f"engine root does not contain a usable Unreal Engine layout: {args.engine_root}")
+        args.rule_path = [path.expanduser().resolve() for path in args.rule_path]
+        if args.cline_settings:
+            args.cline_settings = args.cline_settings.expanduser().resolve()
+    
+        unreal_node_exe: Path | None = None
+        unreal_agent_root: Path | None = None
+        unreal_agent_dependency: dict[str, Any] | None = None
+        if "unreal" in components:
+            node = str(getattr(args, "runtime_node", None) or "") or shutil.which("node")
+            if not node:
+                raise FileNotFoundError("Node.js 20+ is required for the Unreal adapter")
+            unreal_node_exe = Path(node).resolve()
+            version = subprocess.run(
+                [str(unreal_node_exe), "--version"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip().lstrip("v")
+            if int(version.split(".")[0]) < 20:
+                raise RuntimeError(f"Node.js 20+ required, found {version}")
+            unreal_agent_root = ROOT / "lmstudio-unreal-agent-mcp"
+            if not (unreal_agent_root / "src" / "direct-server.js").is_file():
+                raise FileNotFoundError("Unreal agent MCP source is missing")
+            if args.skip_deps:
+                unreal_agent_dependency = (
+                    {
+                        "ok": None,
+                        "entrypoint": UNREAL_AGENT_SDK_ENTRYPOINT,
+                        "source": "dry_run_not_checked",
+                    }
+                    if args.dry_run
+                    else _verify_unreal_agent_dependency(
+                        unreal_node_exe,
+                        unreal_agent_root,
+                        dependency_source="preinstalled_skip_deps",
+                    )
+                )
+    
+        allowed_roots = [args.codex_home, args.lmstudio_home, args.state_home, ROOT]
+        allowed_roots.extend(path.parent for path in args.rule_path)
+        if args.cline_settings:
+            allowed_roots.append(args.cline_settings.parent)
+        unity_args = None
+        if "unity" in components:
+            from installer.unity_install import install_unity
+            unity_args = copy.copy(args)
+            # Unreal's .uproject must never be used as the Unity project root.
+            unity_args.active_project = None
+            if not unity_args.unity_mcp_config and components & {"lmstudio", "unreal"}:
+                unity_args.unity_mcp_config = args.lmstudio_home / "mcp.json"
+            preflight_args = copy.copy(unity_args)
+            preflight_args.dry_run = True
+            unity_plan = install_unity(preflight_args, ROOT, Transaction, InstallLock)
+            allowed_roots.extend([Path(unity_plan["project"]) / "Packages", Path(unity_plan["mcpConfig"]).parent])
+        for root in allowed_roots:
+            _reject_filesystem_root(root, "managed install root")
+        tx = Transaction(args.state_home, allowed_roots, dry_run=args.dry_run)
+        lock = InstallLock(args.state_home, dry_run=args.dry_run)
+        installed_skill = args.codex_home / "skills" / SKILL_NAME
+        report: dict[str, Any] = {
+            "ok": False,
+            "profile": profile,
+            "components": sorted(components),
+            "safeMode": not args.enable_agent_mode,
+            "agentMode": args.enable_agent_mode,
+            "dryRun": args.dry_run,
+            "headlessLmLink": bool(args.headless_lmlink),
+            "platform": platform.system(),
+            "safetyNormalizations": [],
+            "portableRulePaths": [],
+            "clineSettingsPath": str(args.cline_settings) if args.cline_settings else None,
+            "activeProject": str(args.active_project) if args.active_project else None,
+            "projectSearchRoots": [str(path) for path in args.workspace_root],
+            "engineRoot": str(args.engine_root) if args.engine_root else None,
+        }
+        if unreal_agent_dependency is not None:
+            report["unrealAgentDependency"] = unreal_agent_dependency
+        external_actions_started: list[str] = []
+        lock.acquire()
+        try:
+            if "codex" in components or "lmstudio" in components or "cline" in components:
+                tx.replace_directory(SKILL_SOURCE, installed_skill)
+    
+            mcp_config: dict[str, Any] | None = None
+            mcp_path = args.lmstudio_home / "mcp.json"
+            if "lmstudio" in components or "unreal" in components:
+                mcp_config = _load_json(mcp_path, {"mcpServers": {}})
+                if not isinstance(mcp_config, dict):
+                    raise ValueError("LM Studio mcp.json must contain a JSON object")
+    
+            if not args.enable_agent_mode and mcp_config is not None:
+                existing_servers = mcp_config.get("mcpServers")
+                existing_agent = existing_servers.get("unreal-agent") if isinstance(existing_servers, dict) else None
+                existing_env = existing_agent.get("env") if isinstance(existing_agent, dict) else None
+                if isinstance(existing_env, dict):
+                    for key in ("ALLOW_WRITE", "ALLOW_COMMANDS", "ALLOW_UNREAL_BUILD"):
+                        if str(existing_env.get(key, "0")).strip().lower() not in {"", "0", "false", "no", "off"}:
+                            report["safetyNormalizations"].append(f"unreal-agent.env.{key}")
+                        existing_env[key] = "0"
+                    for key in ("VALIDATE_ON_WRITE", "VALIDATE_ON_WRITE_TIMEOUT_MS", "MCP_REQUIRE_PLAN_AUTH"):
+                        if key in existing_env:
+                            report["safetyNormalizations"].append(f"unreal-agent.env.{key}")
+                            existing_env.pop(key, None)
+    
+            evidence_entry = _evidence_mcp_entry(python_exe, installed_skill)
+            if "lmstudio" in components:
+                preset_target = args.lmstudio_home / "config-presets" / "evidence-first-code-audit.preset.json"
+                tx.write_file(preset_target, PRESET_SOURCE.read_bytes())
+                assert mcp_config is not None
+                _merge_mcp_entry(mcp_config, "evidence-first", evidence_entry)
+    
+            if "unreal" in components:
+                assert unreal_node_exe is not None
+                assert unreal_agent_root is not None
+                node_exe = unreal_node_exe
+                agent_root = unreal_agent_root
+                if not args.skip_deps:
+                    npm = str(getattr(args, "runtime_npm", None) or "") or shutil.which("npm")
+                    if not npm:
+                        raise FileNotFoundError("npm is required for the Unreal adapter")
+                    if not args.dry_run:
+                        external_actions_started.append("unreal-agent-npm-dependencies")
+                    _run(
+                        [npm, "ci", "--no-audit", "--no-fund"],
+                        cwd=agent_root,
+                        dry_run=args.dry_run,
+                        timeout=600,
+                    )
+                    report["unrealAgentDependency"] = (
+                        {
+                            "ok": None,
+                            "entrypoint": UNREAL_AGENT_SDK_ENTRYPOINT,
+                            "source": "dry_run_planned_npm_ci",
+                        }
+                        if args.dry_run
+                        else _verify_unreal_agent_dependency(
+                            node_exe,
+                            agent_root,
+                            dependency_source="npm_ci",
+                        )
+                    )
+    
+                shared_path = args.lmstudio_home / "config" / "unreal-workspace.json"
+                agent_path = args.lmstudio_home / "config" / "unreal-agent.json"
+                shared = _load_json(shared_path, {})
+                if not isinstance(shared, dict):
+                    raise ValueError("unreal-workspace.json must contain a JSON object")
+                previous_shared = copy.deepcopy(shared)
+                if args.active_project:
+                    shared["activeProject"] = str(args.active_project)
+                    if _editor_export_path_is_default_like(shared.get("editorExportDir")):
+                        shared["editorExportDir"] = str(_default_editor_export_path(args.active_project))
+                else:
+                    shared.setdefault("activeProject", None)
+                shared["projectSearchRoots"] = [str(path) for path in args.workspace_root]
+                engine_binding = bind_installer_engine(
+                    active_project=args.active_project,
+                    requested_engine_root=args.engine_root,
+                    selection=getattr(args, "_engine_selection", ""),
+                    shared_config=shared,
+                    workspace_root=ROOT,
+                    detect_engine_root_fn=_detect_engine_root,
+                )
+                association = engine_binding.association
+                args.engine_root = engine_binding.engine_root
+                _sync_installer_index_settings(
+                    shared,
+                    engine_binding.engine_root,
+                    state_home=args.state_home,
+                )
+                configured_index = Path(str(shared.get("indexPath") or "")).expanduser()
+                if not configured_index.is_absolute():
+                    configured_index = ROOT / configured_index
+                configured_index = configured_index.resolve()
+                managed_index_root = (args.state_home / "indexes").resolve()
+                if _is_within(configured_index, managed_index_root):
+                    candidates = _prior_rag_index_candidates(
+                        previous_shared=previous_shared,
+                        existing_mcp=mcp_config,
+                        state_home=args.state_home,
+                        namespace=str(shared.get("indexNamespace") or "unreal58"),
+                    )
+                    report["ragIndexMigration"] = _migrate_managed_rag_index(
+                        configured_index,
+                        candidates,
+                        dry_run=args.dry_run,
+                    )
+                else:
+                    report["ragIndexMigration"] = {
+                        **_rag_index_readiness(configured_index),
+                        "action": "user_selected_index",
+                        "owner": "user_selected_index",
+                    }
+                shared["defaultPlatform"] = _default_platform()
+                shared.setdefault("defaultConfiguration", "Development")
+                shared["indexingTier"] = args.index_tier
+                tx.write_file(shared_path, _json_bytes(shared))
+                report["activeProject"] = shared.get("activeProject")
+                report["projectSearchRoots"] = list(shared.get("projectSearchRoots") or [])
+                report["engineRoot"] = shared.get("defaultEngineRoot") or None
+                agent_payload = {
+                    "projectSearchRoots": [str(path) for path in args.workspace_root],
+                    "defaultEngineRoot": str(shared.get("defaultEngineRoot") or ""),
+                    "defaultPlatform": _default_platform(),
+                    "defaultConfiguration": "Development",
+                    "activeProject": shared.get("activeProject"),
+                }
+                tx.write_file(agent_path, _json_bytes(agent_payload))
+                assert mcp_config is not None
+                report["safetyNormalizations"].extend(
+                    f"mcpServers.{name}:removed_legacy_python_control"
+                    for name in _remove_legacy_python_control_entries(mcp_config)
+                )
+                for name, entry in _unreal_entries(
+                    args,
+                    python_exe,
+                    node_exe,
+                    shared_path,
+                    agent_path,
+                    context_compactor_advisory=("context_compactor" in components),
+                    engine_association=association,
+                    index_path=configured_index,
+                ).items():
+                    _merge_mcp_entry(mcp_config, name, entry)
+    
+            settings_path = args.lmstudio_home / "settings.json"
+            if settings_path.exists() and ("lmstudio" in components or "unreal" in components):
+                settings = _load_json(settings_path, {})
+                chat = settings.get("chat") if isinstance(settings, dict) else None
+                patterns = chat.get("skipToolConfirmationPatterns") if isinstance(chat, dict) else None
+                if isinstance(patterns, list):
+                    removed = [pattern for pattern in patterns if pattern in UNSAFE_AUTO_APPROVALS]
+                    if removed:
+                        report["safetyNormalizations"].extend(
+                            f"settings.chat.skipToolConfirmationPatterns:{pattern}" for pattern in removed
+                        )
+                        chat["skipToolConfirmationPatterns"] = [
+                            pattern for pattern in patterns if pattern not in UNSAFE_AUTO_APPROVALS
+                        ]
+                        tx.write_file(settings_path, _json_bytes(settings))
+    
+            if mcp_config is not None:
+                tx.write_file(mcp_path, _json_bytes(mcp_config))
+    
+            if "portable_rule" in components:
+                if not args.rule_path:
+                    raise ValueError("portable_rule component requires at least one --rule-path")
+                rule = (SKILL_SOURCE / "references" / "portable-rule.md").read_bytes()
+                for path in args.rule_path:
+                    tx.write_file(path, rule)
+                report["portableRulePaths"] = [str(path) for path in args.rule_path]
+    
+            if "cline" in components:
+                if not args.cline_settings:
+                    raise ValueError("cline component requires --cline-settings")
+                cline = _load_json(args.cline_settings, {"mcpServers": {}})
+                if not isinstance(cline, dict):
+                    raise ValueError("Cline settings must contain a JSON object")
+                if "unreal" in components:
+                    report["safetyNormalizations"].extend(
+                        f"cline.mcpServers.{name}:removed_legacy_python_control"
+                        for name in _remove_legacy_python_control_entries(cline)
+                    )
+                _merge_mcp_entry(cline, "evidence-first", evidence_entry)
+                if "unreal" in components and mcp_config:
+                    for name in ("unreal-rag", "unreal-agent"):
+                        _merge_mcp_entry(
+                            cline,
+                            name,
+                            _mcp_entry_for_frontend(
+                                mcp_config["mcpServers"][name],
+                                "cline",
+                            ),
+                        )
+                tx.write_file(args.cline_settings, _json_bytes(cline))
+    
+            if "context_compactor" in components:
+                report["contextCompactor"] = _install_context_compactor(
+                    args, external_actions_started
+                )
+    
+            if args.build_rag:
+                if not args.dry_run:
+                    external_actions_started.append("rag-index-build")
+                lock_context = (
+                    contextlib.nullcontext()
+                    if args.dry_run
+                    else index_refresh_lock(configured_index)
+                )
+                with lock_context:
+                    if not args.dry_run:
+                        recover_interrupted_refresh(configured_index.parent)
+                    rag_plan = create_direct_rag_build_plan(
+                        python_executable=python_exe,
+                        index_dir=configured_index,
+                        tier=args.index_tier,
+                        project_roots=list(args.workspace_root),
+                        active_project=args.active_project,
+                        engine_root=args.engine_root,
+                        root=ROOT,
+                        dry_run=args.dry_run,
+                    )
+                    try:
+                        for step in rag_plan.steps:
+                            _run(list(step.command), cwd=ROOT, dry_run=args.dry_run)
+                        rag_plan.commit()
+                        report["ragBuild"] = {
+                            "tier": rag_plan.tier,
+                            "transactional": True,
+                            "steps": [step.name for step in rag_plan.steps],
+                            "engineVersion": rag_plan.engine_version,
+                            "engineAssociation": rag_plan.engine_association or None,
+                            "includedProjects": [str(path) for path in rag_plan.included_projects],
+                            "excludedProjects": [str(path) for path in rag_plan.excluded_projects],
+                        }
+                    finally:
+                        rag_plan.discard()
+    
+            if "unreal" in components:
+                readiness = (
+                    {
+                        "ready": None,
+                        "status": "dry_run",
+                        "indexPath": str(configured_index),
+                        "owner": "state_home_managed_index",
+                    }
+                    if args.dry_run
+                    else _rag_index_readiness(configured_index)
+                )
+                readiness["buildRequested"] = bool(args.build_rag)
+                readiness["degraded"] = readiness.get("ready") is not True
+                report["ragReadiness"] = readiness
+                # A dry run proves command construction only; it deliberately does
+                # not create an index that can satisfy the query-level probe.
+                if args.build_rag and not args.dry_run and readiness.get("ready") is not True:
+                    raise RuntimeError(
+                        "RAG index build completed without query-level readiness: "
+                        f"{readiness.get('errorCode') or readiness.get('status')}"
+                    )
+    
+            if not args.dry_run and "lmstudio" in components:
+                smoke = SKILL_SOURCE / "scripts" / "smoke_evidence_first_mcp.py"
+                completed = subprocess.run(
+                    [str(python_exe), str(smoke), "--server", str(installed_skill / "scripts" / "evidence_first_mcp.py")],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                report["mcpSmoke"] = json.loads(completed.stdout) if completed.stdout.strip() else {}
+                if completed.returncode != 0 or not report["mcpSmoke"].get("ok"):
+                    raise RuntimeError(completed.stderr or "evidence-first MCP smoke failed")
+    
+            if unity_args is not None:
+                report["unity"] = install_unity(
+                    unity_args, ROOT, Transaction, InstallLock,
+                    transaction=tx, external_actions=external_actions_started,
+                )
+            report["lmStudioServer"] = _live_server_status(args.lmstudio_url)
+            report["indexTier"] = args.index_tier if "unreal" in components else None
+            report["externalActions"] = external_actions_started if not args.dry_run else [
+                action
+                for action, enabled in (
+                    ("context-compactor-plugin-install", "context_compactor" in components),
+                    ("rag-index-build", args.build_rag),
+                )
+                if enabled
+            ]
+            report["rollbackScope"] = (
+                "managed configuration/files only; external npm/lms installs, compiled workers and generated indexes are not rolled back"
+            )
+            report["knownIntegrationsSafe"] = not args.enable_agent_mode
+            report["restartRequired"] = bool(
+                {"lmstudio", "unreal", "context_compactor"} & components
+            )
+            report["ok"] = True
+            tx.write_file(args.state_home / "runtime-python.path", (str(python_exe) + "\n").encode("utf-8"))
+            journal = tx.commit(report)
+            report["journal"] = str(journal or "")
+            return report
+        except Exception as install_error:
+            try:
+                tx.rollback_actions()
+            except Exception as rollback_error:
+                raise RuntimeError(
+                    f"installation failed ({install_error}); managed rollback also failed ({rollback_error}). "
+                    f"Inspect the backups under {tx.backup_root} before retrying."
+                ) from install_error
+            if external_actions_started:
+>               raise RuntimeError(
+                    f"installation failed after external actions started ({install_error}). "
+                    "Managed files were rolled back, but these actions may have left external state: "
+                    f"{', '.join(external_actions_started)}."
+                ) from install_error
+E               RuntimeError: installation failed after external actions started (Command '"C:\Program Files\nodejs\npm.CMD" run patch:sdk' returned non-zero exit status 4294963238.). Managed files were rolled back, but these actions may have left external state: context-compactor-plugin-install.
+
+install.py:2353: RuntimeError
+---------------------------- Captured stderr call -----------------------------
+run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_launcher_selection_ignore0\lmstudio\bin\lms.cmd dev --install -y
+run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+npm error code ENOENT
+npm error syscall open
+npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+npm error errno -4058
+npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+npm error enoent This is related to npm not being able to find a file.
+npm error enoent
+npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_04_094Z-debug-0.log
+______ test_safe_profile_installs_codex_lmstudio_and_preserves_other_mcp ______
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_safe_profile_installs_cod0')
+
+    def test_safe_profile_installs_codex_lmstudio_and_preserves_other_mcp(tmp_path: Path) -> None:
+        lmstudio = tmp_path / "lmstudio"
+        lmstudio.mkdir()
+        (lmstudio / "mcp.json").write_text(
+            json.dumps({"mcpServers": {"keep-me": {"command": "example"}}}),
+            encoding="utf-8",
+        )
+        result = _run(tmp_path, "--profile", "safe")
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_installs_cod0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_installs_cod0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_installs_cod0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_05_412Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_05_412Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:673: AssertionError
+__________ test_safe_profile_normalizes_known_existing_unsafe_state ___________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_safe_profile_normalizes_k0')
+
+    def test_safe_profile_normalizes_known_existing_unsafe_state(tmp_path: Path) -> None:
+        lmstudio = tmp_path / "lmstudio"
+        lmstudio.mkdir()
+        (lmstudio / "mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "unreal-agent": {
+                            "command": "node",
+                            "env": {
+                                "ALLOW_WRITE": "1",
+                                "ALLOW_COMMANDS": "true",
+                                "ALLOW_UNREAL_BUILD": "yes",
+                                "VALIDATE_ON_WRITE": "1",
+                            },
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        (lmstudio / "settings.json").write_text(
+            json.dumps(
+                {
+                    "chat": {
+                        "skipToolConfirmationPatterns": [
+                            "keep-me",
+                            "mcp/unreal-agent:*",
+                            "mcp/unreal-rag:*",
+                            "lmstudio/js-code-sandbox:*",
+                            "mcp/unreal-rag:unreal_architecture_reasoning",
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = _run(tmp_path, "--profile", "safe")
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_normalizes_k0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_normalizes_k0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_normalizes_k0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_06_310Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_06_310Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:725: AssertionError
+_ test_standard_upgrade_removes_stale_python_controller_entries_and_reports_them _
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_standard_upgrade_removes_0')
+
+    def test_standard_upgrade_removes_stale_python_controller_entries_and_reports_them(
+        tmp_path: Path,
+    ) -> None:
+        lmstudio = tmp_path / "lmstudio"
+        lmstudio.mkdir()
+        (lmstudio / "mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "unreal-rag-strict": {
+                            "command": "python",
+                            "args": ["renamed.py"],
+                            "env": {"MCP_EXECUTION_MODE": "strict"},
+                        },
+                        "copied-old-rag": {
+                            "command": "python",
+                            "args": ["C:/old/scripts/unreal_rag_mcp.py"],
+                        },
+                        "keep-custom": {"command": "custom", "args": ["server"]},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+    
+        result = _run(
+            tmp_path,
+            "--profile",
+            "standard",
+            "--skip-deps",
+            "--workspace-root",
+            str(tmp_path / "projects"),
+        )
+    
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_upgrade_removes_0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_upgrade_removes_0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_upgrade_removes_0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_07_356Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_07_356Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:771: AssertionError
+______________ test_stale_install_lock_is_cleared_automatically _______________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_stale_install_lock_is_cle0')
+
+    def test_stale_install_lock_is_cleared_automatically(tmp_path: Path) -> None:
+        lock = tmp_path / "state" / "install.lock"
+        lock.parent.mkdir(parents=True)
+        lock.write_text(json.dumps({"pid": 2_147_483_647, "createdAt": 1.0}), encoding="utf-8")
+        result = _run(tmp_path, "--profile", "safe")
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_stale_install_lock_is_cle0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_stale_install_lock_is_cle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_stale_install_lock_is_cle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_11_943Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_11_943Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1213: AssertionError
+__________ test_acknowledged_agent_mode_enables_all_unreal_authority __________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_acknowledged_agent_mode_e0')
+
+    def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) -> None:
+        lmstudio = tmp_path / "lmstudio"
+        lmstudio.mkdir()
+        (lmstudio / "settings.json").write_text(
+            json.dumps(
+                {
+                    "chat": {
+                        "skipToolConfirmationPatterns": [
+                            "keep-me",
+                            "mcp/unreal-agent:*",
+                            "mcp/unreal-rag:*",
+                            "mcp/unreal-rag:unreal_architecture_reasoning",
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = _run(
+            tmp_path,
+            "--profile",
+            "standard",
+            "--enable-agent-mode",
+            "--accept-agent-risk",
+            "--skip-deps",
+            "--workspace-root",
+            str(tmp_path / "projects"),
+        )
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_acknowledged_agent_mode_e0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_acknowledged_agent_mode_e0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_acknowledged_agent_mode_e0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_13_890Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_13_890Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1292: AssertionError
+_____________________ test_custom_rule_and_cline_install ______________________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_custom_rule_and_cline_ins0')
+
+    def test_custom_rule_and_cline_install(tmp_path: Path) -> None:
+        rule = tmp_path / "agent" / "rule.md"
+        cline = tmp_path / "cline" / "mcp.json"
+        result = _run(
+            tmp_path,
+            "--profile",
+            "custom",
+            "--components",
+            "codex,lmstudio,portable_rule,cline",
+            "--rule-path",
+            str(rule),
+            "--cline-settings",
+            str(cline),
+        )
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_rule_and_cline_ins0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_rule_and_cline_ins0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_rule_and_cline_ins0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_14_801Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_14_801Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1413: AssertionError
+________ test_custom_unreal_cline_install_uses_cline_frontend_identity ________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_custom_unreal_cline_insta0')
+
+    def test_custom_unreal_cline_install_uses_cline_frontend_identity(tmp_path: Path) -> None:
+        cline = tmp_path / "cline" / "mcp.json"
+        result = _run(
+            tmp_path,
+            "--profile",
+            "custom",
+            "--components",
+            "codex,lmstudio,unreal,cline",
+            "--cline-settings",
+            str(cline),
+            "--workspace-root",
+            str(tmp_path / "projects"),
+            "--enable-agent-mode",
+            "--accept-agent-risk",
+            "--skip-deps",
+        )
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_unreal_cline_insta0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_unreal_cline_insta0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_unreal_cline_insta0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_15_833Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_15_833Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1435: AssertionError
+____________________ test_last_install_can_be_rolled_back _____________________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_last_install_can_be_rolle0')
+
+    def test_last_install_can_be_rolled_back(tmp_path: Path) -> None:
+        original = tmp_path / "lmstudio" / "mcp.json"
+        original.parent.mkdir()
+        original.write_text(json.dumps({"mcpServers": {"original": {}}}), encoding="utf-8")
+        install = _run(tmp_path, "--profile", "safe")
+>       assert install.returncode == 0, install.stderr or install.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_last_install_can_be_rolle0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_last_install_can_be_rolle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_last_install_can_be_rolle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_19_156Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_19_156Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1465: AssertionError
+____________ test_unreal_safe_component_registers_read_only_agent _____________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_unreal_safe_component_reg0')
+
+    def test_unreal_safe_component_registers_read_only_agent(tmp_path: Path) -> None:
+        result = _run(
+            tmp_path,
+            "--profile",
+            "custom",
+            "--components",
+            "codex,lmstudio,unreal",
+            "--skip-deps",
+            "--workspace-root",
+            str(tmp_path / "projects"),
+        )
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_unreal_safe_component_reg0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_unreal_safe_component_reg0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_unreal_safe_component_reg0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_20_209Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_20_209Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1514: AssertionError
+______ test_standard_adds_read_only_unreal_and_index_tier_is_orthogonal _______
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_standard_adds_read_only_u0')
+
+    def test_standard_adds_read_only_unreal_and_index_tier_is_orthogonal(tmp_path: Path) -> None:
+        result = _run(
+            tmp_path,
+            "--profile",
+            "standard",
+            "--skip-deps",
+            "--index-tier",
+            "lite",
+            "--workspace-root",
+            str(tmp_path / "projects"),
+        )
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_adds_read_only_u0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_adds_read_only_u0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_adds_read_only_u0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_21_212Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_21_212Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1533: AssertionError
+_______ test_explicit_active_project_is_persisted_for_project_indexing ________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_explicit_active_project_i0')
+
+    def test_explicit_active_project_is_persisted_for_project_indexing(tmp_path: Path) -> None:
+        project_dir = tmp_path / "projects" / "Demo"
+        project_dir.mkdir(parents=True)
+        project_file = project_dir / "Demo.uproject"
+        project_file.write_text("{}", encoding="utf-8")
+        result = _run(
+            tmp_path,
+            "--profile",
+            "standard",
+            "--skip-deps",
+            "--active-project",
+            str(project_file),
+        )
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_active_project_i0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_active_project_i0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_active_project_i0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_22_310Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_22_310Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1556: AssertionError
+_________ test_explicit_engine_root_is_persisted_and_forwarded_to_mcp _________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_explicit_engine_root_is_p0')
+
+    def test_explicit_engine_root_is_persisted_and_forwarded_to_mcp(tmp_path: Path) -> None:
+        engine = tmp_path / "CustomEngine"
+        (engine / "Engine" / "Source").mkdir(parents=True)
+        result = _run(
+            tmp_path,
+            "--profile",
+            "standard",
+            "--skip-deps",
+            "--engine-root",
+            str(engine),
+        )
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_engine_root_is_p0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_engine_root_is_p0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_engine_root_is_p0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_23_338Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_23_338Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1576: AssertionError
+_ test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded _
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_custom_active_project_eng0')
+
+    def test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded(
+        tmp_path: Path,
+    ) -> None:
+        engine = tmp_path / "CustomEngine"
+        (engine / "Engine" / "Source").mkdir(parents=True)
+        project_dir = tmp_path / "projects" / "SourceBuildGame"
+        project_dir.mkdir(parents=True)
+        association = "{SOURCE-BUILD-IDENTITY}"
+        project = project_dir / "SourceBuildGame.uproject"
+        project.write_text(json.dumps({"FileVersion": 3, "EngineAssociation": association}), encoding="utf-8")
+    
+        result = _run(
+            tmp_path,
+            "--profile",
+            "standard",
+            "--skip-deps",
+            "--active-project",
+            str(project),
+            "--engine-root",
+            str(engine),
+        )
+    
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_active_project_eng0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_active_project_eng0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_active_project_eng0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_24_350Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_24_350Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1610: AssertionError
+____ test_selected_engine_writes_dynamic_index_config_for_unpinned_rag_mcp ____
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_selected_engine_writes_dy0')
+
+    def test_selected_engine_writes_dynamic_index_config_for_unpinned_rag_mcp(tmp_path: Path) -> None:
+        engine = tmp_path / "UE_5.10"
+        (engine / "Engine" / "Source").mkdir(parents=True)
+        build_version = engine / "Engine" / "Build" / "Build.version"
+        build_version.parent.mkdir(parents=True, exist_ok=True)
+        build_version.write_text(
+            json.dumps({"MajorVersion": 5, "MinorVersion": 10}),
+            encoding="utf-8",
+        )
+    
+        result = _run(
+            tmp_path,
+            "--profile",
+            "standard",
+            "--skip-deps",
+            "--engine-root",
+            str(engine),
+        )
+    
+>       assert result.returncode == 0, result.stderr or result.stdout
+E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_selected_engine_writes_dy0\lmstudio\bin\lms.cmd dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_selected_engine_writes_dy0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_selected_engine_writes_dy0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_25_812Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_25_812Z-debug-0.log\n').returncode
+
+tests\test_integrated_installer.py:1671: AssertionError
+_________ test_package_has_all_platform_launchers_and_no_local_state __________
+
+tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_package_has_all_platform_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001FAA18A8E90>
+
+    def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, monkeypatch) -> None:
+        output, archive = _build(tmp_path, "portable �ѱ� one", legacy_stdout=True)
+        builder = _load_builder_module()
+        expected_files = {
+            "INSTALL.bat",
+            "UPDATE.bat",
+            "install.sh",
+            "install.py",
+            "rag.ps1",
+            "README.md",
+            "skills/evidence-first-code-audit/SKILL.md",
+            "skills/evidence-first-code-audit/assets/lmstudio-evidence-first.preset.json",
+            "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py",
+            "skills/evidence-first-code-audit/scripts/evidence_packet_contract.py",
+            "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
+            "skills/evidence-first-code-audit/scripts/validate_evidence_packet.py",
+            "docs/ARCHITECTURE.md",
+            "docs/Integrated_Installer.md",
+            "docs/LMStudio_MCP_Tool_Discipline.md",
+            "docs/LMStudio_Unreal_Agent_Setup.md",
+            "docs/Troubleshooting.md",
+            "package-manifest.json",
+            *builder.REQUIRED_RUNTIME_FILES,
+        }
+        for relative in sorted(expected_files):
+            assert (output / relative).is_file(), relative
+        packaged_guidelines = list((output / "RAG_Project_Guidelines").rglob("*.md"))
+        assert packaged_guidelines, "portable lite indexing must include factual guideline input"
+        package_manifest = json.loads(
+            (output / "package-manifest.json").read_text(encoding="utf-8")
+        )
+        inventory = {str(row["path"]) for row in package_manifest["inventory"]}
+        explicitly_allowed = (
+            set(builder.ALLOWED_ROOT_FILES)
+            | set(builder.PORTABLE_FILE_ALLOWLIST)
+            | {"PORTABLE-INSTALL.md", "README.md", "rag.ps1"}
+        )
+        unexpected = {
+            relative
+            for relative in inventory
+            if relative not in explicitly_allowed
+            and not any(
+                relative.startswith(prefix)
+                for prefix in builder.PORTABLE_CONTENT_PREFIXES
+            )
+        }
+        assert unexpected == set()
+        assert len(inventory) == len(package_manifest["inventory"])
+        for language_readme, source_template in (
+            ("README.md", "README.portable.md"),
+        ):
+            packaged_readme = (output / language_readme).read_text(encoding="utf-8")
+            assert packaged_readme == (ROOT / source_template).read_text(encoding="utf-8")
+            assert "Enable transparent compaction" not in packaged_readme
+            assert "���� ����ġ" in packaged_readme
+            assert "�⺻ `ON`" in packaged_readme
+        portable_install = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
+        assert "���� ä���� ���� ����ġ�� ON���� �����մϴ�" in portable_install
+        assert "���� �� LM Studio�� ������մϴ�" in portable_install
+        assert "ä�ÿ��� ������ �ʽ��ϴ�" not in portable_install
+        assert "LM Studio �÷����� ��ġ������, �𸮾� �ڵ� Ž��" in portable_install
+        assert "installation/pinning with the chat toggle OFF" not in portable_install
+        assert _broken_local_markdown_links(output) == []
+        assert not (output / "README.portable.md").exists()
+        assert not (output / "README.portable.ko.md").exists()
+        assert not (output / "README.ko.md").exists()
+        portable_rag = (output / "rag.ps1").read_text(encoding="utf-8")
+        assert portable_rag == (ROOT / "scripts" / "portable_rag.ps1").read_text(encoding="utf-8")
+        assert "AllowEditorLaunch" in portable_rag
+        for forbidden_command in (
+            "agent-plan",
+            "agent_orchestrator",
+            "wrapper",
+            "eval-harness",
+            "lmstudio-models",
+            "route",
+        ):
+            assert forbidden_command not in portable_rag
+        pwsh = shutil.which("pwsh")
+        if pwsh:
+            portable_status = subprocess.run(
+                [
+                    pwsh,
+                    "-NoProfile",
+                    "-File",
+                    str(output / "rag.ps1"),
+                    "doctor",
+                    "-Out",
+                    str(tmp_path / "missing-portable.sqlite"),
+                ],
+                cwd=output,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+                env={
+                    **os.environ,
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "PYTHON_EXE": sys.executable,
+                },
+            )
+            assert portable_status.returncode == 0, portable_status.stderr
+            assert json.loads(portable_status.stdout)["indexStatus"] == "not_ready"
+        expected_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert package_manifest["sourceGitCommit"] == expected_commit
+        forbidden_legacy_runtime = (
+            "config/control_protocol_spec.json",
+            "config/control_state_machine.json",
+            "config/rag_eval_architecture_cases.json",
+            "config/rag_eval_e2e_compile_cases.json",
+            "config/strict_tool_manifest.json",
+            "config/synthesis_readiness_policy.json",
+            "config/task_route_recovery_policy.json",
+            "config/tool_orchestration.json",
+            "scripts/agent_orchestrator.py",
+            "scripts/agent_run_report.py",
+            "scripts/architecture_claim_validate.py",
+            "scripts/architecture_decision.py",
+            "scripts/architecture_map.py",
+            "scripts/architecture_portfolio.py",
+            "scripts/architecture_proposal_store.py",
+            "scripts/architecture_reasoning.py",
+            "scripts/architecture_state.py",
+            "scripts/asset_graph_lookup.py",
+            "scripts/asset_hint_resolver.py",
+            "scripts/bootstrap_local_holdout.py",
+            "scripts/build_symbol_graph.py",
+            "scripts/change_impact_contract.py",
+            "scripts/clangd_helper.py",
+            "scripts/code_generation_contract.py",
+            "scripts/code_sketch_claim_validate.py",
+            "scripts/code_sketch_pipeline.py",
+            "scripts/control_runtime_identity.py",
+            "scripts/control_state_registry.py",
+            "scripts/control_transition_bridge.py",
+            "scripts/control_protocol_spec.py",
+            "scripts/direct_model_mode.py",
+            "scripts/domain_planner.py",
+            "scripts/evaluate_refactor_plans.py",
+            "scripts/feature_intent_contract.py",
+            "scripts/feature_intent_fast_path.py",
+            "scripts/job_store.py",
+            "scripts/mcp_control_envelope.py",
+            "scripts/multifile_refactor_autofix.py",
+            "scripts/node_plan_validate.py",
+            "scripts/phase_tool_router.py",
+            "scripts/plan_graph.py",
+            "scripts/plan_slice_state.py",
+            "scripts/profile_ab_harness.py",
+            "scripts/rag_delivery.py",
+            "scripts/rag_search.py",
+            "scripts/rag_semantic.py",
+            "scripts/read_query_history.py",
+            "scripts/refactor_plan.py",
+            "scripts/route_recovery_policy.py",
+            "scripts/runtime_debug_session.py",
+            "scripts/run_dryrun_holdout.ps1",
+            "scripts/run_index_pipeline.ps1",
+            "scripts/run_live_holdout.ps1",
+            "scripts/semantic_refactor_guard.py",
+            "scripts/state_root.py",
+            "scripts/synthesis_readiness.py",
+            "scripts/task_api.py",
+            "scripts/task_autonomy_supervisor.py",
+            "scripts/task_continuation_state.py",
+            "scripts/task_continuity.py",
+            "scripts/task_gate_history.py",
+            "scripts/task_phase.py",
+            "scripts/token_budget.py",
+            "scripts/unreal_rag_mcp.py",
+            "scripts/wrapper_job_manager.py",
+            "lmstudio-unreal-agent-mcp/src/edit-bundle.js",
+            "lmstudio-unreal-agent-mcp/src/mutation-generation.js",
+            "lmstudio-unreal-agent-mcp/src/resolve-recovery-journal-cli.js",
+            "lmstudio-unreal-agent-mcp/src/state-root.js",
+            "lmstudio-unreal-agent-mcp/src/transaction-journal.js",
+            "lmstudio-unreal-agent-mcp/src/validate-write.js",
+            "lmstudio-unreal-agent-mcp/src/validation-dirty.js",
+        )
+        assert not [relative for relative in forbidden_legacy_runtime if (output / relative).exists()]
+        assert (output / "scripts" / "unreal_rag_direct.py").is_file()
+        for name in (
+            "direct_rag_delivery.py",
+            "direct_rag_corpus.py",
+            "direct_rag_lexical.py",
+            "direct_rag_limits.py",
+            "direct_rag_request_bounds.py",
+            "direct_rag_sql.py",
+            "direct_rag_editor_snapshot.py",
+            "direct_rag_engine_collection.py",
+            "direct_rag_engine_tier.py",
+            "direct_rag_freshness_rows.py",
+            "direct_rag_generation_boundary.py",
+            "direct_rag_generation_identity.py",
+            "direct_rag_generation_swap.py",
+            "direct_rag_all_refresh.py",
+            "direct_rag_build_generation.py",
+            "direct_rag_public_build.py",
+            "direct_rag_raw_provenance.py",
+            "direct_rag_raw_scope.py",
+            "direct_rag_project_engine.py",
+            "direct_rag_project_generation.py",
+            "direct_rag_project_selectors.py",
+            "direct_rag_manifest_binding.py",
+            "direct_rag_index_registry.py",
+            "direct_rag_index_ownership.py",
+            "direct_rag_named_index.py",
+            "direct_rag_named_candidate.py",
+            "direct_rag_request_binding.py",
+            "direct_rag_shard_selection.py",
+            "direct_rag_unbuilt_shard.py",
+            "direct_rag_refresh_target.py",
+            "direct_rag_refresh_cli.py",
+            "direct_rag_refresh_journal.py",
+            "direct_rag_startup_recovery.py",
+            "direct_rag_project_collection.py",
+            "direct_rag_project_merge.py",
+            "direct_rag_project_set.py",
+            "editor_export_contract.py",
+            "editor_export_runner.py",
+            "editor_export_settings.py",
+            "editor_export_location.py",
+            "editor_export_project.py",
+            "editor_export_markers.py",
+            "editor_export_process.py",
+            "editor_export_mode.py",
+            "editor_capture_state.py",
+            "editor_metadata_provenance.py",
+            "editor_sync_decision.py",
+            "direct_rag_atomic_replace.py",
+            "direct_rag_backup_restore.py",
+            "direct_rag_selection.py",
+            "direct_rag_readonly_db.py",
+            "direct_rag_symbol_query.py",
+            "direct_rag_build_binding.py",
+            "rag_build_classification.py",
+            "rag_build_input.py",
+            "rag_build_metadata.py",
+            "rag_build_metadata_projection.py",
+            "rag_build_outputs.py",
+            "rag_build_schema.py",
+            "rag_build_writer.py",
+            "editor_metadata_catalog.py",
+            "editor_metadata_sources.py",
+            "editor_metadata_identity.py",
+            "editor_metadata_projection.py",
+            "editor_metadata_search_text.py",
+            "editor_metadata_jsonl.py",
+            "editor_metadata_merge.py",
+            "editor_metadata_cli.py",
+        ):
+            assert (output / "scripts" / name).is_file()
+        direct_catalog = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(output / "scripts" / "unreal_rag_direct.py"),
+                "--index",
+                str(tmp_path / "missing.sqlite"),
+            ],
+            cwd=output,
+            input=(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/list",
+                        "params": {},
+                    }
+                )
+                + "\n"
+            ),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env={**os.environ, "MCP_EXECUTION_MODE": "strict"},
+        )
+        assert direct_catalog.returncode == 0, direct_catalog.stderr
+        catalog_payload = json.loads(direct_catalog.stdout)
+        assert [tool["name"] for tool in catalog_payload["result"]["tools"]] == [
+            "unreal_get_active_project",
+            "unreal_set_active_project",
+            "unreal_rag_search",
+            "unreal_symbol_lookup",
+            "unreal_rag_health",
+            "unreal_rag_rebuild_status",
+            "unreal_rag_refresh",
+            "unreal_rag_capabilities",
+        ]
+        node = shutil.which("node")
+        assert node is not None
+        node_input = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "portable-smoke", "version": "1"},
+                        },
+                    }
+                ),
+                json.dumps(
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                ),
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/list",
+                        "params": {},
+                    }
+                ),
+                "",
+            ]
+        )
+        node_catalog = subprocess.run(
+            [node, str(output / "lmstudio-unreal-agent-mcp" / "src" / "direct-server.js")],
+            cwd=output,
+            input=node_input,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            env={
+                **os.environ,
+                "NODE_PATH": str(ROOT / "lmstudio-unreal-agent-mcp" / "node_modules"),
+                "WORKSPACE_ROOT": str(tmp_path),
+                "SHARED_UNREAL_CONFIG": str(tmp_path / "shared.json"),
+                "AGENT_STATE_ROOT": str(tmp_path / "agent-state"),
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHON_EXE": sys.executable,
+            },
+            check=False,
+        )
+        assert node_catalog.returncode == 0, node_catalog.stderr
+        node_messages = [json.loads(line) for line in node_catalog.stdout.splitlines()]
+        listed_node_tools = next(message for message in node_messages if message.get("id") == 2)
+        stable_manifest = json.loads(
+            (output / "config" / "stable_tool_manifest.json").read_text(encoding="utf-8")
+        )
+        assert {
+            tool["name"] for tool in listed_node_tools["result"]["tools"]
+        } == set(stable_manifest["agentEssential"])
+        public_launchers = {
+            path.relative_to(output).as_posix()
+            for path in output.rglob("*")
+            if path.is_file()
+            and (
+                path.suffix.lower() in {".bat", ".cmd", ".command"}
+                or path.name == "install.sh"
+            )
+        }
+        assert public_launchers == {"INSTALL.bat", "UPDATE.bat", "install.sh"}
+        assert {path.name for path in (output / "installer").iterdir()} == {
+            "README.md",
+            "__init__.py",
+            "bootstrap_python.ps1",
+            "bootstrap_python.sh",
+            "bootstrap_runtimes.py",
+            "direct_rag_build.py",
+            "direct_rag_build_model.py",
+            "direct_rag_build_scope.py",
+            "direct_rag_build_stage.py",
+            "direct_rag_build_steps.py",
+            "lmstudio_plugin_install.py",
+            "manifest.json",
+            "runtime-manifest.json",
+            "unreal_engine_binding.py",
+            "unity_install.py",
+        }
+        packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
+        assert packaged_installer_manifest["productVersion"] == "1.4.0"
+        assert packaged_installer_manifest["version"] == "2.1.22"
+        assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
+        assert (output / "docs" / "Release_Notes_1_4_0.md").is_file()
+        assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
+        assert (output / "UPDATE.bat").read_bytes() == (ROOT / "UPDATE.bat").read_bytes()
+        source_launcher = (ROOT / "install.sh").read_bytes()
+        expected_launcher = source_launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        assert (output / "install.sh").read_bytes() == expected_launcher
+        assert b"\r" not in (output / "install.sh").read_bytes()
+        source_seed = (ROOT / "installer" / "bootstrap_python.sh").read_bytes()
+        expected_seed = source_seed.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        assert (output / "installer" / "bootstrap_python.sh").read_bytes() == expected_seed
+        assert b"\r" not in (output / "installer" / "bootstrap_python.sh").read_bytes()
+        windows_launcher = (output / "INSTALL.bat").read_text(encoding="utf-8")
+        posix_launcher = (output / "install.sh").read_text(encoding="utf-8")
+        assert "pause >nul" in windows_launcher
+        assert "Bootstrapping managed Python 3.12" in windows_launcher
+        assert "Bootstrapping managed Python 3.12" in posix_launcher
+        assert (output / "installer" / "bootstrap_python.ps1").is_file()
+        assert (output / "installer" / "bootstrap_python.sh").is_file()
+        assert "python3.10" in posix_launcher
+        if os.name != "nt":
+            launcher_help = subprocess.run(
+                [str(output / "install.sh"), "--help"],
+                cwd=output,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            assert launcher_help.returncode == 0, launcher_help.stderr or launcher_help.stdout
+        portable_help = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
+        assert "Ubuntu 22.04/24.04(glibc)" in portable_help
+        assert "SHA-256 Ȯ�ΰ��� ����" in portable_help
+        assert "SHA-256���� Ȯ���� uv�� �ڵ����� �����ް�" in portable_help
+        assert "��ġ���� �˻� �ڷ� ������ ���� ���� Python�� ���� ����մϴ�" in portable_help
+        assert "RAG indexing uses the bootstrapped `pwsh`" not in portable_help
+        assert "���� ��ȹ���򰡡��۾� ���� ����� �������� �ʽ��ϴ�" in portable_help
+        assert "Get-Help ./scripts/portable_rag.ps1 -Detailed" in portable_help
+        assert "Get-Help ./rag.ps1 -Detailed" not in portable_help
+        forbidden = {".git", ".venv", "node_modules", "tests", "Reports", ".agent"}
+        assert not any(forbidden.intersection(path.relative_to(output).parts) for path in output.rglob("*"))
+        assert not any(path.suffix in {".sqlite", ".db"} for path in output.rglob("*"))
+        assert str(Path.home()) not in "\n".join(
+            path.read_text(encoding="utf-8", errors="ignore")
+            for path in output.rglob("*")
+            if path.is_file() and path.stat().st_size < 4 * 1024 * 1024
+        )
+        with zipfile.ZipFile(archive) as bundle:
+            names = bundle.namelist()
+        assert any(name.endswith("/install.sh") for name in names)
+        assert not any(name.endswith("/INSTALL.command") for name in names)
+        assert not any("node_modules" in name or "/.git/" in name for name in names)
+        lmstudio_home = tmp_path / "isolated lmstudio"
+        lmstudio_home.mkdir(parents=True, exist_ok=True)
+        _plant_fake_lms(lmstudio_home)
+        # skip-deps + fake LMS builds no npm dependencies; only the version probe is
+        # required. Preserve real Node for the actual packaged stdio smoke above.
+        if not shutil.which("npm"):
+            bindir = tmp_path / "npm-version-probe"
+            bindir.mkdir()
+            npm = bindir / ("npm.cmd" if os.name == "nt" else "npm")
+            npm.write_text("@echo 10.8.2\r\n" if os.name == "nt" else "#!/bin/sh\necho 10.8.2\n", encoding="utf-8")
+            npm.chmod(0o755)
+            monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ.get("PATH", ""))
+        installed = subprocess.run(
+            [
+                *gui_installer_command(output / "install.py"),
+                "--profile",
+                "safe",
+                "--yes",
+                "--skip-deps",
+                "--skip-runtime-bootstrap",
+                "--codex-home",
+                str(tmp_path / "isolated codex"),
+                "--lmstudio-home",
+                str(lmstudio_home),
+                "--state-home",
+                str(tmp_path / "isolated state"),
+            ],
+            cwd=str(output),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+>       assert installed.returncode == 0, installed.stdout + installed.stderr
+E       AssertionError: {
+E           "ok": false,
+E           "error": "installation failed after external actions started (Command '\"C:\\Program Files\\nodejs\\npm.CMD\" run patch:sdk' returned non-zero exit status 4294963238.). Managed files were rolled back, but these actions may have left external state: context-compactor-plugin-install.",
+E           "errorType": "RuntimeError"
+E         }
+E         run: "C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_package_has_all_platform_0\isolated lmstudio\bin\lms.cmd" dev --install -y
+E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
+E         npm error code ENOENT
+E         npm error syscall open
+E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_package_has_all_platform_0\isolated lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error errno -4058
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_package_has_all_platform_0\isolated lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent This is related to npm not being able to find a file.
+E         npm error enoent
+E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_50_209Z-debug-0.log
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_50_209Z-debug-0.log\n').returncode
+
+tests\test_integrated_package.py:883: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_integrated_installer.py::test_launcher_selection_ignores_saved_custom_engine
+FAILED tests/test_integrated_installer.py::test_safe_profile_installs_codex_lmstudio_and_preserves_other_mcp
+FAILED tests/test_integrated_installer.py::test_safe_profile_normalizes_known_existing_unsafe_state
+FAILED tests/test_integrated_installer.py::test_standard_upgrade_removes_stale_python_controller_entries_and_reports_them
+FAILED tests/test_integrated_installer.py::test_stale_install_lock_is_cleared_automatically
+FAILED tests/test_integrated_installer.py::test_acknowledged_agent_mode_enables_all_unreal_authority
+FAILED tests/test_integrated_installer.py::test_custom_rule_and_cline_install
+FAILED tests/test_integrated_installer.py::test_custom_unreal_cline_install_uses_cline_frontend_identity
+FAILED tests/test_integrated_installer.py::test_last_install_can_be_rolled_back
+FAILED tests/test_integrated_installer.py::test_unreal_safe_component_registers_read_only_agent
+FAILED tests/test_integrated_installer.py::test_standard_adds_read_only_unreal_and_index_tier_is_orthogonal
+FAILED tests/test_integrated_installer.py::test_explicit_active_project_is_persisted_for_project_indexing
+FAILED tests/test_integrated_installer.py::test_explicit_engine_root_is_persisted_and_forwarded_to_mcp
+FAILED tests/test_integrated_installer.py::test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded
+FAILED tests/test_integrated_installer.py::test_selected_engine_writes_dynamic_index_config_for_unpinned_rag_mcp
+FAILED tests/test_integrated_package.py::test_package_has_all_platform_launchers_and_no_local_state
+16 failed, 1034 passed, 19 skipped in 122.40s (0:02:02)

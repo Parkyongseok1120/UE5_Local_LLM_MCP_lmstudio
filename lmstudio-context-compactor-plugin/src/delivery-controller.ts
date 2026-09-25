@@ -148,7 +148,7 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
       if (!value || typeof value !== "object") continue;
       const failed = sourceObservationFailed(value);
       if (failed) {
-        const error = String(value.errorCode || value.status || "unknown_error").slice(0, 120);
+        const error = String(value.errorCode || value.error || value.status || "unknown_error").slice(0, 120);
         if (!errors.includes(error)) errors.push(error);
         continue;
       }

@@ -1,0 +1,528 @@
+{
+  "targetReached": true,
+  "postCompactionCumulativeExactInputTokens": 754213,
+  "verifiedReadResults": 44,
+  "allReturnedPagesMatchSource": true,
+  "fileCoverageComplete": true,
+  "contiguousCoverage": true,
+  "checks": [
+    {
+      "path": "Packages/manifest.json",
+      "start": 1,
+      "end": 57,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 1,
+      "end": 16,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 17,
+      "end": 32,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 33,
+      "end": 48,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 49,
+      "end": 64,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 65,
+      "end": 80,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 81,
+      "end": 96,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 97,
+      "end": 112,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 113,
+      "end": 128,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 129,
+      "end": 144,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 145,
+      "end": 160,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 161,
+      "end": 176,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 177,
+      "end": 192,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 193,
+      "end": 208,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 209,
+      "end": 224,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 225,
+      "end": 240,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 241,
+      "end": 256,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 257,
+      "end": 272,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 273,
+      "end": 288,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 289,
+      "end": 304,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 305,
+      "end": 320,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 321,
+      "end": 336,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 337,
+      "end": 352,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 353,
+      "end": 368,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 369,
+      "end": 384,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 385,
+      "end": 400,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 401,
+      "end": 416,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 417,
+      "end": 432,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 433,
+      "end": 448,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 449,
+      "end": 464,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 465,
+      "end": 480,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 481,
+      "end": 496,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 497,
+      "end": 512,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 513,
+      "end": 528,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 529,
+      "end": 544,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 545,
+      "end": 560,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 561,
+      "end": 576,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 577,
+      "end": 592,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 593,
+      "end": 608,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 609,
+      "end": 624,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 625,
+      "end": 640,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 641,
+      "end": 656,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 657,
+      "end": 672,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    },
+    {
+      "path": "Packages/packages-lock.json",
+      "start": 673,
+      "end": 680,
+      "hashMatchesSource": true,
+      "textMatchesSource": true,
+      "countMatchesRange": true,
+      "totalLinesMatchesSource": true,
+      "continuationMatches": true
+    }
+  ],
+  "compactedExactInputs": [
+    16540,
+    16579,
+    16431,
+    16364,
+    16382,
+    16376,
+    16390,
+    16432,
+    16388,
+    16375,
+    16406,
+    16460,
+    16369,
+    16366,
+    16368,
+    16361,
+    16376,
+    16425,
+    16380,
+    16374,
+    16367,
+    16412,
+    16361,
+    16398,
+    16392,
+    16386,
+    16359,
+    16354,
+    16361,
+    16354,
+    16349,
+    16359,
+    16350,
+    16363,
+    16408,
+    16363,
+    16369,
+    16402,
+    16405,
+    16380,
+    16372,
+    16373,
+    16250,
+    15594,
+    17462
+  ],
+  "allCompactedInputsMeetEffectiveLow": true,
+  "backendPromptMatchesExactInput": true,
+  "archiveChecks": [],
+  "semanticSummaryAttempts": 2,
+  "acceptedSemanticSummaries": 0,
+  "oracleForIndependentReviewOnly": {
+    "bridge": "file:C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge",
+    "firstThree": [
+      {
+        "name": "com.cysharp.unitask",
+        "version": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask"
+      },
+      {
+        "name": "com.unity.2d.animation",
+        "version": "13.0.4"
+      },
+      {
+        "name": "com.unity.2d.aseprite",
+        "version": "3.0.1"
+      }
+    ],
+    "last": {
+      "name": "com.unity.modules.xr",
+      "version": "1.0.0"
+    }
+  },
+  "limits": [
+    "Source byte/range integrity does not prove that the model retained all facts.",
+    "Meeting a rising effective Low-water does not prove a stable compaction baseline.",
+    "Final report and archive rehydration must be assessed separately."
+  ]
+}

@@ -1,0 +1,33 @@
+✖ production handler narrows before archive starvation and restores an early fact through the real guard (51.3998ms)
+✔ pending raw identity survives persistence sanitization, cancellation and restart (254.8144ms)
+✔ archive read never claims success for a nonadvancing body page (166.36ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 2
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 596.5401
+
+✖ failing tests:
+
+test at test\prediction-loop.test.cjs:132:1
+✖ production handler narrows before archive starvation and restores an early fact through the real guard (51.3998ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(!tools.some(t => t.name === "write_file"))
+  
+      at Object.act (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:148:27)
+      at runOneToolRound (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-loop.js:54:27)
+      at C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:481:73
+      at async TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:170:3)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

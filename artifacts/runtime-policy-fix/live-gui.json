@@ -1,0 +1,3710 @@
+{
+  "sourceConversation": "C:\\Users\\sster\\.lmstudio\\conversations\\1790319690487.conversation.json",
+  "identities": [
+    {
+      "event": "direct_runtime_identity",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "runtimeSourceRevision": 115,
+      "installedSourceFingerprint": "35947c61b2d700b1cd4d8aa8c570a1dcbd4906935b0fa3061a66bcfb4fd215bd",
+      "installedDistFingerprint": "5fd51de72cd16d214ab4068218b941709cd4385c6aabe621331e96de98cc3e26",
+      "modelIdentifier": "swift-qwen3.8-27b",
+      "toolRegistryFingerprint": "586bc65fa186851736d7f709abbf501ca977d94f98f9f309865606afd37a9b93",
+      "fullToolCount": 34,
+      "contextManagementMode": "hybrid",
+      "configuredWorkingInputTargetTokens": 18000,
+      "configuredWorkingInputTriggerTokens": 22000,
+      "configuredSoftRemainingTokens": 6000,
+      "configuredHardRemainingTokens": 3000,
+      "configuredMaxOutputReserve": 8192,
+      "configuredSafetyMarginTokens": 2048,
+      "configuredFallbackContextLength": 38912
+    },
+    {
+      "event": "direct_runtime_identity",
+      "executionId": "74163b50-0fb4-4432-b5d5-15642b01f133",
+      "runtimeSourceRevision": 115,
+      "installedSourceFingerprint": "35947c61b2d700b1cd4d8aa8c570a1dcbd4906935b0fa3061a66bcfb4fd215bd",
+      "installedDistFingerprint": "5fd51de72cd16d214ab4068218b941709cd4385c6aabe621331e96de98cc3e26",
+      "modelIdentifier": "swift-qwen3.8-27b",
+      "toolRegistryFingerprint": "586bc65fa186851736d7f709abbf501ca977d94f98f9f309865606afd37a9b93",
+      "fullToolCount": 34,
+      "contextManagementMode": "hybrid",
+      "configuredWorkingInputTargetTokens": 18000,
+      "configuredWorkingInputTriggerTokens": 22000,
+      "configuredSoftRemainingTokens": 6000,
+      "configuredHardRemainingTokens": 3000,
+      "configuredMaxOutputReserve": 8192,
+      "configuredSafetyMarginTokens": 2048,
+      "configuredFallbackContextLength": 38912
+    }
+  ],
+  "metric": "sum of exact templated inputs of completed actual research/report predictions; after first real compaction",
+  "target": 380000,
+  "cumulativeExactInputTokens": 785948,
+  "postCompactionCumulativeExactInputTokens": 754213,
+  "rounds": [
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-1",
+      "roundIndex": 0,
+      "exactInputTokens": 14715,
+      "compacted": false,
+      "low": 14715,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 14715,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 14715,
+        "predictedTokensCount": 309,
+        "totalTokensCount": 15024
+      },
+      "prefillMs": 22017,
+      "cumulativeExactInputTokens": 14715,
+      "postCompactionCumulativeExactInputTokens": 0
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-2",
+      "roundIndex": 1,
+      "exactInputTokens": 17020,
+      "compacted": false,
+      "low": 17020,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 17020,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 17020,
+        "predictedTokensCount": 225,
+        "totalTokensCount": 17245
+      },
+      "prefillMs": 3721,
+      "cumulativeExactInputTokens": 31735,
+      "postCompactionCumulativeExactInputTokens": 0
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-3",
+      "roundIndex": 2,
+      "exactInputTokens": 16540,
+      "compacted": true,
+      "low": 16540,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16540,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16540,
+        "predictedTokensCount": 257,
+        "totalTokensCount": 16797
+      },
+      "prefillMs": 23595,
+      "cumulativeExactInputTokens": 48275,
+      "postCompactionCumulativeExactInputTokens": 16540
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-4",
+      "roundIndex": 3,
+      "exactInputTokens": 16579,
+      "compacted": true,
+      "low": 16579,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16579,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16579,
+        "predictedTokensCount": 123,
+        "totalTokensCount": 16702
+      },
+      "prefillMs": 23020,
+      "cumulativeExactInputTokens": 64854,
+      "postCompactionCumulativeExactInputTokens": 33119
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-5",
+      "roundIndex": 4,
+      "exactInputTokens": 16431,
+      "compacted": true,
+      "low": 16431,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16431,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16431,
+        "predictedTokensCount": 99,
+        "totalTokensCount": 16530
+      },
+      "prefillMs": 23204,
+      "cumulativeExactInputTokens": 81285,
+      "postCompactionCumulativeExactInputTokens": 49550
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-6",
+      "roundIndex": 5,
+      "exactInputTokens": 16364,
+      "compacted": true,
+      "low": 16364,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16364,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16364,
+        "predictedTokensCount": 99,
+        "totalTokensCount": 16463
+      },
+      "prefillMs": 23315,
+      "cumulativeExactInputTokens": 97649,
+      "postCompactionCumulativeExactInputTokens": 65914
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-7",
+      "roundIndex": 6,
+      "exactInputTokens": 16382,
+      "compacted": true,
+      "low": 16382,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16382,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16382,
+        "predictedTokensCount": 99,
+        "totalTokensCount": 16481
+      },
+      "prefillMs": 22891,
+      "cumulativeExactInputTokens": 114031,
+      "postCompactionCumulativeExactInputTokens": 82296
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-8",
+      "roundIndex": 7,
+      "exactInputTokens": 16376,
+      "compacted": true,
+      "low": 16376,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16376,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16376,
+        "predictedTokensCount": 99,
+        "totalTokensCount": 16475
+      },
+      "prefillMs": 22964,
+      "cumulativeExactInputTokens": 130407,
+      "postCompactionCumulativeExactInputTokens": 98672
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-9",
+      "roundIndex": 8,
+      "exactInputTokens": 16390,
+      "compacted": true,
+      "low": 16390,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16390,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16390,
+        "predictedTokensCount": 103,
+        "totalTokensCount": 16493
+      },
+      "prefillMs": 22810,
+      "cumulativeExactInputTokens": 146797,
+      "postCompactionCumulativeExactInputTokens": 115062
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-10",
+      "roundIndex": 9,
+      "exactInputTokens": 16432,
+      "compacted": true,
+      "low": 16432,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16432,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16432,
+        "predictedTokensCount": 104,
+        "totalTokensCount": 16536
+      },
+      "prefillMs": 23037,
+      "cumulativeExactInputTokens": 163229,
+      "postCompactionCumulativeExactInputTokens": 131494
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-11",
+      "roundIndex": 10,
+      "exactInputTokens": 16388,
+      "compacted": true,
+      "low": 16388,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16388,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16388,
+        "predictedTokensCount": 104,
+        "totalTokensCount": 16492
+      },
+      "prefillMs": 22969,
+      "cumulativeExactInputTokens": 179617,
+      "postCompactionCumulativeExactInputTokens": 147882
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-12",
+      "roundIndex": 11,
+      "exactInputTokens": 16375,
+      "compacted": true,
+      "low": 16375,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16375,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16375,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16480
+      },
+      "prefillMs": 22888,
+      "cumulativeExactInputTokens": 195992,
+      "postCompactionCumulativeExactInputTokens": 164257
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-13",
+      "roundIndex": 12,
+      "exactInputTokens": 16406,
+      "compacted": true,
+      "low": 16406,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16406,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16406,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16511
+      },
+      "prefillMs": 22912,
+      "cumulativeExactInputTokens": 212398,
+      "postCompactionCumulativeExactInputTokens": 180663
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-14",
+      "roundIndex": 13,
+      "exactInputTokens": 16460,
+      "compacted": true,
+      "low": 16460,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16460,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16460,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16565
+      },
+      "prefillMs": 23002,
+      "cumulativeExactInputTokens": 228858,
+      "postCompactionCumulativeExactInputTokens": 197123
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-15",
+      "roundIndex": 14,
+      "exactInputTokens": 16369,
+      "compacted": true,
+      "low": 16369,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16369,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16369,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16474
+      },
+      "prefillMs": 22967,
+      "cumulativeExactInputTokens": 245227,
+      "postCompactionCumulativeExactInputTokens": 213492
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-16",
+      "roundIndex": 15,
+      "exactInputTokens": 16366,
+      "compacted": true,
+      "low": 16366,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16366,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16366,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16471
+      },
+      "prefillMs": 22806,
+      "cumulativeExactInputTokens": 261593,
+      "postCompactionCumulativeExactInputTokens": 229858
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-17",
+      "roundIndex": 16,
+      "exactInputTokens": 16368,
+      "compacted": true,
+      "low": 16368,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16368,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16368,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16473
+      },
+      "prefillMs": 23034,
+      "cumulativeExactInputTokens": 277961,
+      "postCompactionCumulativeExactInputTokens": 246226
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-18",
+      "roundIndex": 17,
+      "exactInputTokens": 16361,
+      "compacted": true,
+      "low": 16361,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16361,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16361,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16466
+      },
+      "prefillMs": 22880,
+      "cumulativeExactInputTokens": 294322,
+      "postCompactionCumulativeExactInputTokens": 262587
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-19",
+      "roundIndex": 18,
+      "exactInputTokens": 16376,
+      "compacted": true,
+      "low": 16376,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16376,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16376,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16481
+      },
+      "prefillMs": 23051,
+      "cumulativeExactInputTokens": 310698,
+      "postCompactionCumulativeExactInputTokens": 278963
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-20",
+      "roundIndex": 19,
+      "exactInputTokens": 16425,
+      "compacted": true,
+      "low": 16425,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16425,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16425,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16530
+      },
+      "prefillMs": 22990,
+      "cumulativeExactInputTokens": 327123,
+      "postCompactionCumulativeExactInputTokens": 295388
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-21",
+      "roundIndex": 20,
+      "exactInputTokens": 16380,
+      "compacted": true,
+      "low": 16380,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16380,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16380,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16485
+      },
+      "prefillMs": 22799,
+      "cumulativeExactInputTokens": 343503,
+      "postCompactionCumulativeExactInputTokens": 311768
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-22",
+      "roundIndex": 21,
+      "exactInputTokens": 16374,
+      "compacted": true,
+      "low": 16374,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16374,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16374,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16479
+      },
+      "prefillMs": 22713,
+      "cumulativeExactInputTokens": 359877,
+      "postCompactionCumulativeExactInputTokens": 328142
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-23",
+      "roundIndex": 22,
+      "exactInputTokens": 16367,
+      "compacted": true,
+      "low": 16367,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16367,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16367,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16472
+      },
+      "prefillMs": 22813,
+      "cumulativeExactInputTokens": 376244,
+      "postCompactionCumulativeExactInputTokens": 344509
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-24",
+      "roundIndex": 23,
+      "exactInputTokens": 16412,
+      "compacted": true,
+      "low": 16412,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16412,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16412,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16517
+      },
+      "prefillMs": 22998,
+      "cumulativeExactInputTokens": 392656,
+      "postCompactionCumulativeExactInputTokens": 360921
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-25",
+      "roundIndex": 24,
+      "exactInputTokens": 16361,
+      "compacted": true,
+      "low": 16361,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16361,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16361,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16466
+      },
+      "prefillMs": 22867,
+      "cumulativeExactInputTokens": 409017,
+      "postCompactionCumulativeExactInputTokens": 377282
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-26",
+      "roundIndex": 25,
+      "exactInputTokens": 16398,
+      "compacted": true,
+      "low": 16398,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16398,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16398,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16503
+      },
+      "prefillMs": 23076,
+      "cumulativeExactInputTokens": 425415,
+      "postCompactionCumulativeExactInputTokens": 393680
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-27",
+      "roundIndex": 26,
+      "exactInputTokens": 16392,
+      "compacted": true,
+      "low": 16392,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16392,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16392,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16497
+      },
+      "prefillMs": 23080,
+      "cumulativeExactInputTokens": 441807,
+      "postCompactionCumulativeExactInputTokens": 410072
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-28",
+      "roundIndex": 27,
+      "exactInputTokens": 16386,
+      "compacted": true,
+      "low": 16386,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16386,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16386,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16491
+      },
+      "prefillMs": 23095,
+      "cumulativeExactInputTokens": 458193,
+      "postCompactionCumulativeExactInputTokens": 426458
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-29",
+      "roundIndex": 28,
+      "exactInputTokens": 16359,
+      "compacted": true,
+      "low": 16359,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16359,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16359,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16464
+      },
+      "prefillMs": 22939,
+      "cumulativeExactInputTokens": 474552,
+      "postCompactionCumulativeExactInputTokens": 442817
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-30",
+      "roundIndex": 29,
+      "exactInputTokens": 16354,
+      "compacted": true,
+      "low": 16354,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16354,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16354,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16459
+      },
+      "prefillMs": 22897,
+      "cumulativeExactInputTokens": 490906,
+      "postCompactionCumulativeExactInputTokens": 459171
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-31",
+      "roundIndex": 30,
+      "exactInputTokens": 16361,
+      "compacted": true,
+      "low": 16361,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16361,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16361,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16466
+      },
+      "prefillMs": 23069,
+      "cumulativeExactInputTokens": 507267,
+      "postCompactionCumulativeExactInputTokens": 475532
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-32",
+      "roundIndex": 31,
+      "exactInputTokens": 16354,
+      "compacted": true,
+      "low": 16354,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16354,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16354,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16459
+      },
+      "prefillMs": 23051,
+      "cumulativeExactInputTokens": 523621,
+      "postCompactionCumulativeExactInputTokens": 491886
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-33",
+      "roundIndex": 32,
+      "exactInputTokens": 16349,
+      "compacted": true,
+      "low": 16349,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16349,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16349,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16454
+      },
+      "prefillMs": 22884,
+      "cumulativeExactInputTokens": 539970,
+      "postCompactionCumulativeExactInputTokens": 508235
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-34",
+      "roundIndex": 33,
+      "exactInputTokens": 16359,
+      "compacted": true,
+      "low": 16359,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16359,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16359,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16464
+      },
+      "prefillMs": 23117,
+      "cumulativeExactInputTokens": 556329,
+      "postCompactionCumulativeExactInputTokens": 524594
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-35",
+      "roundIndex": 34,
+      "exactInputTokens": 16350,
+      "compacted": true,
+      "low": 16350,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16350,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16350,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16455
+      },
+      "prefillMs": 23242,
+      "cumulativeExactInputTokens": 572679,
+      "postCompactionCumulativeExactInputTokens": 540944
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-36",
+      "roundIndex": 35,
+      "exactInputTokens": 16363,
+      "compacted": true,
+      "low": 16363,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16363,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16363,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16468
+      },
+      "prefillMs": 22861,
+      "cumulativeExactInputTokens": 589042,
+      "postCompactionCumulativeExactInputTokens": 557307
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-37",
+      "roundIndex": 36,
+      "exactInputTokens": 16408,
+      "compacted": true,
+      "low": 16408,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16408,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16408,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16513
+      },
+      "prefillMs": 22978,
+      "cumulativeExactInputTokens": 605450,
+      "postCompactionCumulativeExactInputTokens": 573715
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-38",
+      "roundIndex": 37,
+      "exactInputTokens": 16363,
+      "compacted": true,
+      "low": 16363,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16363,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16363,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16468
+      },
+      "prefillMs": 23020,
+      "cumulativeExactInputTokens": 621813,
+      "postCompactionCumulativeExactInputTokens": 590078
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-39",
+      "roundIndex": 38,
+      "exactInputTokens": 16369,
+      "compacted": true,
+      "low": 16369,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16369,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16369,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16474
+      },
+      "prefillMs": 23317,
+      "cumulativeExactInputTokens": 638182,
+      "postCompactionCumulativeExactInputTokens": 606447
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-40",
+      "roundIndex": 39,
+      "exactInputTokens": 16402,
+      "compacted": true,
+      "low": 16402,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16402,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16402,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16507
+      },
+      "prefillMs": 22989,
+      "cumulativeExactInputTokens": 654584,
+      "postCompactionCumulativeExactInputTokens": 622849
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-41",
+      "roundIndex": 40,
+      "exactInputTokens": 16405,
+      "compacted": true,
+      "low": 16405,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16405,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16405,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16510
+      },
+      "prefillMs": 23058,
+      "cumulativeExactInputTokens": 670989,
+      "postCompactionCumulativeExactInputTokens": 639254
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-42",
+      "roundIndex": 41,
+      "exactInputTokens": 16380,
+      "compacted": true,
+      "low": 16380,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16380,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16380,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16485
+      },
+      "prefillMs": 23160,
+      "cumulativeExactInputTokens": 687369,
+      "postCompactionCumulativeExactInputTokens": 655634
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-43",
+      "roundIndex": 42,
+      "exactInputTokens": 16372,
+      "compacted": true,
+      "low": 16372,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16372,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16372,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16477
+      },
+      "prefillMs": 23039,
+      "cumulativeExactInputTokens": 703741,
+      "postCompactionCumulativeExactInputTokens": 672006
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-44",
+      "roundIndex": 43,
+      "exactInputTokens": 16373,
+      "compacted": true,
+      "low": 16373,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16373,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16373,
+        "predictedTokensCount": 105,
+        "totalTokensCount": 16478
+      },
+      "prefillMs": 23082,
+      "cumulativeExactInputTokens": 720114,
+      "postCompactionCumulativeExactInputTokens": 688379
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-45",
+      "roundIndex": 44,
+      "exactInputTokens": 16250,
+      "compacted": true,
+      "low": 16250,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 16250,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 16250,
+        "predictedTokensCount": 240,
+        "totalTokensCount": 16490
+      },
+      "prefillMs": 22906,
+      "cumulativeExactInputTokens": 736364,
+      "postCompactionCumulativeExactInputTokens": 704629
+    },
+    {
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-46",
+      "roundIndex": 45,
+      "exactInputTokens": 16528,
+      "compacted": false,
+      "low": 15812,
+      "high": 16896,
+      "lowMet": false,
+      "mandatoryFloor": 15812,
+      "finishReason": "eosFound",
+      "backendStats": {
+        "stopReason": "eosFound",
+        "promptTokensCount": 16528,
+        "predictedTokensCount": 2740,
+        "totalTokensCount": 19268
+      },
+      "prefillMs": 326,
+      "cumulativeExactInputTokens": 752892,
+      "postCompactionCumulativeExactInputTokens": 721157
+    },
+    {
+      "modelInputId": "74163b50-0fb4-4432-b5d5-15642b01f133:prediction-1",
+      "roundIndex": 0,
+      "exactInputTokens": 15594,
+      "compacted": true,
+      "low": 15594,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 15594,
+      "finishReason": "toolCalls",
+      "backendStats": {
+        "stopReason": "toolCalls",
+        "promptTokensCount": 15594,
+        "predictedTokensCount": 1831,
+        "totalTokensCount": 17425
+      },
+      "prefillMs": 22219,
+      "cumulativeExactInputTokens": 768486,
+      "postCompactionCumulativeExactInputTokens": 736751
+    },
+    {
+      "modelInputId": "74163b50-0fb4-4432-b5d5-15642b01f133:prediction-2",
+      "roundIndex": 1,
+      "exactInputTokens": 17462,
+      "compacted": true,
+      "low": 17462,
+      "high": 16896,
+      "lowMet": true,
+      "mandatoryFloor": 17462,
+      "finishReason": "eosFound",
+      "backendStats": {
+        "stopReason": "eosFound",
+        "promptTokensCount": 17462,
+        "predictedTokensCount": 1636,
+        "totalTokensCount": 19098
+      },
+      "prefillMs": 24192,
+      "cumulativeExactInputTokens": 785948,
+      "postCompactionCumulativeExactInputTokens": 754213
+    }
+  ],
+  "compactions": 45,
+  "toolErrors": [
+    {
+      "callId": "CdHb50lg4nXfpaMqxeJxvOg9YTivSd3F",
+      "error": "Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more."
+    },
+    {
+      "callId": "UKVQUQsP2F5kiV42vegt4Q59UZASc81L",
+      "error": "Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more."
+    }
+  ],
+  "pages": 43,
+  "lastLine": 680,
+  "pageCoverageContiguous": true,
+  "pageHashesStable": true,
+  "fileReadComplete": true,
+  "answers": [
+    "## GUI-380K-R115 읽기 전용 연속 조회 스트레스 테스트 — 중간 보고 (조회 중단)\n\n**lock 파일 순차 조회: 완료**\n- `Packages/packages-lock.json`을 startLine=1부터 limit=16/byteBudget=4096(예산 초과 시 반환된 실제 범위)으로 페이지 경계 없이 연속 조회했습니다.\n- 마지막 페이지: **673–680줄**, `hasMore=false`, `nextStartLine=null` → 파일 전체 조회 완료.\n- 총 줄 수: **680**\n- 파일 hash (전체 바이트 sha256, 모든 페이지에서 동일하게 반환): `11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea`\n- 마지막 페이지 내용: `com.unity.modules.physics`, `com.unity.modules.jsonserialize`, `com.unity.modules.subsystems`(모두 \"1.0.0\")으로 끝나는 의존성 목록과 닫는 중괄호들(파일 종료).\n\n**현재 입력에서 근거가 사라진 항목 (아카이브 확인 시도 실패)**\n- manifest의 `com.evidencefirst.unity-bridge` 값과 hash, lock 파일 첫 페이지의 처음 세 패키지 이름/version, 마지막 최상위 패키지 이름/version은 이전 라운드에 읽었지만 현재 컨텍스트에 남아 있지 않습니다.\n- 지시대로 아카이브 확인을 시도했으나(`evidence_first_read_context`, action=catalog, path=Packages/manifest.json) 다음 오류가 반환되어 중단합니다:\n\n> **오류 전문**: `Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more.`\n\n- 마지막 성공 범위: `Packages/packages-lock.json` 673–680줄 (hasMore=false).\n\n**완료 여부**: lock 파일의 순차 조회 자체는 끝까지 완료했으나, 아카이브 조회 예산 오류로 manifest Bridge 값/hash와 첫·마지막 패키지 항목을 재확인하지 못해 최종 보고가 불완전합니다. 지시(\"도구 오류 시 오류 전문과 마지막 성공 범위를 보고하고 멈춰라\")에 따라 여기서 중단합니다. 추후 예산이 복구되면 catalog → 정확한 evidenceId/version으로 읽기만 다시 수행하면 됩니다(설치·수정·실행 없음).\n",
+    "도구 오류가 발생해 프로토콜에 따라 보고 후 중단합니다.\n\n## 오류 전문\n```\nShared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more.\n```\n(아카이브 카탈로그 조회 `evidence_first_read_context action=catalog path=Packages/packages-lock.json` 호출 시 발생)\n\n## 마지막 성공 범위\n- **Packages/packages-lock.json**: 673–680행 (이전 라운드에서 순차 읽기의 최종 페이지, 파일 총 680행)\n\n## 현재 입력에 남은 근거 (연속성 메모리 기반)\n| 항목 | 값 |\n|---|---|\n| lock 파일 sha256 | `11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea` |\n| lock 파일 총 줄 수 | 680 |\n| 순차 읽기 진행 상태 | 이전 라운드에서 1행부터 680행(마지막 행)까지 완료 |\n\n## 현재 입력에서 확인 불가한 항목\n- manifest의 `com.evidencefirst.unity-bridge` 값과 파일 hash\n- lock 파일 첫 세 패키지 이름/version\n- 마지막 패키지 이름/version\n\n이 값들은 이전 라운드에 실제로 읽혀 기록되었으나 현재 입력에서 사라졌고, 아카이브로 복구하려던 이번 호출이 예산 소진 오류로 실패했습니다.\n\n## 완료 여부\n순차 조회 자체는 이전 라운드에서 파일 끝(680행)까지 도달했으나, 최종 보고에 필요한 세부 근거의 아카이브 재확인이 이번 라운드에 실패했으므로 **중단**합니다. 설치·수정·실행·프로젝트 전환은 수행하지 않았습니다.\n"
+  ],
+  "requests": [
+    {
+      "toolCallRequestId": "7bePqn31tK8jKDCWforWMihoo8PGTvOD",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/manifest.json",
+        "limit": 200,
+        "byteBudget": 65536
+      }
+    },
+    {
+      "toolCallRequestId": "G6I1c7U4oKx5sn1TgVa564G9VllME0H0",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 1,
+        "limit": 16,
+        "byteBudget": 4096
+      }
+    },
+    {
+      "toolCallRequestId": "wecUkszHpTpcqNZAgBZkODXs5wGMFQfX",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 17,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "gwQAvYWXpcevxbJSNrjLjZI4dVzLgljk",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 33,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "h38RJ0ZHg8V8YtKv8GyZmNXpmHA7YZXr",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 49,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "FLHt8PLJbrvfI80DCFJmd8YFxwavCUs5",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 65,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "9w4X3NhuoBbKHGuudA6iozfW720feZol",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 81,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "Z3FrBUUWHraubQQbcJpPLlvC4V0hjuXI",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 97,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "6FSbVGwD7VDsNkgb9GsHcs1g2KI52lnL",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 113,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "uOajKiOgyROq1OKmtg2zV3wyPb2Ew20o",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 129,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "yexBR8GbDvDnMMRnmXXheFGByMDk02BY",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 145,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "4GU3v1LoVs9y0hFIbLSpXr1MySw4dqZt",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 161,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "nAJ4oxAXHdSOD4QjeYuwUKo56L3C1YB8",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 177,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "PX1LiiMgfSwxdEdlHmWaL2x2RJ9ZAJFD",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 193,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "wspCgk4cMtIRm52s8uuiTCC05LOLqKX3",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 209,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "0pIJIXsF2ToxNyEicm2seJ6y1Bo7ZWIB",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 225,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "iLrl7HA20kE9Au86I88w1b7YwPQN390d",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 241,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "HSg9oL9CVFig6WEH84KQjjh8hh5YdPkK",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 257,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "YtJPpyv6EGVNru28gh8i5XB9n9nrSRoF",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 273,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "DCXJqsN1uk9aj2iXRqg7NjUTr9dLWygg",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 289,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "HA2974FwpLu4jZlUviiI2ntNHJ7AF1Vf",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 305,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "3oIo5LVkYiOFo98fcSWlDZv63cR3cIN3",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 321,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "yQuWrwEEtvme8ekGGEG7pKlTMNysBubg",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 337,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "xRCKZb48wmX12O3k6w9jVdMJd1zrCF9W",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 353,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "Zd7poHZ9CLek1vO5ZgmxVCXlhNOTRVJT",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 369,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "pllHNPtYCpkQgJinR9HUhAPNVEQXXt0r",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 385,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "K2znQ5CXFQB5lnWbpB1GReNLaXqF9e3L",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 401,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "tibbdvMcp0j0sXJsK2myp16zEl4QtyEH",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 417,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "tIF4HFYXi5kZ3wsd777b4GUteLXXQtby",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 433,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "kmKNSbeC56T8NhVevqxGGcbHWFR9r34C",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 449,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "xEMnm051FsBw2Grqu592xaIY0BD3Cbqt",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 465,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "Ri41BBFh7vPG6mCaRSX0u1o1HMqw2fMG",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 481,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "kiAYTLZrjEfPER2Kg4WGedjbCnUdOgmH",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 497,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "C1QlO5BaK3uzyDKcCJ7MfvlvelSaQqeY",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 513,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "055aKoaUh1Wuxue1GI20RFEKVWqcHU01",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 529,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "YDcUo887kDed1dcXE8ZQZsYC4xiGPmH4",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 545,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "UuqncSjobM7jSyNtZtXEelyhlB7swJsF",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 561,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "1leYa1SP1RhqaYLkxR0soxsOhXGjJ9DW",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 577,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "sKfog58hxgSMq7SbeH1Gi7qB6KYpsxhX",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 593,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "Fg6B9J6TP0OSRbt5UXz9H2zHVPQR9li0",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 609,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "bMcuoqyk28hXzuLevvJwqQw7zKCjsD2U",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 625,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "DDuSzB9iwnDL6QtgQEbDMTLGtut4nxfp",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 641,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "IL7f02Bfx0LsNm8HWAq7izxY4iXA5mxR",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 657,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "bBaxcmqpDfXx7dNJ755gb9mHBnL21lPg",
+      "name": "read_file",
+      "parameters": {
+        "path": "Packages/packages-lock.json",
+        "startLine": 673,
+        "limit": 16,
+        "byteBudget": 2436
+      }
+    },
+    {
+      "toolCallRequestId": "CdHb50lg4nXfpaMqxeJxvOg9YTivSd3F",
+      "name": "evidence_first_read_context",
+      "parameters": {
+        "action": "catalog",
+        "path": "Packages/manifest.json"
+      }
+    },
+    {
+      "toolCallRequestId": "UKVQUQsP2F5kiV42vegt4Q59UZASc81L",
+      "name": "evidence_first_read_context",
+      "parameters": {
+        "action": "catalog",
+        "path": "Packages/packages-lock.json"
+      }
+    }
+  ],
+  "reads": [
+    {
+      "callId": "7bePqn31tK8jKDCWforWMihoo8PGTvOD",
+      "status": "observed",
+      "path": "Packages/manifest.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "a0c4a49310ea7d4c062a2e0b25c601c4fe550699611e79866da75b236cf9642f",
+      "observedAt": "2026-09-25T07:02:43.745Z",
+      "startLine": 1,
+      "endLine": 57,
+      "returnedLineCount": 57,
+      "totalLines": 57,
+      "text": "{\n  \"dependencies\": {\n    \"com.cysharp.unitask\": \"https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask\",\n    \"com.unity.addressables\": \"2.9.1\",\n    \"com.unity.cinemachine\": \"3.1.6\",\n    \"com.unity.collab-proxy\": \"2.12.4\",\n    \"com.unity.feature.2d\": \"2.0.2\",\n    \"com.unity.ide.rider\": \"3.0.39\",\n    \"com.unity.ide.visualstudio\": \"2.0.26\",\n    \"com.unity.inputsystem\": \"1.19.0\",\n    \"com.unity.multiplayer.center\": \"1.0.1\",\n    \"com.unity.nuget.newtonsoft-json\": \"3.2.2\",\n    \"com.unity.postprocessing\": \"3.5.4\",\n    \"com.unity.render-pipelines.universal\": \"17.3.0\",\n    \"com.unity.test-framework\": \"1.6.0\",\n    \"com.unity.timeline\": \"1.8.12\",\n    \"com.unity.ugui\": \"2.0.0\",\n    \"com.unity.visualscripting\": \"1.9.11\",\n    \"jp.hadashikick.vcontainer\": \"https://github.com/hadashiA/VContainer.git?path=VContainer/Assets/VContainer#1.16.8\",\n    \"com.unity.modules.accessibility\": \"1.0.0\",\n    \"com.unity.modules.adaptiveperformance\": \"1.0.0\",\n    \"com.unity.modules.ai\": \"1.0.0\",\n    \"com.unity.modules.androidjni\": \"1.0.0\",\n    \"com.unity.modules.animation\": \"1.0.0\",\n    \"com.unity.modules.assetbundle\": \"1.0.0\",\n    \"com.unity.modules.audio\": \"1.0.0\",\n    \"com.unity.modules.cloth\": \"1.0.0\",\n    \"com.unity.modules.director\": \"1.0.0\",\n    \"com.unity.modules.imageconversion\": \"1.0.0\",\n    \"com.unity.modules.imgui\": \"1.0.0\",\n    \"com.unity.modules.jsonserialize\": \"1.0.0\",\n    \"com.unity.modules.particlesystem\": \"1.0.0\",\n    \"com.unity.modules.physics\": \"1.0.0\",\n    \"com.unity.modules.physics2d\": \"1.0.0\",\n    \"com.unity.modules.screencapture\": \"1.0.0\",\n    \"com.unity.modules.terrain\": \"1.0.0\",\n    \"com.unity.modules.terrainphysics\": \"1.0.0\",\n    \"com.unity.modules.tilemap\": \"1.0.0\",\n    \"com.unity.modules.ui\": \"1.0.0\",\n    \"com.unity.modules.uielements\": \"1.0.0\",\n    \"com.unity.modules.umbra\": \"1.0.0\",\n    \"com.unity.modules.unityanalytics\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequest\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequestassetbundle\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequestaudio\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequesttexture\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequestwww\": \"1.0.0\",\n    \"com.unity.modules.vectorgraphics\": \"1.0.0\",\n    \"com.unity.modules.vehicles\": \"1.0.0\",\n    \"com.unity.modules.video\": \"1.0.0\",\n    \"com.unity.modules.vr\": \"1.0.0\",\n    \"com.unity.modules.wind\": \"1.0.0\",\n    \"com.unity.modules.xr\": \"1.0.0\",\n    \"com.evidencefirst.unity-bridge\": \"file:C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge\"\n  }\n}\n",
+      "hasMore": false,
+      "nextStartLine": null,
+      "truncated": false,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "a0c4a49310ea7d4c062a2e0b25c601c4fe550699611e79866da75b236cf9642f",
+      "range": {
+        "unit": "line",
+        "start": 1,
+        "end": 57,
+        "total": 57
+      },
+      "coverage": "complete"
+    },
+    {
+      "callId": "G6I1c7U4oKx5sn1TgVa564G9VllME0H0",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:02:51.854Z",
+      "startLine": 1,
+      "endLine": 16,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "{\n  \"dependencies\": {\n    \"com.cysharp.unitask\": {\n      \"version\": \"https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask\",\n      \"depth\": 0,\n      \"source\": \"git\",\n      \"dependencies\": {},\n      \"hash\": \"a9e27c03d411d2fca01cc7410c24c97cd77cb539\"\n    },\n    \"com.unity.2d.animation\": {\n      \"version\": \"13.0.4\",\n      \"depth\": 1,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.2d.common\": \"12.0.2\",\n        \"com.unity.2d.sprite\": \"1.0.0\",",
+      "hasMore": true,
+      "nextStartLine": 17,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 1,
+        "end": 16,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "wecUkszHpTpcqNZAgBZkODXs5wGMFQfX",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:03:50.105Z",
+      "startLine": 17,
+      "endLine": 32,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "        \"com.unity.collections\": \"2.4.3\",\n        \"com.unity.modules.animation\": \"1.0.0\",\n        \"com.unity.modules.uielements\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.2d.aseprite\": {\n      \"version\": \"3.0.1\",\n      \"depth\": 1,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.2d.common\": \"12.0.1\",\n        \"com.unity.2d.sprite\": \"1.0.0\",\n        \"com.unity.2d.tilemap\": \"1.0.0\",\n        \"com.unity.mathematics\": \"1.2.6\",\n        \"com.unity.modules.animation\": \"1.0.0\"",
+      "hasMore": true,
+      "nextStartLine": 33,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 17,
+        "end": 32,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "gwQAvYWXpcevxbJSNrjLjZI4dVzLgljk",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:04:16.875Z",
+      "startLine": 33,
+      "endLine": 48,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.2d.common\": {\n      \"version\": \"12.0.2\",\n      \"depth\": 2,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.burst\": \"1.8.4\",\n        \"com.unity.2d.sprite\": \"1.0.0\",\n        \"com.unity.collections\": \"2.4.3\",\n        \"com.unity.mathematics\": \"1.1.0\",\n        \"com.unity.modules.animation\": \"1.0.0\",\n        \"com.unity.modules.uielements\": \"1.0.0\",\n        \"com.unity.modules.imageconversion\": \"1.0.0\"\n      },",
+      "hasMore": true,
+      "nextStartLine": 49,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 33,
+        "end": 48,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "h38RJ0ZHg8V8YtKv8GyZmNXpmHA7YZXr",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:04:42.967Z",
+      "startLine": 49,
+      "endLine": 64,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.2d.pixel-perfect\": {\n      \"version\": \"5.1.1\",\n      \"depth\": 1,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.modules.imgui\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.2d.psdimporter\": {\n      \"version\": \"12.0.1\",\n      \"depth\": 1,\n      \"source\": \"registry\",\n      \"dependencies\": {",
+      "hasMore": true,
+      "nextStartLine": 65,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 49,
+        "end": 64,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "FLHt8PLJbrvfI80DCFJmd8YFxwavCUs5",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:05:08.756Z",
+      "startLine": 65,
+      "endLine": 80,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "        \"com.unity.2d.common\": \"12.0.1\",\n        \"com.unity.2d.sprite\": \"1.0.0\",\n        \"com.unity.2d.tilemap\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.2d.sprite\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 1,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.2d.spriteshape\": {\n      \"version\": \"13.0.0\",\n      \"depth\": 1,\n      \"source\": \"registry\",",
+      "hasMore": true,
+      "nextStartLine": 81,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 65,
+        "end": 80,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "9w4X3NhuoBbKHGuudA6iozfW720feZol",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:05:35.023Z",
+      "startLine": 81,
+      "endLine": 96,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"dependencies\": {\n        \"com.unity.2d.common\": \"12.0.0\",\n        \"com.unity.mathematics\": \"1.1.0\",\n        \"com.unity.modules.physics2d\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.2d.tilemap\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 1,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.tilemap\": \"1.0.0\",\n        \"com.unity.modules.uielements\": \"1.0.0\"\n      }\n    },",
+      "hasMore": true,
+      "nextStartLine": 97,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 81,
+        "end": 96,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "Z3FrBUUWHraubQQbcJpPLlvC4V0hjuXI",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:06:00.872Z",
+      "startLine": 97,
+      "endLine": 112,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    \"com.unity.2d.tilemap.extras\": {\n      \"version\": \"6.0.1\",\n      \"depth\": 1,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.2d.tilemap\": \"1.0.0\",\n        \"com.unity.modules.tilemap\": \"1.0.0\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.2d.tooling\": {\n      \"version\": \"1.0.2\",\n      \"depth\": 1,\n      \"source\": \"registry\",\n      \"dependencies\": {",
+      "hasMore": true,
+      "nextStartLine": 113,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 97,
+        "end": 112,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "6FSbVGwD7VDsNkgb9GsHcs1g2KI52lnL",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:06:26.188Z",
+      "startLine": 113,
+      "endLine": 128,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "        \"com.unity.2d.common\": \"12.0.2\",\n        \"com.unity.modules.uielements\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.addressables\": {\n      \"version\": \"2.9.1\",\n      \"depth\": 0,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.profiling.core\": \"1.0.2\",\n        \"com.unity.test-framework\": \"1.4.5\",\n        \"com.unity.modules.assetbundle\": \"1.0.0\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\",\n        \"com.unity.modules.imageconversion\": \"1.0.0\",\n        \"com.unity.modules.unitywebrequest\": \"1.0.0\",",
+      "hasMore": true,
+      "nextStartLine": 129,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 113,
+        "end": 128,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "uOajKiOgyROq1OKmtg2zV3wyPb2Ew20o",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:06:51.760Z",
+      "startLine": 129,
+      "endLine": 144,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "        \"com.unity.scriptablebuildpipeline\": \"2.6.1\",\n        \"com.unity.modules.unitywebrequestassetbundle\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.burst\": {\n      \"version\": \"1.8.29\",\n      \"depth\": 2,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.mathematics\": \"1.2.1\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.cinemachine\": {",
+      "hasMore": true,
+      "nextStartLine": 145,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 129,
+        "end": 144,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "yexBR8GbDvDnMMRnmXXheFGByMDk02BY",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:07:17.311Z",
+      "startLine": 145,
+      "endLine": 160,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"version\": \"3.1.6\",\n      \"depth\": 0,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.splines\": \"2.0.0\",\n        \"com.unity.modules.imgui\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.collab-proxy\": {\n      \"version\": \"2.12.4\",\n      \"depth\": 0,\n      \"source\": \"registry\",\n      \"dependencies\": {},\n      \"url\": \"https://packages.unity.com\"\n    },",
+      "hasMore": true,
+      "nextStartLine": 161,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 145,
+        "end": 160,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "4GU3v1LoVs9y0hFIbLSpXr1MySw4dqZt",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:07:42.771Z",
+      "startLine": 161,
+      "endLine": 176,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    \"com.unity.collections\": {\n      \"version\": \"2.6.5\",\n      \"depth\": 2,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.burst\": \"1.8.27\",\n        \"com.unity.mathematics\": \"1.3.2\",\n        \"com.unity.test-framework\": \"1.4.6\",\n        \"com.unity.nuget.mono-cecil\": \"1.11.6\",\n        \"com.unity.test-framework.performance\": \"3.0.3\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.ext.nunit\": {\n      \"version\": \"2.0.5\",\n      \"depth\": 1,",
+      "hasMore": true,
+      "nextStartLine": 177,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 161,
+        "end": 176,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "nAJ4oxAXHdSOD4QjeYuwUKo56L3C1YB8",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:08:08.307Z",
+      "startLine": 177,
+      "endLine": 192,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.feature.2d\": {\n      \"version\": \"2.0.2\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.2d.animation\": \"13.0.4\",\n        \"com.unity.2d.pixel-perfect\": \"5.1.1\",\n        \"com.unity.2d.psdimporter\": \"12.0.1\",\n        \"com.unity.2d.sprite\": \"1.0.0\",\n        \"com.unity.2d.spriteshape\": \"13.0.0\",\n        \"com.unity.2d.tilemap\": \"1.0.0\",\n        \"com.unity.2d.tilemap.extras\": \"6.0.1\",\n        \"com.unity.2d.aseprite\": \"3.0.1\",",
+      "hasMore": true,
+      "nextStartLine": 193,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 177,
+        "end": 192,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "PX1LiiMgfSwxdEdlHmWaL2x2RJ9ZAJFD",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:08:33.901Z",
+      "startLine": 193,
+      "endLine": 208,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "        \"com.unity.2d.tooling\": \"1.0.2\"\n      }\n    },\n    \"com.unity.ide.rider\": {\n      \"version\": \"3.0.39\",\n      \"depth\": 0,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.ext.nunit\": \"1.0.6\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.ide.visualstudio\": {\n      \"version\": \"2.0.26\",\n      \"depth\": 0,\n      \"source\": \"registry\",",
+      "hasMore": true,
+      "nextStartLine": 209,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 193,
+        "end": 208,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "wspCgk4cMtIRm52s8uuiTCC05LOLqKX3",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:08:59.477Z",
+      "startLine": 209,
+      "endLine": 224,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"dependencies\": {\n        \"com.unity.test-framework\": \"1.1.33\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.inputsystem\": {\n      \"version\": \"1.19.0\",\n      \"depth\": 0,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.modules.uielements\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.mathematics\": {\n      \"version\": \"1.3.3\",",
+      "hasMore": true,
+      "nextStartLine": 225,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 209,
+        "end": 224,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "0pIJIXsF2ToxNyEicm2seJ6y1Bo7ZWIB",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:09:24.855Z",
+      "startLine": 225,
+      "endLine": 240,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"depth\": 2,\n      \"source\": \"registry\",\n      \"dependencies\": {},\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.multiplayer.center\": {\n      \"version\": \"1.0.1\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.uielements\": \"1.0.0\"\n      }\n    },\n    \"com.unity.nuget.mono-cecil\": {\n      \"version\": \"1.11.6\",\n      \"depth\": 3,",
+      "hasMore": true,
+      "nextStartLine": 241,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 225,
+        "end": 240,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "iLrl7HA20kE9Au86I88w1b7YwPQN390d",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:09:50.491Z",
+      "startLine": 241,
+      "endLine": 256,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"source\": \"registry\",\n      \"dependencies\": {},\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.nuget.newtonsoft-json\": {\n      \"version\": \"3.2.2\",\n      \"depth\": 0,\n      \"source\": \"registry\",\n      \"dependencies\": {},\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.postprocessing\": {\n      \"version\": \"3.5.4\",\n      \"depth\": 0,\n      \"source\": \"registry\",\n      \"dependencies\": {",
+      "hasMore": true,
+      "nextStartLine": 257,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 241,
+        "end": 256,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "HSg9oL9CVFig6WEH84KQjjh8hh5YdPkK",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:10:15.984Z",
+      "startLine": 257,
+      "endLine": 272,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "        \"com.unity.modules.imgui\": \"1.0.0\",\n        \"com.unity.modules.physics\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.profiling.core\": {\n      \"version\": \"1.0.3\",\n      \"depth\": 1,\n      \"source\": \"registry\",\n      \"dependencies\": {},\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.render-pipelines.core\": {\n      \"version\": \"17.3.0\",\n      \"depth\": 1,\n      \"source\": \"builtin\",",
+      "hasMore": true,
+      "nextStartLine": 273,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 257,
+        "end": 272,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "YtJPpyv6EGVNru28gh8i5XB9n9nrSRoF",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:10:41.654Z",
+      "startLine": 273,
+      "endLine": 288,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"dependencies\": {\n        \"com.unity.burst\": \"1.8.14\",\n        \"com.unity.mathematics\": \"1.3.2\",\n        \"com.unity.ugui\": \"2.0.0\",\n        \"com.unity.collections\": \"2.4.3\",\n        \"com.unity.modules.physics\": \"1.0.0\",\n        \"com.unity.modules.terrain\": \"1.0.0\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\"\n      }\n    },\n    \"com.unity.render-pipelines.universal\": {\n      \"version\": \"17.3.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.render-pipelines.core\": \"17.3.0\",",
+      "hasMore": true,
+      "nextStartLine": 289,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 273,
+        "end": 288,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "DCXJqsN1uk9aj2iXRqg7NjUTr9dLWygg",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:11:07.258Z",
+      "startLine": 289,
+      "endLine": 304,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "        \"com.unity.shadergraph\": \"17.3.0\",\n        \"com.unity.render-pipelines.universal-config\": \"17.0.3\"\n      }\n    },\n    \"com.unity.render-pipelines.universal-config\": {\n      \"version\": \"17.0.3\",\n      \"depth\": 1,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.render-pipelines.core\": \"17.0.3\"\n      }\n    },\n    \"com.unity.scriptablebuildpipeline\": {\n      \"version\": \"2.6.1\",\n      \"depth\": 1,\n      \"source\": \"registry\",",
+      "hasMore": true,
+      "nextStartLine": 305,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 289,
+        "end": 304,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "HA2974FwpLu4jZlUviiI2ntNHJ7AF1Vf",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:11:32.652Z",
+      "startLine": 305,
+      "endLine": 320,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"dependencies\": {\n        \"com.unity.test-framework\": \"1.4.5\",\n        \"com.unity.modules.assetbundle\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.searcher\": {\n      \"version\": \"4.9.4\",\n      \"depth\": 2,\n      \"source\": \"registry\",\n      \"dependencies\": {},\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.settings-manager\": {\n      \"version\": \"2.1.1\",\n      \"depth\": 2,",
+      "hasMore": true,
+      "nextStartLine": 321,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 305,
+        "end": 320,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "3oIo5LVkYiOFo98fcSWlDZv63cR3cIN3",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:11:57.968Z",
+      "startLine": 321,
+      "endLine": 336,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"source\": \"registry\",\n      \"dependencies\": {},\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.shadergraph\": {\n      \"version\": \"17.3.0\",\n      \"depth\": 1,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.render-pipelines.core\": \"17.3.0\",\n        \"com.unity.searcher\": \"4.9.3\"\n      }\n    },\n    \"com.unity.splines\": {\n      \"version\": \"2.8.4\",\n      \"depth\": 1,",
+      "hasMore": true,
+      "nextStartLine": 337,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 321,
+        "end": 336,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "yQuWrwEEtvme8ekGGEG7pKlTMNysBubg",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:12:23.439Z",
+      "startLine": 337,
+      "endLine": 352,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.mathematics\": \"1.2.1\",\n        \"com.unity.modules.imgui\": \"1.0.0\",\n        \"com.unity.settings-manager\": \"1.0.3\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.test-framework\": {\n      \"version\": \"1.6.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.ext.nunit\": \"2.0.3\",\n        \"com.unity.modules.imgui\": \"1.0.0\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\"",
+      "hasMore": true,
+      "nextStartLine": 353,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 337,
+        "end": 352,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "xRCKZb48wmX12O3k6w9jVdMJd1zrCF9W",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:12:49.061Z",
+      "startLine": 353,
+      "endLine": 368,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      }\n    },\n    \"com.unity.test-framework.performance\": {\n      \"version\": \"3.4.0\",\n      \"depth\": 3,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.test-framework\": \"1.1.33\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.timeline\": {\n      \"version\": \"1.8.12\",\n      \"depth\": 0,\n      \"source\": \"registry\",",
+      "hasMore": true,
+      "nextStartLine": 369,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 353,
+        "end": 368,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "Zd7poHZ9CLek1vO5ZgmxVCXlhNOTRVJT",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:13:14.515Z",
+      "startLine": 369,
+      "endLine": 384,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"dependencies\": {\n        \"com.unity.modules.audio\": \"1.0.0\",\n        \"com.unity.modules.director\": \"1.0.0\",\n        \"com.unity.modules.animation\": \"1.0.0\",\n        \"com.unity.modules.particlesystem\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"com.unity.ugui\": {\n      \"version\": \"2.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.ui\": \"1.0.0\",\n        \"com.unity.modules.imgui\": \"1.0.0\"\n      }",
+      "hasMore": true,
+      "nextStartLine": 385,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 369,
+        "end": 384,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "pllHNPtYCpkQgJinR9HUhAPNVEQXXt0r",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:13:40.119Z",
+      "startLine": 385,
+      "endLine": 400,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    },\n    \"com.unity.visualscripting\": {\n      \"version\": \"1.9.11\",\n      \"depth\": 0,\n      \"source\": \"registry\",\n      \"dependencies\": {\n        \"com.unity.ugui\": \"1.0.0\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\"\n      },\n      \"url\": \"https://packages.unity.com\"\n    },\n    \"jp.hadashikick.vcontainer\": {\n      \"version\": \"https://github.com/hadashiA/VContainer.git?path=VContainer/Assets/VContainer#1.16.8\",\n      \"depth\": 0,\n      \"source\": \"git\",\n      \"dependencies\": {},",
+      "hasMore": true,
+      "nextStartLine": 401,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 385,
+        "end": 400,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "K2znQ5CXFQB5lnWbpB1GReNLaXqF9e3L",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:14:05.836Z",
+      "startLine": 401,
+      "endLine": 416,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"hash\": \"5e6f5cc14b6dc8b94251bf6c0d6c37025a6ecf77\"\n    },\n    \"com.unity.modules.accessibility\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.adaptiveperformance\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.subsystems\": \"1.0.0\"\n      }\n    },",
+      "hasMore": true,
+      "nextStartLine": 417,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 401,
+        "end": 416,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "tibbdvMcp0j0sXJsK2myp16zEl4QtyEH",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:14:31.536Z",
+      "startLine": 417,
+      "endLine": 432,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    \"com.unity.modules.ai\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.androidjni\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.animation\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",",
+      "hasMore": true,
+      "nextStartLine": 433,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 417,
+        "end": 432,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "tIF4HFYXi5kZ3wsd777b4GUteLXXQtby",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:14:57.153Z",
+      "startLine": 433,
+      "endLine": 448,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"dependencies\": {}\n    },\n    \"com.unity.modules.assetbundle\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.audio\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.cloth\": {\n      \"version\": \"1.0.0\",",
+      "hasMore": true,
+      "nextStartLine": 449,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 433,
+        "end": 448,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "kmKNSbeC56T8NhVevqxGGcbHWFR9r34C",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:15:22.608Z",
+      "startLine": 449,
+      "endLine": 464,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.physics\": \"1.0.0\"\n      }\n    },\n    \"com.unity.modules.director\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.audio\": \"1.0.0\",\n        \"com.unity.modules.animation\": \"1.0.0\"\n      }\n    },\n    \"com.unity.modules.hierarchycore\": {",
+      "hasMore": true,
+      "nextStartLine": 465,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 449,
+        "end": 464,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "xEMnm051FsBw2Grqu592xaIY0BD3Cbqt",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:15:48.191Z",
+      "startLine": 465,
+      "endLine": 480,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"version\": \"1.0.0\",\n      \"depth\": 1,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.imageconversion\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.imgui\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}",
+      "hasMore": true,
+      "nextStartLine": 481,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 465,
+        "end": 480,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "Ri41BBFh7vPG6mCaRSX0u1o1HMqw2fMG",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:16:14.695Z",
+      "startLine": 481,
+      "endLine": 496,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    },\n    \"com.unity.modules.jsonserialize\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.particlesystem\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.physics\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,",
+      "hasMore": true,
+      "nextStartLine": 497,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 481,
+        "end": 496,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "kiAYTLZrjEfPER2Kg4WGedjbCnUdOgmH",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:16:40.861Z",
+      "startLine": 497,
+      "endLine": 512,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.physics2d\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.screencapture\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.imageconversion\": \"1.0.0\"\n      }",
+      "hasMore": true,
+      "nextStartLine": 513,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 497,
+        "end": 512,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "C1QlO5BaK3uzyDKcCJ7MfvlvelSaQqeY",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:17:07.457Z",
+      "startLine": 513,
+      "endLine": 528,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    },\n    \"com.unity.modules.subsystems\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 1,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.jsonserialize\": \"1.0.0\"\n      }\n    },\n    \"com.unity.modules.terrain\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.terrainphysics\": {",
+      "hasMore": true,
+      "nextStartLine": 529,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 513,
+        "end": 528,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "055aKoaUh1Wuxue1GI20RFEKVWqcHU01",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:17:34.391Z",
+      "startLine": 529,
+      "endLine": 544,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.physics\": \"1.0.0\",\n        \"com.unity.modules.terrain\": \"1.0.0\"\n      }\n    },\n    \"com.unity.modules.tilemap\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.physics2d\": \"1.0.0\"\n      }\n    },",
+      "hasMore": true,
+      "nextStartLine": 545,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 529,
+        "end": 544,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "YDcUo887kDed1dcXE8ZQZsYC4xiGPmH4",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:18:00.403Z",
+      "startLine": 545,
+      "endLine": 560,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    \"com.unity.modules.ui\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.uielements\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.ui\": \"1.0.0\",\n        \"com.unity.modules.imgui\": \"1.0.0\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\",\n        \"com.unity.modules.hierarchycore\": \"1.0.0\",\n        \"com.unity.modules.physics\": \"1.0.0\"",
+      "hasMore": true,
+      "nextStartLine": 561,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 545,
+        "end": 560,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "UuqncSjobM7jSyNtZtXEelyhlB7swJsF",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:18:26.700Z",
+      "startLine": 561,
+      "endLine": 576,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      }\n    },\n    \"com.unity.modules.umbra\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.unityanalytics\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.unitywebrequest\": \"1.0.0\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\"\n      }",
+      "hasMore": true,
+      "nextStartLine": 577,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 561,
+        "end": 576,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "1leYa1SP1RhqaYLkxR0soxsOhXGjJ9DW",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:18:53.107Z",
+      "startLine": 577,
+      "endLine": 592,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    },\n    \"com.unity.modules.unitywebrequest\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.unitywebrequestassetbundle\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.assetbundle\": \"1.0.0\",\n        \"com.unity.modules.unitywebrequest\": \"1.0.0\"\n      }\n    },",
+      "hasMore": true,
+      "nextStartLine": 593,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 577,
+        "end": 592,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "sKfog58hxgSMq7SbeH1Gi7qB6KYpsxhX",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:19:19.768Z",
+      "startLine": 593,
+      "endLine": 608,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    \"com.unity.modules.unitywebrequestaudio\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.unitywebrequest\": \"1.0.0\",\n        \"com.unity.modules.audio\": \"1.0.0\"\n      }\n    },\n    \"com.unity.modules.unitywebrequesttexture\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.unitywebrequest\": \"1.0.0\",\n        \"com.unity.modules.imageconversion\": \"1.0.0\"",
+      "hasMore": true,
+      "nextStartLine": 609,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 593,
+        "end": 608,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "Fg6B9J6TP0OSRbt5UXz9H2zHVPQR9li0",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:19:45.311Z",
+      "startLine": 609,
+      "endLine": 624,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      }\n    },\n    \"com.unity.modules.unitywebrequestwww\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.unitywebrequest\": \"1.0.0\",\n        \"com.unity.modules.unitywebrequestassetbundle\": \"1.0.0\",\n        \"com.unity.modules.unitywebrequestaudio\": \"1.0.0\",\n        \"com.unity.modules.audio\": \"1.0.0\",\n        \"com.unity.modules.assetbundle\": \"1.0.0\",\n        \"com.unity.modules.imageconversion\": \"1.0.0\"\n      }\n    },\n    \"com.unity.modules.vectorgraphics\": {",
+      "hasMore": true,
+      "nextStartLine": 625,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 609,
+        "end": 624,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "bMcuoqyk28hXzuLevvJwqQw7zKCjsD2U",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:20:11.008Z",
+      "startLine": 625,
+      "endLine": 640,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.uielements\": \"1.0.0\",\n        \"com.unity.modules.imageconversion\": \"1.0.0\",\n        \"com.unity.modules.imgui\": \"1.0.0\"\n      }\n    },\n    \"com.unity.modules.vehicles\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.physics\": \"1.0.0\"\n      }",
+      "hasMore": true,
+      "nextStartLine": 641,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 625,
+        "end": 640,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "DDuSzB9iwnDL6QtgQEbDMTLGtut4nxfp",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:20:36.785Z",
+      "startLine": 641,
+      "endLine": 656,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "    },\n    \"com.unity.modules.video\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {\n        \"com.unity.modules.audio\": \"1.0.0\",\n        \"com.unity.modules.ui\": \"1.0.0\",\n        \"com.unity.modules.unitywebrequest\": \"1.0.0\"\n      }\n    },\n    \"com.unity.modules.vr\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {",
+      "hasMore": true,
+      "nextStartLine": 657,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 641,
+        "end": 656,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "IL7f02Bfx0LsNm8HWAq7izxY4iXA5mxR",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:21:02.557Z",
+      "startLine": 657,
+      "endLine": 672,
+      "returnedLineCount": 16,
+      "totalLines": 680,
+      "text": "        \"com.unity.modules.jsonserialize\": \"1.0.0\",\n        \"com.unity.modules.physics\": \"1.0.0\",\n        \"com.unity.modules.xr\": \"1.0.0\"\n      }\n    },\n    \"com.unity.modules.wind\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {}\n    },\n    \"com.unity.modules.xr\": {\n      \"version\": \"1.0.0\",\n      \"depth\": 0,\n      \"source\": \"builtin\",\n      \"dependencies\": {",
+      "hasMore": true,
+      "nextStartLine": 673,
+      "truncated": true,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 657,
+        "end": 672,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "bBaxcmqpDfXx7dNJ755gb9mHBnL21lPg",
+      "status": "observed",
+      "path": "Packages/packages-lock.json",
+      "receiptScope": "entire_file_bytes",
+      "hash": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "observedAt": "2026-09-25T07:21:28.367Z",
+      "startLine": 673,
+      "endLine": 680,
+      "returnedLineCount": 8,
+      "totalLines": 680,
+      "text": "        \"com.unity.modules.physics\": \"1.0.0\",\n        \"com.unity.modules.jsonserialize\": \"1.0.0\",\n        \"com.unity.modules.subsystems\": \"1.0.0\"\n      }\n    }\n  }\n}\n",
+      "hasMore": false,
+      "nextStartLine": null,
+      "truncated": false,
+      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "schemaVersion": 1,
+      "kind": "workspace_file_observation",
+      "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
+      "sha256": "11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea",
+      "range": {
+        "unit": "line",
+        "start": 673,
+        "end": 680,
+        "total": 680
+      },
+      "coverage": "partial"
+    },
+    {
+      "callId": "CdHb50lg4nXfpaMqxeJxvOg9YTivSd3F",
+      "error": "Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more."
+    },
+    {
+      "callId": "UKVQUQsP2F5kiV42vegt4Q59UZASc81L",
+      "error": "Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more."
+    }
+  ],
+  "semanticSummaryCalls": [
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-3",
+      "roundIndex": 2,
+      "cooldownActive": false,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "length",
+      "modelCalled": true,
+      "finishReason": "maxPredictedTokensReached",
+      "elapsedMs": 28371,
+      "predictionStats": {
+        "stopReason": "maxPredictedTokensReached",
+        "tokensPerSecond": 42.2784680597539,
+        "timeToFirstTokenSec": 3.52706,
+        "totalTimeSec": 27.723774000000002,
+        "promptTokensCount": 2477,
+        "predictedTokensCount": 1024,
+        "totalTokensCount": 3501,
+        "totalDraftTokensCount": 1163,
+        "acceptedDraftTokensCount": 635,
+        "rejectedDraftTokensCount": 528
+      },
+      "requestedMaxTokens": 1024,
+      "appliedMaxTokens": 1024,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-4",
+      "roundIndex": 3,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-5",
+      "roundIndex": 4,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-6",
+      "roundIndex": 5,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-7",
+      "roundIndex": 6,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-8",
+      "roundIndex": 7,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-9",
+      "roundIndex": 8,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-10",
+      "roundIndex": 9,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-11",
+      "roundIndex": 10,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-12",
+      "roundIndex": 11,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-13",
+      "roundIndex": 12,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-14",
+      "roundIndex": 13,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-15",
+      "roundIndex": 14,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-16",
+      "roundIndex": 15,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-17",
+      "roundIndex": 16,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-18",
+      "roundIndex": 17,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-19",
+      "roundIndex": 18,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-20",
+      "roundIndex": 19,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-21",
+      "roundIndex": 20,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-22",
+      "roundIndex": 21,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-23",
+      "roundIndex": 22,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-24",
+      "roundIndex": 23,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-25",
+      "roundIndex": 24,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-26",
+      "roundIndex": 25,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-27",
+      "roundIndex": 26,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-28",
+      "roundIndex": 27,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-29",
+      "roundIndex": 28,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-30",
+      "roundIndex": 29,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-31",
+      "roundIndex": 30,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-32",
+      "roundIndex": 31,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-33",
+      "roundIndex": 32,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-34",
+      "roundIndex": 33,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-35",
+      "roundIndex": 34,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-36",
+      "roundIndex": 35,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-37",
+      "roundIndex": 36,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-38",
+      "roundIndex": 37,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-39",
+      "roundIndex": 38,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-40",
+      "roundIndex": 39,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-41",
+      "roundIndex": 40,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-42",
+      "roundIndex": 41,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-43",
+      "roundIndex": 42,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-44",
+      "roundIndex": 43,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "ea950628-1319-49c3-9cdc-fffb4833c728",
+      "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:semantic-summary-45",
+      "roundIndex": 44,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 2477,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 28371,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "74163b50-0fb4-4432-b5d5-15642b01f133",
+      "modelInputId": "74163b50-0fb4-4432-b5d5-15642b01f133:semantic-summary-1",
+      "roundIndex": 0,
+      "cooldownActive": false,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "length",
+      "modelCalled": true,
+      "finishReason": "maxPredictedTokensReached",
+      "elapsedMs": 29630,
+      "predictionStats": {
+        "stopReason": "maxPredictedTokensReached",
+        "tokensPerSecond": 43.01484714423883,
+        "timeToFirstTokenSec": 5.4423580000000005,
+        "totalTimeSec": 29.224844,
+        "promptTokensCount": 3936,
+        "predictedTokensCount": 1024,
+        "totalTokensCount": 4960,
+        "totalDraftTokensCount": 1127,
+        "acceptedDraftTokensCount": 646,
+        "rejectedDraftTokensCount": 481
+      },
+      "requestedMaxTokens": 1024,
+      "appliedMaxTokens": 1024,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 3936,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 29630,
+        "unknownUsageCalls": 0
+      }
+    },
+    {
+      "event": "semantic_handoff",
+      "executionId": "74163b50-0fb4-4432-b5d5-15642b01f133",
+      "modelInputId": "74163b50-0fb4-4432-b5d5-15642b01f133:semantic-summary-2",
+      "roundIndex": 1,
+      "cooldownActive": true,
+      "purpose": "context_summary",
+      "toolCount": 0,
+      "accepted": false,
+      "reason": "failure_cooldown",
+      "modelCalled": false,
+      "cooldownUntilRound": 9007199254740991,
+      "cost": {
+        "summaryCalls": 1,
+        "summaryPromptTokens": 3936,
+        "summaryPredictedTokens": 1024,
+        "summaryMs": 29630,
+        "unknownUsageCalls": 0
+      }
+    }
+  ],
+  "completed": true,
+  "limitations": [
+    "promptTokensCount is a backend statistic, not a cache/prefill token count.",
+    "prefillMs is time, not tokens; cache counters are not inferred.",
+    "Source coverage and final answer correctness are validated separately."
+  ]
+}

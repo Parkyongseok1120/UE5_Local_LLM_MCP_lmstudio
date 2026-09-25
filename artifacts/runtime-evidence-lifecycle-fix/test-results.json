@@ -1,0 +1,62 @@
+{
+  "baseSha": "868dedf8069c5b6d015794e32e5435ad540db219",
+  "runtimeRevision": 116,
+  "commands": [
+    {
+      "cwd": "lmstudio-context-compactor-plugin",
+      "command": "npm test (first full run)",
+      "exitCode": 1,
+      "passed": 357,
+      "failed": 2,
+      "log": "test-compactor-initial.log",
+      "reason": "Improved recovery headroom yielded only2 compactions in40 pages, so soak extended to60; old cursor commit assertion updated to test sanitized successful commit."
+    },
+    {
+      "cwd": "lmstudio-context-compactor-plugin",
+      "command": "npm test",
+      "exitCode": 0,
+      "passed": 359,
+      "log": "test-compactor.log",
+      "note": "Before final historical-page first-consumer test; final full suite ran inside UPDATE.bat."
+    },
+    {
+      "cwd": ".",
+      "command": "python -m pytest -q tests/test_integrated_installer.py tests/test_integrated_package.py",
+      "exitCode": 0,
+      "passed": 108,
+      "log": "test-installer.log"
+    },
+    {
+      "cwd": ".",
+      "command": "UPDATE.bat (UPDATE_NO_PAUSE=1)",
+      "exitCode": 0,
+      "passed": 360,
+      "log": "update-batch.log",
+      "note": "Includes npm ci, complete360-test suite/build, LMS installation, installedSDK patch."
+    },
+    {
+      "cwd": "lmstudio-context-compactor-plugin",
+      "command": "node --test --test-name-pattern=\"archive starvation\" test/prediction-loop.test.cjs",
+      "exitCode": 0,
+      "passed": 1,
+      "log": "test-handler-final.log",
+      "note": "Assertion uses actual direct_context_measurement.workingContext fields."
+    },
+    {
+      "cwd": ".",
+      "command": "validate_evidence_packet.py artifacts/runtime-evidence-lifecycle-fix/audit-plan.json",
+      "exitCode": 0
+    },
+    {
+      "cwd": ".",
+      "command": "git diff --check",
+      "exitCode": 0
+    }
+  ],
+  "inheritedUnchangedProviderVerification": {
+    "Unity": "../runtime-policy-fix/test-unity.log:35 passed,4 skipped,exit0",
+    "Unreal": "../runtime-policy-fix/test-unreal.log:247 passed,1 skipped,exit0",
+    "PythonFull": "../runtime-policy-fix/test-python-verified.log:1050 passed,19 skipped,exit0; installer-specific108 rerun after116 version bump"
+  },
+  "liveStatus": "RUNNING"
+}

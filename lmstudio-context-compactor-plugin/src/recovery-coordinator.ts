@@ -13,12 +13,12 @@ export class RecoveryCoordinator {
   noProgressRounds = 0;
   reset() { this.toolRounds = 0; this.paginationRounds = 0; this.noProgressRounds = 0; }
   advance(progress: RecoveryProgress | null, maximum: number, continued: boolean,
-    rawIntent: boolean, requestCount: number, resultCount: number, reportText: string) {
+    rawIntent: boolean, requestCount: number, resultCount: number, reportText: string, bounded = true) {
     this.toolRounds++;
     const progressed = progress?.progressed === true;
     if (progressed) { this.paginationRounds++; this.noProgressRounds = 0; } else this.noProgressRounds++;
     const noProgress = this.noProgressRounds >= 1;
-    const paginationBound = this.paginationRounds >= Math.max(1, maximum);
+    const paginationBound = bounded && this.paginationRounds >= Math.max(1, maximum);
     const evidence = Boolean(requestCount || resultCount || progress?.newSuccessfulObservationCount || progress?.errorCount);
     const needsFinal = Boolean(rawIntent || progress?.errorCount || (evidence && !progressed));
     const trigger = (noProgress && needsFinal) || progress?.errorCount || (!continued && !reportText)
@@ -26,7 +26,7 @@ export class RecoveryCoordinator {
       : paginationBound && continued ? "research_recovery_complete" as const : null;
     return {
 trigger, endRecovery: paginationBound || (noProgress && !needsFinal),
-      continue: continued, maxPaginationRounds: Math.max(1, maximum), noProgress
+      continue: continued, maxPaginationRounds: bounded ? Math.max(1, maximum) : null, noProgress
 };
   }
 }

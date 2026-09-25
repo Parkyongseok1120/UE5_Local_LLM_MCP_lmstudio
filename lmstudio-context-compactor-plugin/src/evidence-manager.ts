@@ -64,7 +64,7 @@ export class EvidenceManager {
   }
   view(value: Record<string, unknown>, provider: string): ContentView {
     const kind = String(value.kind || "observation");
-    const projected = kind === "archived_tool_result_projection", archived = kind === "historical_evidence_range";
+    const projected = kind === "archived_tool_result_projection", archived = ["historical_evidence_range", "historical_evidence_index"].includes(kind);
     const body = [value.content, value.body, value.text, value.excerpt].find(x => typeof x === "string");
     const version = coverageSourceVersion(value);
     return {
@@ -215,6 +215,14 @@ export function coverageRange(value: Record<string, unknown>, category: "source"
 export function recoveryCoverageDescriptors(value: Record<string, unknown>): Array<RecoveryCoverageDescriptor> {
   const kind = String(value.kind || "");
   if (kind === "archived_tool_result_projection") return [];
+  if (kind === "historical_evidence_index") {
+    const entries = Array.isArray(value.entries) ? value.entries as Array<Record<string, unknown>> : [];
+    return entries.filter(e => /^ev_[a-f0-9]{64}$/u.test(String(e.evidenceId))
+      && /^[a-f0-9]{64}$/u.test(String(e.version))).map(e => ({
+      category: "archive", key: telemetryFingerprint({ catalogEntry: e.evidenceId, version: e.version }, true),
+      range: [0, 0], rangeUnit: "observation", sourceVersion: String(e.version), sourceIdentity: String(e.evidenceId),
+    }));
+  }
   if (kind === "historical_evidence_range") {
     const archiveRef = value.archiveRef && typeof value.archiveRef === "object"
       ? value.archiveRef as Record<string, unknown> : {};
@@ -325,7 +333,7 @@ export function observationRecords(messages: Array<ChatMessage>, tools: Array<Re
       const request = pairs.matches.get(`${mi}:${ri}`);
       const matches = tools.filter(t => t.name === request?.name);
       const trusted = request && matches.length === 1 && isObservationOnlyToolCall(matches[0], request);
-      const archived = ["archived_tool_result_projection", "historical_evidence_range"].includes(String(decoded?.kind));
+      const archived = ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(String(decoded?.kind));
       records.push({ content: result.content, value: decoded && trusted && !archived ? {
         ...identity.normalizeObservation(decoded, request, matches[0].pluginIdentifier || "local"), canonicalReadObservation: true,
       } : decoded });

@@ -114,16 +114,24 @@ export function readResultContract(tool: RemoteToolLike) {
     maximum: tokens(contract.maximum ?? (field === "maxBytes" ? 2 * 1024 * 1024 : field === "byteBudget" ? 65536 : 4096)) };
 }
 
-export function minimumReadResultTokens(tools: RemoteToolLike[]): number {
+export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired = false): number {
   // Require an actionable source read when source readers are exposed. The
   // auxiliary archive reader may have no refs yet, so it cannot certify that
   // source acquisition fits. The guard reserves the actual selected request.
   const sources = tools.filter(tool => tool.name !== "evidence_first_read_context");
   const actionable = sources.length ? sources : tools;
-  return actionable.length ? Math.min(...actionable.map(tool => {
+  const minimumFor = (tool: RemoteToolLike) => {
     const c = readResultContract(tool);
     return c.field ? c.minimum * c.multiplier + 1024 : 4096;
-  })) : 0;
+  };
+  const sourceMinimum = actionable.length ? Math.min(...actionable.map(minimumFor)) : 0;
+  // Once returned evidence is archived, acquisition and rehydration are both
+  // required lifecycle operations. A cheap source read cannot certify that
+  // the archive is usable. This reserves either operation, not their sum:
+  // parallel requests still compete in the existing shared batch broker.
+  const archive = archiveRequired && tools.find(tool => tool.name === "evidence_first_read_context"
+    && localObservationTools.has(tool));
+  return Math.max(sourceMinimum, archive ? minimumFor(archive) : 0);
 }
 
 export function reserveReadResult(batch: BatchReservation, id: string, tool: RemoteToolLike,

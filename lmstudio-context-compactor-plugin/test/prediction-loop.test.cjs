@@ -100,6 +100,187 @@ test("B04/O03 production handler rejects an inexact input before model dispatch 
   assert.equal(ctl.debugValues.some(e => e.event === 'working_context_commit' && e.committed), false);
 });
 
+test("hybrid handler consumes toolCalls inputs across repeated compaction and delivers EOS", async () => {
+  let rounds=0;
+  const model={identifier:'toolCalls-regression',async getContextLength(){return 38912},
+    async applyPromptTemplate(chat){return chat.toString()},
+    async countTokens(text){return 12000+Math.ceil(text.length/4)},
+    async act(chat,tools,opts){
+      if(rounds++===60){
+        opts.onPredictionCompleted({stats:{stopReason:'eosFound'}});
+        opts.onMessage(ChatMessage.create('assistant','Sixty pages observed.'));return;
+      }
+      assert.ok(tools.some(t=>t.name==='read_file'));
+      const id='read-'+rounds;
+      opts.onPredictionCompleted({stats:{stopReason:'toolCalls'}});
+      opts.onMessage(ChatMessage.from({role:'assistant',content:[{type:'toolCallRequest',toolCallRequest:{type:'function',id,name:'read_file',arguments:{path:'source.txt',startLine:(rounds-1)*20+1}}}]}));
+      opts.onMessage(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:id,content:JSON.stringify({ok:true,kind:'workspace_file_observation',path:'source.txt',startLine:(rounds-1)*20+1,hash:'stable-version',endLine:rounds*20,totalLines:1200,text:'source fact '+id+' '+ 'x'.repeat(5000)})}]}));
+      opts.onRoundEnd();throw opts.signal.reason;
+    }};
+  const ctl=fakeController(Chat.from([{role:'user',content:'Read sixty consecutive source pages.'}]),model,
+    {contextManagementMode:'hybrid',maxOutputReserve:8192,safetyMarginTokens:2048,workingInputTargetTokens:18000,
+      workingInputTriggerTokens:22000,softRemainingTokens:6000,hardRemainingTokens:3000,maxCheckpointChars:5000},
+    [{name:'read_file',pluginIdentifier:'mcp/unity-tools',description:'read',parametersJsonSchema:{type:'object',properties:{path:{type:'string'},byteBudget:{type:'integer',minimum:1024,maximum:65536}}}}]);
+  await handlePredictionLoop(ctl);
+  assert.equal(rounds,61);
+  assert.ok(ctl.blocks.some(b=>b.text.includes('Sixty pages observed.')));
+  const compacted=ctl.debugValues.filter(e=>e.event==='context_low_water' && e.compactionRequested && e.reclaimRatio>0);
+  assert.ok(compacted.length>=3,JSON.stringify(compacted));
+  assert.ok(compacted.every(e=>e.finalExactInputTokens<=e.effectiveLowWaterTokens));
+});
+
+test("production handler narrows before archive starvation and restores an early fact through the real guard", async () => {
+  let rounds = 0, entry, content = "";
+  const history = Chat.from([{ role: "user", content: "Read a.txt, then rediscover it and report EARLY_FACT_729 from the archive." }]);
+  const model = { identifier: "archive-lifecycle", async getContextLength() { return 38912; },
+    applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(text) { if (text.startsWith("[")) return 100; return text.includes('write_file') ? 16250 : 10000; },
+    async act(chat, tools, opts) {
+      const n = rounds++;
+      if (n === 3) {
+        assert.match(chat.toString(), /EARLY_FACT_729/);
+        opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+        opts.onMessage(ChatMessage.create("assistant", "Recovered EARLY_FACT_729 from historical evidence.")); return;
+      }
+      const name = n === 0 ? "read_file" : "evidence_first_read_context";
+      const args = n === 0 ? { path: "a.txt", byteBudget: 1024 } : n === 1 ? { action: "catalog", path: "a.txt" }
+        : { evidenceId: entry.evidenceId, version: entry.version };
+      if (n > 0) { assert.ok(!tools.some(t => t.name === "write_file")); assert.equal(opts.maxTokens, 4096); }
+      const request = { type: "function", id: "r" + n, name, arguments: args }; let executed;
+      await opts.guardToolCall(0, n + 1, { toolCallRequest: request,
+        allow() { executed = args; }, allowAndOverrideParameters(value) { executed = value; },
+        deny(reason) { assert.fail(reason); } });
+      assert.ok(executed);
+      const value = n === 0 ? { ok: true, kind: "workspace_file_observation", path: "a.txt", hash: "stable-hash",
+        startLine: 1, endLine: 1, totalLines: 1, hasMore: false, text: "EARLY_FACT_729", receipt: "live-receipt" }
+        : await tools.find(t => t.name === name).implementation(executed, { signal: opts.signal });
+      assert.equal(value.ok, true);
+      if (n === 1) { assert.equal(value.currentFile, false); entry = value.entries[0]; assert.ok(entry); }
+      if (n === 2) { content = value.content; assert.match(content, /EARLY_FACT_729/); }
+      opts.onPredictionCompleted({ stats: { stopReason: "toolCalls" } });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: { ...request, arguments: executed } }] }));
+      opts.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: request.id, content: JSON.stringify(value) }] }));
+      opts.onRoundEnd(); throw opts.signal.reason;
+    } };
+  const read = { name: "read_file", pluginIdentifier: "mcp/unity-tools", description: "read",
+    parametersJsonSchema: { type: "object", properties: { path: { type: "string" }, byteBudget: { type: "integer", minimum: 1024 } } } };
+  const write = { name: "write_file", pluginIdentifier: "mcp/unity-tools", description: "write", parametersJsonSchema: { type: "object", properties: {} } };
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid", maxOutputReserve: 8192,
+    safetyMarginTokens: 2048, workingInputTargetTokens: 18000, workingInputTriggerTokens: 22000 }, [read, write]);
+  await handlePredictionLoop(ctl);
+  assert.equal(rounds, 4); assert.match(content, /EARLY_FACT_729/);
+  assert.ok(ctl.debugValues.some(e => e.event === "direct_context_budget_rescue" && e.candidateFit));
+  assert.ok(!ctl.debugValues.some(e => e.event === "direct_context_measurement"
+    && e.workingContext?.windowCommitSkippedReason === "pending_evidence_omitted"));
+  assert.ok(ctl.blocks.some(b => b.text.includes("Recovered EARLY_FACT_729")));
+});
+
+test("recovery admission uses the compacted candidate after the original generation headroom failed", async () => {
+  const history = Chat.from([{ role: "user", content: "Prior analysis" },
+    { role: "assistant", content: "OLDER_BODY ".repeat(3000) }, { role: "user", content: "Inspect Git evidence and report." }]);
+  const tools = gitRecoveryTestTools([{ name: "write_file", pluginIdentifier: "mcp/unity-tools",
+    description: "write", parametersJsonSchema: { type: "object" } }]);
+  let calls = 0;
+  const model = { async getContextLength() { return 38912; }, applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(text) {
+      if (text.startsWith("[")) return 100;
+      const parsed = JSON.parse(text);
+      if (parsed.tools.includes("write_file")) return 40000;
+      return parsed.text.includes("OLDER_BODY OLDER_BODY") ? 38000 : 10000;
+    },
+    async act(chat, tools, opts) {
+      calls++; assert.ok(tools.length > 0); assert.ok(!tools.some(t => t.name === "write_file"));
+      assert.doesNotMatch(chat.toString(), /OLDER_BODY OLDER_BODY/);
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", "Measured compacted recovery candidate delivered."));
+    } };
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid", maxOutputReserve: 8192,
+    safetyMarginTokens: 2048 }, tools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  assert.ok(ctl.debugValues.some(e => e.event === "direct_context_budget_rescue" && e.candidateFit && e.candidateInputTokens === 10000));
+});
+
+test("recovery re-entry never reuses a model input identity after the episode counter resets", async () => {
+  let calls = 0;
+  const tools = gitRecoveryTestTools([{ name: "write_file", pluginIdentifier: "mcp/unity-tools",
+    description: "write", parametersJsonSchema: { type: "object" } }]);
+  const model = { async getContextLength() { return 38912; }, applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(text) { return text.startsWith("[") ? 100 : JSON.parse(text).tools.includes("write_file") ? 30000 : 10000; },
+    async act(chat, roundTools, opts) {
+      const n = calls++; assert.ok(n < 6);
+      if (n === 2 || n === 4) {
+        if (n === 2) assert.equal(roundTools.length, 0);
+        opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+        opts.onMessage(ChatMessage.create("assistant", n === 2
+          ? '<tool_call><function=git_diff_file><parameter=path>a.txt</parameter></function></tool_call>'
+          : "The recovered evidence is available; investigation complete.")); return;
+      }
+      const name = n === 3 ? "git_diff_file" : "git_changed_files";
+      const request = { type: "function", id: "round" + n, name, arguments: { path: "a.txt", comparison: "range", base: "a", head: "b", limit: 1 } };
+      assert.ok(roundTools.some(t => t.name === name));
+      const value = n === 1 ? { error: "Shared read-result budget exhausted." }
+        : { ok: true, kind: "git_observation", status: "complete", action: n === 3 ? "diff_file" : "changed_files",
+          path: "a.txt", comparison: "range", base: "a", head: "b", pageStart: n, pageEnd: n,
+          returnedCount: 1, hasMore: false, text: "observed fact " + n };
+      opts.onPredictionCompleted({ stats: { stopReason: "toolCalls" } });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+      opts.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: request.id, content: JSON.stringify(value) }] }));
+      opts.onRoundEnd(); throw opts.signal.reason;
+    } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Inspect the Git changes and report from evidence." }]), model,
+    { contextManagementMode: "hybrid", maxOutputReserve: 8192, safetyMarginTokens: 2048 }, tools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 5);
+  assert.ok(ctl.debugValues.some(e => e.event === "fresh_tool_planning_retry_scheduled"));
+  const measurements = ctl.debugValues.filter(e => e.event === "direct_context_measurement");
+  const inputs = measurements.map(e => e.modelInputId);
+  assert.equal(inputs.length, calls);
+  assert.equal(new Set(inputs).size, inputs.length, JSON.stringify(inputs));
+  assert.deepEqual(measurements.map(e => e.roundIndex), [0, 1, 2, 3, 4]);
+  assert.deepEqual(inputs.map(id => id.split(":").at(-1)), [
+    "research-recovery-1", "research-recovery-2", "final-report-1",
+    "tool-planning-retry-1", "research-recovery-5",
+  ]);
+  const observations = ctl.debugValues.filter(e => e.event === "direct_round_observation");
+  assert.deepEqual(observations.map(e => [e.modelInputId, e.roundIndex]),
+    measurements.map(e => [e.modelInputId, e.roundIndex]));
+  assert.equal(ctl.session.disposed, true);
+});
+
+test("canceled execution releases its session and a new execution cannot reuse its input identity", async () => {
+  const abort = new AbortController();
+  const reason = new Error("identity lifecycle cancellation");
+  let calls = 0;
+  const model = {
+    async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(_chat, _tools, opts) {
+      if (calls++ === 0) { abort.abort(reason); throw reason; }
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", "New execution completed."));
+    },
+  };
+  const handler = createPredictionLoopHandler();
+  const history = Chat.from([{ role: "user", content: "Check input identity lifetime." }]);
+  const canceled = fakeController(history, model);
+  canceled.abortSignal = abort.signal;
+  canceled.guardAbort = () => abort.signal.throwIfAborted();
+  await assert.rejects(handler(canceled), error => error === reason);
+  assert.equal(canceled.session.disposed, true);
+  const resumed = fakeController(history, model);
+  await handler(resumed);
+  assert.equal(calls, 2);
+  assert.equal(resumed.session.disposed, true);
+  const first = canceled.debugValues.find(e => e.event === "direct_context_measurement");
+  const next = resumed.debugValues.find(e => e.event === "direct_context_measurement");
+  assert.equal(first.roundIndex, 0);
+  assert.equal(next.roundIndex, 0);
+  assert.notEqual(first.executionId, next.executionId);
+  assert.notEqual(first.modelInputId, next.modelInputId);
+});
+
 test("prediction loop calls the directly selected model with compacted history", async () => {
   const latest = "Analyze the current Cinematic system only.";
   const history = Chat.from([
@@ -2101,7 +2282,7 @@ test("context budget measures a narrowed registered Git catalogue before tools-d
   assert.equal(rescue.nextToolCount, 4);
   assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
   const identity = ctl.debugValues.find(value => value.event === "direct_runtime_identity");
-  assert.equal(identity.runtimeSourceRevision, 113);
+  assert.equal(identity.runtimeSourceRevision, 117);
   assert.match(identity.installedSourceFingerprint, /^[a-f0-9]{64}$/u);
   assert.match(identity.installedDistFingerprint, /^[a-f0-9]{64}$/u);
   assert.match(identity.toolRegistryFingerprint, /^[a-f0-9]{64}$/u);
@@ -3224,7 +3405,7 @@ test("invalid hybrid summary is discarded without retry or report recovery", asy
   assert.equal(ctl.debugValues.some(value => value.event === "output_recovery_scheduled"), false);
 });
 
-test("a failed hybrid summary enters one-round cooldown while deterministic facts continue", async () => {
+test("a failed hybrid summary stays in execution cooldown while deterministic facts continue", async () => {
   const history = archivedObservationHistory(24000, true);
   let summaryCalls = 0;
   let normalCalls = 0;

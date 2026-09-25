@@ -1,0 +1,28 @@
+✖ recovery re-entry never reuses a model input identity after the episode counter resets (70.6983ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 267.8974
+
+✖ failing tests:
+
+test at lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:204:1
+✖ recovery re-entry never reuses a model input identity after the episode counter resets (70.6983ms)
+  AssertionError [ERR_ASSERTION]: ["0406e91b-0061-49e2-9b2f-a5b808e8806d:research-recovery-1","0406e91b-0061-49e2-9b2f-a5b808e8806d:research-recovery-2","0406e91b-0061-49e2-9b2f-a5b808e8806d:final-report-1","0406e91b-0061-49e2-9b2f-a5b808e8806d:tool-planning-retry-1","0406e91b-0061-49e2-9b2f-a5b808e8806d:research-recovery-2"]
+  
+  4 !== 5
+  
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:237:10)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 4,
+    expected: 5,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

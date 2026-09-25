@@ -1,0 +1,21 @@
+{
+  "completedCalls": 51,
+  "actualCompactions": 8,
+  "postCompactionCumulativeExactInputTokens": 767751,
+  "allCompactedLowMet": true,
+  "compactedMin": 15366,
+  "compactedMax": 15733,
+  "compactedFirst": 15471,
+  "compactedLast": 15733,
+  "allBackendPromptMatchesExact": true,
+  "continueMessages": 0,
+  "toolErrors": 1,
+  "newRuntimeLogBytes": 0,
+  "newUnknownChannelWarnings": 0,
+  "semanticAttempts": 1,
+  "semanticAccepted": 0,
+  "fileComplete": true,
+  "pages": 43,
+  "lastLine": 680,
+  "finalModelResponseCompleted": false
+}

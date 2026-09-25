@@ -1,0 +1,28 @@
+{
+  "stoppedAt": "2026-09-25T17:29:48.8308780+09:00",
+  "reason": "user_requested_stop_at_390k",
+  "firstTargetCrossing": {
+    "id": "e561357c-d31d-44aa-aedd-b793ab45aa33:research-recovery-30",
+    "roundIndex": 29,
+    "purpose": "read_only_research_recovery",
+    "recoveryToolRounds": 28,
+    "exact": 18519,
+    "backend": 18519,
+    "matchedByIdOnly": true,
+    "compacted": false,
+    "finishReason": "toolCalls",
+    "cumulativeExactInputTokens": 532317,
+    "postCompactionCumulativeExactInputTokens": 393340,
+    "errors": 0
+  },
+  "finalVerifiedPostCompactionTokens": 433480,
+  "completedVerifiedCalls": 32,
+  "canceledCallsExcluded": 1,
+  "model": {
+    "identifier": "swift-qwen3.8-27b",
+    "contextLength": 38912,
+    "status": "idle",
+    "queued": 0
+  },
+  "collectorExitCode": 0
+}

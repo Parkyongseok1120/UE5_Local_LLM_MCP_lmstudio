@@ -71,3 +71,7 @@ Runtime commands: node scripts/astra-ratchet.cjs (exit 0, 30 fixture cycles); no
 - A provider whose schema exposes no bounded result parameter cannot be guaranteed a maximum result size before the provider returns it.
 
 Rollback point is the untouched starting commit 3c4375fd3041da16b4e6af721c17fa2c230d2f50. No commit, archive migration or destructive reset occurred. Revert only paths in patch-manifest.json to that SHA to discard the working-tree patch; keep artifacts during review. The initial first failed stress launch and the exact model measurement/failure are preserved in stress-to-380k-setup-issue.json, stress-to-380k.json and stress-to-380k.log.
+
+## 2026-09-25 modelInputId-only follow-up
+
+The current narrowly scoped ID fix and single GUI live run are recorded in [IDENTITY_ONLY_HANDOFF.md](../runtime-identity-fix/IDENTITY_ONLY_HANDOFF.md). Revision 117: 364 regression tests passed; first post-compaction 390K crossing 393,340 tokens; stopped after logging, final verified total 433,480. 32 completed exact/backend pairs matched by ID alone, 33 unique IDs including one canceled call. Live recovery-counter reset re-entry was not observed; that branch passed deterministic regression. This follow-up does not supersede historical full-task quality/risk findings above.

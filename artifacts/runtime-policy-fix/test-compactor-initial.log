@@ -1,0 +1,504 @@
+
+> unreal-context-compactor@0.4.67 test
+> npm run build && node --test test/audit-fc5373.test.cjs test/refactor-policies.test.cjs test/attachment-tools.test.cjs test/availability-eval.test.cjs test/continuity-model-notes.test.js test/direct-compaction-core.test.js test/durable-memory-sanitizer.test.js test/input-availability.test.js test/prediction-loop.test.cjs test/status.test.cjs test/tool-scope.test.cjs test/validation-repair-memory.test.cjs test/working-context-boundary.test.cjs test/working-context.test.cjs test/workspace-continuity.test.cjs
+
+
+> unreal-context-compactor@0.4.67 prebuild
+> node scripts/patch-lmstudio-sdk.cjs
+
+
+> unreal-context-compactor@0.4.67 build
+> npm run clean && tsc -p tsconfig.json
+
+
+> unreal-context-compactor@0.4.67 clean
+> node scripts/clean-dist.cjs
+
+✔ attachment tool returns only the requested parsed-text range with source metadata (4.4568ms)
+✔ attachment observations keep source and range but omit document content from durable memory (5.8508ms)
+✔ SDK toolCalls completes the input consumer, while its newly returned result stays pending (27.3116ms)
+✔ truncation, cancellation and unknown reasons never consume pending evidence (0.2725ms)
+✔ duplicate capture after consumption cannot re-pin a previously consumed result (2.1628ms)
+✔ normal progressing recovery outlives twelve pages; bounded and no-progress limits remain (0.4613ms)
+✔ same source page growth repeats compaction below a fixed derived LOW without inflating floor (245.822ms)
+✔ archive catalog rediscovers consumed evidence with bounded pages and no fresh-source authority (3.8383ms)
+✔ H02 final mapping excludes thinking; swapped facts, duplicate reads and length are failures (0.298ms)
+✔ T03 context/output truncation and unknown completion preserve results but discard planning (0.6701ms)
+✔ T04 delivered EOS report cannot certify objective completion (0.3082ms)
+✔ B01 mandatory floor LOW fit does not certify next read liveness (0.1506ms)
+✔ B02 native Unreal maxBytes is clamped and oversize return blocks later dispatch (0.2988ms)
+✔ B03 schema maximum/default applied before reservation; two small reads share capacity (0.1163ms)
+✔ B01 a cheap auxiliary archive reader cannot hide native read starvation (0.0964ms)
+✔ T01 operation read profiles retain reads and cannot grant writes (0.3003ms)
+✔ T02 known raw changed-files intent retains dependent diff/source readers (0.4482ms)
+✔ E01 native Unity runtime read flows into successful recovery evidence (410.3816ms)
+✔ E02 historical rehydration missing in current input is useful without new source coverage (2.6417ms)
+✔ E03 query, nested workspace and source hash cannot collapse (0.4478ms)
+✔ E04 capture and repeated shifted projection share one archive ID; different call IDs retain provenance (268.1128ms)
+✔ E05 sanitized persistent view permits 140 observations under quota without altering live capabilities (15998.6054ms)
+✔ E06 source failure stays failure through capture, archive read, seed and observe (399.3965ms)
+✔ E03 source and projected page use the same identity/query across provider and pagination (82.4826ms)
+✔ E05 candidate omitting unconsumed evidence blocks explicitly before quota exhaustion (74.6887ms)
+✔ E01 duplicate/orphan callbacks cannot become native success observations (0.422ms)
+✔ SDK guard denial is failed evidence and cannot continue research recovery (0.4838ms)
+✔ O02 distinct assembly stages and schema/reserve cache keys are measured (0.749ms)
+✔ O03 multilingual, escaped JSON and emoji estimates cannot authorize exact-only execution (0.5906ms)
+✔ causal range metrics distinguish input overlap from historical reacquisition (2.0255ms)
+✔ availability oracle compares every source and range instead of trusting entry zero (0.3895ms)
+✔ answer rubric rejects negated keyword stuffing (0.7008ms)
+✔ causal evaluator uses the request-producing input and pre-result history (1.21ms)
+✔ independent oracle recognizes line and UTF-8 byte contracts separately (0.2804ms)
+✔ independent projection does not promote bodyless ranges sharing one key (0.5146ms)
+✔ audit fixture has eight versioned sources and preserves the required exact evidence (0.3904ms)
+✔ audit pressure profiles distinguish normal compaction from threshold-forced stress (0.4988ms)
+✔ targeted access baseline contains exact evidence without fixture-only line counts (6.58ms)
+✔ audit wrapper forwards the configured research cap instead of injecting a hidden generation limit (89.8234ms)
+✔ hybrid evaluator includes summary cost and mandatory-floor outcomes (0.8315ms)
+✔ real-contract audit locators survive the synthetic compaction boundary (20.4013ms)
+✔ empty audit answers are not rewarded for avoiding an overclaim (0.2253ms)
+✔ audit result collection preserves a finalization with no visible answer (0.1546ms)
+✔ audit run outcomes are mutually exclusive and separate truncation from timeout (0.2939ms)
+✔ output recovery is a single tool-free terminal call and remains separate from bounded finalization (0.3277ms)
+✔ bounded evaluation separates valid design from completed-report comparability (0.2575ms)
+✔ audit summaries do not count a timeout as success and mark zero-return reacquisition not evaluable (0.174ms)
+✔ saved audit results are reclassified without inventing a missing legacy timeout (0.3537ms)
+✔ audit answer rubric rewards bounded evidence updates and rejects runtime overclaim (2.5782ms)
+✔ audit rubric accepts multiline caution but rejects invented evidence-rich details (0.4939ms)
+✔ audit rubric recognizes ranged exact locations and rejects a negated prefab finding (0.2984ms)
+✔ the footer parser accepts only bounded descriptive note fields (10.1717ms)
+✔ assistant judgments have stable ids and explicit lifecycle states (1.3731ms)
+✔ malformed reserved footers are removed while quoted code examples remain visible (0.2819ms)
+✔ stored notes follow the exact visible transcript and objective (13.4841ms)
+✔ project scope and refs require unambiguous tool observations (5.5628ms)
+✔ assistant-derived checkpoint evidence stays in an assistant message across compactions (15.9091ms)
+✔ an attachment-bearing user message with a literal checkpoint marker is retained (1.1173ms)
+✔ a legacy system checkpoint migrates assistant claims into the assistant role (1.0081ms)
+✔ latest real user request stays authoritative without promoting an older objective (3.3792ms)
+✔ hard compaction preserves the prior request needed to interpret a continuation (3.3931ms)
+✔ hard compaction preserves a bounded multi-hop continuation chain (1.8623ms)
+✔ hard compaction keeps one substantive anchor beyond any fixed ellipsis horizon (1.7205ms)
+✔ latest constraints and actually unanswered questions survive compaction (0.8137ms)
+✔ a newer request does not promote a conflicting old constraint to active status (0.5363ms)
+✔ older tool outcomes retain file/build facts but strip workflow control (3.9656ms)
+✔ malformed tool results are replaced instead of replaying truncated control (1.0764ms)
+✔ retained factual strings neutralize control tokens regardless of casing or snake case (0.5281ms)
+✔ phase and state objects cannot become an unfiltered JSON fallback (0.2227ms)
+✔ tool-result redaction never rewrites the latest real user message (1.005ms)
+✔ bundle mutation results retain each modified path and hash (2.4071ms)
+✔ hard compaction drops a top-level file receipt and keeps only non-actionable file facts (10.5016ms)
+✔ nested bundle results cannot preserve receipts or registry ordering counters (1.4311ms)
+✔ assistant progress text loses executable receipt instructions without losing the completed fact (0.6362ms)
+✔ mixed assistant prose cannot carry a receipt instruction across hard compaction (13.6144ms)
+✔ a prior raw tail is sanitized before it is inherited (0.665ms)
+✔ prior unresolved items and assistant pending evidence cannot replay a receipt (1.1684ms)
+✔ three hard compactions preserve the objective while never reviving an old receipt (4.1378ms)
+✔ emergency-size checkpoint also removes receipts from every compressed surface (4.235ms)
+✔ receipt-safety diagnosis remains the active objective through an emergency continuation (1.3193ms)
+✔ emergency rendering budgets canonical observations instead of imposing a two-file cap (4.7022ms)
+✔ emergency rendering keeps its hard size bound with an oversized inherited project descriptor (0.9592ms)
+✔ same-name clones remain distinct factual observations and neither is mutation-authoritative (1.8355ms)
+✔ a per-call exact project keeps a write on that clone without changing the active clone (1.4337ms)
+✔ a per-call read cannot change active project or retarget the next unscoped write (1.5168ms)
+✔ set_active_project remains the explicit owner of a durable active-project transition (0.596ms)
+✔ a successful explicit project clear cannot revive the previous active project (0.4187ms)
+✔ an unresolved or mismatched per-call project is never guessed from the active clone (0.8051ms)
+✔ an unmatched request cannot scope a later ID-less write to another clone (1.0191ms)
+✔ duplicate tool-call IDs cannot choose one of two clone scopes (0.532ms)
+✔ reverse ID-less results from different clone scopes are omitted as ambiguous (0.9098ms)
+✔ unique exact IDs remain correlatable when one request batch returns in multiple tool messages (1.6868ms)
+✔ an ambiguous ID-less result does not prevent a later exact ID from retaining its own scope (1.006ms)
+✔ a conflicting per-call result project is omitted instead of crossing clone scope (0.5478ms)
+✔ bundle bare relative paths become canonical only under the proven exact project (1.1393ms)
+✔ workspace and outside absolute paths are never attached to an active project observation (1.1668ms)
+✔ workspace paths are removed from durable tool outcomes even without an active project (1.1261ms)
+✔ path-only workspace errors cannot survive as rootless durable file identity (0.6477ms)
+✔ bounded tool display never discards extracted bundle file facts (1.0946ms)
+✔ production receipt continuation prose is absent from every durable surface (0.7194ms)
+✔ a legacy observation stays with its prior exact clone when another clone becomes active (1.3817ms)
+✔ an unambiguous v1 project-relative observation migrates to canonical v2 facts (1.101ms)
+✔ a rootless v1 observation is omitted when the final active clone cannot prove its origin (0.6109ms)
+✔ nested workspace files inherit parent scope and cannot become project observations (1.5064ms)
+✔ mutation-context receipt synonyms become a fresh-snapshot fact (1.3797ms)
+✔ JSON-escaped receipt capabilities cannot survive hard compaction (0.5456ms)
+✔ registry registration order is discarded even when an unchanged hash is observed repeatedly (1.2407ms)
+✔ partial independent mutation outcomes stay factual without preserving the reused capability (1.5317ms)
+✔ the durable user copy strips raw capability payloads but keeps diagnostic identifiers (0.7133ms)
+✔ a retained file result stays raw and becomes durable only after it is omitted (1.7098ms)
+✔ a simulated MCP restart inherits facts and objective but no prior runtime receipt (2.3387ms)
+✔ the minimized 5,692-line Qwen transcript replay keeps canonical facts through three compactions (17.7303ms)
+✔ system messages, latest turn, and file-bearing messages are retained individually (0.3688ms)
+✔ bounded current-turn retention keeps the newest unread tool exchange complete (1.3307ms)
+✔ a five-call newest exchange stays paired even when the message cap is two (1.8086ms)
+✔ successive bounded compactions serialize each tool outcome exactly once (6.3959ms)
+✔ an old attachment does not pin every later turn and disable compaction (1.384ms)
+✔ previous final response is recorded as evidence without claiming objective completion (0.4833ms)
+✔ token pressure is the only normal compaction decision once the handler is active (0.5655ms)
+✔ fallback message threshold applies only when remaining token measurement is unavailable (0.2473ms)
+✔ actual Qwen E2E transcript keeps the cinematic objective through three hard compactions (4.4254ms)
+✔ emergency checkpoint compaction always emits parseable continuity JSON (2.0865ms)
+✔ escape-heavy emergency text cannot exceed the hard checkpoint bound (6.8348ms)
+✔ Korean payment-receipt objective is preserved across hard compaction (0.4171ms)
+✔ English payment-receipt objective is preserved across hard compaction (0.3367ms)
+✔ receipt-domain code symbols remain exact user-authored objective text (0.3102ms)
+✔ receipt-printer implementation goal is not rewritten as a file snapshot instruction (0.2731ms)
+✔ file-receipt diagnosis remains a diagnosis instead of executable guidance (0.6226ms)
+✔ a raw capability in a user request is removed without collapsing its domain objective (0.4104ms)
+✔ the same receipt phrase follows explicit user and assistant provenance policies (0.3974ms)
+✔ ordinary assistant and tool payment-receipt facts survive operational sanitization (0.57ms)
+✔ returned and previous payment receipts remain ordinary assistant and tool facts (0.5101ms)
+✔ tool structural paths are never treated as operational receipt prose (0.8094ms)
+✔ canonical identities retain capability-like substrings as structural data (1.9105ms)
+✔ synthetic long review keeps several Git observations in the final checkpoint across consecutive compactions (12.6596ms)
+✔ only an unambiguous SDK reasoning boundary is excluded from assistant continuity evidence (1.3631ms)
+✔ Unity file observations keep project, hash and time without changing the Unreal selection (2.5134ms)
+✔ Unity file observations retain only line ranges proven for the current file hash (3.5408ms)
+✔ LM Studio MCP text envelopes retain the same Unity facts as direct JSON (1.2625ms)
+✔ ambiguous MCP content envelopes are omitted instead of merging facts (0.1468ms)
+✔ file observation aggregation precedes the recent tool outcome display window (5.9316ms)
+✔ thirty file observations survive a six-outcome display window and a later re-reference (15.7143ms)
+✔ serialization diagnostics are derived from the emitted checkpoint after budget omission (8.8556ms)
+✔ search continuity keeps request mode, scope, counts, and incomplete zero-match meaning (1.4805ms)
+✔ a Unity file result cannot be attributed to a conflicting explicit Unreal project (0.6668ms)
+✔ Unity directory listing stays a path fact without a file-version observation (0.6848ms)
+✔ an unrelated tool hash is not promoted to a Unity file hash (0.7215ms)
+✔ inherited user fields keep receipt-domain meaning while assistant fields are neutralized (1.0272ms)
+✔ payment-receipt objective survives three hard compactions with no raw file capability (1.4222ms)
+✔ emergency serialization preserves payment-receipt meaning and its hard bound (3.1341ms)
+✔ user-authored receipt-domain language is byte-for-byte preserved (8.9601ms)
+✔ structured raw-capability policy removes exact fields without erasing receipt-domain data (1.9033ms)
+✔ structured policy preserves capability-like substrings in identity and hash values (0.2048ms)
+✔ exact ephemeral keys do not erase longer diagnostic schema keys (0.1425ms)
+✔ origin policies separate user domain prose from derived receipt-reuse guidance (20.842ms)
+✔ derived assistant and tool prose preserves ordinary receipt-domain facts (2.3295ms)
+✔ user diagnostic identifiers and capability-like symbols remain literal (0.191ms)
+✔ raw capability removal preserves Korean diagnostic intent (9.7431ms)
+✔ derived records sanitize operational prose without rewriting structural fields (1.1141ms)
+✔ unrelated literal JSON Unicode escapes remain byte-for-byte unchanged (0.5236ms)
+✔ encoded capability removal does not decode unrelated escapes in the same string (1.2291ms)
+✔ encoded space and dot delimiters stop the capability span (0.2043ms)
+✔ a mixed user objective loses only its raw capability clause (0.253ms)
+✔ both origin policies remain idempotent (0.1852ms)
+✔ durable sanitizer is recursive, non-mutating, and idempotent (1.1843ms)
+✔ English and Korean executable receipt prose becomes a fresh-read fact (6.6621ms)
+✔ a descriptive anti-persistence requirement remains understandable (0.6573ms)
+✔ receipt-safety objectives keep their prohibition, diagnosis, and clone scope (0.1929ms)
+✔ mixed descriptive clauses cannot whitelist a later receipt instruction (1.0669ms)
+✔ the production bundle retry message cannot become durable capability guidance (0.1422ms)
+✔ Markdown and identifier adjacency cannot hide forbidden capability literals (0.3179ms)
+✔ raw receipt tokens cannot leave executable reuse prose behind (0.359ms)
+✔ meta-level safety objectives keep their prohibition without replaying quoted guidance (0.5125ms)
+✔ JSON Unicode escapes cannot reconstruct a raw file capability (0.5363ms)
+✔ sanitizer bounds inherited arrays and recursive depth (0.3155ms)
+✔ T01 no-pressure projection counts only a successful raw result body (3.8528ms)
+✔ T02/T03 historical coverage is distinct from current none or partial (1.5709ms)
+✔ T04 actual returned range wins over the requested range (0.2935ms)
+✔ T05/T06 versions and project identities never merge (0.3036ms)
+✔ T07 partial batch failures are recorded per call and never become raw observations (0.835ms)
+✔ T08 call keys remain execution-scoped when provider IDs are reused (0.3803ms)
+✔ duplicate provider IDs in one SDK round remain explicitly ambiguous (0.3469ms)
+✔ T11/T13 prior availability prose, hashes, and sentinels are not raw bodies (0.2672ms)
+✔ T12 capped metadata distinguishes omitted entries from absent raw content (0.5254ms)
+✔ T18 unverified host delivery and malformed raw ranges remain unknown (0.3454ms)
+✔ worktree and commit-blob adapters preserve the same range contract (0.3375ms)
+✔ verified and bodyless ranges with the same key never promote the bodyless range (0.3455ms)
+✔ Unreal UTF-8 byte windows keep byte units without inventing line ranges (0.2546ms)
+✔ Unreal byte windows reject a decoded body that cannot prove the reported byte span (0.1383ms)
+✔ an exact empty Unreal byte response is a verified full empty file (0.1589ms)
+warning: in the working copy of 'tracked.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tracked.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'added.txt', LF will be replaced by CRLF the next time Git touches it
+✔ ASTRA RANGE: decoded body is not envelope coverage; continuation includes boundary (25.7865ms)
+✔ ASTRA RANGE: sanitized envelope fallback seeds [0,N), not [0,N] (168.9499ms)
+✔ ASTRA RANGE: empty archive EOF is zero coverage (237.5415ms)
+✔ ASTRA GEN: large metadata cannot replace the generic content body (314.859ms)
+✔ ASTRA RANGE: invalid typed endpoints cannot become zero (1.5374ms)
+✔ ASTRA RANGE: unlike source units remain separate (0.903ms)
+✔ ASTRA RANGE: failed projected results never seed successful coverage (661.7784ms)
+✔ ASTRA CAP: exact registered provider tools, not name or prefix, confer read exemption (0.2871ms)
+✔ ASTRA TX: fragment pause without completed event cannot consume raw input (1.1693ms)
+✔ B04/O03 production handler rejects an inexact input before model dispatch or durable commit (28.6021ms)
+✖ hybrid handler consumes toolCalls inputs across repeated compaction and delivers EOS (5407.2207ms)
+✔ prediction loop calls the directly selected model with compacted history (2.59ms)
+✔ low-pressure history passes through without proxy model selection or sampling overrides (1.4035ms)
+✔ prediction loop exposes only the configured engine tools and common tools (1.7092ms)
+✔ Qwen-compatible history has exactly one leading system message after scope injection (1.6287ms)
+✔ repeated compaction preserves invariant system instructions exactly once (4.4745ms)
+✔ continuity marker text in user content is retained as user content (0.7118ms)
+✔ long multi-file review resumes after interruptions across four compactions (8.4474ms)
+✔ prediction loop denies a handcrafted tool call withheld by engine scope (2.0307ms)
+✔ prediction loop binds Unreal mutation project arguments after confirmation overrides (1.6221ms)
+✔ Unity and Unreal observation calls bypass the invisible host confirmation wait (0.1192ms)
+✔ read-only Unity calls finish without asking the hidden confirmation UI (1.5869ms)
+✔ hidden model notes survive a new user turn as assistant judgment and leave visible answers clean (278.0241ms)
+✔ reserved note footers stay hidden when no stable working directory exists (1.7795ms)
+✔ inexact measurement activates the configured message-count fallback (2.5513ms)
+✔ inexact fallback escalates a still-pressured current tool turn to bounded retention (7.1619ms)
+✔ handler activation ignores a legacy nested enabled=false value (1.8675ms)
+✔ observe-only remains the explicit no-mutation mode (1.7821ms)
+✔ observe-only does not filter tools or bind project arguments (1.34ms)
+✔ tool rounds are captured once, remeasured, and compacted before the next act (9.9395ms)
+✔ pressure trace measures eviction and historical reacquisition against the causal input (16.1225ms)
+✔ pause policy stops before a fourth equivalent tool round (4.3801ms)
+✔ soft compaction keeps the largest complete tool tail that meets the token budget (1.4977ms)
+✔ tool generation, finalized requests, results, and the final answer update the GUI without round buffering (3.4784ms)
+✔ bounded audit exposes read-only research tools and gives the same model one tool-free final report (4.1342ms)
+✔ bounded audit converts research output exhaustion into one tool-free final report (2.2588ms)
+✔ normal rounds send the explicit generation cap that was used as the reserve (1.3844ms)
+✔ the default recovery cap follows a larger configured output reserve instead of silently lowering it (0.0664ms)
+✔ new compactor configuration defaults to hybrid and preserves every explicit mode (0.1085ms)
+✔ normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back (2.022ms)
+✔ a recovery that reaches its own limit is recorded once and is never retried recursively (1.785ms)
+✔ reasoning-only and tool-argument output limits do not enter report recovery (2.51ms)
+✔ bounded audit makes zero final model calls after user cancellation (2.1394ms)
+✔ final delivery accepts only a known normal stop and a real report (0.6394ms)
+✔ structured final tool requests are never accepted as a completed report (0.1501ms)
+✔ a denied mutation call keeps the SDK confirmation call ID in emitted messages (3.2431ms)
+✔ allowed ID-less tool calls register once across guard and finalized callbacks (4.4117ms)
+✔ round control never swallows an external abort (0.1504ms)
+✔ round control never swallows an unrelated lookalike error (0.0979ms)
+✔ round telemetry records the SDK finish reason without exposing result bodies (0.1032ms)
+✔ raw tool intent streaming detection is invariant across tag splits (0.322ms)
+✔ final assistant message can authorize fresh planning when fragment callbacks are absent (0.1341ms)
+✔ fresh read-only planning retry has no hidden audit deadline in normal mode (0.1219ms)
+✔ raw intent classification never aliases unknown or withheld mutation names (0.3689ms)
+✔ completed read fingerprints require a causal successful result and current raw content (0.6627ms)
+✔ semantic result fingerprints ignore random snapshot metadata but retain evidence changes (0.1146ms)
+✔ within-generation pause aborts only the owned round and reports a clean pause (0.1814ms)
+✔ final context fitness is exact at the reserve boundary (0.1849ms)
+✔ context measurement reports tool schema cost separately from full prompt tokens (0.1752ms)
+✔ generation budget resolver clamps only to measured headroom and rejects unsafe space (0.0731ms)
+✔ reserve pressure gets one adaptive tool-free final report instead of an immediate rejection (2.5309ms)
+✔ context budget measures a narrowed registered Git catalogue before tools-disabled finalization (4.6278ms)
+✔ context budget uses FINAL_REPORT_ONLY when the measured narrowed catalogue still does not fit (4.8942ms)
+✔ final raw git_diff repair uses a newly measured candidate and preserves a second terminal report (11.4739ms)
+✔ Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes (17.6647ms)
+✔ Unity-marked project uses public schemas and actual temporary Git for mixed raw Git repair (3790.0406ms)
+✔ raw tool text cut by the output cap is classified as tool-argument generation (0.2148ms)
+✔ initial raw tool output records the provider boundary when the measured structured catalogue fits (5.664ms)
+✔ no-progress recovery delivers a safe partial report without task completion (8.0067ms)
+✔ recovery progress counts new source/archive coverage, not response fingerprints (1.0325ms)
+✔ archive-only raw recovery exposes the verified Git source catalogue and reaches a real source page (6331.1735ms)
+✔ deterministic working context projects a completed large result and exposes bounded rehydration (2917.035ms)
+✔ raw Git replan keeps the archive reader beside the public source reader and consumes the archive (2900.028ms)
+✔ low-pressure Git page stays raw for its first consumer without a semantic round trip (6.2364ms)
+✖ aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only (3690.941ms)
+✔ image content keeps prediction alive and skips only the durable working-window commit (2893.3125ms)
+✔ working input target reports the mandatory floor without deleting the current request (2.7735ms)
+✔ hybrid context makes one tool-free semantic handoff and keeps it out of visible output (2845.433ms)
+✔ invalid hybrid summary is discarded without retry or report recovery (2862.4052ms)
+✔ a failed hybrid summary enters one-round cooldown while deterministic facts continue (9565.7398ms)
+✔ BOUNDED keeps its original call budget and does not start a hybrid summary (2882.2948ms)
+✔ cancellation during the hybrid summary prevents the normal model call (2865.2232ms)
+✔ a signed next user turn restores the compacted prefix and appends only the new delta (5352.1131ms)
+✔ context-budget rescue keeps the normal output reserve when it fits (2.408ms)
+✔ bounded context-budget rescue keeps the bounded final token and timeout limits (2.1021ms)
+✖ an input with less than the minimum safe final output still skips the selected model call (2.3803ms)
+✔ tool-round stagnation requires equivalent calls and semantic results (0.8095ms)
+✔ within-generation repetition ignores long normal prose and detects repeated blocks (0.194ms)
+✔ the compactor cannot be selected recursively as the token source (0.1753ms)
+✔ prompt processing progress is visible before the first generated token (1.5622ms)
+✔ prediction fragments stream reasoning into a thinking block and the answer into normal output (1.5389ms)
+✔ a tool follow-up keeps raw reasoning in model history while the GUI stays separated (2.8829ms)
+✔ plain answer fragments are appended once instead of waiting for the completed message (1.3611ms)
+✔ streaming keeps a continuity footer out of the visible answer (58.0988ms)
+✔ T22 default availability observation traces final SDK input without changing it (2.5728ms)
+✔ B mode injects only current-input facts and reports measured prompt overhead (2.4188ms)
+✔ T10 injected metadata participates in the final budget gate (3.4006ms)
+✔ T14 injected facts do not block a model-selected reread (2.5894ms)
+✔ availability off mode leaves both model input and availability telemetry disabled (1.4412ms)
+✔ T09 compaction retains the newest completed tool exchange for its first consumer (1.092ms)
+✔ a new handler recomputes current availability instead of restoring a prior-input flag (1.5598ms)
+✔ T16 real cancellation distinguishes no result from a received partial result (0.527ms)
+✔ tool-generation failure telemetry is causal and never promoted to a result (1.6504ms)
+✔ exact measurement never labels an invalid token counter as exact (3.9963ms)
+✔ orchestrator delegates policy and stays below structural size target (1.2072ms)
+✔ recovery uses typed provider authority, supports non-Git and ends on no progress (3.5837ms)
+✔ capability SSOT rejects provider suffix spoof and name collision; safe profile is stable (0.6277ms)
+✔ Git/File/Symbol/Log/Unity/Unreal share first-consumer, archive and coverage lifecycle (611.2581ms)
+✔ small returned evidence is archived before a canceled round can exit (1.7042ms)
+✔ broker derives watermarks from loaded context and counts post-tool reserve once (0.3248ms)
+✔ shared batch cannot overbook or recycle settled result budget; release exactly once (0.3447ms)
+✔ read envelope reservation reduces a published bound before dispatch (0.3198ms)
+✔ three equivalent growth/compaction cycles verify final reassembled LOW without drift (87.1118ms)
+✔ unreachable LOW preserves mandatory request and reports its measured floor (1.1843ms)
+✔ canonical phase rejects every illegal transition and records transaction effects (1.0476ms)
+✔ canceled/truncated planning rolls back while returned provider evidence survives (0.8863ms)
+✔ extracted evidence algebra preserves units, empty EOF and overlap (0.1795ms)
+✔ extracted boundary does not invent a provider start from guard allow (0.2718ms)
+✔ extracted capabilities and raw intent remain independently testable (0.7734ms)
+✖ status verifies every direct prediction-loop source and its index wiring (17.8032ms)
+✔ status fails closed when a direct runtime source is absent (102.2013ms)
+✔ status fails closed when the package entry does not register the prompt preprocessor (89.7028ms)
+✔ runtime-required status never turns source presence into activation proof (97.5136ms)
+✔ workspace markers select the nearest exact Unity project (12.8127ms)
+✔ ambiguous auto scope withholds both engine families (0.2428ms)
+✔ a verified Unity path in the latest user messages selects Unity deterministically (10.2428ms)
+✔ a verified Unreal directory in the latest user messages resolves its sole descriptor (3.9081ms)
+✔ an exact configured project path is enough for Auto scope (2.3548ms)
+✔ explicit mixed scope is the only mode that exposes both engine families (0.2501ms)
+✔ Unreal project-capable calls are bound while Unity and common calls remain untouched (0.2799ms)
+✔ failed evidence validation retains bounded actionable repair facts (9.9884ms)
+✔ validation repair diagnostics remain capability-free and individually bounded (10.4518ms)
+✔ serialized validation repair keeps counts and as many diagnostics as fit (0.7584ms)
+✔ S2 signed user boundaries preserve UI history and distinguish fork lineages (31.4072ms)
+✔ S2 signed boundaries fall back to current edited history while invalid signatures fail closed (9.734ms)
+✔ S2 lineage survives an attachment marker that is validated by its own boundary (12.0865ms)
+✔ S1 five-call projection preserves SDK pairing and rehydrates exact archived pages (65.4185ms)
+✔ P1 direct JSON and MCP result envelopes produce equivalent projections (414.9829ms)
+✔ P1 archived projection becomes a durable evidence index in the next checkpoint (17.2414ms)
+✔ E2E two-generation compaction rehydrates A after its projection leaves history (579.0197ms)
+✔ S1 pending, duplicate IDs, unknown effects and archive failure keep original messages (1.9936ms)
+✔ S1 archive range/version/scope/hash/TTL/quota failures are explicit (0.365ms)
+✔ P2 expired unreferenced records are reclaimed while live records remain protected (0.3228ms)
+✔ S1 a Git transport cursor is projected for the current round but never archived (50.1872ms)
+✔ S1 durable archive restarts, canonicalizes a trusted root alias and rejects internal links (22.2479ms)
+✔ P2 projection has a whole-result cost gate and short observations are not archived (0.6322ms)
+✔ P2 evidence reads bound metadata and distinguish EOF from complete raw coverage (13557.1535ms)
+✔ regression: a 32KB Git diff keeps a body-first bounded view for its first consumer (5.7948ms)
+✔ regression: the 8192-character first-consumer boundary is exact for direct and MCP envelopes (1553.7917ms)
+✔ Git source page continuation survives archive EOF as a separate contract (3.9553ms)
+✔ P2 provider request IDs may repeat in separate completed causal batches (93.5103ms)
+✔ S2 atomic window restoration rejects edits, stale candidates, fork and missing archive (23.3938ms)
+✔ S3 semantic note validation rejects invented refs and execution fact schema (2.0531ms)
+✔ S4 ten atomic generations keep the latest constraint and decision (29.2936ms)
+✔ S3 a semantic event attempt survives window restore and cannot be implicitly retried (4.595ms)
+✔ signed document boundary survives restart, keeps images and rejects changed history (17.9663ms)
+✔ review claims fold Windows path aliases and are invalidated by deletion, even with the old hash (11.9355ms)
+✔ budget selection measures nonmonotone candidates and never claims an unmeasured fit (1.0706ms)
+✔ old reasoning loses only structural reasoning, preserving newest reasoning and tool pairing (1.2161ms)
+✔ Git memory preserves comparison identity but does not invent source coverage (1.383ms)
+✔ Git log memory preserves author and committer evidence without promoting responsibility (0.9223ms)
+✔ review claims require observed version and disappear after a new hash (1.3673ms)
+ℹ tests 352
+ℹ suites 0
+ℹ pass 348
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 56752.4612
+
+✖ failing tests:
+
+test at test\prediction-loop.test.cjs:103:1
+✖ hybrid handler consumes toolCalls inputs across repeated compaction and delivers EOS (5407.2207ms)
+  AssertionError [ERR_ASSERTION]: [{"event":"context_low_water","executionId":"bffa351e-4f5f-414d-8631-da9f150a91ec","modelInputId":"bffa351e-4f5f-414d-8631-da9f150a91ec:prediction-9","roundIndex":8,"contextLength":38912,"configuredTargetTokens":18000,"configuredTriggerTokens":22000,"requiredGenerationReserve":8192,"safetyMarginTokens":2048,"mandatoryFloorTokens":13837,"configuredLowWaterTokens":12672,"effectiveLowWaterTokens":13837,"effectiveHighWaterTokens":16896,"hardInputCeiling":28672,"reservedToolResultTokens":3584,"requiredPostToolOverhead":8192,"projectedNextInput":28776,"preDispatchCompaction":true,"minimumReadResultTokens":2048,"nextActionFit":true,"targetUnreachable":true,"blockingComponent":"mandatory_objective_evidence_and_template","tokenMetric":"exact_templated_model_input","beforeExactInputTokens":17000,"candidateMeasurements":[{"candidate":"complete_exchange_cap_16","finalExactInputTokens":17000,"accepted":false},{"candidate":"complete_exchange_cap_8","finalExactInputTokens":16149,"accepted":false},{"candidate":"complete_exchange_cap_4","finalExactInputTokens":15173,"accepted":false},{"candidate":"complete_exchange_cap_2","finalExactInputTokens":14685,"accepted":false},{"candidate":"checkpoint_budget_1","finalExactInputTokens":14685,"accepted":false},{"candidate":"checkpoint_budget_0.5","finalExactInputTokens":14159,"accepted":false},{"candidate":"checkpoint_budget_0.25","finalExactInputTokens":13896,"accepted":false},{"candidate":"checkpoint_budget_0.125","finalExactInputTokens":13896,"accepted":false},{"candidate":"mandatory_floor","finalExactInputTokens":13837,"accepted":true}],"selectedCandidate":"mandatory_floor","postHistoryTokens":17519,"postProjectionTokens":16717,"postCompactionTokens":13556,"postMetadataTokens":13837,"postToolSchemaTokens":13837,"finalExactInputTokens":13837,"stageFingerprints":{"history":"bad6554add08654a52bd7822f82334ff58fec1a1845ec82307fcfcb1a4a9981a","projection":"cf8a0b52787fd79b980f7d56d8c3d970413d1cbe8dc36385a34f0a2e8accad25","compaction":"6213b1c9c80d8b07068d0952617a2cac7b701446e91d61ca8c7a9c202051e7ce","metadata":"6c14ba40e45d76691b6bc86a6250116f8030c2616a3056b854ebdee6ba82c8d3","final":"6c14ba40e45d76691b6bc86a6250116f8030c2616a3056b854ebdee6ba82c8d3"},"measurementCost":{"measurementCalls":7,"measurementMs":1,"templateCalls":7,"tokenCountCalls":9,"contextLengthCalls":7,"cacheHits":8,"scope":"round_input_assembler","cacheScope":"same_round_model_handle"},"targetDelta":0,"compactionSucceeded":true,"compactionRequested":true,"lowTargetMet":true,"mandatoryFloorException":true,"hardFit":true,"disposition":"mandatory_floor_exception","canRun":true,"metadataTokens":0,"toolSchemaTokens":12283,"reclaimRatio":0.18605882352941178}]
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:128:10)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at test\prediction-loop.test.cjs:3082:1
+✖ aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only (3690.941ms)
+  Error: CONTEXT_BUDGET_EXCEEDED: final model input exceeds the context budget by 3088 tokens
+      at prepareRoundInput (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-input.js:175:19)
+      at async C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:284:34
+      at async TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3123:3)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7)
+
+test at test\prediction-loop.test.cjs:3490:1
+✖ an input with less than the minimum safe final output still skips the selected model call (2.3803ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - 'context_budget'
+  
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3506:10)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'context_budget',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at test\status.test.cjs:11:1
+✖ status verifies every direct prediction-loop source and its index wiring (17.8032ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  ... Skipped lines
+  
+    [
+      'src/attachment-boundary.ts',
+      'src/attachment-tools.ts',
+      'src/budget-broker.ts',
+  -   'src/checkpoint-budget.js',
+      'src/compaction-tool-memory.js',
+      'src/context-budget.ts',
+      'src/context-manager.ts',
+      'src/context-ports.ts',
+      'src/continuity-assistant-evidence.js',
+  ...
+      'src/recovery-coordinator.ts',
+  -   'src/round-input.ts',
+      'src/round-loop.ts',
+      'src/runtime-identity.ts',
+      'src/tool-boundary.ts',
+      'src/tool-capability-registry.ts',
+      'src/tool-scope.ts',
+  
+      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\status.test.cjs:20:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1306:25)
+      at Test.start (node:internal/test_runner/test:1177:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:385:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [
+      'src/attachment-boundary.ts',          'src/attachment-tools.ts',
+      'src/budget-broker.ts',                'src/compaction-tool-memory.js',
+      'src/context-budget.ts',               'src/context-manager.ts',
+      'src/context-ports.ts',                'src/continuity-assistant-evidence.js',
+      'src/continuity-file-observations.js', 'src/continuity-memory.js',
+      'src/continuity-model-notes.js',       'src/continuity-objectives.js',
+      'src/continuity-text.js',              'src/delivery-controller.ts',
+      'src/direct-compaction-core.js',       'src/direct-config.ts',
+      'src/durable-memory-sanitizer.js',     'src/evidence-archive.js',
+      'src/evidence-identity.js',            'src/evidence-manager.ts',
+      'src/evidence-telemetry.ts',           'src/execution-config.ts',
+      'src/execution-contracts.ts',          'src/execution-instructions.ts',
+      'src/execution-state.ts',              'src/index.ts',
+      'src/input-availability.js',           'src/prediction-loop.ts',
+      'src/prediction-stream.ts',            'src/prediction-ui.ts',
+      'src/raw-tool-intent.ts',              'src/recovery-coordinator.ts',
+      'src/round-loop.ts',                   'src/runtime-identity.ts',
+      'src/tool-boundary.ts',                'src/tool-capability-registry.ts',
+      'src/tool-scope.ts',                   'src/working-context-boundary.ts',
+      'src/working-context.js'
+    ],
+    expected: [
+      'src/attachment-boundary.ts',           'src/attachment-tools.ts',
+      'src/budget-broker.ts',                 'src/checkpoint-budget.js',
+      'src/compaction-tool-memory.js',        'src/context-budget.ts',
+      'src/context-manager.ts',               'src/context-ports.ts',
+      'src/continuity-assistant-evidence.js', 'src/continuity-file-observations.js',
+      'src/continuity-memory.js',             'src/continuity-model-notes.js',
+      'src/continuity-objectives.js',         'src/continuity-text.js',
+      'src/delivery-controller.ts',           'src/direct-compaction-core.js',
+      'src/direct-config.ts',                 'src/durable-memory-sanitizer.js',
+      'src/evidence-archive.js',              'src/evidence-identity.js',
+      'src/evidence-manager.ts',              'src/evidence-telemetry.ts',
+      'src/execution-config.ts',              'src/execution-contracts.ts',
+      'src/execution-instructions.ts',        'src/execution-state.ts',
+      'src/index.ts',                         'src/input-availability.js',
+      'src/prediction-loop.ts',               'src/prediction-stream.ts',
+      'src/prediction-ui.ts',                 'src/raw-tool-intent.ts',
+      'src/recovery-coordinator.ts',          'src/round-input.ts',
+      'src/round-loop.ts',                    'src/runtime-identity.ts',
+      'src/tool-boundary.ts',                 'src/tool-capability-registry.ts',
+      'src/tool-scope.ts',                    'src/working-context-boundary.ts',
+      'src/working-context.js'
+    ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

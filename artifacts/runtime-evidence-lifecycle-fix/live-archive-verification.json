@@ -1,0 +1,931 @@
+{
+  "archiveDirectories": [
+    "63ffe64b57a0d3bff76e0de58f704ef6d404cc6760761a1153a60bbd64d754d7"
+  ],
+  "recordCount": 47,
+  "windows": [
+    {
+      "file": "window-eee1a946-f024-428e-9862-2f8d93eedf45.json",
+      "digestValid": true,
+      "scopeValid": true,
+      "generation": 46,
+      "refs": 5,
+      "rawBindings": 0,
+      "pendingRefs": 0,
+      "pendingHistoricalResults": 1,
+      "remeasureRequired": true,
+      "measurementSubject": "live_candidate_before_persistence_sanitization"
+    }
+  ],
+  "records": [
+    {
+      "id": "ev_03d5cd317fba95698988b7608c94cd79bc2f4c87edf05634388d119ec1dabcad",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 465,
+        "end": 480,
+        "total": 680
+      },
+      "callId": "cE6CEFXfbTPGn53F0u9NqjS5P6H7faqP",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 465,
+      "endLine": 480
+    },
+    {
+      "id": "ev_05fb813c49106f1c79c5888bedf6105eec9e772b33a69a551da428b0d58c7ae1",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 33,
+        "end": 48,
+        "total": 680
+      },
+      "callId": "kFLS4p1DovLwds7MSJ5V4ZdBWjlRqlFP",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 33,
+      "endLine": 48
+    },
+    {
+      "id": "ev_09eeb379da4cdb46814a0f917c4b93ef24197dbbac555a5c1fb41dff96eba192",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 241,
+        "end": 256,
+        "total": 680
+      },
+      "callId": "dNu9qSjD9hoeq7KCLICxZCPVfIGeg2pR",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 241,
+      "endLine": 256
+    },
+    {
+      "id": "ev_0edcf4aeca7031a28da6d1abcadb0c8da9670dd2540eb786e7fcc2b9c1acd019",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 561,
+        "end": 576,
+        "total": 680
+      },
+      "callId": "OcjaBgMoRrGaUESMMDcpzqHRg5VgmnQD",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 561,
+      "endLine": 576
+    },
+    {
+      "id": "ev_15655065b41e9ca26381803ce7846202777e30849fc2f9e96f53c2843f9f69a4",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 417,
+        "end": 432,
+        "total": 680
+      },
+      "callId": "QFAXBCNkpv4pzaZ8MVMz7D45sWmVaVRo",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 417,
+      "endLine": 432
+    },
+    {
+      "id": "ev_2a9bba1b162980bbe80453a220f7d9d629a6bac6389c9f6b0c15455aa5810dd2",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 49,
+        "end": 64,
+        "total": 680
+      },
+      "callId": "jueRFLVZLXFkXuOyQAQvRR6y1RT5bwjW",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 49,
+      "endLine": 64
+    },
+    {
+      "id": "ev_2aeb359ab3e151695eaeb410c4e533b07114e512bfa769fe70a5716037108ffa",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 673,
+        "end": 680,
+        "total": 680
+      },
+      "callId": "R61AMDlmTsLarlB3BHtjgXH5RrCDBSQb",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 673,
+      "endLine": 680
+    },
+    {
+      "id": "ev_30e4454bd413f12fc4b41f81836e19ea22d5216460e1188ae10daba2a52568f9",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 97,
+        "end": 112,
+        "total": 680
+      },
+      "callId": "aRXKZCJLdygF0AH0W0nuPtTRb2UYpANf",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 97,
+      "endLine": 112
+    },
+    {
+      "id": "ev_30e641f8c298109a9c3c221babb62152c311357914189fd2444b3a68ecee0e4e",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "sourceRange": null,
+      "callId": "ptYPc240VtW21nDvlowSnlnsbCTthHsY"
+    },
+    {
+      "id": "ev_35623ed7f02d1d3fb73bc7cc3e9763cd91a249c6d9a94b16a0409f6320822820",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "sourceRange": null,
+      "callId": "4bdizfaKpQv4JU0unvq7rdp9wg1LbLuE"
+    },
+    {
+      "id": "ev_3668a5c32eaf6f4c9cfbb2ec222d15a31f798ce309188aa8d5e604e407ae2c36",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 529,
+        "end": 544,
+        "total": 680
+      },
+      "callId": "7kwdvpTWWCDYzbhvJwzRfjTJc7WkVByy",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 529,
+      "endLine": 544
+    },
+    {
+      "id": "ev_410fd6bc87c68b9a5e7dfaee31f3a09a3d7b48192c049995926cbe4e28c5c70c",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 385,
+        "end": 400,
+        "total": 680
+      },
+      "callId": "3UFUT7EDtzZnhDd2Bgd334avVZvGJSuC",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 385,
+      "endLine": 400
+    },
+    {
+      "id": "ev_440918de6c5645346ab3496ee0acac22ced1dd1eceb3a9abf36b0525da07b084",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 257,
+        "end": 272,
+        "total": 680
+      },
+      "callId": "cuWY3hW8aJDislyVAK5TeYzGwkJIVfyT",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 257,
+      "endLine": 272
+    },
+    {
+      "id": "ev_463bb981546b7f44acd3350fffa734d03b5d659681e8167a3aed67ef032bcab3",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 353,
+        "end": 368,
+        "total": 680
+      },
+      "callId": "MYOTaTEBYSw9FqzlH3hcktgAX4TPL5iq",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 353,
+      "endLine": 368
+    },
+    {
+      "id": "ev_51c8090771e352fd91543cf19804ef28ec156dfc553966b999d9b889c9f81a49",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 481,
+        "end": 496,
+        "total": 680
+      },
+      "callId": "dFE0qmTaPLlqhW9qgC72NhGIxkwkQnrw",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 481,
+      "endLine": 496
+    },
+    {
+      "id": "ev_55fb1abaedf25fa1d300ac41f180c048aedf737f046f555358e28d71a2ceefbc",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 81,
+        "end": 96,
+        "total": 680
+      },
+      "callId": "J3DfHK291c2kve8VtxOl5N5awI6dFQ0Z",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 81,
+      "endLine": 96
+    },
+    {
+      "id": "ev_56f0019287f3fe738e5983bd4f2ddd0f59a5e8553efddf0bad3b26f0824b7786",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 177,
+        "end": 192,
+        "total": 680
+      },
+      "callId": "MuS0xL35t4Lk5KCbQ5KF5sfjwcS1pXc0",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 177,
+      "endLine": 192
+    },
+    {
+      "id": "ev_56fc9609fd8e0d7ece0c4a763d895e56a0e68d6b109afb127e637d414c8010d6",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 321,
+        "end": 336,
+        "total": 680
+      },
+      "callId": "PtD5R7Ipj0SWLVHQ8Yd3u5OwkXBFsYRw",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 321,
+      "endLine": 336
+    },
+    {
+      "id": "ev_624891602b2a84112a572509a90c34f6563ee674009576ea76bbb6de175d5c11",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 193,
+        "end": 208,
+        "total": 680
+      },
+      "callId": "wtdO50LoOezEx7iYcT7ugehLZRdSOlXW",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 193,
+      "endLine": 208
+    },
+    {
+      "id": "ev_62c91fee11ad297f0cdba02d9d1979d3bc2b8672916f5e448c97ef370772183e",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 113,
+        "end": 128,
+        "total": 680
+      },
+      "callId": "PTV2YYiCu2C7UeARUwF4Df7zI9209fX8",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 113,
+      "endLine": 128
+    },
+    {
+      "id": "ev_632d2040be1445858423510f52993ed403fc5310de9f15a4d515765f98a3d4c7",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 657,
+        "end": 672,
+        "total": 680
+      },
+      "callId": "tX5ACqO8gOxUBsllfxIthL9ZGy3bJIoM",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 657,
+      "endLine": 672
+    },
+    {
+      "id": "ev_750d9fc55162537f885f037ee79b41c2b45996e26a495834aa5ca8d4685f06b0",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 449,
+        "end": 464,
+        "total": 680
+      },
+      "callId": "O13umUG2W4wGSzTZwnlzdx7ErB0ra3Ts",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 449,
+      "endLine": 464
+    },
+    {
+      "id": "ev_87927df00670aece7ac29d3696249aec86e3d62db517d071254843760563c4c1",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 497,
+        "end": 512,
+        "total": 680
+      },
+      "callId": "2WwIx8xJY4Ok1MOESqlLotbWT92lCGEk",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 497,
+      "endLine": 512
+    },
+    {
+      "id": "ev_8903bf5db5733defb5e078a37e6d6e297e7c533c3a69f068cc6832f9bbcc2885",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 433,
+        "end": 448,
+        "total": 680
+      },
+      "callId": "Dfu4z5xxfyG3ZO3Wp6XhhaI1mngYZrdD",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 433,
+      "endLine": 448
+    },
+    {
+      "id": "ev_8db6327f193f11fbed4325ee6b9be6c9ab7cffa1db659d1863d0fb92a1aa01f2",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 513,
+        "end": 528,
+        "total": 680
+      },
+      "callId": "0AdQpx79qlghVfV4MPCZ5hnFGzwgcqZx",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 513,
+      "endLine": 528
+    },
+    {
+      "id": "ev_8ea890f78f51699b35e9a9b43fcd481e2f678728d67f8dc0cdfcc82731feff17",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 17,
+        "end": 32,
+        "total": 680
+      },
+      "callId": "r7mzjTOidnXjMtXXl7wXeTk2IDHB8A55",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 17,
+      "endLine": 32
+    },
+    {
+      "id": "ev_912bdf3414e4e2a42495e08224bf84129a24e11c744a23ca552afbd44d61edae",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 225,
+        "end": 240,
+        "total": 680
+      },
+      "callId": "4CB9QzsMfofPYegkTEgm5h46HW78ptC6",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 225,
+      "endLine": 240
+    },
+    {
+      "id": "ev_913965f24565d2c0651b30bba78974da141641823347c5e2d874f2e151dab972",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 305,
+        "end": 320,
+        "total": 680
+      },
+      "callId": "kJY27AO45Jq5kNWqnLwCU9MlV28K01cS",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 305,
+      "endLine": 320
+    },
+    {
+      "id": "ev_9781d4c655e0cd462d313e502dfb051abcb50deae15d233ed78855ed00a165e4",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 593,
+        "end": 608,
+        "total": 680
+      },
+      "callId": "DaHP36NyHAZZuJQnruxsGblgOVEs2mG6",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 593,
+      "endLine": 608
+    },
+    {
+      "id": "ev_9795225b664ab6bd7b90df9f5ec0e2637f2e0b7a96412429297dd6e253e69258",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 289,
+        "end": 304,
+        "total": 680
+      },
+      "callId": "NMuzBoimsaeRdwEadBV4GxLXxHOVV7Mo",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 289,
+      "endLine": 304
+    },
+    {
+      "id": "ev_9c39aec259e3e3fb58d1c819d02a9d50dd8758a73d7bf456f99ef2ac84fa9ceb",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 65,
+        "end": 80,
+        "total": 680
+      },
+      "callId": "VAga0vSWjR3kvff4LNUC46pZR31ev9rx",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 65,
+      "endLine": 80
+    },
+    {
+      "id": "ev_9dd0e8a591bb8345065716ecc0e6f8eccdd2b196d20a2d6e4a253199c85cadd7",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 641,
+        "end": 656,
+        "total": 680
+      },
+      "callId": "D7KZ3U0m7mA6Ch91EsCc2qB6kzvpjGZm",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 641,
+      "endLine": 656
+    },
+    {
+      "id": "ev_9f5292b87bf09ee371cdc2d6d297ee890e2b976bbb372631472b18ade66b5f09",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 369,
+        "end": 384,
+        "total": 680
+      },
+      "callId": "xLoUoffxh3Qtea4lGd0J3BlvXlQ51nib",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 369,
+      "endLine": 384
+    },
+    {
+      "id": "ev_acdd00c2f95a02c57572f807eb51485af08c2a087566359a4ebc03afbcea7d38",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 129,
+        "end": 144,
+        "total": 680
+      },
+      "callId": "26qyjjTtFXEkqg3ehhHy8xmneLRLuo4X",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 129,
+      "endLine": 144
+    },
+    {
+      "id": "ev_b867760078da64acea433c4351e685ae51aa8d64a9971ab3485d535651dd6b72",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 401,
+        "end": 416,
+        "total": 680
+      },
+      "callId": "d74OvfwFLiMp41Laoay9xtWyu1cgj7Tn",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 401,
+      "endLine": 416
+    },
+    {
+      "id": "ev_ba140fbb9fec68e529c3519af7affb9572590a794f6a93a2e8aff39e26914bc8",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 577,
+        "end": 592,
+        "total": 680
+      },
+      "callId": "4OCjdz9YCdhjoTbbUQF2Vky9ZJfzze6t",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 577,
+      "endLine": 592
+    },
+    {
+      "id": "ev_c4011748faa7ed815a17232285591ee6b81d4cd3f93fa3343c5a5f614c49264c",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 145,
+        "end": 160,
+        "total": 680
+      },
+      "callId": "PhVjRm2SIXv0Sl2Hu90s1gTyuxBRJEZk",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 145,
+      "endLine": 160
+    },
+    {
+      "id": "ev_c6b9743417e7625dd5a9da126c22271aaa21ed311e0f74f1477bccab4260cc67",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 609,
+        "end": 624,
+        "total": 680
+      },
+      "callId": "wxK1zRcABDRer6S7lqMSLvOrCeBS8Xhv",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 609,
+      "endLine": 624
+    },
+    {
+      "id": "ev_ce63068fb47d985dff6a9cc4b3be8fe103e6d84291a1ad1acb1be6d7d36916f0",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 625,
+        "end": 640,
+        "total": 680
+      },
+      "callId": "HyU9yYFXkEZWzKwoqIOJWdEGxtpc1DSM",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 625,
+      "endLine": 640
+    },
+    {
+      "id": "ev_ce635ff0de483e33e8f1fee4c56cb46495a2ceb02cc10e87221ab1cc2d091f29",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 545,
+        "end": 560,
+        "total": 680
+      },
+      "callId": "gD6aHjl6WO2xX0uukSIzZVtHs9NoCO1y",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 545,
+      "endLine": 560
+    },
+    {
+      "id": "ev_dbcfd2f43f6e4fdc89f3c7eaebc46b5e11551e3e06faa2ce95918233437f10ea",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 273,
+        "end": 288,
+        "total": 680
+      },
+      "callId": "waoX5gF1vrh8zP2IRspKO75FULevWrxD",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 273,
+      "endLine": 288
+    },
+    {
+      "id": "ev_e21526b5434361c0d6776c1634223379ad6b5a97a00415e7133352a67b4e1e76",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 161,
+        "end": 176,
+        "total": 680
+      },
+      "callId": "N37NruWT9ceDFWzUQFp8zI5S8k8jZKyc",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 161,
+      "endLine": 176
+    },
+    {
+      "id": "ev_e3116e1455512be47f0580651ef4b6f9a7f4165c2a316d88cafa4cfd287f00e8",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 1,
+        "end": 16,
+        "total": 680
+      },
+      "callId": "SB24DtwHrcZ7kTrMFfY1djNlWQc0DZxJ",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 1,
+      "endLine": 16
+    },
+    {
+      "id": "ev_e6a06c6d2a71a4a522627ed6a08e5f93dbf2ba98942b11dbea3739821a167066",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 337,
+        "end": 352,
+        "total": 680
+      },
+      "callId": "Sms9yTAKCJFVAcVgsDhGXajzb9Suppnc",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 337,
+      "endLine": 352
+    },
+    {
+      "id": "ev_ee378e844e151061a72a1ed8f1e83a35e6532503a0bf4d688d249471206556d6",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/packages-lock.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 209,
+        "end": 224,
+        "total": 680
+      },
+      "callId": "uxe0hOa85LYmdjnXZMhOjAOtVPHpOE1C",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": true,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 209,
+      "endLine": 224
+    },
+    {
+      "id": "ev_f5128d6e7763050ae736e710d4349665648a9c3be22b3f05f51f14a905ef0af3",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "sourceRange": null,
+      "callId": "tTwCSltR84JRRmLHloaa8fGFox2SSMLK"
+    },
+    {
+      "id": "ev_f6c052953060cd7e1c50089c2a371c7843f9fc35426f52904d6e0bc15435f887",
+      "recordIntegrity": true,
+      "bodyIntegrity": true,
+      "scopeValid": true,
+      "path": "Packages/manifest.json",
+      "sourceRange": {
+        "unit": "line",
+        "start": 1,
+        "end": 57,
+        "total": 57
+      },
+      "callId": "p1TZRjJ1P8dON7VqBX2aDir31ygHHJZM",
+      "sourceVersionMatches": true,
+      "sourceTextMatches": false,
+      "sourceContentEquivalent": true,
+      "archiveRedacted": true,
+      "startLine": 1,
+      "endLine": 57
+    }
+  ],
+  "allRecordIntegrity": true,
+  "sourcePages": 44,
+  "allSourcePagesMatch": false,
+  "allSourceContentEquivalent": true,
+  "limitation": "Verification covers retained records at this instant, not indefinite retention or semantic recall."
+}

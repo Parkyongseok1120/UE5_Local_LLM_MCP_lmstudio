@@ -1,0 +1,21 @@
+{
+  "baseSha": "868dedf8069c5b6d015794e32e5435ad540db219",
+  "runtimeRevision": 114,
+  "commands": [
+    {"cwd":"lmstudio-context-compactor-plugin","command":"npm test","exitCode":0,"passed":349,"skipped":0,"log":"test-compactor.log"},
+    {"cwd":"lmstudio-unity-mcp","command":"npm test","exitCode":0,"passed":35,"skipped":4,"log":"test-unity.log"},
+    {"cwd":"lmstudio-unreal-agent-mcp","command":"npm test","exitCode":0,"passed":247,"skipped":1,"log":"test-unreal.log"},
+    {"cwd":".","command":"python -m pytest -q","exitCode":1,"passed":1048,"skipped":19,"failed":1,"log":"test-python.log","reason":"Collected pre-update version expectation 0.4.66 vs installed package 0.4.67"},
+    {"cwd":".","command":"python -m pytest -q tests/test_integrated_installer.py::test_installer_profiles_are_manifest_driven","exitCode":0,"passed":1,"log":"test-python-version-rerun.log"},
+    {"cwd":".","command":"python -m pytest -q","exitCode":0,"passed":1049,"skipped":19,"log":"test-python-final.log"},
+    {"cwd":"lmstudio-context-compactor-plugin","command":"npm run build","exitCode":0,"log":"build.log"},
+    {"cwd":".","command":"node --test --test-name-pattern=\"context budget measures a narrowed registered Git catalogue\" lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs","exitCode":0,"passed":1,"log":"test-identity.log"},
+    {"cwd":"lmstudio-context-compactor-plugin","command":"lms dev --install -y","exitCode":0,"log":"install.log"},
+    {"cwd":".","command":"python C:/Users/sster/.codex/skills/evidence-first-code-audit/scripts/validate_evidence_packet.py artifacts/runtime-contract-fix/audit.json","exitCode":0,"claims":5},
+    {"cwd":".","command":"git diff --check","exitCode":0},
+    {"cwd":".","command":"python artifacts/runtime-contract-fix/collect-live.py C:/Users/sster/.lmstudio/conversations/1790316107098.conversation.json","exitCode":0},
+    {"cwd":".","command":"python artifacts/runtime-contract-fix/verify-live.py","exitCode":0,"note":"Collector success is not a product PASS; see statuses."}
+  ],
+  "live": {"contextLength":38912,"postCompactionCumulativeExactInputTokens":483846,"compactions":19,"continueMessages":1,"readThroughLine":520,"sourceTotalLines":680},
+  "statuses": {"380kCumulative":"PASS","returnedPageIntegrity":"PASS","stableCompactionBaseline":"FAIL","automaticTaskCompletion":"FAIL","finalSemanticRetention":"BLOCKED","overall":"FAIL"}
+}

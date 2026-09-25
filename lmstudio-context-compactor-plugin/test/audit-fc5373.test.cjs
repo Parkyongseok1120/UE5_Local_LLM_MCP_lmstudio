@@ -1,4 +1,6 @@
 "use strict";
+require('./tool-round-lifecycle.test.cjs');
+require('./runtime-policy.test.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {Chat,ChatMessage}=require('@lmstudio/sdk');
 const {BudgetBroker,BatchReservation,reserveReadResult,minimumReadResultTokens}=require('../dist/budget-broker');

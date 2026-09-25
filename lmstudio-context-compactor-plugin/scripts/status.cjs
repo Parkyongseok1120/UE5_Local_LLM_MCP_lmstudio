@@ -6,6 +6,9 @@ const path = require("node:path");
 
 const DIRECT_SOURCE_FILES = Object.freeze([
   "src/budget-broker.ts",
+  "src/checkpoint-budget.js",
+  "src/round-input.ts",
+  "src/semantic-handoff.ts",
   "src/context-manager.ts",
   "src/context-ports.ts",
   "src/delivery-controller.ts",

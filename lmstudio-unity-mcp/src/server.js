@@ -49,7 +49,9 @@ function createRuntime(env = process.env, injectedBridge) {
       if (workspaceEnabled && (name === "workspace_status" || name.startsWith("git_"))) result = await workspace(name, args);
       else if (name === "unity_symbols") result = await symbols.call(args);
       else if (name === "unity_git") result = versionControl.call(args);
-      else if (name === "read_file") result = await files.read(args);
+      else if (name === "read_file") return await files.read(args, value => fileObservation({
+        ...value, canonicalProjectRoot: policy.root, projectIdentity: policy.projectIdentity,
+      }));
       else if (name === "list_directory") result = files.list(args);
       else if (name === "search_files") result = await files.search(args);
       else if (name === "patch_file") result = await files.patch(args);

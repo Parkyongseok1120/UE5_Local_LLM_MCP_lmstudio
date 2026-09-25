@@ -8,9 +8,10 @@ import {
 import crypto from "node:crypto";
 import { attachmentBoundary } from "./attachment-boundary";
 import { createAttachmentContext } from "./attachment-tools";
-import { BudgetBroker, minimumReadResultTokens } from "./budget-broker";
+import { BudgetBroker } from "./budget-broker";
+import { buildCompactedHistory, ContextManager, measureContext, modelHistoryMessage, normalizeHistory, normalizeMessages, selectSoftCompaction, toolDefinitionSurface } from "./context-manager";
 import { resolveGenerationBudget } from "./context-budget";
-import { buildCompactedHistory, composeModelHistory, ContextManager, createInputAssembler, measureContext, modelHistoryMessage, normalizeHistory, normalizeMessages, prepareWorkingInput, selectSoftCompaction, toolDefinitionSurface, updateSemanticContext } from "./context-manager";
+import { prepareRoundInput } from "./round-input";
 import { core, inputAvailability, modelNotes, workingContextModule } from "./context-ports";
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
@@ -278,6 +279,9 @@ export function createPredictionLoopHandler(
           : [...scopeInstructions, ...(researchRecoveryRound
             ? [toolPlanningRetryRound ? toolPlanningRetryInstruction : READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION]
             : [])];
+        // Input identity lives for the whole execution, not a recovery episode.
+        // RecoveryCoordinator.reset() may run between calls; roundIndex never resets.
+        // Keep this ID unchanged from measurement through exposure and completion.
         const modelInputId = finalizing
           ? execution.finalizationTrigger === "output_recovery"
             ? `${executionId}:output-recovery-${deliveryController.attempts}`
@@ -285,7 +289,7 @@ export function createPredictionLoopHandler(
           : toolPlanningRetryRound
             ? `${executionId}:tool-planning-retry-${toolPlanningRetryAttempts}`
             : researchRecoveryRound
-              ? `${executionId}:research-recovery-${recoveryCoordinator.toolRounds + 1}`
+              ? `${executionId}:research-recovery-${roundIndex + 1}`
               : `${executionId}:prediction-${roundIndex + 1}`;
         activeActivity = createRoundActivityTracker(ctl, roundIndex);
         const noteEnabled = Boolean(noteWorkingDirectory && objectiveFingerprint && !config.observeOnly);
@@ -295,342 +299,39 @@ export function createPredictionLoopHandler(
           );
         }
         const postProjectionHistory = Chat.from(workingHistory);
-        const beforeInput = composeModelHistory(
-          workingHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled,
-        );
-        const measureRoundInput = (history: Chat) => measureContext(
-          tokenSource, history, config, roundTools, { outputReserve: roundOutputReserve },
-        );
-        let { before, modelHistory, compacted, compactionAppliedCount, compactionAppliedModes,
-          compactionCheckpoint, compactionRetention } = await prepareWorkingInput({
-tokenSource, config,
-            workingHistory, activeNote, noteEnabled, roundScopeInstructions, roundTools, roundOutputReserve,
-            beforeInput, measureRoundInput, ctl, executionId, roundIndex
-});
-        workingHistory = modelHistory;
-        ({ activeNote, semanticSummaryCooldownUntilRound } = await updateSemanticContext({
-tokenSource, config,
-          workingContext, compactionCheckpoint, compacted, projectionApplied, visibleHistory, activeNote,
-          semanticSummaryCooldownUntilRound, boundedAudit, finalizing, roundIndex, executionId, objectiveFingerprint, ctl
-}));
-        const assembleModelInput = createInputAssembler({
-          tokenSource, config, roundTools,
-          roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
-          noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger,
-          preProjectionHistory, postProjectionHistory
+        const prepared = await prepareRoundInput({
+          ctl, config, tokenSource, contextManager, evidenceManager, workingContext,
+          workingHistory, visibleHistory, preProjectionHistory, postProjectionHistory,
+          roundTools, modelTools, roundScopeInstructions, scopeInstructions, roundOutputReserve,
+          activeNote, noteEnabled, historicalAvailabilityLedger, semanticSummaryCooldownUntilRound,
+          objectiveFingerprint, finalizing, boundedAudit, researchRecoveryEpisodeStarted,
+          finalizationTrigger: execution.finalizationTrigger,
+          projectionApplied, executionId, modelInputId, roundIndex,
         });
-        const assembleRecoveryCandidate = async (
-          sourceHistory: Chat,
-          tools: Array<RemoteToolLike>,
-          instruction: string,
-          candidateModelInputId: string,
-        ) => {
-          const desiredMaxTokens = Math.min(config.maxOutputReserve, RESEARCH_RECOVERY_MAX_TOKENS);
-          let assembled = await assembleModelInput(sourceHistory, {
-            tools,
-            instructions: [...scopeInstructions, instruction],
-            outputReserve: desiredMaxTokens,
-            modelInputId: candidateModelInputId,
-          });
-          const budget = resolveGenerationBudget({
-            desiredMaxTokens,
-            contextLength: assembled.measurement.contextLength,
-            inputTokens: assembled.measurement.inputTokens,
-            safetyMarginTokens: config.safetyMarginTokens,
-            minimumTokens: MIN_FINAL_OUTPUT_TOKENS,
-          });
-          if (budget.fit && budget.appliedMaxTokens < desiredMaxTokens) {
-            assembled = await assembleModelInput(sourceHistory, {
-              tools,
-              instructions: [...scopeInstructions, instruction],
-              outputReserve: budget.appliedMaxTokens,
-              modelInputId: candidateModelInputId,
-            });
-          }
-          return {
-            assembled, budget, desiredMaxTokens,
-            fit: budget.fit && assembled.measurement.remainingTokens >= 0
-          };
-        };
-        let assembledInput = await assembleModelInput(workingHistory);
-        let modelComposition = assembledInput.composition;
-        let modelInput = assembledInput.history;
-        let finalMeasurement = assembledInput.measurement;
-        if (finalMeasurement.remainingTokens < 0 && !finalizing && !config.observeOnly
-          && !researchRecoveryEpisodeStarted) {
-          const recoveryProfile = readOnlyRecoveryProfile(workingHistory, modelTools);
-          const recoveryCandidate = recoveryProfile.eligible
-            ? await assembleRecoveryCandidate(
-              workingHistory,
-              recoveryProfile.tools,
-              READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION,
-              `${executionId}:research-recovery-candidate-1`,
-            ) : null;
-          if (recoveryCandidate?.fit) {
-            if (config.showDebugInfo) ctl.debug({
-              event: "direct_context_budget_rescue",
-              executionId,
-              modelInputId,
-              roundIndex,
-              trigger: "context_budget",
-              compactionAppliedCount,
-              compactionAppliedModes,
-              exactMeasurement: finalMeasurement.exact,
-              contextLength: finalMeasurement.contextLength,
-              inputTokens: finalMeasurement.inputTokens,
-              requestedOutputReserve: roundOutputReserve,
-              safetyMargin: config.safetyMarginTokens,
-              remainingTokens: finalMeasurement.remainingTokens,
-              fullToolCount: modelTools.length,
-              narrowedToolCount: recoveryProfile.tools.length,
-              narrowedToolNames: recoveryProfile.tools.map(tool => tool.name),
-              recoveryEligibilityReason: recoveryProfile.reason,
-              recoveryEpisodeStarted: false,
-              candidateExactMeasurement: recoveryCandidate.assembled.measurement.exact,
-              candidateInputTokens: recoveryCandidate.assembled.measurement.inputTokens,
-              candidateRequestedMaxTokens: recoveryCandidate.desiredMaxTokens,
-              candidateAppliedMaxTokens: recoveryCandidate.budget.appliedMaxTokens,
-              candidateRemainingTokens: recoveryCandidate.assembled.measurement.remainingTokens,
-              candidateFit: true,
-              nextToolCount: recoveryProfile.tools.length,
-              maxFinalAttempts: 1,
-              unconsumedEvidenceProjectedBeforeCandidate: false,
-            });
-            researchRecoveryEpisodeStarted = true;
-            execution.startRecovery("context_budget");
-            researchRecoveryToolNames = new Set(recoveryProfile.tools.map(tool => tool.name));
-            researchRecoveryOutputReserve = recoveryCandidate.budget.appliedMaxTokens;
-            recoveryCoordinator.toolRounds = 0;
-            recoveryCoordinator.paginationRounds = 0;
-            recoveryCoordinator.noProgressRounds = 0;
-            seedResearchRecoveryTracking(workingHistory);
-            researchRecoveryReason = "context_budget";
-            activeActivity.complete();
-            activeActivity = null;
-            continue;
-          }
+        ({ activeNote, semanticSummaryCooldownUntilRound } = prepared);
+        if (prepared.kind === "recover") {
+          workingHistory = prepared.history;
+          researchRecoveryEpisodeStarted = true;
+          execution.startRecovery("context_budget");
+          researchRecoveryToolNames = new Set(prepared.tools.map(tool => tool.name));
+          researchRecoveryOutputReserve = prepared.outputReserve;
+          recoveryCoordinator.reset();
+          seedResearchRecoveryTracking(workingHistory);
+          researchRecoveryReason = "context_budget";
+          activeActivity.complete(); activeActivity = null;
+          continue;
         }
-        if (finalMeasurement.remainingTokens < 0 && workingContext && !finalizing && !config.observeOnly) {
-          const projectionObservation = (request: ToolCallRequest) => {
-            const tool = allModelTools.find(candidate => candidate.name === request.name);
-            return Boolean(tool && isObservationOnlyToolCall(tool, request));
-          };
-          // First measure a complete first-consumer batch while retaining every
-          // unconsumed Git page that is individually within the existing raw
-          // threshold. This is deliberately a candidate: only the measured
-          // whole batch is accepted. If it does not fit, the second pass may
-          // project those results, but it must use the body-first view above.
-          const batchCandidate = workingContext.project(workingHistory, projectionObservation,
-            {
-              executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result",
-              preserveUnconsumedRawMaxChars: FIRST_CONSUMER_RAW_GIT_MAX_CHARS
-            },
-            config.toolResultProjectionChars);
-          if (batchCandidate.changed) {
-            workingHistory = batchCandidate.history;
-            modelHistory = batchCandidate.history;
-            projectionApplied = true;
-            assembledInput = await assembleModelInput(workingHistory);
-            modelComposition = assembledInput.composition;
-            modelInput = assembledInput.history;
-            finalMeasurement = assembledInput.measurement;
-          }
-          const batchCandidateMeasurement = finalMeasurement;
-          if (config.showDebugInfo) ctl.debug({
-            event: "working_context_first_consumer_batch",
-            executionId,
-            roundIndex,
-            changed: batchCandidate.changed,
-            reason: batchCandidate.reason,
-            candidateInputTokens: batchCandidateMeasurement.inputTokens,
-            candidateRemainingTokens: batchCandidateMeasurement.remainingTokens,
-            candidateExact: batchCandidateMeasurement.exact,
-            fit: batchCandidateMeasurement.remainingTokens >= 0,
-            rawThresholdChars: FIRST_CONSUMER_RAW_GIT_MAX_CHARS,
-            archive: workingContext.archive.stats,
-          });
-          if (batchCandidateMeasurement.remainingTokens < 0) {
-            const budgetProjection = workingContext.project(workingHistory, projectionObservation,
-              {
-                executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result",
-                preserveUnconsumedRawMaxChars: 0
-              }, config.toolResultProjectionChars);
-            if (budgetProjection.changed) {
-              workingHistory = budgetProjection.history;
-              modelHistory = budgetProjection.history;
-              projectionApplied = true;
-              assembledInput = await assembleModelInput(workingHistory);
-              modelComposition = assembledInput.composition;
-              modelInput = assembledInput.history;
-              finalMeasurement = assembledInput.measurement;
-            }
-            if (config.showDebugInfo) ctl.debug({
-              event: "working_context_projection",
-              executionId,
-              roundIndex,
-              changed: budgetProjection.changed,
-              archiveFailed: budgetProjection.archiveFailed === true,
-              reason: "aggregate_prompt_budget_projection",
-              finalInputTokens: finalMeasurement.inputTokens,
-              finalRemainingTokens: finalMeasurement.remainingTokens,
-              archive: workingContext.archive.stats,
-            });
-          }
+        if (prepared.kind === "finalize") {
+          workingHistory = prepared.history;
+          activeActivity.complete(); activeActivity = null;
+          execution.finishResearch("context_budget");
+          continue;
         }
-        if (finalMeasurement.remainingTokens < 0 && !config.observeOnly) {
-          const emergency = buildCompactedHistory(workingHistory, 0, config, {
-            maxCheckpointChars: config.maxCheckpointChars - modelComposition.overhead,
-            maxCurrentTurnMessages: 2,
-          });
-          if (emergency.history !== workingHistory) {
-            workingHistory = emergency.history;
-            modelHistory = emergency.history;
-            compacted = true;
-            compactionCheckpoint = emergency.checkpoint;
-            compactionRetention = { mode: "final_budget_emergency", maxCurrentTurnMessages: 2 };
-            compactionAppliedCount += 1;
-            compactionAppliedModes.push("final_budget_emergency");
-            assembledInput = await assembleModelInput(workingHistory);
-            modelComposition = assembledInput.composition;
-            modelInput = assembledInput.history;
-            finalMeasurement = assembledInput.measurement;
-          }
-        }
-
-        if (finalizing && !config.observeOnly) {
-          const resolvedBudget = resolveGenerationBudget({
-            desiredMaxTokens: roundOutputReserve,
-            contextLength: finalMeasurement.contextLength,
-            inputTokens: finalMeasurement.inputTokens,
-            safetyMarginTokens: config.safetyMarginTokens,
-            minimumTokens: MIN_FINAL_OUTPUT_TOKENS,
-          });
-          if (resolvedBudget.fit && resolvedBudget.appliedMaxTokens < roundOutputReserve) {
-            roundOutputReserve = resolvedBudget.appliedMaxTokens;
-            outputCapSource = "headroom_clamp";
-            finalMeasurement = await measureRoundInput(modelInput);
-          }
-        }
-
-        if (finalMeasurement.remainingTokens < 0 && !config.observeOnly) {
-          if (!finalizing) {
-            const recoveryProfile = readOnlyRecoveryProfile(workingHistory, modelTools);
-            const recoveryCandidate = !researchRecoveryEpisodeStarted && recoveryProfile.eligible
-              ? await assembleRecoveryCandidate(
-                workingHistory,
-                recoveryProfile.tools,
-                READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION,
-                `${executionId}:research-recovery-candidate-1`,
-              ) : null;
-            if (config.showDebugInfo) ctl.debug({
-              event: "direct_context_budget_rescue",
-              executionId,
-              modelInputId,
-              roundIndex,
-              trigger: "context_budget",
-              compactionAppliedCount,
-              compactionAppliedModes,
-              exactMeasurement: finalMeasurement.exact,
-              contextLength: finalMeasurement.contextLength,
-              inputTokens: finalMeasurement.inputTokens,
-              requestedOutputReserve: roundOutputReserve,
-              safetyMargin: config.safetyMarginTokens,
-              remainingTokens: finalMeasurement.remainingTokens,
-              fullToolCount: modelTools.length,
-              narrowedToolCount: recoveryProfile.tools.length,
-              narrowedToolNames: recoveryProfile.tools.map(tool => tool.name),
-              recoveryEligibilityReason: recoveryProfile.reason,
-              recoveryEpisodeStarted: researchRecoveryEpisodeStarted,
-              candidateExactMeasurement: recoveryCandidate?.assembled.measurement.exact ?? null,
-              candidateInputTokens: recoveryCandidate?.assembled.measurement.inputTokens ?? null,
-              candidateRequestedMaxTokens: recoveryCandidate?.desiredMaxTokens ?? null,
-              candidateAppliedMaxTokens: recoveryCandidate?.budget.appliedMaxTokens ?? null,
-              candidateRemainingTokens: recoveryCandidate?.assembled.measurement.remainingTokens ?? null,
-              candidateFit: recoveryCandidate?.fit ?? false,
-              nextToolCount: recoveryCandidate?.fit ? recoveryProfile.tools.length : 0,
-              maxFinalAttempts: 1,
-            });
-            if (recoveryCandidate?.fit) {
-              researchRecoveryEpisodeStarted = true;
-              execution.startRecovery("context_budget");
-              researchRecoveryToolNames = new Set(recoveryProfile.tools.map(tool => tool.name));
-              researchRecoveryOutputReserve = recoveryCandidate.budget.appliedMaxTokens;
-              recoveryCoordinator.toolRounds = 0;
-              recoveryCoordinator.paginationRounds = 0;
-              recoveryCoordinator.noProgressRounds = 0;
-              seedResearchRecoveryTracking(workingHistory);
-              researchRecoveryReason = "context_budget";
-              activeActivity.complete();
-              activeActivity = null;
-              continue;
-            }
-            activeActivity.complete();
-            activeActivity = null;
-            execution.finishResearch("context_budget");
-            continue;
-          }
-          if (config.showDebugInfo) ctl.debug({
-            event: "direct_context_budget_rejected",
-            executionId,
-            modelInputId,
-            roundIndex,
-            compactionAppliedCount,
-            compactionAppliedModes,
-            exactMeasurement: finalMeasurement.exact,
-            fit: false,
-            contextLength: finalMeasurement.contextLength,
-            inputTokens: finalMeasurement.inputTokens,
-            outputReserve: roundOutputReserve,
-            safetyMargin: config.safetyMarginTokens,
-            remainingTokens: finalMeasurement.remainingTokens,
-            availableOutputTokens: Math.trunc(
-              finalMeasurement.contextLength - finalMeasurement.inputTokens - config.safetyMarginTokens,
-            ),
-            minimumFinalOutputTokens: MIN_FINAL_OUTPUT_TOKENS,
-            finalizationTrigger: execution.finalizationTrigger,
-            modelCallSkipped: true,
-          });
-          ctl.createStatus({
-            status: "error",
-            text: "도구 없는 최종 보고 입력에도 최소 출력 공간이 남지 않아 모델 호출을 중단했습니다.",
-          });
-          throw new Error(`CONTEXT_BUDGET_EXCEEDED: final model input exceeds the context budget by ${-finalMeasurement.remainingTokens} tokens`);
-        }
-
-        const lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-          force: compacted || projectionApplied,
-          hasReadTools: roundTools.some(hasReadCapability),
-          minimumReadTokens: minimumReadResultTokens(roundTools.filter(hasReadCapability)),
-        });
-        if (lowWater.changed) {
-          workingHistory = lowWater.history;
-          modelHistory = workingHistory;
-          assembledInput = lowWater.assembled;
-          modelComposition = assembledInput.composition;
-          modelInput = assembledInput.history;
-          finalMeasurement = assembledInput.measurement;
-          compactionCheckpoint = lowWater.checkpoint;
-          compacted = lowWater.success;
-          compactionAppliedCount += 1;
-          compactionAppliedModes.push("final_exact_low_water");
-        }
-        const mandatoryFloorMeasurement = lowWater.floorMeasurement;
-        if (config.contextManagementMode !== "legacy") compacted = compacted && lowWater.success;
-        const mandatoryFloorExceedsTarget = Boolean(mandatoryFloorMeasurement?.exact
-          && mandatoryFloorMeasurement.inputTokens > config.workingInputTargetTokens);
-        if (config.showDebugInfo && lowWater.telemetry) ctl.debug({
-          event: "context_low_water", executionId,
-          modelInputId, roundIndex, ...lowWater.telemetry
-        });
-        if (!lowWater.canRun) {
-          ctl.debug({ event: "context_execution_blocked", executionId, modelInputId,
-            disposition: lowWater.disposition, exact: finalMeasurement.exact });
-          if (!finalizing && lowWater.disposition === "blocked_next_action") {
-            execution.finishResearch("context_budget");
-            continue;
-          }
-          throw new Error(`CONTEXT_EXECUTION_BLOCKED: ${lowWater.disposition}`);
-        }
+        ({ workingHistory, roundOutputReserve, outputCapSource, projectionApplied } = prepared);
+        const { before, modelHistory, compacted, compactionAppliedCount, compactionAppliedModes,
+          compactionCheckpoint, compactionRetention, assembledInput, modelComposition, modelInput,
+          finalMeasurement, lowWater, mandatoryFloorMeasurement, mandatoryFloorExceedsTarget,
+          assembleRecoveryCandidate } = prepared;
         // Validate first-consumer evidence before any durable window mutation.
         evidenceManager.captureExposure(modelInput, modelInputId, false);
         const committedWindow = contextManager.commit(workingContext, visibleHistory, workingHistory, finalMeasurement,
@@ -1341,7 +1042,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         if (researchRecoveryRound) {
           const decision = recoveryCoordinator.advance(recoveryProgress, config.auditResearchRounds,
             captured.continueAfterTools, finalRawToolIntent, structuredToolRequestCount,
-            actualResultCount, visibleTextFromMessages(captured.messages).trim());
+            actualResultCount, visibleTextFromMessages(captured.messages).trim(), boundedAudit);
           if (decision.trigger) {
             execution.finishResearch(decision.trigger);
             if (config.showDebugInfo) ctl.debug({

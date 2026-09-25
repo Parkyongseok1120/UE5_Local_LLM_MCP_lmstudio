@@ -41,6 +41,7 @@ const {
   sanitizeStructuredDurableValue,
   sanitizeUserAuthoredText,
 } = require("./durable-memory-sanitizer.js");
+const { renderBudgetedCheckpoint } = require("./checkpoint-budget.js");
 
 function retainedUserText(value, maxChars) {
   return clip(sanitizeUserAuthoredText(value), maxChars, { trim: false });
@@ -598,12 +599,15 @@ function buildCheckpoint(messagesInput, options = {}) {
   });
   const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 22000));
   const { systemMemory, assistantEvidence } = splitAssistantEvidence(memory);
-  const assistantCheckpoint = renderAssistantCheckpoint(
+  const assistantCheckpoint = options.checkpointPolicy === "mandatory" ? "" : renderAssistantCheckpoint(
     assistantEvidence,
     // Preserve the factual checkpoint's emergency file/evidence budget first.
     Math.min(2600, Math.max(0, maxCheckpointChars - 6000)),
   );
-  const checkpoint = renderCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length);
+  const checkpoint = options.checkpointPolicy
+    ? renderBudgetedCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length,
+      options.checkpointPolicy === "mandatory")
+    : renderCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length);
   let serializedState = {};
   try {
     const marker = checkpoint.indexOf(CONTINUITY_MARKER);

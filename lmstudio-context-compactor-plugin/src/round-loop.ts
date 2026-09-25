@@ -9,10 +9,10 @@ import {
 
 type TokenSource = LLM | LLMGeneratorHandle;
 
-/** A completion callback is also emitted for truncation; only normal terminal
- * reasons can commit planning or completed model exposure. */
+/** A normal tool handoff completes this prediction and consumes its input.
+ * It does not deliver a final report. Truncation callbacks are not completion. */
 export function isCompletedPredictionReason(reason?: string): boolean {
-  return reason === "eosFound" || reason === "stopStringFound";
+  return reason === "eosFound" || reason === "stopStringFound" || reason === "toolCalls";
 }
 
 const RAW_TOOL_INTENT_PATTERN = /<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu;

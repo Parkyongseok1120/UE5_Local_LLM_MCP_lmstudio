@@ -1,0 +1,1976 @@
+Checking the existing Unity MCP binding and runtime...
+{
+  "ok": true,
+  "dryRun": false,
+  "scope": "in_place_unity_mcp",
+  "config": "C:\\Users\\sster\\.lmstudio\\mcp.json",
+  "project": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+  "sourceRoot": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio",
+  "configurationChanged": false,
+  "projectChanged": false,
+  "otherServerCount": 5,
+  "restartRequired": true,
+  "dependencies": "npm_ci",
+  "verification": {
+    "initialized": true,
+    "tools": 30,
+    "workerConfigured": true,
+    "connection": "disconnected",
+    "reason": "editor_disconnected",
+    "modelConnection": "not_verified"
+  }
+}
+Checking the existing Unreal Agent and RAG runtimes...
+{
+  "ok": true,
+  "dryRun": false,
+  "scope": "in_place_unreal_mcp",
+  "installed": true,
+  "config": "C:\\Users\\sster\\.lmstudio\\mcp.json",
+  "sourceRoot": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio",
+  "configurationChanged": false,
+  "permissionsChanged": false,
+  "permissions": {
+    "ALLOW_WRITE": "1",
+    "ALLOW_COMMANDS": "1",
+    "ALLOW_UNREAL_BUILD": "1"
+  },
+  "otherServerCount": 4,
+  "restartRequired": true,
+  "dependencies": "npm_ci",
+  "verification": {
+    "unrealAgentInitialized": true,
+    "unrealAgentTools": 26,
+    "unrealRagInitialized": true,
+    "unrealRagTools": 8,
+    "modelConnection": "not_verified",
+    "engineExecution": "not_requested"
+  }
+}
+Updating the context compactor plugin...
+
+Runtime bootstrap:
+  Toolchain cache: C:\Users\sster\.evidence-first\runtimes
+  Host arch: windows-x64
+  Python: C:\Users\sster\AppData\Local\Programs\Python\Python312\python.exe (3.12, x64)
+
+Runtime bootstrap:
+  Toolchain cache: C:\Users\sster\.evidence-first\runtimes
+  Host arch: windows-x64
+  Python: C:\Users\sster\AppData\Local\Programs\Python\Python312\python.exe (3.12, x64)
+  Node.js: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\node.exe (x64)
+  npm: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd
+run: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd ci --no-audit --no-fund
+
+> unreal-context-compactor@0.4.69 postinstall
+> node scripts/patch-lmstudio-sdk.cjs
+
+
+added 15 packages in 2s
+run: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd test
+
+> unreal-context-compactor@0.4.69 test
+> npm run build && node --test test/audit-fc5373.test.cjs test/refactor-policies.test.cjs test/attachment-tools.test.cjs test/availability-eval.test.cjs test/continuity-model-notes.test.js test/direct-compaction-core.test.js test/durable-memory-sanitizer.test.js test/input-availability.test.js test/prediction-loop.test.cjs test/status.test.cjs test/tool-scope.test.cjs test/validation-repair-memory.test.cjs test/working-context-boundary.test.cjs test/working-context.test.cjs test/workspace-continuity.test.cjs
+
+
+> unreal-context-compactor@0.4.69 prebuild
+> node scripts/patch-lmstudio-sdk.cjs
+
+
+> unreal-context-compactor@0.4.69 build
+> npm run clean && tsc -p tsconfig.json
+
+
+> unreal-context-compactor@0.4.69 clean
+> node scripts/clean-dist.cjs
+
+TAP version 13
+# Subtest: attachment tool returns only the requested parsed-text range with source metadata
+ok 1 - attachment tool returns only the requested parsed-text range with source metadata
+  ---
+  duration_ms: 5.1199
+  ...
+# Subtest: attachment observations keep source and range but omit document content from durable memory
+ok 2 - attachment observations keep source and range but omit document content from durable memory
+  ---
+  duration_ms: 8.0185
+  ...
+# Subtest: SDK toolCalls completes the input consumer, while its newly returned result stays pending
+ok 3 - SDK toolCalls completes the input consumer, while its newly returned result stays pending
+  ---
+  duration_ms: 29.3916
+  ...
+# Subtest: truncation, cancellation and unknown reasons never consume pending evidence
+ok 4 - truncation, cancellation and unknown reasons never consume pending evidence
+  ---
+  duration_ms: 0.1445
+  ...
+# Subtest: duplicate capture after consumption cannot re-pin a previously consumed result
+ok 5 - duplicate capture after consumption cannot re-pin a previously consumed result
+  ---
+  duration_ms: 2.2345
+  ...
+# Subtest: a cheap source page cannot hide required archive rehydration starvation
+ok 6 - a cheap source page cannot hide required archive rehydration starvation
+  ---
+  duration_ms: 0.9769
+  ...
+# Subtest: normal progressing recovery outlives twelve pages; bounded and no-progress limits remain
+ok 7 - normal progressing recovery outlives twelve pages; bounded and no-progress limits remain
+  ---
+  duration_ms: 0.3502
+  ...
+# Subtest: same source page growth repeats compaction below a fixed derived LOW without inflating floor
+ok 8 - same source page growth repeats compaction below a fixed derived LOW without inflating floor
+  ---
+  duration_ms: 245.2856
+  ...
+# Subtest: archive catalog rediscovers consumed evidence with bounded pages and no fresh-source authority
+ok 9 - archive catalog rediscovers consumed evidence with bounded pages and no fresh-source authority
+  ---
+  duration_ms: 4.4293
+  ...
+# Subtest: summary deadline is classified as timeout when SDK returns userStopped normally
+ok 10 - summary deadline is classified as timeout when SDK returns userStopped normally
+  ---
+  duration_ms: 26.745
+  ...
+# Subtest: a failed optional handoff is not retried for later compactions in the same execution
+ok 11 - a failed optional handoff is not retried for later compactions in the same execution
+  ---
+  duration_ms: 1.8291
+  ...
+# Subtest: actual SDK act loop does not cancel a completed channel but still cancels active generation
+ok 12 - actual SDK act loop does not cancel a completed channel but still cancels active generation
+  ---
+  duration_ms: 9.6552
+  ...
+# Subtest: H02 final mapping excludes thinking; swapped facts, duplicate reads and length are failures
+ok 13 - H02 final mapping excludes thinking; swapped facts, duplicate reads and length are failures
+  ---
+  duration_ms: 0.3608
+  ...
+# Subtest: T03 context/output truncation and unknown completion preserve results but discard planning
+ok 14 - T03 context/output truncation and unknown completion preserve results but discard planning
+  ---
+  duration_ms: 0.7911
+  ...
+# Subtest: T04 delivered EOS report cannot certify objective completion
+ok 15 - T04 delivered EOS report cannot certify objective completion
+  ---
+  duration_ms: 0.2977
+  ...
+# Subtest: B01 mandatory floor LOW fit does not certify next read liveness
+ok 16 - B01 mandatory floor LOW fit does not certify next read liveness
+  ---
+  duration_ms: 0.1459
+  ...
+# Subtest: B02 native Unreal maxBytes is clamped and oversize return blocks later dispatch
+ok 17 - B02 native Unreal maxBytes is clamped and oversize return blocks later dispatch
+  ---
+  duration_ms: 0.1883
+  ...
+# Subtest: B03 schema maximum/default applied before reservation; two small reads share capacity
+ok 18 - B03 schema maximum/default applied before reservation; two small reads share capacity
+  ---
+  duration_ms: 0.1176
+  ...
+# Subtest: B01 a cheap auxiliary archive reader cannot hide native read starvation
+ok 19 - B01 a cheap auxiliary archive reader cannot hide native read starvation
+  ---
+  duration_ms: 0.087
+  ...
+# Subtest: T01 operation read profiles retain reads and cannot grant writes
+ok 20 - T01 operation read profiles retain reads and cannot grant writes
+  ---
+  duration_ms: 0.4105
+  ...
+# Subtest: T02 known raw changed-files intent retains dependent diff/source readers
+ok 21 - T02 known raw changed-files intent retains dependent diff/source readers
+  ---
+  duration_ms: 0.4645
+  ...
+# Subtest: E01 native Unity runtime read flows into successful recovery evidence
+ok 22 - E01 native Unity runtime read flows into successful recovery evidence
+  ---
+  duration_ms: 365.8684
+  ...
+# Subtest: E02 historical rehydration missing in current input is useful without new source coverage
+ok 23 - E02 historical rehydration missing in current input is useful without new source coverage
+  ---
+  duration_ms: 1.5561
+  ...
+# Subtest: E03 query, nested workspace and source hash cannot collapse
+ok 24 - E03 query, nested workspace and source hash cannot collapse
+  ---
+  duration_ms: 0.338
+  ...
+# Subtest: E04 capture and repeated shifted projection share one archive ID; different call IDs retain provenance
+ok 25 - E04 capture and repeated shifted projection share one archive ID; different call IDs retain provenance
+  ---
+  duration_ms: 96.7845
+  ...
+# Subtest: E05 sanitized persistent view permits 140 observations under quota without altering live capabilities
+ok 26 - E05 sanitized persistent view permits 140 observations under quota without altering live capabilities
+  ---
+  duration_ms: 10035.7238
+  ...
+# Subtest: E06 source failure stays failure through capture, archive read, seed and observe
+ok 27 - E06 source failure stays failure through capture, archive read, seed and observe
+  ---
+  duration_ms: 234.6303
+  ...
+# Subtest: E03 source and projected page use the same identity/query across provider and pagination
+ok 28 - E03 source and projected page use the same identity/query across provider and pagination
+  ---
+  duration_ms: 46.7832
+  ...
+# Subtest: E05 candidate omitting unconsumed evidence blocks explicitly before quota exhaustion
+ok 29 - E05 candidate omitting unconsumed evidence blocks explicitly before quota exhaustion
+  ---
+  duration_ms: 50.2881
+  ...
+# Subtest: E01 duplicate/orphan callbacks cannot become native success observations
+ok 30 - E01 duplicate/orphan callbacks cannot become native success observations
+  ---
+  duration_ms: 0.7709
+  ...
+# Subtest: SDK guard denial is failed evidence and cannot continue research recovery
+ok 31 - SDK guard denial is failed evidence and cannot continue research recovery
+  ---
+  duration_ms: 0.6082
+  ...
+# Subtest: O02 distinct assembly stages and schema/reserve cache keys are measured
+ok 32 - O02 distinct assembly stages and schema/reserve cache keys are measured
+  ---
+  duration_ms: 0.9217
+  ...
+# Subtest: O03 multilingual, escaped JSON and emoji estimates cannot authorize exact-only execution
+ok 33 - O03 multilingual, escaped JSON and emoji estimates cannot authorize exact-only execution
+  ---
+  duration_ms: 0.7822
+  ...
+# Subtest: causal range metrics distinguish input overlap from historical reacquisition
+ok 34 - causal range metrics distinguish input overlap from historical reacquisition
+  ---
+  duration_ms: 1.8587
+  ...
+# Subtest: availability oracle compares every source and range instead of trusting entry zero
+ok 35 - availability oracle compares every source and range instead of trusting entry zero
+  ---
+  duration_ms: 0.2966
+  ...
+# Subtest: answer rubric rejects negated keyword stuffing
+ok 36 - answer rubric rejects negated keyword stuffing
+  ---
+  duration_ms: 0.6202
+  ...
+# Subtest: causal evaluator uses the request-producing input and pre-result history
+ok 37 - causal evaluator uses the request-producing input and pre-result history
+  ---
+  duration_ms: 1.1579
+  ...
+# Subtest: independent oracle recognizes line and UTF-8 byte contracts separately
+ok 38 - independent oracle recognizes line and UTF-8 byte contracts separately
+  ---
+  duration_ms: 0.3378
+  ...
+# Subtest: independent projection does not promote bodyless ranges sharing one key
+ok 39 - independent projection does not promote bodyless ranges sharing one key
+  ---
+  duration_ms: 0.4626
+  ...
+# Subtest: audit fixture has eight versioned sources and preserves the required exact evidence
+ok 40 - audit fixture has eight versioned sources and preserves the required exact evidence
+  ---
+  duration_ms: 0.3907
+  ...
+# Subtest: audit pressure profiles distinguish normal compaction from threshold-forced stress
+ok 41 - audit pressure profiles distinguish normal compaction from threshold-forced stress
+  ---
+  duration_ms: 0.4226
+  ...
+# Subtest: targeted access baseline contains exact evidence without fixture-only line counts
+ok 42 - targeted access baseline contains exact evidence without fixture-only line counts
+  ---
+  duration_ms: 4.3214
+  ...
+# Subtest: audit wrapper forwards the configured research cap instead of injecting a hidden generation limit
+ok 43 - audit wrapper forwards the configured research cap instead of injecting a hidden generation limit
+  ---
+  duration_ms: 66.5407
+  ...
+# Subtest: hybrid evaluator includes summary cost and mandatory-floor outcomes
+ok 44 - hybrid evaluator includes summary cost and mandatory-floor outcomes
+  ---
+  duration_ms: 0.45
+  ...
+# Subtest: real-contract audit locators survive the synthetic compaction boundary
+ok 45 - real-contract audit locators survive the synthetic compaction boundary
+  ---
+  duration_ms: 15.8073
+  ...
+# Subtest: empty audit answers are not rewarded for avoiding an overclaim
+ok 46 - empty audit answers are not rewarded for avoiding an overclaim
+  ---
+  duration_ms: 0.1342
+  ...
+# Subtest: audit result collection preserves a finalization with no visible answer
+ok 47 - audit result collection preserves a finalization with no visible answer
+  ---
+  duration_ms: 0.1608
+  ...
+# Subtest: audit run outcomes are mutually exclusive and separate truncation from timeout
+ok 48 - audit run outcomes are mutually exclusive and separate truncation from timeout
+  ---
+  duration_ms: 0.3227
+  ...
+# Subtest: output recovery is a single tool-free terminal call and remains separate from bounded finalization
+ok 49 - output recovery is a single tool-free terminal call and remains separate from bounded finalization
+  ---
+  duration_ms: 0.2648
+  ...
+# Subtest: bounded evaluation separates valid design from completed-report comparability
+ok 50 - bounded evaluation separates valid design from completed-report comparability
+  ---
+  duration_ms: 0.2289
+  ...
+# Subtest: audit summaries do not count a timeout as success and mark zero-return reacquisition not evaluable
+ok 51 - audit summaries do not count a timeout as success and mark zero-return reacquisition not evaluable
+  ---
+  duration_ms: 0.2554
+  ...
+# Subtest: saved audit results are reclassified without inventing a missing legacy timeout
+ok 52 - saved audit results are reclassified without inventing a missing legacy timeout
+  ---
+  duration_ms: 0.4342
+  ...
+# Subtest: audit answer rubric rewards bounded evidence updates and rejects runtime overclaim
+ok 53 - audit answer rubric rewards bounded evidence updates and rejects runtime overclaim
+  ---
+  duration_ms: 2.6949
+  ...
+# Subtest: audit rubric accepts multiline caution but rejects invented evidence-rich details
+ok 54 - audit rubric accepts multiline caution but rejects invented evidence-rich details
+  ---
+  duration_ms: 0.4945
+  ...
+# Subtest: audit rubric recognizes ranged exact locations and rejects a negated prefab finding
+ok 55 - audit rubric recognizes ranged exact locations and rejects a negated prefab finding
+  ---
+  duration_ms: 0.2276
+  ...
+# Subtest: the footer parser accepts only bounded descriptive note fields
+ok 56 - the footer parser accepts only bounded descriptive note fields
+  ---
+  duration_ms: 13.7622
+  ...
+# Subtest: assistant judgments have stable ids and explicit lifecycle states
+ok 57 - assistant judgments have stable ids and explicit lifecycle states
+  ---
+  duration_ms: 1.2319
+  ...
+# Subtest: malformed reserved footers are removed while quoted code examples remain visible
+ok 58 - malformed reserved footers are removed while quoted code examples remain visible
+  ---
+  duration_ms: 0.4254
+  ...
+# Subtest: stored notes follow the exact visible transcript and objective
+ok 59 - stored notes follow the exact visible transcript and objective
+  ---
+  duration_ms: 22.3275
+  ...
+# Subtest: project scope and refs require unambiguous tool observations
+ok 60 - project scope and refs require unambiguous tool observations
+  ---
+  duration_ms: 7.7686
+  ...
+# Subtest: assistant-derived checkpoint evidence stays in an assistant message across compactions
+ok 61 - assistant-derived checkpoint evidence stays in an assistant message across compactions
+  ---
+  duration_ms: 23.8905
+  ...
+# Subtest: an attachment-bearing user message with a literal checkpoint marker is retained
+ok 62 - an attachment-bearing user message with a literal checkpoint marker is retained
+  ---
+  duration_ms: 0.8539
+  ...
+# Subtest: a legacy system checkpoint migrates assistant claims into the assistant role
+ok 63 - a legacy system checkpoint migrates assistant claims into the assistant role
+  ---
+  duration_ms: 1.1188
+  ...
+# Subtest: latest real user request stays authoritative without promoting an older objective
+ok 64 - latest real user request stays authoritative without promoting an older objective
+  ---
+  duration_ms: 4.6141
+  ...
+# Subtest: hard compaction preserves the prior request needed to interpret a continuation
+ok 65 - hard compaction preserves the prior request needed to interpret a continuation
+  ---
+  duration_ms: 4.0175
+  ...
+# Subtest: hard compaction preserves a bounded multi-hop continuation chain
+ok 66 - hard compaction preserves a bounded multi-hop continuation chain
+  ---
+  duration_ms: 1.6873
+  ...
+# Subtest: hard compaction keeps one substantive anchor beyond any fixed ellipsis horizon
+ok 67 - hard compaction keeps one substantive anchor beyond any fixed ellipsis horizon
+  ---
+  duration_ms: 1.4913
+  ...
+# Subtest: latest constraints and actually unanswered questions survive compaction
+ok 68 - latest constraints and actually unanswered questions survive compaction
+  ---
+  duration_ms: 1.2638
+  ...
+# Subtest: a newer request does not promote a conflicting old constraint to active status
+ok 69 - a newer request does not promote a conflicting old constraint to active status
+  ---
+  duration_ms: 1.8382
+  ...
+# Subtest: older tool outcomes retain file/build facts but strip workflow control
+ok 70 - older tool outcomes retain file/build facts but strip workflow control
+  ---
+  duration_ms: 5.0215
+  ...
+# Subtest: malformed tool results are replaced instead of replaying truncated control
+ok 71 - malformed tool results are replaced instead of replaying truncated control
+  ---
+  duration_ms: 1.5783
+  ...
+# Subtest: retained factual strings neutralize control tokens regardless of casing or snake case
+ok 72 - retained factual strings neutralize control tokens regardless of casing or snake case
+  ---
+  duration_ms: 0.7531
+  ...
+# Subtest: phase and state objects cannot become an unfiltered JSON fallback
+ok 73 - phase and state objects cannot become an unfiltered JSON fallback
+  ---
+  duration_ms: 0.4013
+  ...
+# Subtest: tool-result redaction never rewrites the latest real user message
+ok 74 - tool-result redaction never rewrites the latest real user message
+  ---
+  duration_ms: 1.375
+  ...
+# Subtest: bundle mutation results retain each modified path and hash
+ok 75 - bundle mutation results retain each modified path and hash
+  ---
+  duration_ms: 2.58
+  ...
+# Subtest: hard compaction drops a top-level file receipt and keeps only non-actionable file facts
+ok 76 - hard compaction drops a top-level file receipt and keeps only non-actionable file facts
+  ---
+  duration_ms: 12.2059
+  ...
+# Subtest: nested bundle results cannot preserve receipts or registry ordering counters
+ok 77 - nested bundle results cannot preserve receipts or registry ordering counters
+  ---
+  duration_ms: 2.3829
+  ...
+# Subtest: assistant progress text loses executable receipt instructions without losing the completed fact
+ok 78 - assistant progress text loses executable receipt instructions without losing the completed fact
+  ---
+  duration_ms: 1.2377
+  ...
+# Subtest: mixed assistant prose cannot carry a receipt instruction across hard compaction
+ok 79 - mixed assistant prose cannot carry a receipt instruction across hard compaction
+  ---
+  duration_ms: 19.3823
+  ...
+# Subtest: a prior raw tail is sanitized before it is inherited
+ok 80 - a prior raw tail is sanitized before it is inherited
+  ---
+  duration_ms: 1.2596
+  ...
+# Subtest: prior unresolved items and assistant pending evidence cannot replay a receipt
+ok 81 - prior unresolved items and assistant pending evidence cannot replay a receipt
+  ---
+  duration_ms: 0.9952
+  ...
+# Subtest: three hard compactions preserve the objective while never reviving an old receipt
+ok 82 - three hard compactions preserve the objective while never reviving an old receipt
+  ---
+  duration_ms: 6.9053
+  ...
+# Subtest: emergency-size checkpoint also removes receipts from every compressed surface
+ok 83 - emergency-size checkpoint also removes receipts from every compressed surface
+  ---
+  duration_ms: 7.0642
+  ...
+# Subtest: receipt-safety diagnosis remains the active objective through an emergency continuation
+ok 84 - receipt-safety diagnosis remains the active objective through an emergency continuation
+  ---
+  duration_ms: 3.677
+  ...
+# Subtest: emergency rendering budgets canonical observations instead of imposing a two-file cap
+ok 85 - emergency rendering budgets canonical observations instead of imposing a two-file cap
+  ---
+  duration_ms: 7.557
+  ...
+# Subtest: emergency rendering keeps its hard size bound with an oversized inherited project descriptor
+ok 86 - emergency rendering keeps its hard size bound with an oversized inherited project descriptor
+  ---
+  duration_ms: 1.3304
+  ...
+# Subtest: same-name clones remain distinct factual observations and neither is mutation-authoritative
+ok 87 - same-name clones remain distinct factual observations and neither is mutation-authoritative
+  ---
+  duration_ms: 2.1912
+  ...
+# Subtest: a per-call exact project keeps a write on that clone without changing the active clone
+ok 88 - a per-call exact project keeps a write on that clone without changing the active clone
+  ---
+  duration_ms: 1.7
+  ...
+# Subtest: a per-call read cannot change active project or retarget the next unscoped write
+ok 89 - a per-call read cannot change active project or retarget the next unscoped write
+  ---
+  duration_ms: 1.6638
+  ...
+# Subtest: set_active_project remains the explicit owner of a durable active-project transition
+ok 90 - set_active_project remains the explicit owner of a durable active-project transition
+  ---
+  duration_ms: 0.7237
+  ...
+# Subtest: a successful explicit project clear cannot revive the previous active project
+ok 91 - a successful explicit project clear cannot revive the previous active project
+  ---
+  duration_ms: 0.5378
+  ...
+# Subtest: an unresolved or mismatched per-call project is never guessed from the active clone
+ok 92 - an unresolved or mismatched per-call project is never guessed from the active clone
+  ---
+  duration_ms: 0.9066
+  ...
+# Subtest: an unmatched request cannot scope a later ID-less write to another clone
+ok 93 - an unmatched request cannot scope a later ID-less write to another clone
+  ---
+  duration_ms: 1.3855
+  ...
+# Subtest: duplicate tool-call IDs cannot choose one of two clone scopes
+ok 94 - duplicate tool-call IDs cannot choose one of two clone scopes
+  ---
+  duration_ms: 1.3659
+  ...
+# Subtest: reverse ID-less results from different clone scopes are omitted as ambiguous
+ok 95 - reverse ID-less results from different clone scopes are omitted as ambiguous
+  ---
+  duration_ms: 0.9673
+  ...
+# Subtest: unique exact IDs remain correlatable when one request batch returns in multiple tool messages
+ok 96 - unique exact IDs remain correlatable when one request batch returns in multiple tool messages
+  ---
+  duration_ms: 1.4066
+  ...
+# Subtest: an ambiguous ID-less result does not prevent a later exact ID from retaining its own scope
+ok 97 - an ambiguous ID-less result does not prevent a later exact ID from retaining its own scope
+  ---
+  duration_ms: 0.9572
+  ...
+# Subtest: a conflicting per-call result project is omitted instead of crossing clone scope
+ok 98 - a conflicting per-call result project is omitted instead of crossing clone scope
+  ---
+  duration_ms: 0.6486
+  ...
+# Subtest: bundle bare relative paths become canonical only under the proven exact project
+ok 99 - bundle bare relative paths become canonical only under the proven exact project
+  ---
+  duration_ms: 1.3046
+  ...
+# Subtest: workspace and outside absolute paths are never attached to an active project observation
+ok 100 - workspace and outside absolute paths are never attached to an active project observation
+  ---
+  duration_ms: 1.0999
+  ...
+# Subtest: workspace paths are removed from durable tool outcomes even without an active project
+ok 101 - workspace paths are removed from durable tool outcomes even without an active project
+  ---
+  duration_ms: 0.7201
+  ...
+# Subtest: path-only workspace errors cannot survive as rootless durable file identity
+ok 102 - path-only workspace errors cannot survive as rootless durable file identity
+  ---
+  duration_ms: 1.5278
+  ...
+# Subtest: bounded tool display never discards extracted bundle file facts
+ok 103 - bounded tool display never discards extracted bundle file facts
+  ---
+  duration_ms: 1.4468
+  ...
+# Subtest: production receipt continuation prose is absent from every durable surface
+ok 104 - production receipt continuation prose is absent from every durable surface
+  ---
+  duration_ms: 1.0186
+  ...
+# Subtest: a legacy observation stays with its prior exact clone when another clone becomes active
+ok 105 - a legacy observation stays with its prior exact clone when another clone becomes active
+  ---
+  duration_ms: 1.4706
+  ...
+# Subtest: an unambiguous v1 project-relative observation migrates to canonical v2 facts
+ok 106 - an unambiguous v1 project-relative observation migrates to canonical v2 facts
+  ---
+  duration_ms: 0.6737
+  ...
+# Subtest: a rootless v1 observation is omitted when the final active clone cannot prove its origin
+ok 107 - a rootless v1 observation is omitted when the final active clone cannot prove its origin
+  ---
+  duration_ms: 0.7421
+  ...
+# Subtest: nested workspace files inherit parent scope and cannot become project observations
+ok 108 - nested workspace files inherit parent scope and cannot become project observations
+  ---
+  duration_ms: 1.363
+  ...
+# Subtest: mutation-context receipt synonyms become a fresh-snapshot fact
+ok 109 - mutation-context receipt synonyms become a fresh-snapshot fact
+  ---
+  duration_ms: 2.2173
+  ...
+# Subtest: JSON-escaped receipt capabilities cannot survive hard compaction
+ok 110 - JSON-escaped receipt capabilities cannot survive hard compaction
+  ---
+  duration_ms: 0.6194
+  ...
+# Subtest: registry registration order is discarded even when an unchanged hash is observed repeatedly
+ok 111 - registry registration order is discarded even when an unchanged hash is observed repeatedly
+  ---
+  duration_ms: 1.5334
+  ...
+# Subtest: partial independent mutation outcomes stay factual without preserving the reused capability
+ok 112 - partial independent mutation outcomes stay factual without preserving the reused capability
+  ---
+  duration_ms: 1.2689
+  ...
+# Subtest: the durable user copy strips raw capability payloads but keeps diagnostic identifiers
+ok 113 - the durable user copy strips raw capability payloads but keeps diagnostic identifiers
+  ---
+  duration_ms: 0.5172
+  ...
+# Subtest: a retained file result stays raw and becomes durable only after it is omitted
+ok 114 - a retained file result stays raw and becomes durable only after it is omitted
+  ---
+  duration_ms: 2.0784
+  ...
+# Subtest: a simulated MCP restart inherits facts and objective but no prior runtime receipt
+ok 115 - a simulated MCP restart inherits facts and objective but no prior runtime receipt
+  ---
+  duration_ms: 2.2343
+  ...
+# Subtest: the minimized 5,692-line Qwen transcript replay keeps canonical facts through three compactions
+ok 116 - the minimized 5,692-line Qwen transcript replay keeps canonical facts through three compactions
+  ---
+  duration_ms: 19.3788
+  ...
+# Subtest: system messages, latest turn, and file-bearing messages are retained individually
+ok 117 - system messages, latest turn, and file-bearing messages are retained individually
+  ---
+  duration_ms: 0.3931
+  ...
+# Subtest: bounded current-turn retention keeps the newest unread tool exchange complete
+ok 118 - bounded current-turn retention keeps the newest unread tool exchange complete
+  ---
+  duration_ms: 1.7566
+  ...
+# Subtest: a five-call newest exchange stays paired even when the message cap is two
+ok 119 - a five-call newest exchange stays paired even when the message cap is two
+  ---
+  duration_ms: 1.6169
+  ...
+# Subtest: successive bounded compactions serialize each tool outcome exactly once
+ok 120 - successive bounded compactions serialize each tool outcome exactly once
+  ---
+  duration_ms: 4.0586
+  ...
+# Subtest: an old attachment does not pin every later turn and disable compaction
+ok 121 - an old attachment does not pin every later turn and disable compaction
+  ---
+  duration_ms: 1.0327
+  ...
+# Subtest: previous final response is recorded as evidence without claiming objective completion
+ok 122 - previous final response is recorded as evidence without claiming objective completion
+  ---
+  duration_ms: 0.5197
+  ...
+# Subtest: token pressure is the only normal compaction decision once the handler is active
+ok 123 - token pressure is the only normal compaction decision once the handler is active
+  ---
+  duration_ms: 0.1727
+  ...
+# Subtest: fallback message threshold applies only when remaining token measurement is unavailable
+ok 124 - fallback message threshold applies only when remaining token measurement is unavailable
+  ---
+  duration_ms: 0.1396
+  ...
+# Subtest: actual Qwen E2E transcript keeps the cinematic objective through three hard compactions
+ok 125 - actual Qwen E2E transcript keeps the cinematic objective through three hard compactions
+  ---
+  duration_ms: 5.0473
+  ...
+# Subtest: emergency checkpoint compaction always emits parseable continuity JSON
+ok 126 - emergency checkpoint compaction always emits parseable continuity JSON
+  ---
+  duration_ms: 2.8997
+  ...
+# Subtest: escape-heavy emergency text cannot exceed the hard checkpoint bound
+ok 127 - escape-heavy emergency text cannot exceed the hard checkpoint bound
+  ---
+  duration_ms: 5.4547
+  ...
+# Subtest: Korean payment-receipt objective is preserved across hard compaction
+ok 128 - Korean payment-receipt objective is preserved across hard compaction
+  ---
+  duration_ms: 0.3814
+  ...
+# Subtest: English payment-receipt objective is preserved across hard compaction
+ok 129 - English payment-receipt objective is preserved across hard compaction
+  ---
+  duration_ms: 0.2294
+  ...
+# Subtest: receipt-domain code symbols remain exact user-authored objective text
+ok 130 - receipt-domain code symbols remain exact user-authored objective text
+  ---
+  duration_ms: 0.2158
+  ...
+# Subtest: receipt-printer implementation goal is not rewritten as a file snapshot instruction
+ok 131 - receipt-printer implementation goal is not rewritten as a file snapshot instruction
+  ---
+  duration_ms: 0.2307
+  ...
+# Subtest: file-receipt diagnosis remains a diagnosis instead of executable guidance
+ok 132 - file-receipt diagnosis remains a diagnosis instead of executable guidance
+  ---
+  duration_ms: 0.2524
+  ...
+# Subtest: a raw capability in a user request is removed without collapsing its domain objective
+ok 133 - a raw capability in a user request is removed without collapsing its domain objective
+  ---
+  duration_ms: 0.3742
+  ...
+# Subtest: the same receipt phrase follows explicit user and assistant provenance policies
+ok 134 - the same receipt phrase follows explicit user and assistant provenance policies
+  ---
+  duration_ms: 0.3252
+  ...
+# Subtest: ordinary assistant and tool payment-receipt facts survive operational sanitization
+ok 135 - ordinary assistant and tool payment-receipt facts survive operational sanitization
+  ---
+  duration_ms: 0.506
+  ...
+# Subtest: returned and previous payment receipts remain ordinary assistant and tool facts
+ok 136 - returned and previous payment receipts remain ordinary assistant and tool facts
+  ---
+  duration_ms: 0.4141
+  ...
+# Subtest: tool structural paths are never treated as operational receipt prose
+ok 137 - tool structural paths are never treated as operational receipt prose
+  ---
+  duration_ms: 0.6566
+  ...
+# Subtest: canonical identities retain capability-like substrings as structural data
+ok 138 - canonical identities retain capability-like substrings as structural data
+  ---
+  duration_ms: 0.5239
+  ...
+# Subtest: synthetic long review keeps several Git observations in the final checkpoint across consecutive compactions
+ok 139 - synthetic long review keeps several Git observations in the final checkpoint across consecutive compactions
+  ---
+  duration_ms: 8.9181
+  ...
+# Subtest: only an unambiguous SDK reasoning boundary is excluded from assistant continuity evidence
+ok 140 - only an unambiguous SDK reasoning boundary is excluded from assistant continuity evidence
+  ---
+  duration_ms: 1.1418
+  ...
+# Subtest: Unity file observations keep project, hash and time without changing the Unreal selection
+ok 141 - Unity file observations keep project, hash and time without changing the Unreal selection
+  ---
+  duration_ms: 2.4701
+  ...
+# Subtest: Unity file observations retain only line ranges proven for the current file hash
+ok 142 - Unity file observations retain only line ranges proven for the current file hash
+  ---
+  duration_ms: 2.5603
+  ...
+# Subtest: LM Studio MCP text envelopes retain the same Unity facts as direct JSON
+ok 143 - LM Studio MCP text envelopes retain the same Unity facts as direct JSON
+  ---
+  duration_ms: 0.9174
+  ...
+# Subtest: ambiguous MCP content envelopes are omitted instead of merging facts
+ok 144 - ambiguous MCP content envelopes are omitted instead of merging facts
+  ---
+  duration_ms: 0.2209
+  ...
+# Subtest: file observation aggregation precedes the recent tool outcome display window
+ok 145 - file observation aggregation precedes the recent tool outcome display window
+  ---
+  duration_ms: 5.6277
+  ...
+# Subtest: thirty file observations survive a six-outcome display window and a later re-reference
+ok 146 - thirty file observations survive a six-outcome display window and a later re-reference
+  ---
+  duration_ms: 14.2045
+  ...
+# Subtest: serialization diagnostics are derived from the emitted checkpoint after budget omission
+ok 147 - serialization diagnostics are derived from the emitted checkpoint after budget omission
+  ---
+  duration_ms: 7.2813
+  ...
+# Subtest: search continuity keeps request mode, scope, counts, and incomplete zero-match meaning
+ok 148 - search continuity keeps request mode, scope, counts, and incomplete zero-match meaning
+  ---
+  duration_ms: 1.3826
+  ...
+# Subtest: a Unity file result cannot be attributed to a conflicting explicit Unreal project
+ok 149 - a Unity file result cannot be attributed to a conflicting explicit Unreal project
+  ---
+  duration_ms: 0.5574
+  ...
+# Subtest: Unity directory listing stays a path fact without a file-version observation
+ok 150 - Unity directory listing stays a path fact without a file-version observation
+  ---
+  duration_ms: 0.5238
+  ...
+# Subtest: an unrelated tool hash is not promoted to a Unity file hash
+ok 151 - an unrelated tool hash is not promoted to a Unity file hash
+  ---
+  duration_ms: 0.5717
+  ...
+# Subtest: inherited user fields keep receipt-domain meaning while assistant fields are neutralized
+ok 152 - inherited user fields keep receipt-domain meaning while assistant fields are neutralized
+  ---
+  duration_ms: 0.6035
+  ...
+# Subtest: payment-receipt objective survives three hard compactions with no raw file capability
+ok 153 - payment-receipt objective survives three hard compactions with no raw file capability
+  ---
+  duration_ms: 1.3266
+  ...
+# Subtest: emergency serialization preserves payment-receipt meaning and its hard bound
+ok 154 - emergency serialization preserves payment-receipt meaning and its hard bound
+  ---
+  duration_ms: 4.3333
+  ...
+# Subtest: user-authored receipt-domain language is byte-for-byte preserved
+ok 155 - user-authored receipt-domain language is byte-for-byte preserved
+  ---
+  duration_ms: 14.628
+  ...
+# Subtest: structured raw-capability policy removes exact fields without erasing receipt-domain data
+ok 156 - structured raw-capability policy removes exact fields without erasing receipt-domain data
+  ---
+  duration_ms: 2.5813
+  ...
+# Subtest: structured policy preserves capability-like substrings in identity and hash values
+ok 157 - structured policy preserves capability-like substrings in identity and hash values
+  ---
+  duration_ms: 0.3482
+  ...
+# Subtest: exact ephemeral keys do not erase longer diagnostic schema keys
+ok 158 - exact ephemeral keys do not erase longer diagnostic schema keys
+  ---
+  duration_ms: 1.283
+  ...
+# Subtest: origin policies separate user domain prose from derived receipt-reuse guidance
+ok 159 - origin policies separate user domain prose from derived receipt-reuse guidance
+  ---
+  duration_ms: 29.5069
+  ...
+# Subtest: derived assistant and tool prose preserves ordinary receipt-domain facts
+ok 160 - derived assistant and tool prose preserves ordinary receipt-domain facts
+  ---
+  duration_ms: 2.259
+  ...
+# Subtest: user diagnostic identifiers and capability-like symbols remain literal
+ok 161 - user diagnostic identifiers and capability-like symbols remain literal
+  ---
+  duration_ms: 0.2169
+  ...
+# Subtest: raw capability removal preserves Korean diagnostic intent
+ok 162 - raw capability removal preserves Korean diagnostic intent
+  ---
+  duration_ms: 9.0528
+  ...
+# Subtest: derived records sanitize operational prose without rewriting structural fields
+ok 163 - derived records sanitize operational prose without rewriting structural fields
+  ---
+  duration_ms: 0.9744
+  ...
+# Subtest: unrelated literal JSON Unicode escapes remain byte-for-byte unchanged
+ok 164 - unrelated literal JSON Unicode escapes remain byte-for-byte unchanged
+  ---
+  duration_ms: 0.292
+  ...
+# Subtest: encoded capability removal does not decode unrelated escapes in the same string
+ok 165 - encoded capability removal does not decode unrelated escapes in the same string
+  ---
+  duration_ms: 0.2851
+  ...
+# Subtest: encoded space and dot delimiters stop the capability span
+ok 166 - encoded space and dot delimiters stop the capability span
+  ---
+  duration_ms: 0.2474
+  ...
+# Subtest: a mixed user objective loses only its raw capability clause
+ok 167 - a mixed user objective loses only its raw capability clause
+  ---
+  duration_ms: 0.3111
+  ...
+# Subtest: both origin policies remain idempotent
+ok 168 - both origin policies remain idempotent
+  ---
+  duration_ms: 0.3952
+  ...
+# Subtest: durable sanitizer is recursive, non-mutating, and idempotent
+ok 169 - durable sanitizer is recursive, non-mutating, and idempotent
+  ---
+  duration_ms: 0.5995
+  ...
+# Subtest: English and Korean executable receipt prose becomes a fresh-read fact
+ok 170 - English and Korean executable receipt prose becomes a fresh-read fact
+  ---
+  duration_ms: 12
+  ...
+# Subtest: a descriptive anti-persistence requirement remains understandable
+ok 171 - a descriptive anti-persistence requirement remains understandable
+  ---
+  duration_ms: 0.9166
+  ...
+# Subtest: receipt-safety objectives keep their prohibition, diagnosis, and clone scope
+ok 172 - receipt-safety objectives keep their prohibition, diagnosis, and clone scope
+  ---
+  duration_ms: 0.4429
+  ...
+# Subtest: mixed descriptive clauses cannot whitelist a later receipt instruction
+ok 173 - mixed descriptive clauses cannot whitelist a later receipt instruction
+  ---
+  duration_ms: 1.5972
+  ...
+# Subtest: the production bundle retry message cannot become durable capability guidance
+ok 174 - the production bundle retry message cannot become durable capability guidance
+  ---
+  duration_ms: 0.3316
+  ...
+# Subtest: Markdown and identifier adjacency cannot hide forbidden capability literals
+ok 175 - Markdown and identifier adjacency cannot hide forbidden capability literals
+  ---
+  duration_ms: 2.7858
+  ...
+# Subtest: raw receipt tokens cannot leave executable reuse prose behind
+ok 176 - raw receipt tokens cannot leave executable reuse prose behind
+  ---
+  duration_ms: 0.7586
+  ...
+# Subtest: meta-level safety objectives keep their prohibition without replaying quoted guidance
+ok 177 - meta-level safety objectives keep their prohibition without replaying quoted guidance
+  ---
+  duration_ms: 1.3296
+  ...
+# Subtest: JSON Unicode escapes cannot reconstruct a raw file capability
+ok 178 - JSON Unicode escapes cannot reconstruct a raw file capability
+  ---
+  duration_ms: 0.6953
+  ...
+# Subtest: sanitizer bounds inherited arrays and recursive depth
+ok 179 - sanitizer bounds inherited arrays and recursive depth
+  ---
+  duration_ms: 0.4201
+  ...
+# Subtest: T01 no-pressure projection counts only a successful raw result body
+ok 180 - T01 no-pressure projection counts only a successful raw result body
+  ---
+  duration_ms: 3.6045
+  ...
+# Subtest: T02/T03 historical coverage is distinct from current none or partial
+ok 181 - T02/T03 historical coverage is distinct from current none or partial
+  ---
+  duration_ms: 3.3226
+  ...
+# Subtest: T04 actual returned range wins over the requested range
+ok 182 - T04 actual returned range wins over the requested range
+  ---
+  duration_ms: 0.7532
+  ...
+# Subtest: T05/T06 versions and project identities never merge
+ok 183 - T05/T06 versions and project identities never merge
+  ---
+  duration_ms: 0.6459
+  ...
+# Subtest: T07 partial batch failures are recorded per call and never become raw observations
+ok 184 - T07 partial batch failures are recorded per call and never become raw observations
+  ---
+  duration_ms: 1.1895
+  ...
+# Subtest: T08 call keys remain execution-scoped when provider IDs are reused
+ok 185 - T08 call keys remain execution-scoped when provider IDs are reused
+  ---
+  duration_ms: 0.469
+  ...
+# Subtest: duplicate provider IDs in one SDK round remain explicitly ambiguous
+ok 186 - duplicate provider IDs in one SDK round remain explicitly ambiguous
+  ---
+  duration_ms: 0.4882
+  ...
+# Subtest: T11/T13 prior availability prose, hashes, and sentinels are not raw bodies
+ok 187 - T11/T13 prior availability prose, hashes, and sentinels are not raw bodies
+  ---
+  duration_ms: 0.512
+  ...
+# Subtest: T12 capped metadata distinguishes omitted entries from absent raw content
+ok 188 - T12 capped metadata distinguishes omitted entries from absent raw content
+  ---
+  duration_ms: 0.9707
+  ...
+# Subtest: T18 unverified host delivery and malformed raw ranges remain unknown
+ok 189 - T18 unverified host delivery and malformed raw ranges remain unknown
+  ---
+  duration_ms: 0.5802
+  ...
+# Subtest: worktree and commit-blob adapters preserve the same range contract
+ok 190 - worktree and commit-blob adapters preserve the same range contract
+  ---
+  duration_ms: 0.7378
+  ...
+# Subtest: verified and bodyless ranges with the same key never promote the bodyless range
+ok 191 - verified and bodyless ranges with the same key never promote the bodyless range
+  ---
+  duration_ms: 0.6356
+  ...
+# Subtest: Unreal UTF-8 byte windows keep byte units without inventing line ranges
+ok 192 - Unreal UTF-8 byte windows keep byte units without inventing line ranges
+  ---
+  duration_ms: 0.4457
+  ...
+# Subtest: Unreal byte windows reject a decoded body that cannot prove the reported byte span
+ok 193 - Unreal byte windows reject a decoded body that cannot prove the reported byte span
+  ---
+  duration_ms: 0.2544
+  ...
+# Subtest: an exact empty Unreal byte response is a verified full empty file
+ok 194 - an exact empty Unreal byte response is a verified full empty file
+  ---
+  duration_ms: 0.1923
+  ...
+# warning: in the working copy of 'tracked.txt', LF will be replaced by CRLF the next time Git touches it
+# warning: in the working copy of 'tracked.txt', LF will be replaced by CRLF the next time Git touches it
+# warning: in the working copy of 'added.txt', LF will be replaced by CRLF the next time Git touches it
+# Subtest: ASTRA RANGE: decoded body is not envelope coverage; continuation includes boundary
+ok 195 - ASTRA RANGE: decoded body is not envelope coverage; continuation includes boundary
+  ---
+  duration_ms: 23.4654
+  ...
+# Subtest: ASTRA RANGE: sanitized envelope fallback seeds [0,N), not [0,N]
+ok 196 - ASTRA RANGE: sanitized envelope fallback seeds [0,N), not [0,N]
+  ---
+  duration_ms: 142.9723
+  ...
+# Subtest: ASTRA RANGE: empty archive EOF is zero coverage
+ok 197 - ASTRA RANGE: empty archive EOF is zero coverage
+  ---
+  duration_ms: 184.5898
+  ...
+# Subtest: ASTRA GEN: large metadata cannot replace the generic content body
+ok 198 - ASTRA GEN: large metadata cannot replace the generic content body
+  ---
+  duration_ms: 190.3042
+  ...
+# Subtest: ASTRA RANGE: invalid typed endpoints cannot become zero
+ok 199 - ASTRA RANGE: invalid typed endpoints cannot become zero
+  ---
+  duration_ms: 1.1584
+  ...
+# Subtest: ASTRA RANGE: unlike source units remain separate
+ok 200 - ASTRA RANGE: unlike source units remain separate
+  ---
+  duration_ms: 0.8605
+  ...
+# Subtest: ASTRA RANGE: failed projected results never seed successful coverage
+ok 201 - ASTRA RANGE: failed projected results never seed successful coverage
+  ---
+  duration_ms: 618.173
+  ...
+# Subtest: ASTRA CAP: exact registered provider tools, not name or prefix, confer read exemption
+ok 202 - ASTRA CAP: exact registered provider tools, not name or prefix, confer read exemption
+  ---
+  duration_ms: 0.329
+  ...
+# Subtest: ASTRA TX: fragment pause without completed event cannot consume raw input
+ok 203 - ASTRA TX: fragment pause without completed event cannot consume raw input
+  ---
+  duration_ms: 2.226
+  ...
+# Subtest: B04/O03 production handler rejects an inexact input before model dispatch or durable commit
+ok 204 - B04/O03 production handler rejects an inexact input before model dispatch or durable commit
+  ---
+  duration_ms: 33.8508
+  ...
+# Subtest: hybrid handler consumes toolCalls inputs across repeated compaction and delivers EOS
+ok 205 - hybrid handler consumes toolCalls inputs across repeated compaction and delivers EOS
+  ---
+  duration_ms: 36878.0192
+  ...
+# Subtest: production handler narrows before archive starvation and restores an early fact through the real guard
+ok 206 - production handler narrows before archive starvation and restores an early fact through the real guard
+  ---
+  duration_ms: 20.3915
+  ...
+# Subtest: prediction loop calls the directly selected model with compacted history
+ok 207 - prediction loop calls the directly selected model with compacted history
+  ---
+  duration_ms: 2.5605
+  ...
+# Subtest: low-pressure history passes through without proxy model selection or sampling overrides
+ok 208 - low-pressure history passes through without proxy model selection or sampling overrides
+  ---
+  duration_ms: 1.5348
+  ...
+# Subtest: prediction loop exposes only the configured engine tools and common tools
+ok 209 - prediction loop exposes only the configured engine tools and common tools
+  ---
+  duration_ms: 1.8714
+  ...
+# Subtest: Qwen-compatible history has exactly one leading system message after scope injection
+ok 210 - Qwen-compatible history has exactly one leading system message after scope injection
+  ---
+  duration_ms: 1.9939
+  ...
+# Subtest: repeated compaction preserves invariant system instructions exactly once
+ok 211 - repeated compaction preserves invariant system instructions exactly once
+  ---
+  duration_ms: 5.8096
+  ...
+# Subtest: continuity marker text in user content is retained as user content
+ok 212 - continuity marker text in user content is retained as user content
+  ---
+  duration_ms: 0.8122
+  ...
+# Subtest: long multi-file review resumes after interruptions across four compactions
+ok 213 - long multi-file review resumes after interruptions across four compactions
+  ---
+  duration_ms: 9.1626
+  ...
+# Subtest: prediction loop denies a handcrafted tool call withheld by engine scope
+ok 214 - prediction loop denies a handcrafted tool call withheld by engine scope
+  ---
+  duration_ms: 2.3201
+  ...
+# Subtest: prediction loop binds Unreal mutation project arguments after confirmation overrides
+ok 215 - prediction loop binds Unreal mutation project arguments after confirmation overrides
+  ---
+  duration_ms: 2.226
+  ...
+# Subtest: Unity and Unreal observation calls bypass the invisible host confirmation wait
+ok 216 - Unity and Unreal observation calls bypass the invisible host confirmation wait
+  ---
+  duration_ms: 0.1424
+  ...
+# Subtest: read-only Unity calls finish without asking the hidden confirmation UI
+ok 217 - read-only Unity calls finish without asking the hidden confirmation UI
+  ---
+  duration_ms: 1.7011
+  ...
+# Subtest: hidden model notes survive a new user turn as assistant judgment and leave visible answers clean
+ok 218 - hidden model notes survive a new user turn as assistant judgment and leave visible answers clean
+  ---
+  duration_ms: 288.417
+  ...
+# Subtest: reserved note footers stay hidden when no stable working directory exists
+ok 219 - reserved note footers stay hidden when no stable working directory exists
+  ---
+  duration_ms: 2.0038
+  ...
+# Subtest: inexact measurement activates the configured message-count fallback
+ok 220 - inexact measurement activates the configured message-count fallback
+  ---
+  duration_ms: 2.4683
+  ...
+# Subtest: inexact fallback escalates a still-pressured current tool turn to bounded retention
+ok 221 - inexact fallback escalates a still-pressured current tool turn to bounded retention
+  ---
+  duration_ms: 8.2178
+  ...
+# Subtest: handler activation ignores a legacy nested enabled=false value
+ok 222 - handler activation ignores a legacy nested enabled=false value
+  ---
+  duration_ms: 2.0319
+  ...
+# Subtest: observe-only remains the explicit no-mutation mode
+ok 223 - observe-only remains the explicit no-mutation mode
+  ---
+  duration_ms: 2.0677
+  ...
+# Subtest: observe-only does not filter tools or bind project arguments
+ok 224 - observe-only does not filter tools or bind project arguments
+  ---
+  duration_ms: 1.5827
+  ...
+# Subtest: tool rounds are captured once, remeasured, and compacted before the next act
+ok 225 - tool rounds are captured once, remeasured, and compacted before the next act
+  ---
+  duration_ms: 9.3519
+  ...
+# Subtest: pressure trace measures eviction and historical reacquisition against the causal input
+ok 226 - pressure trace measures eviction and historical reacquisition against the causal input
+  ---
+  duration_ms: 20.6979
+  ...
+# Subtest: pause policy stops before a fourth equivalent tool round
+ok 227 - pause policy stops before a fourth equivalent tool round
+  ---
+  duration_ms: 5.8721
+  ...
+# Subtest: soft compaction keeps the largest complete tool tail that meets the token budget
+ok 228 - soft compaction keeps the largest complete tool tail that meets the token budget
+  ---
+  duration_ms: 1.8158
+  ...
+# Subtest: tool generation, finalized requests, results, and the final answer update the GUI without round buffering
+ok 229 - tool generation, finalized requests, results, and the final answer update the GUI without round buffering
+  ---
+  duration_ms: 3.9331
+  ...
+# Subtest: bounded audit exposes read-only research tools and gives the same model one tool-free final report
+ok 230 - bounded audit exposes read-only research tools and gives the same model one tool-free final report
+  ---
+  duration_ms: 5.0169
+  ...
+# Subtest: bounded audit converts research output exhaustion into one tool-free final report
+ok 231 - bounded audit converts research output exhaustion into one tool-free final report
+  ---
+  duration_ms: 2.5962
+  ...
+# Subtest: normal rounds send the explicit generation cap that was used as the reserve
+ok 232 - normal rounds send the explicit generation cap that was used as the reserve
+  ---
+  duration_ms: 1.8173
+  ...
+# Subtest: the default recovery cap follows a larger configured output reserve instead of silently lowering it
+ok 233 - the default recovery cap follows a larger configured output reserve instead of silently lowering it
+  ---
+  duration_ms: 0.084
+  ...
+# Subtest: new compactor configuration defaults to hybrid and preserves every explicit mode
+ok 234 - new compactor configuration defaults to hybrid and preserves every explicit mode
+  ---
+  duration_ms: 0.1425
+  ...
+# Subtest: normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back
+ok 235 - normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back
+  ---
+  duration_ms: 2.3593
+  ...
+# Subtest: a recovery that reaches its own limit is recorded once and is never retried recursively
+ok 236 - a recovery that reaches its own limit is recorded once and is never retried recursively
+  ---
+  duration_ms: 2.2885
+  ...
+# Subtest: reasoning-only and tool-argument output limits do not enter report recovery
+ok 237 - reasoning-only and tool-argument output limits do not enter report recovery
+  ---
+  duration_ms: 2.8302
+  ...
+# Subtest: bounded audit makes zero final model calls after user cancellation
+ok 238 - bounded audit makes zero final model calls after user cancellation
+  ---
+  duration_ms: 2.3745
+  ...
+# Subtest: final delivery accepts only a known normal stop and a real report
+ok 239 - final delivery accepts only a known normal stop and a real report
+  ---
+  duration_ms: 0.7315
+  ...
+# Subtest: structured final tool requests are never accepted as a completed report
+ok 240 - structured final tool requests are never accepted as a completed report
+  ---
+  duration_ms: 0.1401
+  ...
+# Subtest: a denied mutation call keeps the SDK confirmation call ID in emitted messages
+ok 241 - a denied mutation call keeps the SDK confirmation call ID in emitted messages
+  ---
+  duration_ms: 3.3114
+  ...
+# Subtest: allowed ID-less tool calls register once across guard and finalized callbacks
+ok 242 - allowed ID-less tool calls register once across guard and finalized callbacks
+  ---
+  duration_ms: 3.6495
+  ...
+# Subtest: round control never swallows an external abort
+ok 243 - round control never swallows an external abort
+  ---
+  duration_ms: 0.1677
+  ...
+# Subtest: round control never swallows an unrelated lookalike error
+ok 244 - round control never swallows an unrelated lookalike error
+  ---
+  duration_ms: 0.1423
+  ...
+# Subtest: round telemetry records the SDK finish reason without exposing result bodies
+ok 245 - round telemetry records the SDK finish reason without exposing result bodies
+  ---
+  duration_ms: 0.1307
+  ...
+# Subtest: raw tool intent streaming detection is invariant across tag splits
+ok 246 - raw tool intent streaming detection is invariant across tag splits
+  ---
+  duration_ms: 0.4517
+  ...
+# Subtest: final assistant message can authorize fresh planning when fragment callbacks are absent
+ok 247 - final assistant message can authorize fresh planning when fragment callbacks are absent
+  ---
+  duration_ms: 0.1594
+  ...
+# Subtest: fresh read-only planning retry has no hidden audit deadline in normal mode
+ok 248 - fresh read-only planning retry has no hidden audit deadline in normal mode
+  ---
+  duration_ms: 0.1522
+  ...
+# Subtest: raw intent classification never aliases unknown or withheld mutation names
+ok 249 - raw intent classification never aliases unknown or withheld mutation names
+  ---
+  duration_ms: 0.5984
+  ...
+# Subtest: completed read fingerprints require a causal successful result and current raw content
+ok 250 - completed read fingerprints require a causal successful result and current raw content
+  ---
+  duration_ms: 0.7302
+  ...
+# Subtest: semantic result fingerprints ignore random snapshot metadata but retain evidence changes
+ok 251 - semantic result fingerprints ignore random snapshot metadata but retain evidence changes
+  ---
+  duration_ms: 0.1435
+  ...
+# Subtest: within-generation pause aborts only the owned round and reports a clean pause
+ok 252 - within-generation pause aborts only the owned round and reports a clean pause
+  ---
+  duration_ms: 0.2204
+  ...
+# Subtest: final context fitness is exact at the reserve boundary
+ok 253 - final context fitness is exact at the reserve boundary
+  ---
+  duration_ms: 0.2212
+  ...
+# Subtest: context measurement reports tool schema cost separately from full prompt tokens
+ok 254 - context measurement reports tool schema cost separately from full prompt tokens
+  ---
+  duration_ms: 0.197
+  ...
+# Subtest: generation budget resolver clamps only to measured headroom and rejects unsafe space
+ok 255 - generation budget resolver clamps only to measured headroom and rejects unsafe space
+  ---
+  duration_ms: 0.0685
+  ...
+# Subtest: reserve pressure gets one adaptive tool-free final report instead of an immediate rejection
+ok 256 - reserve pressure gets one adaptive tool-free final report instead of an immediate rejection
+  ---
+  duration_ms: 2.6003
+  ...
+# Subtest: context budget measures a narrowed registered Git catalogue before tools-disabled finalization
+ok 257 - context budget measures a narrowed registered Git catalogue before tools-disabled finalization
+  ---
+  duration_ms: 7.7521
+  ...
+# Subtest: context budget uses FINAL_REPORT_ONLY when the measured narrowed catalogue still does not fit
+ok 258 - context budget uses FINAL_REPORT_ONLY when the measured narrowed catalogue still does not fit
+  ---
+  duration_ms: 5.8408
+  ...
+# Subtest: final raw git_diff repair uses a newly measured candidate and preserves a second terminal report
+ok 259 - final raw git_diff repair uses a newly measured candidate and preserves a second terminal report
+  ---
+  duration_ms: 15.2588
+  ...
+# Subtest: Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes
+ok 260 - Human-Bartender raw diff intent gets one fresh structured read-only planning retry and completes
+  ---
+  duration_ms: 18.8691
+  ...
+# Subtest: Unity-marked project uses public schemas and actual temporary Git for mixed raw Git repair
+ok 261 - Unity-marked project uses public schemas and actual temporary Git for mixed raw Git repair
+  ---
+  duration_ms: 3673.0498
+  ...
+# Subtest: raw tool text cut by the output cap is classified as tool-argument generation
+ok 262 - raw tool text cut by the output cap is classified as tool-argument generation
+  ---
+  duration_ms: 0.1937
+  ...
+# Subtest: initial raw tool output records the provider boundary when the measured structured catalogue fits
+ok 263 - initial raw tool output records the provider boundary when the measured structured catalogue fits
+  ---
+  duration_ms: 5.5368
+  ...
+# Subtest: no-progress recovery delivers a safe partial report without task completion
+ok 264 - no-progress recovery delivers a safe partial report without task completion
+  ---
+  duration_ms: 7.9033
+  ...
+# Subtest: recovery progress counts new source/archive coverage, not response fingerprints
+ok 265 - recovery progress counts new source/archive coverage, not response fingerprints
+  ---
+  duration_ms: 1.1159
+  ...
+# Subtest: archive-only raw recovery exposes the verified Git source catalogue and reaches a real source page
+ok 266 - archive-only raw recovery exposes the verified Git source catalogue and reaches a real source page
+  ---
+  duration_ms: 5698.442
+  ...
+# Subtest: deterministic working context projects a completed large result and exposes bounded rehydration
+ok 267 - deterministic working context projects a completed large result and exposes bounded rehydration
+  ---
+  duration_ms: 2629.5688
+  ...
+# Subtest: raw Git replan keeps the archive reader beside the public source reader and consumes the archive
+ok 268 - raw Git replan keeps the archive reader beside the public source reader and consumes the archive
+  ---
+  duration_ms: 2689.4712
+  ...
+# Subtest: low-pressure Git page stays raw for its first consumer without a semantic round trip
+ok 269 - low-pressure Git page stays raw for its first consumer without a semantic round trip
+  ---
+  duration_ms: 6.9982
+  ...
+# Subtest: aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only
+ok 270 - aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only
+  ---
+  duration_ms: 1833.212
+  ...
+# Subtest: image content keeps prediction alive and skips only the durable working-window commit
+ok 271 - image content keeps prediction alive and skips only the durable working-window commit
+  ---
+  duration_ms: 2845.4129
+  ...
+# Subtest: working input target reports the mandatory floor without deleting the current request
+ok 272 - working input target reports the mandatory floor without deleting the current request
+  ---
+  duration_ms: 3.5775
+  ...
+# Subtest: hybrid context makes one tool-free semantic handoff and keeps it out of visible output
+ok 273 - hybrid context makes one tool-free semantic handoff and keeps it out of visible output
+  ---
+  duration_ms: 2644.6677
+  ...
+# Subtest: invalid hybrid summary is discarded without retry or report recovery
+ok 274 - invalid hybrid summary is discarded without retry or report recovery
+  ---
+  duration_ms: 2653.7492
+  ...
+# Subtest: a failed hybrid summary stays in execution cooldown while deterministic facts continue
+ok 275 - a failed hybrid summary stays in execution cooldown while deterministic facts continue
+  ---
+  duration_ms: 6731.5557
+  ...
+# Subtest: BOUNDED keeps its original call budget and does not start a hybrid summary
+ok 276 - BOUNDED keeps its original call budget and does not start a hybrid summary
+  ---
+  duration_ms: 2647.2736
+  ...
+# Subtest: cancellation during the hybrid summary prevents the normal model call
+ok 277 - cancellation during the hybrid summary prevents the normal model call
+  ---
+  duration_ms: 2609.6589
+  ...
+# Subtest: a signed next user turn restores the compacted prefix and appends only the new delta
+ok 278 - a signed next user turn restores the compacted prefix and appends only the new delta
+  ---
+  duration_ms: 4974.6614
+  ...
+# Subtest: context-budget rescue keeps the normal output reserve when it fits
+ok 279 - context-budget rescue keeps the normal output reserve when it fits
+  ---
+  duration_ms: 3.1609
+  ...
+# Subtest: bounded context-budget rescue keeps the bounded final token and timeout limits
+ok 280 - bounded context-budget rescue keeps the bounded final token and timeout limits
+  ---
+  duration_ms: 2.5956
+  ...
+# Subtest: an input with less than the minimum safe final output still skips the selected model call
+ok 281 - an input with less than the minimum safe final output still skips the selected model call
+  ---
+  duration_ms: 2.1203
+  ...
+# Subtest: tool-round stagnation requires equivalent calls and semantic results
+ok 282 - tool-round stagnation requires equivalent calls and semantic results
+  ---
+  duration_ms: 0.9455
+  ...
+# Subtest: within-generation repetition ignores long normal prose and detects repeated blocks
+ok 283 - within-generation repetition ignores long normal prose and detects repeated blocks
+  ---
+  duration_ms: 0.1545
+  ...
+# Subtest: the compactor cannot be selected recursively as the token source
+ok 284 - the compactor cannot be selected recursively as the token source
+  ---
+  duration_ms: 0.2122
+  ...
+# Subtest: prompt processing progress is visible before the first generated token
+ok 285 - prompt processing progress is visible before the first generated token
+  ---
+  duration_ms: 1.8158
+  ...
+# Subtest: prediction fragments stream reasoning into a thinking block and the answer into normal output
+ok 286 - prediction fragments stream reasoning into a thinking block and the answer into normal output
+  ---
+  duration_ms: 1.6974
+  ...
+# Subtest: a tool follow-up keeps raw reasoning in model history while the GUI stays separated
+ok 287 - a tool follow-up keeps raw reasoning in model history while the GUI stays separated
+  ---
+  duration_ms: 3.2018
+  ...
+# Subtest: plain answer fragments are appended once instead of waiting for the completed message
+ok 288 - plain answer fragments are appended once instead of waiting for the completed message
+  ---
+  duration_ms: 1.4715
+  ...
+# Subtest: streaming keeps a continuity footer out of the visible answer
+ok 289 - streaming keeps a continuity footer out of the visible answer
+  ---
+  duration_ms: 52.65
+  ...
+# Subtest: T22 default availability observation traces final SDK input without changing it
+ok 290 - T22 default availability observation traces final SDK input without changing it
+  ---
+  duration_ms: 2.4913
+  ...
+# Subtest: B mode injects only current-input facts and reports measured prompt overhead
+ok 291 - B mode injects only current-input facts and reports measured prompt overhead
+  ---
+  duration_ms: 2.7784
+  ...
+# Subtest: T10 injected metadata participates in the final budget gate
+ok 292 - T10 injected metadata participates in the final budget gate
+  ---
+  duration_ms: 7.5689
+  ...
+# Subtest: T14 injected facts do not block a model-selected reread
+ok 293 - T14 injected facts do not block a model-selected reread
+  ---
+  duration_ms: 3.2558
+  ...
+# Subtest: availability off mode leaves both model input and availability telemetry disabled
+ok 294 - availability off mode leaves both model input and availability telemetry disabled
+  ---
+  duration_ms: 1.6753
+  ...
+# Subtest: T09 compaction retains the newest completed tool exchange for its first consumer
+ok 295 - T09 compaction retains the newest completed tool exchange for its first consumer
+  ---
+  duration_ms: 1.383
+  ...
+# Subtest: a new handler recomputes current availability instead of restoring a prior-input flag
+ok 296 - a new handler recomputes current availability instead of restoring a prior-input flag
+  ---
+  duration_ms: 1.8179
+  ...
+# Subtest: T16 real cancellation distinguishes no result from a received partial result
+ok 297 - T16 real cancellation distinguishes no result from a received partial result
+  ---
+  duration_ms: 0.6092
+  ...
+# Subtest: tool-generation failure telemetry is causal and never promoted to a result
+ok 298 - tool-generation failure telemetry is causal and never promoted to a result
+  ---
+  duration_ms: 1.6182
+  ...
+# Subtest: exact measurement never labels an invalid token counter as exact
+ok 299 - exact measurement never labels an invalid token counter as exact
+  ---
+  duration_ms: 5.0576
+  ...
+# Subtest: orchestrator delegates policy and stays below structural size target
+ok 300 - orchestrator delegates policy and stays below structural size target
+  ---
+  duration_ms: 1.1525
+  ...
+# Subtest: recovery uses typed provider authority, supports non-Git and ends on no progress
+ok 301 - recovery uses typed provider authority, supports non-Git and ends on no progress
+  ---
+  duration_ms: 4.3688
+  ...
+# Subtest: capability SSOT rejects provider suffix spoof and name collision; safe profile is stable
+ok 302 - capability SSOT rejects provider suffix spoof and name collision; safe profile is stable
+  ---
+  duration_ms: 0.6993
+  ...
+# Subtest: Git/File/Symbol/Log/Unity/Unreal share first-consumer, archive and coverage lifecycle
+ok 303 - Git/File/Symbol/Log/Unity/Unreal share first-consumer, archive and coverage lifecycle
+  ---
+  duration_ms: 323.2681
+  ...
+# Subtest: small returned evidence is archived before a canceled round can exit
+ok 304 - small returned evidence is archived before a canceled round can exit
+  ---
+  duration_ms: 1.2353
+  ...
+# Subtest: broker derives watermarks from loaded context and counts post-tool reserve once
+ok 305 - broker derives watermarks from loaded context and counts post-tool reserve once
+  ---
+  duration_ms: 0.2041
+  ...
+# Subtest: shared batch cannot overbook or recycle settled result budget; release exactly once
+ok 306 - shared batch cannot overbook or recycle settled result budget; release exactly once
+  ---
+  duration_ms: 0.301
+  ...
+# Subtest: read envelope reservation reduces a published bound before dispatch
+ok 307 - read envelope reservation reduces a published bound before dispatch
+  ---
+  duration_ms: 0.3184
+  ...
+# Subtest: three equivalent growth/compaction cycles verify final reassembled LOW without drift
+ok 308 - three equivalent growth/compaction cycles verify final reassembled LOW without drift
+  ---
+  duration_ms: 76.9519
+  ...
+# Subtest: unreachable LOW preserves mandatory request and reports its measured floor
+ok 309 - unreachable LOW preserves mandatory request and reports its measured floor
+  ---
+  duration_ms: 1.3914
+  ...
+# Subtest: canonical phase rejects every illegal transition and records transaction effects
+ok 310 - canonical phase rejects every illegal transition and records transaction effects
+  ---
+  duration_ms: 0.6534
+  ...
+# Subtest: canceled/truncated planning rolls back while returned provider evidence survives
+ok 311 - canceled/truncated planning rolls back while returned provider evidence survives
+  ---
+  duration_ms: 0.7846
+  ...
+# Subtest: extracted evidence algebra preserves units, empty EOF and overlap
+ok 312 - extracted evidence algebra preserves units, empty EOF and overlap
+  ---
+  duration_ms: 0.195
+  ...
+# Subtest: extracted boundary does not invent a provider start from guard allow
+ok 313 - extracted boundary does not invent a provider start from guard allow
+  ---
+  duration_ms: 0.1648
+  ...
+# Subtest: extracted capabilities and raw intent remain independently testable
+ok 314 - extracted capabilities and raw intent remain independently testable
+  ---
+  duration_ms: 1.2974
+  ...
+# Subtest: status verifies every direct prediction-loop source and its index wiring
+ok 315 - status verifies every direct prediction-loop source and its index wiring
+  ---
+  duration_ms: 19.8545
+  ...
+# Subtest: status fails closed when a direct runtime source is absent
+ok 316 - status fails closed when a direct runtime source is absent
+  ---
+  duration_ms: 115.0109
+  ...
+# Subtest: status fails closed when the package entry does not register the prompt preprocessor
+ok 317 - status fails closed when the package entry does not register the prompt preprocessor
+  ---
+  duration_ms: 79.627
+  ...
+# Subtest: runtime-required status never turns source presence into activation proof
+ok 318 - runtime-required status never turns source presence into activation proof
+  ---
+  duration_ms: 89.7149
+  ...
+# Subtest: workspace markers select the nearest exact Unity project
+ok 319 - workspace markers select the nearest exact Unity project
+  ---
+  duration_ms: 15.1676
+  ...
+# Subtest: ambiguous auto scope withholds both engine families
+ok 320 - ambiguous auto scope withholds both engine families
+  ---
+  duration_ms: 0.2392
+  ...
+# Subtest: a verified Unity path in the latest user messages selects Unity deterministically
+ok 321 - a verified Unity path in the latest user messages selects Unity deterministically
+  ---
+  duration_ms: 10.1131
+  ...
+# Subtest: a verified Unreal directory in the latest user messages resolves its sole descriptor
+ok 322 - a verified Unreal directory in the latest user messages resolves its sole descriptor
+  ---
+  duration_ms: 4.9231
+  ...
+# Subtest: an exact configured project path is enough for Auto scope
+ok 323 - an exact configured project path is enough for Auto scope
+  ---
+  duration_ms: 3.0905
+  ...
+# Subtest: explicit mixed scope is the only mode that exposes both engine families
+ok 324 - explicit mixed scope is the only mode that exposes both engine families
+  ---
+  duration_ms: 0.2866
+  ...
+# Subtest: Unreal project-capable calls are bound while Unity and common calls remain untouched
+ok 325 - Unreal project-capable calls are bound while Unity and common calls remain untouched
+  ---
+  duration_ms: 0.3225
+  ...
+# Subtest: failed evidence validation retains bounded actionable repair facts
+ok 326 - failed evidence validation retains bounded actionable repair facts
+  ---
+  duration_ms: 16.3415
+  ...
+# Subtest: validation repair diagnostics remain capability-free and individually bounded
+ok 327 - validation repair diagnostics remain capability-free and individually bounded
+  ---
+  duration_ms: 16.946
+  ...
+# Subtest: serialized validation repair keeps counts and as many diagnostics as fit
+ok 328 - serialized validation repair keeps counts and as many diagnostics as fit
+  ---
+  duration_ms: 1.0363
+  ...
+# Subtest: S2 signed user boundaries preserve UI history and distinguish fork lineages
+ok 329 - S2 signed user boundaries preserve UI history and distinguish fork lineages
+  ---
+  duration_ms: 32.6271
+  ...
+# Subtest: S2 signed boundaries fall back to current edited history while invalid signatures fail closed
+ok 330 - S2 signed boundaries fall back to current edited history while invalid signatures fail closed
+  ---
+  duration_ms: 14.4434
+  ...
+# Subtest: S2 lineage survives an attachment marker that is validated by its own boundary
+ok 331 - S2 lineage survives an attachment marker that is validated by its own boundary
+  ---
+  duration_ms: 14.9106
+  ...
+# Subtest: pending raw identity survives persistence sanitization, cancellation and restart
+ok 332 - pending raw identity survives persistence sanitization, cancellation and restart
+  ---
+  duration_ms: 271.6759
+  ...
+# Subtest: a returned historical page cannot be omitted or consumed by an older page with the same archive ID
+ok 333 - a returned historical page cannot be omitted or consumed by an older page with the same archive ID
+  ---
+  duration_ms: 4.3438
+  ...
+# Subtest: archive read never claims success for a nonadvancing body page
+ok 334 - archive read never claims success for a nonadvancing body page
+  ---
+  duration_ms: 144.1282
+  ...
+# Subtest: S1 five-call projection preserves SDK pairing and rehydrates exact archived pages
+ok 335 - S1 five-call projection preserves SDK pairing and rehydrates exact archived pages
+  ---
+  duration_ms: 40.4636
+  ...
+# Subtest: P1 direct JSON and MCP result envelopes produce equivalent projections
+ok 336 - P1 direct JSON and MCP result envelopes produce equivalent projections
+  ---
+  duration_ms: 325.438
+  ...
+# Subtest: P1 archived projection becomes a durable evidence index in the next checkpoint
+ok 337 - P1 archived projection becomes a durable evidence index in the next checkpoint
+  ---
+  duration_ms: 14.7483
+  ...
+# Subtest: E2E two-generation compaction rehydrates A after its projection leaves history
+ok 338 - E2E two-generation compaction rehydrates A after its projection leaves history
+  ---
+  duration_ms: 463.339
+  ...
+# Subtest: S1 pending, duplicate IDs, unknown effects and archive failure keep original messages
+ok 339 - S1 pending, duplicate IDs, unknown effects and archive failure keep original messages
+  ---
+  duration_ms: 2.0594
+  ...
+# Subtest: S1 archive range/version/scope/hash/TTL/quota failures are explicit
+ok 340 - S1 archive range/version/scope/hash/TTL/quota failures are explicit
+  ---
+  duration_ms: 0.4108
+  ...
+# Subtest: P2 expired unreferenced records are reclaimed while live records remain protected
+ok 341 - P2 expired unreferenced records are reclaimed while live records remain protected
+  ---
+  duration_ms: 0.4081
+  ...
+# Subtest: S1 a Git transport cursor is projected for the current round but never archived
+ok 342 - S1 a Git transport cursor is projected for the current round but never archived
+  ---
+  duration_ms: 60.4963
+  ...
+# Subtest: S1 durable archive restarts, canonicalizes a trusted root alias and rejects internal links
+ok 343 - S1 durable archive restarts, canonicalizes a trusted root alias and rejects internal links
+  ---
+  duration_ms: 36.2819
+  ...
+# Subtest: P2 projection has a whole-result cost gate and short observations are not archived
+ok 344 - P2 projection has a whole-result cost gate and short observations are not archived
+  ---
+  duration_ms: 0.7176
+  ...
+# Subtest: P2 evidence reads bound metadata and distinguish EOF from complete raw coverage
+ok 345 - P2 evidence reads bound metadata and distinguish EOF from complete raw coverage
+  ---
+  duration_ms: 12346.4644
+  ...
+# Subtest: regression: a 32KB Git diff keeps a body-first bounded view for its first consumer
+ok 346 - regression: a 32KB Git diff keeps a body-first bounded view for its first consumer
+  ---
+  duration_ms: 7.6639
+  ...
+# Subtest: regression: the 8192-character first-consumer boundary is exact for direct and MCP envelopes
+ok 347 - regression: the 8192-character first-consumer boundary is exact for direct and MCP envelopes
+  ---
+  duration_ms: 1515.1854
+  ...
+# Subtest: Git source page continuation survives archive EOF as a separate contract
+ok 348 - Git source page continuation survives archive EOF as a separate contract
+  ---
+  duration_ms: 4.5555
+  ...
+# Subtest: P2 provider request IDs may repeat in separate completed causal batches
+ok 349 - P2 provider request IDs may repeat in separate completed causal batches
+  ---
+  duration_ms: 92.0057
+  ...
+# Subtest: S2 atomic window restoration rejects edits, stale candidates, fork and missing archive
+ok 350 - S2 atomic window restoration rejects edits, stale candidates, fork and missing archive
+  ---
+  duration_ms: 39.5957
+  ...
+# Subtest: S3 semantic note validation rejects invented refs and execution fact schema
+ok 351 - S3 semantic note validation rejects invented refs and execution fact schema
+  ---
+  duration_ms: 2.6734
+  ...
+# Subtest: S4 ten atomic generations keep the latest constraint and decision
+ok 352 - S4 ten atomic generations keep the latest constraint and decision
+  ---
+  duration_ms: 55.4808
+  ...
+# Subtest: S3 a semantic event attempt survives window restore and cannot be implicitly retried
+ok 353 - S3 a semantic event attempt survives window restore and cannot be implicitly retried
+  ---
+  duration_ms: 7.4894
+  ...
+# Subtest: signed document boundary survives restart, keeps images and rejects changed history
+ok 354 - signed document boundary survives restart, keeps images and rejects changed history
+  ---
+  duration_ms: 26.1063
+  ...
+# Subtest: review claims fold Windows path aliases and are invalidated by deletion, even with the old hash
+ok 355 - review claims fold Windows path aliases and are invalidated by deletion, even with the old hash
+  ---
+  duration_ms: 16.0915
+  ...
+# Subtest: budget selection measures nonmonotone candidates and never claims an unmeasured fit
+ok 356 - budget selection measures nonmonotone candidates and never claims an unmeasured fit
+  ---
+  duration_ms: 0.7176
+  ...
+# Subtest: old reasoning loses only structural reasoning, preserving newest reasoning and tool pairing
+ok 357 - old reasoning loses only structural reasoning, preserving newest reasoning and tool pairing
+  ---
+  duration_ms: 1.216
+  ...
+# Subtest: Git memory preserves comparison identity but does not invent source coverage
+ok 358 - Git memory preserves comparison identity but does not invent source coverage
+  ---
+  duration_ms: 2.036
+  ...
+# Subtest: Git log memory preserves author and committer evidence without promoting responsibility
+ok 359 - Git log memory preserves author and committer evidence without promoting responsibility
+  ---
+  duration_ms: 1.5178
+  ...
+# Subtest: review claims require observed version and disappear after a new hash
+ok 360 - review claims require observed version and disappear after a new hash
+  ---
+  duration_ms: 1.982
+  ...
+1..360
+# tests 360
+# suites 0
+# pass 360
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 81238.1684
+run: C:\Users\sster\.lmstudio\bin\lms.exe dev --install -y
+Installing the plugin codex/unreal-context-compactor...
+Successfully installed codex/unreal-context-compactor.
+run: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd run patch:sdk
+
+> unreal-context-compactor@0.4.69 patch:sdk
+> node scripts/patch-lmstudio-sdk.cjs
+
+{
+  "ok": true,
+  "profile": "custom",
+  "components": [
+    "context_compactor"
+  ],
+  "safeMode": true,
+  "agentMode": false,
+  "dryRun": false,
+  "headlessLmLink": false,
+  "platform": "Windows",
+  "safetyNormalizations": [],
+  "portableRulePaths": [],
+  "clineSettingsPath": null,
+  "activeProject": null,
+  "projectSearchRoots": [
+    "C:\\Users\\sster\\Documents"
+  ],
+  "engineRoot": null,
+  "contextCompactor": {
+    "lms": "C:\\Users\\sster\\.lmstudio\\bin\\lms.exe",
+    "installedManifest": "C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\manifest.json",
+    "installed": true,
+    "ensure": {
+      "target": "C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\manifest.json",
+      "source": "already-present",
+      "copied": false,
+      "ready": true,
+      "previousStatus": "current"
+    },
+    "availability": {
+      "settingsPath": "C:\\Users\\sster\\.lmstudio\\settings.json",
+      "pinned": true,
+      "allowDevelopmentPlugins": true,
+      "changed": false,
+      "activation": {
+        "managed": true,
+        "pluginId": "codex/unreal-context-compactor",
+        "conversationsRoot": "C:\\Users\\sster\\.lmstudio\\conversations",
+        "eligibleConversationCount": 25,
+        "alreadyEnabledConversationCount": 25,
+        "updatedConversationCount": 0,
+        "skippedConversationCount": 0,
+        "enabledForExistingChats": true
+      }
+    },
+    "pluginId": "codex/unreal-context-compactor"
+  },
+  "lmStudioServer": {
+    "reachable": true,
+    "models": [
+      "swift-qwen3.8-27b",
+      "ternary-bonsai-2-27b",
+      "meta/muse-glimmer",
+      "qwen/qwen3.8-27b",
+      "text-embedding-nomic-embed-text-v1.5"
+    ]
+  },
+  "indexTier": null,
+  "externalActions": [
+    "context-compactor-npm-dependencies",
+    "context-compactor-plugin-install"
+  ],
+  "rollbackScope": "managed configuration/files only; external npm/lms installs, compiled workers and generated indexes are not rolled back",
+  "knownIntegrationsSafe": true,
+  "restartRequired": true,
+  "journal": "C:\\Users\\sster\\.evidence-first\\install-journal.json"
+}
+Update complete. Restart LM Studio to load the new MCP process and plugin.

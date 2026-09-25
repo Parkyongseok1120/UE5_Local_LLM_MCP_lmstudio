@@ -135,6 +135,35 @@ class EvidenceArchive {
     } catch { return { ok: false, errorCode: "unavailable" }; }
   }
 
+  catalog({ path: sourcePath, startOffset = 0, maxChars = 4096 } = {}) {
+    if (!Number.isInteger(startOffset) || startOffset < 0 || !Number.isInteger(maxChars) || maxChars < 1)
+      return { ok: false, errorCode: "invalid_range", currentFile: false, grantsMutation: false };
+    // Enumerate only this archive's scope, and revalidate record integrity and
+    // TTL through the same reader used for body access.
+    const records = this.entries().map(e => this.load(e.key)).filter(e => e.ok).map(e => e.record)
+      .filter(r => !sourcePath || r.metadata?.sourceIdentity?.path === sourcePath)
+      .sort((a, b) => a.createdAt - b.createdAt || a.evidenceId.localeCompare(b.evidenceId));
+    const result = { ok: true, kind: "historical_evidence_index", currentFile: false, grantsMutation: false,
+      entries: [], startOffset, nextOffset: null, hasMore: false, total: records.length,
+      retention: { coverage: "currently_available_records_only", maxRecords: this.options.maxRecords,
+        maxBytes: this.options.maxBytes, ttlMs: this.options.ttlMs, unreferencedRecordsMayBeEvicted: true } };
+    for (let i = startOffset; i < records.length; i++) {
+      const r = records[i];
+      const entry = { evidenceId: r.evidenceId, version: r.archivedBodyHash, toolName: r.metadata?.toolName,
+        path: r.metadata?.sourceIdentity?.path, sourceVersion: r.metadata?.sourceVersion,
+        sourceRange: r.metadata?.originRanges, resultStatus: r.metadata?.resultStatus };
+      result.entries.push(entry); result.hasMore = i + 1 < records.length;
+      result.nextOffset = result.hasMore ? i + 1 : null;
+      if (JSON.stringify(result).length > maxChars) {
+        result.entries.pop(); result.hasMore = true; result.nextOffset = i;
+        break;
+      }
+    }
+    if (JSON.stringify(result).length > maxChars || (result.hasMore && result.entries.length === 0))
+      return { ok: false, errorCode: "response_budget_too_small", currentFile: false, grantsMutation: false };
+    return result;
+  }
+
   put(body, metadata = {}, lifecycle = {}) {
     if (typeof body !== "string" || Buffer.byteLength(body) > this.options.maxBytes / 2) return { ok: false, errorCode: "quota" };
     try {
@@ -212,7 +241,7 @@ class EvidenceArchive {
       redacted: r.redacted, currentFile: false, grantsMutation: false,
       rangeUnit: r.rangeUnit, representation: "sanitized_archived_tool_envelope",
       totalChars: r.body.length, availableRange: [0, r.body.length] };
-    const totalBudget = Math.max(512, maxChars);
+    const totalBudget = maxChars;
     const overhead = JSON.stringify({ ...base, returnedRange: [start, start], hasMore: true,
       reachedEnd: false, fullRawProvided: false, coverageState: "partial", content: "" }).length;
     const contentBudget = Math.max(0, totalBudget - overhead);
@@ -233,7 +262,7 @@ class EvidenceArchive {
       result = response();
       serialized = JSON.stringify(result);
     }
-    if (serialized.length > totalBudget) {
+    if (serialized.length > totalBudget || (end === start && end < r.body.length)) {
       return { ok: false, errorCode: "response_budget_too_small", evidenceId: id,
         currentFile: false, grantsMutation: false };
     }

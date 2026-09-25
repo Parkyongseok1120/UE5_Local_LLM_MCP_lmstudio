@@ -1,0 +1,13 @@
+{
+  "startedAt": "2026-09-25T16:46:16.507043+09:00",
+  "logPath": "C:\\Users\\sster\\AppData\\Roaming\\LM Studio\\logs\\main.log",
+  "logStartBytes": 716016,
+  "installedRevision": 116,
+  "installedSdkPatched": true,
+  "installedSdkSha256": "91700d0ceba03d2fe8d8875329ea73c5075cf086b8ff0d97f49eab06c89371c5",
+  "model": "swift-qwen3.8-27b",
+  "contextLength": 38912,
+  "target": 380000,
+  "measurement": "sum of actual exact input tokens after first actual compaction",
+  "continueMessages": 0
+}
