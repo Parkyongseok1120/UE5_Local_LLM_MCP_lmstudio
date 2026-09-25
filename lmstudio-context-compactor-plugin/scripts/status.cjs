@@ -67,8 +67,12 @@ function inspect(root = path.resolve(__dirname, "..")) {
     && index.includes("./working-context-boundary")
     && /withPromptPreprocessor\s*\(/.test(index)
     && /withPredictionLoopHandler\s*\(\s*createPredictionLoopHandler\s*\(/.test(index);
-  const preprocessorHostWiring = /withPromptPreprocessor\s*\(\s*handler\s*\)/.test(entry)
+  const repositoryEntryWiring = /withPromptPreprocessor\s*\(\s*handler\s*\)/.test(entry)
     && /host\.setPromptPreprocessor\s*\(\s*handler\s*\)/.test(entry);
+  // lms dev --install generates its own entry instead of copying ours.
+  const installedEntryWiring = /withPromptPreprocessor\s*:\s*\(\s*preprocess\s*\)\s*=>/.test(entry)
+    && /selfRegistrationHost\.setPromptPreprocessor\s*\(\s*preprocess\s*\)/.test(entry);
+  const preprocessorHostWiring = repositoryEntryWiring || installedEntryWiring;
   const legacyWiring = /withGenerator\s*\(|["']\.\/generator["']|["']\.\/compaction-core["']/.test(index);
   const issues = [];
   if (missing.length) issues.push(`missing: ${missing.join(", ")}`);

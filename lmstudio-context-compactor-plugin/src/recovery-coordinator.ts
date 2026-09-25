@@ -21,7 +21,9 @@ export class RecoveryCoordinator {
     const paginationBound = bounded && this.paginationRounds >= Math.max(1, maximum);
     const evidence = Boolean(requestCount || resultCount || progress?.newSuccessfulObservationCount || progress?.errorCount);
     const needsFinal = Boolean(rawIntent || progress?.errorCount || (evidence && !progressed));
-    const trigger = (noProgress && needsFinal) || progress?.errorCount || (!continued && !reportText)
+    // A budget denial/failure belongs to its request, not to successful peers
+    // in the batch. Consume useful results before declaring recovery exhausted.
+    const trigger = (noProgress && needsFinal) || (!continued && !reportText)
       ? "research_recovery_exhausted" as const
       : paginationBound && continued ? "research_recovery_complete" as const : null;
     return {

@@ -175,6 +175,57 @@ test("production handler narrows before archive starvation and restores an early
   assert.ok(ctl.blocks.some(b => b.text.includes("Recovered EARLY_FACT_729")));
 });
 
+for (const mixed of [true, false]) test(`read recovery ${mixed ? "consumes two successes beside a denied third call" : "uses ordinary delivery limits after a stalled batch"}`, async () => {
+  const read={name:"read_file",pluginIdentifier:"mcp/unity-tools",description:"read source",parametersJsonSchema:{
+    type:"object",properties:{path:{type:"string"},byteBudget:{type:"integer",minimum:1024,maximum:65536,default:32768}}}};
+  const write={name:"write_file",pluginIdentifier:"mcp/unity-tools",description:"write",parametersJsonSchema:{type:"object"}};
+  let calls=0,denials=0;
+  const model={identifier:"mixed-batch-fixture",async getContextLength(){return 86272;},applyPromptTemplate:measuredCataloguePrompt,
+    async countTokens(text){if(text.startsWith("["))return 100;return JSON.parse(text).tools.includes("write_file")?90000:21019;},
+    async act(chat,tools,opts){
+      const n=calls++;
+      if(n===1){
+        assert.equal(tools.length>0,mixed,"useful results must reach the next consumer before declaring exhaustion");
+        assert.equal(opts.maxTokens,mixed?4096:8192);
+        if(mixed){assert.match(chat.toString(),/VERIFIED_SOURCE_A/);assert.match(chat.toString(),/VERIFIED_SOURCE_B/);}
+        await new Promise(resolve=>setTimeout(resolve,1100));
+        assert.equal(opts.signal.aborted,false,"automatic recovery must not inherit auditFinalSeconds=1");
+        opts.onPredictionCompleted({stats:{stopReason:"eosFound"}});
+        opts.onMessage(ChatMessage.create("assistant",mixed?"A and B were read; C remains unresolved.":"The reads failed; the requested scope remains unresolved."));
+        return;
+      }
+      assert.equal(n,0);
+      const requests=[],results=[];
+      for(let i=0;i<3;i++){
+        const proposed={type:"function",id:`source-${i}`,name:"read_file",arguments:{path:`source-${i}.cs`,startLine:1,limit:200}};
+        let args,denied;
+        await opts.guardToolCall(0,i+1,{toolCallRequest:proposed,allow(){args=proposed.arguments;},
+          allowAndOverrideParameters(value){args=value;},deny(reason){denied=reason;denials++;}});
+        const request={...proposed,arguments:args||proposed.arguments};requests.push(request);
+        results.push({type:"toolCallResult",toolCallId:request.id,content:JSON.stringify(denied?{error:denied}
+          :mixed?{ok:true,kind:"workspace_file_observation",path:proposed.arguments.path,startLine:1,endLine:200,totalLines:482,
+            hash:`v${i}`,text:`VERIFIED_SOURCE_${i===0?'A':'B'}`}
+            :{ok:false,errorCode:"response_budget_exceeded"})});
+      }
+      opts.onPredictionCompleted({stats:{stopReason:"toolCalls"}});
+      opts.onMessage(ChatMessage.from({role:"assistant",content:requests.map(toolCallRequest=>({type:"toolCallRequest",toolCallRequest}))}));
+      opts.onMessage(ChatMessage.from({role:"tool",content:results}));
+      opts.onRoundEnd();throw opts.signal.reason;
+    }};
+  const ctl=fakeController(Chat.from([{role:"user",content:"Report from the evidence already gathered."}]),model,{
+    contextManagementMode:"deterministic",maxOutputReserve:8192,safetyMarginTokens:2048,
+    workingInputTargetTokens:40000,workingInputTriggerTokens:56000,auditFinalMaxTokens:4096,auditFinalSeconds:1,
+  },[read,write]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls,2);assert.equal(denials,1);
+  assert.equal(ctl.session.disposed,true);
+  assert.equal(ctl.debugValues.some(e=>e.event==="read_only_research_recovery_exhausted"),!mixed);
+  const next=ctl.debugValues.filter(e=>e.event==="direct_context_measurement")[1];
+  assert.equal(next.finalizationPending,!mixed);
+  assert.equal(next.finalExactMeasurement,true);
+  if(mixed)assert.match(ctl.blocks.at(-1).text,/A and B were read/);
+});
+
 test("recovery admission uses the compacted candidate after the original generation headroom failed", async () => {
   const history = Chat.from([{ role: "user", content: "Prior analysis" },
     { role: "assistant", content: "OLDER_BODY ".repeat(3000) }, { role: "user", content: "Inspect Git evidence and report." }]);
@@ -279,6 +330,15 @@ test("canceled execution releases its session and a new execution cannot reuse i
   assert.equal(next.roundIndex, 0);
   assert.notEqual(first.executionId, next.executionId);
   assert.notEqual(first.modelInputId, next.modelInputId);
+});
+
+test("tool session is released when initialization fails before the round loop", async () => {
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Inspect" }]), exactCountingModel(() => {
+    assert.fail("setup failed before dispatch");
+  }));
+  Object.defineProperty(ctl.session, "tools", { get() { throw new Error("tool registry unavailable"); } });
+  await assert.rejects(handlePredictionLoop(ctl), /tool registry unavailable/);
+  assert.equal(ctl.session.disposed, true);
 });
 
 test("prediction loop calls the directly selected model with compacted history", async () => {
@@ -1756,6 +1816,7 @@ test("final delivery accepts only a known normal stop and a real report", () => 
   });
   assert.deepEqual(classify("", "eosFound"), {
     deliveryState: "no_answer", reportState: "no_answer",
+    rejectionReason: "empty_visible_output",
   });
 });
 
@@ -2282,7 +2343,7 @@ test("context budget measures a narrowed registered Git catalogue before tools-d
   assert.equal(rescue.nextToolCount, 4);
   assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
   const identity = ctl.debugValues.find(value => value.event === "direct_runtime_identity");
-  assert.equal(identity.runtimeSourceRevision, 117);
+  assert.equal(identity.runtimeSourceRevision, 118);
   assert.match(identity.installedSourceFingerprint, /^[a-f0-9]{64}$/u);
   assert.match(identity.installedDistFingerprint, /^[a-f0-9]{64}$/u);
   assert.match(identity.toolRegistryFingerprint, /^[a-f0-9]{64}$/u);
@@ -3541,6 +3602,139 @@ test("a signed next user turn restores the compacted prefix and appends only the
   assert.match(secondInput, /archived_tool_result_projection/);
   assert.ok((secondInput.match(/raw-evidence-/g) || []).length < 50);
   assert.doesNotMatch(secondInput, /hybrid-context-v1/);
+});
+
+test("split host blocks survive canceled multi-tool research and a report-only next turn", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-transcript-reentry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const boundary = new WorkingContextBoundary(path.join(root, "boundary"));
+  const history = Chat.from([{ role: "system", content: "" }]);
+  history.append(boundary.capture(ChatMessage.create("user", "Inspect source then report."), history));
+  const abort = new AbortController(), reason = new Error("stop research");
+  const separator = require("../dist/continuity-text.js").REASONING_SEPARATOR;
+  const tool = { name: "read_file", pluginIdentifier: "mcp/unity-tools",
+    description: "read", parametersJsonSchema: { type: "object" } };
+  const config = { contextManagementMode: "deterministic", workingInputTargetTokens: 5000,
+    workingInputTriggerTokens: 6000, toolResultProjectionChars: 512,
+    softRemainingTokens: 1000, hardRemainingTokens: 500 };
+  let calls = 0;
+  const model = exactCountingModel(async (_chat, _tools, opts) => {
+    const n = calls++;
+    assert.ok(n < 3);
+    const text = n === 2 ? "UNFINISHED_PLAN" : `visible explanation ${n}`;
+    opts.onPredictionFragment({ roundIndex: 0, content: "PRIVATE_REASONING", reasoningType: "reasoning" });
+    opts.onPredictionFragment({ roundIndex: 0, content: text, reasoningType: "none" });
+    const requests = Array.from({ length: n === 0 ? 2 : 1 }, (_, i) => ({
+      type: "function", id: `read-${n}-${i}`, name: "read_file", arguments: { path: `source-${n}-${i}.txt` },
+    }));
+    requests.forEach((request, i) => opts.onToolCallRequestFinalized(0, i, { toolCallRequest: request }));
+    opts.onMessage(ChatMessage.from({ role: "assistant", content: [
+      { type: "text", text: `PRIVATE_REASONING${separator}${text}` },
+      ...requests.map(toolCallRequest => ({ type: "toolCallRequest", toolCallRequest })),
+    ] }));
+    opts.onMessage(ChatMessage.from({ role: "tool", content: requests.map((r, i) => ({
+      type: "toolCallResult", toolCallId: r.id, content: JSON.stringify({ ok: true,
+        kind: "workspace_file_observation", path: r.arguments.path, hash: `version-${n}-${i}`,
+        startLine: 1, endLine: 20, text: `SOURCE_FACT_${n}_${i} ` + "x".repeat(n === 0 ? 16000 : 200),
+        receipt: "EPHEMERAL_RECEIPT", nextCursor: "EPHEMERAL_CURSOR",
+      }),
+    })) }));
+    if (n === 2) { abort.abort(reason); throw reason; }
+    opts.onPredictionCompleted({ stats: { stopReason: "toolCalls" } });
+    opts.onRoundEnd(); throw opts.signal.reason;
+  });
+  const first = fakeController(history, model, config, [tool]);
+  first.getWorkingDirectory = () => root;
+  first.abortSignal = abort.signal;
+  first.guardAbort = () => abort.signal.throwIfAborted();
+  const handler = () => createPredictionLoopHandler(new ContinuityNoteStore(path.join(root, "notes")),
+    undefined, boundary, { root: path.join(root, "archive") });
+  await assert.rejects(handler()(first), error => error === reason);
+  assert.equal(calls, 3);
+  assert.equal(first.session.disposed, true);
+  assert.equal(first.debugValues.find(e => e.event === "working_context_seal").sealed, true);
+
+  // Independent host rehydration, not SDK captured messages or the recorder.
+  const host = Chat.from(history);
+  for (const block of first.blocks) {
+    if (block.options.includeInContext === false) continue;
+    const content = [...(block.text ? [{ type: "text", text: block.text }] : []),
+      ...block.requests.map(r => ({ type: "toolCallRequest", toolCallRequest: {
+        id: r.toolCallRequestId, type: "function", arguments: r.parameters, name: r.name,
+      } })), ...block.results.map(r => ({ type: "toolCallResult", toolCallId: r.toolCallRequestId, content: r.content }))];
+    if (content.length) host.append(ChatMessage.from({ role: block.options.roleOverride || "assistant", content }));
+  }
+  assert.match(host.toString(), /UNFINISHED_PLAN/);
+  host.append(boundary.capture(ChatMessage.create("user", "Report only from what you already read."), host));
+  let reportInput;
+  const next = fakeController(host, exactCountingModel(async (chat, _tools, opts) => {
+    reportInput = chat.toString();
+    opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+    opts.onMessage(ChatMessage.create("assistant", "Report from retained source facts."));
+  }), config, [tool]);
+  next.getWorkingDirectory = () => root;
+  await handler()(next);
+  assert.equal(next.debugValues.find(e => e.event === "working_context_restore").status, "restored_remeasure_required");
+  assert.match(reportInput, /SOURCE_FACT_2_0/);
+  assert.match(reportInput, /SOURCE_FACT_1_0/);
+  assert.doesNotMatch(reportInput, /UNFINISHED_PLAN|PRIVATE_REASONING|EPHEMERAL_RECEIPT|EPHEMERAL_CURSOR/);
+  assert.equal(next.debugValues.find(e => e.event === "direct_context_measurement").finalExactMeasurement, true);
+  assert.equal(next.session.disposed, true);
+});
+
+test("semantic timeout leaves a durable historical archive usable by the next execution", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "summary-timeout-reentry-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const boundary = new WorkingContextBoundary(path.join(root, "boundary"));
+  const history = archivedObservationHistory(24000, true);
+  // Sign the current user within the supplied historical exchange.
+  const original = history.getMessagesArray(), signed = Chat.empty();
+  for (const message of original) signed.append(message.isUserMessage()
+    ? boundary.capture(message, signed) : message);
+  const config = { contextManagementMode: "hybrid", workingInputTargetTokens: 3000,
+    workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
+    semanticSummarySeconds: 1, softRemainingTokens: 1000, hardRemainingTokens: 500 };
+  const tools = [{ name: "git_changed_files", pluginIdentifier: "mcp/unity-tools",
+    description: "read", parametersJsonSchema: { type: "object" } }];
+  let summaries = 0;
+  const model = exactCountingModel(async (chat, _tools, opts) => {
+    if (chat.toString().includes('"purpose":"context_summary"')) {
+      summaries++;
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      opts.signal.throwIfAborted();
+      assert.fail("summary must time out");
+    }
+    opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+    opts.onMessage(ChatMessage.create("assistant", "Completed visible response."));
+  });
+  const handler = () => createPredictionLoopHandler(new ContinuityNoteStore(path.join(root, "notes")),
+    undefined, boundary, { root: path.join(root, "archive") });
+  const first = fakeController(signed, model, config, tools); first.getWorkingDirectory = () => root;
+  await handler()(first);
+  assert.equal(summaries, 1);
+  assert.equal(first.debugValues.find(e => e.event === "semantic_handoff").reason, "timeout");
+  assert.equal(first.debugValues.find(e => e.event === "working_context_seal").sealed, true);
+  const host = Chat.from(signed); host.append("assistant", "Completed visible response.");
+  host.append(boundary.capture(ChatMessage.create("user", "Continue from the archived evidence."), host));
+  let readBody = "";
+  const next = fakeController(host, exactCountingModel(async (_chat, offered, opts) => {
+    const archive = offered.find(tool => tool.name === "evidence_first_read_context");
+    const environment = { signal: opts.signal, status() {}, warn() {}, callId: 1 };
+    const index = await archive.implementation({ action: "catalog", maxChars: 8192 }, environment);
+    assert.equal(index.entries.length, 1);
+    const entry = index.entries[0];
+    const page = await archive.implementation({ action: "read", evidenceId: entry.evidenceId,
+      version: entry.version, startOffset: 0, maxChars: 8192 }, environment);
+    assert.equal(page.currentFile, false);
+    assert.equal(page.grantsMutation, false);
+    readBody = page.content;
+    opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+    opts.onMessage(ChatMessage.create("assistant", "Historical body is available."));
+  }), { ...config, contextManagementMode: "deterministic" }, tools);
+  next.getWorkingDirectory = () => root;
+  await handler()(next);
+  assert.equal(next.debugValues.find(e => e.event === "working_context_restore").status, "restored_remeasure_required");
+  assert.match(readBody, /x{500}/);
 });
 
 test("context-budget rescue keeps the normal output reserve when it fits", async () => {

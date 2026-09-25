@@ -65,8 +65,23 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     if (budget.fit && budget.appliedMaxTokens < desiredMaxTokens) {
       reserve = budget.appliedMaxTokens; assembled = await assemble(sourceHistory);
     }
-    const low = await contextManager.enforceLowWater(sourceHistory, assemble, {
+    let low = await contextManager.enforceLowWater(sourceHistory, assemble, {
       hasReadTools: tools.some(hasReadCapability), minimumReadTokens: minimumReadBudget(tools) });
+    // First try narrowing the tool surface without changing source evidence.
+    // If a checkpoint is actually needed, archive the source before accepting
+    // that destructive reduction. A failed cross-turn restore must not make
+    // summary success the only way to preserve historical bodies.
+    if (low.changed && workingContext && !config.observeOnly) {
+      const projected = evidenceManager.project(sourceHistory,
+        { executionId, roundIndex, modelInputId: candidateModelInputId, proofLevel: "returned_tool_result" },
+        config.toolResultProjectionChars);
+      if (projected.changed) {
+        projectionApplied = true;
+        low = await contextManager.enforceLowWater(projected.history, assemble, {
+          hasReadTools: tools.some(hasReadCapability), minimumReadTokens: minimumReadBudget(tools) });
+        assembled = low.assembled;
+      }
+    }
     if (low.changed) assembled = low.assembled;
     // Admission belongs to the final measured candidate, not the oversized
     // pre-compaction input that initiated recovery.

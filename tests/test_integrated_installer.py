@@ -108,7 +108,7 @@ def test_installer_profiles_are_manifest_driven() -> None:
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.4.0"
-    assert manifest["version"] == "2.1.22"
+    assert manifest["version"] == "2.1.23"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
     assert manifest["safety"]["contextCompactorSkippedInHeadlessLmLinkMode"] is True
     assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is True
@@ -117,9 +117,9 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
     assert node_package["version"] == node_lock["version"] == "0.3.23"
     assert node_lock["packages"][""]["version"] == "0.3.23"
-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.70"
-    assert compactor_lock["packages"][""]["version"] == "0.4.70"
-    assert compactor_manifest["revision"] == 117
+    assert compactor_package["version"] == compactor_lock["version"] == "0.4.71"
+    assert compactor_lock["packages"][""]["version"] == "0.4.71"
+    assert compactor_manifest["revision"] == 118
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()

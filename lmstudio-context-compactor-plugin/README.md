@@ -109,6 +109,6 @@ npm run dev
 
 `eval:audit-pressure`는 8개 파일 fixture에서 실제 압축 뒤 과거 원문 퇴출과 현재 원문 잔존을 독립 oracle로 먼저 확인합니다. 파일럿이 이 조건을 충족할 때만 A/B 본 반복을 실행합니다. A/B는 `Observe`와 `Inject`의 메타데이터 효과만 비교하고, A/C는 사용자가 선택한 `eval/AUDIT_TASK_CONTRACT.md`의 감사 지시 효과를 별도의 탐색 실험으로 비교합니다. 계약은 제품 하네스가 자동 주입하지 않으며, 실패·timeout·압축 미발생 실행도 보고서에서 삭제하지 않습니다. 재조회 반환량은 요청을 만든 `modelInputId`의 실제 입력 원문과 과거 원문 ledger를 각각 대조해 현재 입력 중첩·과거 근거 재획득·새 근거로 나눕니다.
 
-설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.70 / revision 117입니다.
+설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.71 / revision 118입니다.
 
 SDK 1.5.0의 정상 예측 종료 후 cancel 전송 문제는 버전 검증 패치로 보정합니다. 통합 설치기와 `UPDATE.bat`은 LM Studio 설치 대상의 의존성에도 이 패치를 적용합니다. `lms dev --install -y`만 직접 실행한 경우에는 설치 대상 플러그인 디렉터리에서 `npm run patch:sdk`를 실행한 뒤 플러그인을 Force Restart해야 합니다. SDK 버전이나 패치 대상이 달라지면 설치를 실패시켜 재검토하도록 합니다.

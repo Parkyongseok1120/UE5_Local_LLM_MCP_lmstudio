@@ -6,10 +6,99 @@ const os = require("node:os");
 const path = require("node:path");
 const { Chat, ChatMessage } = require("@lmstudio/sdk");
 const { EvidenceArchive } = require("../src/evidence-archive.js");
-const { WorkingContext, serialize, hash, validateSemanticNote } = require("../src/working-context.js");
+const { WorkingContext, serialize, hash, validateSemanticNote, exchangeIndex } = require("../src/working-context.js");
 const { parseToolResult, stateMemory } = require("../src/compaction-tool-memory.js");
 const { buildCheckpoint } = require("../src/direct-compaction-core.js");
 const scope = { conversation: "chat-1", lineage: "fork-1", workspace: "workspace-1", repository: "worktree-1" };
+
+test("terminal seal is a remeasured handoff, cannot reopen an execution, and fails atomically", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sealed-window-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const history = exchange(1), options = { root, durable: true, lineage: "first" };
+  const context = new WorkingContext(scope, options);
+  assert.equal(context.seal(history, history), false);
+  assert.equal(context.lastCommitReason, "no_committed_window_in_execution");
+  context.captureReturned(history, () => true);
+  assert.equal(context.commit(history, history, { exact: true, remainingTokens: 5000 }, hash(serialize(history)), "model"), true);
+  const target = path.join(context.archive.directory, context.windowFile("first"));
+  const before = fs.readFileSync(target, "utf8");
+  const edited = Chat.from(history); edited.getMessagesArray()[0].replaceText("edited system");
+  assert.equal(context.seal(edited, history), false);
+  assert.equal(context.lastCommitReason, "source_prefix_changed");
+  assert.equal(fs.readFileSync(target, "utf8"), before);
+  const omitted = Chat.from([{ role: "user", content: "missing returned fact" }]);
+  assert.equal(context.seal(history, omitted), false);
+  assert.equal(context.lastCommitReason, "pending_evidence_omitted");
+  assert.equal(fs.readFileSync(target, "utf8"), before);
+  const visible = Chat.from(history); visible.append("assistant", "incomplete user-visible answer");
+  assert.equal(context.seal(visible, history), true);
+  const manifest = JSON.parse(fs.readFileSync(target, "utf8"));
+  assert.equal(manifest.measurement, null);
+  assert.equal(manifest.measurementSubject, "terminal_unmeasured");
+  assert.equal(manifest.remeasureRequired, true);
+  assert.equal(context.seal(visible, history), false);
+  assert.equal(context.commit(visible, history, { exact: true, remainingTokens: 5000 }, hash(serialize(visible)), "m"), false);
+  assert.equal(context.lastCommitReason, "execution_closed");
+  const next = new WorkingContext(scope, { root, durable: true, lineage: "next", parentLineage: "first" });
+  visible.append("user", "report now");
+  const restored = next.restore(visible);
+  assert.equal(restored.reason, "restored_remeasure_required");
+  assert.doesNotMatch(restored.history.toString(), /incomplete user-visible answer/);
+  assert.match(restored.history.toString(), /report now/);
+  assert.equal(next.returnedRefs.size, 1, "shutdown is not a completed consumer");
+  assert.equal(next.seal(visible, restored.history), false, "restoration alone never authorizes a new seal");
+});
+
+test("restore distinguishes corrupt windows, edited prefixes, scopes, lineage and unavailable evidence", () => {
+  let now = 100;
+  const context = new WorkingContext(scope, { now: () => now, ttlMs: 50 });
+  const history = exchange(1);
+  context.captureReturned(history, () => true);
+  assert.equal(context.commit(history, history, { exact: true, remainingTokens: 5000 }, hash(serialize(history)), "m"), true);
+  const valid = structuredClone(context.manifest);
+  const change = (patch, reason, rehash = true) => {
+    const { digest, ...body } = { ...valid, ...patch };
+    context.manifest = { ...body, digest: rehash ? hash(body) : "invalid" };
+    assert.equal(context.restore(history).reason, reason);
+    context.manifest = valid;
+  };
+  change({}, "manifest_integrity_failed", false);
+  change({ schemaVersion: 10 }, "manifest_schema_mismatch");
+  change({ scope: "other" }, "scope_mismatch");
+  context.parentLineage = "other";
+  assert.equal(context.restore(history).reason, "lineage_mismatch");
+  context.parentLineage = null;
+  change({ sourceLength: history.length + 1 }, "source_length_mismatch");
+  change({ sourcePrefixHash: "different" }, "source_prefix_mismatch");
+  now = 151;
+  assert.equal(context.restore(history).reason, "archive_refs_unavailable");
+  now = 100;
+  const record = context.archive.records.values().next().value; record.body += "corruption";
+  assert.equal(context.restore(history).reason, "archive_refs_unavailable");
+});
+
+test("host-split request batches archive every result and still reject partial or duplicate exchanges", () => {
+  const sdk = exchange(2), split = Chat.empty();
+  for (const m of sdk.getMessagesArray()) {
+    if (m.getToolCallRequests().length) for (const request of m.getToolCallRequests())
+      split.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+    else split.append(m);
+  }
+  assert.equal(exchangeIndex(split).ambiguous, false);
+  assert.equal(exchangeIndex(split).matches.size, 2);
+  const context = new WorkingContext(scope);
+  assert.equal(context.project(split, () => true, {}, 512).changed, true);
+  assert.equal(context.archive.entries().length, 2);
+  const duplicate = Chat.from(split); duplicate.append(split.getMessagesArray()[2]);
+  assert.equal(exchangeIndex(duplicate).ambiguous, true);
+  const interleaved = Chat.empty(), messages = split.getMessagesArray();
+  for (const i of [0, 1, 2, 3, 4, 2, 5]) interleaved.append(messages[i]);
+  assert.equal(exchangeIndex(interleaved).ambiguous, true);
+  const acrossTurn = Chat.empty();
+  for (const i of [0, 1, 2, 1, 3, 4, 5]) acrossTurn.append(messages[i]);
+  assert.equal(exchangeIndex(acrossTurn).ambiguous, true, "a user boundary cannot extend an unfinished batch");
+});
+
 test("pending raw identity survives persistence sanitization, cancellation and restart", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pending-window-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
