@@ -1,5 +1,5 @@
 {
-  "sourceConversation": "C:\\Users\\sster\\.lmstudio\\conversations\\1790322361376.conversation.json",
+  "sourceConversation": "REDACTED_HOME\\.lmstudio\\conversations\\1790322361376.conversation.json",
   "identities": [
     {
       "event": "direct_runtime_identity",
@@ -1422,7 +1422,7 @@
         "path": "Packages/manifest.json",
         "limit": 200,
         "byteBudget": 65536,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1433,7 +1433,7 @@
         "startLine": 1,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1444,7 +1444,7 @@
         "startLine": 17,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1455,7 +1455,7 @@
         "startLine": 33,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1466,7 +1466,7 @@
         "startLine": 49,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1477,7 +1477,7 @@
         "startLine": 65,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1488,7 +1488,7 @@
         "startLine": 81,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1499,7 +1499,7 @@
         "startLine": 97,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1510,7 +1510,7 @@
         "startLine": 113,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1521,7 +1521,7 @@
         "startLine": 129,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1532,7 +1532,7 @@
         "startLine": 145,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1543,7 +1543,7 @@
         "startLine": 161,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1554,7 +1554,7 @@
         "startLine": 177,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1565,7 +1565,7 @@
         "startLine": 193,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1576,7 +1576,7 @@
         "startLine": 209,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1587,7 +1587,7 @@
         "startLine": 225,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1598,7 +1598,7 @@
         "startLine": 241,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1609,7 +1609,7 @@
         "startLine": 257,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1620,7 +1620,7 @@
         "startLine": 273,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1631,7 +1631,7 @@
         "startLine": 289,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1642,7 +1642,7 @@
         "startLine": 305,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1653,7 +1653,7 @@
         "startLine": 321,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1664,7 +1664,7 @@
         "startLine": 337,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1675,7 +1675,7 @@
         "startLine": 353,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1686,7 +1686,7 @@
         "startLine": 369,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1697,7 +1697,7 @@
         "startLine": 385,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1708,7 +1708,7 @@
         "startLine": 401,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1719,7 +1719,7 @@
         "startLine": 417,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1730,7 +1730,7 @@
         "startLine": 433,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1741,7 +1741,7 @@
         "startLine": 449,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1752,7 +1752,7 @@
         "startLine": 465,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1763,7 +1763,7 @@
         "startLine": 481,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1774,7 +1774,7 @@
         "startLine": 497,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1785,7 +1785,7 @@
         "startLine": 513,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1796,7 +1796,7 @@
         "startLine": 529,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1807,7 +1807,7 @@
         "startLine": 545,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1818,7 +1818,7 @@
         "startLine": 561,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1829,7 +1829,7 @@
         "startLine": 577,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1840,7 +1840,7 @@
         "startLine": 593,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1851,7 +1851,7 @@
         "startLine": 609,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1862,7 +1862,7 @@
         "startLine": 625,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1873,7 +1873,7 @@
         "startLine": 641,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1884,7 +1884,7 @@
         "startLine": 657,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -1895,7 +1895,7 @@
         "startLine": 673,
         "limit": 16,
         "byteBudget": 4096,
-        "project": "C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender"
+        "project": "REDACTED_HOME/Documents/Git/Human-Bartender/HumanBartender"
       }
     },
     {
@@ -2094,11 +2094,11 @@
       "endLine": 57,
       "returnedLineCount": 57,
       "totalLines": 57,
-      "text": "{\n  \"dependencies\": {\n    \"com.cysharp.unitask\": \"https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask\",\n    \"com.unity.addressables\": \"2.9.1\",\n    \"com.unity.cinemachine\": \"3.1.6\",\n    \"com.unity.collab-proxy\": \"2.12.4\",\n    \"com.unity.feature.2d\": \"2.0.2\",\n    \"com.unity.ide.rider\": \"3.0.39\",\n    \"com.unity.ide.visualstudio\": \"2.0.26\",\n    \"com.unity.inputsystem\": \"1.19.0\",\n    \"com.unity.multiplayer.center\": \"1.0.1\",\n    \"com.unity.nuget.newtonsoft-json\": \"3.2.2\",\n    \"com.unity.postprocessing\": \"3.5.4\",\n    \"com.unity.render-pipelines.universal\": \"17.3.0\",\n    \"com.unity.test-framework\": \"1.6.0\",\n    \"com.unity.timeline\": \"1.8.12\",\n    \"com.unity.ugui\": \"2.0.0\",\n    \"com.unity.visualscripting\": \"1.9.11\",\n    \"jp.hadashikick.vcontainer\": \"https://github.com/hadashiA/VContainer.git?path=VContainer/Assets/VContainer#1.16.8\",\n    \"com.unity.modules.accessibility\": \"1.0.0\",\n    \"com.unity.modules.adaptiveperformance\": \"1.0.0\",\n    \"com.unity.modules.ai\": \"1.0.0\",\n    \"com.unity.modules.androidjni\": \"1.0.0\",\n    \"com.unity.modules.animation\": \"1.0.0\",\n    \"com.unity.modules.assetbundle\": \"1.0.0\",\n    \"com.unity.modules.audio\": \"1.0.0\",\n    \"com.unity.modules.cloth\": \"1.0.0\",\n    \"com.unity.modules.director\": \"1.0.0\",\n    \"com.unity.modules.imageconversion\": \"1.0.0\",\n    \"com.unity.modules.imgui\": \"1.0.0\",\n    \"com.unity.modules.jsonserialize\": \"1.0.0\",\n    \"com.unity.modules.particlesystem\": \"1.0.0\",\n    \"com.unity.modules.physics\": \"1.0.0\",\n    \"com.unity.modules.physics2d\": \"1.0.0\",\n    \"com.unity.modules.screencapture\": \"1.0.0\",\n    \"com.unity.modules.terrain\": \"1.0.0\",\n    \"com.unity.modules.terrainphysics\": \"1.0.0\",\n    \"com.unity.modules.tilemap\": \"1.0.0\",\n    \"com.unity.modules.ui\": \"1.0.0\",\n    \"com.unity.modules.uielements\": \"1.0.0\",\n    \"com.unity.modules.umbra\": \"1.0.0\",\n    \"com.unity.modules.unityanalytics\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequest\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequestassetbundle\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequestaudio\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequesttexture\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequestwww\": \"1.0.0\",\n    \"com.unity.modules.vectorgraphics\": \"1.0.0\",\n    \"com.unity.modules.vehicles\": \"1.0.0\",\n    \"com.unity.modules.video\": \"1.0.0\",\n    \"com.unity.modules.vr\": \"1.0.0\",\n    \"com.unity.modules.wind\": \"1.0.0\",\n    \"com.unity.modules.xr\": \"1.0.0\",\n    \"com.evidencefirst.unity-bridge\": \"file:C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge\"\n  }\n}\n",
+      "text": "{\n  \"dependencies\": {\n    \"com.cysharp.unitask\": \"https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask\",\n    \"com.unity.addressables\": \"2.9.1\",\n    \"com.unity.cinemachine\": \"3.1.6\",\n    \"com.unity.collab-proxy\": \"2.12.4\",\n    \"com.unity.feature.2d\": \"2.0.2\",\n    \"com.unity.ide.rider\": \"3.0.39\",\n    \"com.unity.ide.visualstudio\": \"2.0.26\",\n    \"com.unity.inputsystem\": \"1.19.0\",\n    \"com.unity.multiplayer.center\": \"1.0.1\",\n    \"com.unity.nuget.newtonsoft-json\": \"3.2.2\",\n    \"com.unity.postprocessing\": \"3.5.4\",\n    \"com.unity.render-pipelines.universal\": \"17.3.0\",\n    \"com.unity.test-framework\": \"1.6.0\",\n    \"com.unity.timeline\": \"1.8.12\",\n    \"com.unity.ugui\": \"2.0.0\",\n    \"com.unity.visualscripting\": \"1.9.11\",\n    \"jp.hadashikick.vcontainer\": \"https://github.com/hadashiA/VContainer.git?path=VContainer/Assets/VContainer#1.16.8\",\n    \"com.unity.modules.accessibility\": \"1.0.0\",\n    \"com.unity.modules.adaptiveperformance\": \"1.0.0\",\n    \"com.unity.modules.ai\": \"1.0.0\",\n    \"com.unity.modules.androidjni\": \"1.0.0\",\n    \"com.unity.modules.animation\": \"1.0.0\",\n    \"com.unity.modules.assetbundle\": \"1.0.0\",\n    \"com.unity.modules.audio\": \"1.0.0\",\n    \"com.unity.modules.cloth\": \"1.0.0\",\n    \"com.unity.modules.director\": \"1.0.0\",\n    \"com.unity.modules.imageconversion\": \"1.0.0\",\n    \"com.unity.modules.imgui\": \"1.0.0\",\n    \"com.unity.modules.jsonserialize\": \"1.0.0\",\n    \"com.unity.modules.particlesystem\": \"1.0.0\",\n    \"com.unity.modules.physics\": \"1.0.0\",\n    \"com.unity.modules.physics2d\": \"1.0.0\",\n    \"com.unity.modules.screencapture\": \"1.0.0\",\n    \"com.unity.modules.terrain\": \"1.0.0\",\n    \"com.unity.modules.terrainphysics\": \"1.0.0\",\n    \"com.unity.modules.tilemap\": \"1.0.0\",\n    \"com.unity.modules.ui\": \"1.0.0\",\n    \"com.unity.modules.uielements\": \"1.0.0\",\n    \"com.unity.modules.umbra\": \"1.0.0\",\n    \"com.unity.modules.unityanalytics\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequest\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequestassetbundle\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequestaudio\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequesttexture\": \"1.0.0\",\n    \"com.unity.modules.unitywebrequestwww\": \"1.0.0\",\n    \"com.unity.modules.vectorgraphics\": \"1.0.0\",\n    \"com.unity.modules.vehicles\": \"1.0.0\",\n    \"com.unity.modules.video\": \"1.0.0\",\n    \"com.unity.modules.vr\": \"1.0.0\",\n    \"com.unity.modules.wind\": \"1.0.0\",\n    \"com.unity.modules.xr\": \"1.0.0\",\n    \"com.evidencefirst.unity-bridge\": \"file:REDACTED_HOME/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge\"\n  }\n}\n",
       "hasMore": false,
       "nextStartLine": null,
       "truncated": false,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2127,7 +2127,7 @@
       "hasMore": true,
       "nextStartLine": 17,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2156,7 +2156,7 @@
       "hasMore": true,
       "nextStartLine": 33,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2185,7 +2185,7 @@
       "hasMore": true,
       "nextStartLine": 49,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2214,7 +2214,7 @@
       "hasMore": true,
       "nextStartLine": 65,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2243,7 +2243,7 @@
       "hasMore": true,
       "nextStartLine": 81,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2272,7 +2272,7 @@
       "hasMore": true,
       "nextStartLine": 97,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2301,7 +2301,7 @@
       "hasMore": true,
       "nextStartLine": 113,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2330,7 +2330,7 @@
       "hasMore": true,
       "nextStartLine": 129,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2359,7 +2359,7 @@
       "hasMore": true,
       "nextStartLine": 145,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2388,7 +2388,7 @@
       "hasMore": true,
       "nextStartLine": 161,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2417,7 +2417,7 @@
       "hasMore": true,
       "nextStartLine": 177,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2446,7 +2446,7 @@
       "hasMore": true,
       "nextStartLine": 193,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2475,7 +2475,7 @@
       "hasMore": true,
       "nextStartLine": 209,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2504,7 +2504,7 @@
       "hasMore": true,
       "nextStartLine": 225,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2533,7 +2533,7 @@
       "hasMore": true,
       "nextStartLine": 241,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2562,7 +2562,7 @@
       "hasMore": true,
       "nextStartLine": 257,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2591,7 +2591,7 @@
       "hasMore": true,
       "nextStartLine": 273,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2620,7 +2620,7 @@
       "hasMore": true,
       "nextStartLine": 289,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2649,7 +2649,7 @@
       "hasMore": true,
       "nextStartLine": 305,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2678,7 +2678,7 @@
       "hasMore": true,
       "nextStartLine": 321,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2707,7 +2707,7 @@
       "hasMore": true,
       "nextStartLine": 337,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2736,7 +2736,7 @@
       "hasMore": true,
       "nextStartLine": 353,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2765,7 +2765,7 @@
       "hasMore": true,
       "nextStartLine": 369,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2794,7 +2794,7 @@
       "hasMore": true,
       "nextStartLine": 385,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2823,7 +2823,7 @@
       "hasMore": true,
       "nextStartLine": 401,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2852,7 +2852,7 @@
       "hasMore": true,
       "nextStartLine": 417,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2881,7 +2881,7 @@
       "hasMore": true,
       "nextStartLine": 433,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2910,7 +2910,7 @@
       "hasMore": true,
       "nextStartLine": 449,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2939,7 +2939,7 @@
       "hasMore": true,
       "nextStartLine": 465,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2968,7 +2968,7 @@
       "hasMore": true,
       "nextStartLine": 481,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -2997,7 +2997,7 @@
       "hasMore": true,
       "nextStartLine": 497,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3026,7 +3026,7 @@
       "hasMore": true,
       "nextStartLine": 513,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3055,7 +3055,7 @@
       "hasMore": true,
       "nextStartLine": 529,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3084,7 +3084,7 @@
       "hasMore": true,
       "nextStartLine": 545,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3113,7 +3113,7 @@
       "hasMore": true,
       "nextStartLine": 561,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3142,7 +3142,7 @@
       "hasMore": true,
       "nextStartLine": 577,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3171,7 +3171,7 @@
       "hasMore": true,
       "nextStartLine": 593,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3200,7 +3200,7 @@
       "hasMore": true,
       "nextStartLine": 609,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3229,7 +3229,7 @@
       "hasMore": true,
       "nextStartLine": 625,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3258,7 +3258,7 @@
       "hasMore": true,
       "nextStartLine": 641,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3287,7 +3287,7 @@
       "hasMore": true,
       "nextStartLine": 657,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3316,7 +3316,7 @@
       "hasMore": true,
       "nextStartLine": 673,
       "truncated": true,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3345,7 +3345,7 @@
       "hasMore": false,
       "nextStartLine": null,
       "truncated": false,
-      "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+      "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
       "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
       "schemaVersion": 1,
       "kind": "workspace_file_observation",
@@ -3521,7 +3521,7 @@
       "sourceIdentity": {
         "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
         "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
-        "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+        "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
         "path": "Packages/packages-lock.json"
       },
       "sourceIdentityDigest": "89e4e0dbe122874f47c896d41db2d4023edc247877cc23452d563c0a8f802066",
@@ -3557,7 +3557,7 @@
       "reachedEnd": false,
       "fullRawProvided": false,
       "coverageState": "partial",
-      "content": "[{\"type\":\"text\",\"text\":\"{\\\"status\\\":\\\"observed\\\",\\\"path\\\":\\\"Packages/packages-lock.json\\\",\\\"receipt\\\":\\\"[redacted capability or transport token]\\\",\\\"receiptScope\\\":\\\"entire_file_bytes\\\",\\\"hash\\\":\\\"11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea\\\",\\\"observedAt\\\":\\\"2026-09-25T07:48:24.219Z\\\",\\\"startLine\\\":1,\\\"endLine\\\":16,\\\"returnedLineCount\\\":16,\\\"totalLines\\\":680,\\\"text\\\":\\\"{\\\\n  \\\\\\\"dependencies\\\\\\\": {\\\\n    \\\\\\\"com.cysharp.unitask\\\\\\\": {\\\\n      \\\\\\\"version\\\\\\\": \\\\\\\"https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask\\\\\\\",\\\\n      \\\\\\\"depth\\\\\\\": 0,\\\\n      \\\\\\\"source\\\\\\\": \\\\\\\"git\\\\\\\",\\\\n      \\\\\\\"dependencies\\\\\\\": {},\\\\n      \\\\\\\"hash\\\\\\\": \\\\\\\"a9e27c03d411d2fca01cc7410c24c97cd77cb539\\\\\\\"\\\\n    },\\\\n    \\\\\\\"com.unity.2d.animation\\\\\\\": {\\\\n      \\\\\\\"version\\\\\\\": \\\\\\\"13.0.4\\\\\\\",\\\\n      \\\\\\\"depth\\\\\\\": 1,\\\\n      \\\\\\\"source\\\\\\\": \\\\\\\"registry\\\\\\\",\\\\n      \\\\\\\"dependencies\\\\\\\": {\\\\n        \\\\\\\"com.unity.2d.common\\\\\\\": \\\\\\\"12.0.2\\\\\\\",\\\\n        \\\\\\\"com.unity.2d.sprite\\\\\\\": \\\\\\\"1.0.0\\\\\\\",\\\",\\\"hasMore\\\":true,\\\"nextStartLine\\\":17,\\\"truncated\\\":true,\\\"canonicalProjectRoot\\\":\\\"C:\\\\\\\\Users\\\\\\\\sster\\\\\\\\Documents\\\\\\\\Git\\\\\\\\Human-Bartender\\\\\\\\HumanBartender\\\",\\\"projectIdentity\\\":\\\"0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b\\\",\\\"schemaVersion\\\":1,\\\"kind\\\":\\\"workspace_file_observation\\\",\\\"workspaceIdentity\\\":\\\"0bf021500cda77824f943534ab64c26290"
+      "content": "[{\"type\":\"text\",\"text\":\"{\\\"status\\\":\\\"observed\\\",\\\"path\\\":\\\"Packages/packages-lock.json\\\",\\\"receipt\\\":\\\"[redacted capability or transport token]\\\",\\\"receiptScope\\\":\\\"entire_file_bytes\\\",\\\"hash\\\":\\\"11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea\\\",\\\"observedAt\\\":\\\"2026-09-25T07:48:24.219Z\\\",\\\"startLine\\\":1,\\\"endLine\\\":16,\\\"returnedLineCount\\\":16,\\\"totalLines\\\":680,\\\"text\\\":\\\"{\\\\n  \\\\\\\"dependencies\\\\\\\": {\\\\n    \\\\\\\"com.cysharp.unitask\\\\\\\": {\\\\n      \\\\\\\"version\\\\\\\": \\\\\\\"https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask\\\\\\\",\\\\n      \\\\\\\"depth\\\\\\\": 0,\\\\n      \\\\\\\"source\\\\\\\": \\\\\\\"git\\\\\\\",\\\\n      \\\\\\\"dependencies\\\\\\\": {},\\\\n      \\\\\\\"hash\\\\\\\": \\\\\\\"a9e27c03d411d2fca01cc7410c24c97cd77cb539\\\\\\\"\\\\n    },\\\\n    \\\\\\\"com.unity.2d.animation\\\\\\\": {\\\\n      \\\\\\\"version\\\\\\\": \\\\\\\"13.0.4\\\\\\\",\\\\n      \\\\\\\"depth\\\\\\\": 1,\\\\n      \\\\\\\"source\\\\\\\": \\\\\\\"registry\\\\\\\",\\\\n      \\\\\\\"dependencies\\\\\\\": {\\\\n        \\\\\\\"com.unity.2d.common\\\\\\\": \\\\\\\"12.0.2\\\\\\\",\\\\n        \\\\\\\"com.unity.2d.sprite\\\\\\\": \\\\\\\"1.0.0\\\\\\\",\\\",\\\"hasMore\\\":true,\\\"nextStartLine\\\":17,\\\"truncated\\\":true,\\\"canonicalProjectRoot\\\":\\\"REDACTED_HOME\\\\\\\\Documents\\\\\\\\Git\\\\\\\\Human-Bartender\\\\\\\\HumanBartender\\\",\\\"projectIdentity\\\":\\\"0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b\\\",\\\"schemaVersion\\\":1,\\\"kind\\\":\\\"workspace_file_observation\\\",\\\"workspaceIdentity\\\":\\\"0bf021500cda77824f943534ab64c26290"
     },
     {
       "callId": "Umuuyu4j3tlPgRjOziU6P054AmPKuU2N",
@@ -3571,7 +3571,7 @@
       "sourceIdentity": {
         "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
         "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
-        "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+        "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
         "path": "Packages/packages-lock.json"
       },
       "sourceIdentityDigest": "89e4e0dbe122874f47c896d41db2d4023edc247877cc23452d563c0a8f802066",
@@ -3621,7 +3621,7 @@
       "sourceIdentity": {
         "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
         "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
-        "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+        "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
         "path": "Packages/packages-lock.json"
       },
       "sourceIdentityDigest": "89e4e0dbe122874f47c896d41db2d4023edc247877cc23452d563c0a8f802066",
@@ -3671,7 +3671,7 @@
       "sourceIdentity": {
         "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
         "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
-        "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+        "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
         "path": "Packages/packages-lock.json"
       },
       "sourceIdentityDigest": "89e4e0dbe122874f47c896d41db2d4023edc247877cc23452d563c0a8f802066",
@@ -3721,7 +3721,7 @@
       "sourceIdentity": {
         "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
         "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
-        "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+        "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
         "path": "Packages/packages-lock.json"
       },
       "sourceIdentityDigest": "89e4e0dbe122874f47c896d41db2d4023edc247877cc23452d563c0a8f802066",
@@ -3757,7 +3757,7 @@
       "reachedEnd": false,
       "fullRawProvided": false,
       "coverageState": "partial",
-      "content": "\\\\\": \\\\\\\"1.0.0\\\\\\\",\\\\n        \\\\\\\"com.unity.modules.uielements\\\\\\\": \\\\\\\"1.0.0\\\\\\\",\\\\n        \\\\\\\"com.unity.modules.imageconversion\\\\\\\": \\\\\\\"1.0.0\\\\\\\"\\\\n      },\\\",\\\"hasMore\\\":true,\\\"nextStartLine\\\":49,\\\"truncated\\\":true,\\\"canonicalProjectRoot\\\":\\\"C:\\\\\\\\Users\\\\\\\\sster\\\\\\\\Documents\\\\\\\\Git\\\\\\\\Human-Bartender\\\\\\\\HumanBartender\\\",\\\"projectIdentity\\\":\\\"0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b\\\",\\\"schemaVersion\\\":1,\\\"kind\\\":\\\"workspace_file_observation\\\",\\\"workspa"
+      "content": "\\\\\": \\\\\\\"1.0.0\\\\\\\",\\\\n        \\\\\\\"com.unity.modules.uielements\\\\\\\": \\\\\\\"1.0.0\\\\\\\",\\\\n        \\\\\\\"com.unity.modules.imageconversion\\\\\\\": \\\\\\\"1.0.0\\\\\\\"\\\\n      },\\\",\\\"hasMore\\\":true,\\\"nextStartLine\\\":49,\\\"truncated\\\":true,\\\"canonicalProjectRoot\\\":\\\"REDACTED_HOME\\\\\\\\Documents\\\\\\\\Git\\\\\\\\Human-Bartender\\\\\\\\HumanBartender\\\",\\\"projectIdentity\\\":\\\"0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b\\\",\\\"schemaVersion\\\":1,\\\"kind\\\":\\\"workspace_file_observation\\\",\\\"workspa"
     },
     {
       "callId": "ON28DK87VLCSB9snkYPiGreQFfcpps7G",
@@ -3889,7 +3889,7 @@
       "sourceIdentity": {
         "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
         "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
-        "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+        "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
         "path": "Packages/packages-lock.json"
       },
       "sourceIdentityDigest": "89e4e0dbe122874f47c896d41db2d4023edc247877cc23452d563c0a8f802066",
@@ -3939,7 +3939,7 @@
       "sourceIdentity": {
         "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
         "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
-        "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+        "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
         "path": "Packages/packages-lock.json"
       },
       "sourceIdentityDigest": "89e4e0dbe122874f47c896d41db2d4023edc247877cc23452d563c0a8f802066",
@@ -3975,7 +3975,7 @@
       "reachedEnd": true,
       "fullRawProvided": false,
       "coverageState": "partial",
-      "content": "\\\": \\\\\\\"https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask\\\\\\\",\\\\n      \\\\\\\"depth\\\\\\\": 0,\\\\n      \\\\\\\"source\\\\\\\": \\\\\\\"git\\\\\\\",\\\\n      \\\\\\\"dependencies\\\\\\\": {},\\\\n      \\\\\\\"hash\\\\\\\": \\\\\\\"a9e27c03d411d2fca01cc7410c24c97cd77cb539\\\\\\\"\\\\n    },\\\\n    \\\\\\\"com.unity.2d.animation\\\\\\\": {\\\\n      \\\\\\\"version\\\\\\\": \\\\\\\"13.0.4\\\\\\\",\\\\n      \\\\\\\"depth\\\\\\\": 1,\\\\n      \\\\\\\"source\\\\\\\": \\\\\\\"registry\\\\\\\",\\\\n      \\\\\\\"dependencies\\\\\\\": {\\\\n        \\\\\\\"com.unity.2d.common\\\\\\\": \\\\\\\"12.0.2\\\\\\\",\\\\n        \\\\\\\"com.unity.2d.sprite\\\\\\\": \\\\\\\"1.0.0\\\\\\\",\\\",\\\"hasMore\\\":true,\\\"nextStartLine\\\":17,\\\"truncated\\\":true,\\\"canonicalProjectRoot\\\":\\\"C:\\\\\\\\Users\\\\\\\\sster\\\\\\\\Documents\\\\\\\\Git\\\\\\\\Human-Bartender\\\\\\\\HumanBartender\\\",\\\"projectIdentity\\\":\\\"0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b\\\",\\\"schemaVersion\\\":1,\\\"kind\\\":\\\"workspace_file_observation\\\",\\\"workspaceIdentity\\\":\\\"0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b\\\",\\\"sha256\\\":\\\"11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea\\\",\\\"range\\\":{\\\"unit\\\":\\\"line\\\",\\\"start\\\":1,\\\"end\\\":16,\\\"total\\\":680},\\\"coverage\\\":\\\"partial\\\"}\"}]"
+      "content": "\\\": \\\\\\\"https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask\\\\\\\",\\\\n      \\\\\\\"depth\\\\\\\": 0,\\\\n      \\\\\\\"source\\\\\\\": \\\\\\\"git\\\\\\\",\\\\n      \\\\\\\"dependencies\\\\\\\": {},\\\\n      \\\\\\\"hash\\\\\\\": \\\\\\\"a9e27c03d411d2fca01cc7410c24c97cd77cb539\\\\\\\"\\\\n    },\\\\n    \\\\\\\"com.unity.2d.animation\\\\\\\": {\\\\n      \\\\\\\"version\\\\\\\": \\\\\\\"13.0.4\\\\\\\",\\\\n      \\\\\\\"depth\\\\\\\": 1,\\\\n      \\\\\\\"source\\\\\\\": \\\\\\\"registry\\\\\\\",\\\\n      \\\\\\\"dependencies\\\\\\\": {\\\\n        \\\\\\\"com.unity.2d.common\\\\\\\": \\\\\\\"12.0.2\\\\\\\",\\\\n        \\\\\\\"com.unity.2d.sprite\\\\\\\": \\\\\\\"1.0.0\\\\\\\",\\\",\\\"hasMore\\\":true,\\\"nextStartLine\\\":17,\\\"truncated\\\":true,\\\"canonicalProjectRoot\\\":\\\"REDACTED_HOME\\\\\\\\Documents\\\\\\\\Git\\\\\\\\Human-Bartender\\\\\\\\HumanBartender\\\",\\\"projectIdentity\\\":\\\"0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b\\\",\\\"schemaVersion\\\":1,\\\"kind\\\":\\\"workspace_file_observation\\\",\\\"workspaceIdentity\\\":\\\"0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b\\\",\\\"sha256\\\":\\\"11ff3f5705d576c88f4826cbae26ffbf62262e11a4d7f354399bc4535f3514ea\\\",\\\"range\\\":{\\\"unit\\\":\\\"line\\\",\\\"start\\\":1,\\\"end\\\":16,\\\"total\\\":680},\\\"coverage\\\":\\\"partial\\\"}\"}]"
     },
     {
       "callId": "R5sHViQeMzuhc1h7ttATjGuiupLlwEgF",
@@ -4373,7 +4373,7 @@
       "sourceIdentity": {
         "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
         "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
-        "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+        "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
         "path": "Packages/manifest.json"
       },
       "sourceIdentityDigest": "b8ce6bf9c393005d447ed7ac0c3e6ed442c52e987a30097c4802dc5efbba9d40",
@@ -4423,7 +4423,7 @@
       "sourceIdentity": {
         "workspaceIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
         "projectIdentity": "0bf021500cda77824f943534ab64c262905f7752486a6ff41fbb971132ea9e4b",
-        "canonicalProjectRoot": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
+        "canonicalProjectRoot": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
         "path": "Packages/manifest.json"
       },
       "sourceIdentityDigest": "b8ce6bf9c393005d447ed7ac0c3e6ed442c52e987a30097c4802dc5efbba9d40",
@@ -4459,7 +4459,7 @@
       "reachedEnd": false,
       "fullRawProvided": false,
       "coverageState": "partial",
-      "content": "s.imgui\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.jsonserialize\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.particlesystem\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.physics\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.physics2d\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.screencapture\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.terrain\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.terrainphysics\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.tilemap\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.ui\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.uielements\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.umbra\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unityanalytics\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequest\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequestassetbundle\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequestaudio\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequesttexture\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequestwww\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.vectorgraphics\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.vehicles\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.video\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.vr\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.wind\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.xr\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.evidencefirst.unity-bridge\\\\\\\":\\\\\\\"file:C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge\\\\\\\"}}\\\",\\\"hasMore\\\":false,\\\"nextStartLine\\\":null,\\\"truncated\\\":false,\\\"canonicalProjectRoot\\\":\\\"C:\\\\\\\\Users\\\\\\\\sster\\\\\\\\Documents\\\\\\\\Git\\\\\\\\Human-Bar"
+      "content": "s.imgui\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.jsonserialize\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.particlesystem\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.physics\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.physics2d\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.screencapture\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.terrain\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.terrainphysics\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.tilemap\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.ui\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.uielements\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.umbra\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unityanalytics\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequest\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequestassetbundle\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequestaudio\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequesttexture\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.unitywebrequestwww\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.vectorgraphics\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.vehicles\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.video\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.vr\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.wind\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.unity.modules.xr\\\\\\\":\\\\\\\"1.0.0\\\\\\\",\\\\\\\"com.evidencefirst.unity-bridge\\\\\\\":\\\\\\\"file:REDACTED_HOME/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge\\\\\\\"}}\\\",\\\"hasMore\\\":false,\\\"nextStartLine\\\":null,\\\"truncated\\\":false,\\\"canonicalProjectRoot\\\":\\\"REDACTED_HOME\\\\\\\\Documents\\\\\\\\Git\\\\\\\\Human-Bar"
     },
     {
       "callId": "tTwCSltR84JRRmLHloaa8fGFox2SSMLK",

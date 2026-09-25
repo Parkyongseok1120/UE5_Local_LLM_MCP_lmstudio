@@ -118,7 +118,7 @@ warning: in the working copy of 'added.txt', LF will be replaced by CRLF the nex
 test at test\prediction-loop.test.cjs:103:1
 ✖ hybrid handler consumes toolCalls inputs across repeated compaction and delivers EOS (5126.4281ms)
   AssertionError [ERR_ASSERTION]: [{"event":"context_low_water","executionId":"761ad3be-d32e-40db-9c54-e7b05d8543cb","modelInputId":"761ad3be-d32e-40db-9c54-e7b05d8543cb:prediction-9","roundIndex":8,"contextLength":38912,"configuredTargetTokens":18000,"configuredTriggerTokens":22000,"requiredGenerationReserve":8192,"safetyMarginTokens":2048,"mandatoryFloorTokens":13837,"configuredLowWaterTokens":12672,"effectiveLowWaterTokens":13837,"effectiveHighWaterTokens":16896,"hardInputCeiling":28672,"reservedToolResultTokens":3584,"requiredPostToolOverhead":8192,"projectedNextInput":28776,"preDispatchCompaction":true,"minimumReadResultTokens":2048,"nextActionFit":true,"targetUnreachable":true,"blockingComponent":"mandatory_objective_evidence_and_template","tokenMetric":"exact_templated_model_input","beforeExactInputTokens":17000,"candidateMeasurements":[{"candidate":"complete_exchange_cap_16","finalExactInputTokens":17000,"accepted":false},{"candidate":"complete_exchange_cap_8","finalExactInputTokens":16149,"accepted":false},{"candidate":"complete_exchange_cap_4","finalExactInputTokens":15173,"accepted":false},{"candidate":"complete_exchange_cap_2","finalExactInputTokens":14685,"accepted":false},{"candidate":"checkpoint_budget_1","finalExactInputTokens":14685,"accepted":false},{"candidate":"checkpoint_budget_0.5","finalExactInputTokens":14159,"accepted":false},{"candidate":"checkpoint_budget_0.25","finalExactInputTokens":13896,"accepted":false},{"candidate":"checkpoint_budget_0.125","finalExactInputTokens":13896,"accepted":false},{"candidate":"mandatory_floor","finalExactInputTokens":13837,"accepted":true}],"selectedCandidate":"mandatory_floor","postHistoryTokens":17519,"postProjectionTokens":16717,"postCompactionTokens":13556,"postMetadataTokens":13837,"postToolSchemaTokens":13837,"finalExactInputTokens":13837,"stageFingerprints":{"history":"5f942df61dd9d6e757579d8c1435d88cdb085afd8b476f24605cd60f23222840","projection":"3cd4d6bd0d7217b8fbb77eb0730d9df23360d7200e42e76409e34606af1e0e25","compaction":"6213b1c9c80d8b07068d0952617a2cac7b701446e91d61ca8c7a9c202051e7ce","metadata":"6c14ba40e45d76691b6bc86a6250116f8030c2616a3056b854ebdee6ba82c8d3","final":"6c14ba40e45d76691b6bc86a6250116f8030c2616a3056b854ebdee6ba82c8d3"},"measurementCost":{"measurementCalls":7,"measurementMs":0,"templateCalls":7,"tokenCountCalls":9,"contextLengthCalls":7,"cacheHits":8,"scope":"round_input_assembler","cacheScope":"same_round_model_handle"},"targetDelta":0,"compactionSucceeded":true,"compactionRequested":true,"lowTargetMet":true,"mandatoryFloorException":true,"hardFit":true,"disposition":"mandatory_floor_exception","canRun":true,"metadataTokens":0,"toolSchemaTokens":12283,"reclaimRatio":0.18605882352941178}]
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:128:10)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:128:10)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
     generatedMessage: false,
@@ -132,9 +132,9 @@ test at test\prediction-loop.test.cjs:103:1
 test at test\prediction-loop.test.cjs:3082:1
 ✖ aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only (3800.0696ms)
   Error: CONTEXT_BUDGET_EXCEEDED: final model input exceeds the context budget by 3088 tokens
-      at prepareRoundInput (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-input.js:175:19)
-      at async C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:284:34
-      at async TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3123:3)
+      at prepareRoundInput (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-input.js:175:19)
+      at async REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:284:34
+      at async TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3123:3)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7)
 
@@ -146,7 +146,7 @@ test at test\prediction-loop.test.cjs:3490:1
   + undefined
   - 'context_budget'
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3506:10)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3506:10)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
     generatedMessage: true,

@@ -1,221 +1,221 @@
 [
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\attachment-boundary.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\attachment-boundary.ts",
     "sha256": "8689CFE590CFA927D91171ACFC91132F5F73DD4C24A5E943BFED1E5E54C5F7C0",
     "bytes": 5740
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\attachment-tools.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\attachment-tools.ts",
     "sha256": "CF4B6BAF50756809EC7E9C081A2D955B5F4CEF2F3A81076F0EFA41288F840EDA",
     "bytes": 5770
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\compaction-tool-memory.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\compaction-tool-memory.js",
     "sha256": "A0432258A7CEEC70ECD3C79F42279ADB43665B84132E4A27FF14CA0AF7E73515",
     "bytes": 37653
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\context-budget.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\context-budget.ts",
     "sha256": "FBA05EA331FA59DAD4724902DE52B66EF4AD1A314A4F3BB00EC5087D8934E608",
     "bytes": 4088
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-assistant-evidence.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-assistant-evidence.js",
     "sha256": "D1C43DA949D188588CDA97BD9AB5166C9BED712EC0D408EA9D312512142E91C7",
     "bytes": 5973
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-file-observations.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-file-observations.js",
     "sha256": "CD553B02808019D5918545D3755CFB41A60163C9A3F3B8707A336C834FCC4F1D",
     "bytes": 9779
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-memory.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-memory.js",
     "sha256": "32C47CBC8BAFE1A63C0B952C72F06D0C3147687051152970DF2FC2981CA4D635",
     "bytes": 10734
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-model-notes.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-model-notes.js",
     "sha256": "B14235E846A0063B958BCF68A7F5CFC746B494AE137D8644D1C671A6EF283A77",
     "bytes": 18517
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-objectives.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-objectives.js",
     "sha256": "32C27B89475779A48D6B4155801E7E3DD4AFD1BE9EAA9B11BECF84FD06104CEE",
     "bytes": 5828
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-text.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\continuity-text.js",
     "sha256": "2406AF3E5A36AA1CA23AE1D4FCA7EF2300B563C7E182FB38FFF61725D09C1AFE",
     "bytes": 3940
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\direct-compaction-core.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\direct-compaction-core.js",
     "sha256": "9FBDFCB9F55A992DF6F236B1AB5FAF18CD63AB238ECC2241A7DE71F49EC9A49B",
     "bytes": 29840
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\direct-config.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\direct-config.ts",
     "sha256": "6275C2A8B3BBE6CC6C0E8DD75DF47B0B758159360F87D93407DBD1ECFEDD91C2",
     "bytes": 9015
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\durable-memory-sanitizer.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\durable-memory-sanitizer.js",
     "sha256": "A895F505B3A4B86818AFA8B7CA7FCD7EA1D26958303312626F8CCBE5FCC3AB13",
     "bytes": 15649
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\evidence-archive.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\evidence-archive.js",
     "sha256": "AB06D791C0BF04533F2E2516500EFC78C1E54DCA479C38E0BC728A6C1BD63553",
     "bytes": 12929
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\index.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\index.ts",
     "sha256": "A437C97AFA7C7C9CA5190E83B10F4A5950B06E045A1E2DA4A3D91D88C9F985CC",
     "bytes": 781
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\input-availability.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\input-availability.js",
     "sha256": "FD999A23490BD13F398CD2020121EC6A52463F8DDF13E2CABA9CE6BBFE8F804E",
     "bytes": 20334
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\prediction-loop.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\prediction-loop.ts",
     "sha256": "462CB54E9751509F3B6678D76453EF8E00C65CE44205D5944186CE00F791573C",
     "bytes": 191003
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\prediction-stream.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\prediction-stream.ts",
     "sha256": "7DC8659B296A9CC2B18B69BA5538C472C80832447157ABB17C973A24D969568B",
     "bytes": 6144
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\round-loop.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\round-loop.ts",
     "sha256": "196B8894F17850B094E08CE7D12EEE6B2F9541819D167559D2D3BE085FDFC03B",
     "bytes": 10156
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\tool-scope.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\tool-scope.ts",
     "sha256": "9F9084289DD291FEF9ADE71147A4F5DFC85C5C7C78B7C072106BBC67EC8BE03A",
     "bytes": 10454
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\working-context-boundary.ts",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\working-context-boundary.ts",
     "sha256": "CE89A4BCCCCC861E3B4A6C7EBAACF9236E99F1F0E56258F28DD8850F82B5674F",
     "bytes": 5922
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\working-context.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\src\\working-context.js",
     "sha256": "8906E619CE9F28C1AA0D898ABB09DBB294C32D2870AF57313DDFB739DAE8AD56",
     "bytes": 24802
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\attachment-boundary.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\attachment-boundary.js",
     "sha256": "E667F00A03843E5222D925CAFB15ED7883838761960BDDB29E5BDD2A01FF1568",
     "bytes": 6789
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\attachment-tools.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\attachment-tools.js",
     "sha256": "3CD34ACDE4AE88FD116145322128F298CF05C5C157DA3D313B63BC928A85355F",
     "bytes": 6297
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\compaction-tool-memory.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\compaction-tool-memory.js",
     "sha256": "883122CD7835536704EBE128C1520C8E6D90C91096F9388FC9954207F6344CA7",
     "bytes": 40204
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\context-budget.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\context-budget.js",
     "sha256": "AC8849B00EEA01BC359D6D78BDAA185BED7524D908249B239293E22E77468C2F",
     "bytes": 4009
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-assistant-evidence.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-assistant-evidence.js",
     "sha256": "6DF5168BACFE8F961A255645C75D7E10BCACBEFF827359D72A208E449B70C3A9",
     "bytes": 6146
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-file-observations.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-file-observations.js",
     "sha256": "37A30B9565F10F70E22FFE3F494C022EE40A587CCE51E927DCC1C3C06C4AC3A3",
     "bytes": 10242
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-memory.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-memory.js",
     "sha256": "D1C955CB4688876C04D2A1E39528B1C0D4F9200DC4952153992940A7E2D383C9",
     "bytes": 11026
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-model-notes.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-model-notes.js",
     "sha256": "9BBEF151BDABCE0C9AAC83ABFEC5CF0C65DC1F7B7A073BF26F37E98281894757",
     "bytes": 19778
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-objectives.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-objectives.js",
     "sha256": "F30C1C3C75CEE81BFEA72D483175221020C36FAC857C4FCF8FDD75A7A0C7489C",
     "bytes": 5968
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-text.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\continuity-text.js",
     "sha256": "2B2D9F21E49C5FFEAC7DAE6C7AE75003E92A9EBB50B1E7114DD061EEA9DFF383",
     "bytes": 4079
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\direct-compaction-core.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\direct-compaction-core.js",
     "sha256": "A3AF2145B58B325D258D819DCD0405EA6ED3ED369192CFACABDE09B8C4BBF3D9",
     "bytes": 31422
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\direct-config.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\direct-config.js",
     "sha256": "B356036AB55F60ACE557449ACAF06A7A09D4777835C5B05E8ADDF38B1D3F2F10",
     "bytes": 8990
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\durable-memory-sanitizer.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\durable-memory-sanitizer.js",
     "sha256": "60E67F7F68550A8F8673377ECB484E43F96CFB40439B33B4FA1DF6536AAE7490",
     "bytes": 16051
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\evidence-archive.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\evidence-archive.js",
     "sha256": "0B5D164335614E5285CCCA6E92B90DAD9DFC6F073C8719A219B5347244EAF503",
     "bytes": 14209
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\index.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\index.js",
     "sha256": "0309D2864379AC0B77A9FF1EA739675E7904A08E9A3A88EDD76156FA8E3BA495",
     "bytes": 855
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\input-availability.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\input-availability.js",
     "sha256": "2FA677B7EBA349DCF84B3FB11CBC4BB6A3E172C2D0BD9E61314350AB0E45D4CA",
     "bytes": 21925
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\prediction-loop.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\prediction-loop.js",
     "sha256": "0395E960B91E6E1C7EDF257C437297BD16F821C5B3A6DE25D89EE4689A2E130D",
     "bytes": 200725
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\prediction-stream.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\prediction-stream.js",
     "sha256": "C1537BBBE9A9560D526657AA0E2088E2EDCA48337AB6FDAC175828DFBB82DAD8",
     "bytes": 5963
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\round-loop.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\round-loop.js",
     "sha256": "2AB2BC588C448A70BD99510F4717E7AAC52F218E354C0783C5080A2C8D63B75A",
     "bytes": 8326
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\tool-scope.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\tool-scope.js",
     "sha256": "1E651975CF0F008FFE96AB425F03AC9FD7B57F5AA81B4C3B610E8F16AE3AD0C7",
     "bytes": 10486
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\working-context-boundary.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\working-context-boundary.js",
     "sha256": "F4BF5E7A1BFD5CAAFFFB73CB1C95ADA9D36DFFD6B247A04819A329F288877F1D",
     "bytes": 7076
   },
   {
-    "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\working-context.js",
+    "path": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio\\lmstudio-context-compactor-plugin\\dist\\working-context.js",
     "sha256": "E59CE79595CEE3D14BE2CAC2682044BE0B9008E53ACFD276CDBF73E7B24C1E0C",
     "bytes": 27928
   }

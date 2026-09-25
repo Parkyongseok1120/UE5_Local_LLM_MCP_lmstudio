@@ -343,8 +343,8 @@ test at artifacts\astra-full-refactor\diagnose-tests.cjs:9:11
   -   }
   - ]
   
-      at C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:870:12
-      at async rest.<computed> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\artifacts\astra-full-refactor\diagnose-tests.cjs:8:107)
+      at REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:870:12
+      at async rest.<computed> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\artifacts\astra-full-refactor\diagnose-tests.cjs:8:107)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
     generatedMessage: true,
@@ -358,13 +358,13 @@ test at artifacts\astra-full-refactor\diagnose-tests.cjs:9:11
 test at artifacts\astra-full-refactor\diagnose-tests.cjs:9:11
 ✖ Unity-marked project uses public schemas and actual temporary Git for mixed raw Git repair (1339.2619ms)
   AssertionError [ERR_ASSERTION]: Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more.
-      at Object.deny (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2466:35)
-      at Object.guardToolCall (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:1068:44)
-      at Object.act (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2464:25)
-      at async runOneToolRound (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-loop.js:48:9)
-      at async C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:957:34
-      at async C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2516:3
-      at async rest.<computed> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\artifacts\astra-full-refactor\diagnose-tests.cjs:8:107)
+      at Object.deny (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2466:35)
+      at Object.guardToolCall (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:1068:44)
+      at Object.act (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2464:25)
+      at async runOneToolRound (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-loop.js:48:9)
+      at async REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:957:34
+      at async REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2516:3
+      at async rest.<computed> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\artifacts\astra-full-refactor\diagnose-tests.cjs:8:107)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
     generatedMessage: false,

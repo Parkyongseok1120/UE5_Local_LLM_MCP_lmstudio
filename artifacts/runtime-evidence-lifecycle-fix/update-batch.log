@@ -3,9 +3,9 @@ Checking the existing Unity MCP binding and runtime...
   "ok": true,
   "dryRun": false,
   "scope": "in_place_unity_mcp",
-  "config": "C:\\Users\\sster\\.lmstudio\\mcp.json",
-  "project": "C:\\Users\\sster\\Documents\\Git\\Human-Bartender\\HumanBartender",
-  "sourceRoot": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio",
+  "config": "REDACTED_HOME\\.lmstudio\\mcp.json",
+  "project": "REDACTED_HOME\\Documents\\Git\\Human-Bartender\\HumanBartender",
+  "sourceRoot": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio",
   "configurationChanged": false,
   "projectChanged": false,
   "otherServerCount": 5,
@@ -26,8 +26,8 @@ Checking the existing Unreal Agent and RAG runtimes...
   "dryRun": false,
   "scope": "in_place_unreal_mcp",
   "installed": true,
-  "config": "C:\\Users\\sster\\.lmstudio\\mcp.json",
-  "sourceRoot": "C:\\Users\\sster\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio",
+  "config": "REDACTED_HOME\\.lmstudio\\mcp.json",
+  "sourceRoot": "REDACTED_HOME\\Documents\\Git\\UE5_Local_LLM_MCP_lmstudio",
   "configurationChanged": false,
   "permissionsChanged": false,
   "permissions": {
@@ -50,24 +50,24 @@ Checking the existing Unreal Agent and RAG runtimes...
 Updating the context compactor plugin...
 
 Runtime bootstrap:
-  Toolchain cache: C:\Users\sster\.evidence-first\runtimes
+  Toolchain cache: REDACTED_HOME\.evidence-first\runtimes
   Host arch: windows-x64
-  Python: C:\Users\sster\AppData\Local\Programs\Python\Python312\python.exe (3.12, x64)
+  Python: REDACTED_HOME\AppData\Local\Programs\Python\Python312\python.exe (3.12, x64)
 
 Runtime bootstrap:
-  Toolchain cache: C:\Users\sster\.evidence-first\runtimes
+  Toolchain cache: REDACTED_HOME\.evidence-first\runtimes
   Host arch: windows-x64
-  Python: C:\Users\sster\AppData\Local\Programs\Python\Python312\python.exe (3.12, x64)
-  Node.js: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\node.exe (x64)
-  npm: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd
-run: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd ci --no-audit --no-fund
+  Python: REDACTED_HOME\AppData\Local\Programs\Python\Python312\python.exe (3.12, x64)
+  Node.js: REDACTED_HOME\.evidence-first\runtimes\node-v20.20.2\node.exe (x64)
+  npm: REDACTED_HOME\.evidence-first\runtimes\node-v20.20.2\npm.cmd
+run: REDACTED_HOME\.evidence-first\runtimes\node-v20.20.2\npm.cmd ci --no-audit --no-fund
 
 > unreal-context-compactor@0.4.69 postinstall
 > node scripts/patch-lmstudio-sdk.cjs
 
 
 added 15 packages in 2s
-run: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd test
+run: REDACTED_HOME\.evidence-first\runtimes\node-v20.20.2\npm.cmd test
 
 > unreal-context-compactor@0.4.69 test
 > npm run build && node --test test/audit-fc5373.test.cjs test/refactor-policies.test.cjs test/attachment-tools.test.cjs test/availability-eval.test.cjs test/continuity-model-notes.test.js test/direct-compaction-core.test.js test/durable-memory-sanitizer.test.js test/input-availability.test.js test/prediction-loop.test.cjs test/status.test.cjs test/tool-scope.test.cjs test/validation-repair-memory.test.cjs test/working-context-boundary.test.cjs test/working-context.test.cjs test/workspace-continuity.test.cjs
@@ -1897,10 +1897,10 @@ ok 360 - review claims require observed version and disappear after a new hash
 # skipped 0
 # todo 0
 # duration_ms 81238.1684
-run: C:\Users\sster\.lmstudio\bin\lms.exe dev --install -y
+run: REDACTED_HOME\.lmstudio\bin\lms.exe dev --install -y
 Installing the plugin codex/unreal-context-compactor...
 Successfully installed codex/unreal-context-compactor.
-run: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd run patch:sdk
+run: REDACTED_HOME\.evidence-first\runtimes\node-v20.20.2\npm.cmd run patch:sdk
 
 > unreal-context-compactor@0.4.69 patch:sdk
 > node scripts/patch-lmstudio-sdk.cjs
@@ -1921,29 +1921,29 @@ run: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd run patch:sdk
   "clineSettingsPath": null,
   "activeProject": null,
   "projectSearchRoots": [
-    "C:\\Users\\sster\\Documents"
+    "REDACTED_HOME\\Documents"
   ],
   "engineRoot": null,
   "contextCompactor": {
-    "lms": "C:\\Users\\sster\\.lmstudio\\bin\\lms.exe",
-    "installedManifest": "C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\manifest.json",
+    "lms": "REDACTED_HOME\\.lmstudio\\bin\\lms.exe",
+    "installedManifest": "REDACTED_HOME\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\manifest.json",
     "installed": true,
     "ensure": {
-      "target": "C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\manifest.json",
+      "target": "REDACTED_HOME\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\manifest.json",
       "source": "already-present",
       "copied": false,
       "ready": true,
       "previousStatus": "current"
     },
     "availability": {
-      "settingsPath": "C:\\Users\\sster\\.lmstudio\\settings.json",
+      "settingsPath": "REDACTED_HOME\\.lmstudio\\settings.json",
       "pinned": true,
       "allowDevelopmentPlugins": true,
       "changed": false,
       "activation": {
         "managed": true,
         "pluginId": "codex/unreal-context-compactor",
-        "conversationsRoot": "C:\\Users\\sster\\.lmstudio\\conversations",
+        "conversationsRoot": "REDACTED_HOME\\.lmstudio\\conversations",
         "eligibleConversationCount": 25,
         "alreadyEnabledConversationCount": 25,
         "updatedConversationCount": 0,
@@ -1971,6 +1971,6 @@ run: C:\Users\sster\.evidence-first\runtimes\node-v20.20.2\npm.cmd run patch:sdk
   "rollbackScope": "managed configuration/files only; external npm/lms installs, compiled workers and generated indexes are not rolled back",
   "knownIntegrationsSafe": true,
   "restartRequired": true,
-  "journal": "C:\\Users\\sster\\.evidence-first\\install-journal.json"
+  "journal": "REDACTED_HOME\\.evidence-first\\install-journal.json"
 }
 Update complete. Restart LM Studio to load the new MCP process and plugin.

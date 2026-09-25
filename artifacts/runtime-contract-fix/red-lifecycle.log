@@ -18,7 +18,7 @@ test at lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:15:
   
   false !== true
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:29:10)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:29:10)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
     generatedMessage: true,
@@ -35,7 +35,7 @@ test at lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:41:
   
   false !== true
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:44:74)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:44:74)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1306:25)
       at Test.processPendingSubtests (node:internal/test_runner/test:897:18)
@@ -56,7 +56,7 @@ test at lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:46:
   
   1 !== 0
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:51:10)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\tool-round-lifecycle.test.cjs:51:10)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1306:25)
       at Test.processPendingSubtests (node:internal/test_runner/test:897:18)

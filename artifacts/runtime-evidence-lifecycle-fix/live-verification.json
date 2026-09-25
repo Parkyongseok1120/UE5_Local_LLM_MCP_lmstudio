@@ -636,7 +636,7 @@
   "semanticSummaryAttempts": 1,
   "acceptedSemanticSummaries": 0,
   "oracleForIndependentReviewOnly": {
-    "bridge": "file:C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge",
+    "bridge": "file:REDACTED_HOME/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge",
     "firstThree": [
       {
         "name": "com.cysharp.unitask",
