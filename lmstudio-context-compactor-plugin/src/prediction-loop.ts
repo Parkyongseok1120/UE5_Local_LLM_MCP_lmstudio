@@ -21,7 +21,7 @@ import { FIRST_CONSUMER_RAW_GIT_MAX_CHARS, MIN_FINAL_OUTPUT_TOKENS, RESEARCH_REC
 import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, FRESH_TOOL_PLANNING_RETRY_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
-import { createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin } from "./prediction-ui";
+import { createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
 import { classifyRawToolIntent, containsUnresolvedToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, planReadRecovery, readOnlyRecoveryProfile, RecoveryCoordinator } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
@@ -71,7 +71,9 @@ export function createPredictionLoopHandler(
     let workingDirectory = "";
     try { workingDirectory = ctl.getWorkingDirectory(); } catch { /* No stable chat workspace is available. */ }
     const noteWorkingDirectory = config.observeOnly ? "" : workingDirectory;
-    const toolSession = await ctl.startToolUseSession();
+    // The execution owns this resource from acquisition, including setup
+    // failures before the round loop and failures while sealing the window.
+    using toolSession = await ctl.startToolUseSession();
     const mentionedProject = detectMentionedProject(originalHistory.getMessagesArray());
     const scope = resolveToolScope(
       config.projectEngine,
@@ -135,8 +137,9 @@ export function createPredictionLoopHandler(
         && modelTools.some(hasReadCapability)
         ? [READ_ONLY_BATCH_INSTRUCTION] : []),
     ];
-    const emitter = createMessageEmitter(ctl, modelTools);
-    const visibleHistory = Chat.from(originalHistory);
+    const visibleTranscript = new VisibleHistoryRecorder(ctl, originalHistory);
+    const emitter = createMessageEmitter(visibleTranscript.controller, modelTools);
+    let visibleHistory = visibleTranscript.snapshot();
     const historicalAvailabilityLedger: Array<Record<string, unknown>> = [];
     if (config.inputAvailabilityMode !== "off") {
       const normalizedOriginal = normalizeHistory(originalHistory);
@@ -260,12 +263,9 @@ export function createPredictionLoopHandler(
           ? modelTools.filter(tool => researchRecoveryToolNames.has(tool.name))
           : modelTools;
         const actToolSurfaceFingerprint = telemetryFingerprint(toolDefinitionSurface(roundTools));
+        const finalLimits = deliveryController.limits(config, boundedAudit, execution.finalizationTrigger);
         let roundOutputReserve = finalizing
-          ? execution.finalizationTrigger === "output_recovery"
-            ? Math.min(config.maxOutputReserve, config.outputRecoveryMaxTokens)
-            : execution.finalizationTrigger === "context_budget" && !boundedAudit
-              ? config.maxOutputReserve
-              : Math.min(config.maxOutputReserve, config.auditFinalMaxTokens)
+          ? finalLimits.maxTokens
           : researchRecoveryRound ? researchRecoveryOutputReserve : config.maxOutputReserve;
         const requestedOutputCap = roundOutputReserve;
         let outputCapSource: "configured" | "headroom_clamp" = "configured";
@@ -339,7 +339,7 @@ export function createPredictionLoopHandler(
 model: String((tokenSource as { identifier?: unknown }).identifier || "unknown"), contextLength: finalMeasurement.contextLength,
             tools: roundTools.map(tool => ({ name: tool.name, schema: tool.parametersJsonSchema })), target: config.workingInputTargetTokens
 },
-          (projectionApplied || compacted || restoredWindowApplied) && lowWater.canRun);
+          lowWater.canRun);
         const workingWindowCommitted = committedWindow.committed;
         const windowCommitSkippedReason = committedWindow.reason;
 
@@ -467,7 +467,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         // Clear correlation state after the prior round's captured messages have
         // been emitted, while keeping guard/finalized registration idempotent.
         emitter.beginRound();
-        const stream = new PredictionStreamRenderer(ctl, modelNotes.splitVisibleAnswer, noteEnabled);
+        const stream = new PredictionStreamRenderer(visibleTranscript.controller, modelNotes.splitVisibleAnswer, noteEnabled);
         const generationRepetition = new GenerationRepetitionDetector(config.generationRepeatCount);
         let generationRepetitionReported = false;
         const toolGeneration = createToolGenerationTracker(ctl);
@@ -485,10 +485,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         const displayedMessages = new Set<ChatMessage>();
         const liveMessages = new Map<ChatMessage, { visibleMessage: ChatMessage; textStreamed: boolean }>();
         const phaseTimeoutSignal = finalizing
-          ? execution.finalizationTrigger === "context_budget" && !boundedAudit
-            ? null
-            : AbortSignal.timeout(Math.max(1, (execution.finalizationTrigger === "output_recovery"
-              ? config.outputRecoverySeconds : config.auditFinalSeconds) * 1000))
+          ? finalLimits.timeoutMs === null ? null : AbortSignal.timeout(finalLimits.timeoutMs)
           : boundedAudit
             ? AbortSignal.timeout(Math.max(1, researchDeadlineAt - Date.now()))
             : null;
@@ -668,9 +665,9 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           }
           const durableMessage = transaction.durable(historyMessage);
           if (durableMessage) workingHistory.append(durableMessage);
-          visibleHistory.append(visibleMessage);
           if (!displayedMessages.has(message)) emitter.emit(visibleMessage, textAlreadyStreamed);
         }
+        visibleHistory = visibleTranscript.snapshot();
         const outputLimitStage = classifyOutputLimitStage(captured, finalizing, toolGeneration);
         if (toolPlanningRetryRound) execution.finishReplan();
         const outputEvidence = messageEvidenceTelemetry(captured.messages);
@@ -947,7 +944,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           const { deliveryState } = finalDelivery;
           const safePartialReport = evaluated.partial;
           if (safePartialReport) {
-            const block = ctl.createContentBlock({ roleOverride: "assistant" });
+            const block = visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" });
             block.appendText(safePartialReport.text);
             if (config.showDebugInfo) ctl.debug({
               event: "partial_report_delivery",
@@ -1046,7 +1043,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           if (decision.trigger) {
             execution.finishResearch(decision.trigger);
             if (config.showDebugInfo) ctl.debug({
-event: decision.noProgress
+event: decision.trigger === "research_recovery_exhausted"
                 ? "read_only_research_recovery_exhausted" : "read_only_research_recovery_completed",
               executionId, modelInputId, recoveryReason: researchRecoveryReason,
               toolRounds: recoveryCoordinator.toolRounds, paginationRounds: recoveryCoordinator.paginationRounds,
@@ -1122,6 +1119,7 @@ event: decision.noProgress
         roundIndex += 1;
       }
       if (activeNote && noteWorkingDirectory) {
+        visibleHistory = visibleTranscript.snapshot();
         const nextHistoryKey = modelNotes.historyKey(visibleHistory.getMessagesArray(), noteWorkingDirectory);
         const verifiedNote = modelNotes.reconcileStoredNote(
           activeNote, visibleHistory.getMessagesArray(), workingContext?.summaryRefs(),
@@ -1139,10 +1137,16 @@ event: decision.noProgress
         });
       }
     } finally {
+      // No new model work during shutdown. Persist returned evidence and only
+      // RoundTransaction-approved planning; the next execution must remeasure.
+      if (workingContext) {
+        const sealed = workingContext.seal(visibleTranscript.snapshot(), workingHistory);
+        if (config.showDebugInfo) ctl.debug({ event: "working_context_seal", executionId,
+          sealed, reason: sealed ? "terminal_remeasure_required" : workingContext.lastCommitReason });
+      }
       execution.terminate(ctl.abortSignal.aborted ? "canceled" : "execution_finished");
       if (config.showDebugInfo) ctl.debug({ event: "execution_transitions", phase: execution.phase, transitions: execution.transitions });
       activeActivity?.complete();
-      toolSession[Symbol.dispose]();
     }
   };
 }

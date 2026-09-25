@@ -3,13 +3,27 @@ import {
   ChatMessage
 } from "@lmstudio/sdk";
 import { toolMemory } from "./context-ports";
-import type { FinalizationTrigger } from "./execution-contracts";
+import type { DirectConfig, FinalizationTrigger } from "./execution-contracts";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
 import { containsUnresolvedToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { sourceObservationFailed } from "./evidence-manager";
+const { redact } = require("./evidence-archive.js") as { redact(value: string): string };
 
 export class DeliveryController {
   attempts = 0;
+  limits(config: Pick<DirectConfig, "maxOutputReserve" | "auditFinalMaxTokens" | "auditFinalSeconds"
+    | "outputRecoveryMaxTokens" | "outputRecoverySeconds">, bounded: boolean, trigger: FinalizationTrigger | null) {
+    // A context/read recovery does not opt the user into bounded audit. Keep
+    // its report under the ordinary token cap and user cancellation signal.
+    if (trigger === "output_recovery") return {
+      maxTokens: Math.min(config.maxOutputReserve, config.outputRecoveryMaxTokens),
+      timeoutMs: Math.max(1, config.outputRecoverySeconds * 1000),
+    };
+    return {
+      maxTokens: bounded ? Math.min(config.maxOutputReserve, config.auditFinalMaxTokens) : config.maxOutputReserve,
+      timeoutMs: bounded ? Math.max(1, config.auditFinalSeconds * 1000) : null,
+    };
+  }
   begin(bounded: boolean, replanAttempts: number) {
     const limit = bounded ? 1 : replanAttempts > 0 ? 2 : 1;
     const allowed = this.attempts < limit;
@@ -104,7 +118,10 @@ export function classifyFinalDelivery(
   messages: Array<ChatMessage>,
 ): { deliveryState: FinalDeliveryState; reportState: FinalReportState; rejectionReason?: string } {
   const text = reportText.trim();
-  if (!text) return { deliveryState: "no_answer", reportState: "no_answer" };
+  if (!text) return { deliveryState: "no_answer", reportState: "no_answer",
+    rejectionReason: phaseTimedOut ? "final_timeout"
+      : captured.failure !== undefined ? "generation_failure"
+        : captured.finishReason === "maxPredictedTokensReached" ? "max_predicted_tokens" : "empty_visible_output" };
   const unresolvedToolIntent = containsUnresolvedToolIntent(text, messages);
   let deliveryState: FinalDeliveryState;
   let rejectionReason: string | undefined;
@@ -142,7 +159,10 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
   const facts: Array<string> = [];
   const errors: Array<string> = [];
   const seen = new Set<string>();
-  for (const message of [...history.getMessagesArray(), ...currentMessages]) {
+  const excerpts: Array<string> = [];
+  let excerptChars = 0;
+  // Favor the most recent returned evidence, not the oldest eight results.
+  for (const message of [...history.getMessagesArray(), ...currentMessages].reverse()) {
     for (const result of message.getToolCallResults()) {
       const value = toolMemory.decodeToolResultRecord(result.content).value;
       if (!value || typeof value !== "object") continue;
@@ -154,7 +174,24 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
       }
       const kind = String(value.kind || "");
       let fact = "";
-      if (kind === "historical_evidence_range") {
+      if (kind === "workspace_file_observation") {
+        const status = String(value.resultStatus || value.status || "");
+        if (value.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(status)
+          || !(value.ok === true || ["observed", "complete"].includes(status))) continue;
+        const target = String(value.path || value.sourcePath || "unknown-file").slice(0, 240);
+        const byteRange = value.range as { unit?: unknown; start?: unknown; endExclusive?: unknown } | undefined;
+        const range = Number.isInteger(value.startLine) && Number.isInteger(value.endLine)
+          ? `lines ${value.startLine}–${value.endLine}`
+          : byteRange?.unit === "byte" ? `bytes [${byteRange.start}, ${byteRange.endExclusive})`
+            : "range unknown";
+        fact = `file ${target} ${range} (반환된 관측 범위)`;
+        const body = [value.text, value.content, value.body].find(item => typeof item === "string");
+        if (!seen.has(fact) && typeof body === "string" && body && excerptChars < 2400) {
+          const excerpt = redact(body).slice(0, Math.min(800, 2400 - excerptChars));
+          excerptChars += excerpt.length;
+          excerpts.push(`${target} — 본문 일부 발췌, 전체 파일 분석 아님:\n${excerpt.split(/\r?\n/u).map(line => `    ${line}`).join("\n")}`);
+        }
+      } else if (kind === "historical_evidence_range") {
         const id = String(value.evidenceId || "unknown-evidence").slice(0, 80);
         const range = Array.isArray(value.returnedRange) ? JSON.stringify(value.returnedRange) : "unknown-range";
         fact = `archive ${id} range ${range}`;
@@ -181,6 +218,7 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
   const lines = ["부분 조사 보고 (미완료)", "확인된 근거:"];
   if (facts.length) for (const fact of facts) lines.push(`- ${fact}`);
   else lines.push("- 현재 입력에서 구조화된 성공 결과를 확인하지 못했습니다.");
+  if (excerpts.length) lines.push("", "반환된 파일 본문 발췌:", ...excerpts, "");
   lines.push("미확인/중단 범위:");
   lines.push(`- ${String(reason || "조사 복구가 진행되지 않음").slice(0, 240)}`);
   if (errors.length) lines.push(`- 도구 오류: ${errors.slice(0, 4).join(", ")}`);

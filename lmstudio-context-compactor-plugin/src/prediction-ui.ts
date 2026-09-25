@@ -1,10 +1,67 @@
 import {
+  Chat,
   ChatMessage,
+  type ChatMessagePartData,
+  type ChatMessageData,
+  type ChatMessageRoleData,
   type PredictionLoopHandlerController,
   type PredictionProcessStatusController,
   type ToolCallRequest
 } from "@lmstudio/sdk";
 import { type RemoteToolLike } from "./tool-capability-registry";
+
+type ContentController = Pick<PredictionLoopHandlerController, "createContentBlock">;
+
+/** Owns the host-visible transcript for one execution. SDK messages are not
+ * host messages: streamed text and each finalized request occupy separate
+ * blocks. Record exactly those blocks, including partial visible output on
+ * cancellation, while excluding thinking blocks. WorkingContext separately
+ * owns which completed planning/evidence is safe to carry to the next turn. */
+export class VisibleHistoryRecorder {
+  private readonly blocks: Array<{ role: ChatMessageRoleData; text: string; parts: ChatMessagePartData[] }> = [];
+  private readonly initial: Chat;
+  readonly controller: ContentController;
+
+  constructor(ctl: ContentController, initial: Chat) {
+    this.initial = Chat.from(initial);
+    this.controller = { createContentBlock: options => {
+      const block = ctl.createContentBlock(options);
+      if (options?.includeInContext === false) return block;
+      const entry = { role: options?.roleOverride || "assistant", text: "", parts: [] as ChatMessagePartData[] };
+      this.blocks.push(entry);
+      return new Proxy(block, { get(target, key) {
+        if (key === "appendText") return (...args: Parameters<typeof block.appendText>) => {
+          const result = target.appendText(...args); entry.text += args[0]; return result;
+        };
+        if (key === "appendToolRequest") return (...args: Parameters<typeof block.appendToolRequest>) => {
+          const result = target.appendToolRequest(...args), request = args[0];
+          // Same shape as LM Studio's rehydrated function requests.
+          entry.parts.push({ type: "toolCallRequest", toolCallRequest: {
+            id: request.toolCallRequestId, type: "function", arguments: structuredClone(request.parameters || {}),
+            name: request.name,
+          } });
+          return result;
+        };
+        if (key === "appendToolResult") return (...args: Parameters<typeof block.appendToolResult>) => {
+          const result = target.appendToolResult(...args), value = args[0];
+          entry.parts.push({ type: "toolCallResult", toolCallId: value.toolCallRequestId, content: value.content });
+          return result;
+        };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+    } };
+  }
+
+  snapshot(): Chat {
+    const history = Chat.from(this.initial);
+    for (const entry of this.blocks) {
+      const content: ChatMessagePartData[] = [...(entry.text ? [{ type: "text" as const, text: entry.text }] : []), ...entry.parts];
+      if (content.length) history.append(ChatMessage.from({ role: entry.role, content } as ChatMessageData));
+    }
+    return history;
+  }
+}
 
 export function selectedSourceIsThisPlugin(source: unknown): boolean {
   const identifier = String((source as { identifier?: string })?.identifier || "").toLowerCase();
@@ -16,7 +73,7 @@ export function toolPluginIdentifier(tools: Array<RemoteToolLike>, name: string)
 }
 
 export function createMessageEmitter(
-  ctl: PredictionLoopHandlerController,
+  ctl: ContentController,
   tools: Array<RemoteToolLike>,
 ) {
   const callIdsByToolRequestId = new Map<string, number>();

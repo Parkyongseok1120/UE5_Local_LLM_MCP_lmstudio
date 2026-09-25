@@ -61,6 +61,31 @@ test("status fails closed when the package entry does not register the prompt pr
   }
 });
 
+test("status accepts the CLI generated entry and rejects missing host registration", () => {
+  const source = path.resolve(__dirname, "..");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "compactor-status-cli-entry-"));
+  try {
+    for (const relative of ["manifest.json", "package.json", ".lmstudio/entry.ts", ...DIRECT_SOURCE_FILES]) {
+      const to = path.join(root, relative);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(path.join(source, relative), to);
+    }
+    const entryPath = path.join(root, ".lmstudio", "entry.ts");
+    const entry = `const selfRegistrationHost = client.plugins.getSelfRegistrationHost();
+      const pluginContext = { withPromptPreprocessor: (preprocess) => {
+        selfRegistrationHost.setPromptPreprocessor(preprocess);
+        return pluginContext;
+      } };`;
+    fs.writeFileSync(entryPath, entry);
+    assert.equal(inspect(root).ok, true);
+    assert.equal(inspect(root).runtimeActivationProven, false);
+    fs.writeFileSync(entryPath, entry.replace("selfRegistrationHost.setPromptPreprocessor(preprocess);", ""));
+    assert.equal(inspect(root).ok, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("runtime-required status never turns source presence into activation proof", () => {
   const result = spawnSync(process.execPath, [path.resolve(__dirname, "../scripts/status.cjs"), "--require-runtime", "--json"], {
     encoding: "utf8",

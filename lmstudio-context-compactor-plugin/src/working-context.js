@@ -28,9 +28,15 @@ function exchangeIndex(history) {
   const messages = history.getMessagesArray();
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
     const message = messages[messageIndex], requests = message.getToolCallRequests();
+    if (active && !message.isAssistantMessage() && message.getRole() !== "tool") {
+      ambiguous = true; active = null;
+    }
     if (requests.length) {
-      if (active && active.consumed.size !== active.requests.size) ambiguous = true;
-      const byId = new Map();
+      // Host history splits finalized requests into assistant blocks. Requests
+      // before the first result still belong to one batch; never merge across
+      // a partially returned exchange or accept duplicate request IDs.
+      if (active && active.consumed.size > 0) ambiguous = true;
+      const byId = active && active.consumed.size === 0 ? active.requests : new Map();
       for (const request of requests) {
         if (!request.id || byId.has(request.id)) ambiguous = true;
         else byId.set(request.id, request);
@@ -167,6 +173,8 @@ class WorkingContext {
     this.pendingHistoricalResults = new Set();
     this.rawRefs = new Map();
     this.lastCommitReason = null;
+    this.committedInExecution = false;
+    this.closed = false;
     this.exposure = new Map();
     this.note = null;
     this.lineage = options.lineage || null;
@@ -513,17 +521,45 @@ class WorkingContext {
   }
 
   commit(source, candidate, measurement, expectedPrefix, modelFingerprint) {
+    if (this.closed) { this.lastCommitReason = "execution_closed"; return false; }
+    if (!measurement?.exact || measurement.remainingTokens < 0) {
+      this.lastCommitReason = !measurement?.exact ? "measurement_not_exact" : "hard_limit";
+      return false;
+    }
+    const saved = this.#writeWindow(source, candidate, measurement, expectedPrefix, modelFingerprint);
+    if (saved) this.committedInExecution = true;
+    return saved;
+  }
+
+  seal(source, candidate) {
+    if (this.closed) { this.lastCommitReason = "execution_closed"; return false; }
+    // A terminal checkpoint extends an already measured window in this
+    // execution. It is not a measurement and must never authorize dispatch.
+    if (!this.committedInExecution || !this.manifest) {
+      this.lastCommitReason = "no_committed_window_in_execution"; return false;
+    }
+    try {
+      const prefix = serialize(source);
+      if (hash(prefix.slice(0, this.manifest.sourceLength)) !== this.manifest.sourcePrefixHash) {
+        this.lastCommitReason = "source_prefix_changed"; return false;
+      }
+      const saved = this.#writeWindow(source, candidate, null, hash(prefix), this.manifest.modelFingerprint);
+      if (saved) this.closed = true;
+      return saved;
+    } catch (error) { this.lastCommitReason = error.message || "window_write_failed"; return false; }
+  }
+
+  #writeWindow(source, candidate, measurement, expectedPrefix, modelFingerprint) {
     this.lastCommitReason = null;
     try {
       const prefix = serialize(source);
       const candidateRefs = this.inputRefs(candidate);
       const candidateKeys = inputResultKeys(candidate);
       const rejection = hash(prefix) !== expectedPrefix ? "source_prefix_changed"
-        : !measurement.exact ? "measurement_not_exact" : measurement.remainingTokens < 0 ? "hard_limit"
-          : !this.refsValid([...candidateRefs]) ? "archive_refs_unavailable"
-            : exchangeIndex(candidate).ambiguous ? "pending_or_ambiguous_exchange"
-              : [...this.returnedRefs.keys()].some(id => !candidateRefs.has(id))
-                || [...this.pendingHistoricalResults].some(key => !candidateKeys.has(key)) ? "pending_evidence_omitted" : null;
+        : !this.refsValid([...candidateRefs]) ? "archive_refs_unavailable"
+          : exchangeIndex(candidate).ambiguous ? "pending_or_ambiguous_exchange"
+            : [...this.returnedRefs.keys()].some(id => !candidateRefs.has(id))
+              || [...this.pendingHistoricalResults].some(key => !candidateKeys.has(key)) ? "pending_evidence_omitted" : null;
       if (rejection) { this.lastCommitReason = rejection; return false; }
       // Validate the exact live candidate first. Persistence owns sanitization;
       // stripping capabilities before validation changes raw-envelope identity.
@@ -554,7 +590,8 @@ class WorkingContext {
         replacement, refs: [...candidateRefs], rawBindings, consumedBindings,
         pendingRefs: [...this.returnedRefs], pendingHistoricalResults, note: this.note,
         lastSummaryInput: this.lastSummaryInput, modelFingerprint, measurement,
-        measurementSubject: "live_candidate_before_persistence_sanitization", remeasureRequired: true };
+        measurementSubject: measurement ? "live_candidate_before_persistence_sanitization" : "terminal_unmeasured",
+        remeasureRequired: true };
       const manifest = { ...body, digest: hash(body) };
       if (this.archive.directory) {
         this.archive.ensureDirectory(true);
@@ -575,10 +612,15 @@ class WorkingContext {
       if (!manifest) return { history: source, reason: "no_manifest" };
       const { digest, ...body } = manifest;
       const messages = serialize(source);
-      if (digest !== hash(body) || body.schemaVersion !== 1 || body.scope !== this.scope
-        || (this.parentLineage && body.lineage !== this.parentLineage)
-        || hash(messages.slice(0, body.sourceLength)) !== body.sourcePrefixHash
-        || !this.refsValid(body.refs)) return { history: source, reason: "invalid_scope_prefix_or_refs" };
+      const rejection = digest !== hash(body) ? "manifest_integrity_failed"
+        : body.schemaVersion !== 1 ? "manifest_schema_mismatch"
+          : body.scope !== this.scope ? "scope_mismatch"
+            : this.parentLineage && body.lineage !== this.parentLineage ? "lineage_mismatch"
+              : !Number.isSafeInteger(body.sourceLength) || body.sourceLength < 0
+                || body.sourceLength > messages.length ? "source_length_mismatch"
+                : hash(messages.slice(0, body.sourceLength)) !== body.sourcePrefixHash ? "source_prefix_mismatch"
+                  : !this.refsValid(body.refs) ? "archive_refs_unavailable" : null;
+      if (rejection) return { history: source, reason: rejection };
       this.manifest = manifest; this.generation = body.generation; this.refs = new Map(body.refs); this.note = body.note;
       this.rawRefs = new Map(body.rawBindings || []);
       this.returnedRefs = new Map(body.pendingRefs || []);

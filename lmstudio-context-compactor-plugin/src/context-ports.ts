@@ -49,6 +49,7 @@ export const workingContextModule = require("./working-context.js") as {
     restore(history: Chat): { history: Chat; reason: string };
     commit(source: Chat, candidate: Chat, measurement: ContextMeasurement,
       expectedPrefix: string, modelFingerprint: string): boolean;
+    seal(source: Chat, candidate: Chat): boolean;
     captureExposure(history: Chat, modelInputId: string, completed?: boolean): void;
     captureReturned(history: Chat, observation: (request: ToolCallRequest) => boolean, metadata?: Record<string, unknown>): number;
     summaryRefs(): Set<string>;

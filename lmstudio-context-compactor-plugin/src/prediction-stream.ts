@@ -67,7 +67,7 @@ export class PredictionStreamRenderer {
   private readonly states = new Map<number, StreamState>();
 
   constructor(
-    private readonly ctl: PredictionLoopHandlerController,
+    private readonly ctl: Pick<PredictionLoopHandlerController, "createContentBlock">,
     private readonly splitVisibleAnswer: SplitVisibleAnswer,
     private readonly protectContinuityFooter: boolean,
   ) {}

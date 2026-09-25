@@ -38,6 +38,80 @@ test('recovery uses typed provider authority, supports non-Git and ends on no pr
   assert.equal(result.delivery.deliveryState,'partial');
   assert.ok(result.partial);
 });
+
+test('a denied member of a useful batch does not exhaust read recovery', () => {
+  const {RecoveryCoordinator}=require('../dist/recovery-coordinator');
+  for (const bounded of [false,true]) {
+    const state=new RecoveryCoordinator();
+    const decision=state.advance({progressed:true,newSuccessfulObservationCount:2,errorCount:1},3,true,true,3,3,'',bounded);
+    assert.equal(decision.trigger,null);
+    assert.equal(decision.continue,true);
+    assert.equal(state.noProgressRounds,0);
+    const stalled=state.advance({progressed:false,newSuccessfulObservationCount:0,errorCount:1},3,true,true,1,1,'',bounded);
+    assert.equal(stalled.trigger,'research_recovery_exhausted');
+  }
+  const bounded=new RecoveryCoordinator();
+  assert.equal(bounded.advance({progressed:true,errorCount:1},1,true,true,3,3,'',true).trigger,'research_recovery_complete');
+});
+
+test('timeout fallback preserves successful file ranges and body excerpts beside a batch error', () => {
+  const history=Chat.from([{role:'user',content:'Report from the evidence.'}]);
+  const append=(id,value)=>history.append(ChatMessage.from({role:'tool',content:[{
+    type:'toolCallResult',toolCallId:id,content:JSON.stringify([{type:'text',text:JSON.stringify(value)}])
+  }]}));
+  append('A',{ok:true,kind:'workspace_file_observation',path:'Assets/A.cs',startLine:1,endLine:200,totalLines:482,
+    text:'public void StartDay() { BeginPartOne(); }'});
+  append('B',{ok:true,kind:'workspace_file_observation',path:'Assets/B.cs',startLine:1,endLine:200,totalLines:370,
+    text:'public void CompleteBar() { LeaveBar(); }'});
+  append('C',{error:'Shared read-result budget exhausted.'});
+  const result=new delivery.DeliveryController().evaluate(history,{messages:[],finishReason:'userStopped'},true,'research_recovery_exhausted',0);
+  assert.equal(result.delivery.rejectionReason,'final_timeout');
+  assert.equal(result.partial.evidenceCount,2);
+  assert.equal(result.partial.errorCount,1);
+  assert.match(result.partial.text,/Assets\/A\.cs/);
+  assert.match(result.partial.text,/1.*200/);
+  assert.match(result.partial.text,/BeginPartOne/);
+  assert.match(result.partial.text,/LeaveBar/);
+  assert.match(result.partial.text,/final_timeout/);
+  assert.doesNotMatch(result.partial.text,/성공 결과를 확인하지 못했습니다/);
+  assert.equal(result.taskCompleted,false);
+});
+
+test('delivery limits are owned by the selected mode, not the automatic recovery trigger', () => {
+  const controller=new delivery.DeliveryController();
+  const config={maxOutputReserve:8192,auditFinalMaxTokens:4096,auditFinalSeconds:70,
+    outputRecoveryMaxTokens:2048,outputRecoverySeconds:30};
+  for(const trigger of ['context_budget','research_recovery_complete','research_recovery_exhausted']) {
+    assert.deepEqual(controller.limits(config,false,trigger),{maxTokens:8192,timeoutMs:null});
+    assert.deepEqual(controller.limits(config,true,trigger),{maxTokens:4096,timeoutMs:70000});
+  }
+  for(const bounded of [false,true]) assert.deepEqual(controller.limits(config,bounded,'output_recovery'),
+    {maxTokens:2048,timeoutMs:30000});
+});
+
+test('fallback keeps byte ranges, excludes failed file bodies, deduplicates and bounds excerpts', () => {
+  const history=Chat.empty();
+  const values=[{ok:false,kind:'workspace_file_observation',path:'failed.cs',errorCode:'read_failed',text:'NOT_OBSERVED'},
+    ...Array.from({length:9},(_,i)=>({ok:true,kind:'workspace_file_observation',path:`file${i}.cpp`,
+      range:{unit:'byte',start:64,endExclusive:128},content:`BODY_${i} `+'x'.repeat(5000)}))];
+  for(const [i,value] of values.entries())history.append(ChatMessage.from({role:'tool',content:[{
+    type:'toolCallResult',toolCallId:String(i),content:JSON.stringify(value)
+  }]}));
+  const report=delivery.evidenceBackedPartialReport(history,[history.getMessagesArray().at(-1)],'final_timeout');
+  assert.equal(report.evidenceCount,8);
+  assert.match(report.text,/bytes \[64, 128\)/);
+  assert.match(report.text,/BODY_8/);
+  assert.doesNotMatch(report.text,/NOT_OBSERVED|BODY_0/);
+  assert.ok(report.text.length<5000);
+  assert.equal((report.text.match(/file8\.cpp —/g)||[]).length,1);
+  const pending=Chat.empty();
+  for(const value of [{kind:'workspace_file_observation',text:'UNKNOWN_BODY'},
+    {ok:true,pending:true,kind:'workspace_file_observation',text:'PENDING_BODY'}])
+    pending.append(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',content:JSON.stringify(value),toolCallId:'unknown'}]}));
+  const unknown=delivery.evidenceBackedPartialReport(pending,[],'final_timeout');
+  assert.equal(unknown.evidenceCount,0);
+  assert.doesNotMatch(unknown.text,/UNKNOWN_BODY|PENDING_BODY/);
+});
 test('capability SSOT rejects provider suffix spoof and name collision; safe profile is stable', () => {
   const {ToolCapabilityRegistry,resolveCapability}=capability;
   const trusted={name:'read_file',pluginIdentifier:'mcp/unreal-agent'};
