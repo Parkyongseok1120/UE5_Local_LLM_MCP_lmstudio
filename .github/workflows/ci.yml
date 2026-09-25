@@ -95,7 +95,7 @@ jobs:
           (sdk / "package.json").write_text('{"version":"1.5.0"}', encoding="utf-8")
           patch_target = "handlePredictionEnd: endPacket => {\n                const predictionResult = makePredictionResult({"
           for name in ("index.cjs", "index.mjs"):
-              (sdk / "dist" / name).write_text(patch_target, encoding="utf-8")
+              (sdk / "dist" / name).write_bytes(patch_target.encode("utf-8"))
           if os.name == "nt":
               (bindir / "lms.cmd").write_text(
                   "\r\n".join(
