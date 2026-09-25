@@ -72,17 +72,30 @@ jobs:
           python - <<'PY'
           import os
           import stat
+          import shutil
           from pathlib import Path
 
           home = Path(os.environ["RUNNER_TEMP"]) / "lmstudio"
           bindir = home / "bin"
           plugin = home / "extensions" / "plugins" / "codex" / "unreal-context-compactor"
-          source_manifest = Path.cwd() / "lmstudio-context-compactor-plugin" / "manifest.json"
+          source_plugin = Path.cwd() / "lmstudio-context-compactor-plugin"
+          source_manifest = source_plugin / "manifest.json"
           production = plugin / ".lmstudio" / "production.js"
           if not source_manifest.is_file():
               raise SystemExit("context compactor manifest is missing before LMS stub setup")
           bindir.mkdir(parents=True, exist_ok=True)
           plugin.mkdir(parents=True, exist_ok=True)
+          (plugin / "scripts").mkdir(parents=True, exist_ok=True)
+          sdk = plugin / "node_modules" / "@lmstudio" / "sdk"
+          (sdk / "dist").mkdir(parents=True, exist_ok=True)
+          shutil.copy2(source_plugin / "scripts" / "patch-lmstudio-sdk.cjs", plugin / "scripts")
+          (plugin / "package.json").write_text(
+              '{"scripts":{"patch:sdk":"node scripts/patch-lmstudio-sdk.cjs"}}', encoding="utf-8"
+          )
+          (sdk / "package.json").write_text('{"version":"1.5.0"}', encoding="utf-8")
+          patch_target = "handlePredictionEnd: endPacket => {\n                const predictionResult = makePredictionResult({"
+          for name in ("index.cjs", "index.mjs"):
+              (sdk / "dist" / name).write_bytes(patch_target.encode("utf-8"))
           if os.name == "nt":
               (bindir / "lms.cmd").write_text(
                   "\r\n".join(
@@ -289,6 +302,10 @@ jobs:
       - name: Install Context Compactor dependencies
         run: npm ci --no-fund --no-audit
         working-directory: lmstudio-context-compactor-plugin
+
+      - name: Install Unity MCP dependencies used by compactor integration tests
+        run: npm ci --no-fund --no-audit
+        working-directory: lmstudio-unity-mcp
 
       - name: Context Compactor build and full semantic test suite
         run: npm test

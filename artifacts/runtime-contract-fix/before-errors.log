@@ -1,20 +1,20 @@
 [2026-09-25 14:26:47.984] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [   PredictionLoopHandler] Generation failed. Error: CONTEXT_PENDING_EVIDENCE_OMITTED
-    at WorkingContext.reconcileRefs (C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4457:17)
-    at WorkingContext.captureExposure (C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4699:14)
-    at EvidenceManager.captureExposure (C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:6870:21)
-    at C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:8831:25
+    at WorkingContext.reconcileRefs (REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4457:17)
+    at WorkingContext.captureExposure (REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4699:14)
+    at EvidenceManager.captureExposure (REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:6870:21)
+    at REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:8831:25
     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
 
 [2026-09-25 14:35:41.087] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [   PredictionLoopHandler] Generation failed. Error: CONTEXT_PENDING_EVIDENCE_OMITTED
-    at WorkingContext.reconcileRefs (C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4457:17)
-    at WorkingContext.captureExposure (C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4699:14)
-    at EvidenceManager.captureExposure (C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:6870:21)
-    at C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:8831:25
+    at WorkingContext.reconcileRefs (REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4457:17)
+    at WorkingContext.captureExposure (REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4699:14)
+    at EvidenceManager.captureExposure (REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:6870:21)
+    at REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:8831:25
     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
 
 [2026-09-25 14:37:28.818] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [   PredictionLoopHandler] Generation failed. Error: CONTEXT_PENDING_EVIDENCE_OMITTED
-    at WorkingContext.reconcileRefs (C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4457:17)
-    at WorkingContext.captureExposure (C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4699:14)
-    at EvidenceManager.captureExposure (C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:6870:21)
-    at C:\Users\sster\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:8831:25
+    at WorkingContext.reconcileRefs (REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4457:17)
+    at WorkingContext.captureExposure (REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:4699:14)
+    at EvidenceManager.captureExposure (REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:6870:21)
+    at REDACTED_HOME\.lmstudio\extensions\plugins\codex\unreal-context-compactor\.lmstudio\production.js:8831:25
     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)

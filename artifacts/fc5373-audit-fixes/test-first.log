@@ -364,7 +364,7 @@ warning: in the working copy of 'added.txt', LF will be replaced by CRLF the nex
 test at test\astra-contract.test.cjs:24:1
 ✖ ASTRA RANGE: decoded body is not envelope coverage; continuation includes boundary (17.9903ms)
   TypeError: Cannot read properties of undefined (reading 'uncoveredRanges')
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\astra-contract.test.cjs:32:37)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\astra-contract.test.cjs:32:37)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1306:25)
       at Test.start (node:internal/test_runner/test:1177:17)
@@ -373,7 +373,7 @@ test at test\astra-contract.test.cjs:24:1
 test at test\astra-contract.test.cjs:36:1
 ✖ ASTRA RANGE: sanitized envelope fallback seeds [0,N), not [0,N] (166.1294ms)
   TypeError: Cannot read properties of undefined (reading 'uncoveredRanges')
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\astra-contract.test.cjs:44:37)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\astra-contract.test.cjs:44:37)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1306:25)
       at Test.processPendingSubtests (node:internal/test_runner/test:897:18)
@@ -387,7 +387,7 @@ test at test\astra-contract.test.cjs:71:1
   
   0 !== 1
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\astra-contract.test.cjs:76:12)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\astra-contract.test.cjs:76:12)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1306:25)
       at Test.processPendingSubtests (node:internal/test_runner/test:897:18)
@@ -430,7 +430,7 @@ test at test\prediction-loop.test.cjs:787:1
   -   }
   - ]
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:875:12)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:875:12)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
     generatedMessage: true,
@@ -453,10 +453,10 @@ test at test\prediction-loop.test.cjs:2229:1
   +   'evidence_first_read_context'
     ]
   
-      at Object.act (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2276:16)
-      at runOneToolRound (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-loop.js:54:27)
-      at C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:758:73
-      at async TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2306:3)
+      at Object.act (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2276:16)
+      at runOneToolRound (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-loop.js:54:27)
+      at REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:758:73
+      at async TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2306:3)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
     generatedMessage: true,
@@ -473,7 +473,7 @@ test at test\prediction-loop.test.cjs:2715:1
   
   false !== true
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2726:10)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2726:10)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1306:25)
       at Test.processPendingSubtests (node:internal/test_runner/test:897:18)
@@ -499,11 +499,11 @@ test at test\prediction-loop.test.cjs:2936:1
       'evidence_first_read_context'
     ]
   
-      at C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2955:14
-      at Object.act (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2895:46)
-      at runOneToolRound (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-loop.js:54:27)
-      at C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:758:73
-      at async TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2989:3)
+      at REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2955:14
+      at Object.act (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2895:46)
+      at runOneToolRound (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\round-loop.js:54:27)
+      at REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:758:73
+      at async TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2989:3)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
     generatedMessage: true,
@@ -534,7 +534,7 @@ test at test\status.test.cjs:11:1
       'src/execution-contracts.ts',
       'src/execution-instructions.ts',
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\status.test.cjs:20:10)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\status.test.cjs:20:10)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1306:25)
       at Test.start (node:internal/test_runner/test:1177:17)

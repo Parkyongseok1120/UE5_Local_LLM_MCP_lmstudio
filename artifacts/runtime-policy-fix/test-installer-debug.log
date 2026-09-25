@@ -334,7 +334,7 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
 input = None, capture_output = False, timeout = 30, check = True
 popenargs = ('"C:\\Program Files\\nodejs\\npm.CMD" run patch:sdk',)
-kwargs = {'cwd': 'C:\\Users\\sster\\AppData\\Local\\Temp\\pytest-of-sster\\pytest-4069\\test_launcher_selection_ignore0\\lmstud...': <_io.TextIOWrapper name='<tempfile._TemporaryFileWrapper object at 0x0000025ADF46B680>' mode='r+' encoding='utf-8'>}
+kwargs = {'cwd': 'REDACTED_HOME\\AppData\\Local\\Temp\\pytest-of-sster\\pytest-4069\\test_launcher_selection_ignore0\\lmstud...': <_io.TextIOWrapper name='<tempfile._TemporaryFileWrapper object at 0x0000025ADF46B680>' mode='r+' encoding='utf-8'>}
 
     def run(*popenargs,
             input=None, capture_output=False, timeout=None, check=False, **kwargs):
@@ -410,7 +410,7 @@ E               subprocess.CalledProcessError: Command '"C:\Program Files\nodejs
 The above exception was the direct cause of the following exception:
 
 monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x0000025AE188B8F0>
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4069/test_launcher_selection_ignore0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4069/test_launcher_selection_ignore0')
 
     def test_launcher_selection_ignores_saved_custom_engine(
         monkeypatch: pytest.MonkeyPatch,
@@ -891,16 +891,16 @@ E               RuntimeError: installation failed after external actions started
 
 install.py:2353: RuntimeError
 ---------------------------- Captured stderr call -----------------------------
-run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4069\test_launcher_selection_ignore0\lmstudio\bin\lms.cmd dev --install -y
+run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4069\test_launcher_selection_ignore0\lmstudio\bin\lms.cmd dev --install -y
 run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 npm error code ENOENT
 npm error syscall open
-npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4069\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4069\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 npm error errno -4058
-npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4069\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4069\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 npm error enoent This is related to npm not being able to find a file.
 npm error enoent
-npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_47_367Z-debug-0.log
+npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_47_367Z-debug-0.log
 =========================== short test summary info ===========================
 FAILED tests/test_integrated_installer.py::test_launcher_selection_ignores_saved_custom_engine
 !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!

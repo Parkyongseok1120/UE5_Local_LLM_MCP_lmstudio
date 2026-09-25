@@ -16,7 +16,7 @@ test at lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:204:1
   
   4 !== 5
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:237:10)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:237:10)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
     generatedMessage: false,

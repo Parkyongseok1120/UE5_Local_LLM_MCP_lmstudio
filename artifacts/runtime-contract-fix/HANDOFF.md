@@ -90,7 +90,7 @@ PredictionLoop에는 오류를 덮는 recovery branch를 추가하지 않았다.
 
 새 GUI 채팅에 manifest 근거 기록과 packages-lock.json 전체 순차 조회(20줄, byteBudget 4,096, 도구 한 개씩)를 지시했다. 사용자의 요청대로 기존에 로드된 `swift-qwen3.8-27b` / context **38,912**를 그대로 사용했다. 컴팩터 revision 114와 Unity MCP만 재시작했고 모델을 교체하거나 컨텍스트 길이를 변경하지 않았다.
 
-- 실제 채팅: `C:\Users\sster\.lmstudio\conversations\1790316107098.conversation.json`.
+- 실제 채팅: `REDACTED_HOME\.lmstudio\conversations\1790316107098.conversation.json`.
 - 최초 execution: `59236d0d-cc58-4216-98ac-0787dfb639f3`.
 - 280/680줄에서 부분 보고로 멈춘 뒤 **정확히 “계속해”를 1회** GUI로 전송했다.
 - 재개 execution: `b7cbcab6-c3d3-4f3d-b3fa-1d9da9031802`.

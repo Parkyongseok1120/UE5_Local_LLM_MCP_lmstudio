@@ -26,7 +26,7 @@
 | `node --test --test-name-pattern='recovery re-entry never\|canceled execution releases\|bounded audit makes zero final' test/prediction-loop.test.cjs` | 3 pass | 0 |
 | `python install.py --profile custom --components context_compactor --yes` | 내부 `npm ci`, `npm test` 포함: 364 pass / 0 fail / 0 skip, 설치 완료 | 0 |
 | `node scripts/status.cjs` (plugin 디렉터리) | source layout PASS | 0 |
-| `python artifacts/runtime-identity-fix/check-identity-live.py C:/Users/sster/.lmstudio/conversations/1790324308065.conversation.json` | 아래 live 수치 및 ID 대조 | 0 |
+| `python artifacts/runtime-identity-fix/check-identity-live.py REDACTED_HOME/.lmstudio/conversations/1790324308065.conversation.json` | 아래 live 수치 및 ID 대조 | 0 |
 
 집중 3개는 전체 364개에 포함되며 합산하지 않는다. 원래 실패는 `red-input-identity.log`의 5 calls / 4 unique IDs로 보존했다. 강화한 재진입 회귀는 `[recovery-1, recovery-2, final-report-1, tool-planning-retry-1, recovery-5]`를 확인하며, 관측과 측정의 `(ID, roundIndex)` 대응 및 세션 해제를 검증한다. 별도 취소 회귀는 재호출 시 roundIndex=0이어도 executionId 및 modelInputId가 달라짐을 검증한다.
 

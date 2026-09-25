@@ -9,7 +9,7 @@
 - 감사의 19개 지적을 전부 해결했다고 주장하지 않는다. 사용자 목표의 의미적 AC 검증과 장기 production stress는 아래 잔여 항목에 명시했다.
 - 시작/현재 HEAD: `fc5373b0b62c4e07829cea5052f1e1afbacc3104` (`컴팩터 리팩토링 1`). 변경은 working tree에 있으며 새 commit/deploy는 없다.
 - 제품 patch digest: `17f88b8978ebce3694f3bbfaa5814417ea6e3809059b7475954cfbd723301062`. 정의와 20개 변경 파일의 SHA256은 [patch-manifest.json](patch-manifest.json). Untracked 제품 소스·테스트도 포함한다. 보고서와 generated dist는 제외한다.
-- 입력 문서: `C:/Users/sster/Downloads/fc5373_Complete_Audit.md`, SHA256 `fc7b7649cdf6a984853319c4e85d8e62fb7cf06c67ac900a68f1a5c47f8cc1cb`.
+- 입력 문서: `REDACTED_HOME/Downloads/fc5373_Complete_Audit.md`, SHA256 `fc7b7649cdf6a984853319c4e85d8e62fb7cf06c67ac900a68f1a5c47f8cc1cb`.
 
 ## 책임별 실제 변경
 

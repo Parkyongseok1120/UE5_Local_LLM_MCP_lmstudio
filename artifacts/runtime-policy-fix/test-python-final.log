@@ -348,7 +348,7 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
 input = None, capture_output = False, timeout = 30, check = True
 popenargs = ('"C:\\Program Files\\nodejs\\npm.CMD" run patch:sdk',)
-kwargs = {'cwd': 'C:\\Users\\sster\\AppData\\Local\\Temp\\pytest-of-sster\\pytest-4068\\test_launcher_selection_ignore0\\lmstud...': <_io.TextIOWrapper name='<tempfile._TemporaryFileWrapper object at 0x000001FA9D92B770>' mode='r+' encoding='utf-8'>}
+kwargs = {'cwd': 'REDACTED_HOME\\AppData\\Local\\Temp\\pytest-of-sster\\pytest-4068\\test_launcher_selection_ignore0\\lmstud...': <_io.TextIOWrapper name='<tempfile._TemporaryFileWrapper object at 0x000001FA9D92B770>' mode='r+' encoding='utf-8'>}
 
     def run(*popenargs,
             input=None, capture_output=False, timeout=None, check=False, **kwargs):
@@ -424,7 +424,7 @@ E               subprocess.CalledProcessError: Command '"C:\Program Files\nodejs
 The above exception was the direct cause of the following exception:
 
 monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001FAA1D54890>
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_launcher_selection_ignore0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_launcher_selection_ignore0')
 
     def test_launcher_selection_ignores_saved_custom_engine(
         monkeypatch: pytest.MonkeyPatch,
@@ -905,19 +905,19 @@ E               RuntimeError: installation failed after external actions started
 
 install.py:2353: RuntimeError
 ---------------------------- Captured stderr call -----------------------------
-run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_launcher_selection_ignore0\lmstudio\bin\lms.cmd dev --install -y
+run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_launcher_selection_ignore0\lmstudio\bin\lms.cmd dev --install -y
 run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 npm error code ENOENT
 npm error syscall open
-npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 npm error errno -4058
-npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_launcher_selection_ignore0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 npm error enoent This is related to npm not being able to find a file.
 npm error enoent
-npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_04_094Z-debug-0.log
+npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_04_094Z-debug-0.log
 ______ test_safe_profile_installs_codex_lmstudio_and_preserves_other_mcp ______
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_safe_profile_installs_cod0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_safe_profile_installs_cod0')
 
     def test_safe_profile_installs_codex_lmstudio_and_preserves_other_mcp(tmp_path: Path) -> None:
         lmstudio = tmp_path / "lmstudio"
@@ -928,24 +928,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
         )
         result = _run(tmp_path, "--profile", "safe")
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_installs_cod0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_installs_cod0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_installs_cod0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_installs_cod0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_installs_cod0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_installs_cod0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_05_412Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_05_412Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_05_412Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_05_412Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:673: AssertionError
 __________ test_safe_profile_normalizes_known_existing_unsafe_state ___________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_safe_profile_normalizes_k0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_safe_profile_normalizes_k0')
 
     def test_safe_profile_normalizes_known_existing_unsafe_state(tmp_path: Path) -> None:
         lmstudio = tmp_path / "lmstudio"
@@ -986,24 +986,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
         )
         result = _run(tmp_path, "--profile", "safe")
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_normalizes_k0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_normalizes_k0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_normalizes_k0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_normalizes_k0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_normalizes_k0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_safe_profile_normalizes_k0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_06_310Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_06_310Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_06_310Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_06_310Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:725: AssertionError
 _ test_standard_upgrade_removes_stale_python_controller_entries_and_reports_them _
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_standard_upgrade_removes_0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_standard_upgrade_removes_0')
 
     def test_standard_upgrade_removes_stale_python_controller_entries_and_reports_them(
         tmp_path: Path,
@@ -1040,24 +1040,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
         )
     
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_upgrade_removes_0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_upgrade_removes_0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_upgrade_removes_0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_upgrade_removes_0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_upgrade_removes_0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_upgrade_removes_0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_07_356Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_07_356Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_07_356Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_07_356Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:771: AssertionError
 ______________ test_stale_install_lock_is_cleared_automatically _______________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_stale_install_lock_is_cle0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_stale_install_lock_is_cle0')
 
     def test_stale_install_lock_is_cleared_automatically(tmp_path: Path) -> None:
         lock = tmp_path / "state" / "install.lock"
@@ -1065,24 +1065,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
         lock.write_text(json.dumps({"pid": 2_147_483_647, "createdAt": 1.0}), encoding="utf-8")
         result = _run(tmp_path, "--profile", "safe")
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_stale_install_lock_is_cle0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_stale_install_lock_is_cle0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_stale_install_lock_is_cle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_stale_install_lock_is_cle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_stale_install_lock_is_cle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_stale_install_lock_is_cle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_11_943Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_11_943Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_11_943Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_11_943Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1213: AssertionError
 __________ test_acknowledged_agent_mode_enables_all_unreal_authority __________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_acknowledged_agent_mode_e0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_acknowledged_agent_mode_e0')
 
     def test_acknowledged_agent_mode_enables_all_unreal_authority(tmp_path: Path) -> None:
         lmstudio = tmp_path / "lmstudio"
@@ -1113,24 +1113,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
             str(tmp_path / "projects"),
         )
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_acknowledged_agent_mode_e0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_acknowledged_agent_mode_e0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_acknowledged_agent_mode_e0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_acknowledged_agent_mode_e0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_acknowledged_agent_mode_e0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_acknowledged_agent_mode_e0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_13_890Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_13_890Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_13_890Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_13_890Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1292: AssertionError
 _____________________ test_custom_rule_and_cline_install ______________________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_custom_rule_and_cline_ins0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_custom_rule_and_cline_ins0')
 
     def test_custom_rule_and_cline_install(tmp_path: Path) -> None:
         rule = tmp_path / "agent" / "rule.md"
@@ -1147,24 +1147,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
             str(cline),
         )
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_rule_and_cline_ins0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_rule_and_cline_ins0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_rule_and_cline_ins0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_rule_and_cline_ins0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_rule_and_cline_ins0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_rule_and_cline_ins0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_14_801Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_14_801Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_14_801Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_14_801Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1413: AssertionError
 ________ test_custom_unreal_cline_install_uses_cline_frontend_identity ________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_custom_unreal_cline_insta0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_custom_unreal_cline_insta0')
 
     def test_custom_unreal_cline_install_uses_cline_frontend_identity(tmp_path: Path) -> None:
         cline = tmp_path / "cline" / "mcp.json"
@@ -1183,24 +1183,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
             "--skip-deps",
         )
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_unreal_cline_insta0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_unreal_cline_insta0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_unreal_cline_insta0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_unreal_cline_insta0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_unreal_cline_insta0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_unreal_cline_insta0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_15_833Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_15_833Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_15_833Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_15_833Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1435: AssertionError
 ____________________ test_last_install_can_be_rolled_back _____________________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_last_install_can_be_rolle0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_last_install_can_be_rolle0')
 
     def test_last_install_can_be_rolled_back(tmp_path: Path) -> None:
         original = tmp_path / "lmstudio" / "mcp.json"
@@ -1208,24 +1208,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
         original.write_text(json.dumps({"mcpServers": {"original": {}}}), encoding="utf-8")
         install = _run(tmp_path, "--profile", "safe")
 >       assert install.returncode == 0, install.stderr or install.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_last_install_can_be_rolle0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_last_install_can_be_rolle0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_last_install_can_be_rolle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_last_install_can_be_rolle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_last_install_can_be_rolle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_last_install_can_be_rolle0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_19_156Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_19_156Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_19_156Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_19_156Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1465: AssertionError
 ____________ test_unreal_safe_component_registers_read_only_agent _____________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_unreal_safe_component_reg0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_unreal_safe_component_reg0')
 
     def test_unreal_safe_component_registers_read_only_agent(tmp_path: Path) -> None:
         result = _run(
@@ -1239,24 +1239,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
             str(tmp_path / "projects"),
         )
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_unreal_safe_component_reg0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_unreal_safe_component_reg0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_unreal_safe_component_reg0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_unreal_safe_component_reg0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_unreal_safe_component_reg0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_unreal_safe_component_reg0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_20_209Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_20_209Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_20_209Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_20_209Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1514: AssertionError
 ______ test_standard_adds_read_only_unreal_and_index_tier_is_orthogonal _______
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_standard_adds_read_only_u0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_standard_adds_read_only_u0')
 
     def test_standard_adds_read_only_unreal_and_index_tier_is_orthogonal(tmp_path: Path) -> None:
         result = _run(
@@ -1270,24 +1270,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
             str(tmp_path / "projects"),
         )
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_adds_read_only_u0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_adds_read_only_u0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_adds_read_only_u0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_adds_read_only_u0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_adds_read_only_u0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_standard_adds_read_only_u0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_21_212Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_21_212Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_21_212Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_21_212Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1533: AssertionError
 _______ test_explicit_active_project_is_persisted_for_project_indexing ________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_explicit_active_project_i0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_explicit_active_project_i0')
 
     def test_explicit_active_project_is_persisted_for_project_indexing(tmp_path: Path) -> None:
         project_dir = tmp_path / "projects" / "Demo"
@@ -1303,24 +1303,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
             str(project_file),
         )
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_active_project_i0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_active_project_i0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_active_project_i0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_active_project_i0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_active_project_i0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_active_project_i0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_22_310Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_22_310Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_22_310Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_22_310Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1556: AssertionError
 _________ test_explicit_engine_root_is_persisted_and_forwarded_to_mcp _________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_explicit_engine_root_is_p0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_explicit_engine_root_is_p0')
 
     def test_explicit_engine_root_is_persisted_and_forwarded_to_mcp(tmp_path: Path) -> None:
         engine = tmp_path / "CustomEngine"
@@ -1334,24 +1334,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
             str(engine),
         )
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_engine_root_is_p0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_engine_root_is_p0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_engine_root_is_p0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_engine_root_is_p0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_engine_root_is_p0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_explicit_engine_root_is_p0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_23_338Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_23_338Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_23_338Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_23_338Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1576: AssertionError
 _ test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded _
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_custom_active_project_eng0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_custom_active_project_eng0')
 
     def test_custom_active_project_engine_is_mapped_and_runtime_commit_is_forwarded(
         tmp_path: Path,
@@ -1376,24 +1376,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
         )
     
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_active_project_eng0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_active_project_eng0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_active_project_eng0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_active_project_eng0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_active_project_eng0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_custom_active_project_eng0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_24_350Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_24_350Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_24_350Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_24_350Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1610: AssertionError
 ____ test_selected_engine_writes_dynamic_index_config_for_unpinned_rag_mcp ____
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_selected_engine_writes_dy0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_selected_engine_writes_dy0')
 
     def test_selected_engine_writes_dynamic_index_config_for_unpinned_rag_mcp(tmp_path: Path) -> None:
         engine = tmp_path / "UE_5.10"
@@ -1415,24 +1415,24 @@ tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest
         )
     
 >       assert result.returncode == 0, result.stderr or result.stdout
-E       AssertionError: run: C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_selected_engine_writes_dy0\lmstudio\bin\lms.cmd dev --install -y
+E       AssertionError: run: REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_selected_engine_writes_dy0\lmstudio\bin\lms.cmd dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_selected_engine_writes_dy0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_selected_engine_writes_dy0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_selected_engine_writes_dy0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_selected_engine_writes_dy0\lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_25_812Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_25_812Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_25_812Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_25_812Z-debug-0.log\n').returncode
 
 tests\test_integrated_installer.py:1671: AssertionError
 _________ test_package_has_all_platform_launchers_and_no_local_state __________
 
-tmp_path = WindowsPath('C:/Users/sster/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_package_has_all_platform_0')
+tmp_path = WindowsPath('REDACTED_HOME/AppData/Local/Temp/pytest-of-sster/pytest-4068/test_package_has_all_platform_0')
 monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001FAA18A8E90>
 
     def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, monkeypatch) -> None:
@@ -1912,19 +1912,19 @@ E           "ok": false,
 E           "error": "installation failed after external actions started (Command '\"C:\\Program Files\\nodejs\\npm.CMD\" run patch:sdk' returned non-zero exit status 4294963238.). Managed files were rolled back, but these actions may have left external state: context-compactor-plugin-install.",
 E           "errorType": "RuntimeError"
 E         }
-E         run: "C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_package_has_all_platform_0\isolated lmstudio\bin\lms.cmd" dev --install -y
+E         run: "REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_package_has_all_platform_0\isolated lmstudio\bin\lms.cmd" dev --install -y
 E         run: "C:\Program Files\nodejs\npm.CMD" run patch:sdk
 E         npm error code ENOENT
 E         npm error syscall open
-E         npm error path C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_package_has_all_platform_0\isolated lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
+E         npm error path REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_package_has_all_platform_0\isolated lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json
 E         npm error errno -4058
-E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'C:\Users\sster\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_package_has_all_platform_0\isolated lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
+E         npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'REDACTED_HOME\AppData\Local\Temp\pytest-of-sster\pytest-4068\test_package_has_all_platform_0\isolated lmstudio\extensions\plugins\codex\unreal-context-compactor\package.json'
 E         npm error enoent This is related to npm not being able to find a file.
 E         npm error enoent
-E         npm error A complete log of this run can be found in: C:\Users\sster\AppData\Local\npm-cache\_logs\2026-09-25T06_58_50_209Z-debug-0.log
+E         npm error A complete log of this run can be found in: REDACTED_HOME\AppData\Local\npm-cache\_logs\2026-09-25T06_58_50_209Z-debug-0.log
 E         
 E       assert 1 == 0
-E        +  where 1 = CompletedProcess(args=['C:\\Users\\sster\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'C:\\Users\\sster\... this run can be found in: C:\\Users\\sster\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_50_209Z-debug-0.log\n').returncode
+E        +  where 1 = CompletedProcess(args=['REDACTED_HOME\\AppData\\Local\\Programs\\Python\\Python312\\python.exe', 'REDACTED_HOME\... this run can be found in: REDACTED_HOME\\AppData\\Local\\npm-cache\\_logs\\2026-09-25T06_58_50_209Z-debug-0.log\n').returncode
 
 tests\test_integrated_package.py:883: AssertionError
 =========================== short test summary info ===========================

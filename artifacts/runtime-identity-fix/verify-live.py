@@ -6,7 +6,7 @@ import re
 
 directory = pathlib.Path(__file__).parent
 data = json.loads((directory / "live-gui.json").read_text(encoding="utf8"))
-root = pathlib.Path(r"C:\Users\sster\Documents\Git\Human-Bartender\HumanBartender")
+root = pathlib.Path(r"REDACTED_HOME\Documents\Git\Human-Bartender\HumanBartender")
 checks = []
 for read in data["reads"]:
     if read.get("path") not in ["Packages/manifest.json", "Packages/packages-lock.json"]:

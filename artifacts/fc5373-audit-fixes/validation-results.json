@@ -11,7 +11,7 @@
     {"cwd":"lmstudio-unreal-agent-mcp","command":"npm test","exitCode":0,"pass":247,"fail":0,"skip":1,"log":"test-unreal.log"},
     {"cwd":"lmstudio-context-compactor-plugin","command":"node scripts/astra-ratchet.cjs","exitCode":0,"cycles":30,"counter":"synthetic chars/4 fixture, not actual runtime tokens","log":"ratchet-soak.log"},
     {"cwd":"repository root","command":"node artifacts/fc5373-audit-fixes/collect-evidence.cjs","exitCode":0},
-    {"cwd":"repository root","command":"python C:/Users/sster/.codex/skills/evidence-first-code-audit/scripts/validate_evidence_packet.py artifacts/fc5373-audit-fixes/audit.json","exitCode":0,"claims":6,"errors":0,"warnings":0},
+    {"cwd":"repository root","command":"python REDACTED_HOME/.codex/skills/evidence-first-code-audit/scripts/validate_evidence_packet.py artifacts/fc5373-audit-fixes/audit.json","exitCode":0,"claims":6,"errors":0,"warnings":0},
     {"cwd":"lmstudio-context-compactor-plugin","command":"node --check scripts/astra-live-flow.cjs","exitCode":0},
     {"cwd":"lmstudio-context-compactor-plugin","command":"node --check scripts/astra-ratchet.cjs","exitCode":0},
     {"cwd":"repository root","command":"git diff --check","exitCode":0},

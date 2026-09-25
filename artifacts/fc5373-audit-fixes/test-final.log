@@ -372,23 +372,23 @@ warning: in the working copy of 'added.txt', LF will be replaced by CRLF the nex
 test at test\prediction-loop.test.cjs:2063:1
 ✖ context budget measures a narrowed registered Git catalogue before tools-disabled finalization (5.1138ms)
   Error: CONTEXT_EXECUTION_BLOCKED: blocked_next_action
-      at C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:592:27
-      at async TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2093:3)
+      at REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:592:27
+      at async TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2093:3)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7)
 
 test at test\prediction-loop.test.cjs:2152:1
 ✖ final raw git_diff repair uses a newly measured candidate and preserves a second terminal report (6.7055ms)
   Error: CONTEXT_EXECUTION_BLOCKED: blocked_next_action
-      at C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:592:27
-      at async TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2221:3)
+      at REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:592:27
+      at async TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:2221:3)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7)
 
 test at test\prediction-loop.test.cjs:3053:1
 ✖ aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only (3820.1618ms)
   Error: CONTEXT_EXECUTION_BLOCKED: blocked_next_action
-      at C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:592:27
-      at async TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3094:3)
+      at REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\dist\prediction-loop.js:592:27
+      at async TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\prediction-loop.test.cjs:3094:3)
       at async Test.run (node:internal/test_runner/test:1313:7)
       at async Test.processPendingSubtests (node:internal/test_runner/test:897:7)

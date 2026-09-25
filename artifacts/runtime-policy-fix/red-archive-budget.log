@@ -16,7 +16,7 @@ test at test\runtime-policy.test.cjs:14:1
   
   2048 !== 7168
   
-      at TestContext.<anonymous> (C:\Users\sster\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\runtime-policy.test.cjs:21:10)
+      at TestContext.<anonymous> (REDACTED_HOME\Documents\Git\UE5_Local_LLM_MCP_lmstudio\lmstudio-context-compactor-plugin\test\runtime-policy.test.cjs:21:10)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1306:25)
       at Test.start (node:internal/test_runner/test:1177:17)
