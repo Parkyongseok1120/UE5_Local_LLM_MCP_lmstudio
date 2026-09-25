@@ -6,7 +6,9 @@ const { createRuntime } = require("../src/server");
 const { VersionControl } = require("../../shared-tool-core/git");
 function fixture(t) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "workspace-git-long-name-")));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Git may finish writing a temporary object just as the fixture is removed
+  // on a busy CI runner. Retry transient ENOTEMPTY during cleanup.
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   for (const dir of ["Assets", "Packages", "ProjectSettings"]) fs.mkdirSync(path.join(root, dir));
   fs.writeFileSync(path.join(root, "Packages/manifest.json"), "{}");
   fs.writeFileSync(path.join(root, "ProjectSettings/ProjectVersion.txt"), "test");
