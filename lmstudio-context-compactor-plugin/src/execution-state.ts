@@ -51,7 +51,7 @@ export class RoundTransaction {
   readonly returnedIds: Set<string>;
   constructor(readonly captured: CapturedRound, aborted: boolean) {
     this.planningCommitted = captured.predictionCompleted === true && !aborted && captured.failure === undefined
-      && !["maxPredictedTokensReached", "userStopped", "generation_repetition_paused"].includes(captured.finishReason || "");
+      && ["eosFound", "stopStringFound"].includes(captured.finishReason || "");
     this.returnedIds = new Set(captured.messages.flatMap(m => m.getToolCallResults()).map(r => String(r.toolCallId)));
   }
   durable(message: ChatMessage): ChatMessage | null {

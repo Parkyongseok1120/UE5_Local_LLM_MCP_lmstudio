@@ -4,6 +4,7 @@ const {Chat,LMStudioClient}=require('@lmstudio/sdk');
 const {ContextManager,createInputAssembler}=require('../dist/context-manager');
 const {BudgetBroker}=require('../dist/budget-broker');
 const {readConfig}=require('../dist/execution-config');
+const {visibleAssistantText}=require('../dist/continuity-text');
 async function run() {
  const live=process.argv.includes('--live');
  const cycles=live?3:30;
@@ -32,15 +33,20 @@ async function run() {
  const drift=Math.max(...baselines)-Math.min(...baselines);
  let prediction=null;
  if(live) {
-   const input=Chat.from(history); input.append('user','Return the invariant SENTINEL-731 exactly.');
-   const response=await model.respond(input,{maxTokens:128,temperature:0,signal:AbortSignal.timeout(45000)});
-   prediction={text:response.content,stats:response.stats,taskCompleted:response.content.includes('SENTINEL-731')};
+   const input=Chat.from(history); input.append('user','Return only the invariant code from the prior context.');
+   const measured=(await assemble(input)).measurement;
+   if(!measured.exact || measured.remainingTokens<0)throw new Error('Final prediction input must fit exactly');
+   const response=await model.respond(input,{maxTokens:config.maxOutputReserve,temperature:0,signal:AbortSignal.timeout(90000)});
+   const visible=visibleAssistantText(response.content).trim();
+   prediction={text:visible,stats:response.stats,finalMeasurement:measured,
+     invariantPresent:visible==='SENTINEL-731'&&['eosFound','stopStringFound'].includes(response.stats?.stopReason)};
  }
  const report={mode:live?'live_sdk_exact_template':'deterministic_fixture',cycles,results,baselines,drift,
-   duplicateSourceReads:0,compactionsPer10Rounds:10/8,taskCompleted:prediction?prediction.taskCompleted:true,prediction,
-   interpretation:'Synthetic repeated equivalent evidence; live mode uses actual loaded tokenizer/template and one real prediction. Does not prove installed GUI plugin or editor workflows.',
-   status:drift<=128&&(!prediction||prediction.taskCompleted)?'PASS':'FAIL'};
- fs.writeFileSync(path.resolve(__dirname,'../../artifacts/astra-full-refactor',live?'ratchet-live.json':'ratchet-soak.json'),JSON.stringify(report,null,2)+'\n');
+   compactionsPer10Rounds:10/8,objectiveSatisfied:null,prediction,
+   interpretation:'Repeated equivalent evidence tests only bounded input size and mandatory system invariant retention. Not native evidence preservation, distinct retained information, long-running production handler, GUI, or editor validation.',
+   status:drift<=128&&(!prediction||prediction.invariantPresent)?'PASS':'FAIL'};
+ const directory=path.resolve(__dirname,'../../artifacts/fc5373-audit-fixes');fs.mkdirSync(directory,{recursive:true});
+ fs.writeFileSync(path.join(directory,live?'ratchet-live.json':'ratchet-soak.json'),JSON.stringify(report,null,2)+'\n');
  if(report.status==='FAIL') process.exitCode=1;
 }
 run().catch(e=>{console.error(e);process.exitCode=1});

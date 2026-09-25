@@ -31,12 +31,15 @@ export const modelNotes = require("./continuity-model-notes.js") as {
 };
 
 export const workingContextModule = require("./working-context.js") as {
+  exchangeIndex(history: Chat): { matches: Map<string, ToolCallRequest>; ambiguous: boolean };
   WorkingContext: new (scope: Record<string, string>, options?: Record<string, unknown>) => {
     archive: { stats: Record<string, number> };
     cost: Record<string, number>;
     exposure: Map<string, unknown>;
     note: unknown;
     lastSummaryInput: string;
+    lastCommitReason: string | null;
+    persistable(history: Chat): Chat;
     project(history: Chat, observation: (request: ToolCallRequest) => boolean,
       metadata?: Record<string, unknown>, maxChars?: number): {
         history: Chat; changed: boolean; archiveFailed?: boolean; reason: string;

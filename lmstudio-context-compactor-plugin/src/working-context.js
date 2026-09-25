@@ -5,7 +5,9 @@ const { EvidenceArchive, hash, redact, atomicWrite, readFile } = require("./evid
 const path = require("node:path");
 const modelNotes = require("./continuity-model-notes.js");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
-const { REASONING_SEPARATOR } = require("./continuity-text.js");
+const { REASONING_SEPARATOR, visibleAssistantText } = require("./continuity-text.js");
+const { isEphemeralCapabilityKey } = require("./durable-memory-sanitizer.js");
+const evidenceIdentity = require("./evidence-identity.js");
 
 function serialize(history) {
   return history.getMessagesArray().map(m => {
@@ -152,6 +154,9 @@ class WorkingContext {
     this.manifest = null;
     this.generation = 0;
     this.refs = new Map();
+    this.returnedRefs = new Map();
+    this.rawRefs = new Map();
+    this.lastCommitReason = null;
     this.exposure = new Map();
     this.note = null;
     this.lineage = options.lineage || null;
@@ -162,6 +167,75 @@ class WorkingContext {
   }
 
   windowFile(lineage) { return lineage ? `window-${lineage}.json` : "window.json"; }
+
+  archiveObservation(request, result, value, metadata = {}) {
+    const canonical = evidenceIdentity.normalizeObservation(value, request,
+      metadata.toolProviders?.[request.name] || value.provider || "unknown-provider");
+    const envelope = serializedResultContent(result.content);
+    const callKey = rawExposureKey(request, result, envelope);
+    const saved = this.archive.put(envelope, { ...metadata, callKey,
+      providerRequestId: result.toolCallId, toolName: request.name,
+      sourceKind: value.kind || "observation", sourceIdentity: sourceIdentity(value),
+      sourceVersion: canonical.sourceVersion, sourceIdentityDigest: canonical.sourceIdentityDigest,
+      sourceQueryKey: canonical.sourceQueryKey, provider: canonical.provider,
+      semanticQueryDigest: canonical.semanticQueryDigest, semanticFacts: semanticFacts(value),
+      resultStatus: value.ok === false || (value.error !== undefined && value.error !== null && value.error !== false)
+        ? false : value.resultStatus ?? value.status ?? value.ok ?? "unknown",
+      errorCode: value.errorCode ?? null, operationId: value.operationId ?? null,
+      originRanges: value.range || value.returnedRange || value.lineRange || value.page
+        || (value.pageStart !== undefined ? [value.pageStart, value.pageEnd] : null),
+    }, { liveRefs: new Set([...this.refs.keys(), ...this.returnedRefs.keys()]) });
+    if (saved.ok) {
+      const ref = [saved.record.evidenceId, saved.record.archivedBodyHash];
+      this.refs.set(...ref);
+      this.rawRefs.set(callKey, ref);
+    }
+    return saved;
+  }
+
+  /** Only call for an accepted input. Speculative projection must not unpin
+   * either the current durable window or a returned result awaiting consumption. */
+  inputRefs(history) {
+    const live = liveEvidenceRefs(history), index = exchangeIndex(history);
+    history.getMessagesArray().forEach((message, mi) => message.getToolCallResults().forEach((result, ri) => {
+      const request = index.matches.get(`${mi}:${ri}`);
+      const ref = request && this.rawRefs.get(rawExposureKey(request, result, serializedResultContent(result.content)));
+      if (ref) live.set(...ref);
+    }));
+    return live;
+  }
+
+  reconcileRefs(history, consumed = false, requirePending = false) {
+    const live = this.inputRefs(history);
+    // A bounded candidate may not silently omit a result before its first
+    // consumer. Keep it pinned and block that candidate with an explicit error.
+    if (requirePending && [...this.returnedRefs.keys()].some(id => !live.has(id))) {
+      throw new Error("CONTEXT_PENDING_EVIDENCE_OMITTED");
+    }
+    if (consumed) for (const id of live.keys()) this.returnedRefs.delete(id);
+    this.refs = new Map([...(this.manifest?.refs || []), ...live, ...this.returnedRefs]);
+    for (const [key, [id]] of this.rawRefs) if (!this.refs.has(id)) {
+      this.rawRefs.delete(key); this.consumedRawResults.delete(key);
+    }
+  }
+
+  persistable(history) {
+    const replacement = serialize(history); // Preserve typed-file rejection.
+    const clean = value => {
+      if (Array.isArray(value)) return value.map(clean);
+      if (!value || typeof value !== "object") return redact(value);
+      return Object.fromEntries(Object.entries(value).filter(([key, item]) =>
+        !/^(?:receipt|approval|capability|authorization|nextCursor|cursor|transport)$/iu.test(key)
+          && !isEphemeralCapabilityKey(key, item)).map(([key, item]) => [key, clean(item)]));
+    };
+    for (const message of replacement) for (const part of message.content) {
+      if (part.type === "text" && message.role === "assistant") part.text = visibleAssistantText(part.text);
+      if (part.type === "toolCallResult" && typeof part.content === "string") {
+        try { part.content = JSON.stringify(clean(JSON.parse(part.content))); } catch { part.content = redact(part.content); }
+      }
+    }
+    return deserialize(clean(replacement));
+  }
 
   captureReturned(history, isObservation, metadata = {}) {
     const index = exchangeIndex(history);
@@ -175,11 +249,8 @@ class WorkingContext {
         const envelope = serializedResultContent(result.content);
         const value = decodeToolResultRecord(envelope).value;
         if (!value || ["archived_tool_result_projection", "historical_evidence_range"].includes(value.kind)) continue;
-        const saved = this.archive.put(envelope, { ...metadata, providerRequestId: result.toolCallId,
-          toolName: request.name, sourceKind: value.kind || "observation", sourceIdentity: sourceIdentity(value),
-          sourceVersion: value.sha256 || value.head || null, semanticFacts: semanticFacts(value),
-          resultStatus: value.status ?? value.ok ?? "unknown" }, { liveRefs: new Set(this.refs.keys()) });
-        if (saved.ok) { this.refs.set(saved.record.evidenceId, saved.record.archivedBodyHash); captured++; }
+        const saved = this.archiveObservation(request, result, value, metadata);
+        if (saved.ok) { this.returnedRefs.set(saved.record.evidenceId, saved.record.archivedBodyHash); captured++; }
       }
     }
     return captured;
@@ -235,18 +306,7 @@ class WorkingContext {
         // replacing tiny observations that cannot become cheaper overall.
         if (originalEnvelope.length <= Math.max(maxChars, 1024)) return result;
         const identity = sourceIdentity(parsed), facts = semanticFacts(parsed);
-        const saved = this.archive.put(originalEnvelope, { ...metadata,
-          callKey: `${metadata.executionId || "history"}:history-${messageIndex}:result-${resultIndex}:${result.toolCallId}`,
-          providerRequestId: result.toolCallId, toolName: request.name,
-          sourceKind: parsed.kind || "observation", sourceVersion: parsed.sha256 || parsed.head || null,
-          sourceIdentity: identity, semanticQueryDigest: hash(request.arguments || {}), semanticFacts: facts,
-          resultStatus: parsed.status ?? parsed.ok ?? "unknown",
-          errorCode: parsed.errorCode ?? null,
-          operationId: parsed.operationId ?? null,
-          buildAttempt: parsed.buildAttempt ?? parsed.attemptId ?? null,
-          originRanges: parsed.returnedRange || parsed.lineRange || parsed.page
-            || (parsed.pageStart !== undefined || parsed.pageEnd !== undefined ? [parsed.pageStart, parsed.pageEnd] : null) },
-        { liveRefs: new Set(this.refs.keys()) });
+        const saved = this.archiveObservation(request, result, parsed, metadata);
         if (!saved.ok) { archiveFailed = true; return result; }
         const record = saved.record;
         this.refs.set(record.evidenceId, record.archivedBodyHash);
@@ -268,9 +328,10 @@ class WorkingContext {
           ...(bodyFirst ? { viewMode: "body_first_bounded", bodyField: bodyView.field } : {}),
           originalEnvelopeChars: originalEnvelope.length,
           originalEnvelopeBytes: Buffer.byteLength(originalEnvelope),
-          resultStatus: parsed.status ?? parsed.ok ?? "unknown", errorCode: parsed.errorCode ?? null,
-          sourceIdentity: identity, sourceIdentityDigest: hash(identity),
-          sourceVersion: parsed.sha256 || parsed.head || null,
+          resultStatus: record.metadata.resultStatus, errorCode: record.metadata.errorCode,
+          sourceIdentity: identity, sourceIdentityDigest: record.metadata.sourceIdentityDigest,
+          sourceVersion: record.metadata.sourceVersion, sourceQueryKey: record.metadata.sourceQueryKey,
+          provider: record.metadata.provider, semanticQueryDigest: record.metadata.semanticQueryDigest,
           sourceRange: parsed.returnedRange || parsed.lineRange
             || (parsed.pageStart !== undefined || parsed.pageEnd !== undefined ? [parsed.pageStart, parsed.pageEnd] : null),
           sourceCollectionComplete: parsed.sourceResultComplete ?? "unknown",
@@ -364,6 +425,7 @@ class WorkingContext {
   }); }
 
   captureExposure(history, modelInputId, completed = false) {
+    this.reconcileRefs(history, completed, !completed);
     const index = exchangeIndex(history);
     const messages = history.getMessagesArray();
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
@@ -405,20 +467,29 @@ class WorkingContext {
   }
 
   commit(source, candidate, measurement, expectedPrefix, modelFingerprint) {
+    this.lastCommitReason = null;
     try {
       const prefix = serialize(source), replacement = serialize(candidate);
       const liveRefs = liveEvidenceRefs(candidate);
-      if (hash(prefix) !== expectedPrefix || !measurement.exact || measurement.remainingTokens < 0
-        || !this.refsValid([...liveRefs]) || exchangeIndex(candidate).ambiguous) return false;
+      const candidateRefs = this.inputRefs(candidate);
+      const rejection = hash(prefix) !== expectedPrefix ? "source_prefix_changed"
+        : !measurement.exact ? "measurement_not_exact" : measurement.remainingTokens < 0 ? "hard_limit"
+          : !this.refsValid([...liveRefs]) ? "archive_refs_unavailable"
+            : exchangeIndex(candidate).ambiguous ? "pending_or_ambiguous_exchange"
+              : [...this.returnedRefs.keys()].some(id => !candidateRefs.has(id)) ? "pending_evidence_omitted" : null;
+      if (rejection) { this.lastCommitReason = rejection; return false; }
       // Never persist live receipt/secret material or raw reasoning in a window.
       if (JSON.stringify(redact(replacement)) !== JSON.stringify(replacement)
-        || replacement.some(m => m.content.some(p => p.type === "text" && p.text.includes(REASONING_SEPARATOR)))) return false;
+        || replacement.some(m => m.content.some(p => p.type === "text" && p.text.includes(REASONING_SEPARATOR)))) {
+        this.lastCommitReason = "non_persistable_live_material"; return false;
+      }
       const body = { schemaVersion: 1, scope: this.scope, windowId: hash([this.scope, expectedPrefix, replacement]),
         generation: this.generation + 1, parentWindowId: this.manifest?.windowId || null,
         lineage: this.lineage, parentLineage: this.parentLineage,
         sourcePrefixHash: expectedPrefix, sourceLength: prefix.length,
         replacement, refs: [...liveRefs], note: this.note,
-        lastSummaryInput: this.lastSummaryInput, modelFingerprint, measurement };
+        lastSummaryInput: this.lastSummaryInput, modelFingerprint, measurement,
+        measurementSubject: "live_candidate_before_persistence_sanitization", remeasureRequired: true };
       const manifest = { ...body, digest: hash(body) };
       if (this.archive.directory) {
         this.archive.ensureDirectory(true);
@@ -426,7 +497,7 @@ class WorkingContext {
       }
       this.manifest = manifest; this.generation = body.generation; this.refs = liveRefs;
       return true;
-    } catch { return false; }
+    } catch (error) { this.lastCommitReason = error.message || "window_write_failed"; return false; }
   }
 
   restore(source) {

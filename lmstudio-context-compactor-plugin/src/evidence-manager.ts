@@ -6,6 +6,12 @@ import {
 import { inputAvailability, toolMemory, workingContextModule } from "./context-ports";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
+const identity = require("./evidence-identity.js") as {
+  sourceIdentity(value: Record<string, unknown>): string;
+  sourceVersion(value: Record<string, unknown>): string;
+  queryKey(value: Record<string, unknown>): string;
+  normalizeObservation(value: Record<string, unknown>, request: ToolCallRequest, provider: string): Record<string, unknown>;
+};
 
 export type EvidenceIdentity = { provider: string; sourceKind: string; sourceIdentity: string; query: string };
 export type EvidenceVersion = { value: string; verified: boolean };
@@ -30,23 +36,31 @@ modelInputId: string; included: boolean; predictionCompleted: boolean;
 export class EvidenceManager {
   fingerprints = new Set<string>();
   coverage: RecoveryCoverageLedger = new Map();
+  private currentCoverage: RecoveryCoverageLedger = new Map();
   constructor(readonly store: InstanceType<typeof workingContextModule.WorkingContext> | null,
     readonly tools: Array<RemoteToolLike>) { }
-  seed(history: Chat) { const state = seedRecoveryProgress(history); this.fingerprints = state.fingerprints; this.coverage = state.coverage; }
-  observe(messages: Array<ChatMessage>) { return observeRecoveryProgress(messages, this.fingerprints, this.coverage); }
+  seed(history: Chat) { const state = seedRecoveryProgress(history, this.tools); this.fingerprints = state.fingerprints; this.coverage = state.coverage; }
+  observe(messages: Array<ChatMessage>) {
+    return observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools);
+  }
   project(history: Chat, metadata: Record<string, unknown>, maxChars: number) {
     return this.store?.project(history, request => {
       const matches = this.tools.filter(tool => tool.name === request.name);
       return matches.length === 1 && isObservationOnlyToolCall(matches[0], request);
-    }, metadata, maxChars) || { history, changed: false, reason: "disabled" };
+    }, { ...metadata, toolProviders: Object.fromEntries(this.tools.map(t => [t.name, t.pluginIdentifier || "local"])) }, maxChars)
+      || { history, changed: false, reason: "disabled" };
   }
-  captureExposure(history: Chat, modelInputId: string, completed = false) { this.store?.captureExposure(history, modelInputId, completed); }
+  captureExposure(history: Chat, modelInputId: string, completed = false) {
+    this.currentCoverage = seedRecoveryProgress(history, this.tools).coverage;
+    this.store?.captureExposure(history, modelInputId, completed);
+  }
   captureReturned(messages: Array<ChatMessage>, executionId: string) {
     const history = Chat.empty(); for (const message of messages) history.append(message);
     return this.store?.captureReturned(history, request => {
       const matches = this.tools.filter(tool => tool.name === request.name);
       return matches.length === 1 && isObservationOnlyToolCall(matches[0], request);
-    }, { executionId, proofLevel: "returned_tool_result" }) || 0;
+    }, { executionId, proofLevel: "returned_tool_result",
+      toolProviders: Object.fromEntries(this.tools.map(t => [t.name, t.pluginIdentifier || "local"])) }) || 0;
   }
   view(value: Record<string, unknown>, provider: string): ContentView {
     const kind = String(value.kind || "observation");
@@ -55,7 +69,7 @@ export class EvidenceManager {
     const version = coverageSourceVersion(value);
     return {
 identity: { provider, sourceKind: kind, sourceIdentity: coverageSourceIdentity(value), query: coverageQueryKey(value) },
-      version: { value: version, verified: version !== "unknown-version" },
+      version: { value: version, verified: version !== "unknown-version" && !version.startsWith("observed:") },
       representation: archived ? "sanitized_archived_tool_envelope" : projected ? "sanitized_body" : "source",
       body: typeof body === "string" ? body : "", archive: (value.archiveRef as ArchiveRef) || null,
       continuation: {
@@ -96,7 +110,7 @@ export function completedRequestFingerprints(history: Chat): Set<string> {
       const currentRaw = value && !["archived_tool_result_projection", "historical_evidence_index"].includes(
         String(value.kind || ""),
       );
-      const succeeded = currentRaw && value?.ok !== false && !value?.errorCode
+      const succeeded = currentRaw && !sourceObservationFailed(value)
         && !["error", "failed", "timeout", "timed_out", "canceled", "cancelled"].includes(status);
       if (succeeded) completed.add(telemetryFingerprint({
         name: request.name,
@@ -149,47 +163,18 @@ export function subtractCoverageRanges(
   return normalizedCoverageRanges(remaining);
 }
 
-export function coverageSourceIdentity(value: Record<string, unknown>): string {
-  const explicit = value.sourceIdentityDigest || value.repositoryIdentity || value.workspaceIdentity
-    || value.projectIdentity || value.canonicalProjectRoot;
-  if (explicit) return typeof explicit === "string" ? explicit : telemetryFingerprint(explicit, true);
-  if (value.sourceIdentity && typeof value.sourceIdentity === "object") {
-    return telemetryFingerprint(value.sourceIdentity, true);
-  }
-  return "unknown-source";
-}
-
-export function coverageSourceVersion(value: Record<string, unknown>): string {
-  const explicit = value.sourceVersion || value.sourceHash || value.sha256 || value.blobOid
-    || value.head || value.version;
-  if (explicit) return String(explicit);
-  if (value.base || value.comparison || value.revision) {
-    return telemetryFingerprint({
-      base: value.base, head: value.head,
-      comparison: value.comparison, revision: value.revision
-    }, true);
-  }
-  return "unknown-version";
-}
-
-export function coverageQueryKey(value: Record<string, unknown>): string {
-  return telemetryFingerprint({
-    sourceIdentity: coverageSourceIdentity(value),
-    sourceVersion: coverageSourceVersion(value),
-    action: value.sourceAction || value.action || value.toolName || value.kind || "observation",
-    path: value.path || value.sourcePath || value.workspaceRelativePath || "",
-    comparison: value.comparison,
-    base: value.base,
-    head: value.head,
-    revision: value.revision,
-    since: value.sourceSince ?? value.since,
-    until: value.sourceUntil ?? value.until,
-    authorQuery: value.sourceAuthorQuery ?? value.authorQuery,
-    paths: value.paths || value.requestedPaths || value.queryPath,
-  }, true);
-}
-
+export const coverageSourceIdentity = identity.sourceIdentity;
+export const coverageSourceVersion = identity.sourceVersion;
+export const coverageQueryKey = identity.queryKey;
 export function coverageRange(value: Record<string, unknown>, category: "source" | "archive"): { range: RecoveryCoverageRange; rangeUnit: string } | null {
+  const native = value.range as { start?: number; end?: number; endExclusive?: number; unit?: string } | undefined;
+  if (native && native.start !== undefined) {
+    const start = finiteCoverageInteger(native.start), end = finiteCoverageInteger(native.endExclusive ?? native.end);
+    if (start === null || end === null || end < start || (native.endExclusive !== undefined && end === start)) return null;
+    return { range: [start, native.endExclusive !== undefined ? end - 1 : end],
+      rangeUnit: native.unit === "byte" ? "utf8_byte" : String(native.unit || "unknown") };
+  }
+  if (value.returnedLineCount === 0 || value.returnedCount === 0) return null;
   const returned = value.returnedRange ?? value.archiveReturnedRange;
   if (Array.isArray(returned) && returned.length >= 2) {
     const start = finiteCoverageInteger(returned[0]);
@@ -245,7 +230,8 @@ export function recoveryCoverageDescriptors(value: Record<string, unknown>): Arr
       sourceVersion: version, sourceIdentity: evidenceId
     }];
   }
-  const isSourceObservation = /^(?:git|file|symbol|log|unity|unreal)_observation$/u.test(kind) || Boolean(
+  const isSourceObservation = value.canonicalReadObservation === true || kind === "workspace_file_observation"
+    || /^(?:git|file|symbol|log|unity|unreal)_observation$/u.test(kind) || Boolean(
     value.action || value.sourceAction || value.pageStart !== undefined || value.sourcePageStart !== undefined,
   );
   if (!isSourceObservation) return [];
@@ -313,19 +299,51 @@ export function recordRecoveryCoverage(
   return { uncovered, overlapped };
 }
 
-export function seedRecoveryProgress(history: Chat): {
+export function sourceObservationFailed(value: Record<string, unknown>): boolean {
+  return value.ok === false || value.resultStatus === false || Boolean(value.errorCode)
+    // LM Studio SDK guard denials and implementation exceptions use {error}.
+    || (value.error !== undefined && value.error !== null && value.error !== false)
+    || [value.resultStatus, value.status].some(status =>
+      ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(String(status).toLowerCase()));
+}
+
+/** Normalize native producer payloads using the actual paired request and trusted
+ * provider. A payload cannot grant itself read authority. Pagination/size fields
+ * identify a range within the query, rather than a different semantic query. */
+export function observationRecords(messages: Array<ChatMessage>, tools: Array<RemoteToolLike> = []) {
+  const records: Array<{ content: unknown; value: Record<string, unknown> | undefined }> = [];
+  const history = Chat.empty(); for (const message of messages) history.append(message);
+  const pairs = workingContextModule.exchangeIndex(history);
+  // Do not manufacture observations out of canceled, orphaned or duplicate
+  // callback sequences. The same pairing contract protects durable commit.
+  // Pure range-algebra callers can supply already decoded result-only samples.
+  // Runtime adapters always supply a registry and must prove complete pairing.
+  if (pairs.ambiguous && (tools.length || messages.some(m => m.getToolCallRequests().length))) return records;
+  for (const [mi, message] of messages.entries()) {
+    for (const [ri, result] of message.getToolCallResults().entries()) {
+      const decoded = toolMemory.decodeToolResultRecord(result.content).value;
+      const request = pairs.matches.get(`${mi}:${ri}`);
+      const matches = tools.filter(t => t.name === request?.name);
+      const trusted = request && matches.length === 1 && isObservationOnlyToolCall(matches[0], request);
+      const archived = ["archived_tool_result_projection", "historical_evidence_range"].includes(String(decoded?.kind));
+      records.push({ content: result.content, value: decoded && trusted && !archived ? {
+        ...identity.normalizeObservation(decoded, request, matches[0].pluginIdentifier || "local"), canonicalReadObservation: true,
+      } : decoded });
+    }
+  }
+  return records;
+}
+
+export function seedRecoveryProgress(history: Chat, tools: Array<RemoteToolLike> = []): {
   fingerprints: Set<string>; coverage: RecoveryCoverageLedger;
 } {
   const fingerprints = new Set<string>();
   const coverage: RecoveryCoverageLedger = new Map();
-  for (const message of history.getMessagesArray()) {
-    for (const result of message.getToolCallResults()) {
+  for (const result of observationRecords(history.getMessagesArray(), tools)) {
       fingerprints.add(telemetryFingerprint(result.content));
-      const value = toolMemory.decodeToolResultRecord(result.content).value;
+      const value = result.value;
       if (!value || typeof value !== "object") continue;
-      const resultStatus = String(value.resultStatus ?? value.status ?? "").toLowerCase();
-      if (value.ok === false || value.resultStatus === false || value.errorCode
-        || ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(resultStatus)) continue;
+      if (sourceObservationFailed(value)) continue;
       if (value.kind === "archived_tool_result_projection") {
         for (const descriptor of projectionCoverageDescriptors(value)) recordRecoveryCoverage(coverage, descriptor);
         continue;
@@ -335,7 +353,6 @@ export function seedRecoveryProgress(history: Chat): {
         || ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(status);
       if (failed) continue;
       for (const descriptor of recoveryCoverageDescriptors(value)) recordRecoveryCoverage(coverage, descriptor);
-    }
   }
   return { fingerprints, coverage };
 }
@@ -347,6 +364,7 @@ export type RecoveryProgress = {
   newSourceUnits: number;
   newArchiveUnits: number;
   currentInputAvailabilityGain: null;
+  restoredWorkingEvidenceUnits: number;
   usefulProgress: boolean;
   progressed: boolean;
   errorCount: number;
@@ -359,11 +377,14 @@ export function observeRecoveryProgress(
   messages: Array<ChatMessage>,
   seen: Set<string>,
   coverageLedger: RecoveryCoverageLedger = new Map(),
+  currentCoverage?: RecoveryCoverageLedger,
+  tools: Array<RemoteToolLike> = [],
 ): RecoveryProgress {
   let newResultCount = 0;
   let newSuccessfulObservationCount = 0;
   let newSourceUnits = 0;
   let newArchiveUnits = 0;
+  let restoredWorkingEvidenceUnits = 0;
   // No final-input view is supplied here; historical novelty cannot measure
   // regained current availability (nor can unlike range units be summed).
   const currentInputAvailabilityGain = null;
@@ -371,23 +392,21 @@ export function observeRecoveryProgress(
   let duplicateCount = 0;
   let partialOverlapCount = 0;
   const coverage: Array<Record<string, unknown>> = [];
-  for (const message of messages) {
-    for (const result of message.getToolCallResults()) {
-      const decoded = toolMemory.decodeToolResultRecord(result.content);
-      const value = decoded.value;
+  for (const result of observationRecords(messages, tools)) {
+      const value = result.value;
       const fingerprint = telemetryFingerprint(result.content);
       const isNewResult = !seen.has(fingerprint);
       if (isNewResult) { seen.add(fingerprint); newResultCount += 1; }
       else duplicateCount += 1;
       if (!value || typeof value !== "object") { errorCount += 1; continue; }
-      const status = String(value.status || "").toLowerCase();
-      const failed = value.ok === false || Boolean(value.errorCode)
-        || ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(status);
-      if (failed) { errorCount += 1; continue; }
+      if (sourceObservationFailed(value)) { errorCount += 1; continue; }
       const descriptors = recoveryCoverageDescriptors(value);
       let resultAddedCoverage = false;
       for (const descriptor of descriptors) {
         const delta = recordRecoveryCoverage(coverageLedger, descriptor);
+        if (currentCoverage && recordRecoveryCoverage(currentCoverage, descriptor).uncovered.length) {
+          restoredWorkingEvidenceUnits++;
+        }
         if (delta.uncovered.length) {
           resultAddedCoverage = true;
           if (descriptor.category === "source") newSourceUnits += 1;
@@ -405,12 +424,11 @@ export function observeRecoveryProgress(
         });
       }
       if (resultAddedCoverage) newSuccessfulObservationCount += 1;
-    }
   }
-  const progressed = newSourceUnits > 0 || newArchiveUnits > 0;
+  const progressed = newSourceUnits > 0 || newArchiveUnits > 0 || restoredWorkingEvidenceUnits > 0;
   return {
     newResultCount, newResponseFingerprintCount: newResultCount, newSuccessfulObservationCount,
-    newSourceUnits, newArchiveUnits, currentInputAvailabilityGain,
+    newSourceUnits, newArchiveUnits, currentInputAvailabilityGain, restoredWorkingEvidenceUnits,
     usefulProgress: progressed, progressed, errorCount, duplicateCount, partialOverlapCount, coverage
   };
 }

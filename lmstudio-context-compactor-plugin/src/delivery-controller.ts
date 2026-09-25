@@ -6,6 +6,7 @@ import { toolMemory } from "./context-ports";
 import type { FinalizationTrigger } from "./execution-contracts";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
 import { containsUnresolvedToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
+import { sourceObservationFailed } from "./evidence-manager";
 
 export class DeliveryController {
   attempts = 0;
@@ -16,7 +17,8 @@ export class DeliveryController {
     return { allowed, limit };
   }
   evaluate(history: Chat, captured: Parameters<typeof classifyFinalDelivery>[1] & { messages: Array<ChatMessage> },
-    timedOut: boolean, trigger: FinalizationTrigger | null, noProgressRounds: number) {
+    timedOut: boolean, trigger: FinalizationTrigger | null, noProgressRounds: number,
+    objectiveSatisfied: boolean | null = null) {
     const text = visibleTextFromMessages(captured.messages).trim();
     const classified = classifyFinalDelivery(text, captured, timedOut, captured.messages);
     const forced = trigger === "research_recovery_exhausted" && noProgressRounds > 0;
@@ -26,6 +28,12 @@ export class DeliveryController {
     const needsPartial = delivery.deliveryState !== "complete" && (delivery.reportState === "unresolved_tool_intent"
       || ["research_recovery_complete", "research_recovery_exhausted"].includes(trigger || ""));
     return {
+      generationCompleted: ["eosFound", "stopStringFound"].includes(captured.finishReason || "")
+        && captured.failure === undefined && !timedOut,
+      reportDelivered: delivery.deliveryState === "complete" || needsPartial,
+      researchTerminated: trigger !== null,
+      objectiveSatisfied,
+      taskCompleted: objectiveSatisfied === true && delivery.deliveryState === "complete",
 delivery, partial: needsPartial ? evidenceBackedPartialReport(history, captured.messages,
         delivery.rejectionReason || trigger || "research_incomplete") : null
 };
@@ -138,9 +146,7 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
     for (const result of message.getToolCallResults()) {
       const value = toolMemory.decodeToolResultRecord(result.content).value;
       if (!value || typeof value !== "object") continue;
-      const status = String(value.status || "").toLowerCase();
-      const failed = value.ok === false || Boolean(value.errorCode)
-        || ["error", "failed", "timeout", "timed_out", "canceled", "cancelled", "denied"].includes(status);
+      const failed = sourceObservationFailed(value);
       if (failed) {
         const error = String(value.errorCode || value.status || "unknown_error").slice(0, 120);
         if (!errors.includes(error)) errors.push(error);

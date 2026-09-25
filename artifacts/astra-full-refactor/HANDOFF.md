@@ -1,5 +1,7 @@
 # ASTRA full refactor handoff
 
+> **2026-09-25 후속 감사/개선:** 아래 본문은 `fc5373b0`에 포함된 당시의 기록이다. 현재 패치는 `fc5373b0b62c4e07829cea5052f1e1afbacc3104`에서 시작했으며, 결과는 [후속 HANDOFF](../fc5373-audit-fixes/HANDOFF.md)에 있다. 플러그인 전체 회귀 345개가 통과했으나 현재 로드된 모델이 없어 새 실제 38K/누적380K 검증은 BLOCKED다. 기존 96-token 출력 제한 stress의 실패 수치를 제품 컨텍스트 한계로 해석하지 않는다. 기존 synthetic live/ratchet PASS를 native provider 장기 보존 증명으로 확대하지 않으며 323개와 그 안의 집중16개를 중복 합산하지 않는다. 원래 로그는 역사 자료로 보존한다.
+
 ## Disposition
 
 **Overall: FAIL for the complete requested objective.** Architecture and regression work passed locally, but the requested actual-runtime 380K cumulative post-compaction usage condition was not met. The stress probe stopped at the first post-compaction truncated model response and no product code was changed in response.

@@ -1,0 +1,324 @@
+{
+  "mode": "codegen",
+  "claims": [
+    {
+      "claim": "예산 부족과 exact 측정 불가를 dispatch/commit 전에 구분하고, 가능한 경우 근거를 보존한 최종 보고로 전환한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "observation": "enforceLowWater에서 정책을 적용한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs",
+          "observation": "검사 이름과 결과는 test-verification.log에 저장한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "symbol": "enforceLowWater"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "symbol": "입력 및 상태 계약 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "symbol": "context_execution_blocked"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "observation": "Legacy/observeOnly는 명시적인 호환 경로이며 이 제한을 적용하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 38,912 context 및 380K 누적 production 실행은 이번 패치에서 미검증."
+      ]
+    },
+    {
+      "claim": "native provider의 paired 결과를 공통 identity/query로 처리하고 SDK error 및 원본 실패를 성공 progress로 승격하지 않는다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "observation": "observationRecords에서 정책을 적용한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs",
+          "observation": "검사 이름과 결과는 test-verification.log에 저장한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "symbol": "observationRecords"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "symbol": "입력 및 상태 계약 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "symbol": "observeRecoveryProgress"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "observation": "Registry 없는 pure range 단위 검사 입력은 result-only sample을 허용하지만 production 경로는 pairing을 요구한다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 38,912 context 및 380K 누적 production 실행은 이번 패치에서 미검증."
+      ]
+    },
+    {
+      "claim": "capture/project archive ID를 일치시키고 pending omission을 durable 저장 전 거부하며 저장용 capability/reasoning을 제거한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "captureReturned에서 정책을 적용한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs",
+          "observation": "검사 이름과 결과는 test-verification.log에 저장한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "symbol": "captureReturned"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "symbol": "입력 및 상태 계약 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "symbol": "commit"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "typed file, 범위/무결성, stale-prefix 거부는 유지되며 unconsumed 결과는 GC로 조용히 버리지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 38,912 context 및 380K 누적 production 실행은 이번 패치에서 미검증."
+      ]
+    },
+    {
+      "claim": "읽기 operation을 read profile에 유지하고 raw retry 후 source/archive 도구 목록을 보존한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+          "observation": "readProfile에서 정책을 적용한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs",
+          "observation": "검사 이름과 결과는 test-verification.log에 저장한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+          "symbol": "readProfile"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+          "symbol": "입력 및 상태 계약 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+          "symbol": "createToolGuard"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+          "observation": "Mutation은 여전히 host 승인 대상이고 좁혀진 read profile의 write action은 guard가 거부한다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 38,912 context 및 380K 누적 production 실행은 이번 패치에서 미검증."
+      ]
+    },
+    {
+      "claim": "잘린 planning을 commit하지 않고 보고 EOS와 목표 달성을 별도 값으로 처리한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "observation": "runOneToolRound에서 정책을 적용한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs",
+          "observation": "검사 이름과 결과는 test-verification.log에 저장한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "symbol": "runOneToolRound"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "symbol": "입력 및 상태 계약 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+          "symbol": "evaluate"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "observation": "이미 반환된 tool evidence는 실패/취소 후에도 보존하며 정상 EOS/stopString planning은 허용한다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 38,912 context 및 380K 누적 production 실행은 이번 패치에서 미검증."
+      ]
+    },
+    {
+      "claim": "입력 조립 단계별 fingerprint/token 수와 RPC 비용을 구분하고 동일 라운드의 동일 후보만 캐시한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "observation": "createInputAssembler에서 정책을 적용한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs",
+          "observation": "검사 이름과 결과는 test-verification.log에 저장한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "symbol": "createInputAssembler"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "symbol": "입력 및 상태 계약 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "symbol": "measureContext"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "observation": "Typed file 및 실패한/inexact 측정은 캐시하지 않으며 summary/preparation RPC 비용은 이 scope에 포함하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 38,912 context 및 380K 누적 production 실행은 이번 패치에서 미검증."
+      ]
+    }
+  ],
+  "invariants": [
+    "최종 exact input <= effective LOW가 compaction 성공 조건",
+    "Returned evidence를 cancel/retry에서 유실하지 않음",
+    "출력 종료와 목표 달성을 혼동하지 않음",
+    "Mutation 권한을 evidence/자연어에서 만들지 않음"
+  ],
+  "impactedSurfaces": [
+    "BudgetBroker/ContextManager",
+    "EvidenceManager/WorkingContext",
+    "Capability/ToolBoundary",
+    "Recovery/Delivery",
+    "측정 harness"
+  ],
+  "validationPlan": [
+    "npm test: plugin/Unity/Unreal",
+    "30-cycle deterministic soak",
+    "140-observation archive lifecycle",
+    "SDK 원문 및 별도 read-only reviewer 반례 검토",
+    "Loaded-model 조회 후 runtime 검증 가능성 확인"
+  ],
+  "doNotDuplicate": [
+    "기존 archive/continuity core/range matcher",
+    "기존 phase machine/host approval",
+    "기존 objective text continuity"
+  ]
+}

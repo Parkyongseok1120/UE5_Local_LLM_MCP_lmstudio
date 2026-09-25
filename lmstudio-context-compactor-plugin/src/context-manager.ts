@@ -11,7 +11,10 @@ import { telemetryFingerprint } from "./evidence-telemetry";
 import { numeric } from "./execution-config";
 import { type CheckpointResult, type ContextMeasurement, type ContinuityNote, type DirectConfig, type NormalizedMessage } from "./execution-contracts";
 import { visibleAssistantOutput } from "./raw-tool-intent";
-import { type RemoteToolLike } from "./tool-capability-registry";
+import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
+
+type MeasurementCost = { measurementCalls: number; measurementMs: number; templateCalls: number;
+  tokenCountCalls: number; contextLengthCalls: number; cacheHits: number };
 
 export function normalizeMessages(messages: Array<ChatMessage>): Array<NormalizedMessage> {
   return messages.map((message) => ({
@@ -43,8 +46,10 @@ export async function measureContext(
   history: Chat,
   config: DirectConfig,
   tools: Array<RemoteToolLike & { description?: string; parametersJsonSchema?: unknown }> = [],
-  options: { outputReserve?: number } = {},
+  options: { outputReserve?: number; cost?: MeasurementCost } = {},
 ): Promise<ContextMeasurement> {
+  const started = Date.now(), cost = options.cost;
+  if (cost) cost.measurementCalls++;
   const source = tokenSource as {
     getContextLength?: () => Promise<number>;
     applyPromptTemplate?: (chat: Chat, opts?: { toolDefinitions?: Array<LLMTool> }) => Promise<string>;
@@ -68,13 +73,19 @@ export async function measureContext(
   let exact = false;
   try {
     if (typeof source.getContextLength === "function") {
-      contextLength = numeric(await source.getContextLength(), config.assumedContextLength, 2048, 4_000_000);
+      if (cost) cost.contextLengthCalls++;
+      const loadedContextLength = await source.getContextLength();
+      if (!Number.isSafeInteger(loadedContextLength) || loadedContextLength < 2048 || loadedContextLength > 4_000_000)
+        throw new Error("invalid_runtime_context_length");
+      contextLength = loadedContextLength;
       contextLengthSource = "model";
     }
     if (typeof source.applyPromptTemplate === "function" && typeof source.countTokens === "function") {
+      if (cost) cost.templateCalls++;
       const prompt = await source.applyPromptTemplate(history, { toolDefinitions });
       templatedInputChars = String(prompt).length;
       templatedInputFingerprint = telemetryFingerprint(String(prompt));
+      if (cost) cost.tokenCountCalls++;
       const counted = await source.countTokens(prompt);
       if (!Number.isSafeInteger(counted) || counted < 0) throw new Error("invalid_token_measurement");
       inputTokens = counted;
@@ -82,6 +93,7 @@ export async function measureContext(
       exact = true;
       if (toolSchemaChars > 0) {
         try {
+          if (cost) cost.tokenCountCalls++;
           toolSchemaTokens = numeric(
             await source.countTokens(toolSchemaJson), toolSchemaTokens, 0, 4_000_000,
           );
@@ -93,11 +105,12 @@ export async function measureContext(
     }
   } catch {
     // A selected generator or experimental model handle may not expose token
-    // measurement. Character estimation remains conservative, and the
-    // configured message-count fallback independently protects this path.
+    // measurement. The character estimate is diagnostic only: it cannot
+    // certify a safe model call for an unknown tokenizer/template.
   }
   const outputReserve = numeric(options.outputReserve, config.maxOutputReserve, 0, 131072);
   const remainingTokens = contextLength - inputTokens - outputReserve - config.safetyMarginTokens;
+  if (cost) cost.measurementMs += Date.now() - started;
   return {
     contextLength, contextLengthSource, promptMeasurementSource, templatedInputChars,
     inputTokens,
@@ -154,17 +167,17 @@ export type SoftCompactionSelection = {
   fit: boolean | null;
 };
 
-export function targetRemainingForInput(measurement: ContextMeasurement, config: DirectConfig): number {
+export function targetRemainingForInput(measurement: ContextMeasurement, config: DirectConfig, hasReadTools = false): number {
   if (config.contextManagementMode === "legacy" || !measurement.exact) return 0;
-  const water = new BudgetBroker(config).watermarks(measurement);
+  const water = new BudgetBroker(config).watermarks(measurement, 0, hasReadTools);
   return Math.max(0, water.hardInputCeiling - water.configuredLowWaterTokens);
 }
 
-export function shouldCompactContext(measurement: ContextMeasurement, config: DirectConfig): boolean {
+export function shouldCompactContext(measurement: ContextMeasurement, config: DirectConfig, hasReadTools = false): boolean {
   if (config.observeOnly) return false;
   return core.shouldCompact(measurement, config)
     || (config.contextManagementMode !== "legacy" && measurement.exact
-      && measurement.inputTokens > new BudgetBroker(config).watermarks(measurement).effectiveHighWaterTokens);
+      && measurement.inputTokens > new BudgetBroker(config).watermarks(measurement, 0, hasReadTools).effectiveHighWaterTokens);
 }
 
 export async function selectSoftCompaction(
@@ -346,10 +359,29 @@ export type InputAssemblyOptions = {
   roundScopeInstructions: Array<string>; getRoundOutputReserve: () => number;
   modelInputId: string; noteEnabled: boolean; getNote: () => ContinuityNote | null;
   historicalAvailabilityLedger: Array<Record<string, unknown>>;
+  preProjectionHistory?: Chat; postProjectionHistory?: Chat;
 };
 export function createInputAssembler(options: InputAssemblyOptions) {
   const { tokenSource, config, roundTools, roundScopeInstructions, getRoundOutputReserve,
     modelInputId, noteEnabled, getNote, historicalAvailabilityLedger } = options;
+  // Cache only within this round/model handle, keyed by the entire SDK message
+  // and schema surface. Typed files bypass serialization and therefore caching.
+  const cache = new Map<string, ContextMeasurement>();
+  const cost: MeasurementCost = { measurementCalls: 0, measurementMs: 0,
+    templateCalls: 0, tokenCountCalls: 0, contextLengthCalls: 0, cacheHits: 0 };
+  const measure = async (history: Chat, tools: Array<RemoteToolLike>, reserve: number) => {
+    let key: string | null = null;
+    try { key = telemetryFingerprint([workingContextModule.serialize(history), toolDefinitionSurface(tools), reserve]); }
+    catch { /* A typed file is never flattened into a text cache key. */ }
+    const cached = key ? cache.get(key) : undefined;
+    if (cached) { cost.cacheHits++; return cached; }
+    const measured = await measureContext(tokenSource, history, config, tools, { outputReserve: reserve, cost });
+    if (key && measured.exact) {
+      if (cache.size >= 96) cache.delete(cache.keys().next().value!);
+      cache.set(key, measured);
+    }
+    return measured;
+  };
   return async (sourceHistory: Chat, profile: {
     tools?: Array<RemoteToolLike>;
     instructions?: Array<string>;
@@ -360,24 +392,33 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const profileInstructions = profile.instructions || roundScopeInstructions;
     const profileOutputReserve = profile.outputReserve ?? getRoundOutputReserve();
     const profileModelInputId = profile.modelInputId || modelInputId;
-    const measureProfileInput = (history: Chat) => measureContext(
-      tokenSource, history, config, profileTools, { outputReserve: profileOutputReserve },
-    );
+    const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
     const baseComposition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled,
     );
     const baseMeasurement = await measureProfileInput(baseComposition.history);
-    const historyMeasurement = config.contextManagementMode === "legacy" ? baseMeasurement
-      : await measureContext(tokenSource, sourceHistory, config, [], { outputReserve: profileOutputReserve });
+    const historyMeasurement = config.contextManagementMode !== "legacy" && options.preProjectionHistory
+      ? await measure(options.preProjectionHistory, [], profileOutputReserve) : null;
+    const projectionMeasurement = config.contextManagementMode !== "legacy" && options.postProjectionHistory
+      ? await measure(options.postProjectionHistory, [], profileOutputReserve) : null;
+    const compactionMeasurement = config.contextManagementMode === "legacy" ? null
+      : await measure(sourceHistory, [], profileOutputReserve);
     const stages = async (input: Chat, measured: ContextMeasurement) => {
-      const metadataMeasurement = config.contextManagementMode === "legacy" ? measured
-        : await measureContext(tokenSource, input, config, [], { outputReserve: profileOutputReserve });
+      const metadataMeasurement = config.contextManagementMode === "legacy" ? null
+        : await measure(input, [], profileOutputReserve);
       return {
-postHistoryTokens: historyMeasurement.exact ? historyMeasurement.inputTokens : null,
-        postProjectionTokens: historyMeasurement.exact ? historyMeasurement.inputTokens : null,
-        postMetadataTokens: metadataMeasurement.exact ? metadataMeasurement.inputTokens : null,
+        postHistoryTokens: historyMeasurement?.exact ? historyMeasurement.inputTokens : null,
+        postProjectionTokens: projectionMeasurement?.exact ? projectionMeasurement.inputTokens : null,
+        postCompactionTokens: compactionMeasurement?.exact ? compactionMeasurement.inputTokens : null,
+        postMetadataTokens: metadataMeasurement?.exact ? metadataMeasurement.inputTokens : null,
         postToolSchemaTokens: measured.exact ? measured.inputTokens : null,
-        finalExactInputTokens: measured.exact ? measured.inputTokens : null
+        finalExactInputTokens: measured.exact ? measured.inputTokens : null,
+        stageFingerprints: { history: historyMeasurement?.templatedInputFingerprint ?? null,
+          projection: projectionMeasurement?.templatedInputFingerprint ?? null,
+          compaction: compactionMeasurement?.templatedInputFingerprint ?? null,
+          metadata: metadataMeasurement?.templatedInputFingerprint ?? null,
+          final: measured.templatedInputFingerprint },
+        measurementCost: { ...cost, scope: "round_input_assembler", cacheScope: "same_round_model_handle" }
 };
     };
     let projection = config.inputAvailabilityMode === "off" ? null
@@ -441,9 +482,9 @@ export class ContextManager {
     candidate: Chat, measured: ContextMeasurement, fingerprint: Record<string, unknown>, eligible: boolean) {
     if (!store || !eligible || !measured.exact || measured.remainingTokens < 0) return { committed: false, reason: null };
     try {
-      const committed = store.commit(visible, candidate, measured,
+      const committed = store.commit(visible, store.persistable(candidate), measured,
         workingContextModule.hash(workingContextModule.serialize(visible)), workingContextModule.hash(fingerprint));
-      return { committed, reason: committed ? null : "commit_validation_rejected" };
+      return { committed, reason: committed ? null : store.lastCommitReason || "commit_validation_rejected" };
     } catch (error) {
       return {
 committed: false, reason: error instanceof Error && error.message === "typed_files_not_serializable"
@@ -452,19 +493,23 @@ committed: false, reason: error instanceof Error && error.message === "typed_fil
     }
   }
   async enforceLowWater(history: Chat, assemble: (history: Chat) => Promise<AssembledInput>,
-    options: { force?: boolean; hasReadTools: boolean }) {
+    options: { force?: boolean; hasReadTools: boolean; minimumReadTokens?: number }) {
     const before = await assemble(history);
-    if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !before.measurement.exact) {
+    if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !before.measurement.exact
+      || before.measurement.contextLengthSource !== "model") {
       return {
 history, assembled: before, changed: false, success: false, checkpoint: null,
-        floorMeasurement: null, telemetry: null
+        floorMeasurement: null, telemetry: null,
+        canRun: this.config.observeOnly || this.config.contextManagementMode === "legacy",
+        disposition: !before.measurement.exact ? "exact_measurement_unavailable"
+          : before.measurement.contextLengthSource !== "model" ? "runtime_context_length_unavailable" : "compatibility_mode"
 };
     }
     const floorCandidate = buildCompactedHistory(history, 0, this.config, { maxCurrentTurnMessages: 0 });
     const floorInput = floorCandidate.history === history ? before : await assemble(floorCandidate.history);
     // A checkpoint that expands an already minimal input is not its mandatory floor.
-    const floor = floorInput.measurement.inputTokens < before.measurement.inputTokens ? floorInput : before;
-    const water = this.broker.watermarks(before.measurement, floor.measurement.inputTokens, options.hasReadTools);
+    const floor = floorInput.measurement.exact && floorInput.measurement.inputTokens < before.measurement.inputTokens ? floorInput : before;
+    const water = this.broker.watermarks(before.measurement, floor.measurement.inputTokens, options.hasReadTools, options.minimumReadTokens);
     const measurements: Array<{ candidate: string; finalExactInputTokens: number; accepted: boolean }> = [];
     let selected = { history, assembled: before, checkpoint: null as CheckpointResult | null, name: "unchanged" };
     const pressured = options.force || before.measurement.inputTokens > water.effectiveHighWaterTokens
@@ -478,7 +523,9 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
         const input = candidate.history === history ? before
           : cap === 0 ? floorInput : await assemble(candidate.history);
         const accepted = input.measurement.exact && input.measurement.inputTokens <= water.effectiveLowWaterTokens
-          && input.measurement.inputTokens <= water.hardInputCeiling;
+          && input.measurement.inputTokens <= water.hardInputCeiling
+          && this.broker.watermarks(input.measurement, floor.measurement.inputTokens,
+            options.hasReadTools, options.minimumReadTokens).nextActionFit;
         measurements.push({ candidate: `complete_exchange_cap_${cap}`, finalExactInputTokens: input.measurement.inputTokens, accepted });
         if (accepted) {
           selected = {
@@ -491,14 +538,22 @@ history: candidate.history, assembled: input, checkpoint: candidate.checkpoint,
     const final = selected.assembled.measurement;
     const success = final.exact && final.inputTokens <= water.effectiveLowWaterTokens
       && final.inputTokens <= water.hardInputCeiling;
+    const finalWater = this.broker.watermarks(final, floor.measurement.inputTokens, options.hasReadTools, options.minimumReadTokens);
+    const hardFit = final.exact && final.inputTokens <= water.hardInputCeiling;
+    const canRun = hardFit && finalWater.nextActionFit && (!pressured || success);
+    const disposition = !hardFit ? "blocked_hard_limit" : !finalWater.nextActionFit ? "blocked_next_action"
+      : pressured && !success ? "blocked_low_target" : water.targetUnreachable ? "mandatory_floor_exception"
+        : pressured ? "compacted_to_low" : "normal_growth";
     return {
       history: selected.history, assembled: selected.assembled, checkpoint: selected.checkpoint,
-      changed: selected.history !== history, success, floorMeasurement: floor.measurement,
+      changed: selected.history !== history, success, canRun, disposition, floorMeasurement: floor.measurement,
       telemetry: {
 ...water, tokenMetric: "exact_templated_model_input", beforeExactInputTokens: before.measurement.inputTokens,
         candidateMeasurements: measurements, selectedCandidate: selected.name,
         ...selected.assembled.stages, finalExactInputTokens: final.inputTokens, targetDelta: final.inputTokens - water.effectiveLowWaterTokens,
         compactionSucceeded: success, compactionRequested: Boolean(pressured),
+        lowTargetMet: success, mandatoryFloorException: water.targetUnreachable, hardFit,
+        nextActionFit: finalWater.nextActionFit, disposition, canRun,
         metadataTokens: selected.assembled.metadataTokens, toolSchemaTokens: final.toolSchemaTokens,
         reclaimRatio: before.measurement.inputTokens ? (before.measurement.inputTokens - final.inputTokens) / before.measurement.inputTokens : 0
 }
@@ -523,7 +578,7 @@ export async function prepareWorkingInput(options: {
   const compactionAppliedModes: Array<string> = [];
   let compactionCheckpoint: CheckpointResult | null = null;
   let compactionRetention: Record<string, unknown> | null = null;
-  if (shouldCompactContext(before, config)) {
+  if (shouldCompactContext(before, config, roundTools.some(hasReadCapability))) {
     const counter = tokenSource as { countTokens?: (text: string) => Promise<number> };
     if (config.pastReasoningTokens > 0 && counter.countTokens) {
       workingHistory = await boundPastReasoning(workingHistory, config.pastReasoningTokens, text => counter.countTokens!(text));
@@ -533,7 +588,7 @@ export async function prepareWorkingInput(options: {
         config, roundTools, { outputReserve: roundOutputReserve });
     }
   }
-  if (shouldCompactContext(before, config)) {
+  if (shouldCompactContext(before, config, roundTools.some(hasReadCapability))) {
     const hard = before.remainingTokens <= config.hardRemainingTokens;
     const checkpointOptions = {
       maxCheckpointChars: config.maxCheckpointChars - beforeInput.overhead,
@@ -546,7 +601,7 @@ export async function prepareWorkingInput(options: {
           candidateHistory, noteEnabled ? activeNote : null,
           config, roundScopeInstructions, noteEnabled,
         ).history),
-        targetRemainingForInput(before, config),
+        targetRemainingForInput(before, config, roundTools.some(hasReadCapability)),
       );
       candidate = selected.candidate;
       compactionRetention = {
@@ -570,7 +625,7 @@ export async function prepareWorkingInput(options: {
           candidate.history, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled,
         ).history;
         const afterFirst = await measureRoundInput(measuredCandidate);
-        needsBoundedCurrentTurn = shouldCompactContext(afterFirst, config);
+        needsBoundedCurrentTurn = shouldCompactContext(afterFirst, config, roundTools.some(hasReadCapability));
       }
       if (needsBoundedCurrentTurn) {
         candidate = buildCompactedHistory(

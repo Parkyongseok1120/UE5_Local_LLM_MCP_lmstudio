@@ -1,0 +1,33 @@
+{
+  "baseSha": "fc5373b0b62c4e07829cea5052f1e1afbacc3104",
+  "date": "2026-09-25",
+  "localStatus": "PASS",
+  "liveStatus": "BLOCKED",
+  "liveBlocker": "lms ps --json returned [] on this turn. No loaded LM Studio model; no 38912-token live or cumulative-380K claim.",
+  "commands": [
+    {"cwd":"lmstudio-context-compactor-plugin","command":"npm test","exitCode":0,"pass":345,"fail":0,"skip":0,"log":"test-verification.log"},
+    {"cwd":"lmstudio-context-compactor-plugin","command":"node --test --test-name-pattern='context budget measures a narrowed|final raw git_diff repair|aggregate first-consumer fit|B04/O03' test/prediction-loop.test.cjs","exitCode":0,"pass":4,"includedInPluginTotal":true,"log":"test-budget-integration.log"},
+    {"cwd":"lmstudio-unity-mcp","command":"npm test","exitCode":0,"pass":34,"fail":0,"skip":4,"log":"test-unity.log"},
+    {"cwd":"lmstudio-unreal-agent-mcp","command":"npm test","exitCode":0,"pass":247,"fail":0,"skip":1,"log":"test-unreal.log"},
+    {"cwd":"lmstudio-context-compactor-plugin","command":"node scripts/astra-ratchet.cjs","exitCode":0,"cycles":30,"counter":"synthetic chars/4 fixture, not actual runtime tokens","log":"ratchet-soak.log"},
+    {"cwd":"repository root","command":"node artifacts/fc5373-audit-fixes/collect-evidence.cjs","exitCode":0},
+    {"cwd":"repository root","command":"python C:/Users/sster/.codex/skills/evidence-first-code-audit/scripts/validate_evidence_packet.py artifacts/fc5373-audit-fixes/audit.json","exitCode":0,"claims":6,"errors":0,"warnings":0},
+    {"cwd":"lmstudio-context-compactor-plugin","command":"node --check scripts/astra-live-flow.cjs","exitCode":0},
+    {"cwd":"lmstudio-context-compactor-plugin","command":"node --check scripts/astra-ratchet.cjs","exitCode":0},
+    {"cwd":"repository root","command":"git diff --check","exitCode":0},
+    {"cwd":"repository environment","command":"lms ps --json","exitCode":0,"loadedModels":[]}
+  ],
+  "intermediateRuns": [
+    {"log":"test-first.log","pass":329,"fail":8,"exitCode":1,"finalEvidence":false},
+    {"log":"test-focused-19.log","pass":19,"fail":0,"exitCode":0,"finalEvidence":false},
+    {"log":"test-full.log","pass":343,"fail":0,"exitCode":0,"finalEvidence":false},
+    {"log":"test-final.log","pass":342,"fail":3,"exitCode":1,"finalEvidence":false,"resolution":"Source minimum excludes auxiliary archive; next-action-only failure transitions to measured tool-free final delivery. Final verification passes."}
+  ],
+  "newFocusedTests":21,
+  "newHandlerTests":1,
+  "newTestsIncludedIn345":true,
+  "archiveSoak":{"observations":140,"maxRecords":8,"pass":true},
+  "ratchetFixture":{"firstThreeBaselines":[5675,5670,5670],"lastBaseline":5670,"spread":5,"low":6000,"high":9000},
+  "node":"v24.17.0",
+  "npm":"11.13.0"
+}

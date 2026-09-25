@@ -4,7 +4,7 @@ import { telemetryFingerprint } from "./evidence-telemetry";
 import type { DirectConfig } from "./execution-contracts";
 import { type OutputLimitStage } from "./execution-contracts";
 import { createMessageEmitter, createToolGenerationTracker, toolPluginIdentifier } from "./prediction-ui";
-import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
+import { isObservationOnlyToolCall, readOnlyOperationProfiles, type RemoteToolLike } from "./tool-capability-registry";
 import { bindProjectArguments, type ScopedTool } from "./tool-scope";
 
 export type ToolCallBoundary = {
@@ -91,6 +91,12 @@ export function createToolGuard(options: {
       allowedTool as ScopedTool, request, projectBindingIdentity,
     );
     const proposedArguments = boundArguments || request.arguments || {};
+    if (readOnlyOperationProfiles.has(allowedTool)
+      && !isObservationOnlyToolCall(allowedTool, { ...request, arguments: proposedArguments })) {
+      traceCall(callId, { validationState: "denied_read_profile_operation", executionState: "not_executed" });
+      controller.deny("Operation is outside the published read-only profile.");
+      return;
+    }
     const retryFingerprint = telemetryFingerprint({ name: request.name, arguments: proposedArguments });
     if (toolPlanningRetryRound && toolPlanningRetryBlockedFingerprints.has(retryFingerprint)) {
       traceCall(callId, { validationState: "denied_duplicate_retry", executionState: "not_executed" });

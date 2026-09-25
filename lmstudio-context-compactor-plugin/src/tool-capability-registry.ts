@@ -20,6 +20,16 @@ export type RemoteToolLike = Tool & {
 
 // Only locally constructed tool objects can receive local read authority.
 export const localObservationTools = new WeakSet<object>();
+const readOperations: Readonly<Record<string, readonly string[]>> = {
+  unity_scene: ["list"], unity_prefab: ["read", "contents", "overrides"],
+  unity_approval: ["status"], unity_operation: ["get"], unity_tests: ["status", "results"],
+};
+export const readOnlyOperationProfiles = new WeakSet<object>();
+
+export function hasReadCapability(tool: RemoteToolLike): boolean {
+  return isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} })
+    || (tool.pluginIdentifier === "mcp/unity-tools" && Boolean(readOperations[tool.name]));
+}
 
 export const UNITY_OBSERVATION_TOOLS = new Set([
   "workspace_status", "git_status", "git_log", "git_changed_files", "git_diff_file", "git_read_file",
@@ -74,11 +84,7 @@ function hasReadAuthority(
     && ["evidence_first_contract", "evidence_first_validate", "evidence_first_status"].includes(name)) return true;
   if (plugin === "mcp/unity-tools") {
     if (UNITY_OBSERVATION_TOOLS.has(name)) return true;
-    if (name === "unity_scene") return args.action === "list";
-    if (name === "unity_prefab") return ["read", "contents", "overrides"].includes(String(args.action || ""));
-    if (name === "unity_approval") return args.action === "status";
-    if (name === "unity_operation") return args.action === "get";
-    if (name === "unity_tests") return ["status", "results"].includes(String(args.action || ""));
+    if (readOperations[name]) return readOperations[name].includes(String(args.action || ""));
     return false;
   }
   if (plugin === "mcp/unreal-agent" || plugin === "mcp/unreal-rag") {
@@ -118,5 +124,20 @@ export class ToolCapabilityRegistry {
     this.tools = tools.filter(t => !this.collisions.includes(t.name));
   }
   resolve(name: string) { return this.tools.find(t => t.name === name); }
-  readProfile() { return this.tools.filter(t => resolveCapability(t, { name: t.name, arguments: {} }).recoveryEligible); }
+  readProfile() {
+    return this.tools.filter(hasReadCapability).map(tool => {
+      const actions = tool.pluginIdentifier === "mcp/unity-tools" ? readOperations[tool.name] : undefined;
+      if (!actions) return tool;
+      const schema = (tool.parametersJsonSchema || {}) as { properties?: Record<string, unknown>; required?: string[] };
+      // Preserve the SDK tool implementation/remote session while narrowing the
+      // model-facing operation schema. The guard independently enforces it.
+      const narrowed = Object.create(tool) as RemoteToolLike;
+      Object.defineProperty(narrowed, "parametersJsonSchema", { value: {
+        ...schema, properties: { ...schema.properties, action: { type: "string", enum: [...actions] } },
+        required: [...new Set([...(schema.required || []), "action"])],
+      }, enumerable: true });
+      readOnlyOperationProfiles.add(narrowed);
+      return narrowed;
+    });
+  }
 }

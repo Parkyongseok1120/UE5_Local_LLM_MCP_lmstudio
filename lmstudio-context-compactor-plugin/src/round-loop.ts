@@ -9,6 +9,12 @@ import {
 
 type TokenSource = LLM | LLMGeneratorHandle;
 
+/** A completion callback is also emitted for truncation; only normal terminal
+ * reasons can commit planning or completed model exposure. */
+export function isCompletedPredictionReason(reason?: string): boolean {
+  return reason === "eosFound" || reason === "stopStringFound";
+}
+
 const RAW_TOOL_INTENT_PATTERN = /<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu;
 const RAW_TOOL_INTENT_CARRY_CHARS = 96;
 
@@ -210,7 +216,7 @@ export async function runOneToolRound(
 
   return {
     predictionCompleted: Boolean(predictionStats && !fragmentAbortReason && !parentSignal.aborted
-      && !["userStopped", "unknown"].includes(predictionStats.stopReason)),
+      && failure === undefined && isCompletedPredictionReason(predictionStats.stopReason)),
     messages,
     continueAfterTools: boundaryRequested,
     ...(fragmentAbortReason ? { finishReason: "generation_repetition_paused" }

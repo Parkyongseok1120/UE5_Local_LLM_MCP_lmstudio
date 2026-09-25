@@ -8,7 +8,7 @@ import {
 import crypto from "node:crypto";
 import { attachmentBoundary } from "./attachment-boundary";
 import { createAttachmentContext } from "./attachment-tools";
-import { BudgetBroker } from "./budget-broker";
+import { BudgetBroker, minimumReadResultTokens } from "./budget-broker";
 import { resolveGenerationBudget } from "./context-budget";
 import { buildCompactedHistory, composeModelHistory, ContextManager, createInputAssembler, measureContext, modelHistoryMessage, normalizeHistory, normalizeMessages, prepareWorkingInput, selectSoftCompaction, toolDefinitionSurface, updateSemanticContext } from "./context-manager";
 import { core, inputAvailability, modelNotes, workingContextModule } from "./context-ports";
@@ -26,7 +26,7 @@ import { freshToolPlanningRetryDecision, planReadRecovery, readOnlyRecoveryProfi
 import { runOneToolRound } from "./round-loop";
 import { runtimeInstallationIdentity } from "./runtime-identity";
 import { classifyToolCallBoundary, createToolGuard } from "./tool-boundary";
-import { isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
+import { hasReadCapability, isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 import {
   bindProjectArguments,
   detectMentionedProject,
@@ -104,7 +104,7 @@ export function createPredictionLoopHandler(
     const allModelTools = capabilityRegistry.tools;
     const evidenceManager = new EvidenceManager(workingContext, allModelTools);
     const modelTools = config.auditCompletionMode === "bounded"
-      ? allModelTools.filter(tool => isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} }))
+      ? capabilityRegistry.readProfile()
       : allModelTools;
     if (config.showDebugInfo) ctl.debug({
       event: "direct_runtime_identity",
@@ -131,7 +131,7 @@ export function createPredictionLoopHandler(
         ? [renderToolScopeInstruction(scope)] : []),
       ...(attachmentContext.instruction ? [attachmentContext.instruction] : []),
       ...(config.contextManagementMode !== "legacy"
-        && modelTools.some(tool => isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} }))
+        && modelTools.some(hasReadCapability)
         ? [READ_ONLY_BATCH_INSTRUCTION] : []),
     ];
     const emitter = createMessageEmitter(ctl, modelTools);
@@ -233,6 +233,7 @@ export function createPredictionLoopHandler(
             break;
           }
         }
+        const preProjectionHistory = Chat.from(workingHistory);
         let projectionApplied = false;
         if (workingContext && !finalizing) {
           const projected = evidenceManager.project(workingHistory, {
@@ -293,6 +294,7 @@ export function createPredictionLoopHandler(
             activeNote, visibleHistory.getMessagesArray(), workingContext?.summaryRefs(),
           );
         }
+        const postProjectionHistory = Chat.from(workingHistory);
         const beforeInput = composeModelHistory(
           workingHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled,
         );
@@ -314,7 +316,8 @@ tokenSource, config,
         const assembleModelInput = createInputAssembler({
           tokenSource, config, roundTools,
           roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
-          noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger
+          noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger,
+          preProjectionHistory, postProjectionHistory
         });
         const assembleRecoveryCandidate = async (
           sourceHistory: Chat,
@@ -596,7 +599,8 @@ tokenSource, config,
 
         const lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
           force: compacted || projectionApplied,
-          hasReadTools: roundTools.some(tool => isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} })),
+          hasReadTools: roundTools.some(hasReadCapability),
+          minimumReadTokens: minimumReadResultTokens(roundTools.filter(hasReadCapability)),
         });
         if (lowWater.changed) {
           workingHistory = lowWater.history;
@@ -618,12 +622,23 @@ tokenSource, config,
           event: "context_low_water", executionId,
           modelInputId, roundIndex, ...lowWater.telemetry
         });
+        if (!lowWater.canRun) {
+          ctl.debug({ event: "context_execution_blocked", executionId, modelInputId,
+            disposition: lowWater.disposition, exact: finalMeasurement.exact });
+          if (!finalizing && lowWater.disposition === "blocked_next_action") {
+            execution.finishResearch("context_budget");
+            continue;
+          }
+          throw new Error(`CONTEXT_EXECUTION_BLOCKED: ${lowWater.disposition}`);
+        }
+        // Validate first-consumer evidence before any durable window mutation.
+        evidenceManager.captureExposure(modelInput, modelInputId, false);
         const committedWindow = contextManager.commit(workingContext, visibleHistory, workingHistory, finalMeasurement,
           {
 model: String((tokenSource as { identifier?: unknown }).identifier || "unknown"), contextLength: finalMeasurement.contextLength,
             tools: roundTools.map(tool => ({ name: tool.name, schema: tool.parametersJsonSchema })), target: config.workingInputTargetTokens
 },
-          (projectionApplied || compacted || restoredWindowApplied) && (!compacted || lowWater.success));
+          (projectionApplied || compacted || restoredWindowApplied) && lowWater.canRun);
         const workingWindowCommitted = committedWindow.committed;
         const windowCommitSkippedReason = committedWindow.reason;
 
@@ -781,9 +796,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
           : ctl.abortSignal;
         const historyBeforeRound = Chat.from(workingHistory);
         const batchReservation = config.contextManagementMode === "legacy" || config.observeOnly
-          ? null : budgetBroker.beginBatch(finalMeasurement, roundTools.length > 0);
+          ? null : budgetBroker.beginBatch(finalMeasurement, roundTools.some(hasReadCapability));
         const reservationIds = new Map<string, string>();
-        evidenceManager.captureExposure(modelInput, modelInputId, false);
         const roundModelStartedAt = Date.now();
         const captured = await runOneToolRound(
           tokenSource,
@@ -1036,7 +1050,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           toolPlanningRetryAttempts += 1;
           execution.startReplan();
           toolPlanningRetryInstruction = retryInstruction;
-          toolPlanningRetryBlockedFingerprints = completedRequestFingerprints(historyBeforeRound);
+          toolPlanningRetryBlockedFingerprints = completedRequestFingerprints(modelInput);
           researchRecoveryEpisodeStarted = true;
           researchRecoveryToolNames = new Set(retryTools.map(tool => tool.name));
           researchRecoveryOutputReserve = retryCandidate?.budget.appliedMaxTokens
@@ -1267,7 +1281,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             rejectionReason: finalDelivery.rejectionReason,
             completionAccepted: deliveryState === "complete",
             reportDelivered,
-            taskCompleted: deliveryState === "complete",
+            generationCompleted: evaluated.generationCompleted,
+            researchTerminated: evaluated.researchTerminated,
+            objectiveSatisfied: evaluated.objectiveSatisfied,
+            taskCompleted: evaluated.taskCompleted,
             predictionStats: captured.predictionStats,
             predictionUsage: captured.predictionUsage,
             outputLimitStage,

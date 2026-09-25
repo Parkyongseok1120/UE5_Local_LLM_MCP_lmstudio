@@ -34,6 +34,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/compaction-tool-memory.js",
   "src/input-availability.js",
   "src/evidence-archive.js",
+  "src/evidence-identity.js",
   "src/working-context.js",
   "src/working-context-boundary.ts",
   "src/continuity-assistant-evidence.js",

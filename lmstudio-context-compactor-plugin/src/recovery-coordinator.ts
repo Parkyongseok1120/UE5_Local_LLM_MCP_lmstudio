@@ -37,11 +37,12 @@ export type ReadOnlyRecoveryProfile = {
   tools: Array<RemoteToolLike>;
 };
 
-export type ObjectiveState = {
+// This is a capability scope, not a claim about the user's goal or completion.
+export type ReadExecutionScope = {
   scope: "registered_read_evidence" | "mixed_or_unknown";
   reason: string; allowedReadNames: ReadonlySet<string>
 };
-export function objectiveState(history: Chat, tools: Array<RemoteToolLike>): ObjectiveState {
+export function readExecutionScope(history: Chat, tools: Array<RemoteToolLike>): ReadExecutionScope {
   const registry = new ToolCapabilityRegistry(tools);
   const messages = history.getMessagesArray();
   const latest = messages.map((m, i) => m.isUserMessage() ? i : -1).filter(i => i >= 0).at(-1) ?? 0;
@@ -61,8 +62,8 @@ scope: "registered_read_evidence", reason: "provider_qualified_read_scope",
 
 export function readOnlyRecoveryProfile(history: Chat, visibleTools: Array<RemoteToolLike>): ReadOnlyRecoveryProfile {
   const messages = history.getMessagesArray();
-  const objective = objectiveState(history, visibleTools);
-  if (objective.scope !== "registered_read_evidence") return { eligible: false, reason: objective.reason, tools: [] };
+  const scope = readExecutionScope(history, visibleTools);
+  if (scope.scope !== "registered_read_evidence") return { eligible: false, reason: scope.reason, tools: [] };
 
   const latestUserIndex = messages.map((message, index) => message.isUserMessage() ? index : -1)
     .filter(index => index >= 0).at(-1) ?? 0;
@@ -190,8 +191,7 @@ export function planReadRecovery(historyBeforeRound: Chat, workingHistory: Chat,
     && rawIntent.knownReadOnlyNames.every(name => name === "evidence_first_read_context")
     && gitRecoveryProfile.eligible;
   const retryTools = includeArchiveReader(
-    rawIntent.unknownNames.length > 0 || archiveOnlyRecoveryAllowed
-      ? gitRecoveryProfile.tools : exactRawTools,
+    gitRecoveryProfile.eligible ? gitRecoveryProfile.tools : exactRawTools,
   );
   const retryInstruction = rawIntent.unknownNames.length > 0
     ? catalogueCorrectionInstruction(rawIntent, retryTools)

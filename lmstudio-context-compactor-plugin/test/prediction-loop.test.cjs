@@ -87,6 +87,19 @@ function fakeController(history, tokenSource, overrides = {}, tools = []) {
   return ctl;
 }
 
+test("B04/O03 production handler rejects an inexact input before model dispatch or durable commit", async () => {
+  let calls = 0;
+  const model = { async getContextLength() { return 38912; },
+    async applyPromptTemplate() { throw new Error('tokenizer unavailable'); },
+    async countTokens() { return 1; }, async act() { calls++; } };
+  const ctl = fakeController(Chat.from([{role:'user',content:'한글😀 evidence'}]), model,
+    {contextManagementMode:'hybrid'});
+  await assert.rejects(handlePredictionLoop(ctl), /CONTEXT_EXECUTION_BLOCKED: exact_measurement_unavailable/);
+  assert.equal(calls, 0);
+  assert.equal(ctl.debugValues.some(e => e.event === 'context_execution_blocked'), true);
+  assert.equal(ctl.debugValues.some(e => e.event === 'working_context_commit' && e.committed), false);
+});
+
 test("prediction loop calls the directly selected model with compacted history", async () => {
   const latest = "Analyze the current Cinematic system only.";
   const history = Chat.from([
@@ -2273,7 +2286,7 @@ test("Human-Bartender raw diff intent gets one fresh structured read-only planni
         return;
       }
       if (called === 2) {
-        assert.deepEqual(roundTools.map(tool => tool.name), ["git_diff_file"]);
+        assert.deepEqual(roundTools.map(tool => tool.name), ["git_log", "git_changed_files", "git_diff_file", "evidence_first_read_context"]);
         assert.match(chat.toString(), /freshly emit only valid structured read-only tool requests/u);
         assert.match(chat.toString(), /CHANGED_FILES_SENTINEL/u);
         const request = { id: "fresh-diff-1", type: "function", name: "git_diff_file",
@@ -2952,7 +2965,7 @@ test("raw Git replan keeps the archive reader beside the public source reader an
     }
     if (calls === 2) {
       retryToolNames = tools.map(tool => tool.name);
-      assert.deepEqual(retryToolNames, ["git_read_file", "evidence_first_read_context"]);
+      assert.deepEqual(retryToolNames, ["git_read_file", "git_changed_files", "evidence_first_read_context"]);
       const projection = chat.getMessagesArray().flatMap(message => message.getToolCallResults())
         .map(result => { try { return JSON.parse(result.content); } catch { return null; } })
         .find(value => value?.kind === "archived_tool_result_projection");
@@ -2989,7 +3002,7 @@ test("raw Git replan keeps the archive reader beside the public source reader an
   await handlePredictionLoop(ctl);
   assert.equal(calls, 3);
   const retry = ctl.debugValues.find(value => value.event === "fresh_tool_planning_retry_scheduled");
-  assert.deepEqual(retry.recoveryToolNames, ["git_read_file", "evidence_first_read_context"]);
+  assert.deepEqual(retry.recoveryToolNames, ["git_read_file", "git_changed_files", "evidence_first_read_context"]);
   const retryRound = ctl.debugValues.find(value => value.event === "direct_round_observation"
     && value.modelInputId?.includes(":tool-planning-retry-"));
   assert.equal(retryRound.actualDispatchCount, null);

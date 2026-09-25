@@ -10,7 +10,7 @@
     "eval:availability-ab": "npm run build && node scripts/eval-input-availability-ab.cjs",
     "eval:audit-pressure": "npm run build && node scripts/eval-audit-pressure.cjs",
     "eval:hybrid-context": "npm run build && node scripts/eval-hybrid-context.cjs",
-    "test": "npm run build && node --test test/refactor-policies.test.cjs test/attachment-tools.test.cjs test/availability-eval.test.cjs test/continuity-model-notes.test.js test/direct-compaction-core.test.js test/durable-memory-sanitizer.test.js test/input-availability.test.js test/prediction-loop.test.cjs test/status.test.cjs test/tool-scope.test.cjs test/validation-repair-memory.test.cjs test/working-context-boundary.test.cjs test/working-context.test.cjs test/workspace-continuity.test.cjs",
+    "test": "npm run build && node --test test/audit-fc5373.test.cjs test/refactor-policies.test.cjs test/attachment-tools.test.cjs test/availability-eval.test.cjs test/continuity-model-notes.test.js test/direct-compaction-core.test.js test/durable-memory-sanitizer.test.js test/input-availability.test.js test/prediction-loop.test.cjs test/status.test.cjs test/tool-scope.test.cjs test/validation-repair-memory.test.cjs test/working-context-boundary.test.cjs test/working-context.test.cjs test/workspace-continuity.test.cjs",
     "test:active": "npm run build && node scripts/status.cjs --require-runtime",
     "status": "node scripts/status.cjs"
   },
