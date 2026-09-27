@@ -78,6 +78,8 @@ Unity MCP 설정의 `unity-tools.args[0]`은 설치에 사용한 소스 폴더�
 
 Windows에서는 저장소 루트의 `UPDATE.bat`를 실행하면 설치된 Unity MCP, Unreal Agent/RAG, 대화 압축 플러그인을 순서대로 갱신합니다. 설치되지 않은 엔진은 건너뜁니다. 기본 설정은 `%LMSTUDIO_HOME%\mcp.json` 또는 `%USERPROFILE%\.lmstudio\mcp.json`을 사용합니다. 다른 위치에 설치했다면 `UPDATE.bat "C:\path\to\mcp.json"`처럼 기존 설정 파일을 지정합니다. 기존 프로젝트·엔진·인덱스·권한 설정은 다시 생성하지 않고 유지합니다. `UPDATE.bat --dry-run`은 세 단계의 계획만 확인합니다. 완료 후 LM Studio를 재시작합니다.
 
+Unity MCP가 등록되어 있지만 프로젝트에서 Editor Bridge 패키지가 빠진 경우에는 `bridgeBinding: missing`과 안내를 출력하고 MCP 업데이트를 계속합니다. 파일 도구는 Editor Bridge 없이 사용할 수 있으며, 이 과정에서 프로젝트에 브릿지를 다시 추가하지 않습니다. 다른 브릿지 경로가 등록되어 있거나 등록 값이 잘못된 경우에는 기존 연결을 보존하기 위해 중단하며, 브릿지 설치·이전은 `install.py`에서 진행합니다.
+
 ```sh
 python scripts/update_unity_mcp.py --mcp-config /absolute/path/to/mcp.json --dry-run
 python scripts/update_unity_mcp.py --mcp-config /absolute/path/to/mcp.json

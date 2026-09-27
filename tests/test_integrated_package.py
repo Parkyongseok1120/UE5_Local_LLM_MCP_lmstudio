@@ -342,6 +342,25 @@ def test_package_builder_requires_the_direct_compactor_runtime_surface() -> None
     }.isdisjoint(required)
 
 
+def test_design_guidance_package_contains_rebuild_inputs_without_project_snapshot() -> None:
+    builder = _load_builder_module()
+    catalog = json.loads((ROOT / "docs/model-guidance/catalog.json").read_text(encoding="utf-8"))
+    required = set(builder.REQUIRED_RUNTIME_FILES)
+    expected = {
+        "docs/model-guidance/catalog.json",
+        "lmstudio-context-compactor-plugin/src/design-guidance.ts",
+        "lmstudio-context-compactor-plugin/src/generated-design-guidance.ts",
+        "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs",
+        "lmstudio-context-compactor-plugin/test/design-guidance.test.cjs",
+        *(f"docs/model-guidance/{entry['file']}" for entry in catalog["documents"]),
+    }
+    assert expected <= required
+    selected = {relative.as_posix() for _, relative in builder._source_files(ROOT, include_index=False)}
+    assert expected <= selected
+    assert not any(path.startswith("docs/model-guidance/examples/") for path in selected)
+    assert "docs/model-guidance/project-template.md" not in selected
+
+
 def test_package_builder_rejects_tracked_source_drift_before_copying(tmp_path: Path) -> None:
     source = tmp_path / "dirty-source"
     source.mkdir()

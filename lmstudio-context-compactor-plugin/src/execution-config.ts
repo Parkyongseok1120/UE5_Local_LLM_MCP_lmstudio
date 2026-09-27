@@ -2,6 +2,7 @@ import {
   type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import { directConfigSchematics } from "./direct-config";
+import { designGuidanceMode } from "./design-guidance";
 import { DEFAULT_CONTEXT_MANAGEMENT_MODE, type AuditCompletionMode, type ContextManagementMode, type DirectConfig, type InputAvailabilityMode, type OutputRecoveryMode, type StagnationAction } from "./execution-contracts";
 import {
   type ProjectEngineSetting
@@ -45,6 +46,8 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
   return {
     projectEngine,
     projectIdentity: String(config.get("projectIdentity") || "").trim().slice(0, 4096),
+    designGuidanceMode: designGuidanceMode(config.get("designGuidanceMode")),
+    designGuidanceMaxTokens: numeric(config.get("designGuidanceMaxTokens"), 2048, 0, 8192),
     observeOnly: config.get("observeOnly") === true,
     contextManagementMode: contextManagementMode(config.get("contextManagementMode")),
     workingInputTargetTokens,
@@ -60,6 +63,7 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     hardRemainingTokens: numeric(config.get("hardRemainingTokens"), 3000, 0, 1_000_000),
     maxOutputReserve,
     outputRecoveryMode: outputRecoveryMode(config.get("outputRecoveryMode")),
+    reasoningRecoveryMode: outputRecoveryMode(config.get("reasoningRecoveryMode")),
     outputRecoveryMaxTokens: configuredRecoveryMaxTokens > 0 ? configuredRecoveryMaxTokens : maxOutputReserve,
     outputRecoverySeconds: numeric(config.get("outputRecoverySeconds"), 90, 1, 600),
     safetyMarginTokens: numeric(config.get("safetyMarginTokens"), 2048, 0, 131072),

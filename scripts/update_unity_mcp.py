@@ -2,7 +2,8 @@
 """Refresh and verify an in-place Unity MCP installation from this source tree.
 
 The MCP configuration already points at source files. Obtain newer source files
-before running this command. Bridge or symbol-worker migrations use install.py.
+before running this command. A missing Editor Bridge does not prevent updating
+the independent MCP file tools. Bridge or symbol-worker migrations use install.py.
 """
 from __future__ import annotations
 
@@ -48,9 +49,11 @@ def _read_config(config_path: Path, source_root: Path, *, if_present: bool = Fal
     dependencies = manifest.get("dependencies") if isinstance(manifest, dict) else None
     if not isinstance(dependencies, dict):
         raise ValueError("Unity package dependencies must be an object")
-    binding = dependencies.get("com.evidencefirst.unity-bridge")
+    bridge_package = "com.evidencefirst.unity-bridge"
+    binding = dependencies.get(bridge_package)
     expected_binding = "file:" + (source_root / "unity-editor-bridge").resolve().as_posix()
-    if binding != expected_binding:
+    bridge_registered = bridge_package in dependencies
+    if bridge_registered and binding != expected_binding:
         raise ValueError("Unity Bridge binding differs from this source tree; use install.py for a Bridge migration")
     executable = Path(command)
     if executable.is_absolute():
@@ -62,7 +65,8 @@ def _read_config(config_path: Path, source_root: Path, *, if_present: bool = Fal
         if not node:
             raise ValueError("Configured Node executable was not found on PATH")
     return {"config": str(config_path), "project": str(project), "sourceRoot": str(source_root), "node": node,
-            "server": str(server), "otherServerCount": len(servers) - 1}
+            "server": str(server), "otherServerCount": len(servers) - 1,
+            "bridgeBinding": "current" if bridge_registered else "missing"}
 
 
 def _run(command: list[str], *, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
@@ -99,7 +103,13 @@ def update(config_path: Path, *, source_root: Path = ROOT, dry_run: bool = False
     adapter = source_root / "lmstudio-unity-mcp"
     report = {"ok": True, "dryRun": dry_run, "scope": "in_place_unity_mcp", "config": details["config"],
               "project": details["project"], "sourceRoot": details["sourceRoot"], "configurationChanged": False,
-              "projectChanged": False, "otherServerCount": details["otherServerCount"], "restartRequired": not dry_run}
+              "projectChanged": False, "otherServerCount": details["otherServerCount"], "restartRequired": not dry_run,
+              "bridgeBinding": details["bridgeBinding"]}
+    if details["bridgeBinding"] == "missing":
+        report["warnings"] = [
+            "Unity Editor Bridge package is not registered in this project. "
+            "The MCP file tools can still be updated. Use install.py to install the Bridge for Editor features."
+        ]
     if dry_run:
         report["verification"] = "not_run"
         report["dependencies"] = "skipped" if skip_deps else "would_refresh"

@@ -4,6 +4,7 @@ import {
 import {
   type ProjectEngineSetting
 } from "./tool-scope";
+import type { DesignGuidanceMode } from "./design-guidance";
 
 export type ContinuityNote = {
   scope: { objectiveFingerprint: string; projectIdentity?: string };
@@ -64,6 +65,8 @@ export type ContextMeasurement = {
 export type DirectConfig = {
   projectEngine: ProjectEngineSetting;
   projectIdentity: string;
+  designGuidanceMode: DesignGuidanceMode;
+  designGuidanceMaxTokens: number;
   observeOnly: boolean;
   contextManagementMode: ContextManagementMode;
   workingInputTargetTokens: number;
@@ -78,6 +81,7 @@ export type DirectConfig = {
   hardRemainingTokens: number;
   maxOutputReserve: number;
   outputRecoveryMode: OutputRecoveryMode;
+  reasoningRecoveryMode: OutputRecoveryMode;
   outputRecoveryMaxTokens: number;
   outputRecoverySeconds: number;
   safetyMarginTokens: number;

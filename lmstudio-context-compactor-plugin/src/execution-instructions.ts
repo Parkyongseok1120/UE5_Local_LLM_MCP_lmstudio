@@ -1,5 +1,14 @@
 
 
+export const REASONING_RECOVERY_INSTRUCTION = [
+  "The previous generation exhausted its output limit in reasoning without producing an answer or a tool request.",
+  "Its unfinished reasoning is not an implemented change or an accepted decision. Restart from the user's original constraints and the verified evidence in this input.",
+  "Choose the next small useful step. Avoid re-deriving the whole design or drafting the entire implementation in reasoning.",
+  "If an operation is needed, use the registered structured tool interface with a small coherent batch and inspect its results before further work.",
+  "If a user constraint prevents choosing a correct implementation, ask one concise clarification; do not reinterpret a prohibition as permission.",
+  "An answer or clarification is also valid; tool use is not mandatory. Never claim unexecuted work is complete.",
+].join(" ");
+
 export const BOUNDED_AUDIT_FINAL_INSTRUCTION = [
   "phase=FINAL_REPORT_ONLY; tools_available=false; research_must_not_continue=true; missing_evidence_must_be_reported_as_unresolved=true; do_not_emit_tool_syntax=true.",
   "The user selected bounded audit completion and the research resource budget has ended.",

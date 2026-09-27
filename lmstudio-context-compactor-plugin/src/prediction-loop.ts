@@ -17,16 +17,18 @@ import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage,
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
 import { assistantNoteTelemetry, messageEvidenceTelemetry, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
+import { selectDesignGuidance } from "./design-guidance";
 import { FIRST_CONSUMER_RAW_GIT_MAX_CHARS, MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote } from "./execution-contracts";
-import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, FRESH_TOOL_PLANNING_RETRY_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
+import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, FRESH_TOOL_PLANNING_RETRY_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
 import { createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
 import { classifyRawToolIntent, containsUnresolvedToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, planReadRecovery, readOnlyRecoveryProfile, RecoveryCoordinator } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
+import { decideReasoningRecovery } from "./reasoning-recovery";
 import { runtimeInstallationIdentity } from "./runtime-identity";
-import { classifyToolCallBoundary, createToolGuard } from "./tool-boundary";
+import { classifyToolCallBoundary, createToolGuard, readHostToolApprovalPolicy } from "./tool-boundary";
 import { hasReadCapability, isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 import {
   bindProjectArguments,
@@ -43,6 +45,7 @@ export function createPredictionLoopHandler(
   client?: LMStudioClient,
   contextBoundaryStore: Pick<typeof workingContextBoundary, "restore"> = workingContextBoundary,
   workingContextOptions: Record<string, unknown> = {},
+  readApprovalPolicy = readHostToolApprovalPolicy,
 ): PredictionLoopHandler {
   return async (ctl) => {
     ctl.guardAbort();
@@ -85,6 +88,7 @@ export function createPredictionLoopHandler(
     const attachmentContext = config.observeOnly
       ? { tools: [], instruction: "", attachmentCount: 0 }
       : createAttachmentContext(cleanAttachmentHistory, client);
+    const guidanceDocuments = config.observeOnly ? [] : selectDesignGuidance(config.designGuidanceMode, scope);
     const scopedRemoteTools = config.observeOnly
       ? toolSession.tools as Array<ScopedTool>
       : filterToolsForScope(toolSession.tools as Array<ScopedTool>, scope);
@@ -215,6 +219,7 @@ export function createPredictionLoopHandler(
           continue;
         }
         const finalizing = execution.finalizing;
+        const reasoningRecoveryRound = execution.reasoningRecovery;
         const researchRecoveryRound = !finalizing && execution.recovering;
         const toolPlanningRetryRound = researchRecoveryRound && execution.replanning;
         if (finalizing) {
@@ -237,11 +242,22 @@ export function createPredictionLoopHandler(
             break;
           }
         }
+        // One input identity covers projection, measurement, exposure and
+        // completion. Recovery episode counters must not mint a second ID.
+        const modelInputId = reasoningRecoveryRound ? `${executionId}:reasoning-recovery-${execution.reasoningRecoveryAttempts}` : finalizing
+          ? execution.finalizationTrigger === "output_recovery"
+            ? `${executionId}:output-recovery-${deliveryController.attempts}`
+            : `${executionId}:final-report-${deliveryController.attempts}`
+          : toolPlanningRetryRound
+            ? `${executionId}:tool-planning-retry-${toolPlanningRetryAttempts}`
+            : researchRecoveryRound
+              ? `${executionId}:research-recovery-${roundIndex + 1}`
+              : `${executionId}:prediction-${roundIndex + 1}`;
         const preProjectionHistory = Chat.from(workingHistory);
         let projectionApplied = false;
         if (workingContext && !finalizing) {
           const projected = evidenceManager.project(workingHistory, {
-            executionId, roundIndex, modelInputId: `${executionId}:prediction-${roundIndex + 1}`,
+            executionId, roundIndex, modelInputId,
             proofLevel: "returned_tool_result",
             preserveUnconsumedRawMaxChars: FIRST_CONSUMER_RAW_GIT_MAX_CHARS,
           }, config.toolResultProjectionChars);
@@ -276,21 +292,9 @@ export function createPredictionLoopHandler(
               ? CONTEXT_BUDGET_FINAL_INSTRUCTION
               : ["research_recovery_complete", "research_recovery_exhausted"].includes(execution.finalizationTrigger || "")
                 ? RESEARCH_RECOVERY_FINAL_INSTRUCTION : BOUNDED_AUDIT_FINAL_INSTRUCTION]
-          : [...scopeInstructions, ...(researchRecoveryRound
+          : [...scopeInstructions, ...(reasoningRecoveryRound ? [REASONING_RECOVERY_INSTRUCTION] : []), ...(researchRecoveryRound
             ? [toolPlanningRetryRound ? toolPlanningRetryInstruction : READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION]
             : [])];
-        // Input identity lives for the whole execution, not a recovery episode.
-        // RecoveryCoordinator.reset() may run between calls; roundIndex never resets.
-        // Keep this ID unchanged from measurement through exposure and completion.
-        const modelInputId = finalizing
-          ? execution.finalizationTrigger === "output_recovery"
-            ? `${executionId}:output-recovery-${deliveryController.attempts}`
-            : `${executionId}:final-report-${deliveryController.attempts}`
-          : toolPlanningRetryRound
-            ? `${executionId}:tool-planning-retry-${toolPlanningRetryAttempts}`
-            : researchRecoveryRound
-              ? `${executionId}:research-recovery-${roundIndex + 1}`
-              : `${executionId}:prediction-${roundIndex + 1}`;
         activeActivity = createRoundActivityTracker(ctl, roundIndex);
         const noteEnabled = Boolean(noteWorkingDirectory && objectiveFingerprint && !config.observeOnly);
         if (noteEnabled && activeNote) {
@@ -305,10 +309,20 @@ export function createPredictionLoopHandler(
           roundTools, modelTools, roundScopeInstructions, scopeInstructions, roundOutputReserve,
           activeNote, noteEnabled, historicalAvailabilityLedger, semanticSummaryCooldownUntilRound,
           objectiveFingerprint, finalizing, boundedAudit, researchRecoveryEpisodeStarted,
+          reasoningRecovery: reasoningRecoveryRound,
+          guidanceDocuments,
           finalizationTrigger: execution.finalizationTrigger,
           projectionApplied, executionId, modelInputId, roundIndex,
         });
         ({ activeNote, semanticSummaryCooldownUntilRound } = prepared);
+        if (reasoningRecoveryRound && prepared.kind !== "ready") {
+          ctl.guardAbort();
+          workingHistory = prepared.history;
+          activeActivity.complete(); activeActivity = null;
+          ctl.createStatus({ status: "canceled", text: "생각 단계 재시도에 필요한 입력이 컨텍스트 예산에 맞지 않아 중단했습니다. 추가 도구는 실행하지 않았습니다." });
+          if (config.showDebugInfo) ctl.debug({ event: "reasoning_recovery_blocked", executionId, modelInputId, reason: "context_budget" });
+          break;
+        }
         if (prepared.kind === "recover") {
           workingHistory = prepared.history;
           researchRecoveryEpisodeStarted = true;
@@ -503,6 +517,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
           roundTools,
           roundSignal,
           {
+            captureUnparsedToolRequest: !config.observeOnly,
             onPromptProcessingProgress: activeActivity.progress,
             onFirstToken: activeActivity.firstToken,
             onPredictionFragment: (fragment) => {
@@ -568,6 +583,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             onMessageCaptured: (message) => {
               activeActivity?.firstToken();
               for (const result of message.getToolCallResults()) {
+                toolGeneration.completed(result.toolCallId, result.content);
                 const id = reservationIds.get(String(result.toolCallId));
                 if (id) batchReservation?.receive(id, Buffer.byteLength(typeof result.content === "string"
                   ? result.content : JSON.stringify(result.content)));
@@ -590,11 +606,12 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             },
             guardToolCall: createToolGuard({
 ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
-              toolPlanningRetryBlockedFingerprints, batchReservation, reservationIds, toolGeneration, traceCall
+              toolPlanningRetryBlockedFingerprints, batchReservation, reservationIds, toolGeneration, traceCall, readApprovalPolicy
 }),
           },
           { maxTokens: roundOutputReserve },
         );
+        toolGeneration.finishPending();
         const roundModelElapsedMs = Date.now() - roundModelStartedAt;
         evidenceManager.captureReturned(captured.messages, executionId);
         for (const result of captured.messages.flatMap(message => message.getToolCallResults())) {
@@ -701,7 +718,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         });
         const recoveryProgress = researchRecoveryRound
           ? evidenceManager.observe(captured.messages) : null;
-        const planningAllowed = !(finalizing && execution.finalizationTrigger === "output_recovery");
+        const planningAllowed = !reasoningRecoveryRound && !(finalizing && execution.finalizationTrigger === "output_recovery");
         const shouldMeasureRetryCandidate = !boundedAudit && !config.observeOnly && planningAllowed
           && toolPlanningRetryAttempts < 1 && captured.failure === undefined
           && !ctl.abortSignal.aborted && phaseTimeoutSignal?.aborted !== true
@@ -743,6 +760,11 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           actualResultCount,
         });
         const freshToolPlanningRetryEligible = retryDecision.eligible;
+        const reasoningRecoveryDecision = decideReasoningRecovery({
+          config, phase: execution.phase, attempts: execution.reasoningRecoveryAttempts,
+          captured, outputLimitStage, canceled: ctl.abortSignal.aborted,
+          timedOut: phaseTimeoutSignal?.aborted === true, toolTraceCount: runtimeToolTrace.size,
+        });
         const scheduleFreshToolPlanningRetry = () => {
           workingHistory = historyBeforeRound;
           toolPlanningRetryAttempts += 1;
@@ -806,10 +828,11 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             roundIndex,
             finishReason: captured.finishReason || (captured.failure === undefined ? "unknown" : "failed"),
             predictionStats: captured.predictionStats,
+            toolRequestFailure: captured.toolRequestFailure,
             predictionUsage: captured.predictionUsage,
             callPurpose: finalizing
               ? execution.finalizationTrigger === "output_recovery" ? "output_recovery" : "final"
-              : toolPlanningRetryRound ? "fresh_planning_retry"
+              : reasoningRecoveryRound ? "reasoning_recovery" : toolPlanningRetryRound ? "fresh_planning_retry"
                 : researchRecoveryRound ? "read_only_research_recovery" : "research",
             roundModelElapsedMs,
             modelPrefillMs: captured.timing.promptProcessingMs,
@@ -851,6 +874,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             recoveryProfileActive: execution.recovering,
             recoveryReason: researchRecoveryReason || undefined,
             recoveryAttempts: toolPlanningRetryAttempts,
+            reasoningRecoveryAttempts: execution.reasoningRecoveryAttempts,
+            reasoningRecoveryDecision,
             recoveryToolRounds: recoveryCoordinator.toolRounds,
             recoveryPaginationRounds: recoveryCoordinator.paginationRounds,
             recoveryNoProgressRounds: recoveryCoordinator.noProgressRounds,
@@ -937,6 +962,15 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         }
         if (ctl.abortSignal.aborted) throw ctl.abortSignal.reason || captured.failure;
         const phaseTimedOut = phaseTimeoutSignal?.aborted === true;
+        if (captured.toolRequestFailure) {
+          ctl.createStatus({ status: "canceled", text: captured.finishReason === "maxPredictedTokensReached"
+            ? "도구 인수 JSON이 생성 한도에서 잘려 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘린 요청은 자동 재실행하지 않습니다."
+            : "도구 인수 JSON을 해석할 수 없어 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘못된 요청은 자동 재실행하지 않습니다." });
+          if (config.showDebugInfo) ctl.debug({ event: "tool_request_generation_failed", executionId, modelInputId,
+            finishReason: captured.finishReason || "unknown", stage: "tool_arguments", failedRequestExecuted: false,
+            returnedPeerResults: actualResultCount, rawContentChars: captured.toolRequestFailure.rawContentChars });
+          break;
+        }
         if (finalizing) {
           const evaluated = deliveryController.evaluate(workingHistory, captured, phaseTimedOut,
             execution.finalizationTrigger, recoveryCoordinator.noProgressRounds);
@@ -1031,6 +1065,35 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           roundIndex += 1;
           continue;
         }
+        if (reasoningRecoveryRound) {
+          ctl.guardAbort();
+          if (captured.continueAfterTools) {
+            execution.finishReasoningRecovery();
+            roundIndex += 1;
+            continue;
+          }
+          // This is the single retry, not an entry to report or read recovery.
+          if (captured.finishReason === "maxPredictedTokensReached" || finalRawToolIntent
+            || !captured.predictionCompleted || !visibleTextFromMessages(captured.messages).trim()) {
+            ctl.createStatus({ status: "canceled", text: "생각 단계 재시도에서도 응답을 완료하지 못했습니다. 자동 재시도는 여기서 중단합니다." });
+          }
+          break;
+        }
+        if (reasoningRecoveryDecision.eligible) {
+          ctl.guardAbort();
+          execution.startReasoningRecovery();
+          // Admission proved this round had no tool activity. Earlier returned
+          // evidence remains; incomplete reasoning stays in the GUI only.
+          workingHistory = historyBeforeRound;
+          ctl.createStatus({ status: "done", text: "생각 단계에서 생성 한도에 도달했습니다. 이번 생성에는 도구 요청이 없어, 확인된 근거로 다음 작업을 한 번 재시도합니다." });
+          if (config.showDebugInfo) ctl.debug({ event: "reasoning_recovery_scheduled", executionId,
+            sourceModelInputId: modelInputId,
+            recoveryModelInputId: `${executionId}:reasoning-recovery-${execution.reasoningRecoveryAttempts}`,
+            attempt: execution.reasoningRecoveryAttempts, toolCount: roundTools.length,
+            requestedMaxTokens: config.maxOutputReserve, partialReasoningPreservedInGui: true });
+          roundIndex += 1;
+          continue;
+        }
         if (freshToolPlanningRetryEligible) {
           scheduleFreshToolPlanningRetry();
           roundIndex += 1;
@@ -1100,7 +1163,9 @@ event: decision.trigger === "research_recovery_exhausted"
             status: "canceled",
             text: outputLimitStage === "tool_arguments"
               ? "도구 호출 인수가 출력 한도에서 끝나 실행하지 않았습니다."
-              : "응답이 출력 한도에 도달해 완료로 처리하지 않았습니다.",
+              : outputLimitStage === "reasoning"
+                ? "생각 단계에서 생성 한도에 도달했습니다. 자동 복구가 꺼져 있거나 허용 조건을 충족하지 않아 중단했습니다."
+                : "응답이 출력 한도에 도달해 완료로 처리하지 않았습니다.",
           });
         }
         if (toolPlanningRetryRound && captured.predictionUsage.rawToolIntentCandidate

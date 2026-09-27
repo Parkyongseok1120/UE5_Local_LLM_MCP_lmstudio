@@ -30,6 +30,7 @@ type RoundCallbacks = {
   onToolCallRequestEnd?: NonNullable<LLMActionOpts["onToolCallRequestEnd"]>;
   onToolCallRequestFailure?: NonNullable<LLMActionOpts["onToolCallRequestFailure"]>;
   onMessageCaptured?: (message: ChatMessage) => void;
+  captureUnparsedToolRequest?: boolean;
   abortAfterPredictionFragment?: (fragment: Parameters<NonNullable<LLMActionOpts["onPredictionFragment"]>>[0]) => Error | undefined;
 };
 
@@ -38,6 +39,7 @@ export type CapturedRound = {
   messages: Array<ChatMessage>;
   continueAfterTools: boolean;
   failure?: unknown;
+  toolRequestFailure?: { kind: "unparsed_request"; rawContentChars: number | null };
   finishReason?: string;
   predictionStats?: {
     stopReason: string;
@@ -86,6 +88,8 @@ export async function runOneToolRound(
   let hasToolResults = false;
   let boundaryRequested = false;
   let failure: unknown;
+  let unparsedToolRequestError: unknown;
+  let unparsedArgumentChars: number | null = null;
   let finishReason: string | undefined;
   let predictionStats: CapturedRound["predictionStats"];
   let fragmentAbortReason: Error | undefined;
@@ -116,11 +120,22 @@ export async function runOneToolRound(
   else parentSignal.addEventListener("abort", forwardAbort, { once: true });
 
   try {
-    const { onMessageCaptured, abortAfterPredictionFragment, onFirstToken, ...actCallbacks } = callbacks;
+    const { onMessageCaptured, abortAfterPredictionFragment, onFirstToken, captureUnparsedToolRequest, ...actCallbacks } = callbacks;
+    const handleInvalidToolRequest: LLMActionOpts["handleInvalidToolRequest"] = (error, request) => {
+      // Preserve the SDK's result for a parsed request rejected by its schema.
+      if (request !== undefined) return error.message;
+      // No request exists to execute or attach a synthetic result to. Let the
+      // prediction end normally so its stop reason survives; stop at our round
+      // boundary after collecting any already-running peers' returned results.
+      unparsedToolRequestError = error;
+      unparsedArgumentChars = typeof error.rawContent === "string" ? error.rawContent.length : null;
+      return undefined;
+    };
     await tokenSource.act(history, tools, {
       signal: roundAbort.signal,
       ...predictionOptions,
       ...actCallbacks,
+      ...(captureUnparsedToolRequest ? { handleInvalidToolRequest } : {}),
       onFirstToken: (...args) => {
         firstTokenAt ??= Date.now();
         onFirstToken?.(...args);
@@ -214,6 +229,10 @@ export async function runOneToolRound(
     parentSignal.removeEventListener("abort", forwardAbort);
   }
 
+  // A transport error or external cancellation retains precedence over a
+  // parser failure. Never reclassify either as a recoverable generation.
+  if (failure === undefined && unparsedToolRequestError !== undefined) failure = unparsedToolRequestError;
+
   return {
     predictionCompleted: Boolean(predictionStats && !fragmentAbortReason && !parentSignal.aborted
       && failure === undefined && isCompletedPredictionReason(predictionStats.stopReason)),
@@ -222,6 +241,8 @@ export async function runOneToolRound(
     ...(fragmentAbortReason ? { finishReason: "generation_repetition_paused" }
       : finishReason === undefined ? {} : { finishReason }),
     ...(predictionStats ? { predictionStats } : {}),
+    ...(unparsedToolRequestError !== undefined && failure === unparsedToolRequestError
+      ? { toolRequestFailure: { kind: "unparsed_request" as const, rawContentChars: unparsedArgumentChars } } : {}),
     predictionUsage: {
       ...predictionUsage,
       unattributedTokensCount: predictionStats?.predictedTokensCount === undefined

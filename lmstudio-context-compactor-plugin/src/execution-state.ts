@@ -3,9 +3,10 @@ import type { FinalizationTrigger } from "./execution-contracts";
 import { isCompletedPredictionReason, type CapturedRound } from "./round-loop";
 
 export type ExecutionPhase = "RESEARCH" | "READ_RECOVERY" | "TOOL_REPLAN"
-  | "FINAL_DELIVERY" | "OUTPUT_RECOVERY" | "TERMINATED";
+  | "REASONING_RECOVERY" | "FINAL_DELIVERY" | "OUTPUT_RECOVERY" | "TERMINATED";
 export const ALLOWED_TRANSITIONS: Readonly<Record<ExecutionPhase, readonly ExecutionPhase[]>> = {
-  RESEARCH: ["READ_RECOVERY", "TOOL_REPLAN", "FINAL_DELIVERY", "OUTPUT_RECOVERY", "TERMINATED"],
+  RESEARCH: ["READ_RECOVERY", "TOOL_REPLAN", "REASONING_RECOVERY", "FINAL_DELIVERY", "OUTPUT_RECOVERY", "TERMINATED"],
+  REASONING_RECOVERY: ["RESEARCH", "TERMINATED"],
   READ_RECOVERY: ["RESEARCH", "TOOL_REPLAN", "FINAL_DELIVERY", "OUTPUT_RECOVERY", "TERMINATED"],
   TOOL_REPLAN: ["READ_RECOVERY", "FINAL_DELIVERY", "TERMINATED"],
   FINAL_DELIVERY: ["TOOL_REPLAN", "TERMINATED"],
@@ -15,6 +16,7 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<ExecutionPhase, readonly Execu
 export class ExecutionState {
   private current: ExecutionPhase = "RESEARCH";
   private trigger: FinalizationTrigger | null = null;
+  private reasoningAttempts = 0;
   readonly transitions: Array<{
 from: ExecutionPhase; to: ExecutionPhase; reason: string;
     planningEffect: "commit_completed_only"; evidenceEffect: "retain_returned"
@@ -23,10 +25,16 @@ from: ExecutionPhase; to: ExecutionPhase; reason: string;
   get finalizing() { return this.current === "FINAL_DELIVERY" || this.current === "OUTPUT_RECOVERY"; }
   get recovering() { return this.current === "READ_RECOVERY" || this.current === "TOOL_REPLAN"; }
   get replanning() { return this.current === "TOOL_REPLAN"; }
+  get reasoningRecovery() { return this.current === "REASONING_RECOVERY"; }
+  get reasoningRecoveryAttempts() { return this.reasoningAttempts; }
   get finalizationTrigger() { return this.trigger; }
   transition(to: ExecutionPhase, reason: string) {
     if (!reason.trim() || !ALLOWED_TRANSITIONS[this.current].includes(to)) {
       throw new Error(`ILLEGAL_EXECUTION_TRANSITION: ${this.current} -> ${to} (${reason})`);
+    }
+    if (to === "REASONING_RECOVERY") {
+      if (this.reasoningAttempts >= 1) throw new Error("REASONING_RECOVERY_EXHAUSTED");
+      this.reasoningAttempts++;
     }
     this.transitions.push({
 from: this.current, to, reason,
@@ -39,6 +47,10 @@ from: this.current, to, reason,
     this.trigger = trigger;
   }
   startRecovery(reason: string) { this.transition("READ_RECOVERY", reason); this.trigger = null; }
+  startReasoningRecovery() { this.transition("REASONING_RECOVERY", "reasoning_output_limit"); }
+  finishReasoningRecovery() {
+    if (this.reasoningRecovery) this.transition("RESEARCH", "reasoning_retry_tools_returned");
+  }
   startReplan() { this.transition("TOOL_REPLAN", "fresh_structured_planning"); this.trigger = null; }
   finishReplan() { if (this.replanning) this.transition("READ_RECOVERY", "planning_round_returned"); }
   endRecovery() { if (this.recovering) this.transition("RESEARCH", "recovery_report_returned"); }

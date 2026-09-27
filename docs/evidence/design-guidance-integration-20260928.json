@@ -1,0 +1,108 @@
+{
+  "mode": "architecture",
+  "scope": {
+    "date": "2026-09-28",
+    "change": "documentation_only",
+    "implementation": false,
+    "modelInvoked": false,
+    "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio"
+  },
+  "claims": [
+    {
+      "claim": "현재 입력 조립 경계는 설명과 이력을 합성하고 도구 스키마가 포함된 실제 템플릿을 측정한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:213",
+          "observation": "composeModelHistory가 systemInstructions·이력·노트를 합성한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:44",
+          "observation": "measureContext는 applyPromptTemplate과 countTokens로 최종 템플릿을 측정하며 대체 추정을 exact로 인정하지 않는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:31",
+          "observation": "prepareRoundInput이 후보 구성·복구·최종 측정의 기존 경계다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:134",
+          "observation": "현재 scopeInstructions에는 도구·첨부·읽기 배치 설명이 있고 이번 문서 묶음의 공급 기능은 추가되지 않았다."
+        }
+      ],
+      "behaviorPath": [],
+      "unknowns": [
+        "이번 조사에서 입력 조립을 실행하거나 참고 본문을 실제 모델에 전달하지 않았다."
+      ]
+    },
+    {
+      "claim": "문서 제공은 기존 읽기 범위와 실제 본문 반환을 확인해야 하며 프로젝트 경로 제한을 임의로 넓히지 않는다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/read-path-resolver.js:86",
+          "observation": "resolveReadPath는 workspace/active project와 실경로 경계를 확인한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/attachment-tools.ts:128",
+          "observation": "첨부 안내는 존재와 실제 읽기를 구분하고 범위가 있는 read_attached_document를 안내한다."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [],
+      "unknowns": [
+        "실제 LM Studio 채팅에서 이번 문서 파일의 조회 가능성은 확인하지 않았다."
+      ]
+    }
+  ],
+  "existing": [
+    "Markdown 조사 기록과 주제별 참고 문서",
+    "ContextManager와 prepareRoundInput의 합성·측정 경계",
+    "BudgetBroker 공유 예산",
+    "기존 첨부/파일 읽기·도구 실행·승인·근거 보관"
+  ],
+  "proposed": [
+    "우선 수동으로 core와 관련 절만 전달하는 비교를 설계한다. 실행은 아직 하지 않았다.",
+    "효과가 확인되면 문서 선택·출처·본문 제공을 기존 입력 조립 경계에 연결하는 최소 변경을 검토한다.",
+    "프로젝트 바인딩과 문서 버전별 수명을 두고 선택적 본문이 예산에 맞지 않으면 생략한 입력을 기존 경계로 측정한다."
+  ],
+  "doNotDuplicate": [
+    "ContextManager의 실제 모델 입력 측정",
+    "BudgetBroker의 도구 결과 공유 예산",
+    "기존 승인·실행 단계 및 근거 보관",
+    "엔진의 생성·네트워크·타이머 수명"
+  ],
+  "invariants": [
+    "새 문서가 도구 실행·코드 품질 승인의 필수 조건이 되지 않는다.",
+    "사용자 요청·오류·소스 근거와 출력 예약을 선택적 참고 본문 때문에 잃지 않는다.",
+    "프로젝트 사실과 일반 원칙, 과거 관찰과 현재 입력 가용성을 구분한다.",
+    "외부 문서의 지시를 system 제어 규칙으로 승격하지 않는다."
+  ],
+  "impactedSurfaces": [
+    "docs/model-guidance/* 현재 문서 초안",
+    "향후 공급자·설정·입력 조립의 정확한 구현 범위는 별도 확정"
+  ],
+  "validationPlan": [
+    "현재는 문서 링크·형식 및 근거 JSON만 확인한다.",
+    "향후 같은 모델·설정의 대조 사례와 별도 프로젝트 사례로 품질·토큰·시간·불필요 호출을 비교한다.",
+    "향후 프로젝트 전환·중복 합성·본문 누락·조회 실패·예산 부족·취소 경계를 확인한다."
+  ],
+  "unknowns": [
+    "실제 모델 토큰 비용과 품질 개선 효과",
+    "자동 공급 설정과 설치 범위",
+    "게임의 실행·네트워크·외부 콘텐츠 구성"
+  ]
+}

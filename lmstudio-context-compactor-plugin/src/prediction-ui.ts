@@ -6,9 +6,11 @@ import {
   type ChatMessageRoleData,
   type PredictionLoopHandlerController,
   type PredictionProcessStatusController,
+  type PredictionProcessToolStatusController,
   type ToolCallRequest
 } from "@lmstudio/sdk";
 import { type RemoteToolLike } from "./tool-capability-registry";
+import { toolMemory } from "./context-ports";
 
 type ContentController = Pick<PredictionLoopHandlerController, "createContentBlock">;
 
@@ -40,6 +42,13 @@ export class VisibleHistoryRecorder {
             id: request.toolCallRequestId, type: "function", arguments: structuredClone(request.parameters || {}),
             name: request.name,
           } });
+          return result;
+        };
+        if (key === "replaceToolRequest") return (...args: Parameters<typeof block.replaceToolRequest>) => {
+          const result = target.replaceToolRequest(...args), request = args[0];
+          const part = entry.parts.find(part => part.type === "toolCallRequest"
+            && part.toolCallRequest.id === request.toolCallRequestId);
+          if (part?.type === "toolCallRequest") part.toolCallRequest.arguments = structuredClone(request.parameters || {});
           return result;
         };
         if (key === "appendToolResult") return (...args: Parameters<typeof block.appendToolResult>) => {
@@ -81,6 +90,7 @@ export function createMessageEmitter(
   const unidentifiedRequestCallIds: Array<number> = [];
   const unidentifiedResultCallIds: Array<number> = [];
   const emittedCallIds = new Set<number>();
+  const requestBlocks = new Map<number, ReturnType<ContentController["createContentBlock"]>>();
   let fallbackCallId = 1_000_000;
 
   const beginRound = () => {
@@ -89,6 +99,7 @@ export function createMessageEmitter(
     unidentifiedRequestCallIds.length = 0;
     unidentifiedResultCallIds.length = 0;
     emittedCallIds.clear();
+    requestBlocks.clear();
   };
 
   const registerRequest = (callId: number, request: ToolCallRequest) => {
@@ -145,6 +156,7 @@ export function createMessageEmitter(
     if (emittedCallIds.has(callId)) return;
     emittedCallIds.add(callId);
     const block = ctl.createContentBlock({ roleOverride: "assistant" });
+    requestBlocks.set(callId, block);
     block.appendToolRequest({
       callId,
       toolCallRequestId: request.id,
@@ -154,10 +166,18 @@ export function createMessageEmitter(
     });
   };
 
-  return { beginRound, emit, emitRequest, registerRequest };
+  const replaceRequest = (callId: number, request: ToolCallRequest) => {
+    requestBlocks.get(callId)?.replaceToolRequest({ callId, toolCallRequestId: request.id,
+      name: request.name, parameters: request.arguments || {},
+      pluginIdentifier: toolPluginIdentifier(tools, request.name) });
+  };
+  return { beginRound, emit, emitRequest, replaceRequest, registerRequest };
 }
 
 export function createToolGenerationTracker(ctl: PredictionLoopHandlerController) {
+  const approvalCards = new Map<number, {
+    controller: PredictionProcessToolStatusController; requestId?: string; startedAt: number; executing: boolean;
+  }>();
   const statuses = new Map<number, {
     controller: PredictionProcessStatusController;
     name: string;
@@ -187,12 +207,13 @@ export function createToolGenerationTracker(ctl: PredictionLoopHandlerController
     if (!state) return;
     state.controller.setText(`도구 실행 확인 중${state.name ? `: ${state.name}` : ""}`);
   };
-  const waitingForApproval = (callId: number) => {
-    const state = statuses.get(callId);
-    if (!state) return;
-    state.controller.setText(`도구 실행 승인 대기${state.name ? `: ${state.name}` : ""}`);
-  };
   const executing = (callId: number) => {
+    const card = approvalCards.get(callId);
+    if (card) {
+      card.executing = true;
+      card.startedAt = Date.now();
+      card.controller.setStatus({ type: "callingTool" });
+    }
     const state = statuses.get(callId);
     if (!state) return;
     state.controller.setText(`도구 실행 중${state.name ? `: ${state.name}` : ""}`);
@@ -208,7 +229,36 @@ export function createToolGenerationTracker(ctl: PredictionLoopHandlerController
     statuses.delete(callId);
   };
   const hasUnfinished = () => statuses.size > 0;
-  return { start, name, argument, end, waitingForApproval, executing, finalized, failure, hasUnfinished };
+  const approvalCard = (callId: number, requestId: string | undefined, autoApproved: boolean) => {
+    statuses.get(callId)?.controller.remove();
+    statuses.delete(callId);
+    approvalCards.set(callId, { requestId, startedAt: Date.now(), executing: false,
+      controller: ctl.createToolStatus(callId, { type: autoApproved ? "toolCallQueued" : "confirmingToolCall" }) });
+  };
+  const denied = (callId: number, denyReason?: string) => {
+    approvalCards.get(callId)?.controller.setStatus({ type: "toolCallDenied", denyReason });
+    approvalCards.delete(callId);
+  };
+  const completed = (requestId: string | undefined, content: string) => {
+    const entry = [...approvalCards].find(([, card]) => card.requestId === requestId);
+    if (!entry) return;
+    const [callId, card] = entry;
+    const value = toolMemory.decodeToolResultRecord(content).value;
+    const error = value?.errorCode || value?.error || (value?.ok === false || value?.isError === true
+      || ["error", "failed", "not_applied", "outcome_unknown"].includes(String(value?.status)) ? "Tool returned an unsuccessful result" : null);
+    card.controller.setStatus(error ? { type: "toolCallFailed", error: String(error) }
+      : { type: "toolCallSucceeded", timeMs: Math.max(0, Date.now() - card.startedAt) });
+    approvalCards.delete(callId);
+  };
+  const finishPending = () => {
+    for (const [callId, card] of approvalCards) {
+      if (card.executing) card.controller.setStatus({ type: "toolCallFailed", error: "Tool result was not received; execution outcome is unknown." });
+      else card.controller.setStatus({ type: "toolCallDenied", denyReason: "Confirmation interrupted; tool was not dispatched." });
+      approvalCards.delete(callId);
+    }
+  };
+  return { start, name, argument, end, executing, finalized, failure, hasUnfinished,
+    approvalCard, denied, completed, finishPending };
 }
 
 export function createRoundActivityTracker(

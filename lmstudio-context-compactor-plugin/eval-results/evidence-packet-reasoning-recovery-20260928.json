@@ -1,0 +1,232 @@
+{
+  "mode": "codegen",
+  "claims": [
+    {
+      "claim": "생각 단계 출력 한도 복구는 기존 입력·예산·승인·도구 세션을 재사용하며, ExecutionState가 실행당 한 번의 복구와 허용 상태 전이를 소유한다.",
+      "claimType": "architecture",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "current user request",
+          "observation": "앞선 오류 처리를 마무리한 뒤 SSOT, SOLID, 책임, 계약, 생명주기를 검토하고 보완한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "src/execution-state.ts:16; src/reasoning-recovery.ts:7; src/round-input.ts:33",
+          "observation": "실행 상태가 횟수를 변경하고 순수 정책이 진입을 판단한다. 기존 ready 입력과 예산 계산을 그대로 사용한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "src/prediction-loop.ts:78; src/round-loop.ts:117",
+          "observation": "using 도구 세션과 라운드 부모 취소 전달을 재사용하며 종료 시 리스너를 제거한다."
+        },
+        {
+          "kind": "test",
+          "location": "test/prediction-loop.test.cjs:4356; test/refactor-policies.test.cjs",
+          "observation": "횟수 비초기화, 제약·근거 보존, 기존 승인, 취소, 입력 부적합, 실패 후 복구 연쇄 금지, 세션 해제를 검증했다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/AppData/Local/Temp/reasoning-recovery-final-tests-20260928.log",
+          "observation": "전체 npm test 404/404 통과. 이후 입력 ID 보완은 별도의 관련 164개 테스트로 검증했다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/AppData/Local/Temp/reasoning-recovery-architecture-tests-20260928.log",
+          "observation": "마지막 코드 변경 후 prediction-loop, refactor-policies, status 테스트 164/164 통과."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:6",
+          "observation": "Existing OUTPUT_RECOVERY is terminal report recovery; reusing it unchanged would suppress tools and prevent normal work resumption."
+        }
+      ],
+      "behaviorPath": [],
+      "unknowns": [
+        "현재 모델의 실제 재시도 성공률은 설치 후 LM Studio 대화에서 확인해야 한다. 실행 중인 revision 119를 교체하지 않았다."
+      ]
+    },
+    {
+      "claim": "SDK 1.5.0의 지원 콜백에서 해석 불가 도구 요청을 기록하면 해당 요청을 실행·보정하지 않고 생성 종료 통계와 반환된 동료 결과를 수집할 수 있다.",
+      "claimType": "framework_semantics",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "framework_source",
+          "location": "node_modules/@lmstudio/sdk/dist/index.d.ts:4340 and dist/index.cjs:16351",
+          "observation": "Undefined request has no executable call; returning undefined adds no substitute result. Prediction then completes and peer results are awaited."
+        },
+        {
+          "kind": "test",
+          "location": "test/prediction-loop.test.cjs:4589",
+          "observation": "출력 한도와 일반 JSON 오류의 구분, 동료 결과 보존, 취소·통신 오류 우선, 스키마 오류 호환 및 Observe only를 검증했다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "framework_source",
+          "location": "node_modules/@lmstudio/sdk/dist/index.d.ts:4366",
+          "observation": "Parsed but invalid requests receive error.message as a synthetic result by default; the new handler preserves that behavior."
+        }
+      ],
+      "behaviorPath": [],
+      "unknowns": [
+        "실제 LM Studio 설치 후 동일 오류의 사용자 화면과 로그 재현은 미확인이다."
+      ]
+    },
+    {
+      "claim": "근거 투영 단계가 일반 prediction ID를 재구성하여 복구 입력 ID와 불일치하던 경로를 수정했다. 이제 같은 ID를 투영·측정·노출·완료 관찰에 전달한다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "src/prediction-loop.ts:243",
+          "observation": "입력 ID를 근거 투영 전에 한 번 결정하고 이후 모든 소비자에 동일 변수를 전달한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "src/working-context.js:197",
+          "observation": "투영 메타데이터는 archiveObservation을 통해 근거 보관 기록에 전달된다."
+        },
+        {
+          "kind": "test",
+          "location": "test/prediction-loop.test.cjs:4479",
+          "observation": "Hybrid 복구에서 투영 ID, 측정 ID, 노출·완료 ID, 관찰 ID의 일치를 확인했다. 잘린 생각의 입력은 완료 노출로 승격되지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts:245",
+          "symbol": "modelInputId"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts:259",
+          "symbol": "evidenceManager.project"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "src/working-context.js:209",
+          "symbol": "archive.put"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "test/prediction-loop.test.cjs:4479",
+          "symbol": "projection/measurement/exposure/observation identity equality"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/working-context.js:201",
+          "observation": "이미 보관된 근거는 기존 기록을 재사용하며, 별도의 source identity나 내용 해시가 손상된다는 근거는 없다. 이번 수정은 투영 호출의 입력 상관관계에 한정한다."
+        }
+      ],
+      "unknowns": []
+    }
+  ],
+  "existing": [
+    "ExecutionState and RoundTransaction",
+    "RecoveryCoordinator and DeliveryController",
+    "BudgetBroker, resolveGenerationBudget, ContextManager",
+    "runOneToolRound, tool guard, capability registry and visible transcript"
+  ],
+  "proposed": [
+    "Add reasoning recovery only from ordinary RESEARCH initially; exclude bounded audit, observe-only, READ_RECOVERY, TOOL_REPLAN and final delivery.",
+    "Keep independent lifetime counters for read-recovery episodes, fresh planning attempts, reasoning retries and delivery attempts; assign each field one writer without merging meanings.",
+    "기존 prepareRoundInput의 ready 결과를 입력·예산·호출의 공통 근거로 재사용하고 별도의 RoundPlan 계층을 추가하지 않는다.",
+    "Preserve report-only recovery setting meaning; expose separate reasoning recovery policy with explicit migration defaults.",
+    "Use parent cancellation and bounded retry admission; do not impose existing audit/report timeouts on normal mutation-capable tool execution.",
+    "Reuse RoundTransaction and existing tool guard; no replay when tool authorization or execution is uncertain.",
+    "New reasoningRecoveryMode defaults on when absent, independently of report rewrite; off disables it.",
+    "Disable optional semantic summary calls during reasoning retry input preparation.",
+    "An unfit reasoning retry ends without cascading into another recovery.",
+    "Use SDK handleInvalidToolRequest for unparsed requests only: preserve prediction stop stats and peer results, then terminate without replay. Parsed schema-invalid requests retain SDK feedback.",
+    "Preserve cancellation and transport errors ahead of parser errors; no raw JSON body in new telemetry.",
+    "입력 ID 생성은 투영 전 한 곳으로 이동하고 복구 경로의 모든 소비자가 같은 ID를 사용하도록 보완한다."
+  ],
+  "doNotDuplicate": [
+    "No second tool executor or permission policy",
+    "No second evidence archive or independent recovery history",
+    "No second budget calculation or model loop",
+    "No new general plugin strategy framework",
+    "SDK parser and tool dispatcher remain authoritative; no JSON auto-repair."
+  ],
+  "invariants": [
+    "One mutable owner per fact; derived snapshots are read-only.",
+    "Recovery does not reset on a successful tool call or compaction.",
+    "Cancel prevents pending recovery dispatch; unknown side effects are not automatically replayed.",
+    "No partially generated tool arguments are executed.",
+    "Measured history and tool catalogue match dispatched plan.",
+    "Guard approval is not provider dispatch proof; missing results do not prove no side effect.",
+    "Per-episode counters may reset when a new episode begins; per-execution retry allowances never reset on tool success.",
+    "Returned evidence must survive cancellation; late events cannot mutate another execution but should not be indiscriminately discarded.",
+    "Allowed tool surface never widens on a recovery transition.",
+    "No active application or user chat is interrupted by installation."
+  ],
+  "impactedSurfaces": [
+    "execution-state",
+    "recovery-coordinator",
+    "delivery-controller",
+    "prediction-loop",
+    "budget and config projection",
+    "prediction-ui",
+    "existing recovery and cancellation tests",
+    "reasoning-recovery policy and config",
+    "round-input optional semantic summary boundary",
+    "reasoning recovery integration tests",
+    "round-loop SDK failure boundary",
+    "delivery-controller output-stage classifier",
+    "scripts/status.cjs required source inventory"
+  ],
+  "validationPlan": [
+    "Replay reasoning-only output-cap outcome with zero calls; permit at most one retry.",
+    "Verify visible report and read-only recovery behavior remains unchanged.",
+    "Verify cancellation between decision and dispatch, duplicate completion and late callbacks.",
+    "Verify shared batch reservations and generation maxTokens use the same measured plan.",
+    "Runtime compare successful structured action or clarification, total cost and no duplicate writes.",
+    "Malformed tool JSON with and without an output-limit stop; retain successful peer results; cancellation and transport precedence; parsed schema error compatibility."
+  ],
+  "validationResults": {
+    "build": "npm run build passed after the final code edit",
+    "fullSuite": {
+      "passed": 404,
+      "failed": 0,
+      "scope": "before final input-identity refinement"
+    },
+    "finalAffectedSuite": {
+      "passed": 164,
+      "failed": 0,
+      "scope": "prediction-loop, refactor-policies (including tool approval), status after input-identity refinement"
+    },
+    "runtime": {
+      "installedRevision": 119,
+      "sourceRevision": 120,
+      "sourceVersion": "0.4.73",
+      "newVersionInstalled": false,
+      "reason": "LM Studio model conversation is active"
+    },
+    "review": {
+      "ssot": "ExecutionState owns reasoning attempts; existing broker owns budgets; one modelInputId is shared across boundaries.",
+      "solid": "Admission policy has no side effects; input preparation returns a disposition; SDK adapter captures outcomes; transaction decides durability; guard owns approval.",
+      "contracts": "Reasoning retry is separate from report-only rewrite; invalid JSON is not repaired or replayed; parsed schema error and observe-only contracts are retained.",
+      "lifetime": "No new session or timeout on reasoning recovery; parent cancellation dominates; listeners/session are released; no model dispatch from shutdown.",
+      "additionalFinding": "Projection used a separately constructed normal prediction ID during recovery. Fixed and regression-tested."
+    }
+  }
+}

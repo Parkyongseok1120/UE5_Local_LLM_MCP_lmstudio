@@ -11,6 +11,7 @@ import { FIRST_CONSUMER_RAW_GIT_MAX_CHARS, MIN_FINAL_OUTPUT_TOKENS, RESEARCH_REC
 import { READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION } from "./execution-instructions";
 import { readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
+import { designGuidanceCandidates, type GuidanceDocument } from "./design-guidance";
 
 type RoundInputOptions = {
   ctl: PredictionLoopHandlerController; config: DirectConfig;
@@ -24,6 +25,8 @@ type RoundInputOptions = {
   historicalAvailabilityLedger: Array<Record<string, unknown>>;
   semanticSummaryCooldownUntilRound: number; objectiveFingerprint: string;
   finalizing: boolean; boundedAudit: boolean; researchRecoveryEpisodeStarted: boolean;
+  reasoningRecovery?: boolean;
+  guidanceDocuments?: readonly GuidanceDocument[];
   finalizationTrigger: string | null;
   projectionApplied: boolean; executionId: string; modelInputId: string; roundIndex: number;
 };
@@ -95,7 +98,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   const baseResult = () => ({ activeNote, semanticSummaryCooldownUntilRound });
   const recoveryDisposition = async () => {
     const profile = readOnlyRecoveryProfile(workingHistory, modelTools);
-    const candidate = !researchRecoveryEpisodeStarted && profile.eligible
+    const candidate = !options.reasoningRecovery && !researchRecoveryEpisodeStarted && profile.eligible
       ? await assembleRecoveryCandidate(workingHistory, profile.tools, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION,
         `${executionId}:research-recovery-candidate-1`) : null;
     const measured = assembledInput.measurement;
@@ -174,7 +177,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   };
   acceptLow();
   if (!lowWater.canRun && !finalizing && !config.observeOnly) return recoveryDisposition();
-  if (lowWater.canRun) {
+  if (lowWater.canRun && !options.reasoningRecovery) {
     const priorNote = activeNote;
     ({ activeNote, semanticSummaryCooldownUntilRound } = await updateSemanticContext({ tokenSource, config, workingContext,
       compactionCheckpoint, compacted, projectionApplied, visibleHistory, activeNote, semanticSummaryCooldownUntilRound,
@@ -190,6 +193,18 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   }
   if (config.showDebugInfo && lowWater.telemetry) ctl.debug({ event: "context_low_water", executionId,
     modelInputId, roundIndex, ...lowWater.telemetry });
+  // Optional references never enter workingHistory or the persisted checkpoint.
+  // Always derive a fresh, measured candidate from the same evidence history.
+  if (lowWater.canRun && !config.observeOnly && !finalizing && options.guidanceDocuments?.length) {
+    const guidance = await contextManager.addOptionalReferences(assembledInput,
+      designGuidanceCandidates(options.guidanceDocuments),
+      instruction => assembleModelInput(workingHistory, { instructions: [...roundScopeInstructions, instruction] }),
+      { maxAddedTokens: config.designGuidanceMaxTokens, hasReadTools: roundTools.some(hasReadCapability),
+        minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort() });
+    assembledInput = guidance.assembled;
+    if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
+      mode: config.designGuidanceMode, ...guidance.telemetry });
+  }
   const finalMeasurement = assembledInput.measurement;
   if (!lowWater.canRun || (!config.observeOnly && finalMeasurement.remainingTokens < 0)) {
     if (!finalizing && !config.observeOnly) return recoveryDisposition();

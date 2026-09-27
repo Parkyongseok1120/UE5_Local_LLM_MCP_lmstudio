@@ -2,6 +2,7 @@
 
 // Included by the existing enumerated package test entry point.
 require("./astra-contract.test.cjs");
+require("./design-guidance.test.cjs");
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -10,7 +11,12 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const test = require("node:test");
 const { Chat, ChatMessage } = require("@lmstudio/sdk");
-const { createPredictionLoopHandler, handlePredictionLoop, __test } = require("../dist/prediction-loop.js");
+const { createPredictionLoopHandler: productionHandler, __test } = require("../dist/prediction-loop.js");
+// These fixtures must not inherit the developer machine's saved Allow all policy.
+function createPredictionLoopHandler(...args) {
+  return productionHandler(args[0], args[1], args[2], args[3], () => ({}));
+}
+const handlePredictionLoop = createPredictionLoopHandler();
 const { runOneToolRound } = require("../dist/round-loop.js");
 const { ContinuityNoteStore, NOTE_MARKER } = require("../dist/continuity-model-notes.js");
 const { WorkingContextBoundary } = require("../dist/working-context-boundary.js");
@@ -54,6 +60,11 @@ function fakeController(history, tokenSource, overrides = {}, tools = []) {
     async tokenSource() { return tokenSource; },
     async startToolUseSession() { return session; },
     async requestConfirmToolCall() { return { type: "allow" }; },
+    createToolStatus(callId, initialState) {
+      const status = { callId, state: initialState, states: [initialState] };
+      statuses.push(status);
+      return { setStatus(state) { status.state = state; status.states.push(state); } };
+    },
     debug(value) { ctl.debugValue = value; },
     createStatus(initialState) {
       const status = { state: initialState, texts: [initialState.text], states: [initialState], removed: false };
@@ -70,6 +81,10 @@ function fakeController(history, tokenSource, overrides = {}, tools = []) {
       return {
         appendText(text) { block.text += text; },
         appendToolRequest(request) { block.requests.push(request); },
+        replaceToolRequest(request) {
+          const index = block.requests.findIndex(value => value.callId === request.callId);
+          if (index >= 0) block.requests[index] = request;
+        },
         appendToolResult(result) { block.results.push(result); },
         setStyle(style) { block.styles.push(style); block.options.style = style; },
       };
@@ -1706,6 +1721,7 @@ test("reasoning-only and tool-argument output limits do not enter report recover
     };
     const ctl = fakeController(history, selectedModel, {
       outputRecoveryMode: "on",
+      reasoningRecoveryMode: "off",
     }, kind === "tool" ? [{ name: "read_file", description: "Read", parametersJsonSchema: { type: "object" },
       pluginIdentifier: "mcp/unreal-agent" }] : []);
 
@@ -2343,7 +2359,7 @@ test("context budget measures a narrowed registered Git catalogue before tools-d
   assert.equal(rescue.nextToolCount, 4);
   assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
   const identity = ctl.debugValues.find(value => value.event === "direct_runtime_identity");
-  assert.equal(identity.runtimeSourceRevision, 118);
+  assert.equal(identity.runtimeSourceRevision, 120);
   assert.match(identity.installedSourceFingerprint, /^[a-f0-9]{64}$/u);
   assert.match(identity.installedDistFingerprint, /^[a-f0-9]{64}$/u);
   assert.match(identity.toolRegistryFingerprint, /^[a-f0-9]{64}$/u);
@@ -4321,4 +4337,424 @@ test("tool-generation failure telemetry is causal and never promoted to a result
   assert.equal(observation.toolTrace.runtime[0].executionState, "not_executed");
   assert.equal(observation.toolTrace.runtime[0].causalModelInputId, observation.modelInputId);
   assert.equal(observation.toolTrace.captured.results.length, 0);
+});
+
+function emitReasoningLimit(options, marker = 'UNFINISHED-REASONING-DO-NOT-REPLAY') {
+  options.onPredictionFragment({ roundIndex: 0, content: marker, reasoningType: 'reasoning',
+    tokensCount: 8170, containsDrafted: false, isStructural: false });
+  options.onPredictionCompleted({ stats: { stopReason: 'maxPredictedTokensReached',
+    promptTokensCount: 100, predictedTokensCount: 8192, totalTokensCount: 8292 } });
+}
+function reasoningModel(act) {
+  return { identifier: 'reasoning-recovery-test', async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 100; }, act };
+}
+function completeRecoveryReply(options, text = 'Which input binding constraint should I use?') {
+  options.onPredictionCompleted({ stats: { stopReason: 'eosFound', promptTokensCount: 100, predictedTokensCount: 20 } });
+  options.onMessage(ChatMessage.create('assistant', text));
+}
+
+test('reasoning recovery keeps constraints and evidence, allows clarification, and does not reuse report limits', async () => {
+  let calls = 0;
+  const history = Chat.from([{ role: 'user', content: 'C++ only. Input Action binding forbidden. Make a small change.' }]);
+  history.append(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: {
+    type: 'function', id: 'prior-read', name: 'read_file', arguments: { path: 'A.cpp' } } }] }));
+  history.append(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: 'prior-read', content: 'VERIFIED-SOURCE-123' }] }));
+  const model = reasoningModel(async (chat, tools, options) => {
+    calls++;
+    assert.equal(options.maxTokens, 8192);
+    if (calls === 1) { emitReasoningLimit(options); return; }
+    assert.equal(calls, 2);
+    assert.match(chat.toString(), /Input Action binding forbidden/);
+    assert.match(chat.toString(), /VERIFIED-SOURCE-123/);
+    assert.match(chat.toString(), /next small useful step/);
+    assert.doesNotMatch(chat.toString(), /UNFINISHED-REASONING-DO-NOT-REPLAY/);
+    assert.equal(options.signal.aborted, false);
+    completeRecoveryReply(options);
+  });
+  const ctl = fakeController(history, model, { maxOutputReserve: 8192, outputRecoveryMode: 'off',
+    outputRecoveryMaxTokens: 256, outputRecoverySeconds: 1, reasoningRecoveryMode: 'on' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  assert.ok(ctl.blocks.some(b => b.text.includes('Which input binding')));
+  assert.ok(ctl.blocks.some(b => b.text.includes('UNFINISHED-REASONING')));
+  const rounds = ctl.debugValues.filter(e => e.event === 'direct_round_observation');
+  assert.deepEqual(rounds.map(e => e.callPurpose), ['research', 'reasoning_recovery']);
+  assert.equal(new Set(rounds.map(e => e.modelInputId)).size, 2);
+  assert.ok(ctl.session.disposed);
+});
+
+test('reasoning recovery is used once across a successful guarded mutation and later reasoning exhaustion', async () => {
+  let calls = 0, writes = 0, approvals = 0;
+  const tool = { name: 'write_file', description: 'Write', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } } };
+  const model = reasoningModel(async (chat, tools, options) => {
+    calls++;
+    assert.ok(tools.some(t => t.name === 'write_file'));
+    if (calls === 1 || calls === 3) { emitReasoningLimit(options); return; }
+    assert.equal(calls, 2, 'no further automatic reasoning retry');
+    const request = { type: 'function', id: 'write-once', name: 'write_file', arguments: { path: 'project://A.cpp', content: 'code' } };
+    let allowed = false;
+    await options.guardToolCall(0, 7001, { toolCallRequest: request,
+      allow() { allowed = true; }, allowAndOverrideParameters() { allowed = true; }, deny(reason) { assert.fail(reason); } });
+    assert.ok(allowed); writes++;
+    options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+    options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+    options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+      content: JSON.stringify({ ok: true, path: 'A.cpp' }) }] }));
+    options.onRoundEnd(); throw options.signal.reason;
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Create A.cpp in the active Unreal project.' }]),
+    model, { reasoningRecoveryMode: 'on' }, [tool]);
+  ctl.requestConfirmToolCall = async () => { approvals++; return { type: 'allow' }; };
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 3); assert.equal(writes, 1); assert.equal(approvals, 1);
+  assert.equal(ctl.debugValues.filter(e => e.event === 'reasoning_recovery_scheduled').length, 1);
+  const transitions = ctl.debugValues.find(e => e.event === 'execution_transitions').transitions;
+  assert.ok(transitions.some(t => t.from === 'REASONING_RECOVERY' && t.to === 'RESEARCH'));
+  assert.ok(ctl.blocks.some(b => b.results.length === 1));
+});
+
+for (const retryResult of ['reasoning', 'visible', 'raw']) test(`reasoning recovery stops without cascading after ${retryResult} output failure`, async () => {
+  let calls = 0;
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    calls++; assert.ok(calls <= 2);
+    if (calls === 1 || retryResult === 'reasoning') { emitReasoningLimit(options); return; }
+    options.onPredictionCompleted({ stats: { stopReason: 'maxPredictedTokensReached' } });
+    options.onMessage(ChatMessage.create('assistant', retryResult === 'visible' ? 'partial visible answer' : '<tool_call>{"name":"read_file","arguments":'));
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect A.cpp.' }]), model,
+    { reasoningRecoveryMode: 'on', outputRecoveryMode: 'on' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  assert.equal(ctl.debugValues.some(e => ['output_recovery_scheduled', 'fresh_tool_planning_retry_scheduled'].includes(e.event)), false);
+  assert.match(ctl.statuses.at(-1).state.text, /자동 재시도는 여기서 중단/);
+});
+
+for (const mode of ['disabled', 'observe', 'bounded']) test(`reasoning recovery respects ${mode} mode`, async () => {
+  let calls = 0;
+  const model = reasoningModel(async (_chat, tools, options) => {
+    calls++;
+    if (calls === 1) emitReasoningLimit(options);
+    else { assert.equal(mode, 'bounded'); assert.deepEqual(tools, []); completeRecoveryReply(options, 'Bounded final report.'); }
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect sources.' }]), model, {
+    reasoningRecoveryMode: mode === 'disabled' ? 'off' : 'on', observeOnly: mode === 'observe',
+    auditCompletionMode: mode === 'bounded' ? 'bounded' : 'off' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, mode === 'bounded' ? 2 : 1);
+  assert.equal(ctl.debugValues.some(e => e.event === 'reasoning_recovery_scheduled'), false);
+});
+
+test('reasoning recovery cancellation during input preparation prevents dispatch and disposes the session', async () => {
+  let calls = 0;
+  const abort = new AbortController();
+  const model = reasoningModel(async (_chat, _tools, options) => { calls++; emitReasoningLimit(options); });
+  model.applyPromptTemplate = async chat => {
+    if (chat.toString().includes('next small useful step')) abort.abort(new Error('user canceled retry'));
+    return chat.toString();
+  };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Implement a change.' }]), model, { reasoningRecoveryMode: 'on' });
+  ctl.abortSignal = abort.signal; ctl.guardAbort = () => abort.signal.throwIfAborted();
+  await assert.rejects(handlePredictionLoop(ctl), /user canceled retry/);
+  assert.equal(calls, 1); assert.ok(ctl.session.disposed);
+});
+
+test('reasoning recovery that cannot fit stops without a narrowed-tool or final-report cascade', async () => {
+  let calls = 0;
+  const model = reasoningModel(async (_chat, _tools, options) => { calls++; emitReasoningLimit(options); });
+  model.countTokens = async text => text.includes('next small useful step') ? 100000 : 100;
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Make a change.' }]), model, { reasoningRecoveryMode: 'on' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  assert.ok(ctl.debugValues.some(e => e.event === 'reasoning_recovery_blocked'));
+  assert.ok(ctl.session.disposed);
+});
+
+test('reasoning recovery defaults independently from report recovery and preserves explicit off', () => {
+  const fresh = __test.readConfig(fakeController(Chat.empty(), {}, { outputRecoveryMode: 'off' }));
+  assert.equal(fresh.reasoningRecoveryMode, 'on');
+  assert.equal(__test.readConfig(fakeController(Chat.empty(), {}, { reasoningRecoveryMode: 'off' })).reasoningRecoveryMode, 'off');
+});
+
+test('reasoning recovery in hybrid remeasures its exact input without invoking semantic handoff', async t => {
+  const semantic = require('../dist/semantic-handoff');
+  const { EvidenceManager } = require('../dist/evidence-manager');
+  const original = semantic.updateSemanticContext;
+  const project = EvidenceManager.prototype.project, expose = EvidenceManager.prototype.captureExposure;
+  const projections = [], exposures = [];
+  EvidenceManager.prototype.project = function(history, metadata, maxChars) {
+    projections.push(metadata.modelInputId);
+    return project.call(this, history, metadata, maxChars);
+  };
+  EvidenceManager.prototype.captureExposure = function(history, modelInputId, completed) {
+    exposures.push({ modelInputId, completed });
+    return expose.call(this, history, modelInputId, completed);
+  };
+  t.after(() => {
+    semantic.updateSemanticContext = original;
+    EvidenceManager.prototype.project = project;
+    EvidenceManager.prototype.captureExposure = expose;
+  });
+  let calls = 0;
+  const model = reasoningModel(async (chat, _tools, options) => {
+    calls++;
+    if (calls === 1) {
+      semantic.updateSemanticContext = async () => { assert.fail('retry must not start optional summary preparation'); };
+      emitReasoningLimit(options); return;
+    }
+    assert.equal(calls, 2);
+    assert.match(chat.toString(), /next small useful step/);
+    completeRecoveryReply(options);
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect the project and ask if necessary.' }]), model,
+    { reasoningRecoveryMode: 'on', contextManagementMode: 'hybrid', maxOutputReserve: 8192 });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  const measurements = ctl.debugValues.filter(e => e.event === 'direct_context_measurement');
+  assert.equal(measurements.length, 2);
+  assert.ok(measurements.every(e => e.finalExactMeasurement && e.toolSurfaceMatchesMeasured && e.outputReserve === 8192));
+  assert.ok(measurements[1].modelInputId.includes(':reasoning-recovery-'));
+  assert.deepEqual(projections, measurements.map(e => e.modelInputId), 'projection must share the actual input identity');
+  assert.deepEqual(exposures, [
+    { modelInputId: measurements[0].modelInputId, completed: false },
+    { modelInputId: measurements[1].modelInputId, completed: false },
+    { modelInputId: measurements[1].modelInputId, completed: true },
+  ], 'truncated reasoning must not consume evidence; completed retry must use its measured identity');
+  assert.deepEqual(ctl.debugValues.filter(e => e.event === 'direct_round_observation').map(e => e.modelInputId),
+    measurements.map(e => e.modelInputId));
+});
+
+test('reasoning recovery does not replay a guard-authorized operation whose result is missing', async () => {
+  let calls = 0;
+  const tool = { name: 'write_file', description: 'Write', pluginIdentifier: 'mcp/unreal-agent', parametersJsonSchema: { type: 'object' } };
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    calls++;
+    await options.guardToolCall(0, 9001, { toolCallRequest: { type: 'function', id: 'unknown-result', name: 'write_file', arguments: {} },
+      allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+    emitReasoningLimit(options);
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Write a file.' }]), model, { reasoningRecoveryMode: 'on' }, [tool]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  const observation = ctl.debugValues.find(e => e.event === 'direct_round_observation');
+  assert.equal(observation.reasoningRecoveryDecision.reason, 'tool_activity_present');
+  assert.ok(ctl.statuses.some(s => s.state.type === 'toolCallFailed' && /unknown/.test(s.state.error)));
+});
+
+test('reasoning recovery state owns its non-resetting allowance and rejects duplicate or terminal admission', () => {
+  const { ExecutionState } = require('../dist/execution-state');
+  const state = new ExecutionState();
+  state.startReasoningRecovery();
+  assert.equal(state.recovering, false, 'must not select the read-only recovery profile');
+  assert.throws(() => state.startReasoningRecovery(), /ILLEGAL_EXECUTION_TRANSITION/);
+  state.finishReasoningRecovery();
+  assert.throws(() => state.startReasoningRecovery(), /REASONING_RECOVERY_EXHAUSTED/);
+  state.terminate('done');
+  assert.throws(() => state.startReasoningRecovery(), /ILLEGAL_EXECUTION_TRANSITION/);
+  assert.equal(new ExecutionState().reasoningRecoveryAttempts, 0);
+});
+
+test('reasoning recovery rejects partial tool events, unknown execution, other phases and stop signals', () => {
+  const { decideReasoningRecovery } = require('../dist/reasoning-recovery');
+  const baseline = { config: { reasoningRecoveryMode: 'on', observeOnly: false, auditCompletionMode: 'off' },
+    phase: 'RESEARCH', attempts: 0, outputLimitStage: 'reasoning', canceled: false, timedOut: false, toolTraceCount: 0,
+    captured: { messages: [], continueAfterTools: false, finishReason: 'maxPredictedTokensReached', predictionUsage: {
+      toolArgumentChars: 0, sdkToolRequestStartedCount: 0, sdkToolRequestNamedCount: 0, sdkToolRequestEndedCount: 0,
+      sdkToolRequestFinalizedCount: 0, sdkToolRequestFailureCount: 0, rawToolIntentCandidate: false } } };
+  assert.equal(decideReasoningRecovery(baseline).eligible, true);
+  for (const field of ['toolArgumentChars', 'sdkToolRequestStartedCount', 'sdkToolRequestNamedCount',
+    'sdkToolRequestEndedCount', 'sdkToolRequestFinalizedCount', 'sdkToolRequestFailureCount', 'rawToolIntentCandidate']) {
+    assert.equal(decideReasoningRecovery({ ...baseline, captured: { ...baseline.captured,
+      predictionUsage: { ...baseline.captured.predictionUsage, [field]: 1 } } }).eligible, false, field);
+  }
+  for (const overrides of [{ phase: 'READ_RECOVERY' }, { phase: 'TOOL_REPLAN' }, { phase: 'OUTPUT_RECOVERY' },
+    { phase: 'TERMINATED' }, { attempts: 1 }, { canceled: true }, { timedOut: true }, { toolTraceCount: 1 }]) {
+    assert.equal(decideReasoningRecovery({ ...baseline, ...overrides }).eligible, false, JSON.stringify(overrides));
+  }
+});
+
+async function emitUnparsedRequest(options, stopReason = 'maxPredictedTokensReached') {
+  const { ToolCallRequestError } = require('@lmstudio/sdk');
+  const raw = '{"files":[{"path":"Source/UNFINISHED';
+  const error = new ToolCallRequestError('Unterminated string in JSON', raw);
+  options.onToolCallRequestStart?.(0, 988, {});
+  options.onToolCallRequestNameReceived?.(0, 988, 'propose_file_deletions');
+  options.onToolCallRequestArgumentFragmentGenerated?.(0, 988, raw);
+  assert.equal(await options.handleInvalidToolRequest(error, undefined), undefined);
+  options.onToolCallRequestFailure?.(0, 988, error);
+  options.onPredictionCompleted({ stats: { stopReason, promptTokensCount: 45541, predictedTokensCount: 8192 } });
+  return error;
+}
+
+for (const stopReason of ['maxPredictedTokensReached', 'eosFound']) test(`unparsed tool request retains ${stopReason} and stops without repair or retry`, async () => {
+  let calls = 0, approvals = 0;
+  const model = reasoningModel(async (_chat, _tools, options) => { calls++; await emitUnparsedRequest(options, stopReason); });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Refactor the existing files.' }]), model,
+    { reasoningRecoveryMode: 'on', outputRecoveryMode: 'on' });
+  ctl.requestConfirmToolCall = async () => { approvals++; assert.fail('unparsed request cannot reach approval'); };
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1); assert.equal(approvals, 0); assert.ok(ctl.session.disposed);
+  const observation = ctl.debugValues.find(e => e.event === 'direct_round_observation');
+  assert.equal(observation.finishReason, stopReason);
+  assert.equal(observation.predictionStats.predictedTokensCount, 8192);
+  assert.equal(observation.toolRequestFailure.kind, 'unparsed_request');
+  assert.equal(observation.structuredToolRequestCount, 0);
+  assert.equal(ctl.debugValues.some(e => e.event === 'reasoning_recovery_scheduled'), false);
+  assert.match(ctl.statuses.at(-1).state.text, stopReason === 'maxPredictedTokensReached' ? /생성 한도에서 잘려/ : /해석할 수 없어/);
+  assert.doesNotMatch(JSON.stringify(ctl.debugValues), /Source\/UNFINISHED/);
+});
+
+test('unparsed tool request preserves successful peer results and never completes partial planning', async () => {
+  const { RoundTransaction } = require('../dist/execution-state');
+  let calls = 0;
+  const request = { type: 'function', id: 'peer', name: 'read_file', arguments: { path: 'A.cpp' } };
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    calls++; await emitUnparsedRequest(options);
+    options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'text', text: 'INCOMPLETE_PLAN' },
+      { type: 'toolCallRequest', toolCallRequest: request }] }));
+    options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: 'peer', content: 'PEER_RESULT' }] }));
+    options.onRoundEnd(); throw options.signal.reason;
+  });
+  const captured = await runOneToolRound(model, Chat.empty(), [], new AbortController().signal,
+    { captureUnparsedToolRequest: true, onToolCallRequestFinalized() {}, async guardToolCall() {} });
+  assert.equal(calls, 1);
+  assert.equal(captured.predictionCompleted, false);
+  assert.equal(captured.toolRequestFailure.kind, 'unparsed_request');
+  const durable = Chat.empty(); new RoundTransaction(captured, false).commitEvidence(durable);
+  assert.match(durable.toString(), /PEER_RESULT/);
+  assert.doesNotMatch(durable.toString(), /INCOMPLETE_PLAN/);
+});
+
+for (const failureKind of ['cancel', 'transport']) test(`unparsed tool request does not hide subsequent ${failureKind} failure`, async () => {
+  const parent = new AbortController(), reason = new Error(failureKind);
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    await emitUnparsedRequest(options);
+    if (failureKind === 'cancel') parent.abort(reason);
+    throw reason;
+  });
+  const captured = await runOneToolRound(model, Chat.empty(), [], parent.signal,
+    { captureUnparsedToolRequest: true, onToolCallRequestFinalized() {}, async guardToolCall() {} });
+  assert.equal(captured.failure, reason);
+  assert.equal(captured.toolRequestFailure, undefined);
+});
+
+test('unparsed tool handling preserves SDK validation feedback for a parsed request and observe-only behavior', async () => {
+  const { ToolCallRequestError } = require('@lmstudio/sdk');
+  const schemaError = new ToolCallRequestError('invalid schema value', '{}');
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    assert.equal(await options.handleInvalidToolRequest(schemaError, { type: 'function', id: 'bad-schema', name: 'read_file', arguments: {} }), schemaError.message);
+    completeRecoveryReply(options, 'Schema feedback is unchanged.');
+  });
+  const captured = await runOneToolRound(model, Chat.empty(), [], new AbortController().signal,
+    { captureUnparsedToolRequest: true, onToolCallRequestFinalized() {}, async guardToolCall() {} });
+  assert.equal(captured.failure, undefined);
+  const observeModel = reasoningModel(async (_chat, _tools, options) => {
+    assert.equal(options.handleInvalidToolRequest, undefined); throw schemaError;
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Observe only.' }]), observeModel, { observeOnly: true });
+  await assert.rejects(handlePredictionLoop(ctl), error => error === schemaError);
+});
+
+test('design references reach each measured prediction once and preserve ordinary tool approval', async () => {
+  let calls = 0, approvals = 0;
+  const original = Chat.from([{ role: 'user', content: 'Make the authorized small C++ edit.' }]);
+  const tool = { name: 'write_file', description: 'Write', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } } };
+  const model = { identifier: 'guidance-flow', async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat, options) { return chat.toString() + JSON.stringify(options.toolDefinitions); },
+    async countTokens(text) { return Math.ceil(text.length / 2); },
+    async act(chat, tools, options) {
+      calls++;
+      const text = chat.toString();
+      assert.equal(text.split('[reference id=core ').length - 1, 1);
+      assert.equal(text.split('[reference id=design ').length - 1, 1);
+      assert.match(text, /Make the authorized small C\+\+ edit/);
+      assert.ok(tools.some(t => t.name === 'write_file'));
+      assert.equal(options.maxTokens, 4096);
+      if (calls === 2) { assert.match(text, /WRITE_RESULT/); completeRecoveryReply(options, 'Done.'); return; }
+      const request = { type: 'function', id: 'guidance-write', name: 'write_file', arguments: { path: 'A.cpp', content: 'code' } };
+      let allowed = false;
+      await options.guardToolCall(0, 7101, { toolCallRequest: request,
+        allow() { allowed = true; }, allowAndOverrideParameters() { allowed = true; }, deny(reason) { assert.fail(reason); } });
+      assert.ok(allowed);
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: 'A.cpp', message: 'WRITE_RESULT' }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(original, model, { projectEngine: 'unreal', designGuidanceMode: 'design',
+    designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [tool]);
+  ctl.requestConfirmToolCall = async () => { approvals++; return { type: 'allow' }; };
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2); assert.equal(approvals, 1);
+  assert.doesNotMatch(original.toString(), /Optional design reference/);
+  assert.ok(ctl.blocks.every(b => !b.text.includes('[Optional design reference]')));
+  const measured = ctl.debugValues.filter(e => e.event === 'direct_context_measurement');
+  const references = ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  assert.equal(references.length, 2);
+  for (let i = 0; i < 2; i++) {
+    assert.equal(references[i].reason, 'included');
+    assert.equal(references[i].finalInputTokens, measured[i].finalInputTokens);
+    assert.equal(measured[i].finalExactMeasurement, true);
+  }
+});
+
+test('a reused handler resolves each engine anew without carrying prior reference text', async () => {
+  const handler = createPredictionLoopHandler();
+  for (const engine of ['unreal', 'unity']) {
+    const model = { async getContextLength() { return 38912; },
+      async applyPromptTemplate(chat) { return chat.toString(); },
+      async countTokens(text) { return Math.ceil(text.length / 2); },
+      async act(chat, _tools, options) {
+        assert.match(chat.toString(), new RegExp('reference id=' + engine + '-networking'));
+        assert.doesNotMatch(chat.toString(), new RegExp('reference id=' + (engine === 'unity' ? 'unreal' : 'unity') + '-networking'));
+        assert.doesNotMatch(chat.toString(), /Latency_MultiCombat/);
+        completeRecoveryReply(options, 'Reviewed.');
+      } };
+    await handler(fakeController(Chat.from([{ role: 'user', content: 'Review this multiplayer change.' }]), model,
+      { projectEngine: engine, designGuidanceMode: 'multiplayer', designGuidanceMaxTokens: 8192 }));
+  }
+});
+
+for (const variant of ['off', 'observe', 'no-budget']) test(`design references preserve dispatch in ${variant} mode`, async () => {
+  let calls = 0;
+  const model = { async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 2); },
+    async act(chat, _tools, options) {
+      calls++;
+      assert.doesNotMatch(chat.toString(), /Optional design reference/);
+      assert.match(chat.toString(), /ORIGINAL_TASK/);
+      completeRecoveryReply(options, 'Original behavior.');
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'ORIGINAL_TASK' }]), model, {
+    designGuidanceMode: variant === 'off' ? 'off' : 'core', observeOnly: variant === 'observe',
+    designGuidanceMaxTokens: variant === 'no-budget' ? 1 : 2048,
+  });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+});
+
+test('forced final delivery omits optional design references', async () => {
+  let calls = 0;
+  const model = { async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 2); },
+    async act(chat, tools, options) {
+      if (++calls === 1) {
+        assert.match(chat.toString(), /Optional design reference/);
+        options.onPredictionCompleted({ stats: { stopReason: 'maxPredictedTokensReached', predictedTokensCount: 4096 } });
+        options.onMessage(ChatMessage.create('assistant', 'This report was cut short.')); return;
+      }
+      assert.equal(calls, 2);
+      assert.equal(tools.length, 0);
+      assert.doesNotMatch(chat.toString(), /Optional design reference/);
+      completeRecoveryReply(options, 'Completed short report.');
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Report from the supplied facts.' }]), model,
+    { designGuidanceMode: 'core', outputRecoveryMode: 'on' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
 });

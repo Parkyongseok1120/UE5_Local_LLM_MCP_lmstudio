@@ -1,0 +1,172 @@
+{
+  "mode": "codegen",
+  "baseline": {
+    "reviewedHead": "81dd48b91d949a72beb300e522f037d106b04883",
+    "branch": "Develop",
+    "initialWorktree": "clean"
+  },
+  "claims": [
+    {
+      "claim": "직접 승인 경로가 저장된 Allow all 정책을 적용하지 않고, 승인 UI에 필요한 native toolStatus도 생성하지 않아 승인 대기가 진행되지 않습니다.",
+      "claimType": "wiring",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts (baseline)",
+          "observation": "변경 도구는 requestConfirmToolCall을 무조건 기다리며 generic status만 갱신합니다."
+        },
+        {
+          "kind": "framework_source",
+          "location": "LM Studio resources/app/.webpack/renderer/main_window.js: ToolStatusStep, buildToolStatusContent, requestConfirmToolCall rendering",
+          "observation": "requestConfirmToolCall은 독립 렌더링에서 제외되고, confirmingToolCall native status에서 callId로 연결되어 승인 버튼을 표시합니다."
+        },
+        {
+          "kind": "framework_source",
+          "location": "LM Studio resources/app/.webpack/main/index.js: processing confirmToolCall handler",
+          "observation": "명시적 승인 RPC는 확인 step을 추가하고 사용자 응답을 기다립니다. 이 handler에 skip preference 분기가 없습니다."
+        },
+        {
+          "kind": "runtime",
+          "location": "1790523127131.conversation.json and settings.json chat approval keys",
+          "observation": "revision 118 unreal_set_active_project 승인 요청과 unreal-rag:* 허용 설정이 함께 존재하며 toolStatus 카드가 없습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/tool-boundary.ts",
+          "symbol": "createToolGuard"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/tool-boundary.ts (baseline)",
+          "symbol": "isObservationOnlyToolCall false branch always requests confirmation"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "SDK ProcessingController.requestConfirmToolCall",
+          "symbol": "confirmToolCall RPC"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "expected_missing",
+          "location": "src/prediction-ui.ts (baseline)",
+          "symbol": "native confirmingToolCall card"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "src/tool-boundary.ts",
+          "observation": "등록된 읽기 전용 도구는 승인 RPC 없이 실행되어 같은 대기 문제가 나타나지 않습니다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실제 LM Studio 화면에서 버튼 표시와 새 요청 완료는 아직 확인하지 않았습니다."
+      ]
+    },
+    {
+      "claim": "승인 정책 적용과 native 카드 수명 연결이 자동 회귀에서 검증됐습니다. 실제 활성 채팅에서의 UI 및 도구 실행은 아직 별도 확인이 필요합니다.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "test/tool-approval.test.cjs; test/prediction-loop.test.cjs",
+          "observation": "provider별 Allow all, 정확한 도구 허용, 설정 재읽기, 수동 카드 선행, 편집 인수 재바인딩, 거절, 취소, 실패·미수신 결과와 기존 scope 처리가 통과했습니다."
+        },
+        {
+          "kind": "build",
+          "location": "npm run build",
+          "observation": "최종 TypeScript 빌드가 통과했습니다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "LM Studio active chat",
+          "observation": "기존 승인 대기는 이전 실행이며 수정 후 GUI 왕복 실행을 관찰하지 않았습니다."
+        }
+      ],
+      "unknowns": [
+        "수정본으로 재시도한 실제 UI/도구 결과"
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/tool-boundary.ts",
+          "symbol": "createToolGuard"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/tool-boundary.ts",
+          "symbol": "hostToolAutoApproval and scope validation"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "present",
+          "location": "src/prediction-ui.ts",
+          "symbol": "approvalCard / replaceRequest / completed / finishPending"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "test/tool-approval.test.cjs",
+          "symbol": "native card contract assertions"
+        }
+      ]
+    }
+  ],
+  "existing": [
+    "createToolGuard의 scope, 읽기 예산, 프로젝트 인수 바인딩",
+    "createMessageEmitter와 VisibleHistoryRecorder의 요청 상관관계",
+    "SDK native toolStatus와 requestConfirmToolCall"
+  ],
+  "proposed": [
+    "승인 직전에 저장된 host 정책을 읽고 provider와 tool을 정확하게 대조",
+    "수동 승인 앞에서 요청과 native 확인 카드를 게시",
+    "인수 편집, 거절, 반환, 취소에 맞춰 기록과 카드 수명 정리"
+  ],
+  "doNotDuplicate": [
+    "MCP 실행기와 권한 설정 저장소",
+    "provider의 파일 쓰기, receipt, 실행 권한 검사"
+  ],
+  "invariants": [
+    "Allow all은 읽기 전용/recovery 분류나 scope 검사를 바꾸지 않음",
+    "설정 읽기 실패 시 수동 승인을 유지",
+    "거절과 취소 뒤 실행 허용 금지",
+    "실행 결과 미수신을 성공으로 표시하지 않음",
+    "사용자가 편집한 인수도 프로젝트에 다시 바인딩"
+  ],
+  "impactedSurfaces": [
+    "src/tool-boundary.ts",
+    "src/prediction-ui.ts",
+    "src/prediction-loop.ts",
+    "test/tool-approval.test.cjs",
+    "test/prediction-loop.test.cjs"
+  ],
+  "validationPlan": [
+    "TypeScript build",
+    "회귀 테스트: Allow all, exact tool, manual card, override, denial, cancellation, failed/missing result",
+    "기존 prediction-loop 및 정책 테스트",
+    "설치본 fingerprint 확인; 활성 프로세스 교체는 다음 plugin reload에서 확인"
+  ],
+  "validationResults": {
+    "build": "passed; TypeScript final source 0.4.72/revision 119",
+    "regression": "138/138 prediction-loop and refactor-policy tests passed; final targeted rerun 11/11 passed",
+    "gitDiffCheck": "passed",
+    "install": "lms dev --install -y succeeded",
+    "liveGui": "not observed; existing pending call belongs to previous execution",
+    "installedFiles": "revision 119, package 0.4.72; source and dist fingerprints match; production entry exists; real saved policy grants the reported Unreal and Unity tools"
+  }
+}

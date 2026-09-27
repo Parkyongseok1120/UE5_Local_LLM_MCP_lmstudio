@@ -64,10 +64,9 @@ export const UNREAL_OBSERVATION_TOOLS = new Set([
 ]);
 
 /**
- * LM Studio 0.4.24 can leave requestConfirmToolCall pending without rendering
- * its approval controls. Observation-only calls must not block the prediction
- * loop on that host UI. Mutations and long-running work still use the host's
- * confirmation flow.
+ * Known observations do not require confirmation. Mutations and long-running
+ * work use the host's saved approval policy or its native confirmation card;
+ * that decision must not change a tool's read/recovery classification.
  */
 function hasReadAuthority(
   tool: RemoteToolLike,

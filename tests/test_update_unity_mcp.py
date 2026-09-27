@@ -129,7 +129,47 @@ def test_update_rejects_different_source_or_bridge_before_external_action(instal
         updater.update(config, source_root=source)
 
 
-def test_real_cli_checks_current_mcp_without_changing_config(tmp_path):
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_missing_bridge_allows_mcp_update_without_reinstalling_package(installed, monkeypatch, dry_run):
+    source, _, config, manifest = installed
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    del payload["dependencies"]["com.evidencefirst.unity-bridge"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    before = config.read_bytes(), manifest.read_bytes()
+    commands = []
+
+    def fake_run(command, **_):
+        assert not dry_run, "dry run must not start external processes"
+        commands.append(command)
+        output = "v20.20.2" if command[1] == "--version" else json.dumps({
+            "initialized": True, "connection": "disconnected", "reason": "ENOENT",
+        })
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(updater, "_run", fake_run)
+    report = updater.update(config, source_root=source, dry_run=dry_run, skip_deps=True)
+    assert report["ok"] and report["bridgeBinding"] == "missing"
+    assert "Bridge package is not registered" in report["warnings"][0]
+    assert not report["configurationChanged"] and not report["projectChanged"]
+    assert len(commands) == (0 if dry_run else 2)
+    assert (config.read_bytes(), manifest.read_bytes()) == before
+
+
+@pytest.mark.parametrize("binding", [None, "", "file:/other-bridge", "https://example.test/bridge.git"])
+def test_present_invalid_or_different_bridge_is_not_treated_as_missing(installed, monkeypatch, binding):
+    source, _, config, manifest = installed
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["dependencies"]["com.evidencefirst.unity-bridge"] = binding
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    before = config.read_bytes(), manifest.read_bytes()
+    monkeypatch.setattr(updater, "_run", lambda *a, **k: pytest.fail("must fail before external action"))
+    with pytest.raises(ValueError, match="Bridge binding differs"):
+        updater.update(config, source_root=source, skip_deps=True)
+    assert (config.read_bytes(), manifest.read_bytes()) == before
+
+
+@pytest.mark.parametrize("bridge_registered", [True, False])
+def test_real_cli_checks_current_mcp_without_changing_config(tmp_path, bridge_registered):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is unavailable")
@@ -137,9 +177,8 @@ def test_real_cli_checks_current_mcp_without_changing_config(tmp_path):
     for folder in ["Assets", "Packages", "ProjectSettings"]:
         (project / folder).mkdir(parents=True)
     manifest = project / "Packages/manifest.json"
-    manifest.write_text(json.dumps({"dependencies": {
-        "com.evidencefirst.unity-bridge": "file:" + (ROOT / "unity-editor-bridge").resolve().as_posix(),
-    }}), encoding="utf-8")
+    dependencies = {"com.evidencefirst.unity-bridge": "file:" + (ROOT / "unity-editor-bridge").resolve().as_posix()} if bridge_registered else {}
+    manifest.write_text(json.dumps({"dependencies": dependencies}), encoding="utf-8")
     (project / "ProjectSettings/ProjectVersion.txt").write_text("m_EditorVersion: 2022.3.0f1", encoding="utf-8")
     config = tmp_path / "mcp.json"
     config.write_text(json.dumps({"mcpServers": {"unity-tools": {
@@ -155,6 +194,7 @@ def test_real_cli_checks_current_mcp_without_changing_config(tmp_path):
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["ok"] and report["verification"]["initialized"]
+    assert report["bridgeBinding"] == ("current" if bridge_registered else "missing")
     assert report["verification"]["connection"] == "disconnected"
     assert (config.read_bytes(), manifest.read_bytes()) == before
 

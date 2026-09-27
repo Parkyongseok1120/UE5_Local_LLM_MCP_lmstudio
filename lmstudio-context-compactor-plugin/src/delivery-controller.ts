@@ -57,6 +57,7 @@ delivery, partial: needsPartial ? evidenceBackedPartialReport(history, captured.
 export function classifyOutputLimitStage(
   captured: {
     finishReason?: string;
+    toolRequestFailure?: { kind: "unparsed_request" };
     messages: Array<ChatMessage>;
     predictionUsage?: {
       reasoningTokensCount?: number;
@@ -69,6 +70,7 @@ export function classifyOutputLimitStage(
   toolGeneration: { hasUnfinished: () => boolean },
 ): OutputLimitStage | undefined {
   if (captured.finishReason !== "maxPredictedTokensReached") return undefined;
+  if (captured.toolRequestFailure) return "tool_arguments";
   const finalRawToolIntent = containsUnresolvedToolIntent(visibleTextFromMessages(captured.messages), captured.messages);
   if ((captured.predictionUsage?.rawToolIntentCandidate === true || finalRawToolIntent)
     && !captured.messages.some(message => message.getToolCallRequests().length > 0)) {

@@ -385,6 +385,66 @@ type AssembledInput = Awaited<ReturnType<ReturnType<typeof createInputAssembler>
  * continuity/availability metadata and the exact exposed schema are attached. */
 export class ContextManager {
   constructor(readonly config: DirectConfig, readonly broker: BudgetBroker) { }
+  /** Add optional material only after the existing evidence window is ready.
+   * Admission reuses the exact assembler and shared broker; it never compacts
+   * evidence, changes output limits, or creates a second execution gate. */
+  async addOptionalReferences(base: AssembledInput,
+    candidates: ReadonlyArray<{ ids: readonly string[]; instruction: string }>,
+    assemble: (instruction: string) => Promise<AssembledInput>,
+    options: { maxAddedTokens: number; hasReadTools: boolean; minimumReadTokens: number; guardAbort: () => void }) {
+    const requestedIds = candidates[0]?.ids || [];
+    let reason = "no_candidates";
+    let attempts = 0;
+    const result = (assembled: AssembledInput, selectedIds: readonly string[] = [], addedTokens = 0) => ({
+      assembled,
+      telemetry: { requestedIds, selectedIds, omittedIds: requestedIds.filter(id => !selectedIds.includes(id)),
+        reason, attempts, addedTokens, baseInputTokens: base.measurement.inputTokens,
+        finalInputTokens: assembled.measurement.inputTokens },
+    });
+    if (!candidates.length) return result(base);
+    if (!Number.isFinite(options.maxAddedTokens) || options.maxAddedTokens <= 0) {
+      reason = "disabled";
+      return result(base);
+    }
+    if (!base.measurement.exact || base.measurement.contextLengthSource !== "model") {
+      reason = "measurement_unavailable";
+      return result(base);
+    }
+    const baselineWater = this.broker.watermarks(base.measurement, 0, options.hasReadTools, options.minimumReadTokens);
+    if (base.measurement.inputTokens >= baselineWater.effectiveLowWaterTokens) {
+      reason = "existing_input_priority";
+      return result(base);
+    }
+    for (const candidate of candidates) {
+      options.guardAbort();
+      let input: AssembledInput;
+      try {
+        attempts++;
+        input = await assemble(candidate.instruction);
+      } catch {
+        options.guardAbort();
+        reason = "assembly_failed";
+        continue;
+      }
+      options.guardAbort();
+      const measured = input.measurement;
+      if (!measured.exact || measured.contextLengthSource !== "model") {
+        reason = "measurement_unavailable";
+        continue;
+      }
+      const addedTokens = Math.max(0, measured.inputTokens - base.measurement.inputTokens);
+      const water = this.broker.watermarks(measured, 0, options.hasReadTools, options.minimumReadTokens);
+      if (addedTokens > options.maxAddedTokens || measured.remainingTokens < 0
+        || measured.inputTokens > water.effectiveLowWaterTokens || !water.nextActionFit || water.preDispatchCompaction) {
+        reason = "budget_omitted";
+        continue;
+      }
+      reason = "included";
+      return result(input, candidate.ids, addedTokens);
+    }
+    return result(base);
+  }
+
   commit(store: InstanceType<typeof workingContextModule.WorkingContext> | null, visible: Chat,
     candidate: Chat, measured: ContextMeasurement, fingerprint: Record<string, unknown>, eligible: boolean) {
     if (!store || !eligible || !measured.exact || measured.remainingTokens < 0) return { committed: false, reason: null };

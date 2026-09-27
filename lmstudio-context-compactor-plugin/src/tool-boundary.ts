@@ -1,4 +1,7 @@
 import type { LLMActionOpts, PredictionLoopHandlerController } from "@lmstudio/sdk";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { reserveReadResult, type BatchReservation } from "./budget-broker";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import type { DirectConfig } from "./execution-contracts";
@@ -6,6 +9,36 @@ import { type OutputLimitStage } from "./execution-contracts";
 import { createMessageEmitter, createToolGenerationTracker, toolPluginIdentifier } from "./prediction-ui";
 import { isObservationOnlyToolCall, readOnlyOperationProfiles, type RemoteToolLike } from "./tool-capability-registry";
 import { bindProjectArguments, type ScopedTool } from "./tool-scope";
+
+export type HostToolApprovalPolicy = {
+  neverAskForToolConfirmation?: boolean;
+  skipToolConfirmationPatterns?: string[];
+};
+
+// SDK 1.5.0's explicit confirmation RPC always waits for a response; it does
+// not consult the app's Allow all preferences. Read those user-owned settings
+// at each confirmation edge, without caching or changing them. Missing or
+// unreadable settings retain interactive confirmation.
+export function readHostToolApprovalPolicy(): HostToolApprovalPolicy {
+  try {
+    const home = process.env.LMSTUDIO_HOME?.trim() || path.join(os.homedir(), ".lmstudio");
+    const file = path.join(home, "settings.json");
+    if (fs.statSync(file).size > 1024 * 1024) return {};
+    const chat = JSON.parse(fs.readFileSync(file, "utf8")).chat;
+    return {
+      neverAskForToolConfirmation: chat?.neverAskForToolConfirmation === true,
+      skipToolConfirmationPatterns: Array.isArray(chat?.skipToolConfirmationPatterns)
+        ? chat.skipToolConfirmationPatterns.filter((value: unknown) => typeof value === "string") : [],
+    };
+  } catch { return {}; }
+}
+
+export function hostToolAutoApproval(policy: HostToolApprovalPolicy, provider: string | undefined, name: string): boolean {
+  if (!provider || !name) return false;
+  return policy.neverAskForToolConfirmation === true
+    || Boolean(policy.skipToolConfirmationPatterns?.some(pattern =>
+      pattern === `${provider}:*` || pattern === `${provider}:${name}`));
+}
 
 export type ToolCallBoundary = {
   state: string;
@@ -72,6 +105,7 @@ export function createToolGuard(options: {
   batchReservation: BatchReservation | null; reservationIds: Map<string, string>;
   toolGeneration: ReturnType<typeof createToolGenerationTracker>;
   traceCall: (id: number, values: Record<string, unknown>) => void;
+  readApprovalPolicy?: () => HostToolApprovalPolicy;
 }): NonNullable<LLMActionOpts["guardToolCall"]> {
   const { ctl, emitter, roundTools, config, scope, toolPlanningRetryRound, toolPlanningRetryBlockedFingerprints,
     batchReservation, reservationIds, toolGeneration, traceCall } = options;
@@ -128,14 +162,23 @@ export function createToolGuard(options: {
       else controller.allow();
       return;
     }
-    toolGeneration.waitingForApproval(callId);
-    const decision = await ctl.requestConfirmToolCall({
+    ctl.guardAbort();
+    const pluginIdentifier = toolPluginIdentifier(roundTools, request.name);
+    const autoApproved = hostToolAutoApproval(
+      (options.readApprovalPolicy || readHostToolApprovalPolicy)(), pluginIdentifier, request.name);
+    // The host renders confirmation controls inside a toolStatus card, matched
+    // by callId. A plain loading status and a confirmation request are invisible.
+    emitter.emitRequest(callId, { ...request, arguments: proposedArguments });
+    toolGeneration.approvalCard(callId, request.id, autoApproved);
+    const decision = autoApproved ? { type: "allow" as const } : await ctl.requestConfirmToolCall({
       callId,
-      pluginIdentifier: toolPluginIdentifier(roundTools, request.name),
+      pluginIdentifier,
       name: request.name,
       parameters: proposedArguments,
     });
+    ctl.guardAbort();
     if (decision.type === "deny") {
+      toolGeneration.denied(callId, decision.denyReason);
       traceCall(callId, { approvalState: "denied", executionState: "not_executed" });
       controller.deny(decision.denyReason);
     }
@@ -147,13 +190,14 @@ export function createToolGuard(options: {
         projectBindingIdentity,
       );
       const finalArguments = reboundArguments || confirmedArguments;
+      emitter.replaceRequest(callId, { ...request, arguments: finalArguments });
       if (boundArguments || decision.toolArgsOverride || reboundArguments) {
         controller.allowAndOverrideParameters(finalArguments);
       } else controller.allow();
       toolGeneration.executing(callId);
       traceCall(callId, {
         validationState: "allowed",
-        approvalState: "allowed",
+        approvalState: autoApproved ? "allowed_host_policy" : "allowed",
         executionState: "unknown", guardAllowed: true,
         proposedArgumentsFingerprint: telemetryFingerprint(request.arguments || {}),
         executedArgumentsFingerprint: telemetryFingerprint(finalArguments),

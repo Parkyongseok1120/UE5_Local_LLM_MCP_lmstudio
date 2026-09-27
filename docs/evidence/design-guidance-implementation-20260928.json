@@ -1,0 +1,183 @@
+{
+  "mode": "codegen",
+  "date": "2026-09-28",
+  "scope": {
+    "component": "optional_design_guidance",
+    "deployed": false,
+    "gameSourceModified": false,
+    "realModelInvoked": false
+  },
+  "claims": [
+    {
+      "claim": "설정으로 선택한 참고 문서는 실제 prediction handler의 최종 모델 입력에 포함되고 기존 도구 승인 경로를 유지한다. SDK 대역으로 해당 경로를 검증했다.",
+      "claimType": "wiring",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-config.ts:49",
+          "observation": "GUI mode와 증가 토큰 allowance를 읽는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:91",
+          "observation": "기존 ToolScope로 문서를 선택하고 prepareRoundInput에 전달한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/design-guidance-20260928/guidance-handler-tests.log",
+          "observation": "일반 도구 승인, 반복 모델 입력, 엔진 전환, Off/Observe/예산 부족, 강제 최종 보고의 6개 SDK 대역 통합 테스트가 통과했다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/direct-config.ts:35",
+          "observation": "기본값은 Off이며 실행 중인 설치본과 GUI 값은 바꾸지 않았다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-config.ts:49",
+          "symbol": "readConfig"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:21",
+          "symbol": "selectDesignGuidance"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:199",
+          "symbol": "addOptionalReferences"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:204",
+          "symbol": "최종 assembledInput 선택"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "symbol": "실제 handler에 연결한 SDK 대역의 act 입력·승인 확인"
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 모델의 응답 품질과 토큰 비용은 미측정이다."
+      ]
+    },
+    {
+      "claim": "선택적 자료는 기존 입력과 출력 예약을 보존한 채 정확한 입력 측정·공유 예산으로 수용 여부를 정하며, 부적합하면 원래 입력으로 진행한다.",
+      "claimType": "architecture",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:391",
+          "observation": "addOptionalReferences는 기존 assembler와 broker를 사용하고 추가 압축·출력 한도 변경을 하지 않는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:198",
+          "observation": "기존 근거 입력 준비 뒤 합성하며 workingHistory를 변경하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/design-guidance-20260928/guidance-final-tests.log",
+          "observation": "선택·예산·본문 보존·실패·취소·0 allowance의 단위 테스트 9개가 최종 빌드에서 통과했다."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [],
+      "unknowns": [
+        "테스트의 tokenizer와 모델 실행은 SDK 대역이다."
+      ]
+    },
+    {
+      "claim": "배포 본문은 catalog와 Markdown에서 생성하며 프로젝트별 검토 사실을 번들에 넣지 않는다.",
+      "claimType": "architecture",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs",
+          "observation": "선언된 9개 Markdown의 본문·출처·sha256 개정에서 배포 모듈을 생성한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/design-guidance-20260928/guidance-final-tests.log",
+          "observation": "생성 데이터가 Markdown 정본에서 그대로 만들어짐을 비교했다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/design-guidance-20260928/package-tests.log",
+          "observation": "새 런타임·생성기·문서가 패키지 선택 목록에 포함되고 프로젝트 예시가 제외됨을 확인했다."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [],
+      "unknowns": [
+        "실제 설치본 교체와 배포는 수행하지 않았다."
+      ]
+    }
+  ],
+  "existing": [
+    "ContextManager의 실제 입력 합성과 측정",
+    "BudgetBroker 공유 예산",
+    "ToolScope의 프로젝트 범위 근거",
+    "도구 승인·실행 및 근거 저장 수명",
+    "docs/model-guidance Markdown 정본"
+  ],
+  "proposed": [
+    "선택적 문서 공급과 GUI 선택 구현 완료; 배포·품질 비교는 미수행"
+  ],
+  "doNotDuplicate": [
+    "새 공유 예산 관리자",
+    "새 정적 설계 검사와 승인 단계",
+    "프로젝트 사실을 추정하는 전역 저장소"
+  ],
+  "invariants": [
+    "참고 자료 때문에 기존 근거를 추가 압축하지 않는다.",
+    "최종 입력 전체를 같은 assembler로 측정한다.",
+    "Off/Observe only/강제 최종 보고는 참고 주입을 하지 않는다.",
+    "취소를 삼키지 않는다.",
+    "도구 목록만으로 엔진 자료를 선택하지 않는다.",
+    "개별 프로젝트 현황을 공통 번들에 넣지 않는다."
+  ],
+  "impactedSurfaces": [
+    "GUI schema/config/types",
+    "selection module and generated content",
+    "ContextManager and round-input",
+    "prediction-loop",
+    "build generator and package allowlist",
+    "tests and documentation"
+  ],
+  "validationPlan": [
+    "TypeScript build 통과",
+    "npm test 전체 419건 통과",
+    "최종 표현 문서 선택 조정 후 단위 9건·handler 6건 재확인",
+    "패키지 관련 pytest 2건 통과",
+    "git diff --check 통과",
+    "Unreal 게임 Source 무변경 확인"
+  ],
+  "checks": {
+    "build": "passed",
+    "nodeTests": 419,
+    "newUnitTests": 9,
+    "newHandlerTests": 6,
+    "packageTests": 2,
+    "actualModelQuality": "not_measured"
+  }
+}

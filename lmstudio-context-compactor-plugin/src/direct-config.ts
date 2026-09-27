@@ -32,6 +32,23 @@ export const directConfigSchematics = createConfigSchematics()
     { displayName: "Observe only", subtitle: "Measure context pressure without changing the model-facing history." },
     false,
   )
+  .field("designGuidanceMode", "select", {
+    displayName: "Design references",
+    subtitle: "Optional bundled guidance. Adds the common core and selected topic, plus the verified/configured engine. Never gates tools or replaces project evidence; omitted when it does not fit.",
+    options: [
+      { value: "off", displayName: "Off (default)" },
+      { value: "core", displayName: "Common core" },
+      { value: "design", displayName: "SSOT, SOLID and patterns" },
+      { value: "debugging", displayName: "Debugging and API contracts" },
+      { value: "code-style", displayName: "Formatting and readability" },
+      { value: "lifecycle", displayName: "Engine ownership and lifetime" },
+      { value: "multiplayer", displayName: "Multiplayer contracts" },
+    ],
+  }, "off")
+  .field("designGuidanceMaxTokens", "numeric", {
+    displayName: "Design reference token allowance",
+    subtitle: "Maximum measured increase in the final input (default 2048). Existing working-context and tool-result budgets also apply. 0 disables references.",
+  }, 2048)
   .field("contextManagementMode", "select", {
     displayName: "Working context",
     subtitle: "Hybrid is the installed default: deterministic scoped evidence archive, bounded result views, measured working window, and at most one tool-free local semantic handoff per accepted compaction. Legacy remains available for an explicit compatibility choice.",
@@ -65,6 +82,14 @@ export const directConfigSchematics = createConfigSchematics()
   }, "on")
   .field("outputRecoveryMaxTokens", "numeric", { displayName: "Recovery output limit", subtitle: "Maximum predicted tokens for the single normal-mode tool-free rewrite; 0 uses the general output reserve." }, 0)
   .field("outputRecoverySeconds", "numeric", { displayName: "Recovery seconds", subtitle: "Maximum time for the single normal-mode tool-free rewrite." }, 90)
+  .field("reasoningRecoveryMode", "select", {
+    displayName: "Reasoning-limit recovery",
+    subtitle: "If a normal generation uses its output cap entirely before an answer or tool request, retry once with the same permitted tools and output cap. No report-rewrite timeout is applied. Missing saved values default to On; bounded audit and observe-only are excluded.",
+    options: [
+      { value: "on", displayName: "On (one focused retry)" },
+      { value: "off", displayName: "Off" },
+    ],
+  }, "on")
   .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra allowance for prompt-template and token-estimation variance." }, 2048)
   .field("assumedContextLength", "numeric", { displayName: "Fallback context length", subtitle: "38,912-token trial fallback used only when the selected token source cannot report its loaded context length; it never overrides a reported value." }, 38912)
   .field("recentCompleteTurns", "numeric", { displayName: "Recent complete turns", subtitle: "Prior completed user turns retained verbatim after soft compaction." }, 2)

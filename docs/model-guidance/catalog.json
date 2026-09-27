@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "documents": [
+    { "id": "core", "file": "core.md", "engine": "common" },
+    { "id": "design", "file": "design.md", "engine": "common" },
+    { "id": "debugging", "file": "debugging.md", "engine": "common" },
+    { "id": "code-style", "file": "code-style.md", "engine": "common" },
+    { "id": "unreal", "file": "unreal.md", "engine": "unreal" },
+    { "id": "unity", "file": "unity.md", "engine": "unity" },
+    { "id": "multiplayer", "file": "multiplayer.md", "engine": "common" },
+    { "id": "unreal-networking", "file": "unreal-networking.md", "engine": "unreal" },
+    { "id": "unity-networking", "file": "unity-networking.md", "engine": "unity" }
+  ]
+}

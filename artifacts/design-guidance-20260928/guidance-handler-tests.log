@@ -1,0 +1,14 @@
+✔ design references reach each measured prediction once and preserve ordinary tool approval (47.6095ms)
+✔ a reused handler resolves each engine anew without carrying prior reference text (4.5407ms)
+✔ design references preserve dispatch in off mode (1.8369ms)
+✔ design references preserve dispatch in observe mode (1.6572ms)
+✔ design references preserve dispatch in no-budget mode (2.4355ms)
+✔ forced final delivery omits optional design references (3.3447ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 243.6084

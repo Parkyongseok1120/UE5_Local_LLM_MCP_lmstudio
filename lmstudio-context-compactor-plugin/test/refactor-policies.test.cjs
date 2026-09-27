@@ -1,4 +1,5 @@
 "use strict";
+require('./tool-approval.test.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
 const {Chat, ChatMessage} = require('@lmstudio/sdk');
 const evidence = require('../dist/evidence-manager');
