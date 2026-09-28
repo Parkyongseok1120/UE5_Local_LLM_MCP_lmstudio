@@ -45,6 +45,14 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "multiplayer", displayName: "Multiplayer contracts" },
     ],
   }, "off")
+  .field("designGuidanceDelivery", "select", {
+    displayName: "Design reference delivery",
+    subtitle: "Documents preserves existing delivery. Focused selects complete sections for your chosen topic and bounded returned observations; adds no tool calls or execution gates.",
+    options: [
+      { value: "documents", displayName: "Documents (compatible default)" },
+      { value: "focused", displayName: "Focused sections and observations" },
+    ],
+  }, "documents")
   .field("designGuidanceMaxTokens", "numeric", {
     displayName: "Design reference token allowance",
     subtitle: "Maximum measured increase in the final input (default 2048). Existing working-context and tool-result budgets also apply. 0 disables references.",

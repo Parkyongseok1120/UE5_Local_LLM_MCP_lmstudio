@@ -64,3 +64,638 @@ export const bundledDesignGuidance = [
     "text": "# Unity 네트워크 계약\n\n적용: Unity 멀티플레이의 권한·생성·상태·RPC·예측.\n범위: 조사한 문서는 NGO 2.7.0과 Netcode for Entities 1.10.0. 실제 설치 버전의 보장이 아니다. [근거](sources.md#unity-network)\n\n## 패키지와 토폴로지\n\n패키지 이름·해결된 버전·client-server/분산 권한 여부를 먼저 확인한다. NGO, Entities, Mirror, Photon/Fusion은 API와 예측 모델이 다르다. Mirror/Fusion 상세 계약은 이 묶음에서 조사하지 않았다.\n\n소유자와 확정 권한을 구분한다. 권한 오류를 없애려고 소유권 제한만 풀거나 네트워크 호출을 로컬 함수로 바꾸지 않는다.\n\n## NGO 2.7\n\n- NetworkVariable의 초기 동기화, 읽기·쓰기 권한, 이후 OnValueChanged 알림을 구분한다. 이벤트만 등록하고 최초 표시를 빠뜨리지 않는다.\n- Start와 OnNetworkSpawn의 순서는 생성 방식에 따라 다르다. Start를 모든 객체의 네트워크 준비 완료 시점으로 취급하지 않는다.\n- OnNetworkDespawn은 서버·클라이언트 양쪽에서 실행된다. Despawn, Destroy, Pool 반환의 정리 책임을 구분한다.\n- Rpc 특성의 수신 대상·실행 조건과 프로젝트의 기존 ServerRpc/ClientRpc 사용을 적용 버전으로 확인한다.\n- Host에서 로컬 실행과 수신 처리가 중복되지 않는지 살핀다. RPC 대상 설정과 게임 규칙 검사는 별개다.\n- Reliable RPC의 순서 보장을 다른 NetworkObject 전체로 확대하지 않는다.\n- Anticipation은 표시값과 권위값을 구분하는 기능이다. NGO 2.7의 해당 기능을 완전한 rollback-and-replay 제공으로 설명하지 않는다.\n- 로컬 Scene 로드 완료와 참가자들의 네트워크 동기화 완료를 구분한다. NetworkSceneManager의 해당 이벤트·수명을 확인한다.\n\n## Netcode for Entities 1.10\n\n- Ghost, tick별 입력, PredictedSimulationSystemGroup, Simulate 대상의 의미를 사용 중인 구성으로 확인한다.\n- 예측 시뮬레이션이 렌더 프레임당 한 번만 실행된다고 가정하지 않는다.\n- 재시뮬레이션되는 상태 계산과 일회성 효과를 구분하고, 예측 범위·비용을 살핀다.\n- GameObject/NGO의 생명주기와 클래스 구조를 ECS 시스템에 억지로 맞추지 않는다.\n\n## 확인 상황\n\n변경과 관련된 원격 Client·Host·서버 경로, 지연 참가 초기 상태, Despawn 중 대기 작업, 재사용된 객체, Scene 전환, 연결 종료를 선택해 확인한다. 서버 실행에 로컬 UI·입력이 있다고 가정하지 않는다."
   }
 ] as const;
+export const bundledGuidanceSections = [
+  {
+    "id": "core/ownership",
+    "documentId": "core",
+    "engine": "common",
+    "source": "docs/model-guidance/core.md#ownership",
+    "topics": [
+      "core",
+      "design",
+      "debugging",
+      "code-style",
+      "lifecycle",
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 30,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "- 변경 전에 관련 상태의 결정권자, 호출 시작점, 실제 변경 지점, 종료 책임을 찾는다. 주석의 “SSOT”, “서버 권한”, “설정 가능”을 구현의 증거로 삼지 않는다.\n- 설정 → 생성·등록 → 호출 → 상태 변경·외부 결과 중 작업에 필요한 연결을 확인한다. 함수·에셋·속성의 선언만으로 기능이 완성됐다고 보고하지 않는다.\n- 같은 규칙의 확정 경로를 하나로 유지한다. 설정, 실행 상태, 복제·예측·표시값은 구분하고 갱신 관계를 명확히 한다.\n- 기존 책임자가 맡을 수 있는 수정은 그곳에서 해결한다. 패턴은 실제 변경·수명 문제를 줄일 때 선택한다.",
+    "revision": "ae15c0bf349bca9d9f0a5469ca90365b7dc9885fc5fa7de629869dd819ed38f4"
+  },
+  {
+    "id": "core/lifetime",
+    "documentId": "core",
+    "engine": "common",
+    "source": "docs/model-guidance/core.md#lifetime",
+    "topics": [
+      "core",
+      "design",
+      "lifecycle",
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 40,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "- 실패·취소·중복 호출·객체 종료가 관련된 변경에서는 상태와 후속 효과가 어떻게 남는지 살핀다.",
+    "revision": "9e6dc074cf426076c7c9503111815334f635e34db7e94a5ec8b3eb1f1704d0b0"
+  },
+  {
+    "id": "core/api",
+    "documentId": "core",
+    "engine": "common",
+    "source": "docs/model-guidance/core.md#api",
+    "topics": [
+      "core",
+      "debugging"
+    ],
+    "signals": [
+      "diagnostic_recurred"
+    ],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "- API 기억과 진단이 충돌하면 정확한 사용 표현식·심볼·부모·매크로·버전을 확인한다. 같은 가설로 추측 수정을 반복하지 않는다.\n- 컴파일 수정에서는 입력·결과·부모 호출·콜백·복제·충돌 필터의 의미를 보존한다. 의미를 바꾸는 경우 요구와 근거를 설명한다.",
+    "revision": "610ceb9f98d93ad4f9d7078c68a757181d2716fbe433402c090fd52f45c3326f"
+  },
+  {
+    "id": "core/style",
+    "documentId": "core",
+    "engine": "common",
+    "source": "docs/model-guidance/core.md#style",
+    "topics": [
+      "core",
+      "code-style"
+    ],
+    "signals": [],
+    "priority": 40,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "- 상태 대입과 조건을 읽기 쉬운 줄과 블록으로 작성한다. 기존 들여쓰기, 중괄호, 의미별 빈 줄을 따르고 역할을 드러내는 이름을 쓴다.",
+    "revision": "ae1ede54948e6cd9dd1a703a6e68e4efd9a1eb0ff0b7e604f6bf95ad3db2baa9"
+  },
+  {
+    "id": "core/proof",
+    "documentId": "core",
+    "engine": "common",
+    "source": "docs/model-guidance/core.md#proof",
+    "topics": [
+      "core",
+      "design",
+      "debugging",
+      "code-style",
+      "lifecycle",
+      "multiplayer"
+    ],
+    "signals": [
+      "source_body_unavailable",
+      "operation_outcome_unknown"
+    ],
+    "priority": 900,
+    "requires": [],
+    "applicability": {},
+    "text": "- 소스 확인, 수정 완료, 빌드 성공, 실제 실행 확인을 구분한다. 미실행 작업과 미확인 설명을 완료 사실로 쓰지 않는다.\n- 이 자료는 판단 보조다. 문답·문서·검사 완료를 도구 실행의 추가 허가 조건으로 만들지 않는다.\n\n관련 설계·오류·표현·엔진·네트워크 자료가 제공되면 필요한 내용만 참고한다. 문서 ID나 파일 경로만 전달받았다면 본문까지 읽은 것으로 가정하지 않는다.",
+    "revision": "b815bcc1396bcdc6c80080f66351a5ed79d5fabd323649060cdfb44f7b758158"
+  },
+  {
+    "id": "design/state",
+    "documentId": "design",
+    "engine": "common",
+    "source": "docs/model-guidance/design.md#state",
+    "topics": [
+      "design"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 상태의 정본\n\n| 구분 | 책임 |\n| --- | --- |\n| 정의 데이터 | 기본 능력치·설정·콘텐츠 ID를 정의 |\n| 실행 상태 | 개체·매치의 현재 값을 확정 |\n| 복제·예측·표시 | 확정값을 전달·추정·표현하며 보정과 폐기 조건을 가짐 |\n| 영속 상태 | 저장·로드·이전의 경계와 성공 조건을 가짐 |\n\nSSOT는 같은 사실의 확정 경로를 분명히 하는 원칙이다. 모든 값을 전역 객체에 모으는 조건이 아니다. 정의 데이터가 실행 상태를 초기화하는 지점과, 이후 변경 권한을 함께 찾는다.\n\n팀 값과 멤버 목록처럼 같은 사실을 여러 형태로 보관한다면 한 변경 경로에서 함께 갱신하거나 하나를 파생한다. 두 저장소가 독립적으로 옳다고 판단하게 두지 않는다.",
+    "revision": "50c97c7581ed28a41771cf0cc1c39d2e9a701caaed0e77b7b1d859fe3bb96ef6"
+  },
+  {
+    "id": "design/solid",
+    "documentId": "design",
+    "engine": "common",
+    "source": "docs/model-guidance/design.md#solid",
+    "topics": [
+      "design"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## SOLID를 판단에 사용하기\n\n| 원칙 | 적용할 질문 | 과도해지는 경우 |\n| --- | --- | --- |\n| SRP | 같은 변경 이유가 모여 있는가? | 메서드마다 클래스를 만듦 |\n| OCP | 반복되는 확장 지점이 실제로 있는가? | 예상만으로 확장 계층을 만듦 |\n| LSP | 대체 구현도 입력·결과·실패·불변 조건을 유지하는가? | 타입 일치만 확인 |\n| ISP | 소비자가 쓰는 기능만 의존하는가? | 모든 기능을 한 인터페이스에 넣음 |\n| DIP | 핵심 규칙이 UI·저장소·전송 상세에 묶였는가? | 모든 클래스에 인터페이스와 컨테이너를 추가 |\n\nDRY는 함께 바뀌는 규칙의 중복을 줄인다. 모양이 비슷해도 변경 이유가 다르면 분리를 유지할 수 있다. KISS·YAGNI는 현재 요구를 만족하는 단순한 형태를 선택하는 기준이다.",
+    "revision": "6572768a460dde6837e94316d5cd6b2a99ad23602480558fc387bc36ca02e451"
+  },
+  {
+    "id": "design/lifetime",
+    "documentId": "design",
+    "engine": "common",
+    "source": "docs/model-guidance/design.md#lifetime",
+    "topics": [
+      "design"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 변경 경로와 수명\n\n- 계약에는 유효한 입력, 결과, 실패, 부분 성공, 중복 요청의 의미가 포함된다.\n- “이미 사망함”과 “이번 요청으로 사망함”을 구분한다. 보상·점수·예약은 필요한 전이에서만 발생시킨다.\n- 사망·취소·매치 종료 뒤 늦은 타이머·비동기 결과가 상태를 되살리지 않도록 적용 조건과 정리 책임을 둔다.\n- 동시에 존재할 수 있는 작업은 개체·요청별 수명을 갖게 한다. 전역 핸들 하나로 여러 작업을 덮어쓰지 않는다.\n- 생성·로드·스폰 같은 실패 가능한 단계와 성공 상태 확정의 순서를 정한다. 중간 실패 시 기존 상태 보존·복구·재시도 가능성을 설명한다.\n- 등록한 입력·이벤트·팀 멤버·작업은 누가 언제 해제하는지 연결한다. 객체, 활성화, 연결, Scene/World, 매치의 수명은 따로 본다.",
+    "revision": "60843365a2c4a02f039732d3323b9a82f9810a76d44f17a92c3cbe492f5c02bb"
+  },
+  {
+    "id": "design/patterns",
+    "documentId": "design",
+    "engine": "common",
+    "source": "docs/model-guidance/design.md#patterns",
+    "topics": [
+      "design"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 패턴은 해결할 문제가 있을 때 선택\n\n| 문제 | 후보 | 단순한 형태와 비용 |\n| --- | --- | --- |\n| 실제 교체되는 판정·전략 | Strategy | 함수·기존 컴포넌트로 충분한지 먼저 판단 |\n| 허용 동작과 진입·종료가 상태별로 다름 | State/FSM | 전이 함수부터 시작; 독립 상태를 거대 enum에 모두 합치지 않음 |\n| 같은 사실을 UI·음향 등이 관찰 | Observer | 구독 수명·재진입 책임이 추가됨 |\n| 예약·기록·재실행할 입력 | Command | 단순 호출의 객체화 비용과 재실행 효과를 구분 |\n| 반복되는 생성·초기화 규칙 | Factory/Composition Root | 엔진 생성 경로와 정리 책임을 재사용 |\n| 독립 기능의 조합 | Component | 상호 내부 상태 변경과 순환 의존성을 피함 |\n| 측정된 생성·폐기 비용 | Pool | 반환 시 상태·구독·작업 초기화가 필요 |\n| 복잡한 UI와 게임 규칙 분리 | MVP/MVVM | 표시 계층에 확정 상태를 중복 소유시키지 않음 |\n\n클래스 수, Singleton 유무, 인터페이스 수로 품질을 판정하지 않는다. 패턴 없는 코드의 계약이 명확하면 유지한다.",
+    "revision": "1c50abdb423a7e3b30f94164b1738c342cabdb00f6b1fd87d712305fa86a03e9"
+  },
+  {
+    "id": "debugging/definitions",
+    "documentId": "debugging",
+    "engine": "common",
+    "source": "docs/model-guidance/debugging.md#definitions",
+    "topics": [
+      "debugging"
+    ],
+    "signals": [
+      "diagnostic_present",
+      "diagnostic_recurred"
+    ],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 오류에서 정의까지\n\n1. 현재 파일의 진단 위치와 실제 표현식을 읽는다. 생성식, 참조 전달, 멤버 접근, 매크로 확장을 구분한다.\n2. 정확한 심볼·부모 선언·인자 타입과 적용 버전을 찾는다. 이미 확인한 동일 버전의 근거는 재사용한다.\n3. 검색은 좁은 이름·모듈·파일 범위부터 시작한다. 직접 소스, 심볼 도구, 적용 버전의 공식 문서 중 가능한 수단을 선택한다.\n4. 검색 결과 없음, 도구 오류, 인덱스 범위 밖, API 부재를 구분한다. 실패 메시지에 맞춰 범위를 조정한다.\n5. 확인된 원인에 맞춰 최소 수정하고 결과를 본다. 같은 가설이 실패하면 새 근거 없이 헤더·시그니처를 계속 바꾸지 않는다.\n\n이는 판단 순서의 참고다. 모든 작업에 고정된 도구 호출 순서를 강제하지 않는다.",
+    "revision": "820294151d58e05443842ec62868c8b479d43f0e582d14423023bcc6c686bfa0"
+  },
+  {
+    "id": "debugging/preserve-contract",
+    "documentId": "debugging",
+    "engine": "common",
+    "source": "docs/model-guidance/debugging.md#preserve-contract",
+    "topics": [
+      "debugging"
+    ],
+    "signals": [
+      "observed_source_changed"
+    ],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 보존할 계약\n\n컴파일 오류를 없애려다 부모 호출, 콜백 등록, RPC, 복제 등록, 필터·채널, 처리 순서를 바꾸는지 살핀다. 바꿔야 한다면 게임 규칙의 근거와 영향 범위를 설명한다.\n\n| 실제 사례 | 정확한 구분 |\n| --- | --- |\n| UE 5.7의 FDamageEvent() 생성 | 완전한 타입 정의가 필요하며 Engine/DamageEvents.h에서 확인. 현재 경로 확인으로 “5.7에서 이동했다”는 이력까지 증명되지 않음 |\n| DOREPLIFETIME 사용 | UE 5.7 매크로가 OutLifetimeProps라는 식별자를 참조. C++ 선언·정의의 매개변수 이름 일치를 일반 필수 규칙으로 설명하지 않음 |\n| APlayerState의 Score·OnRep_Score | 부모에 실제 선언이 있음. 부모 등록과 신규 UFUNCTION/RepNotify 계약을 구분 |\n| FCollisionObjectTypes::AllStatic 오류 | UE 5.7의 실제 타입은 FCollisionObjectQueryParams, 열거 값은 AllStaticObjects. 정적 객체만 맞혀야 하는지 의도는 별도 확인 |\n| ObjectType → Visibility Trace | 조회 기준이 변경됨. 벽·Pawn·Mesh·자신·아군 필터에 미치는 영향을 확인 |\n| Unity Physics2D → Physics | 2D/3D 물리 시스템이 다름. 오버로드 오류를 피하는 교체로 처리하지 않음 |\n| Unity 콜백·네트워크 API 변경 | 컴파일 성공과 엔진·네트워크의 실제 호출 조건을 각각 확인 |",
+    "revision": "132b7267b83c31c35e6bb6d5793bb7e6c31fce9340bd1364fb89adf9a321d0f2"
+  },
+  {
+    "id": "debugging/verification",
+    "documentId": "debugging",
+    "engine": "common",
+    "source": "docs/model-guidance/debugging.md#verification",
+    "topics": [
+      "debugging"
+    ],
+    "signals": [
+      "compilation_pending",
+      "operation_outcome_unknown"
+    ],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 결과를 보고하는 수준\n\n- 선언을 찾음: 해당 버전의 API 근거를 얻었다.\n- 코드를 수정함: 수정 파일을 확인했다.\n- 빌드 성공: 실행한 대상·구성의 실제 결과가 성공했다.\n- 실행 확인: 명시한 조건에서 관찰한 동작이 맞았다.\n\n다른 오류가 먼저 나왔다는 사실만으로 이전 오류의 해결을 확정하지 않는다. 캐시·컴파일러·버전 이동을 원인으로 설명할 때도 직접 근거를 둔다. 도구 실패 표시만으로 컴파일 실패와 도구 전송 실패를 동일하게 취급하지 않는다.",
+    "revision": "5b1ab28499b33594db899d4c770ef579017f3359a1999f2357df41c2ced21ee5"
+  },
+  {
+    "id": "code-style/conventions",
+    "documentId": "code-style",
+    "engine": "common",
+    "source": "docs/model-guidance/code-style.md#conventions",
+    "topics": [
+      "code-style"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 작성 기준\n\n- .editorconfig, .clang-format, 저장소 지침과 일관된 기존 코드를 먼저 확인한다.\n- 여러 상태 대입과 외부 호출을 한 줄에 압축하지 않는다. 조건·반환·중첩 블록을 실행 범위에 맞게 들여쓴다.\n- 가드, 계산, 상태 갱신, 후속 효과 사이에 의미 있는 빈 줄을 둔다. 매 문장 사이에 빈 줄을 넣지는 않는다.\n- 코드의 역할을 드러내는 이름을 쓴다. HitResult, TraceStart, QueryParams, AmmoToTransfer처럼 읽을 때 해석이 필요한 부분을 풀어 쓴다.\n- 자명한 반복 변수·짧은 수학식의 이름까지 기계적으로 늘리지 않는다.\n- 단순 접근자와 여러 상태를 바꾸는 함수를 구분한다. FORCEINLINE이나 한 줄 함수가 품질·성능을 보증하지 않는다.\n- 주석에는 의도, 제약, 실패 처리 이유를 적는다. 구현이 없는데 “서버 권한”, “SSOT”, “설정 완료”라고만 적지 않는다.\n- 기능 수정과 함께 관계없는 파일 전체를 다시 포맷하지 않는다. 기존 파일이 일관되게 나쁘다면 별도의 정리 범위를 잡는다.",
+    "revision": "ab9ef5e609d411093f03640ef94041078b0a26e9ab33c59fe71c41a1acb68f34"
+  },
+  {
+    "id": "code-style/unreal-example",
+    "documentId": "code-style",
+    "engine": "unreal",
+    "source": "docs/model-guidance/code-style.md#unreal-example",
+    "topics": [
+      "code-style"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## Unreal C++ 표현 예시\n\n아래는 줄 배치만 보이는 코드 조각이다. 발사·재장전·권한 처리가 완성된 구현은 아니다.\n\n압축된 표현:\n\n```cpp\nLastFireTime=Now;MagazineAmmo--;SetCombatState(ECombatState::Firing);\n```\n\n동일한 연산을 읽기 쉽게 표현:\n\n```cpp\nLastFireTime = Now;\nMagazineAmmo--;\n\nSetCombatState(ECombatState::Firing);\n```\n\nEpic 관례는 새 줄의 중괄호와 단일 문장 블록에도 중괄호를 사용하는 형태다. 들여쓰기 폭과 탭·공백은 프로젝트의 명시적 규칙과 맞춘다.\n\n```cpp\nif (!CurrentWeapon)\n{\n\treturn;\n}\n\nconst int32 MissingAmmo = CurrentWeapon->Stats.MagazineSize - MagazineAmmo;\n```\n\n위 조각은 중괄호와 실행 블록 들여쓰기의 예시다. 실제 멤버 이름과 가드 조건은 해당 프로젝트의 정의를 확인한다.",
+    "revision": "76a8312fbdab059e240a3f018fe56c93b4ffbcc2ce7dbace7570fa0965d2469b"
+  },
+  {
+    "id": "code-style/unity-example",
+    "documentId": "code-style",
+    "engine": "unity",
+    "source": "docs/model-guidance/code-style.md#unity-example",
+    "topics": [
+      "code-style"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## Unity C# 표현 예시\n\n```csharp\nif (isReloading || magazineAmmo <= 0)\n{\n    return;\n}\n\nmagazineAmmo--;\nRefreshAmmoDisplay();\n```\n\n이 예시도 포맷만 보여준다. 실제 로직에는 채택한 권한·상태·UI 계약을 적용한다. 엔진 간에 탭·공백 규칙이나 네임스페이스 선호를 무조건 공유하지 않는다.\n\n형식은 작성 품질의 기본 조건으로 다룬다. 새 포맷 검사 실패를 작업 진행의 추가 승인 조건으로 만들지 않는다.",
+    "revision": "9cb9e85a0c755fdd0949b1d7216a88831fbc2a54847063a6f9d4334d463ee6db"
+  },
+  {
+    "id": "unreal/ownership",
+    "documentId": "unreal",
+    "engine": "unreal",
+    "source": "docs/model-guidance/unreal.md#ownership",
+    "topics": [
+      "design",
+      "lifecycle"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 상태와 수명의 위치\n\n- GameMode, GameState, PlayerState, Controller, Pawn이 지금 맡는 역할과 수명을 먼저 읽는다. 기능 이름만 보고 새 Manager/Subsystem을 만들지 않는다.\n- GameMode는 서버 규칙 경계다. 클라이언트가 공유할 현재 상태는 프로젝트의 복제 경로로 전달한다. GameInstance의 로컬 지속성을 자동 복제·복원으로 해석하지 않는다.\n- Data Asset 정의 → 생성 시 선택 → 개체별 실행 상태 초기화 → 소비자를 연결한다. EditDefaultsOnly와 에셋 선언만으로 설정이 사용되지는 않는다.\n- 기본 생성·리스폰·로드가 같은 설정과 초기화 계약을 쓰는지 확인한다. 생성 전에 성공 상태를 확정하지 않는다.\n- EndPlay와 메모리 회수를 구분한다. World·매치·소유자의 종료 시점에 게임플레이 작업과 구독의 정리 책임을 둔다.\n- UPROPERTY로 추적되는 TObjectPtr, 비소유 weak 참조, soft asset 참조의 목적을 구분한다. TObjectPtr 표기만으로 어디서나 GC 유지가 된다고 가정하지 않는다.\n- 상태 변경 책임, UObject 참조, Actor Owner/owning connection을 따로 판단한다.\n- 타이머가 바인딩한 객체와 람다가 임의로 캡처한 포인터를 구분한다. null 검사만으로 파괴 뒤 유효성을 보증하지 않는다.",
+    "revision": "c7584cfbbc067e195f208572e7c75561bed88d29a79ca029f08ae23ad3e3d891"
+  },
+  {
+    "id": "unreal/connections",
+    "documentId": "unreal",
+    "engine": "unreal",
+    "source": "docs/model-guidance/unreal.md#connections",
+    "topics": [
+      "design",
+      "lifecycle"
+    ],
+    "signals": [],
+    "priority": 30,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 연결과 동작 확인\n\n- 입력 Action 바인딩, Mapping Context 설정, 실제 로컬 플레이어 등록을 구분한다. 완료 로그는 실제 등록 결과와 맞춘다.\n- 좌우·전후 이동은 입력 축과 실제 방향 벡터를 대조한다. 서로 다른 변수명만으로 방향도 다르다고 가정하지 않는다.\n- UnPossess와 Pawn 종료는 다르다. 시체 유지, 충돌·피해 차단, 폐기 시점의 책임을 정한다.",
+    "revision": "45eb798043b26e681605f304997b311ba75d27ce4d5be6618531dedbc61cbf57"
+  },
+  {
+    "id": "unreal/timer",
+    "documentId": "unreal",
+    "engine": "unreal",
+    "source": "docs/model-guidance/unreal.md#timer",
+    "topics": [
+      "lifecycle"
+    ],
+    "signals": [],
+    "priority": 10,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {
+      "engineVersions": [
+        "5.7"
+      ]
+    },
+    "text": "- 플레이어별 리스폰을 단일 FTimerHandle로 덮어쓰지 않는다. UE 5.7 SetTimer는 같은 유효 핸들의 예약을 교체한다.",
+    "revision": "77ae1ffca3da015e5b2fee8356f97f13b108ab8cda93ecae2691142229f661b7"
+  },
+  {
+    "id": "unreal/api",
+    "documentId": "unreal",
+    "engine": "unreal",
+    "source": "docs/model-guidance/unreal.md#api",
+    "topics": [
+      "debugging"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "- UFUNCTION, RepNotify, 부모 가상 함수, DOREPLIFETIME의 계약은 정확한 선언과 매크로에서 확인한다. 관련 오류 사례는 debugging.md를 참고한다.\n- Trace는 대상 Object Type, 채널 응답, 가림, 자신 제외, 판정 위치·시각을 같이 확인한다.\n- Build.cs 의존성과 Public/Private 노출, Runtime/Editor 경계를 구분한다. 헤더 경로를 추측하며 엔진 소스를 수정하지 않는다.",
+    "revision": "99ff038d6efd4a59c6e21513727c9d78c033694f60f5c6648b3f6f35018efe69"
+  },
+  {
+    "id": "unreal/preference",
+    "documentId": "unreal",
+    "engine": "unreal",
+    "source": "docs/model-guidance/unreal.md#preference",
+    "topics": [
+      "code-style"
+    ],
+    "signals": [],
+    "priority": 70,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 이 작업의 선호\n\n이 문서 묶음을 요청한 사용자는 Unreal 프로젝트에서 네임스페이스를 가급적 사용하지 않기를 원한다. 프로젝트 현황 문서에도 기록한다. Unreal의 보편적 금지 규칙으로 설명하지 않는다.",
+    "revision": "ecc348ae620a884db92bc56fe0adfac5a2f6f83469a03f4b20e31e068314dc1e"
+  },
+  {
+    "id": "unity/wiring",
+    "documentId": "unity",
+    "engine": "unity",
+    "source": "docs/model-guidance/unity.md#wiring",
+    "topics": [
+      "design",
+      "debugging",
+      "lifecycle"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 버전과 실행 연결\n\n- ProjectVersion.txt, manifest.json과 실제 해결된 packages-lock.json, 관련 asmdef 참조를 확인한다.\n- CS0246·CS1061에서는 수신 타입, 확장 메서드, 접근 범위, 패키지 소스·메타데이터와 적용 버전을 찾는다.\n- 인스펙터 필드·ScriptableObject·이벤트 선언 → 초기화·등록 → 실제 호출·변경의 연결을 확인한다.\n- ScriptableObject 설정과 개체별 실행 상태를 구분한다. 공유 에셋의 변경을 의도한다면 범위와 복구·저장 책임을 명시한다.\n- 서로 다른 GameObject의 동일 콜백 순서를 임의로 가정하지 않는다. 초기화 의존성은 엔진 보장 또는 프로젝트의 명시적 연결로 해결한다.\n- Runtime/Editor·테스트·플랫폼 코드를 asmdef와 의존성 관점에서 확인한다.",
+    "revision": "53c4e55ba148fbc12bd66108d57f457a3451c897dbb963727d83bdbe92298a48"
+  },
+  {
+    "id": "unity/lifetime",
+    "documentId": "unity",
+    "engine": "unity",
+    "source": "docs/model-guidance/unity.md#lifetime",
+    "topics": [
+      "design",
+      "debugging",
+      "lifecycle"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {
+      "engineVersions": [
+        "6000.0"
+      ]
+    },
+    "text": "## 종료와 재사용\n\n- 객체 존재, 활성화, Scene, Pool 대여, 네트워크 Spawn/Despawn의 수명은 다르다.\n- 이벤트는 필요한 수명에 맞춰 구독·해제한다. 비활성화 동안에도 필요한 알림을 무조건 끊지 않는다.\n- MonoBehaviour.enabled=false만으로 코루틴은 멈추지 않는다. GameObject 비활성화·파괴와 구분한다.\n- destroyCancellationToken은 파괴에 연결된다. 필요한 토큰은 파괴 전에 확보하고 실제 비동기 API까지 전달·처리한다.\n- Task/Awaitable의 재개 문맥과 Unity API의 메인 스레드 제약을 확인한다. Task.Run 추가·await 제거를 단순 컴파일 해결로 쓰지 않는다.\n- Pool 반환·Despawn 이후 완료된 결과가 재사용된 개체에 적용되지 않게 한다. 기존 작업의 취소·식별 방식부터 재사용한다.\n- Domain Reload를 끈 환경에서 static 값·이벤트가 Play 사이에 남을 수 있으므로 초기화 책임을 둔다.\n- 사망·반환·취소 뒤 늦은 재장전·로드 결과가 이전 상태를 복원하지 않게 한다.",
+    "revision": "e96b7bd1baf21dd817cab7ada4eb2dbfda2178e51981baee71baec00a16c27c4"
+  },
+  {
+    "id": "unity/api",
+    "documentId": "unity",
+    "engine": "unity",
+    "source": "docs/model-guidance/unity.md#api",
+    "topics": [
+      "design",
+      "debugging",
+      "lifecycle"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {
+      "engineVersions": [
+        "6000.0"
+      ],
+      "packages": [
+        {
+          "id": "com.unity.inputsystem",
+          "versions": [
+            "1.14"
+          ]
+        }
+      ]
+    },
+    "text": "## 입력·물리·콜백의 의미\n\n| 대상 | 구분할 계약 |\n| --- | --- |\n| Input System 1.14 | 프로젝트 전체 Action은 기본 활성화, 그 밖의 에셋·코드 정의 Action은 활성화 필요. 프로젝트 구성별로 확인 |\n| Physics / Physics2D | 서로 다른 물리 시스템; LayerMask·Trigger·깊이·결과 타입도 적용 API로 확인 |\n| Physics.RaycastAll | 결과 순서 미보장; 첫 원소를 가장 가까운 것으로 사용하지 않음 |\n| OnTriggerEnter2D | Collider2D 시그니처와 실제 물리 발생 조건을 함께 확인 |\n| 콜백·이벤트 등록 | 메서드 존재와 호출 가능성은 다름. 이름·인자를 바꾼 뒤 실제 연결 확인 |\n\nUnity 네트워크의 Spawn·권한·복제는 채택한 패키지에 맞춰 unity-networking.md를 참고한다. 다른 Unity 네트코드의 API를 섞지 않는다.",
+    "revision": "ea9641d82438415a11e2c2ac654cd49baff2c83ab80172cb7455adc6416e6973"
+  },
+  {
+    "id": "multiplayer/authority",
+    "documentId": "multiplayer",
+    "engine": "common",
+    "source": "docs/model-guidance/multiplayer.md#authority",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 권한과 상태\n\n- 로컬 제어, 연결 소유권, 상태 확정 권한을 구분한다.\n- 입력 의도 → 네트워크 전달 → 권한 측 규칙 검사 → 결과 확정 → 복제·표시의 경로를 연결한다. 기존 객체·컴포넌트 안에서 이 책임을 구현할 수 있다.\n- 서버 권한 게임에서 클라이언트가 보낸 명중·거리·보상을 그대로 확정하지 않는다. 발사 속도·탄약·생존·매치 상태 등 해당 규칙의 검사를 권한 측에 둔다.\n- 지속 상태, 요청, 순간 효과를 구분한다. 지연 참가자가 현재 상태를 복원할 수 있어야 한다.\n- Reliable 전송을 전역 순서, 영구 보관, 게임 규칙의 정확히 한 번 실행 보장으로 확대 해석하지 않는다.\n- 사망·보상·완료처럼 중복에 민감한 전이는 기존 상태나 요청 식별로 처리 범위를 정한다.",
+    "revision": "70832fde4a40e1c7365300d28644c71178eb11156442ecdafd9fff608b730203"
+  },
+  {
+    "id": "multiplayer/time",
+    "documentId": "multiplayer",
+    "engine": "common",
+    "source": "docs/model-guidance/multiplayer.md#time",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 시간과 지연 대응\n\n| 개념 | 다루는 문제 |\n| --- | --- |\n| 보간 | 받은 과거 상태 사이의 표시를 부드럽게 함 |\n| 외삽 | 새 상태가 없을 때 이후 상태를 추정 |\n| 입력 예측 | 확정 결과를 기다리는 동안 로컬 입력을 시뮬레이션 |\n| 보정·재시뮬레이션 | 확정 상태와 입력 기록을 기준으로 예상 상태를 다시 맞춤 |\n| Lag compensation | 규칙이 허용하는 과거 시각의 상태로 판정 |\n\n렌더 프레임, 물리 업데이트, 시뮬레이션 tick, 전송 간격, 서버 시각, 보간 지연을 구분한다. 시각적 부드러움만으로 권위 상태 일치를 증명하지 않는다.\n\n재시뮬레이션 때 소리·보상·탄환 생성·저장 같은 일회성 효과가 반복되지 않게 한다. 채택한 엔진의 기존 예측 기능과 상태를 이중 관리하지 않는다.\n\n과거 판정에는 사용할 시간, 이력 범위, 허용 상한, 대상, 현재 상태 복구, 공격자·피격자의 공정성 규칙이 필요하다. 특정 엔진 예제의 tickrate나 이력 시간을 모든 게임의 기본값으로 옮기지 않는다.",
+    "revision": "cc2451bc6abb64d69bf5679ca22f68505c63c93ef0e9e6110b23c2d2e9078428"
+  },
+  {
+    "id": "multiplayer/lifetime",
+    "documentId": "multiplayer",
+    "engine": "common",
+    "source": "docs/model-guidance/multiplayer.md#lifetime",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 연결과 객체 수명\n\n- 플레이어 정체성, 현재 연결, Pawn/NetworkObject, 매치를 구분한다. 재접속 뒤 오래된 연결의 결과를 새 상태에 적용하지 않는다.\n- 생성·동기화 준비·Despawn·파괴·Scene/World 전환의 경계를 확인한다.\n- 다른 객체·변수의 도착 순서를 근거 없이 가정하지 않는다.\n- 필요한 관찰자·전송 빈도·변화량을 선택한다. 모든 상태를 매 프레임 전송하는 형태부터 시작하지 않는다.\n\n관련 변경의 확인 상황을 고른다: 원격 Client, 전용 서버, 지연 참가, 동시에 여러 명 사망, 예약 중 연결 종료, 지연·손실·순서 변화, 장면 전환, 예측 재실행. 매번 전 항목을 의무 테스트로 요구하지 않는다. 로그에는 문제에 필요한 역할·객체·연결·tick/요청 식별을 남긴다.",
+    "revision": "0af7bc4fef21a9f838bd968ba57cc4c8f4df2a6b718446b0e2c5aeec13ba7315"
+  },
+  {
+    "id": "unreal-networking/authority",
+    "documentId": "unreal-networking",
+    "engine": "unreal",
+    "source": "docs/model-guidance/unreal-networking.md#authority",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 10,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "- HasAuthority, IsLocallyControlled, Actor Owner/owning connection은 다른 질문에 답한다. Owner 설정으로 서버 판정이나 참조 수명이 완성되지 않는다.\n- Server/Client/NetMulticast RPC의 실행 조건, 소유 연결, Actor/Component의 복제 전제를 확인한다. 클라이언트의 Multicast 호출을 서버 방송으로 해석하지 않는다.\n- 원격 플레이어의 요청이 권한 측 실행까지 도달하는지 본다. HasAuthority 가드만 추가해 원격 요청을 버리면 기능은 연결되지 않는다.\n- bReplicates와 SetReplicateMovement는 전투 규칙 구현의 증거가 아니다. 탄약·체력·사망·점수의 실제 변경 권한과 관찰 범위를 각각 정한다.\n- 지속 상태와 순간 효과를 구분한다. 늦게 참가하거나 다시 relevant해진 연결의 표시를 복원할 상태를 둔다.\n- 서로 다른 Actor의 RPC나 서로 다른 변수의 OnRep 순서를 전제로 하지 않는다. 함께 해석해야 하는 값에는 일관성·준비 조건을 둔다.\n- GameMode의 서버 규칙, GameState/PlayerState의 공유 상태, Pawn의 실행 수명을 현재 프로젝트 기준으로 연결한다.",
+    "revision": "97ba1a8bb5c41020e19d651b3ea24e0544babe3d6d83c076a07e2df15facc871"
+  },
+  {
+    "id": "unreal-networking/prediction",
+    "documentId": "unreal-networking",
+    "engine": "unreal",
+    "source": "docs/model-guidance/unreal-networking.md#prediction",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 30,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "- 일반 Character 이동은 CMC의 기존 예측·서버 검증·보정을 먼저 확인한다. Transform 직접 갱신·별도 RPC로 같은 이동을 이중 관리하지 않는다.\n- 전투의 명중 시각·조준·가림·충돌 필터·거리·연사·탄약은 명시적 규칙이 필요하다. Visibility를 썼다는 사실만으로 명중 규칙이 맞는 것은 아니다.",
+    "revision": "fabf8fb53b2aedcca81688795714ade581451d0be3082a3c4434494d250fef5a"
+  },
+  {
+    "id": "unreal-networking/lifetime",
+    "documentId": "unreal-networking",
+    "engine": "unreal",
+    "source": "docs/model-guidance/unreal-networking.md#lifetime",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 40,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "- 사망 전이의 점수·시체·리스폰, 매치 종료 시 요청·타이머, Logout/EndPlay 정리를 연결한다.\n- Listen Host의 성공과 원격 Client·전용 서버의 성공을 구분한다. 관련 변경에서는 역할별로 확인한다.\n\nIris, Replication Graph, GAS 예측, Mover, Networked Physics, Seamless Travel은 채택 여부와 버전 계약을 별도 확인한다. CMC 사례나 이 문서만으로 해당 기능 구현을 완성했다고 판단하지 않는다.",
+    "revision": "4c68e65058784cb7aecbdace3ce03fe1e1b724f30551dd2ff5c5f1fffeb9183c"
+  },
+  {
+    "id": "unity-networking/topology",
+    "documentId": "unity-networking",
+    "engine": "unity",
+    "source": "docs/model-guidance/unity-networking.md#topology",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 패키지와 토폴로지\n\n패키지 이름·해결된 버전·client-server/분산 권한 여부를 먼저 확인한다. NGO, Entities, Mirror, Photon/Fusion은 API와 예측 모델이 다르다. Mirror/Fusion 상세 계약은 이 묶음에서 조사하지 않았다.\n\n소유자와 확정 권한을 구분한다. 권한 오류를 없애려고 소유권 제한만 풀거나 네트워크 호출을 로컬 함수로 바꾸지 않는다.",
+    "revision": "1b6a8ac15a1f23bcdc576096434504f5d99e2de75049f7e6cbcaff01dbb226ed"
+  },
+  {
+    "id": "unity-networking/ngo",
+    "documentId": "unity-networking",
+    "engine": "unity",
+    "source": "docs/model-guidance/unity-networking.md#ngo",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 10,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {
+      "packages": [
+        {
+          "id": "com.unity.netcode.gameobjects",
+          "versions": [
+            "2.7.0"
+          ]
+        }
+      ]
+    },
+    "text": "## NGO 2.7\n\n- NetworkVariable의 초기 동기화, 읽기·쓰기 권한, 이후 OnValueChanged 알림을 구분한다. 이벤트만 등록하고 최초 표시를 빠뜨리지 않는다.\n- Start와 OnNetworkSpawn의 순서는 생성 방식에 따라 다르다. Start를 모든 객체의 네트워크 준비 완료 시점으로 취급하지 않는다.\n- OnNetworkDespawn은 서버·클라이언트 양쪽에서 실행된다. Despawn, Destroy, Pool 반환의 정리 책임을 구분한다.\n- Rpc 특성의 수신 대상·실행 조건과 프로젝트의 기존 ServerRpc/ClientRpc 사용을 적용 버전으로 확인한다.\n- Host에서 로컬 실행과 수신 처리가 중복되지 않는지 살핀다. RPC 대상 설정과 게임 규칙 검사는 별개다.\n- Reliable RPC의 순서 보장을 다른 NetworkObject 전체로 확대하지 않는다.\n- Anticipation은 표시값과 권위값을 구분하는 기능이다. NGO 2.7의 해당 기능을 완전한 rollback-and-replay 제공으로 설명하지 않는다.\n- 로컬 Scene 로드 완료와 참가자들의 네트워크 동기화 완료를 구분한다. NetworkSceneManager의 해당 이벤트·수명을 확인한다.",
+    "revision": "0dc89dd9c45cc60a530bd3ad07b6f759477bbee6e4e93df9213148149ce264bc"
+  },
+  {
+    "id": "unity-networking/entities",
+    "documentId": "unity-networking",
+    "engine": "unity",
+    "source": "docs/model-guidance/unity-networking.md#entities",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 10,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {
+      "packages": [
+        {
+          "id": "com.unity.netcode",
+          "versions": [
+            "1.10.0"
+          ]
+        }
+      ]
+    },
+    "text": "## Netcode for Entities 1.10\n\n- Ghost, tick별 입력, PredictedSimulationSystemGroup, Simulate 대상의 의미를 사용 중인 구성으로 확인한다.\n- 예측 시뮬레이션이 렌더 프레임당 한 번만 실행된다고 가정하지 않는다.\n- 재시뮬레이션되는 상태 계산과 일회성 효과를 구분하고, 예측 범위·비용을 살핀다.\n- GameObject/NGO의 생명주기와 클래스 구조를 ECS 시스템에 억지로 맞추지 않는다.",
+    "revision": "7443bde36260bc00d3534a42d3513ea8ba08282500e4a3c78765657ca9bc9b2e"
+  },
+  {
+    "id": "unity-networking/verification",
+    "documentId": "unity-networking",
+    "engine": "unity",
+    "source": "docs/model-guidance/unity-networking.md#verification",
+    "topics": [
+      "multiplayer"
+    ],
+    "signals": [],
+    "priority": 20,
+    "requires": [
+      "core/proof"
+    ],
+    "applicability": {},
+    "text": "## 확인 상황\n\n변경과 관련된 원격 Client·Host·서버 경로, 지연 참가 초기 상태, Despawn 중 대기 작업, 재사용된 객체, Scene 전환, 연결 종료를 선택해 확인한다. 서버 실행에 로컬 UI·입력이 있다고 가정하지 않는다.",
+    "revision": "11fff171c9dd0732dfb820ec0d0c55f31b73fcf277dee8f16afedc2b57d75cde"
+  }
+] as const;

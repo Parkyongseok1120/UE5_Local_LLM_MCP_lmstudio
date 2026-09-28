@@ -11,7 +11,8 @@ import { FIRST_CONSUMER_RAW_GIT_MAX_CHARS, MIN_FINAL_OUTPUT_TOKENS, RESEARCH_REC
 import { READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION } from "./execution-instructions";
 import { readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
-import { designGuidanceCandidates, type GuidanceDocument } from "./design-guidance";
+import { designGuidanceCandidates, focusedGuidanceCandidates, type GuidanceDocument } from "./design-guidance";
+import type { ToolScope } from "./tool-scope";
 
 type RoundInputOptions = {
   ctl: PredictionLoopHandlerController; config: DirectConfig;
@@ -27,6 +28,8 @@ type RoundInputOptions = {
   finalizing: boolean; boundedAudit: boolean; researchRecoveryEpisodeStarted: boolean;
   reasoningRecovery?: boolean;
   guidanceDocuments?: readonly GuidanceDocument[];
+  guidanceScope?: ToolScope;
+  referenceRecovery?: boolean;
   finalizationTrigger: string | null;
   projectionApplied: boolean; executionId: string; modelInputId: string; roundIndex: number;
 };
@@ -195,15 +198,20 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     modelInputId, roundIndex, ...lowWater.telemetry });
   // Optional references never enter workingHistory or the persisted checkpoint.
   // Always derive a fresh, measured candidate from the same evidence history.
-  if (lowWater.canRun && !config.observeOnly && !finalizing && options.guidanceDocuments?.length) {
+  const focused = config.designGuidanceDelivery === "focused";
+  if (lowWater.canRun && !config.observeOnly && !finalizing && config.designGuidanceMode !== "off"
+    && config.designGuidanceMaxTokens > 0 && (!focused || !options.referenceRecovery)) {
+    const candidates = focused && options.guidanceScope
+      ? focusedGuidanceCandidates(config.designGuidanceMode, options.guidanceScope, evidenceManager.referenceSnapshot(workingHistory))
+      : focused ? [] : designGuidanceCandidates(options.guidanceDocuments || []);
     const guidance = await contextManager.addOptionalReferences(assembledInput,
-      designGuidanceCandidates(options.guidanceDocuments),
-      instruction => assembleModelInput(workingHistory, { instructions: [...roundScopeInstructions, instruction] }),
+      candidates,
+      (instruction, referenceData) => assembleModelInput(workingHistory, { instructions: [...roundScopeInstructions, instruction], referenceData }),
       { maxAddedTokens: config.designGuidanceMaxTokens, hasReadTools: roundTools.some(hasReadCapability),
         minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort() });
     assembledInput = guidance.assembled;
     if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
-      mode: config.designGuidanceMode, ...guidance.telemetry });
+      mode: config.designGuidanceMode, delivery: config.designGuidanceDelivery, ...guidance.telemetry });
   }
   const finalMeasurement = assembledInput.measurement;
   if (!lowWater.canRun || (!config.observeOnly && finalMeasurement.remainingTokens < 0)) {

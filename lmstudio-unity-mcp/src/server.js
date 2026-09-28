@@ -66,6 +66,9 @@ function createRuntime(env = process.env, injectedBridge) {
         if (edit && env.ALLOW_WRITE !== "1") fail("edit_disabled", "Adapter Edit permission is disabled");
         if (execute && env.ALLOW_COMMANDS !== "1") fail("execute_disabled", "Adapter Execute permission is disabled");
         result = await bridge.call(name, args);
+        // The adapter has verified the server/Bridge binding. Include its
+        // canonical scope with runtime observations as well as file results.
+        result = { ...result, canonicalProjectRoot: policy.root, projectIdentity: policy.projectIdentity };
       }
       if (PROJECT_FILE_TOOLS.has(name) && result && !result.errorCode) {
         result = { ...result, canonicalProjectRoot: policy.root, projectIdentity: policy.projectIdentity };
@@ -74,7 +77,11 @@ function createRuntime(env = process.env, injectedBridge) {
     } catch (error) {
       if (name === "unity_status" && !["invalid_arguments", "project_scope_mismatch"].includes(error.code)) return { status: "observed", connection: "disconnected", projectIdentity: policy.projectIdentity, canonicalProjectRoot: policy.root,
         fileTools: "available", unityObjects: "unavailable", lastKnownSession: bridge.lastSession, reason: error.code || "bridge_unavailable" };
-      return { status: error.status || "not_applied", errorCode: error.code || "tool_error", message: String(error.message).slice(0, 1000), ...(args.operationId ? { operationId: args.operationId } : {}) };
+      return { status: error.status || "not_applied", errorCode: error.code || "tool_error", message: String(error.message).slice(0, 1000),
+        ...(error.code === "receipt_conflict" && typeof args.path === "string"
+          ? { path: args.path, observationState: "conflict_observed" } : {}),
+        ...(error.code !== "project_scope_mismatch" ? { canonicalProjectRoot: policy.root, projectIdentity: policy.projectIdentity,
+          bindingSource: "server_configuration" } : {}), ...(args.operationId ? { operationId: args.operationId } : {}) };
     }
   }
   return { tools, call, policy };

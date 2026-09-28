@@ -2,7 +2,6 @@
 
 // Included by the existing enumerated package test entry point.
 require("./astra-contract.test.cjs");
-require("./design-guidance.test.cjs");
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -4756,5 +4755,103 @@ test('forced final delivery omits optional design references', async () => {
   const ctl = fakeController(Chat.from([{ role: 'user', content: 'Report from the supplied facts.' }]), model,
     { designGuidanceMode: 'core', outputRecoveryMode: 'on' });
   await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+});
+
+test('focused observations reach the next measured round without altering approval or persisting derived data', async () => {
+  let calls = 0, approvals = 0;
+  const project = 'C:/Projects/Focused/Focused.uproject';
+  const tool = { name: 'build_unreal_project', description: 'Build', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { project: { type: 'string' } } } };
+  const original = Chat.from([{ role: 'user', content: 'Build the authorized project and explain the error.' }]);
+  const model = { async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(text.length / 3); },
+    async act(chat, tools, options) {
+      calls++;
+      assert.equal(options.maxTokens, 4096);
+      assert.ok(tools.some(t => t.name === tool.name));
+      const dataMessages = chat.getMessagesArray().filter(m => m.isAssistantMessage() && m.getText().startsWith('[Derived reference data'));
+      if (calls === 2) {
+        assert.equal(dataMessages.length, 1);
+        assert.match(dataMessages[0].getText(), /"operationStatus":"failed"/);
+        assert.match(dataMessages[0].getText(), /OBSERVED_ERROR/);
+        assert.doesNotMatch(chat.getMessagesArray().find(m => m.isSystemPrompt()).getText(), /OBSERVED_ERROR/);
+        assert.match(chat.toString(), /reference id=debugging\/definitions/);
+        completeRecoveryReply(options, 'Observed build failure; source verification is still needed.'); return;
+      }
+      assert.equal(dataMessages.length, 0);
+      const request = { type: 'function', id: 'focused-build', name: tool.name, arguments: { project } };
+      await options.guardToolCall(0, 8111, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: false, project: { projectPath: project, target: 'FocusedEditor', platform: 'Win64', configuration: 'Development' },
+          diagnostics: ['OBSERVED_ERROR'], diagnosticCoverage: { truncated: false } }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(original, model, { projectEngine: 'unreal', projectIdentity: project,
+    designGuidanceMode: 'debugging', designGuidanceDelivery: 'focused', designGuidanceMaxTokens: 8192,
+    contextManagementMode: 'hybrid' }, [tool]);
+  ctl.requestConfirmToolCall = async () => { approvals++; return { type: 'allow' }; };
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2); assert.equal(approvals, 1);
+  assert.doesNotMatch(original.toString(), /Derived reference data/);
+  assert.ok(ctl.blocks.every(b => !b.text.includes('[Derived reference data')));
+  const events = ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  assert.equal(events[1].selectedDataIds.length, 1);
+  assert.ok(events.every(e => e.attempts <= 4));
+  const measurements = ctl.debugValues.filter(e => e.event === 'direct_context_measurement');
+  assert.equal(events[1].finalInputTokens, measurements[1].finalInputTokens);
+});
+
+for (const variant of ['off', 'observe', 'zero']) test(`focused ${variant} skips new analysis and candidate admission`, async () => {
+  const { EvidenceManager } = require('../dist/evidence-manager');
+  const oldSnapshot = EvidenceManager.prototype.referenceSnapshot;
+  const oldIngest = EvidenceManager.prototype.ingestReferences;
+  EvidenceManager.prototype.referenceSnapshot = () => assert.fail('disabled snapshot');
+  EvidenceManager.prototype.ingestReferences = () => assert.fail('disabled ingest');
+  try {
+    const model = { async getContextLength() { return 38912; }, async applyPromptTemplate(chat) { return chat.toString(); },
+      async countTokens(text) { return Math.ceil(text.length / 3); }, async act(chat, _tools, options) {
+        assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
+        completeRecoveryReply(options, 'Done.');
+      } };
+    const ctl = fakeController(Chat.from([{ role: 'user', content: 'TASK' }]), model, {
+      designGuidanceDelivery: 'focused', designGuidanceMode: variant === 'off' ? 'off' : 'design',
+      observeOnly: variant === 'observe', designGuidanceMaxTokens: variant === 'zero' ? 0 : 8192 });
+    await handlePredictionLoop(ctl);
+    assert.equal(ctl.debugValues.some(e => e.event === 'design_guidance_input'), false);
+  } finally { EvidenceManager.prototype.referenceSnapshot = oldSnapshot; EvidenceManager.prototype.ingestReferences = oldIngest; }
+});
+
+test('focused final delivery omits references and makes no extra model call', async () => {
+  let calls = 0;
+  const model = { async getContextLength() { return 38912; }, async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 3); }, async act(chat, tools, options) {
+      if (++calls === 1) {
+        assert.match(chat.toString(), /Optional design reference/);
+        options.onPredictionCompleted({ stats: { stopReason: 'maxPredictedTokensReached', predictedTokensCount: 4096 } });
+        options.onMessage(ChatMessage.create('assistant', 'Truncated report.')); return;
+      }
+      assert.equal(tools.length, 0); assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
+      completeRecoveryReply(options, 'Finished.');
+    } };
+  await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: 'Report.' }]), model,
+    { designGuidanceMode: 'core', designGuidanceDelivery: 'focused', outputRecoveryMode: 'on' }));
+  assert.equal(calls, 2);
+});
+
+for (const delivery of ['documents', 'focused']) test(`${delivery} follows its explicit reasoning recovery reference policy`, async () => {
+  let calls = 0;
+  const model = reasoningModel(async (chat, _tools, options) => {
+    if (++calls === 1) { assert.match(chat.toString(), /Optional design reference/); emitReasoningLimit(options); return; }
+    assert.equal(calls, 2);
+    if (delivery === 'focused') assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
+    else assert.match(chat.toString(), /Optional design reference/);
+    completeRecoveryReply(options, 'Continued under the existing recovery policy.');
+  });
+  await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: 'Inspect the supplied source.' }]), model,
+    { designGuidanceMode: 'debugging', designGuidanceDelivery: delivery, maxOutputReserve: 8192, reasoningRecoveryMode: 'on', outputRecoveryMode: 'off' }));
   assert.equal(calls, 2);
 });

@@ -1,7 +1,7 @@
 # 근거와 적용 버전
 
 확인일: 2026-09-28. 이 파일은 근거 조회용이며 상시 입력 대상이 아니다.
-세부 관찰과 한계는 [조사 기록](../Design_Guidance_Research_20260928.md)에 보관한다. 아래 버전은 조사한 문헌의 버전이다.
+세부 관찰과 한계는 저장소 전용 조사 기록 `docs/Design_Guidance_Research_20260928.md`에 보관한다. 아래 버전은 조사한 문헌의 버전이다.
 
 <a id="design"></a>
 ## 설계 원칙과 패턴
@@ -48,7 +48,7 @@ Epic 문서는 조사 당시 주로 5.8로 표시되었다. 아래 일반 계약
 | Private/PlayerController.cpp:1357 | OnUnPossess는 Pawn을 Destroy하지 않음 |
 | Private/GameModeBase.cpp:71 | 기본 Pawn·Controller 클래스 |
 
-이력·이전 버전과의 이동은 확인하지 않았다. 절대 경로와 조사한 호출 경로는 [게임 소스 근거 JSON](../evidence/combat-source-audit-20260928.json)에 있다.
+이력·이전 버전과의 이동은 확인하지 않았다. 프로젝트별 조사 경로는 저장소 전용 `docs/evidence/combat-source-audit-20260928.json`에 보관하며 배포 패키지에는 포함하지 않는다.
 
 <a id="unity"></a>
 ## Unity 일반

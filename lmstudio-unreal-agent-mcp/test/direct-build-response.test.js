@@ -59,3 +59,13 @@ test("UHT warnings-as-errors and clang undefined symbols remain visible", () => 
   assert.ok(diagnostics.some((line) => /Demo::Run/.test(line)));
   assert.ok(diagnostics.some((line) => /clang\+\+: error/.test(line)));
 });
+
+test("diagnostic coverage is additive and shares the legacy parser and entry limit", () => {
+  const stdout = Array.from({ length: 50 }, (_, i) => `Source/A.cpp(${i + 1}): error C2039: missing ${i}`).join("\n");
+  const payload = buildDirectResponse(input({ ok: false, stdout }));
+  assert.deepEqual(payload.diagnostics, extractBuildDiagnostics(stdout, ""));
+  assert.equal(payload.diagnostics.length, 40);
+  assert.equal(payload.diagnosticCoverage.truncated, true);
+  assert.equal(payload.diagnosticCoverage.completeBuildLog, false);
+  assert.equal(payload.diagnosticCoverage.returnedEntries, 40);
+});

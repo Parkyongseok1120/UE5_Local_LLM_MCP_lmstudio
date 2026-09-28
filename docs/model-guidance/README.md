@@ -1,6 +1,6 @@
 # 모델 참고 문서 묶음
 
-- 버전: 0.1 / 2026-09-28
+- 버전: 0.2 / 2026-09-29
 - 상태: 컴팩터에 선택적 공급 기능 구현. 기본 Off. 실행 중인 LM Studio 설치본과 게임 코드에는 적용하지 않았다.
 - 목적: 기존 소유자·계약·수명을 확인하면서 읽을 수 있는 코드를 작성하고, 근거 없는 API 수정과 실행 연결 누락을 줄인다.
 - 정본: 이 디렉터리의 주제별 Markdown. [조사 기록](../Design_Guidance_Research_20260928.md)은 근거와 조사 경위를 보관한다.
@@ -45,11 +45,21 @@
 
 새 빌드의 GUI에서 `Design references`로 Off, Common core, SSOT/SOLID, Debugging, Formatting, Engine lifetime, Multiplayer 중 하나를 선택한다. `Design reference token allowance`의 기본값은 2048이며 0이면 본문을 제공하지 않는다.
 
-문서 선택은 core → 선택 주제 → 확인되거나 명시된 엔진 순서다. Formatting은 core와 표현 문서만 사용한다. 도구 목록만으로 추정한 엔진은 선택 근거로 쓰지 않는다. 예산에 맞지 않으면 뒤의 문서를 온전히 제외하며, core도 맞지 않으면 원래 입력으로 진행한다. 상세 절의 자동 검색은 구현하지 않았고 첫 버전의 선택 단위는 짧은 문서다.
+`Design reference delivery`는 **Documents**가 호환 기본값이다. 이 경우 core → 선택 주제 → 확인되거나 명시된 엔진 순서로 기존 문서 본문 전체를 제공한다. Formatting은 core와 표현 문서만 사용한다. 도구 목록만으로 추정한 엔진은 선택 근거로 쓰지 않는다. 예산에 맞지 않으면 뒤의 문서를 온전히 제외하며, core도 맞지 않으면 원래 입력으로 진행한다.
+
+**Focused sections and observations**를 선택하면 같은 주제 안에서 필요한 절과 동반 계약을 고른다. 완료된 실제 도구 결과에서 진단, 파일 관찰, 확인된 Unity 버전·package lock의 설치 버전, 일부 포맷 설정을 제한적으로 요약한다. 모델 추론문이나 파일명의 키워드로 주제를 자동 변경하지 않는다. 추가 도구 호출·파일 탐색·모델 호출은 없다.
+
+Focused의 한도는 실행 내 최근 16개 관찰, 입력에 최대 3개 진단 그룹/12개 진단, 최대 8개 메타데이터 항목, 최대 6개 절, 라운드당 최대 4개 후보다. 절·동반 계약·출처·자료를 묶어 실제 입력 증가량을 측정한다. C1 전체 제한 자료+최우선 계약+최대 2개 보충 묶음 → C2 최신 진단+최우선 계약 → C3 계약만 → C4 공통 최소 절 순서이며, 모두 안 맞으면 기준 입력을 쓴다.
 
 본문은 기존 근거 압축·보존 후에 합성하고 실제 템플릿으로 측정한다. 기존 작업 창·도구 결과 예산과 위 allowance를 모두 만족할 때만 제공한다. Observe only와 강제 최종 보고에는 넣지 않는다. 문서를 위해 추가 압축·출력 한도 축소·도구 차단을 하지 않는다.
 
-`design_guidance_input` 디버그 항목에서 requestedIds, selectedIds, omittedIds, reason, addedTokens를 확인할 수 있다. 참고 본문은 일반 대화 이력이나 영속 체크포인트에 저장하지 않고 각 모델 입력에 다시 구성한다.
+Focused는 일반 작업 및 bounded audit의 일반 조사 라운드에서 제공하고, research/reasoning recovery와 tool-planning retry에는 넣지 않는다. Off·Observe only·allowance 0에서는 관찰 요약을 수집하거나 후보를 만들지 않는다. 기존 Documents의 복구 단계 전달 방식은 유지한다.
+
+정적 참고 원칙은 기존 시스템 입력에, 외부 진단·프로젝트 자료는 별도 assistant 참고 데이터 메시지에 넣는다. 자료는 당시 반환값에서 파생된 설명이며 새 파일 읽기·편집 receipt·권한·완료 증거가 아니다. Unity accepted는 요청 수락이고 Player 빌드 성공이 아니다. 현재 컴파일 ID와 다른 로그 행은 현재 결과에 합치지 않으며 구독 범위·누락·세대 미확인을 표시한다.
+
+관찰의 수명은 한 실행이다. 같은 파일의 수정·삭제·충돌을 관찰하면 이전 설정 요약을 버리고, 같은 batch에서 읽기/수정이 겹치면 순서를 확정하지 않는다. 다른 프로젝트 결과는 섞지 않는다. 외부 변경을 아직 관찰하지 못한 경우 마지막 관찰만 표시한다. note v1 판단은 현재 프로젝트 사실로 변환하지 않는다.
+
+`design_guidance_input` 디버그 항목에서 delivery, requestedIds, selectedIds, omittedIds, requestedDataIds, selectedDataIds, omittedDataIds, reason, attempts, addedTokens를 확인할 수 있다. 참고 본문은 일반 대화 이력이나 영속 체크포인트에 저장하지 않고 각 모델 입력에 다시 구성한다. `included`는 입력에 포함됐다는 뜻이며 모델이 원칙을 따랐거나 품질이 좋아졌다는 평가가 아니다.
 
 ## 본문 유지보수와 프로젝트 사실
 

@@ -1,0 +1,382 @@
+{
+  "mode": "codegen",
+  "scope": {
+    "date": "2026-09-29",
+    "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio",
+    "baselineCommit": "4d88404",
+    "change": "P0-P5 focused optional guidance implementation",
+    "installed": false,
+    "modelInvoked": false,
+    "editorInvoked": false,
+    "committed": false
+  },
+  "claims": [
+    {
+      "id": "I01",
+      "claim": "기존 documents 본문을 보존하면서 focused는 명시 주제와 적용 조건에 맞는 완결된 절 묶음을 유한하게 선택한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P3",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs:17",
+          "observation": "Markdown marker를 분리하고 v2 metadata와 의존성 검증을 수행한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:73",
+          "observation": "focusedGuidanceCandidates는 같은 주제, 엔진/버전, 의존성 closure와 최대 4개 후보를 적용한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/model-behavior-20260929/focused-final-tests.log",
+          "observation": "최종 재빌드 후 관련 계약 fixture 통과."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-config.ts:51",
+          "symbol": "readConfig"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:73",
+          "symbol": "focusedGuidanceCandidates"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs:25",
+          "symbol": "topic/dependency/applicability fixture"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:35",
+          "observation": "기존 documents selector/prefix 경로를 별도로 보존한다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 모델의 행동 개선 정도와 Editor/게임 실행은 검증하지 않았다."
+      ]
+    },
+    {
+      "id": "I02",
+      "claim": "참고 지시와 외부 데이터는 함께 정확 측정되며, 외부 값은 system 밖의 assistant 슬롯에만 들어간다. 모든 후보가 실패하면 기준 입력을 반환한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P3",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:248",
+          "observation": "referenceData는 assistant 메시지로 추가된다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:394",
+          "observation": "기존 optional admission이 instruction/data와 원래 전체 입력을 측정하고 baseline 대비 allowance를 적용한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/model-behavior-20260929/focused-final-tests.log",
+          "observation": "최종 재빌드 후 관련 계약 fixture 통과."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:201",
+          "symbol": "focused candidate admission"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:394",
+          "symbol": "addOptionalReferences"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:299",
+          "symbol": "createInputAssembler profile"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs:128",
+          "symbol": "atomic data fallback / injection boundary tests"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:307",
+          "observation": "캐시는 전체 SDK 입력과 도구 표면/예약을 키로 사용한다. source history에는 파생 data를 저장하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 모델의 행동 개선 정도와 Editor/게임 실행은 검증하지 않았다."
+      ]
+    },
+    {
+      "id": "I03",
+      "claim": "파생 관찰은 실행별 EvidenceManager에 귀속되며 scope·파일 수정/충돌·부분 실패·동시 batch·Unity session 경계에서 보수적으로 제외된다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P3",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/evidence-manager.ts:42",
+          "observation": "referenceState가 manager instance 안에 생성된다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:237",
+          "observation": "완료된 유일 요청/결과를 수집하고 파일/세션 불확실성을 배치 전체에서 유지한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:308",
+          "observation": "현재 원본 이력에서 가용성을 다시 확인하고 과거 compilation 신호를 현재로 승격하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/model-behavior-20260929/focused-final-tests.log",
+          "observation": "최종 재빌드 후 관련 계약 fixture 통과."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:622",
+          "symbol": "captureReturned 이후 ingestReferences"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:237",
+          "symbol": "ingestReferenceObservations scope/identity validation"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:245",
+          "symbol": "batch uncertainty invalidation"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/reference-context.test.cjs:1",
+          "symbol": "25개 정규화/수명/반례 fixture"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/evidence-manager.ts:68",
+          "observation": "기존 captureReturned archive 필터는 observation-only로 유지한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/continuity-model-notes.js:1",
+          "observation": "note v1을 현재 프로젝트 사실 데이터로 변환하거나 새 필드로 확장하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 모델의 행동 개선 정도와 Editor/게임 실행은 검증하지 않았다."
+      ]
+    },
+    {
+      "id": "I04",
+      "claim": "focused를 켠 실제 prediction handler fixture에서 다음 입력으로 자료를 전달하며 기존 승인/출력 예약을 유지하고 Off/Observe/0 및 복구·최종화 생략 계약을 지킨다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P3",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:91",
+          "observation": "focusedReferences 활성 조건은 mode, delivery, allowance, observeOnly를 모두 확인한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:201",
+          "observation": "focused는 referenceRecovery/finalizing에서 후보를 추가하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/model-behavior-20260929/focused-final-loop-tests.log",
+          "observation": "최종 재빌드 후 관련 계약 fixture 통과."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:91",
+          "symbol": "focused activation"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:201",
+          "symbol": "reference stage eligibility"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:306",
+          "symbol": "prepareRoundInput / existing model act"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:4775",
+          "symbol": "focused end-to-end SDK controller fixture"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:202",
+          "observation": "기존 Documents의 recovery 전달 정책은 유지한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/tool-boundary.ts:1",
+          "observation": "새 참고 기능이 ToolGuard 승인 결정을 소유하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 모델의 행동 개선 정도와 Editor/게임 실행은 검증하지 않았다."
+      ]
+    }
+  ],
+  "existing": [
+    "Markdown/catalogue SSOT",
+    "ContextManager/BudgetBroker token admission",
+    "ToolScope/ToolGuard authority",
+    "EvidenceManager/WorkingContext archival",
+    "note v1",
+    "Unreal diagnostic parser and Unity Bridge session owner"
+  ],
+  "proposed": [
+    "기존 선택/입력/관찰 경계의 확장을 구현함. 실제 모델 비교 P6은 후속 작업."
+  ],
+  "doNotDuplicate": [
+    "공유 예산/승인/재시도/모델 호출 정책",
+    "원본 archive/receipt/파일 writer",
+    "Unreal 로그 파서",
+    "Unity Editor 세션 owner",
+    "모델 설계 판단과 note v1"
+  ],
+  "invariants": [
+    "원래 시스템/사용자/도구 메시지와 출력 예약을 선택 자료 때문에 줄이지 않는다.",
+    "외부 관찰을 system 지시로 승격하지 않는다.",
+    "accepted/unknown/부분 자료를 성공으로 승격하지 않는다.",
+    "선택 자료가 자동 도구/검사 gate/formatter/모델 호출을 만들지 않는다.",
+    "원본 archive 필터 및 note v1을 확장하지 않는다."
+  ],
+  "impactedSurfaces": [
+    "정본 9개 Markdown과 v2 catalog/generated bundle",
+    "focused selection and reference normalization/rendering",
+    "input assembler, EvidenceManager, prediction loop, GUI config",
+    "Unreal diagnostic coverage, Unity adapter scope/conflict metadata",
+    "status source inventory, package inventory and docs links",
+    "npm unit/integration tests and package tests"
+  ],
+  "validationPlan": [
+    "기존 9개 documents 본문과 revision 비교",
+    "TypeScript build + guidance:check",
+    "plugin npm test 및 최종 경계 변경 뒤 targeted 재검사",
+    "Unreal/Unity npm test",
+    "통합 package pytest, encoding, git diff --check",
+    "근거 packet validator"
+  ],
+  "validationResults": [
+    {
+      "command": "plugin npm test",
+      "passed": 465,
+      "failed": 0,
+      "log": "artifacts/model-behavior-20260929/plugin-full-tests.log",
+      "note": "전체 통과 뒤 과거 compiling 신호 종료 조건 1줄을 보강하고 다음 두 targeted 검사를 최종 재빌드에 실행함."
+    },
+    {
+      "command": "node --test design-guidance/focused-guidance/reference-context/status",
+      "passed": 53,
+      "failed": 0,
+      "log": "artifacts/model-behavior-20260929/focused-final-tests.log"
+    },
+    {
+      "command": "node --test --test-name-pattern=focused|explicit reasoning recovery prediction-loop",
+      "passed": 7,
+      "failed": 0,
+      "log": "artifacts/model-behavior-20260929/focused-final-loop-tests.log"
+    },
+    {
+      "command": "unreal npm test",
+      "passed": 248,
+      "skipped": 1,
+      "failed": 0,
+      "log": "artifacts/model-behavior-20260929/unreal-full-tests.log"
+    },
+    {
+      "command": "unity npm test",
+      "passed": 36,
+      "skipped": 4,
+      "failed": 0,
+      "log": "artifacts/model-behavior-20260929/unity-full-tests.log"
+    },
+    {
+      "command": "python -m pytest tests/test_integrated_package.py -q",
+      "passed": 18,
+      "failed": 0,
+      "log": "artifacts/model-behavior-20260929/package-tests.log"
+    },
+    {
+      "command": "python scripts/verify_encoding.py",
+      "result": "1197 files OK"
+    },
+    {
+      "command": "CI suite membership --validate-only",
+      "result": "54 files across 4 suites; tests were not run by this command"
+    },
+    {
+      "command": "guidance:check and git diff --check",
+      "result": "passed"
+    }
+  ],
+  "independentReview": {
+    "agent": "behavior_plan_review",
+    "mode": "read_only",
+    "fixedFindings": [
+      "bundle per-file scope",
+      "receipt conflict invalidation",
+      "parallel file order",
+      "old accepted pending signal",
+      "fallback omission count",
+      "batch partial-failure uncertainty",
+      "batch session uncertainty",
+      "rollback incomplete invalidation"
+    ]
+  },
+  "unknowns": [
+    "모델 품질/토큰 비용의 실제 최적값은 미평가",
+    "LM Studio 설치/GUI 활성화 및 실제 Editor/네트워크 실행 미검증",
+    "GitHub CI를 트리거하거나 커밋/푸시/릴리스하지 않음",
+    "host-split 요청의 참고 가용성은 보수적으로 누락될 수 있음; 기존 원본 이력은 유지"
+  ]
+}

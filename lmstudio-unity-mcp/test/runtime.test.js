@@ -27,6 +27,23 @@ test("offline project detection and catalog does not expose Unreal or autonomous
   assert(f.tools.every(tool => !/unreal|planner|model_load|agent_run/.test(tool.name)));
   assert.equal((await f.call("unity_status", { arbitrary: true })).errorCode, "invalid_arguments");
 });
+
+test("runtime observations and uncertain operations carry the adapter's bound scope", async t => {
+  const f = fixture(t);
+  let uncertain = false;
+  const bridge = { async call() {
+    if (uncertain) throw Object.assign(new Error("RPC timed out"), { status: "outcome_unknown", code: "rpc_timeout" });
+    return { status: "accepted", editorSessionId: "s", domainGeneration: 1, compilationIdAtRequest: "old" };
+  } };
+  const runtime = createRuntime({ UNITY_PROJECT_ROOT: f.root, ALLOW_COMMANDS: "1" }, bridge);
+  const accepted = await runtime.call("unity_editor", { action: "compile", operationId: "ref-compile-1" });
+  assert.equal(accepted.status, "accepted"); assert.equal(accepted.canonicalProjectRoot, f.root);
+  assert.equal(accepted.projectIdentity, f.policy.projectIdentity); assert.equal(accepted.compilationId, undefined);
+  uncertain = true;
+  const unknown = await runtime.call("unity_editor", { action: "compile", operationId: "ref-compile-2" });
+  assert.equal(unknown.status, "outcome_unknown"); assert.equal(unknown.canonicalProjectRoot, f.root);
+  assert.equal(unknown.editorSessionId, undefined);
+});
 test("receipt conflicts, forgery, cross-project isolation and re-read", async t => {
   const a = fixture(t), b = fixture(t);
   a.put("Assets/Code.cs", "class Before {}\r\n"); b.put("Assets/Code.cs", a.get("Assets/Code.cs"));
@@ -35,7 +52,10 @@ test("receipt conflicts, forgery, cross-project isolation and re-read", async t 
   assert.equal((await b.call("patch_file", args)).errorCode, "invalid_receipt");
   assert.equal((await a.call("patch_file", { ...args, receipt: "forged.signature" })).errorCode, "invalid_receipt");
   a.put("Assets/Code.cs", "class UserEdit {}\r\n");
-  assert.equal((await a.call("patch_file", args)).errorCode, "receipt_conflict");
+  const conflict = await a.call("patch_file", args);
+  assert.equal(conflict.errorCode, "receipt_conflict");
+  assert.equal(conflict.path, args.path); assert.equal(conflict.observationState, "conflict_observed");
+  assert.equal(conflict.canonicalProjectRoot, a.root);
   const current = await a.call("read_file", { path: args.path });
   const result = await a.call("patch_file", { ...args, receipt: current.receipt, edits: [{ oldText: "UserEdit", newText: "After" }] });
   assert.equal(result.status, "applied"); assert.equal(a.get(args.path), "class After {}\r\n");

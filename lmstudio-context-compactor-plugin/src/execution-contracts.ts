@@ -4,7 +4,7 @@ import {
 import {
   type ProjectEngineSetting
 } from "./tool-scope";
-import type { DesignGuidanceMode } from "./design-guidance";
+import type { DesignGuidanceMode, DesignGuidanceDelivery } from "./design-guidance";
 
 export type ContinuityNote = {
   scope: { objectiveFingerprint: string; projectIdentity?: string };
@@ -66,6 +66,7 @@ export type DirectConfig = {
   projectEngine: ProjectEngineSetting;
   projectIdentity: string;
   designGuidanceMode: DesignGuidanceMode;
+  designGuidanceDelivery: DesignGuidanceDelivery;
   designGuidanceMaxTokens: number;
   observeOnly: boolean;
   contextManagementMode: ContextManagementMode;

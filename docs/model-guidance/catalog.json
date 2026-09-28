@@ -1,14 +1,510 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "documents": [
-    { "id": "core", "file": "core.md", "engine": "common" },
-    { "id": "design", "file": "design.md", "engine": "common" },
-    { "id": "debugging", "file": "debugging.md", "engine": "common" },
-    { "id": "code-style", "file": "code-style.md", "engine": "common" },
-    { "id": "unreal", "file": "unreal.md", "engine": "unreal" },
-    { "id": "unity", "file": "unity.md", "engine": "unity" },
-    { "id": "multiplayer", "file": "multiplayer.md", "engine": "common" },
-    { "id": "unreal-networking", "file": "unreal-networking.md", "engine": "unreal" },
-    { "id": "unity-networking", "file": "unity-networking.md", "engine": "unity" }
+    {
+      "id": "core",
+      "file": "core.md",
+      "engine": "common",
+      "sections": [
+        {
+          "id": "ownership",
+          "topics": [
+            "core",
+            "design",
+            "debugging",
+            "code-style",
+            "lifecycle",
+            "multiplayer"
+          ],
+          "priority": 30,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "lifetime",
+          "topics": [
+            "core",
+            "design",
+            "lifecycle",
+            "multiplayer"
+          ],
+          "priority": 40,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "api",
+          "topics": [
+            "core",
+            "debugging"
+          ],
+          "priority": 20,
+          "signals": [
+            "diagnostic_recurred"
+          ],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "style",
+          "topics": [
+            "core",
+            "code-style"
+          ],
+          "priority": 40,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "proof",
+          "topics": [
+            "core",
+            "design",
+            "debugging",
+            "code-style",
+            "lifecycle",
+            "multiplayer"
+          ],
+          "priority": 900,
+          "signals": [
+            "source_body_unavailable",
+            "operation_outcome_unknown"
+          ],
+          "requires": []
+        }
+      ]
+    },
+    {
+      "id": "design",
+      "file": "design.md",
+      "engine": "common",
+      "sections": [
+        {
+          "id": "state",
+          "topics": [
+            "design"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "solid",
+          "topics": [
+            "design"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "lifetime",
+          "topics": [
+            "design"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "patterns",
+          "topics": [
+            "design"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "debugging",
+      "file": "debugging.md",
+      "engine": "common",
+      "sections": [
+        {
+          "id": "definitions",
+          "topics": [
+            "debugging"
+          ],
+          "priority": 20,
+          "signals": [
+            "diagnostic_present",
+            "diagnostic_recurred"
+          ],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "preserve-contract",
+          "topics": [
+            "debugging"
+          ],
+          "priority": 20,
+          "signals": [
+            "observed_source_changed"
+          ],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "verification",
+          "topics": [
+            "debugging"
+          ],
+          "priority": 20,
+          "signals": [
+            "compilation_pending",
+            "operation_outcome_unknown"
+          ],
+          "requires": [
+            "core/proof"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "code-style",
+      "file": "code-style.md",
+      "engine": "common",
+      "sections": [
+        {
+          "id": "conventions",
+          "topics": [
+            "code-style"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "unreal-example",
+          "topics": [
+            "code-style"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "engine": "unreal"
+        },
+        {
+          "id": "unity-example",
+          "topics": [
+            "code-style"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "engine": "unity"
+        }
+      ]
+    },
+    {
+      "id": "unreal",
+      "file": "unreal.md",
+      "engine": "unreal",
+      "sections": [
+        {
+          "id": "ownership",
+          "topics": [
+            "design",
+            "lifecycle"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "connections",
+          "topics": [
+            "design",
+            "lifecycle"
+          ],
+          "priority": 30,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "timer",
+          "topics": [
+            "lifecycle"
+          ],
+          "priority": 10,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "engineVersions": [
+              "5.7"
+            ]
+          }
+        },
+        {
+          "id": "api",
+          "topics": [
+            "debugging"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "preference",
+          "topics": [
+            "code-style"
+          ],
+          "priority": 70,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unity",
+      "file": "unity.md",
+      "engine": "unity",
+      "sections": [
+        {
+          "id": "wiring",
+          "topics": [
+            "design",
+            "debugging",
+            "lifecycle"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "lifetime",
+          "topics": [
+            "design",
+            "debugging",
+            "lifecycle"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "engineVersions": [
+              "6000.0"
+            ]
+          }
+        },
+        {
+          "id": "api",
+          "topics": [
+            "design",
+            "debugging",
+            "lifecycle"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "engineVersions": [
+              "6000.0"
+            ],
+            "packages": [
+              {
+                "id": "com.unity.inputsystem",
+                "versions": [
+                  "1.14"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "multiplayer",
+      "file": "multiplayer.md",
+      "engine": "common",
+      "sections": [
+        {
+          "id": "authority",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "time",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "lifetime",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unreal-networking",
+      "file": "unreal-networking.md",
+      "engine": "unreal",
+      "sections": [
+        {
+          "id": "authority",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 10,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "prediction",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 30,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "lifetime",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 40,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unity-networking",
+      "file": "unity-networking.md",
+      "engine": "unity",
+      "sections": [
+        {
+          "id": "topology",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "ngo",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 10,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "packages": [
+              {
+                "id": "com.unity.netcode.gameobjects",
+                "versions": [
+                  "2.7.0"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "entities",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 10,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "packages": [
+              {
+                "id": "com.unity.netcode",
+                "versions": [
+                  "1.10.0"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "verification",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        }
+      ]
+    }
   ]
 }

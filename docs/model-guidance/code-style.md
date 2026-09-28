@@ -3,6 +3,7 @@
 적용: 새 코드 작성과 수정한 주변 코드의 표현.
 근거: [Epic C++ 관례](sources.md#style). Unity는 저장소의 C# 관례를 따른다.
 
+<!-- guidance-section: conventions -->
 ## 작성 기준
 
 - .editorconfig, .clang-format, 저장소 지침과 일관된 기존 코드를 먼저 확인한다.
@@ -14,6 +15,8 @@
 - 주석에는 의도, 제약, 실패 처리 이유를 적는다. 구현이 없는데 “서버 권한”, “SSOT”, “설정 완료”라고만 적지 않는다.
 - 기능 수정과 함께 관계없는 파일 전체를 다시 포맷하지 않는다. 기존 파일이 일관되게 나쁘다면 별도의 정리 범위를 잡는다.
 
+<!-- /guidance-section: conventions -->
+<!-- guidance-section: unreal-example -->
 ## Unreal C++ 표현 예시
 
 아래는 줄 배치만 보이는 코드 조각이다. 발사·재장전·권한 처리가 완성된 구현은 아니다.
@@ -46,6 +49,8 @@ const int32 MissingAmmo = CurrentWeapon->Stats.MagazineSize - MagazineAmmo;
 
 위 조각은 중괄호와 실행 블록 들여쓰기의 예시다. 실제 멤버 이름과 가드 조건은 해당 프로젝트의 정의를 확인한다.
 
+<!-- /guidance-section: unreal-example -->
+<!-- guidance-section: unity-example -->
 ## Unity C# 표현 예시
 
 ```csharp
@@ -61,3 +66,4 @@ RefreshAmmoDisplay();
 이 예시도 포맷만 보여준다. 실제 로직에는 채택한 권한·상태·UI 계약을 적용한다. 엔진 간에 탭·공백 규칙이나 네임스페이스 선호를 무조건 공유하지 않는다.
 
 형식은 작성 품질의 기본 조건으로 다룬다. 새 포맷 검사 실패를 작업 진행의 추가 승인 조건으로 만들지 않는다.
+<!-- /guidance-section: unity-example -->

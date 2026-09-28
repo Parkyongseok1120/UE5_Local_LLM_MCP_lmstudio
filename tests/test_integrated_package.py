@@ -348,7 +348,12 @@ def test_design_guidance_package_contains_rebuild_inputs_without_project_snapsho
     required = set(builder.REQUIRED_RUNTIME_FILES)
     expected = {
         "docs/model-guidance/catalog.json",
+        "docs/model-guidance/sources.md",
         "lmstudio-context-compactor-plugin/src/design-guidance.ts",
+        "lmstudio-context-compactor-plugin/src/reference-context.ts",
+        "lmstudio-context-compactor-plugin/src/reference-rendering.ts",
+        "lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs",
+        "lmstudio-context-compactor-plugin/test/reference-context.test.cjs",
         "lmstudio-context-compactor-plugin/src/generated-design-guidance.ts",
         "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs",
         "lmstudio-context-compactor-plugin/test/design-guidance.test.cjs",

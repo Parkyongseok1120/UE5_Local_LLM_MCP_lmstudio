@@ -2,7 +2,7 @@ import {
   type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import { directConfigSchematics } from "./direct-config";
-import { designGuidanceMode } from "./design-guidance";
+import { designGuidanceMode, designGuidanceDelivery } from "./design-guidance";
 import { DEFAULT_CONTEXT_MANAGEMENT_MODE, type AuditCompletionMode, type ContextManagementMode, type DirectConfig, type InputAvailabilityMode, type OutputRecoveryMode, type StagnationAction } from "./execution-contracts";
 import {
   type ProjectEngineSetting
@@ -47,6 +47,7 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     projectEngine,
     projectIdentity: String(config.get("projectIdentity") || "").trim().slice(0, 4096),
     designGuidanceMode: designGuidanceMode(config.get("designGuidanceMode")),
+    designGuidanceDelivery: designGuidanceDelivery(config.get("designGuidanceDelivery")),
     designGuidanceMaxTokens: numeric(config.get("designGuidanceMaxTokens"), 2048, 0, 8192),
     observeOnly: config.get("observeOnly") === true,
     contextManagementMode: contextManagementMode(config.get("contextManagementMode")),

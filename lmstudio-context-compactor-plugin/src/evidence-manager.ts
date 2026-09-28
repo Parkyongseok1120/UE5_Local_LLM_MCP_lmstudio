@@ -6,6 +6,8 @@ import {
 import { inputAvailability, toolMemory, workingContextModule } from "./context-ports";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
+import { emptyReferenceState, ingestReferenceObservations, referenceSnapshot } from "./reference-context";
+import type { ToolScope } from "./tool-scope";
 const identity = require("./evidence-identity.js") as {
   sourceIdentity(value: Record<string, unknown>): string;
   sourceVersion(value: Record<string, unknown>): string;
@@ -37,8 +39,13 @@ export class EvidenceManager {
   fingerprints = new Set<string>();
   coverage: RecoveryCoverageLedger = new Map();
   private currentCoverage: RecoveryCoverageLedger = new Map();
+  private readonly referenceState = emptyReferenceState();
   constructor(readonly store: InstanceType<typeof workingContextModule.WorkingContext> | null,
     readonly tools: Array<RemoteToolLike>) { }
+  ingestReferences(messages: readonly ChatMessage[], scope: ToolScope, executionId: string) {
+    ingestReferenceObservations(this.referenceState, messages, this.tools, scope, executionId);
+  }
+  referenceSnapshot(history: Chat) { return referenceSnapshot(this.referenceState, history); }
   seed(history: Chat) { const state = seedRecoveryProgress(history, this.tools); this.fingerprints = state.fingerprints; this.coverage = state.coverage; }
   observe(messages: Array<ChatMessage>) {
     return observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools);

@@ -1,0 +1,17 @@
+✔ guidance is opt-in, numeric allowance is bounded, and selection does not infer an engine from tools (2.7671ms)
+✔ engine selection is per execution and never imports the audited project's facts (0.27ms)
+✔ generated deployment content is derived exactly from canonical Markdown (2.6151ms)
+✔ fallbacks retain whole documents and deduplicate references (0.1711ms)
+✔ final input includes exact measured guidance and tools without modifying evidence history (9.8554ms)
+✔ allowance and shared budget omit documents without shrinking evidence or the output reserve (3.2122ms)
+✔ optional reference failure or inexact measurement keeps the already measured input (1.4908ms)
+✔ cancellation during optional measurement is propagated (0.5735ms)
+✔ disabled allowance performs no additional measurement (1.1455ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 926.5026

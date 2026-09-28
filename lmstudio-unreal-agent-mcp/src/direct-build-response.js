@@ -24,14 +24,16 @@ function compactDiagnostic(line, maxChars = 500) {
   return value.replace(/\ufffd+/g, " ").replace(/\s+/g, " ").trim().slice(0, Math.max(80, maxChars));
 }
 
-function extractBuildDiagnostics(stdout, stderr, maxLines = 40) {
+function collectBuildDiagnostics(stdout, stderr, maxLines = 40) {
   const combined = `${stdout || ""}\n${stderr || ""}`;
   const warningsAreErrors = /UnrealHeaderTool[^\r\n]*-WarningsAsErrors/i.test(combined)
     || /Running Internal UnrealHeaderTool[^\r\n]*-WarningsAsErrors/i.test(combined);
   const lines = combined.split(/\r?\n/);
   const diagnostics = [];
+  const limit = clamp(maxLines, 40, 1, 120);
+  let truncated = false;
   let captureUndefined = false;
-  for (const raw of lines) {
+  for (const [index, raw] of lines.entries()) {
     const line = String(raw || "");
     if (/^Undefined symbols for architecture\b/i.test(line.trim())) captureUndefined = true;
     const interesting = (
@@ -48,16 +50,21 @@ function extractBuildDiagnostics(stdout, stderr, maxLines = 40) {
       if (compact && !diagnostics.includes(compact)) diagnostics.push(compact);
     }
     if (captureUndefined && /^\s*(?:ld:|clang\+\+:|Result:|Total time)/i.test(line)) captureUndefined = false;
-    if (diagnostics.length >= clamp(maxLines, 40, 1, 120)) break;
+    if (diagnostics.length >= limit) { truncated = index < lines.length - 1; break; }
   }
-  return diagnostics;
+  return { diagnostics, coverage: { scope: "filtered_log_lines", truncated, maxEntries: limit,
+    returnedEntries: diagnostics.length, perEntryMaxChars: 500, completeBuildLog: false } };
+}
+
+function extractBuildDiagnostics(stdout, stderr, maxLines = 40) {
+  return collectBuildDiagnostics(stdout, stderr, maxLines).diagnostics;
 }
 
 function buildDirectResponse({ result, build, planResult, projectPath, command, logPath, verbose = false, executionMode = "direct" }) {
   const stdout = String(result?.stdout || "");
   const stderr = String(result?.stderr || "");
   const rawOutput = `${stdout}\n${stderr}`;
-  const diagnostics = extractBuildDiagnostics(stdout, stderr);
+  const { diagnostics, coverage } = collectBuildDiagnostics(stdout, stderr);
   const proof = parseBuildProof(result?.ok === true, rawOutput, { logPath });
   const actionsExecuted = proof.highestObservedActionIndex || proof.actionCount;
   const upToDate = proof.targetUpToDate === true;
@@ -80,6 +87,7 @@ function buildDirectResponse({ result, build, planResult, projectPath, command, 
     exitCode: result?.exitCode ?? null,
     timedOut: result?.timedOut === true,
     diagnostics,
+    diagnosticCoverage: coverage,
     firstError: firstError || null,
     outputTail: ok ? [] : outputTail,
     fullLogPath: logPath,

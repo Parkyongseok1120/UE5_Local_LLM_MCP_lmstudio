@@ -3,12 +3,15 @@
 적용: Unity 멀티플레이의 권한·생성·상태·RPC·예측.
 범위: 조사한 문서는 NGO 2.7.0과 Netcode for Entities 1.10.0. 실제 설치 버전의 보장이 아니다. [근거](sources.md#unity-network)
 
+<!-- guidance-section: topology -->
 ## 패키지와 토폴로지
 
 패키지 이름·해결된 버전·client-server/분산 권한 여부를 먼저 확인한다. NGO, Entities, Mirror, Photon/Fusion은 API와 예측 모델이 다르다. Mirror/Fusion 상세 계약은 이 묶음에서 조사하지 않았다.
 
 소유자와 확정 권한을 구분한다. 권한 오류를 없애려고 소유권 제한만 풀거나 네트워크 호출을 로컬 함수로 바꾸지 않는다.
 
+<!-- /guidance-section: topology -->
+<!-- guidance-section: ngo -->
 ## NGO 2.7
 
 - NetworkVariable의 초기 동기화, 읽기·쓰기 권한, 이후 OnValueChanged 알림을 구분한다. 이벤트만 등록하고 최초 표시를 빠뜨리지 않는다.
@@ -20,6 +23,8 @@
 - Anticipation은 표시값과 권위값을 구분하는 기능이다. NGO 2.7의 해당 기능을 완전한 rollback-and-replay 제공으로 설명하지 않는다.
 - 로컬 Scene 로드 완료와 참가자들의 네트워크 동기화 완료를 구분한다. NetworkSceneManager의 해당 이벤트·수명을 확인한다.
 
+<!-- /guidance-section: ngo -->
+<!-- guidance-section: entities -->
 ## Netcode for Entities 1.10
 
 - Ghost, tick별 입력, PredictedSimulationSystemGroup, Simulate 대상의 의미를 사용 중인 구성으로 확인한다.
@@ -27,6 +32,9 @@
 - 재시뮬레이션되는 상태 계산과 일회성 효과를 구분하고, 예측 범위·비용을 살핀다.
 - GameObject/NGO의 생명주기와 클래스 구조를 ECS 시스템에 억지로 맞추지 않는다.
 
+<!-- /guidance-section: entities -->
+<!-- guidance-section: verification -->
 ## 확인 상황
 
 변경과 관련된 원격 Client·Host·서버 경로, 지연 참가 초기 상태, Despawn 중 대기 작업, 재사용된 객체, Scene 전환, 연결 종료를 선택해 확인한다. 서버 실행에 로컬 UI·입력이 있다고 가정하지 않는다.
+<!-- /guidance-section: verification -->

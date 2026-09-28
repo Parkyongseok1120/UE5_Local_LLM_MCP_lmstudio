@@ -216,6 +216,7 @@ export function composeModelHistory(
   config: DirectConfig,
   systemInstructions: Array<string> = [],
   enableNoteProtocol = Boolean(note),
+  referenceData?: string,
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
@@ -223,7 +224,7 @@ export function composeModelHistory(
     .filter((index) => index >= 0);
   const systemLayoutIsCompatible = systemIndexes.length === 0
     || (systemIndexes.length === 1 && systemIndexes[0] === 0);
-  if (!enableNoteProtocol && instructions.length === 0 && systemLayoutIsCompatible) {
+  if (!enableNoteProtocol && instructions.length === 0 && !referenceData && systemLayoutIsCompatible) {
     return { history, overhead: 0 };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note) : "";
@@ -244,6 +245,7 @@ export function composeModelHistory(
   ].join("\n\n");
   if (combinedSystemText) composed.append("system", combinedSystemText);
   if (canIncludeNote && noteText) composed.append("assistant", noteText);
+  if (referenceData) composed.append("assistant", referenceData);
   for (const message of messages) {
     if (!message.isSystemPrompt()) composed.append(message);
   }
@@ -294,6 +296,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     instructions?: Array<string>;
     outputReserve?: number;
     modelInputId?: string;
+    referenceData?: string;
   } = {}) => {
     const profileTools = profile.tools || roundTools;
     const profileInstructions = profile.instructions || roundScopeInstructions;
@@ -301,7 +304,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const profileModelInputId = profile.modelInputId || modelInputId;
     const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
     const baseComposition = composeModelHistory(
-      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled,
+      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData,
     );
     const baseMeasurement = await measureProfileInput(baseComposition.history);
     const historyMeasurement = config.contextManagementMode !== "legacy" && options.preProjectionHistory
@@ -346,7 +349,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
     let composition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config,
-      [...profileInstructions, metadata], noteEnabled,
+      [...profileInstructions, metadata], noteEnabled, profile.referenceData,
     );
     let measurement = await measureProfileInput(composition.history);
     const finalProjection = inputAvailability.projectInputAvailability(
@@ -359,7 +362,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       metadata = finalMetadata;
       composition = composeModelHistory(
         sourceHistory, noteEnabled ? getNote() : null, config,
-        [...profileInstructions, metadata], noteEnabled,
+        [...profileInstructions, metadata], noteEnabled, profile.referenceData,
       );
       measurement = await measureProfileInput(composition.history);
     }
@@ -389,15 +392,17 @@ export class ContextManager {
    * Admission reuses the exact assembler and shared broker; it never compacts
    * evidence, changes output limits, or creates a second execution gate. */
   async addOptionalReferences(base: AssembledInput,
-    candidates: ReadonlyArray<{ ids: readonly string[]; instruction: string }>,
-    assemble: (instruction: string) => Promise<AssembledInput>,
+    candidates: ReadonlyArray<{ ids: readonly string[]; instruction: string; referenceData?: string; dataIds?: readonly string[] }>,
+    assemble: (instruction: string, referenceData?: string) => Promise<AssembledInput>,
     options: { maxAddedTokens: number; hasReadTools: boolean; minimumReadTokens: number; guardAbort: () => void }) {
     const requestedIds = candidates[0]?.ids || [];
+    const requestedDataIds = candidates[0]?.dataIds || [];
     let reason = "no_candidates";
     let attempts = 0;
-    const result = (assembled: AssembledInput, selectedIds: readonly string[] = [], addedTokens = 0) => ({
+    const result = (assembled: AssembledInput, selectedIds: readonly string[] = [], addedTokens = 0, selectedDataIds: readonly string[] = []) => ({
       assembled,
       telemetry: { requestedIds, selectedIds, omittedIds: requestedIds.filter(id => !selectedIds.includes(id)),
+        requestedDataIds, selectedDataIds, omittedDataIds: requestedDataIds.filter(id => !selectedDataIds.includes(id)),
         reason, attempts, addedTokens, baseInputTokens: base.measurement.inputTokens,
         finalInputTokens: assembled.measurement.inputTokens },
     });
@@ -420,7 +425,7 @@ export class ContextManager {
       let input: AssembledInput;
       try {
         attempts++;
-        input = await assemble(candidate.instruction);
+        input = await assemble(candidate.instruction, candidate.referenceData);
       } catch {
         options.guardAbort();
         reason = "assembly_failed";
@@ -440,7 +445,7 @@ export class ContextManager {
         continue;
       }
       reason = "included";
-      return result(input, candidate.ids, addedTokens);
+      return result(input, candidate.ids, addedTokens, candidate.dataIds);
     }
     return result(base);
   }

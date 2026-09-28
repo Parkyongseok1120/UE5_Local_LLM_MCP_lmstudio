@@ -1,0 +1,15 @@
+✔ focused observations reach the next measured round without altering approval or persisting derived data (57.3766ms)
+✔ focused off skips new analysis and candidate admission (2.6703ms)
+✔ focused observe skips new analysis and candidate admission (1.9517ms)
+✔ focused zero skips new analysis and candidate admission (1.9986ms)
+✔ focused final delivery omits references and makes no extra model call (3.6928ms)
+✔ documents follows its explicit reasoning recovery reference policy (4.2182ms)
+✔ focused follows its explicit reasoning recovery reference policy (2.8378ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 329.7562

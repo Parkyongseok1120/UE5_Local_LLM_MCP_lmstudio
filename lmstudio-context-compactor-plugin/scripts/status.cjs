@@ -7,6 +7,8 @@ const path = require("node:path");
 const DIRECT_SOURCE_FILES = Object.freeze([
   "src/budget-broker.ts",
   "src/design-guidance.ts",
+  "src/reference-context.ts",
+  "src/reference-rendering.ts",
   "src/generated-design-guidance.ts",
   "src/checkpoint-budget.js",
   "src/round-input.ts",

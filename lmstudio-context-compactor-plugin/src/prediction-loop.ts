@@ -88,7 +88,10 @@ export function createPredictionLoopHandler(
     const attachmentContext = config.observeOnly
       ? { tools: [], instruction: "", attachmentCount: 0 }
       : createAttachmentContext(cleanAttachmentHistory, client);
-    const guidanceDocuments = config.observeOnly ? [] : selectDesignGuidance(config.designGuidanceMode, scope);
+    const focusedReferences = !config.observeOnly && config.designGuidanceMode !== "off"
+      && config.designGuidanceMaxTokens > 0 && config.designGuidanceDelivery === "focused";
+    const guidanceDocuments = config.observeOnly || config.designGuidanceMaxTokens <= 0
+      || config.designGuidanceDelivery === "focused" ? [] : selectDesignGuidance(config.designGuidanceMode, scope);
     const scopedRemoteTools = config.observeOnly
       ? toolSession.tools as Array<ScopedTool>
       : filterToolsForScope(toolSession.tools as Array<ScopedTool>, scope);
@@ -311,6 +314,8 @@ export function createPredictionLoopHandler(
           objectiveFingerprint, finalizing, boundedAudit, researchRecoveryEpisodeStarted,
           reasoningRecovery: reasoningRecoveryRound,
           guidanceDocuments,
+          guidanceScope: focusedReferences ? scope : undefined,
+          referenceRecovery: researchRecoveryRound || reasoningRecoveryRound,
           finalizationTrigger: execution.finalizationTrigger,
           projectionApplied, executionId, modelInputId, roundIndex,
         });
@@ -614,6 +619,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         toolGeneration.finishPending();
         const roundModelElapsedMs = Date.now() - roundModelStartedAt;
         evidenceManager.captureReturned(captured.messages, executionId);
+        if (focusedReferences) evidenceManager.ingestReferences(captured.messages, scope, executionId);
         for (const result of captured.messages.flatMap(message => message.getToolCallResults())) {
           const id = reservationIds.get(String(result.toolCallId));
           if (id) batchReservation?.settle(id, "returned");
