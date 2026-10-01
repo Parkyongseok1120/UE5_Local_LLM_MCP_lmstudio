@@ -1,0 +1,266 @@
+{
+  "mode": "architecture",
+  "scope": {
+    "date": "2026-10-01",
+    "timezone": "Asia/Seoul",
+    "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio",
+    "baselineCommit": "6a0e9b7",
+    "change": "planning_documents_only",
+    "implementation": false,
+    "modelInvoked": false,
+    "runtimeTestsRun": false,
+    "plan": "docs/Auto_Design_References_Plan_20261001.md"
+  },
+  "claims": [
+    {
+      "id": "A01",
+      "claim": "현재 참고 설정은 Off/documents가 기본이며 명시 Auto 선택은 아직 존재하지 않는다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/direct-config.ts:35", "observation": "designGuidanceMode 옵션과 기본 off, delivery 기본 documents, allowance 기본 2048을 선언한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:27", "observation": "현재 명시 6주제만 수용하며 그 외 값은 off로 정규화한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/direct-config.ts:6", "observation": "projectEngine에는 별도 auto가 있지만 참고 주제 Auto와 다른 책임이다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["설치된 LM Studio GUI의 실제 설정은 이번 요청에서 확인하지 않았다."]
+    },
+    {
+      "id": "A02",
+      "claim": "기존 focused selector는 명시된 주제 안에서 관측 신호로 절을 정렬하며 실행을 제어하지 않는다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:81", "observation": "applicable는 topics.includes(mode)와 core를 허용하고 scope/version/package/requires를 확인한 후보를 만든다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs:43", "observation": "정의된 테스트는 진단이 design을 debugging으로 전환하지 않음을 기대한다. 이번 요청에서 실행한 결과는 아니다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:113", "observation": "관측 신호에 맞는 절이 우선되므로 여러 주제를 단순히 합치면 기존 정렬만으로 주요/보조 책임을 보존하지 못할 수 있다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["새 Auto의 실제 입력/모델 동작은 미구현이다."]
+    },
+    {
+      "id": "A03",
+      "claim": "기존 사용자 목적 helper와 fingerprint를 재사용할 수 있지만 완전한 자연어 목적 판정이나 잘린 문맥의 복원을 제공하지는 않는다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-objectives.js:94", "observation": "buildObjectiveContinuity는 사용자 메시지와 looksElliptical 규칙으로 activeObjective/antecedent를 반환한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-objectives.js:27", "observation": "목적 텍스트는 retainedUserText로 4000자 제한을 적용한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:154", "observation": "objectiveFingerprint도 기존 buildObjectiveContinuity의 activeObjective를 사용한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-text.js:58", "observation": "짧은 계속 요청 판정은 정규식이므로 모든 목표 교체/연결을 의미적으로 증명하지 않는다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["실제 host에서 압축 뒤 전달되는 사용자 목적의 완전성은 runtime 확인이 필요하다."]
+    },
+    {
+      "id": "A04",
+      "claim": "현재 참고 관측은 실행별 EvidenceManager가 보유하고 기존 프로젝트/provider/session 경계와 크기 제한을 적용한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:38", "observation": "referenceState는 manager 인스턴스의 private 필드이고 ingestReferences/referenceSnapshot이 기존 모듈을 호출한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:115", "observation": "각 handler 실행에서 새로운 EvidenceManager를 만든다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:237", "observation": "유일한 request/result, provider, scope, provenProject와 session, file 변경을 확인한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:11", "observation": "observations 16, sections 6, candidates 4 등 기존 상한을 선언한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:262", "observation": "현재 mixed scope는 engine equality 조건 때문에 엔진 관측을 그대로 수집하지 않는다. Auto에서 범위를 확대하면 계약 변경이다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["세션/병행 호출의 실제 runtime 동작은 이번 계획에서 실행 확인하지 않았다."]
+    },
+    {
+      "id": "A05",
+      "claim": "diagnostic_present는 실패/원인을 증명하지 않으며 보조 주제의 현재성은 원래 관측 의미와 최신성을 확인해야 한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:329", "observation": "표시할 diagnostics가 있으면 diagnostic_present를 추가하며 실패 여부를 조건으로 삼지 않는다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:175", "observation": "Unity compiler 관측은 compilationId/session, observedOutcome과 부분 coverage를 별도로 보유한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:340", "observation": "더 늦은 runtime 관측으로 이전 pending/accepted의 현재성을 제한하지만 진단의 모든 현재성 관계를 Auto 정책으로 보장하지는 않는다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:318", "observation": "동일 groupKey의 오래된 진단은 이미 snapshot에서 제외한다. 모든 과거 진단이 항상 남는다는 결론은 아니다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["추가 최신성 필드의 필요 여부와 최소 형태는 구현 fixture에서 결정할 계획이다."]
+    },
+    {
+      "id": "A06",
+      "claim": "참고 삽입은 기존 라운드 조립과 정확 예산 채택 경계를 재사용할 수 있다.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/round-input.ts:199", "observation": "기준 입력 조립 뒤 focused/documents 후보를 생성해 addOptionalReferences에 전달한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:394", "observation": "기준 입력, 정확 측정, watermark, maxAddedTokens로 후보를 채택하고 실패 시 기준 입력을 유지한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:309", "observation": "prepareRoundInput 결과가 실행 라운드의 modelInput으로 이어진다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/round-input.ts:202", "observation": "최종 보고와 focused 복구 라운드에서는 참고를 새로 넣지 않는다."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/round-input.ts:39", "symbol": "prepareRoundInput"},
+        {"stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/round-input.ts:202", "symbol": "참고 활성/단계 조건과 후보 생성"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:394", "symbol": "ContextManager.addOptionalReferences"},
+        {"stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/round-input.ts:212", "symbol": "채택된 assembledInput과 기존 telemetry"}
+      ],
+      "unknowns": ["Auto 후보를 실제 입력으로 전달하는 신규 연결은 미구현이다."]
+    },
+    {
+      "id": "A07",
+      "claim": "현재 하네스에는 이미 조건부 Hybrid 요약 모델 호출이 있으며 Auto의 추가 호출 금지와 구분해야 한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:69", "observation": "tokenSource.act(input, [])를 호출하며 빈 도구 목록과 출력/시간 상한을 적용한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:133", "observation": "hybrid/compacted와 중복/cooldown/phase 조건으로 요약을 실행한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:81", "observation": "참고 selector는 순수 후보 생성이며 자체 모델 호출은 없다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["GUI 실제 contextManagementMode와 요약 실행 횟수는 확인하지 않았다."]
+    },
+    {
+      "id": "A08",
+      "claim": "신규 소스/테스트를 명시된 테스트 실행 및 설치 패키지 목록에 연결해야 한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/package.json:17", "observation": "npm test는 개별 테스트 파일을 명시한다."},
+        {"kind": "project_source", "location": "scripts/build_integrated_package.py:546", "observation": "기존 guidance 소스와 테스트를 REQUIRED_RUNTIME_FILES에 명시한다."},
+        {"kind": "project_source", "location": "tests/test_integrated_package.py:345", "observation": "bundle에 rebuild source/test/정본을 포함하는지 검사한다."},
+        {"kind": "project_source", "location": ".github/workflows/ci.yml:310", "observation": "Context Compactor job은 플랫폼별 npm test를 실행한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/scripts/status.cjs:7", "observation": "DIRECT_SOURCE_FILES는 설치 상태 확인에 필요한 소스를 명시한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/test/status.test.cjs:20", "observation": "status 테스트는 명시 소스 목록과 src ts/js 파일 목록의 일치를 검사한다."},
+        {"kind": "project_source", "location": "scripts/build_integrated_package.py:661", "observation": "portable 파일 허용 목록은 REQUIRED_RUNTIME_FILES와 명시 내용 목록으로 구성한다."}
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [],
+      "unknowns": ["이번 계획 작성 중 GitHub CI나 plugin build/test는 실행하지 않았다."]
+    },
+    {
+      "id": "P01",
+      "claim": "Auto를 명시 모드의 순수 주제 선택으로 제한하고 기존 근거/예산/실행 담당자를 재사용하는 다중 파일 변경을 제안한다.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {"kind": "requirement", "location": "user_request:2026-10-01", "observation": "사용자는 Auto 계획을 요청하며 하네스가 모델 판단을 가져가거나 추가 서브 에이전트가 되는 것을 우려했다."},
+        {"kind": "project_source", "location": "docs/Auto_Design_References_Plan_20261001.md", "observation": "설정 행렬, 목적 provenance, 주요/보조 역할, 단계/수명, 최소 변경, T01-T40을 제안한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-text.js:58", "observation": "기존 목적 판정도 문장 규칙이며 범용 자연어 이해가 아니다. Auto 주제 선택 정확성을 보장할 수 없다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["Auto는 미구현이다.", "구현 fixture·실제 LM Studio 입력·모델 행동은 후속 확인이 필요하다."]
+    }
+  ],
+  "existing": [
+    "기존 사용자 목적 continuity와 objectiveFingerprint",
+    "ToolScope 프로젝트/엔진 범위",
+    "EvidenceManager/reference-context의 실행 관측과 유효성",
+    "Markdown/catalogue 및 기존 절 selector/동반 절/적용 조건",
+    "ContextManager/BudgetBroker의 정확 측정과 참고 채택",
+    "prediction/tool/recovery/취소/최종화 경계",
+    "기존 조건부 Hybrid 요약 추론",
+    "명시 테스트 목록·통합 package·CI"
+  ],
+  "proposed": [
+    "명시 Auto 값과 effective focused delivery",
+    "기존 사용자 목적의 읽기 전용 결과를 쓰는 제한된 순수 주제 selector",
+    "주요 주제 1개와 debugging 보조 1개의 기존 절 조합",
+    "기존 관측 담당자가 파생하는 Auto용 autoSignals 가산 정보; 기존 items/signals 유지",
+    "실행 시작/일반 라운드 두 경계의 연결",
+    "선택과 실제 포함을 구분하는 기존 telemetry 확장",
+    "호환/수명/권한/예산/호출/패키지 검증 및 GUI 설명"
+  ],
+  "doNotDuplicate": [
+    "사용자 목적/계속 요청/목표 fingerprint 소유자",
+    "프로젝트/엔진 탐지와 도구 권한",
+    "근거 archive/provider/session/file 버전 원장",
+    "버전/패키지 적용 조건과 동반 절 closure",
+    "공유 예산·출력 예약·입력 측정",
+    "prediction/retry/recovery/finalization/취소 상태 머신",
+    "Hybrid 요약과 note/checkpoint 저장 형식",
+    "모델을 대신하는 설계 판정기/자체 agent/영구 사실 DB"
+  ],
+  "invariants": [
+    "기본 Off, 기존 manual/Documents/Focused 동작 유지",
+    "Auto는 토픽 ID/선택 이유만 반환하고 원인/수정/도구/완료를 판정하지 않음",
+    "Auto가 추가 모델/도구/파일 scan/polling/정적 검사 gate를 실행하지 않음",
+    "주요 사용자 목적은 같은 실행의 오류/assistant 요약으로 바뀌지 않음",
+    "외부 자료와 선택 이유를 system 사실/실행 증거로 승격하지 않음",
+    "참고가 예산에 맞지 않으면 기준 입력/원문/출력 예약 유지",
+    "새 영구 설정 이전/프로젝트 상태/실행 타이머 없음",
+    "기존 Hybrid 추론 존재를 Auto 비용과 구분"
+  ],
+  "impactedSurfaces": [
+    "설정 mode/topic/effective delivery 타입과 GUI 설명",
+    "새 guidance-topic-selection.ts와 기존 design-guidance 내부 재사용",
+    "prediction-loop/round-input의 활성/단계/입력 연결",
+    "필요시 context-ports objective 타입 및 reference-context 최신성 가산 정보",
+    "새 auto-guidance 테스트와 기존 guidance/reference/prediction 회귀",
+    "package.json 명시 테스트 목록",
+    "통합 package required files와 package tests",
+    "status DIRECT_SOURCE_FILES와 source inventory 테스트",
+    "plugin README 및 계획/근거 문서"
+  ],
+  "validationPlan": [
+    "이번 계획: 근거 JSON 형식, 링크/소스 위치, diff/인코딩 확인",
+    "구현 P0-P4: 계획 T01-T39의 설정/분류/진단/권한/예산/수명/실제 handler/패키지 검증",
+    "같은 관측·압축 사건 fixture에서 추가 act/도구 호출 종류가 없는지 확인",
+    "한국어/영어 정상 경로에 실제 주요/보조 절이 입력으로 전달되는지 확인",
+    "local build/전체 plugin 회귀 및 통합 package 검사",
+    "후속 P5: 작은 실제 사례 T40에서 SDK 입력 포함과 모델 행동을 따로 기록"
+  ],
+  "independentReview": {
+    "agent": "auto_reference_plan_review",
+    "mode": "read_only",
+    "proofLevel": "SourceVerified",
+    "implementationValidated": false,
+    "findingsIncorporated": [
+      "Auto 설정/parser/delivery 조합",
+      "사용자 목적과 이전 state의 기존 소유자",
+      "mixed 범위에서 관측이 제한되는 계약",
+      "진단과 원문의 가용성·마지막 관측·최신성 구분",
+      "Unreal association과 실제 버전 구분",
+      "최종 통합 후보 전체의 4개 상한",
+      "기존 Hybrid 추론과 Auto 추가 호출 구분",
+      "portable allowlist와 status 소스 목록 등록",
+      "prior 목적은 실제 사용자 원문과 비교할 수 없으면 core로 낮춤",
+      "6절 초과 시 관련 추가 pack부터 보조 pack 전체 순서로 제외",
+      "추가 절은 이미 선택한 두 주제 안으로 제한",
+      "인라인 기술 명칭 제외의 첫 버전 한계를 구체화"
+    ]
+  },
+  "unknowns": [
+    "자연어 규칙의 실제 오선택 빈도",
+    "주요/보조 참고 분량의 모델별 최적값",
+    "실제 LM Studio 입력/요약/도구 실행 결과",
+    "모델 코드 품질 개선의 크기"
+  ]
+}

@@ -1,0 +1,352 @@
+{
+  "mode": "architecture",
+  "scope": {
+    "date": "2026-10-01",
+    "timezone": "Asia/Seoul",
+    "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio",
+    "baselineCommit": "6a0e9b7",
+    "change": "planning_documents_only",
+    "implementation": false,
+    "modelInvoked": false,
+    "buildsRun": false,
+    "runtimeTestsRun": false,
+    "plan": "docs/Model_Behavior_Incident_Plan_20261001.md",
+    "limitations": [
+      "첨부 채팅의 여러 도구 카드에 실제 반환 본문이 없다. 모델의 결과 설명을 raw tool receipt로 간주하지 않았다.",
+      "서버 로그는 01:25:14–01:33:45 구간이며 전체 채팅과 사건을 일대일로 맞출 수 없다.",
+      "현재 게임 소스와 설치된 엔진은 로그 작성 이후 바뀌었을 수 있다.",
+      "당시 실제 모델 입력, 참고 본문 채택, Hybrid 실행, KV/V cache 설정은 확인하지 못했다."
+    ]
+  },
+  "claims": [
+    {
+      "id": "F01",
+      "claim": "모델의 최종 GameState/PlayerState 기능 수정 보고가 실제 확인된 변경과 불일치하고 이후 diff 확인에서 정정됐다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7366", "observation": "최종 보고는 GameState bMatchStarted/StartMatch 변경 완료를 주장한다. 이 첨부에서 해당 심볼의 최초 출현도 최종 보고다."},
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7367", "observation": "PlayerState SetLifeSpan(0.f) 제거를 완료로 주장한다."},
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameState.cpp:1", "observation": "현재 git diff는 자기 헤더와 Net/UnrealNetwork.h의 include 순서 교환뿐이며 현재 GameState에는 보고된 bMatchStarted/StartMatch가 없다."},
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:18", "observation": "현재 BeginPlay는 부모 호출뿐이고 diff는 include 순서 교환이다."},
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7629", "observation": "후속 diff 확인과 7636–7637줄 정정은 두 기능 수정 주장을 부정한다. 현재 독립 소스 확인과 일치한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:5139", "observation": "실제 include 순서 수정은 자기 헤더 첫 include 오류를 해결하는 변경이다. 아무것도 해결하지 않았다는 평가도 부정확하다."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7349", "symbol": "모델이 빌드 성공 후 전체 변경을 요약"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7366", "symbol": "최종 사용자 출력의 두 기능 완료 항목"},
+        {"stage": "observer", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7636", "symbol": "후속 diff 확인 및 보고 정정; 현재 독립 diff와 대조"}
+      ],
+      "unknowns": ["최초 보고를 생성한 내부 추론과 compactor 입력은 확인하지 못했다.", "누락된 mutation 반환 payload와 사건 이후 변경의 전부를 복원하지 않았다."]
+    },
+    {
+      "id": "F02",
+      "claim": "SetLifeSpan(0.f)가 즉시 또는 1초 뒤 파괴를 의미한다는 설명은 현재 설치된 UE 5.7.4 계약과 반대다.",
+      "claimType": "framework_semantics",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7529", "observation": "모델이 ULifetimeReplicatedObject::SetLifeSpan과 1초 후 파괴를 설명한다."},
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp:6514", "observation": "AActor::SetLifeSpan은 양수면 소멸 타이머를 설정하고 0 이하이면 기존 타이머를 해제한다."},
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2308", "observation": "0이면 타이머를 해제하고 actor는 파괴되지 않는다고 직접 명시한다."},
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Build/Build.version", "observation": "현재 설치 버전은 5.7.4, changelist 51494982다."}
+      ],
+      "counterEvidence": [
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp:6521", "observation": "다른 양수 lifespan이나 부모/Blueprint 경로에서 파괴가 발생할 수 있지만 0의 의미를 뒷받침하지 않는다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["현재 설치 버전이 당시 실제 실행 patch 버전과 같은지는 build payload 부재로 확인하지 못했다."]
+    },
+    {
+      "id": "F03",
+      "claim": "입력 API 이름·소유자·enum 전체와 버전 변경 역사에 관한 여러 설명은 직접 선언 근거와 불일치하거나 근거 범위를 넘는다.",
+      "claimType": "framework_semantics",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Plugins/EnhancedInput/Source/EnhancedInput/Public/InputActionValue.h:10", "observation": "EInputActionValueType과 Axis2D를 선언한다."},
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Plugins/EnhancedInput/Source/EnhancedInput/Public/EnhancedInputSubsystems.h:37", "observation": "UEnhancedInputLocalPlayerSubsystem이 AddMappingContext를 선언한다."},
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/Components/InputComponent.h:1020", "observation": "BindKey의 key event 인자는 EInputEvent다."},
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h:30", "observation": "EInputEvent에는 Pressed/Released 외 Repeat/DoubleClick/Axis가 있다."},
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:6094", "observation": "앞선 컴파일 타입 오류만으로 뒤 표현식 GetEnhancedInputUser가 컴파일됐다고 추정한다."},
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7226", "observation": "검색 결과 없음을 근거로 enum이 두 값만 있으며 Down/Up이 제거됐다고 추정한다. 7370줄의 변경 역사 보고도 이전 버전 직접 근거가 없다."}
+      ],
+      "counterEvidence": [
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7212", "observation": "모델은 후반에 소비 API와 EInputEvent를 찾아 잘못된 이름을 고쳤다. 조회 자체가 전혀 불가능했던 사례는 아니다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["17개의 visible build card 각각의 반환·작업시간은 export에서 검증하지 못했다.", "개별 RAG 실패의 원인이 stale index/budget/coverage 중 무엇인지 raw payload 부재로 단정하지 않았다."]
+    },
+    {
+      "id": "F04",
+      "claim": "현재 게임 입력에는 바인딩과 실제 mapping/시작·종료 연결을 별도로 확인해야 할 누락 후보가 있다.",
+      "claimType": "wiring",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P1",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:59", "observation": "legacy axis는 MoveForward/MoveRight/Turn/LookUp에 바인딩되지만 Source/Config에서 해당 이름의 키 mapping 등록을 찾지 못했다."},
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Config/DefaultInput.ini:1", "observation": "전체 84줄에 AxisConfig는 있으나 AxisMappings가 없다."},
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/UserInterface/PlayerInput.cpp:1173", "observation": "named axis의 mapping이 없을 때 DetermineAxisValue는 기본 0을 반환하는 경로다."},
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp:16", "observation": "SetupEnhancedInput은 cast와 ready 로그뿐이다. Source에서 CombatMappingContext 사용/AddMappingContext를 찾지 못했다."},
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:65", "observation": "legacy LMB에는 Pressed만 등록되고 ShootReleased가 연결되지 않는다. 할당된 full-auto 무기 조건에서 놓음→반복 중단 연결이 없다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:79", "observation": "CurrentWeapon null이면 full-auto Tick 조건이 false다. Enhanced 경로에는 ShootReleased가 바인딩돼 있다."},
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Config/DefaultInput.ini:77", "observation": "별도 Blueprint·에디터·사용자 설정·런타임 등록이 mapping을 제공할 수 있다. 실제 이 경로는 확인하지 못했다."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:41", "symbol": "SetupPlayerInputComponent"},
+        {"stage": "decision", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:44", "symbol": "action 존재 조건으로 Enhanced/legacy 경로 선택"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:59", "symbol": "BindAxis/BindKey"},
+        {"stage": "mutation", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:96", "symbol": "ShootPressed callback은 bWantsToFire를 true로 설정"},
+        {"stage": "side_effect", "stageStatus": "expected_missing", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:65", "symbol": "legacy의 버튼 놓음→ShootReleased 연결"},
+        {"stage": "observer", "stageStatus": "unknown", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Config/DefaultInput.ini", "symbol": "실제 PIE mapping·버튼 놓음 후 사격 상태"}
+      ],
+      "unknowns": ["PIE·에셋·외부 설정과 원격 입력을 실행 확인하지 않았다."]
+    },
+    {
+      "id": "F05",
+      "claim": "현재 게임의 예약·종료·재진입·실패 복구 경로는 수명 지침에 사용할 구체적 검토 사례를 제공한다.",
+      "claimType": "state_transition",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:99", "observation": "플레이어별 예약에 하나의 RespawnTimerHandle을 재사용하며 람다에 raw this/Controller를 캡처한다."},
+        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Public/TimerManager.h:150", "observation": "같은 유효 timer handle을 재사용하면 기존 timer를 교체하는 계약이다."},
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:110", "observation": "spawn/possess 성공 전에 ResetForRespawn한다. 이전 Pawn 폐기·실패 상태 복구는 해당 경로에서 찾지 못했다."},
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:140", "observation": "dead 상태의 재호출도 Die를 다시 부를 수 있고 개인 킬/예약 전에 중복·매치 종료를 거르는 경로가 없다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Public/LatencyMultiCombatGameState.h:43", "observation": "팀 점수 증가에는 bMatchEnded 방어가 이미 있다."},
+        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:24", "observation": "현재 PostLogin은 팀을 배정한다. 초기 로그의 연결이 전혀 없다는 진단을 현재 사실로 사용하지 않았다."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:70", "symbol": "HandlePlayerDeath"},
+        {"stage": "decision", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:96", "symbol": "Controller의 존재 확인"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:99", "symbol": "동일 handle timer와 RespawnPlayer callback"},
+        {"stage": "observer", "stageStatus": "unknown", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:103", "symbol": "연속 사망·퇴장·spawn 실패의 실제 경기 결과"}
+      ],
+      "unknowns": ["실제 경기·크래시·원격 클라이언트에서 확인하지 않았다. 이번 계획은 게임 구현 수정으로 확대하지 않는다."]
+    },
+    {
+      "id": "A01",
+      "claim": "현재 파일 변경 관찰·모델 판단·도구 근거 담당자는 이미 분리되어 있으며 파일 변경 관찰은 semantic completion을 보증하지 않는다.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:314", "observation": "성공 교체 반환은 operation/path/occurrences/전후hash/snapshot이며 변경 hunk나 기능 목적은 없다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:123", "observation": "fileObservation은 프로젝트·path·hash·범위·fresh_read_required 상태를 유지한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-memory.js:249", "observation": "기존 파일 관찰 병합으로 최대64개를 유지한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:303", "observation": "이전 assistant 판단은 verified semantic completion이 아니며 최신 도구 관찰이 우선한다고 설명한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-rendering.ts:7", "observation": "파생 자료는 fresh read/권한/인과 증명/완료 작업이 아니라고 명시한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:227", "observation": "완료 도구 ref 존재를 확인하는 경로는 있다. ref가 주장의 진실까지 확인하는 것은 아니다."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:314", "symbol": "실제 mutation success 반환"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:769", "symbol": "파일 관찰 사실 추출"},
+        {"stage": "mutation", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/continuity-memory.js:249", "symbol": "기존 work status 관찰 병합"},
+        {"stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:303", "symbol": "사실과 모델 판단의 별도 설명"}
+      ],
+      "unknowns": ["사건 당시 실제 입력에서 각 자료가 채택·보존됐는지는 미확인이다."]
+    },
+    {
+      "id": "A02",
+      "claim": "기존 모든 전문 절의 core/proof 의존성과 최소 focused 후보를 이용해 공통 검증 기준을 중복 없이 전달할 수 있다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "docs/model-guidance/catalog.json:21", "observation": "core/proof 외 전문 절은 core/proof를 requires한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:98", "observation": "선택 closure에 requires 절을 포함한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:126", "observation": "최소 축소 후보도 core/proof closure를 사용한다."},
+        {"kind": "project_source", "location": "docs/model-guidance/core.md", "observation": "현재 API 기준은 기억과 진단이 충돌할 때 확인하는 표현이고 proof는 소스/변경/빌드/실행 구분을 안내한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/round-input.ts:202", "observation": "최종화·복구 라운드에서는 참고를 넣지 않는다. budget/allowance/Off도 삽입을 제한한다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["본문 변경 후 실제 token 측정과 handler 연결 검증은 후속 구현 작업이다."]
+    },
+    {
+      "id": "A03",
+      "claim": "기존 targetResolution은 제한된 후보 식별 결과이며 receiver/부모/시그니처·전체 유일성 증명으로 확대할 수 없다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "scripts/target_resolver.py:183", "observation": "exact 종류에는 qualified/symbol/file stem/prefix 제거 문자열 일치가 포함된다."},
+        {"kind": "project_source", "location": "scripts/target_resolver.py:205", "observation": "expectedBaseType은 candidate token 점수 가산이고 직접 부모 관계 검증이 아니다."},
+        {"kind": "project_source", "location": "scripts/target_resolver.py:280", "observation": "read resolved는 실제 파일 존재 확인을 요구하지 않는다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_symbol.py:216", "observation": "top_k 제한된 rows를 기존 resolver에 전달하고 targetResolution을 반환한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "scripts/target_resolver.py:234", "observation": "유사 일치를 exact로 부르지 않고 모호한 근접 후보를 unresolved로 처리하는 방어가 이미 있다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["사건의 raw symbol 반환이 누락돼 모델이 어떤 기존 status/exact를 읽었는지는 미확인이다."]
+    },
+    {
+      "id": "A04",
+      "claim": "현재 engine header helper를 실도구에 연결하려면 plugin 범위·실제 읽기 상한·cache/coverage·관찰 owner 경계를 보완해야 한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "scripts/engine_header_evidence.py:70", "observation": "Engine/Source가 있으면 Plugins를 catalog root에 포함하지 않는다."},
+        {"kind": "project_source", "location": "scripts/engine_header_evidence.py:48", "observation": "catalog cache는 host/root 중심이고 버전·module 변화 identity는 없다."},
+        {"kind": "project_source", "location": "scripts/engine_header_evidence.py:278", "observation": "timeout/부분 탐색 결과가 empty/partial cache로 유지될 수 있다."},
+        {"kind": "project_source", "location": "scripts/engine_header_evidence.py:522", "observation": "read_text 뒤 slice하므로 max_header_chars는 실제 I/O 바이트 상한이 아니다."},
+        {"kind": "project_source", "location": "scripts/engine_header_evidence.py:386", "observation": "signature 추출은 파일 전체에서 함수 이름을 검색하며 547줄에서 요청 owner로 qualified 이름을 합성한다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_symbol.py:113", "observation": "현재 indexed capability는 index resolution/존재 실패에서 반환한다. helper import/call은 찾지 못했다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_evidence.py:131", "observation": "기존 fit은 top-level evidence를 줄인다. 별도 긴 header metadata는 그대로 넘치지 않게 assembly 예산에 포함해야 한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "scripts/engine_header_evidence.py:441", "observation": "helper는 bounded miss가 API 부재 증명이 아니라고 명시하고 개별 파일 containment도 확인한다."},
+        {"kind": "project_source", "location": "tests/test_engine_header_evidence_identity.py:11", "observation": "기존 helper identity 테스트를 재사용할 수 있다. 실도구의 realistic Source+Plugins 범위까지 증명하지는 않는다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["현재 설치 헤더에서 helper의 실제 성능/false positive를 실행 검사하지 않았다.", "source 밖 프로젝트 plugin은 별도 project containment 계약이다."]
+    },
+    {
+      "id": "A05",
+      "claim": "서버의 truncation/cache/schema/disconnect 기록만으로 완료 환각이나 API 오류의 단일 원인을 확정할 수 없다.",
+      "claimType": "behavior",
+      "verdict": "Ambiguous",
+      "severity": "P2",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1045", "observation": "첨부에는 slot launch/release 각13개, release 모두 truncated=0이 있다."},
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:101", "observation": "prompt state 10289.126 MiB가 cache 한도8192.000 MiB를 넘겨 skipping한 경고다."},
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1047", "observation": "unanchored pattern \\S 지원 제한으로 schema 변환이 불완전하다는 경고가 전체59줄에 나타난다."},
+        {"kind": "project_source", "location": "skills/evidence-first-code-audit/scripts/evidence_packet_contract.py:86", "observation": "현재 정본에도 동일한 unanchored nonempty pattern이 있다. 당시 설치 schema와 동일함은 아직 확인하지 못했다."}
+      ],
+      "counterEvidence": [
+        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1045", "observation": "백엔드 truncation 표시는 없다. 이 기록은 compactor의 의미 보존·지침 전달까지 보증하지 않는다."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:173", "symbol": "설치 compactor의 모델 요청 기록"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1045", "symbol": "관찰된 slot 처리 종료"},
+        {"stage": "observer", "stageStatus": "unknown", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7366", "symbol": "정확히 대응되는 입력/설정/요약으로부터 완료 환각이 발생한 인과경로"}
+      ],
+      "unknowns": ["당시 Q5_1/KV/V cache 설정은 첨부에 없다.", "disconnect 원인이 crash/앱/사용자 동작 중 무엇인지 미확인이다.", "공유 budget·compactor 투영·Hybrid·guidance 채택의 당시 기록이 없다."]
+    },
+    {
+      "id": "A06",
+      "claim": "workspace의 기본 5.8 인덱스만으로 사건의 5.7 프로젝트가 잘못된 index를 사용했다고 확정할 수 없다.",
+      "claimType": "data_flow",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "config/workspace.json", "observation": "현재 기본 engineVersion/indexNamespace는5.8/unreal58다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_index_registry.py:76", "observation": "선택 프로젝트 binding과 manifest 버전으로 matching index를 고른다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_project_engine.py:50", "observation": "숫자 association은 major/minor를 제공하지만 실제 root/patch 관찰은 아니다."},
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/direct-build-response.js:109", "observation": "빌드 결과는 실제 선택 root와 association/selectionReason을 별도로 반환한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "scripts/direct_rag_index_registry.py:132", "observation": "호환 sibling index를 선택했는지 usedSiblingIndex로 표현할 수 있다."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "scripts/direct_rag_symbol.py:113", "symbol": "project selector의 index resolution 요청"},
+        {"stage": "decision", "stageStatus": "present", "location": "scripts/direct_rag_index_registry.py:80", "symbol": "project와 manifest version/association 비교"},
+        {"stage": "observer", "stageStatus": "unknown", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:5316", "symbol": "사건 당시 raw symbol indexPath/engineVersion 반환"}
+      ],
+      "unknowns": ["당시 실제 index identity·선택 engine root·patch를 전체 payload로 확인하지 못했다."]
+    },
+    {
+      "id": "P01",
+      "claim": "기존 공통 기준·명시 도구·파일 관찰 수명을 보완한 뒤 Auto를 연결하는 다중 파일 변경을 제안한다.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {"kind": "requirement", "location": "user_request:2026-10-01", "observation": "사용자는 로그 분석과 계획을 먼저 요청하고 SSOT/SOLID·책임/계약/수명을 지키며 모델을 대신 판단하는 하네스를 우려했다."},
+        {"kind": "project_source", "location": "docs/Model_Behavior_Incident_Plan_20261001.md", "observation": "I0–I5, 변경A–C, 명시 local source 상한, mutation 근거 상한, V01–V18을 정의한다."},
+        {"kind": "project_source", "location": "docs/Auto_Design_References_Plan_20261001.md", "observation": "Auto는 주요1/보조1 주제 선택, 기존 예산과 관찰, T01–T40으로 제한하는 앞선 계획이다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:303", "observation": "기존 경계 문구가 이미 있지만 이번 보고 오류를 막았는지는 미확인이다. 지침 보강만으로 모델 행동 개선을 보장할 수 없다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["제품 소스 변경은 아직 하지 않았다.", "실제 token/byte/time 비용과 handler·LM Studio 모델 행동은 구현 후 확인이 필요하다."]
+    }
+  ],
+  "existing": [
+    "지침 Markdown/catalogue/generated bundle/selector/closure",
+    "Node/Python 엔진 resolver와 프로젝트/index binding",
+    "기존 targetResolution와 engine_header_evidence helper",
+    "Direct Agent mutation CAS/lock/snapshot/bundle commit/outcome",
+    "compaction file facts/continuity/EvidenceManager/reference context",
+    "assistant model notes의 status/id/supersedes 및 sanitizer",
+    "ContextManager/BudgetBroker와 기존 telemetry",
+    "prediction/tool/recovery/finalization/cancellation 경계",
+    "통합 package/source inventory/CI와 기존 회귀 테스트"
+  ],
+  "proposed": [
+    "core/proof의 짧은 API·수명·완료 근거 기준과 전문 절 사례 보강",
+    "기존 symbol 도구의 선택적 engine_local 조회와 실제 version/source/coverage 관찰",
+    "header helper의 plugin 범위·실제 비용·cache·owner 선언 영역 보완",
+    "실제 committed 전후 영역의 제한된 changeEvidence 반환",
+    "기존 파일 사실 경로의 versioned 근거 보존·생략·무효화",
+    "선택/채택/SDK 입력을 구분하는 기존 telemetry 연결",
+    "I1–I3 완료 뒤 기존 Auto 계획의 I4 연결"
+  ],
+  "doNotDuplicate": [
+    "사용자 목적/원래 계획/continuity parser의 기존 소유자",
+    "엔진·프로젝트 탐지/association/index 선택과 권한",
+    "targetResolution 후보 선택과 version 비교",
+    "도구 완료 짝·근거 원장·file/session identity·receipt/CAS",
+    "model notes와 supersedes 상태 머신",
+    "공유 budget/출력 예약/입력 측정/복구·취소 경계",
+    "별도 완료 DB·설계 판정기·추가 classifier LLM·자율 서브 에이전트",
+    "필수 static Validate·자동 API scan·자동 빌드 재시도"
+  ],
+  "invariants": [
+    "기본Off와 기존 권한/수동 delivery/receipt 계약 유지",
+    "유효한 참고 후보에 공통 기준을 포함하되 예산·단계상 생략을 허용",
+    "사실·요청 의도·이전 assistant 판단을 분리",
+    "실제 반환·committed 내용만 변경 관찰로 유지",
+    "보조 changeEvidence 계산/serialization 실패는 성공 commit의 outcome/hash/receipt를 뒤집지 않음",
+    "부분 헤더 fingerprint에는 hashScope/읽은 byte 범위/완전성을 표시하며 full-file hash로 승격하지 않음",
+    "다른 project/root/hash/engine identity의 근거를 합치지 않음",
+    "raw receipt/capability를 영속 메모에 보존하거나 재발급하지 않음",
+    "검색 실패/부분 진단/ready 로그/build success를 기능 완료로 승격하지 않음",
+    "local 조회는 모델의 명시 기존 도구 요청이며 전체 byte/time/result 상한을 지킴",
+    "Auto가 추가 act/tool/scan/gate/semantic completion 판정을 만들지 않음",
+    "게임 코드·LM Studio 설정 수정은 이번 계획 작성 범위 밖"
+  ],
+  "impactedSurfaces": [
+    "docs/model-guidance 정본/catalogue/sources와 generated guidance",
+    "scripts/direct_rag_contract.py/direct_rag_request_bounds.py/direct_rag_symbol.py/engine_header_evidence.py와 기존 engine binding",
+    "Direct Agent mutation/bundle 반환·engine 관찰과 관련 테스트",
+    "compactor tool facts/file observations/continuity/reference adapter/rendering/telemetry",
+    "기존 guidance/round-input/handler·수명·예산 테스트",
+    "Auto 명시 설정·selector·GUI 설명·T01–T40",
+    "통합 package 허용 목록/status source inventory/플랫폼CI"
+  ],
+  "validationPlan": [
+    "V01–V06: actual/failed/missing mutation 반환, partial/rollback, 보조 근거 계산 예외, hash/프로젝트 교체, 근거 생략, note 정정 경계",
+    "V07–V08: 모든 활성 후보의 공통 기준 및 Off/allowance/budget/복구/최종화 계약",
+    "V09–V14: index unavailable, real Source+Plugins, 잘못된 owner/동명 함수/상속, 실제 읽기·시간 한도, cache 무효화, 정확 root provenance",
+    "V15–V16: build target와 runtime 분리, 입력 시작/종료·mapping과 엔진별 lifecycle 지침 연결",
+    "V17–V18: Auto 전체 handler와 설치 bundle/source inventory/플랫폼 CI",
+    "모델 행동은 별도의 제한된 LM Studio 사례를 관찰한 뒤에만 개선됐다고 보고",
+    "이번 턴은 근거 JSON 형식·UTF8·참조 경로/줄과 planning-only git status만 검사"
+  ]
+}
