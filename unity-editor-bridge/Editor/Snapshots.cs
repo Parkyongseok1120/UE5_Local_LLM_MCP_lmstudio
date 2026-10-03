@@ -17,27 +17,45 @@ namespace EvidenceFirst.UnityBridge
             PathSafety.CheckInternal(RecordingPath);
             if (!File.Exists(RecordingPath)) return;
             if (new FileInfo(RecordingPath).Length > 16384) return;
-            recording = JObject.Parse(File.ReadAllText(RecordingPath)); samples = recording["snapshotIds"] as JArray ?? new JArray();
+            recording = JObject.Parse(File.ReadAllText(RecordingPath)); recording["origin"] = ResponseMetadata.Origin(recording); samples = recording["snapshotIds"] as JArray ?? new JArray();
             if ((string)recording["status"] == "recording") { recording["status"] = "stopped"; recording["reason"] = "domain_or_editor_ended"; }
-            SaveRecording();
+            TrySaveRecording();
         }
         static void SaveRecording() {
             var saved = (JObject)recording.DeepClone(); saved.Remove("selection"); saved["snapshotIds"] = samples.DeepClone();
+            saved.Remove("metadataPersistence");
             PathSafety.WritePrivate(RecordingPath, saved.ToString(Formatting.None));
+        }
+        static void TrySaveRecording()
+        {
+            try { SaveRecording(); recording.Remove("metadataPersistence"); }
+            catch
+            {
+                // The in-memory transition has happened. Stop future sampling
+                // on metadata loss and report its real state without throwing
+                // through Pump as a misleading not_applied response.
+                if ((string)recording["status"] == "recording") {
+                    recording["status"] = "stopped"; recording["reason"] = "record_metadata_write_failed";
+                }
+                recording["metadataPersistence"] = new JObject {
+                    ["status"] = "unavailable", ["errorCode"] = "record_metadata_write_failed",
+                    ["message"] = "Current recording state is retained in memory; the durable metadata may be older. Retained snapshot IDs remain valid."
+                };
+            }
         }
         internal static void Tick()
         {
             if (recording == null || (string)recording["status"] != "recording") return;
-            if ((string)recording["playSessionId"] != Bridge.PlaySession || (int)recording["domainGeneration"] != Bridge.Generation) { recording["status"] = "stopped"; recording["reason"] = "session_changed"; SaveRecording(); return; }
-            if (EditorApplication.timeSinceStartup >= until || Time.frameCount > endFrame || samples.Count >= maxSamples) { recording["status"] = "stopped"; recording["reason"] = "configured_limit"; SaveRecording(); return; }
+            if ((string)recording["playSessionId"] != Bridge.PlaySession || (int)recording["domainGeneration"] != Bridge.Generation) { recording["status"] = "stopped"; recording["reason"] = "session_changed"; TrySaveRecording(); return; }
+            if (EditorApplication.timeSinceStartup >= until || Time.frameCount > endFrame || samples.Count >= maxSamples) { recording["status"] = "stopped"; recording["reason"] = "configured_limit"; TrySaveRecording(); return; }
             if (EditorApplication.timeSinceStartup < next) return;
             next = EditorApplication.timeSinceStartup + (int)recording["intervalMs"] / 1000.0;
             try {
                 var sample = CaptureData((JObject)recording["selection"]); int size = System.Text.Encoding.UTF8.GetByteCount(sample.ToString(Formatting.None));
-                if (bytes + size > maxBytes) { recording["status"] = "stopped"; recording["reason"] = "byte_limit"; SaveRecording(); return; }
+                if (bytes + size > maxBytes) { recording["status"] = "stopped"; recording["reason"] = "byte_limit"; TrySaveRecording(); return; }
                 samples.Add(Store.Put(sample)); bytes += size; recording["sampleCount"] = samples.Count; recording["bytes"] = bytes;
             } catch (Exception e) { recording["status"] = "stopped"; recording["reason"] = e is BridgeException b ? b.Code : "capture_failed"; }
-            try { SaveRecording(); } catch { recording["status"] = "stopped"; recording["reason"] = "record_metadata_write_failed"; }
+            TrySaveRecording();
         }
         internal static JObject Call(JObject args)
         {
@@ -49,7 +67,7 @@ namespace EvidenceFirst.UnityBridge
                 // retained and can be paged separately with read(section=...).
                 int budget = Math.Min((int?)args["byteBudget"] ?? 65536, 60000) - 384;
                 if (System.Text.Encoding.UTF8.GetByteCount(result.ToString(Formatting.None)) > budget)
-                    return new JObject { ["status"] = "stored", ["snapshotId"] = id, ["targetCount"] = ((JArray)data["objects"]).Count,
+                    return new JObject { ["status"] = "stored", ["snapshotId"] = id, ["origin"] = data["origin"]?.DeepClone(), ["targetCount"] = ((JArray)data["objects"]).Count,
                         ["metadataOmitted"] = true, ["metadataRead"] = "read with section or targetIndex", ["atomic"] = false };
                 return result;
             }
@@ -60,9 +78,9 @@ namespace EvidenceFirst.UnityBridge
                     string section = (string)args["section"];
                     var rows = section == "scope" ? ((JArray)s["scope"]).OfType<JObject>().ToList() : section == "failures" ? ((JArray)s["objects"]).OfType<JObject>().Where(o => (string)o["state"] != "collected").ToList() :
                         section == "metadata" ? s.Properties().Where(p => p.Name != "objects" && p.Name != "scope" && p.Name != "scopeStates").Select(p => new JObject { ["name"] = p.Name, ["value"] = p.Value.DeepClone() }).ToList() : throw new BridgeException("invalid_arguments", "Unknown snapshot section");
-                    var page = Objects.Page(rows, args, (string)s["id"] + section); page["snapshotId"] = s["id"]; return page;
+                    var page = Objects.Page(rows, args, (string)s["id"] + section); page["snapshotId"] = s["id"]; page["origin"] = s["origin"]?.DeepClone(); return page;
                 }
-                var result = args["targetIndex"] != null ? new JObject { ["status"] = "stored", ["snapshotId"] = s["id"], ["editorSessionId"] = s["editorSessionId"], ["playSessionId"] = s["playSessionId"], ["atomic"] = false } : Metadata(s, (string)s["id"]);
+                var result = args["targetIndex"] != null ? new JObject { ["status"] = "stored", ["snapshotId"] = s["id"], ["origin"] = s["origin"]?.DeepClone(), ["editorSessionId"] = s["editorSessionId"], ["playSessionId"] = s["playSessionId"], ["atomic"] = false } : Metadata(s, (string)s["id"]);
                 if (args["targetIndex"] != null) {
                     int i = (int)args["targetIndex"]; var targets = (JArray)s["objects"]; if (i < 0 || i >= targets.Count) throw new BridgeException("invalid_target_index", "Outside stored scope");
                     var row = (JObject)targets[i]; result["target"] = row["target"]; result["state"] = row["state"];
@@ -78,14 +96,14 @@ namespace EvidenceFirst.UnityBridge
                 maxSamples = (int?)args["maxSamples"] ?? 0; maxBytes = (int?)args["maxBytes"] ?? 0;
                 if (ms < 1 || ms > 60000 || frames < 1 || frames > 3600 || interval < 50 || interval > 60000 || maxSamples < 1 || maxSamples > 32 || maxBytes < 1024 || maxBytes > 4194304) throw new BridgeException("invalid_bounds", "All explicit recording bounds are required");
                 ValidateSelection(args); samples = new JArray(); bytes = 0; until = EditorApplication.timeSinceStartup + ms / 1000.0; next = 0; endFrame = Time.frameCount + frames;
-                recording = new JObject { ["recordingId"] = Guid.NewGuid().ToString("N"), ["status"] = "recording", ["playSessionId"] = Bridge.PlaySession, ["domainGeneration"] = Bridge.Generation,
+                recording = new JObject { ["recordingId"] = Guid.NewGuid().ToString("N"), ["status"] = "recording", ["origin"] = Bridge.CurrentOrigin(), ["playSessionId"] = Bridge.PlaySession, ["domainGeneration"] = Bridge.Generation,
                     ["selection"] = args.DeepClone(), ["intervalMs"] = interval, ["sampleCount"] = 0, ["bytes"] = 0, ["startedAt"] = DateTime.UtcNow.ToString("O"), ["maxDurationMs"] = ms, ["maxFrames"] = frames };
-                SaveRecording(); return RecordingStatus();
+                TrySaveRecording(); return RecordingStatus();
             }
             if (action == "record_status" || action == "record_stop") {
                 if (recording == null || (string)args["recordingId"] != (string)recording["recordingId"]) throw new BridgeException("recording_unavailable", "Only the latest recording metadata is retained; explicitly retained snapshot IDs remain readable");
                 if (action == "record_stop") { recording["status"] = "stopped"; recording["reason"] = "explicit_stop"; }
-                SaveRecording(); return RecordingStatus();
+                TrySaveRecording(); return RecordingStatus();
             }
             throw new BridgeException("invalid_arguments", "Unknown snapshot action");
         }
@@ -169,7 +187,11 @@ namespace EvidenceFirst.UnityBridge
                     Change(kind, p, f, g);
                 }
             }
-            var result = Objects.Page(changes, args, (string)a["id"] + (string)b["id"]); result["a"] = a["id"]; result["b"] = b["id"]; result["causation"] = "not_inferred"; result["matching"] = "exact ObjectRefs only; explicit target membership only"; return result;
+            var result = Objects.Page(changes, args, (string)a["id"] + (string)b["id"]);
+            result["a"] = a["id"]; result["b"] = b["id"];
+            result["origin"] = new JObject { ["schemaVersion"] = 1, ["state"] = "derived_from_retained_snapshots",
+                ["a"] = ResponseMetadata.Origin(a), ["b"] = ResponseMetadata.Origin(b) };
+            result["causation"] = "not_inferred"; result["matching"] = "exact ObjectRefs only; explicit target membership only"; return result;
         }
     }
 }

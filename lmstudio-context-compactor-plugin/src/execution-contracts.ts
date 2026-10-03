@@ -23,6 +23,7 @@ export type NormalizedMessage = {
 };
 
 export type CheckpointResult = {
+  changeDataCheckpoint?: string;
   checkpoint: string;
   assistantCheckpoint: string;
   retainedIndexes: Array<number>;

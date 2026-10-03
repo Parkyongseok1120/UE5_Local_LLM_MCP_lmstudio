@@ -32,6 +32,8 @@ SEARCH_LIST_LIMITS = {
     )
 }
 SYMBOL_STRING_LIMITS = {
+    "sourceMode": 16,
+    "owner": 128,
     "query": MAX_QUERY_CHARS,
     "symbol_kind": MAX_SYMBOL_HINT_CHARS,
     "expectedBaseType": MAX_SYMBOL_HINT_CHARS,

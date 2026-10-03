@@ -6,6 +6,8 @@ venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+# Local audit logs, reproductions, and temporary test/package fixtures.
+/artifacts/
 *.sqlite
 config/workspace.json
 config/workspace.local.json

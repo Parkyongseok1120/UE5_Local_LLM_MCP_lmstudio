@@ -18,7 +18,7 @@ from direct_rag_limits import detail_limits, next_detail
 from direct_rag_request_bounds import rag_request_bound_error
 from direct_rag_index_registry import resolve_request_index
 from direct_rag_retrieval import retrieve
-from direct_rag_selection import project_selectors
+from direct_rag_selection import effective_search_filters, project_selectors
 from rag_modes import MODE_ENUM
 from workspace_paths import resolve_active_project_path
 
@@ -160,6 +160,7 @@ def rag_search(
     active_project = resolve_active_project_path(getattr(runtime, "workspace", None))
     active = str(active_project or "")
     repeat_receipt = str(arguments.get("repeatReceipt") or "").strip()
+    selection = effective_search_filters(arguments)
     preflight = deliver(
         tool="unreal_rag_search",
         active_project=active,
@@ -173,6 +174,7 @@ def rag_search(
         rows=None,
         repeat_receipt=repeat_receipt,
         projects=explicit,
+        selection=selection,
     )
     if preflight.get("suppressed"):
         duplicate_payload = {
@@ -266,6 +268,7 @@ def rag_search(
         rows=page.rows,
         repeat_receipt=repeat_receipt,
         projects=explicit,
+        selection=selection,
     )
     payload["repeatReceipt"] = delivery.get("repeatReceipt")
     payload, envelope_truncated = fit_evidence_payload(payload, max_chars=limit)

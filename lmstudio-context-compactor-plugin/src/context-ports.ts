@@ -14,6 +14,13 @@ export const core = require("./direct-compaction-core.js") as {
   shouldCompact(measurement: ContextMeasurement, options?: Record<string, unknown>): boolean;
 };
 
+export const objectiveContinuity = require("./continuity-objectives.js") as {
+  guidanceObjective(messages: Array<NormalizedMessage & { index: number }>, previousState: unknown): { text?: string; reason: string };
+};
+export const continuityState = require("./continuity-memory.js") as {
+  extractPriorContinuityState(messages: Array<NormalizedMessage & { index: number }>): unknown;
+};
+
 export const modelNotes = require("./continuity-model-notes.js") as {
   NOTE_INSTRUCTION: string;
   ContinuityNoteStore: new () => {
@@ -25,7 +32,8 @@ export const modelNotes = require("./continuity-model-notes.js") as {
   historyKey(messages: Array<ChatMessage>, workingDirectory: string): string;
   objectiveFingerprint(messages: Array<ChatMessage>): string;
   reconcileStoredNote(note: ContinuityNote, messages: Array<ChatMessage>,
-    additionalVerifiedRefs?: Set<string>): ContinuityNote | null;
+    additionalVerifiedRefs?: Set<string>, options?: { objectiveFingerprint?: string; projectDescriptor?: string;
+      discardReviewClaims?: boolean }): ContinuityNote | null;
   renderAssistantNote(note: ContinuityNote): string;
   splitVisibleAnswer(text: string): { visibleText: string; hasFooter: boolean; note: unknown };
 };

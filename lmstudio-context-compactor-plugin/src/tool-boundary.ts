@@ -114,10 +114,14 @@ export function createToolGuard(options: {
     // The SDK does not invoke onToolCallRequestFinalized for denied
     // calls, so register the stable call ID at the confirmation edge.
     emitter.registerRequest(callId, request);
+    const deny = (reason: string) => {
+      toolGeneration.denied(callId, reason);
+      controller.deny(reason);
+    };
     const allowedTool = roundTools.find((tool) => tool.name === request.name);
     if (!allowedTool) {
       traceCall(callId, { validationState: "denied_scope", executionState: "not_executed" });
-      controller.deny("Tool withheld by the deterministic project-engine scope.");
+      deny("Tool withheld by the deterministic project-engine scope.");
       return;
     }
     const projectBindingIdentity = config.observeOnly ? "" : scope.projectIdentity;
@@ -128,13 +132,13 @@ export function createToolGuard(options: {
     if (readOnlyOperationProfiles.has(allowedTool)
       && !isObservationOnlyToolCall(allowedTool, { ...request, arguments: proposedArguments })) {
       traceCall(callId, { validationState: "denied_read_profile_operation", executionState: "not_executed" });
-      controller.deny("Operation is outside the published read-only profile.");
+      deny("Operation is outside the published read-only profile.");
       return;
     }
     const retryFingerprint = telemetryFingerprint({ name: request.name, arguments: proposedArguments });
     if (toolPlanningRetryRound && toolPlanningRetryBlockedFingerprints.has(retryFingerprint)) {
       traceCall(callId, { validationState: "denied_duplicate_retry", executionState: "not_executed" });
-      controller.deny("Fresh tool-planning retry cannot repeat an already successful identical read.");
+      deny("Fresh tool-planning retry cannot repeat an already successful identical read.");
       return;
     }
     if (isObservationOnlyToolCall(allowedTool, { ...request, arguments: proposedArguments })) {
@@ -144,7 +148,7 @@ export function createToolGuard(options: {
         : { allowed: true, arguments: proposedArguments, reservedTokens: 0, bounded: false };
       if (!reservation.allowed) {
         traceCall(callId, { validationState: "denied_batch_budget", executionState: "not_executed" });
-        controller.deny("Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more.");
+        deny("Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more.");
         return;
       }
       reservationIds.set(String(request.id), reservationId);
@@ -178,9 +182,8 @@ export function createToolGuard(options: {
     });
     ctl.guardAbort();
     if (decision.type === "deny") {
-      toolGeneration.denied(callId, decision.denyReason);
       traceCall(callId, { approvalState: "denied", executionState: "not_executed" });
-      controller.deny(decision.denyReason);
+      deny(decision.denyReason || "Tool execution was denied.");
     }
     else {
       const confirmedArguments = decision.toolArgsOverride || proposedArguments;

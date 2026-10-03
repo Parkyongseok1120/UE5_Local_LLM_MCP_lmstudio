@@ -1,4 +1,5 @@
 "use strict";
+const { withBundleChangeEvidence } = require("./direct-change-evidence");
 
 const path = require("node:path");
 const { calculateReplacement } = require("./safe-write");
@@ -188,15 +189,15 @@ function createBundleCapability(context) {
       const resolution = resolutions.get(filePath)
         || await mutationResolution(filePath, args.project);
       const snapshot = await registerCurrentVersion(context, resolution, hash, requestContext);
-      files.push({ path: filePath, sha256: hash, ...snapshot });
+      files.push({ path: filePath, sha256: hash, previousSha256: result.preChangeHashes?.[filePath], ...snapshot });
     }
-    return success({
+    return withBundleChangeEvidence(success({
       operation: "bundle_applied",
       transactionId: result.transactionId,
       files,
       advisory: "The atomic edit committed. Build can run immediately; static validation is optional diagnostic evidence.",
       ...(semanticAdvisories.length ? { semanticAdvisories } : {}),
-    });
+    }), result.changeEvidenceByPath, context.payloadFits);
   }
 
   return { apply_edit_bundle: applyEditBundle };

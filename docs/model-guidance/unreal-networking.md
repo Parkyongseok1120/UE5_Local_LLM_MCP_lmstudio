@@ -18,6 +18,7 @@
 <!-- /guidance-section: prediction -->
 <!-- guidance-section: lifetime -->
 - 사망 전이의 점수·시체·리스폰, 매치 종료 시 요청·타이머, Logout/EndPlay 정리를 연결한다.
+- 반복 사망 요청의 점수 중복, 플레이어별 예약 교체, 퇴장 후 callback, spawn/possess 실패를 확인한다. 다음 Pawn 준비 전에 성공 상태를 확정하지 않으며 이전 Pawn·팀 목록 정리를 기존 소유자에게 둔다.
 - Listen Host의 성공과 원격 Client·전용 서버의 성공을 구분한다. 관련 변경에서는 역할별로 확인한다.
 
 Iris, Replication Graph, GAS 예측, Mover, Networked Physics, Seamless Travel은 채택 여부와 버전 계약을 별도 확인한다. CMC 사례나 이 문서만으로 해당 기능 구현을 완성했다고 판단하지 않는다.

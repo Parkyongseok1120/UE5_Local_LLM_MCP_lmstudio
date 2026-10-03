@@ -440,6 +440,31 @@ test("regression: a 32KB Git diff keeps a body-first bounded view for its first 
   assert.equal(value.bodyComplete, false);
   assert.deepEqual(value.projectedBodyRanges[0], [0, value.excerpt.length]);
   assert.ok(value.archiveRef?.evidenceId);
+  context.captureExposure(projected.history, "projected-input", true);
+  const exposure = context.exposure.get(`projected-input:${request.id}`);
+  assert.deepEqual(exposure.projectedBodyRanges, value.projectedBodyRanges);
+  assert.deepEqual(exposure.omittedBodyRanges, value.omittedBodyRanges);
+  assert.equal(exposure.bodyOmittedChars, value.bodyOmittedChars);
+  assert.equal(exposure.bodyField, "text"); assert.equal(exposure.bodyComplete, false);
+  assert.equal(exposure.fullRawProvided, false); assert.equal(exposure.hostInputVerification, "unknown");
+});
+
+test("unconsumed source above the former fixed cap stays raw until a completed consumer, then projects", () => {
+  const history = Chat.from([{ role: "user", content: "Read the returned source." }]);
+  const request = { type: "function", id: "large-source", name: "read_file", arguments: { path: "A.cpp" } };
+  const content = JSON.stringify({ok:true,kind:"workspace_file_observation",status:"observed",path:"A.cpp",
+    startLine:1,endLine:300,text:"x".repeat(10000)+"SOURCE_TAIL"});
+  history.append(ChatMessage.from({role:"assistant",content:[{type:"toolCallRequest",toolCallRequest:request}]}));
+  history.append(ChatMessage.from({role:"tool",content:[{type:"toolCallResult",toolCallId:request.id,content}]}));
+  const context = new WorkingContext(scope), policy = {preserveUnconsumedRaw:true};
+  assert.equal(context.project(history,()=>true,policy,512).changed,false);
+  context.captureExposure(history,"incomplete-input",false);
+  assert.equal(context.project(history,()=>true,policy,512).changed,false);
+  context.captureExposure(history,"completed-input",true);
+  const projected = context.project(history,()=>true,policy,512);
+  assert.equal(projected.changed,true); assert.doesNotMatch(projected.history.toString(),/SOURCE_TAIL/);
+  assert.match(projected.history.toString(),/archived_tool_result_projection/);
+  assert.equal(context.refsValid(),true);
 });
 
 test("regression: the 8192-character first-consumer boundary is exact for direct and MCP envelopes", () => {

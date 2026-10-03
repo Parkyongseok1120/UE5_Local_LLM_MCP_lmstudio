@@ -190,6 +190,10 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 )
 
 REQUIRED_RUNTIME_FILES = (
+    "scripts/direct_rag_engine_local.py",
+    "scripts/engine_header_evidence.py",
+    "scripts/project_name_resolver.py",
+    "lmstudio-unreal-agent-mcp/src/resolve-project-name-cli.js",
     "installer/unity_install.py",
     "docs/Unity_Authoring_Tests.md",
     "scripts/check_unity_install.js",
@@ -270,6 +274,8 @@ REQUIRED_RUNTIME_FILES = (
     "shared-tool-core/data.js",
     "unity-editor-bridge/package.json",
     "unity-editor-bridge/Editor/Bridge.cs",
+    "unity-editor-bridge/Editor/ResponseMetadata.cs",
+    "unity-editor-bridge/Editor/ResponseMetadata.cs.meta",
     "unity-editor-bridge/Editor/Objects.cs",
     "unity-editor-bridge/Editor/Operations.cs",
     "unity-editor-bridge/Editor/Observations.cs",
@@ -303,6 +309,9 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/direct_rag_status.py",
     "scripts/direct_rag_evidence.py",
     "scripts/direct_rag_freshness.py",
+    "scripts/direct_rag_source_snapshot.py",
+    "scripts/direct_rag_operation.py",
+    "scripts/direct_rag_stdio_requests.py",
     "scripts/direct_rag_freshness_rows.py",
     "scripts/direct_rag_generation_boundary.py",
     "scripts/direct_rag_generation_identity.py",
@@ -482,6 +491,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/direct-runtime-context.js",
     "lmstudio-unreal-agent-mcp/src/direct-static-validation.js",
     "lmstudio-unreal-agent-mcp/src/direct-bundle-capability.js",
+    "lmstudio-unreal-agent-mcp/src/direct-change-evidence.js",
     "lmstudio-unreal-agent-mcp/src/direct-delete-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-edit-bundle.js",
     "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-commit.js",
@@ -544,6 +554,9 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/write-lock-reclaim-bridge.py",
     "lmstudio-context-compactor-plugin/src/index.ts",
     "lmstudio-context-compactor-plugin/src/design-guidance.ts",
+    "lmstudio-context-compactor-plugin/src/guidance-topic-selection.ts",
+    "lmstudio-context-compactor-plugin/test/auto-guidance.test.cjs",
+    "lmstudio-context-compactor-plugin/test/change-evidence.test.cjs",
     "lmstudio-context-compactor-plugin/src/reference-context.ts",
     "lmstudio-context-compactor-plugin/src/reference-rendering.ts",
     "lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs",
@@ -563,6 +576,7 @@ REQUIRED_RUNTIME_FILES = (
     "docs/model-guidance/unreal-networking.md",
     "docs/model-guidance/unity-networking.md",
     "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/tool-exchange-index.js",
     "lmstudio-context-compactor-plugin/src/context-budget.ts",
     "lmstudio-context-compactor-plugin/src/attachment-boundary.ts",
     "lmstudio-context-compactor-plugin/src/round-loop.ts",
@@ -580,6 +594,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/continuity-memory.js",
     "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
     "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
+    "lmstudio-context-compactor-plugin/src/change-evidence-memory.js",
     "lmstudio-context-compactor-plugin/src/continuity-text.js",
     "lmstudio-context-compactor-plugin/src/durable-memory-sanitizer.js",
     "lmstudio-context-compactor-plugin/src/direct-config.ts",
@@ -594,6 +609,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/test/fixtures/qwen-direct-e2e-continuity.json",
     "lmstudio-context-compactor-plugin/test/fixtures/qwen-receipt-path-confusion.json",
     "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+    "lmstudio-context-compactor-plugin/test/architecture-contract.test.cjs",
     "lmstudio-context-compactor-plugin/test/status.test.cjs",
     "lmstudio-context-compactor-plugin/test/tool-scope.test.cjs",
     "lmstudio-context-compactor-plugin/test/attachment-tools.test.cjs",
@@ -1146,6 +1162,45 @@ def _write_deterministic_zip(staging: Path, target: Path) -> None:
             temporary.unlink()
 
 
+class PackagePublicationError(RuntimeError):
+    """A failed restore must leave both recovery artifacts available."""
+
+    preserve_staging = True
+
+
+def _publish_package_output(staging: Path, output: Path) -> dict[str, object] | None:
+    backup_root: Path | None = None
+    prior: Path | None = None
+    if output.exists():
+        backup_root = Path(tempfile.mkdtemp(prefix=f".{output.name}-backup-", dir=output.parent))
+        prior = backup_root / "previous"
+        try:
+            output.replace(prior)
+        except BaseException:
+            shutil.rmtree(backup_root, ignore_errors=True)
+            raise
+    try:
+        staging.replace(output)
+    except BaseException as publish_error:
+        if prior is not None:
+            try:
+                prior.replace(output)
+            except OSError as restore_error:
+                raise PackagePublicationError(
+                    f"Package publish failed ({publish_error}); restore failed ({restore_error}); "
+                    f"preserved backup: {prior}; staging: {staging}"
+                ) from publish_error
+        if backup_root is not None:
+            shutil.rmtree(backup_root, ignore_errors=True)
+        raise
+    if backup_root is not None:
+        try:
+            shutil.rmtree(backup_root)
+        except OSError as exc:
+            return {"status": "pending", "warning": str(exc), "backup": str(backup_root)}
+    return None
+
+
 def build(
     source: Path,
     output: Path,
@@ -1207,13 +1262,11 @@ def build(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         _scan_private_paths(staging)
-        if output.exists():
-            shutil.rmtree(output) if output.is_dir() else output.unlink()
-        staging.replace(output)
+        cleanup = _publish_package_output(staging, output)
         if zip_path is not None:
             _write_deterministic_zip(output, zip_path)
-    except Exception:
-        if staging.exists():
+    except BaseException as exc:
+        if staging.exists() and not getattr(exc, "preserve_staging", False):
             shutil.rmtree(staging)
         raise
 
@@ -1225,6 +1278,7 @@ def build(
         "indexIncluded": include_index,
         "forbiddenInventoryCount": 0,
         "inventorySample": inventory_paths[:40],
+        **({"cleanup": cleanup} if cleanup else {}),
     }
 
 

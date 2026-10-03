@@ -114,6 +114,7 @@ def query_keys(
     top_k: int,
     hybrid: bool,
     index: Path,
+    selection: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     selectors = (
         projects
@@ -123,6 +124,7 @@ def query_keys(
         else []
     )
     base = {
+        "identityVersion": 4,
         "tool": tool,
         "activeProject": filesystem_path_identity(active_project),
         "projects": sorted(
@@ -130,7 +132,8 @@ def query_keys(
             for item in selectors
             if str(item).strip()
         ),
-        "query": " ".join(str(query).casefold().split())[:512],
+        "query": " ".join(str(query).casefold().split()),
+        "selection": selection or {},
         "mode": str(mode or "auto").casefold(),
         "scope": str(scope or "auto").casefold(),
         "index": _index_fingerprint(index),

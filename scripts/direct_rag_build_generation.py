@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from index_inputs import existing_input_paths
+from direct_rag_operation import run_collector
 
 
 def build_generation(
@@ -38,22 +38,12 @@ def build_generation(
         *(["--indexing-tier", indexing_tier] if indexing_tier else []),
         "--input", *[str(path) for path in inputs],
     ]
-    proc = subprocess.run(
-        cmd,
-        cwd=str(workspace),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    output = (proc.stdout or "") + (proc.stderr or "")
+    result = run_collector(cmd, cwd=workspace, scratch=target)
     return {
-        "ok": proc.returncode == 0,
-        "returncode": proc.returncode,
-        "command": cmd,
-        "outputTail": output[-4000:] if output else "",
+        **result,
         **(
             {}
-            if proc.returncode == 0
+            if result["ok"]
             else {
                 "errorCode": "RAG_INDEX_BUILD_FAILED",
                 "error": "The staged RAG generation build failed.",

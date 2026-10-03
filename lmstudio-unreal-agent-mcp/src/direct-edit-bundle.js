@@ -121,6 +121,7 @@ async function applyDirectEditBundle(bundle, resolvePath, options = {}) {
         baseline,
         writtenAbsolutePaths: committed.writtenAbsolutePaths,
         postWriteHashes: committed.postWriteHashes,
+        changeEvidenceByPath: committed.changeEvidenceByPath,
         preChangeHashes: Object.fromEntries(
           [...baseline].map(([relativePath, snapshot]) => [relativePath, snapshot.preHash]),
         ),

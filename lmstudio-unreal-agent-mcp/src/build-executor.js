@@ -217,8 +217,13 @@ async function runUnrealBuildFromPlan(options = {}) {
     logPath,
     hostPlatform,
     maxOutputBytes: options.maxOutputBytes,
+    signal: options.signal,
+    shutdownTimeoutMs: options.shutdownTimeoutMs,
+    ...(options.terminate ? { terminate: options.terminate } : {}),
   });
-  const failure = processResult.timedOut
+  const failure = processResult.cancelled
+    ? { errorCode: "BUILD_CANCELLED", error: "Build cancellation requested; inspect processExited for termination evidence." }
+    : processResult.timedOut
     ? { errorCode: "BUILD_TIMEOUT", error: `Build timed out after ${timeoutMs}ms` }
     : processResult.spawnError
       ? { errorCode: "BUILD_PROCESS_FAILED", error: processResult.spawnError }
@@ -227,7 +232,7 @@ async function runUnrealBuildFromPlan(options = {}) {
         : processResult.logPersistenceError
           ? { errorCode: "BUILD_LOG_WRITE_FAILED", error: processResult.logPersistenceError }
           : null;
-  const commandSucceeded = processResult.exitCode === 0 && !processResult.timedOut;
+  const commandSucceeded = processResult.exitCode === 0 && !processResult.timedOut && !processResult.cancelled;
   return {
     ok: commandSucceeded && !failure,
     commandSucceeded,

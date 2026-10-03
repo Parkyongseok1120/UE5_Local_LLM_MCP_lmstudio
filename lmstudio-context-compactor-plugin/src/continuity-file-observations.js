@@ -1,4 +1,5 @@
 "use strict";
+const { normalizedChange, boundChangeBodies } = require("./change-evidence-memory.js");
 
 const path = require("node:path");
 
@@ -65,7 +66,7 @@ function canonicalFilePath(item, descriptor) {
 
 function normalizedObservationState(item, fallbackOperation) {
   const explicit = String(item?.observationState || "").toLowerCase();
-  if (["observed", "modified", "deleted", "conflict_observed"].includes(explicit)) return explicit;
+  if (["observed", "modified", "deleted", "conflict_observed", "unavailable"].includes(explicit)) return explicit;
   const operation = String(item?.operation || fallbackOperation || "observed").toLowerCase();
   const errorCode = String(item?.errorCode || "").toUpperCase();
   if (errorCode === "FILE_VERSION_CONFLICT" || operation.includes("conflict")) return "conflict_observed";
@@ -125,7 +126,8 @@ function fileObservation(item, fallbackProject = "", fallbackOperation = "observ
   const descriptor = projectDescriptor(item, fallbackProject);
   const canonicalPath = canonicalFilePath(item, descriptor);
   if (!descriptor || !canonicalPath) return null;
-  const sha256AtObservation = item.sha256AtObservation || item.sha256 || undefined;
+  const observationState = normalizedObservationState(item, fallbackOperation);
+  const sha256AtObservation = observationState === "unavailable" ? undefined : item.sha256AtObservation || item.sha256 || undefined;
   const observedLineRanges = sha256AtObservation ? normalizeObservedLineRanges(item) : [];
   const totalLinesAtObservation = positiveInteger(item.totalLinesAtObservation ?? item.totalLines);
   return sanitizeStructuredDurableValue({
@@ -133,7 +135,7 @@ function fileObservation(item, fallbackProject = "", fallbackOperation = "observ
     canonicalProjectRoot: projectRoot(descriptor) || undefined,
     canonicalPath: canonicalPath || undefined,
     path: String(item.path),
-    observationState: normalizedObservationState(item, fallbackOperation),
+    observationState,
     sha256AtObservation,
     previousSha256AtObservation: item.previousSha256AtObservation || item.previousSha256 || undefined,
     lastObservedAt: item.lastObservedAt || item.snapshotCapturedAt || undefined,
@@ -141,6 +143,9 @@ function fileObservation(item, fallbackProject = "", fallbackOperation = "observ
     totalLinesAtObservation: observedLineRanges.length ? totalLinesAtObservation || undefined : undefined,
     readCoverageState: lineCoverageState(observedLineRanges, totalLinesAtObservation),
     mutationSnapshotState: "fresh_read_required",
+    changeEvidence: observationState === "unavailable" ? undefined : normalizedChange(item.changeEvidence, item),
+    changeReadVerified: item.changeReadVerified === true ? true : undefined,
+    changeEvidenceInvalidated: item.changeEvidenceInvalidated === true ? true : undefined,
   });
 }
 
@@ -156,7 +161,8 @@ function coalesceFileObservations(items, maxItems = 16, fallbackProject = "") {
     const previous = observations.get(identity);
     const previousHash = String(previous?.sha256AtObservation || "");
     const currentHash = String(observation.sha256AtObservation || "");
-    const sameObservedVersion = Boolean(previous && previousHash && (!currentHash || currentHash === previousHash));
+    const sameObservedVersion = Boolean(observation.observationState !== "unavailable"
+      && previous && previousHash && (!currentHash || currentHash === previousHash));
     const observedLineRanges = normalizeObservedLineRanges({
       observedLineRanges: [
         ...(sameObservedVersion ? previous.observedLineRanges || [] : []),
@@ -171,6 +177,17 @@ function coalesceFileObservations(items, maxItems = 16, fallbackProject = "") {
       ...observation,
       mutationSnapshotState: "fresh_read_required",
     };
+    if (observation.observationState === "unavailable") {
+      delete merged.sha256AtObservation; delete merged.changeReadVerified;
+    }
+    // Read coverage has a more permissive legacy contract; change evidence
+    // requires an explicit matching hash and a paired read, never spread carry.
+    delete merged.changeEvidence;
+    if (!observation.changeEvidenceInvalidated && !["deleted", "conflict_observed", "outcome_unknown", "unavailable"].includes(observation.observationState)) {
+      if (observation.changeEvidence) merged.changeEvidence = observation.changeEvidence;
+      else if (observation.changeReadVerified && currentHash && previousHash === currentHash && previous?.changeEvidence)
+        merged.changeEvidence = previous.changeEvidence;
+    }
     if (observedLineRanges.length) {
       merged.observedLineRanges = observedLineRanges;
       if (totalLinesAtObservation !== null) merged.totalLinesAtObservation = totalLinesAtObservation;
@@ -182,7 +199,7 @@ function coalesceFileObservations(items, maxItems = 16, fallbackProject = "") {
     }
     observations.set(identity, merged);
   }
-  return [...observations.values()].slice(-maxItems);
+  return boundChangeBodies([...observations.values()].slice(-maxItems));
 }
 
 function migratePriorFileObservations(items, previousState, maxItems = 16) {

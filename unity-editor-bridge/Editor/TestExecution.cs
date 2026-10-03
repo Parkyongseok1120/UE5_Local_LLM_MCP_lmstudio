@@ -27,6 +27,7 @@ namespace EvidenceFirst.UnityBridge
             string path = PathFor(id); if (!File.Exists(path)) throw new BridgeException("test_run_unknown", "No retained test run");
             if (new FileInfo(path).Length > 1048576) throw new BridgeException("evidence_corrupt", "Test result exceeds bound");
             var value = JObject.Parse(File.ReadAllText(path));
+            value["origin"] = ResponseMetadata.Origin(value);
             if ((string)value["projectIdentity"] != Bridge.ProjectId) throw new BridgeException("binding_mismatch", "Wrong test project");
             if ((string)value["editorSessionId"] != Bridge.Session && new[] { "preparing", "accepted", "running", "cancel_requested" }.Contains((string)value["status"])) {
                 value["status"] = "outcome_unknown"; value["errorCode"] = "editor_session_ended";
@@ -37,6 +38,7 @@ namespace EvidenceFirst.UnityBridge
         public static void Save(JObject value) {
             string path = PathFor((string)value["operationId"]); value["projectIdentity"] = Bridge.ProjectId;
             if (value["editorSessionId"] == null) { value["editorSessionId"] = Bridge.Session; value["domainGenerationAtRequest"] = Bridge.Generation; }
+            value["origin"] = ResponseMetadata.Origin(value);
             string json = value.ToString(Formatting.None); if (Encoding.UTF8.GetByteCount(json) > 1048576) throw new BridgeException("test_result_capacity", "1 MiB/run bound exceeded");
             var files = new DirectoryInfo(Folder).GetFiles("*.json"); if (!File.Exists(path) && files.Length >= 16) throw new BridgeException("test_history_capacity", "16 retained runs; release an old result explicitly");
             PathSafety.WritePrivate(path, json);

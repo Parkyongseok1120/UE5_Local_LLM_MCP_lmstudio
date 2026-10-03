@@ -2267,7 +2267,7 @@ def install(
                 try:
                     for step in rag_plan.steps:
                         _run(list(step.command), cwd=ROOT, dry_run=args.dry_run)
-                    rag_plan.commit()
+                    publication = rag_plan.commit()
                     report["ragBuild"] = {
                         "tier": rag_plan.tier,
                         "transactional": True,
@@ -2276,6 +2276,7 @@ def install(
                         "engineAssociation": rag_plan.engine_association or None,
                         "includedProjects": [str(path) for path in rag_plan.included_projects],
                         "excludedProjects": [str(path) for path in rag_plan.excluded_projects],
+                        **({"cleanup": publication["cleanup"]} if publication and publication.get("cleanup") else {}),
                     }
                 finally:
                     rag_plan.discard()

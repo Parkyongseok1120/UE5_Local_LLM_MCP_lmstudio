@@ -14,6 +14,9 @@ import os
 import re
 import shutil
 import subprocess
+import hashlib
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -28,6 +31,8 @@ from workspace_paths import (
 _HEADER_CATALOGS: dict[str, dict[str, list[Path]]] = {}
 _TYPE_DECLARATION_PATHS: dict[tuple[str, str], list[Path]] = {}
 _MAX_PYTHON_DECLARATION_SCAN_FILES = 512
+_LOCAL_CATALOGS: OrderedDict[tuple[str, str, str], tuple[float, list[Path]]] = OrderedDict()
+_LOCAL_CACHE_GENERATION = 0
 _SKIP_DIRS = {
     ".git",
     "Binaries",
@@ -437,6 +442,7 @@ def lookup_engine_header_evidence(
     max_files_per_claim: int = 12,
     max_header_chars: int = 1_000_000,
     host_platform: str | None = None,
+    local_source_identity: str | None = None,
 ) -> dict[str, Any]:
     """Return exact source excerpts keyed by ``owner::symbol`` or symbol.
 
@@ -444,6 +450,8 @@ def lookup_engine_header_evidence(
     claim.  It must never be interpreted as proof that the API does not exist.
     """
 
+    if local_source_identity is not None:
+        return _bounded_local_lookup(engine_root, list(claims), local_source_identity, host_platform=host_platform)
     root = Path(engine_root).expanduser().resolve() if engine_root else None
     if root is None or not root.is_dir():
         return {
@@ -626,5 +634,208 @@ def resolve_engine_include_path(
 
 
 def clear_engine_header_catalog_cache() -> None:
+    global _LOCAL_CACHE_GENERATION
+    _LOCAL_CACHE_GENERATION += 1
+    _LOCAL_CATALOGS.clear()
     _HEADER_CATALOGS.clear()
     _TYPE_DECLARATION_PATHS.clear()
+
+
+def _local_catalog(module: Path, identity: str, deadline: float, host_platform: str | None,
+                   generation: int | None = None) -> tuple[list[Path], str]:
+    """Bound filename discovery as well as reads; no recursive content search."""
+    key = (_cache_root_identity(module, host_platform=host_platform), identity, "local-v1")
+    cached = _LOCAL_CATALOGS.get(key)
+    if cached and time.monotonic() - cached[0] < 30:
+        _LOCAL_CATALOGS.move_to_end(key)
+        return cached[1], "complete_filename_catalog"
+    generation = _LOCAL_CACHE_GENERATION if generation is None else generation
+    paths: list[Path] = []
+    pending = [module]
+    entries = 0
+    reason = "complete_filename_catalog"
+    try:
+        while pending:
+            if time.monotonic() >= deadline:
+                reason = "deadline"; break
+            directory = pending.pop()
+            with os.scandir(directory) as listing:
+                for entry in listing:
+                    entries += 1
+                    if time.monotonic() >= deadline or entries > 16384 or len(paths) >= 4096:
+                        reason = "deadline" if time.monotonic() >= deadline else "catalog_limit"
+                        break
+                    if entry.is_symlink() or entry.name in _SKIP_DIRS:
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        child = Path(entry.path)
+                        if _contained(child, module):
+                            pending.append(child)
+                    elif entry.name.lower().endswith((".h", ".hpp", ".inl")):
+                        paths.append(Path(entry.path))
+                if reason != "complete_filename_catalog":
+                    break
+    except OSError:
+        reason = "catalog_unavailable"
+    if reason == "complete_filename_catalog" and generation == _LOCAL_CACHE_GENERATION:
+        # A changed source version evicts the same module's old catalog.
+        for old in list(_LOCAL_CATALOGS):
+            if old[0] == key[0] and old != key:
+                del _LOCAL_CATALOGS[old]
+        _LOCAL_CATALOGS[key] = (time.monotonic(), paths)
+        _LOCAL_CATALOGS.move_to_end(key)
+        while len(_LOCAL_CATALOGS) > 8:
+            _LOCAL_CATALOGS.popitem(last=False)
+    return paths, reason
+
+
+def _lexical_source(text: str) -> str:
+    # Keep offsets/lines while excluding literals and comments. Raw strings
+    # and preprocessor conditions are not interpreted as active C++ contracts.
+    pattern = r'R"([^ ()\\\t\r\n]{0,16})\([\s\S]*?\)\1"|/\*[\s\S]*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\x27(?:\\.|[^\x27\\])*\x27'
+    return re.sub(pattern, lambda m: re.sub(r"[^\n]", " ", m.group()), text)
+
+
+def _owner_region(masked: str, owner: str) -> tuple[int, int, int] | None:
+    pattern = r"\b(?:class|struct|enum(?:\s+class)?)\s+(?:\w+_API\s+)?" + re.escape(owner) + r"\b"
+    regions = []
+    for declaration in re.finditer(pattern, masked):
+        opening = masked.find("{", declaration.end(), declaration.end() + 2048)
+        if opening < 0 or ";" in masked[declaration.end():opening]:
+            continue
+        depth = 1
+        end = opening + 1
+        while end < len(masked) and depth:
+            depth += (masked[end] == "{") - (masked[end] == "}")
+            end += 1
+        if depth == 0:
+            regions.append((declaration.start(), opening, end))
+    return regions[0] if len(regions) == 1 else None
+
+
+def _without_reflection_annotations(prefix: str) -> str:
+    # Remove only known UE annotation invocations, with balanced parentheses.
+    # This does not evaluate macros or assert their compiled expansion.
+    for match in reversed(list(re.finditer(r"\b(?:UFUNCTION|UPROPERTY|UMETA)\s*\(", prefix))):
+        depth, end = 1, match.end()
+        while end < len(prefix) and depth:
+            depth += (prefix[end] == "(") - (prefix[end] == ")")
+            end += 1
+        if depth == 0:
+            prefix = prefix[:match.start()] + " " + prefix[end:]
+    return prefix
+
+
+def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] | None:
+    masked = _lexical_source(text)
+    region = _owner_region(masked, owner or symbol)
+    if not region:
+        return None
+    start, opening, end = region
+    enum_owner = bool(re.match(r"enum\b", masked[start:opening]))
+    positions = [start] if not owner else []
+    if owner:
+        depth = 0
+        wanted = re.compile(r"\b" + re.escape(symbol) + r"\b")
+        for match in wanted.finditer(masked, opening + 1, end - 1):
+            prefix = masked[opening + 1:match.start()]
+            depth = prefix.count("{") - prefix.count("}")
+            if depth != 0:
+                continue
+            # A member initializer or qualified call is not this owner's
+            # declaration merely because it occurs at class brace depth zero.
+            boundary = max(prefix.rfind(";"), prefix.rfind("}"), prefix.rfind("{"), prefix.rfind(",") if enum_owner else -1) + 1
+            declaration_prefix = _without_reflection_annotations(prefix[boundary:])
+            if any(c in declaration_prefix for c in "=()") or re.search(r"\bfriend\b|(?:\.|->|::)\s*$", declaration_prefix):
+                continue
+            tail = masked[match.end():match.end() + 2048]
+            if (not enum_owner and re.match(r"\s*\(", tail)) or (enum_owner and re.match(r"\s*(?:UMETA\s*\(|=|,|}|$)", tail)):
+                positions.append(match.start())
+    if not positions:
+        return None
+    pos = positions[0]
+    line = text.count("\n", 0, pos) + 1
+    lines = text.splitlines()
+    excerpt = "\n".join(lines[max(0, line - 2):min(len(lines), line + 5)])
+    conditional = bool(re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif|define)\b", masked[:end], re.M))
+    return {"line": line, "excerpt": excerpt[:1800], "observedOwner": owner or symbol,
+            "declarationStatus": "candidate_conditional" if conditional else "lexical_declaration",
+            "signatureVerification": "lexical_only; overloads_inheritance_macros_and_callability_unverified"}
+
+
+def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str, str]], identity: str,
+                          *, host_platform: str | None = None) -> dict[str, Any]:
+    generation = _LOCAL_CACHE_GENERATION
+    root = Path(engine_root).expanduser().resolve() if engine_root else None
+    if root is None or len(claims) != 1:
+        return {"status": "engine_root_unavailable", "results": {}, "readBytes": 0}
+    claim = claims[0]
+    symbol = str(claim.get("symbol") or "")
+    owner = str(claim.get("receiverType") or "")
+    deadline = time.monotonic() + 3.0
+    modules = [root / "Engine/Source/Runtime" / name for name in ("Core", "CoreUObject", "Engine")]
+    if "input" in (owner + symbol).lower():
+        modules.insert(0, root / "Engine/Plugins/EnhancedInput/Source/EnhancedInput")
+    modules = [m for m in modules if m.is_dir() and _contained(m, root)]
+    candidates: dict[str, tuple[Path, Path, int]] = {}
+    reasons: set[str] = set()
+    names = {Path(n).stem.lower() for n in _header_names(owner or symbol)}
+    stem = _unqualified(owner or symbol)
+    stem = stem[1:] if len(stem) > 1 and stem[0] in "AUFSEI" and stem[1].isupper() else stem
+    tokens = [t.lower() for t in re.findall(r"[A-Z][a-z]+|[A-Z]+(?=[A-Z][a-z]|$)", stem)]
+    for module in modules:
+        if time.monotonic() >= deadline:
+            reasons.add("deadline"); break
+        paths, status = _local_catalog(module, identity, deadline, host_platform, generation)
+        if status != "complete_filename_catalog": reasons.add(status)
+        for path in paths:
+            if time.monotonic() >= deadline:
+                reasons.add("deadline"); break
+            name = path.stem.lower()
+            score = 100 if name in names else sum(len(t) for t in tokens if len(t) >= 4 and t in name)
+            if score:
+                key = _identity(path, host_platform=host_platform)
+                candidates.setdefault(key, (path, module, score))
+    ranked = sorted(candidates.values(), key=lambda c: (-c[2], str(c[0])))
+    if len(ranked) > 4: reasons.add("candidate_limit")
+    results = []
+    read_bytes = 0
+    inspected = 0
+    for header, module, _ in ranked[:4]:
+        if time.monotonic() >= deadline:
+            reasons.add("deadline"); break
+        if not _contained(header, module) or not _contained(module, root):
+            reasons.add("containment"); continue
+        try:
+            with header.open("rb") as stream:
+                before = os.fstat(stream.fileno())
+                raw = stream.read(min(262144, 1048576 - read_bytes))
+                after = os.fstat(stream.fileno())
+            read_bytes += len(raw); inspected += 1
+            current = header.stat()
+            stable = all((s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) ==
+                         (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) for s in (after, current))
+            if not stable or not _contained(header, module):
+                reasons.add("source_changed"); continue
+            complete = len(raw) == before.st_size
+            if not complete: reasons.add("read_limit")
+            text = raw.decode("utf-8-sig", errors="replace")
+            found = _bounded_declaration(text, symbol, owner)
+            if not found:
+                continue
+            results.append({"symbol_name": symbol, "qualified_name": f"{owner}::{symbol}" if owner else symbol,
+                            "source": str(header.resolve()), "moduleRoot": str(module.resolve()), **found,
+                            "fingerprint": {"sha256": hashlib.sha256(raw).hexdigest(),
+                                            "hashScope": "file" if complete else "byte_range",
+                                            "readByteRange": [0, len(raw)], "readBytes": len(raw), "completeFile": complete}})
+        except OSError:
+            reasons.add("read_unavailable")
+            # A cached positive path no longer exists. Do not keep serving the
+            # stale catalog; the next bounded request discovers current names.
+            _LOCAL_CATALOGS.pop((_cache_root_identity(module, host_platform=host_platform), identity, "local-v1"), None)
+    # Filename discovery is intentionally incomplete as a declaration search.
+    # Even a complete catalog and zero hits cannot establish API absence.
+    return {"status": "ready" if results else "coverage_limited", "engineRoot": str(root),
+            "results": results, "readBytes": read_bytes, "inspectedFileCount": inspected,
+            "coverage": {"scope": "bounded_module_filename_candidates", "completeness": "partial",
+                         "reasons": sorted(reasons), "apiAbsenceVerified": False}}

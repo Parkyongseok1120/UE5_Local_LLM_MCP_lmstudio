@@ -52,23 +52,29 @@ function normalizeMessage(message, index) {
 function main() {
   const input = JSON.parse(fs.readFileSync(0, "utf8"));
   const messages = Array.isArray(input.messages) ? input.messages : [];
-  const options = input.options || {};
+  const options = { maxCurrentTurnMessages: 8, ...(input.options || {}) };
   const measurement = input.measurement || {};
   if (!core.shouldCompact(measurement, options)) {
     process.stdout.write(JSON.stringify({ compacted: false, messages }));
     return;
   }
-  const checkpoint = core.buildCheckpoint(messages.map(normalizeMessage), options);
+  const normalized = messages.map(normalizeMessage);
+  const checkpoint = core.buildCheckpoint(normalized, options);
   if (checkpoint.omittedMessageCount <= 0) {
     process.stdout.write(JSON.stringify({ compacted: false, messages }));
     return;
   }
   const retained = new Set(checkpoint.retainedIndexes);
   const compacted = [];
-  messages.forEach((message, index) => {
-    if (message.role === "system" && retained.has(index)) compacted.push(message);
-  });
-  compacted.push({ role: "system", content: checkpoint.checkpoint });
+  const systemText = [
+    ...normalized.filter(message => message.role === "system")
+      .map(message => core.invariantSystemText(message)).filter(Boolean),
+    checkpoint.checkpoint,
+  ].filter(Boolean).join("\n\n");
+  if (systemText) compacted.push({ role: "system", content: systemText });
+  // Keep model assertions and untrusted change text out of system instructions.
+  for (const content of [checkpoint.assistantCheckpoint, checkpoint.changeDataCheckpoint])
+    if (content) compacted.push({ role: "assistant", content });
   messages.forEach((message, index) => {
     if (message.role !== "system" && retained.has(index)) compacted.push(message);
   });

@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 import tempfile
+from direct_rag_operation import collector_cleanup_safe, run_collector
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -14,20 +14,13 @@ from typing import Any
 
 def run_script(workspace: Path, script: str, *args: str) -> dict[str, Any]:
     cmd = [sys.executable, str(workspace / "scripts" / script), *args]
-    proc = subprocess.run(
-        cmd,
-        cwd=str(workspace),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    output = (proc.stdout or "") + (proc.stderr or "")
-    return {
-        "ok": proc.returncode == 0,
-        "returncode": proc.returncode,
-        "command": cmd,
-        "outputTail": output[-2000:] if output else "",
-    }
+    scratch = None
+    for flag in ("--out-dir", "--out", "--jsonl"):
+        if flag in args:
+            destination = Path(args[args.index(flag) + 1])
+            scratch = destination if flag == "--out-dir" else destination.parent
+            break
+    return run_collector(cmd, cwd=workspace, scratch=scratch)
 
 
 def collector_commands(project: Path, stage: Path) -> tuple[tuple[str, ...], ...]:
@@ -70,7 +63,8 @@ def run_project_collectors(
     stage: Path,
     emit: Callable[[str], None],
 ) -> tuple[list[dict[str, Any]], str | None]:
-    from direct_rag_project_merge import merge_project_collection
+    from direct_rag_project_merge import merge_project_collection, stamp_project_collection
+    from direct_rag_source_snapshot import source_snapshot
 
     steps: list[dict[str, Any]] = []
     stage.mkdir(parents=True, exist_ok=True)
@@ -78,16 +72,25 @@ def run_project_collectors(
         tempfile.mkdtemp(prefix=".project-collection-", dir=str(stage))
     ).resolve()
     try:
+        before = source_snapshot(project, max_seconds=10.0)
         for script, *arguments in collector_commands(project, collection):
             emit(f"{script} (staged)")
             step = run_script(workspace, script, *arguments)
             steps.append({"name": script, **step})
             if step.get("ok") is not True:
                 return steps, script
+        after = source_snapshot(project, max_seconds=10.0)
+        if before.get("status") == after.get("status") == "complete":
+            if before["fingerprint"] != after["fingerprint"]:
+                steps.append({"name": "project_source_snapshot", "ok": False,
+                              "outputTail": "Project inputs changed during collection; no generation published."})
+                return steps, "project_source_snapshot"
+            stamp_project_collection(collection, after["fingerprint"])
         merge_project_collection(stage, collection, project.resolve())
         return steps, None
     finally:
-        shutil.rmtree(collection, ignore_errors=True)
+        if collector_cleanup_safe(collection):
+            shutil.rmtree(collection, ignore_errors=True)
 
 
 def ingest_editor_snapshot(

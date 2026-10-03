@@ -29,6 +29,7 @@ const { recoverRuntimeTransactions } = require("./direct-transaction-recovery.js
 
 function createDirectRuntime(options = {}) {
   const context = createDirectRuntimeContext(options);
+  const lifetime = new AbortController();
   const workspace = createWorkspaceCapabilities({ resolveBinding: async selector => {
     const project = await context.resolveCallProject(selector);
     return { root: project ? path.dirname(project) : context.workspaceRoot, engine: "unreal", projectIdentity: project || null };
@@ -48,7 +49,19 @@ function createDirectRuntime(options = {}) {
 
   async function callTool(name, rawArgs = {}, requestContext = {}) {
     const args = cleanArgs(rawArgs);
+    const controller = new AbortController();
+    const sources = [lifetime.signal, requestContext.signal].filter(Boolean);
+    const abort = () => controller.abort();
+    for (const source of sources) {
+      source.addEventListener("abort", abort, { once: true });
+      if (source.aborted) abort();
+    }
     try {
+      const signal = controller.signal;
+      if (signal.aborted) return context.directResult(name, failure("REQUEST_CANCELLED", "Request cancelled before dispatch.", {
+        details: { cancelled: true, executionState: "not_started" },
+      }));
+      requestContext = { ...requestContext, signal };
       const handler = toolsByName.has(name) ? handlers[name] : undefined;
       const definition = toolsByName.get(name);
       const allowed = new Set(Object.keys(definition?.inputSchema?.properties || {}));
@@ -66,6 +79,8 @@ function createDirectRuntime(options = {}) {
       return context.directResult(name, payload);
     } catch (error) {
       return context.directResult(name, errorFromException(error));
+    } finally {
+      for (const source of sources) source.removeEventListener("abort", abort);
     }
   }
 
@@ -79,13 +94,14 @@ function createDirectRuntime(options = {}) {
     fileSnapshots: context.fileSnapshots,
     tools,
     callTool,
+    close: (reason = "connection_closed") => lifetime.abort(reason),
     resolveProject: (selector) => context.resolveCallProject(selector),
     recoverTransactions: () => recoverRuntimeTransactions(context.stateRoot, context.runtimeOwner),
     probeSafety: () => ({ semanticGuard: probeMutationSemanticGuard() }),
   };
 }
 
-async function serveRuntime(runtime, serverName) {
+async function serveRuntime(runtime, serverName, transport = new StdioServerTransport()) {
   let version = "unknown";
   try {
     version = String(require("../package.json").version || "unknown");
@@ -100,9 +116,8 @@ async function serveRuntime(runtime, serverName) {
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => runtime.callTool(
     request.params.name,
     request.params.arguments || {},
-    extra?.sessionId ? { sessionId: extra.sessionId } : {},
+    { ...(extra?.sessionId ? { sessionId: extra.sessionId } : {}), signal: extra?.signal },
   ));
-  const transport = new StdioServerTransport();
   const priorClose = transport.onclose;
   transport.onclose = () => {
     try {

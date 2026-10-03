@@ -104,9 +104,13 @@ export function readResultContract(tool: RemoteToolLike) {
     : nativeBytes && properties.maxBytes ? "maxBytes" : null;
   const contract = field ? properties[field] : {};
   const archiveEnvelope = tool.name === "evidence_first_read_context" && localObservationTools.has(tool);
-  const defaultValue = contract.default ?? (field === "maxBytes" ? 65536 : field === "maxChars" ? 4096
+  // A provider's source-file ceiling is not a useful default batch allocation.
+  // Bound an omitted native window to 4 KiB; explicit requests can still ask
+  // for more. Bytes already account for UTF-8, unlike character limits.
+  const defaultValue = field === "maxBytes" ? Math.min(contract.default ?? 4096, 4096)
+    : contract.default ?? (field === "maxChars" ? 4096
     : tool.name === "git_changed_files" ? 4096 : 32768);
-  return { field, defaultValue, multiplier: field === "byteBudget" ? 1 : archiveEnvelope ? 3 : 6,
+  return { field, defaultValue, multiplier: field === "byteBudget" ? 1 : field === "maxBytes" ? 2 : archiveEnvelope ? 3 : 6,
     // The archive's schema accepts maxChars=1 for range validation, but its
     // identity envelope needs usable headroom before any body can be returned.
     minimum: archiveEnvelope ? Math.max(2048, tokens(contract.minimum ?? 1))

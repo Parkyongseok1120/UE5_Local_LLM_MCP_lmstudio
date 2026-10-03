@@ -1,6 +1,8 @@
 "use strict";
 
 const path = require("node:path");
+const { normalizedChange, fileIdentity } = require("./change-evidence-memory.js");
+const { exchangeIndex } = require("./tool-exchange-index.js");
 
 const { clip } = require("./continuity-text.js");
 const {
@@ -113,7 +115,7 @@ function retainedFileFact(file, fallbackOperation = "observed") {
     "canonicalProjectRoot", "canonicalPath", "absolutePath", "projectRelativePath",
     "workspaceRelativePath", "resolvedRootType", "errorCode", "startLine", "endLine",
     "returnedLineCount", "nextStartLine", "totalLines", "hasMore", "observedLineRanges",
-    "totalLinesAtObservation", "readCoverageState",
+    "totalLinesAtObservation", "readCoverageState", "changeEvidence", "changeReadVerified", "changeEvidenceInvalidated",
   ]) {
     if (file[key] !== undefined) fact[key] = file[key];
   }
@@ -143,6 +145,9 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
   const hasFileIdentity = Boolean(
     scoped.path || scoped.canonicalPath || scoped.projectRelativePath || scoped.workspaceRelativePath,
   );
+  // An unsuccessful read cannot acquire file identity from the prior active
+  // project or request arguments. Only the resolved result can invalidate it.
+  if (scoped.observationState === "unavailable" && !explicitProject) delete scoped.observationState;
   let retainedObservation = null;
   if (descriptor) {
     scoped.canonicalProject = descriptor;
@@ -162,7 +167,7 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
   if (hasFileIdentity && !retainedObservation) {
     for (const key of [
       "path", "canonicalProject", "canonicalProjectRoot", "canonicalPath", "projectRelativePath",
-      "workspaceRelativePath", "sha256", "previousSha256", "lastObservedAt", "mutationSnapshotState",
+      "workspaceRelativePath", "sha256", "previousSha256", "lastObservedAt", "mutationSnapshotState", "changeEvidence",
     ]) delete scoped[key];
     scoped.fileObservationState = "omitted_non_project_scope";
   }
@@ -340,9 +345,10 @@ function parseToolResult(content) {
       return out;
     }
     for (const key of [
-      "ok", "status", "summary", "message", "errorCode", "path", "operation", "mode",
+      "ok", "status", "summary", "message", "errorCode", "path", "operation", "observationState", "mode", "changeEvidence",
       "sha256", "previousSha256", "size", "truncated", "hasMore",
       "startLine", "endLine", "returnedLineCount", "nextStartLine", "totalLines", "filesScanned", "findingCount",
+      "coverage", "filesRead", "filesSkipped", "readErrorCount", "skippedByReason", "discoveryErrorCount", "excludedEntries",
       "validationOk", "blocksBuild", "exitCode", "likelyErrors", "fullLogPath",
       "upToDate", "actionsExecuted", "proofLevel", "failedCount", "succeededCount",
       "claimCount", "errorCount", "warningCount", "errorShapeCount", "warningShapeCount",
@@ -421,9 +427,11 @@ function searchObservation(requestFact, rawValue, parsed) {
     ? rawValue.results : Array.isArray(rawValue.items) ? rawValue.items : null;
   const matchCount = resultItems ? resultItems.length
     : Number.isSafeInteger(rawValue.findingCount) ? rawValue.findingCount : null;
-  const partial = rawValue.incomplete === true || rawValue.maxFilesReached === true
+  const partial = rawValue.coverage === "partial" || Number(rawValue.readErrorCount) > 0 || Number(rawValue.filesSkipped) > 0
+    || Number(rawValue.discoveryErrorCount) > 0 || Number(rawValue.excludedEntries) > 0
+    || rawValue.incomplete === true || rawValue.maxFilesReached === true
     || rawValue.truncated === true || rawValue.hasMore === true || Boolean(rawValue.nextCursor);
-  const explicitlyComplete = rawValue.incomplete === false
+  const explicitlyComplete = rawValue.coverage === "complete" || rawValue.incomplete === false
     || rawValue.maxFilesReached === false || rawValue.truncated === false || rawValue.hasMore === false;
   const completeness = partial ? "partial" : explicitlyComplete ? "complete_for_requested_scope" : "unknown";
   return sanitizeStructuredDurableValue({
@@ -432,6 +440,9 @@ function searchObservation(requestFact, rawValue, parsed) {
     reportedTotal: Number.isSafeInteger(rawValue.total) ? rawValue.total : undefined,
     filesScanned: Number.isSafeInteger(rawValue.filesScanned)
       ? rawValue.filesScanned : Number.isSafeInteger(rawValue.scanned) ? rawValue.scanned : parsed.filesScanned,
+    coverage: rawValue.coverage, filesRead: rawValue.filesRead, filesSkipped: rawValue.filesSkipped,
+    readErrorCount: rawValue.readErrorCount, skippedByReason: rawValue.skippedByReason,
+    discoveryErrorCount: rawValue.discoveryErrorCount, excludedEntries: rawValue.excludedEntries,
     incomplete: rawValue.incomplete === true,
     truncated: rawValue.truncated === true,
     hasMore: rawValue.hasMore === true || Boolean(rawValue.nextCursor),
@@ -445,6 +456,7 @@ function searchObservation(requestFact, rawValue, parsed) {
 }
 
 function toolOutcomeRecords(messages, beforeIndex, options = {}) {
+  const pairing = exchangeIndex(messages.slice(0, beforeIndex));
   const maxItems = Math.max(1, Number(options.maxItems || 12));
   const includeMessageIndexes = options.includeMessageIndexes instanceof Set
     ? options.includeMessageIndexes
@@ -456,6 +468,8 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
   const pendingRequests = [];
   let ambiguousRequestBatch = false;
   let acceptsIdlessResults = false;
+  let changeBatch = 0;
+  let changeBatchOpen = false, changeBatchHasResults = false;
   const abandonRequestBatch = () => {
     requestsById.clear();
     duplicateRequestIds.clear();
@@ -467,6 +481,8 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     const args = isRecord(request?.arguments) ? request.arguments : {};
     const descriptor = projectDescriptor(args);
     const record = {
+      request,
+      changeBatch,
       descriptor,
       searchRequest: searchRequestFact(request),
       changesActiveProject: String(request?.name || "") === "set_active_project",
@@ -488,12 +504,12 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     }
     pendingRequests.push(record);
   };
-  const projectHintFor = (result) => {
+  const projectHintFor = (result, canonicalRequest = null) => {
     const resultId = result?.toolCallId ? String(result.toolCallId) : "";
     if (resultId && duplicateRequestIds.has(resultId)) {
       return { descriptor: "", hasExplicitProject: true, consumed: true };
     }
-    let record = resultId ? requestsById.get(resultId) : null;
+    let record = resultId ? pendingRequests.find(candidate => candidate.request === canonicalRequest) : null;
     if (resultId && !record) {
       ambiguousRequestBatch = true;
       return { descriptor: "", hasExplicitProject: true, consumed: true };
@@ -529,6 +545,30 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
   const retain = (content, requestScope = null, includeOutcome = true) => {
     const parsed = parseToolResult(content);
     const decoded = decodeToolResultRecord(content);
+    // Only the execution's paired-return observer can provide this origin.
+    // Ignore any provider/origin asserted inside the tool payload itself.
+    const origin = requestScope?.request?.id && typeof options.changeOrigin === "function"
+      ? options.changeOrigin(requestScope.request, content) : undefined;
+    if ((parsed.ok === false || parsed.errorCode) && parsed.path
+      && ["read_file", "read_file_range", "read_symbol"].includes(requestScope?.request?.name)
+      && exactProjectIdentity(projectDescriptor(parsed))) parsed.observationState = "unavailable";
+    const succeeded = parsed.ok === true && !parsed.errorCode;
+    const fileRecords = [parsed, ...(Array.isArray(parsed.files) ? parsed.files : [])];
+    for (const file of fileRecords) {
+      const evidence = file.changeEvidence;
+      delete file.changeEvidence;
+      delete file.changeReadVerified;
+      const fileProject = exactProjectIdentity(projectDescriptor(file));
+      const requestProject = exactProjectIdentity(requestScope?.descriptor);
+      const resultProject = exactProjectIdentity(projectDescriptor(parsed));
+      const consistentProject = fileProject && (!requestScope?.hasExplicitProject || !requestProject || fileProject === requestProject)
+        && (!resultProject || fileProject === resultProject);
+      if (succeeded && origin && consistentProject) {
+        const change = normalizedChange({ ...evidence, origin }, file);
+        if (change) file.changeEvidence = change;
+        if (["read_file", "read_file_range", "read_symbol"].includes(origin.tool)) file.changeReadVerified = true;
+      }
+    }
     const explicitProject = projectDescriptor(parsed);
     const activeProjectCleared = requestScope?.clearsActiveProject === true && parsed.ok !== false;
     const requestOwnsScope = requestScope?.hasExplicitProject === true
@@ -553,21 +593,35 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     });
     const search = searchObservation(requestScope?.searchRequest, decoded.value, parsed);
     if (search) scopedOutcome.searchObservation = search;
-    if (includeOutcome) outcomes.push(scopedOutcome);
+    // Pairing ambiguity belongs to the whole execution batch, including raw
+    // results retained outside this checkpoint's factual projection.
+    scopedOutcome._changeBatch = changeBatch;
+    scopedOutcome._includeOutcome = includeOutcome;
+    outcomes.push(scopedOutcome);
   };
-  for (const message of messages.slice(0, beforeIndex)) {
+  for (const [mi, message] of messages.slice(0, beforeIndex).entries()) {
+    if (!["assistant", "tool"].includes(message.role)) changeBatchOpen = false;
     if ((message.toolRequests || []).length) {
+      // The host may split one request batch across assistant blocks before
+      // any result arrives. Keep its ambiguity boundary across those blocks.
+      const newBatch = !changeBatchOpen || changeBatchHasResults;
+      if (newBatch) changeBatch++;
+      changeBatchOpen = true; changeBatchHasResults = false;
       // Tool results belong to the immediately preceding request batch. An
       // unmatched older request must never scope a later ID-less result.
-      abandonRequestBatch();
+      if (newBatch) abandonRequestBatch();
       for (const request of message.toolRequests) rememberRequest(request);
       acceptsIdlessResults = true;
     }
     if (message.role !== "tool") continue;
+    changeBatchHasResults = true;
     const includeOutcome = includeMessageIndexes === null
       || includeMessageIndexes.has(message.index);
-    for (const result of message.toolResults) {
-      retain(result?.content ?? result, projectHintFor(result), includeOutcome);
+    for (const [ri, result] of message.toolResults.entries()) {
+      const requestScope = projectHintFor(result, pairing.matches.get(`${mi}:${ri}`));
+      // ID-less compatibility remains for general file facts only.
+      retain(result?.content ?? result, result?.toolCallId ? requestScope
+        : requestScope ? { ...requestScope, request: null } : null, includeOutcome);
     }
     if (!message.toolResults.length && message.text) {
       retain(message.text, projectHintFor(null), includeOutcome);
@@ -576,7 +630,21 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     // ID-less result is accepted only in the immediate result message.
     acceptsIdlessResults = false;
   }
-  return options.aggregateAll === true ? outcomes : outcomes.slice(-maxItems);
+  const batchFiles = new Map();
+  for (const outcome of outcomes) {
+    for (const file of [outcome, ...(outcome.files || [])]) {
+      if (!file.canonicalProject || !file.canonicalPath) continue;
+      const key = JSON.stringify([outcome._changeBatch, file.canonicalProject, file.canonicalPath]);
+      const group = batchFiles.get(key) || [];
+      group.push(file); batchFiles.set(key, group);
+    }
+  }
+  for (const group of batchFiles.values()) if (group.length > 1) for (const file of group) {
+    delete file.changeEvidence; delete file.changeReadVerified; file.changeEvidenceInvalidated = true;
+  }
+  const included = outcomes.filter(outcome => outcome._includeOutcome);
+  for (const outcome of outcomes) { delete outcome._changeBatch; delete outcome._includeOutcome; }
+  return options.aggregateAll === true ? included : included.slice(-maxItems);
 }
 
 const DERIVED_BUILD_FIELDS = new Set([
@@ -589,6 +657,7 @@ const DERIVED_BUILD_FIELDS = new Set([
 ]);
 
 const DERIVED_FILE_FIELDS = new Set([
+  "changeEvidence", "changeReadVerified", "changeEvidenceInvalidated",
   "path",
   "canonicalPath",
   "canonicalProject",
@@ -732,7 +801,7 @@ function durableGitObservation(value) {
   return sanitizeStructuredDurableValue(retained);
 }
 
-function stateMemory(outcomes) {
+function stateMemory(outcomes, options = {}) {
   const files = [];
   const builds = [];
   const gitObservations = [];
@@ -768,7 +837,8 @@ function stateMemory(outcomes) {
       : (projectCandidate || activeProject?.descriptor || "");
     const observedFileFact = item.ok !== false && (item.operation || item.sha256 || item.previousSha256);
     const conflictFact = item.errorCode === "FILE_VERSION_CONFLICT";
-    if (item.path && (observedFileFact || conflictFact)) {
+    const unavailableFact = item.observationState === "unavailable" && Boolean(projectCandidate);
+    if (item.path && (observedFileFact || conflictFact || unavailableFact)) {
       files.push(fileObservation(item, fallbackProject));
     }
     if (Array.isArray(item.files)) {
@@ -789,7 +859,7 @@ function stateMemory(outcomes) {
     }
   }
   return {
-    files: coalesceFileObservations(files.filter(Boolean), 64),
+    files: coalesceFileObservations(files.filter(file => file && (!options.fileIdentities || options.fileIdentities.has(fileIdentity(file)))), 64),
     builds: builds.slice(-4),
     gitObservations: gitObservations.slice(-8),
     historicalEvidence: historicalEvidence.slice(-16),

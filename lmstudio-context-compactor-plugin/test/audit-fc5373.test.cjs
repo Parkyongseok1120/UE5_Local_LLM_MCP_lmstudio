@@ -1,4 +1,5 @@
 "use strict";
+require('./architecture-contract.test.cjs');
 require('./tool-round-lifecycle.test.cjs');
 require('./runtime-policy.test.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
@@ -70,9 +71,25 @@ test('B03 schema maximum/default applied before reservation; two small reads sha
 test('B01 a cheap auxiliary archive reader cannot hide native read starvation',()=>{
   const tools=[{name:'read_file',pluginIdentifier:'mcp/unreal-agent',parametersJsonSchema:{properties:{maxBytes:{type:'integer'}}}},
     {name:'evidence_first_read_context',parametersJsonSchema:{properties:{maxChars:{minimum:1,maximum:8192}}}}];
-  const min=minimumReadResultTokens(tools);assert.equal(min,7168);
+  const min=minimumReadResultTokens(tools);assert.equal(min,3072);
   const broker=new BudgetBroker({workingInputTargetTokens:18000,workingInputTriggerTokens:22000,safetyMarginTokens:2048});
-  assert.equal(broker.watermarks({contextLength:38912,outputReserve:8192,inputTokens:19000},19000,true,min).nextActionFit,false);
+  assert.equal(broker.watermarks({contextLength:38912,outputReserve:8192,inputTokens:17000},17000,true,min).nextActionFit,true);
+  assert.equal(broker.watermarks({contextLength:38912,outputReserve:8192,inputTokens:21000},21000,true,min).nextActionFit,false);
+});
+
+test('omitted native source windows share a batch while explicit byte limits remain bounded',()=>{
+  const native={name:'read_file',pluginIdentifier:'mcp/unreal-agent',parametersJsonSchema:{properties:{
+    maxBytes:{type:'integer',minimum:1024,maximum:2*1024*1024,default:65536}}}};
+  const batch=new BatchReservation(50419);
+  const peers=Array.from({length:5},(_,index)=>reserveReadResult(batch,String(index),native,{}));
+  assert.equal(peers.every(r=>r.allowed),true);
+  for(const r of peers){assert.equal(r.arguments.maxBytes,4096);assert.equal(r.reservedTokens,9216);}
+  const sixth=reserveReadResult(batch,'sixth',native,{});
+  assert.equal(sixth.allowed,true);assert.ok(sixth.arguments.maxBytes>=1024 && sixth.arguments.maxBytes<4096);
+  assert.ok(batch.used<=batch.capacity);
+  const explicit=reserveReadResult(new BatchReservation(70000),'large',native,{maxBytes:32768});
+  assert.equal(explicit.arguments.maxBytes,32768);
+  assert.equal(explicit.reservedTokens,66560);
 });
 test('T01 operation read profiles retain reads and cannot grant writes',()=>{
   for(const [name,action] of [['unity_prefab','read'],['unity_scene','list'],['unity_tests','status']]) {

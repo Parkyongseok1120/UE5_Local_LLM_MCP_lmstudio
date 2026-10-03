@@ -6,6 +6,8 @@
 
 추가 검토: [작업 보고·API 확인·수명 검토 개선 계획](Model_Behavior_Incident_Plan_20261001.md). 새 로그에서 확인한 실제 변경과 완료 보고의 불일치, API 추측, 입력·수명 연결을 I1–I3에서 우선 보완한다. Auto는 그 계획의 I4로 연결한다. Auto 없이도 앞 단계가 유효해야 하며, 주제 자동 선택만으로 완료 환각·API 문제를 해결했다고 보고하지 않는다. 공통 기준은 기존 `core/proof`와 예산 축소 후보를 공유하고 별도 완료 판정기를 만들지 않는다.
 
+현재 구조 재대조(`6893493`): 위 계획 §7.3/§8/§14의 RAG 조회 분류·관찰 identity·mutation origin·checkpoint optional projection·동기 서버 deadline·portable helper 편입을 I2–I3의 독립 보완으로 명시했다. Auto selector가 분류/권한/취소를 관리하는 변경은 아니다. 본 계획의 순수 주제 선택·추가 도구 호출 없음·기존 budget/최종화 경계는 유지한다.
+
 ## 1. 목적과 완료 기준
 
 사용자가 Auto를 명시적으로 선택했을 때 현재 작업과 관련된 짧은 참고를 제공한다. 모델이 문제 원인, 구현 방법, 다음 도구, 작업 완료 여부를 판단하는 책임은 그대로 둔다. 추가 모델 추론이나 도구 실행 없이 기존 참고 선택을 확장하는 것이 이번 변경의 목적이다.
@@ -389,3 +391,5 @@ Unity/Unreal producer나 Bridge, 게임 프로젝트 코드를 바꾸는 계획�
 독립 검토: `auto_reference_plan_review`가 현재 소스와 요청만으로 읽기 전용 검토했다. Auto/parser 조합, 목적 출처/이전 state, mixed 관측 범위, 진단의 현재성, UE 버전 불명, 최종 통합 후보 상한, 기존 Hybrid 추론, 설치 allowlist/status 등록을 확인하고 계획에 반영했다. 초안 재검토에서 prior 목적의 완전성, 6절 초과 시 제외 순서, 주제 확장 범위, 인라인 기술 명칭의 한계도 구체화했다. 구현 또는 실제 모델 동작을 검증한 결과는 아니다.
 
 근거 기록: [auto-design-references-plan-20261001.json](evidence/auto-design-references-plan-20261001.json).
+
+2026-10-03 후속: 사용자 요청으로 Auto와 사건 개선 경로를 구현했다. 위 계획의 불확실성은 계속 적용되며 현재 구현 및 검사 범위는 [구현 기록](Model_Behavior_Implementation_20261003.md)에 남긴다. 기본 Off, 추가 모델·도구 호출 없음, 참고의 선택적 예산 처리를 유지한다.

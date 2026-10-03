@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from direct_rag_operation import RagOperationStopped
 
 from direct_rag_build_generation import build_generation
 from direct_rag_manifest_binding import resolve_generation_engine_binding
@@ -90,7 +91,7 @@ def build_public_index(
                     "build": build,
                 }
             rebase_stage_manifest(stage, target)
-            commit_refresh_stage(
+            publication = commit_refresh_stage(
                 stage,
                 target,
                 required_files=BUILD_OUTPUTS,
@@ -101,9 +102,14 @@ def build_public_index(
                 "skipped": False,
                 "reason": reason,
                 "stageCommitted": True,
+                **({"cleanup": publication["cleanup"]} if publication and publication.get("cleanup") else {}),
                 "build": build,
                 "recovery": recovery if recovery.get("recovered") else None,
             }
+    except RagOperationStopped as exc:
+        return {"ok": False, "errorCode": exc.code, "error": str(exc),
+                "stageCommitted": False, "terminationConfirmed": exc.termination_confirmed,
+                "terminationScope": "collector_process", "preservedScratch": exc.preserved_scratch}
     except DirectRagRefreshBusyError as exc:
         return {
             "ok": False,

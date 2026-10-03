@@ -63,6 +63,25 @@ def test_portable_validator_accepts_complete_audit_packet() -> None:
     assert result["errors"] == []
 
 
+def test_optional_obligations_obey_published_types_in_every_mode() -> None:
+    validator = _load_validator()
+    for field in ("existing", "proposed", "doNotDuplicate", "invariants", "impactedSurfaces", "validationPlan"):
+        for invalid in (None, "not an array", 7, {}):
+            result = validator.validate_packet({"mode": "audit", "claims": [_valid_claim()], field: invalid})
+            assert result["ok"] is False
+            assert f"{field} must be an array when provided" in result["errors"]
+        assert validator.validate_packet({"mode": "audit", "claims": [_valid_claim()], field: []})["ok"]
+
+
+def test_nonblank_strings_remain_server_checked_without_regex_grammar() -> None:
+    validator = _load_validator()
+    claim = _valid_claim()
+    claim["claim"] = " \n\t "
+    assert not validator.validate_packet({"mode": "audit", "claims": [claim]})["ok"]
+    claim["claim"] = "First line\nSecond line"
+    assert validator.validate_packet({"mode": "audit", "claims": [claim]})["ok"]
+
+
 def test_portable_validator_rejects_schema_invalid_scalar_types() -> None:
     validator = _load_validator()
     packet = _neutral_architecture_packet()

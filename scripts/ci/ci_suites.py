@@ -7,6 +7,8 @@ SUITES: dict[str, tuple[str, ...]] = {
     "portable_direct": (
         "tests/test_python_direct_rag_server.py",
         "tests/test_direct_rag_response_budget.py",
+        "tests/test_direct_rag_engine_local.py",
+        "tests/test_engine_header_evidence_identity.py",
         "tests/test_tool_manifest_contract.py",
         "tests/test_direct_mcp_subprocess_e2e.py",
         "tests/test_cross_language_tool_contract.py",
@@ -18,6 +20,7 @@ SUITES: dict[str, tuple[str, ...]] = {
         "tests/test_build_rag_index_atomic.py",
         "tests/test_build_rag_index_compact.py",
         "tests/test_rag_refresh.py",
+        "tests/test_rag_contract_refactor.py",
         "tests/test_rag_smoke.py",
         "tests/test_direct_rag_project_isolation.py",
         "tests/test_dynamic_rag_cli_defaults.py",
@@ -36,6 +39,8 @@ SUITES: dict[str, tuple[str, ...]] = {
         "tests/test_no_project_hardcode.py",
     ),
     "portable_release": (
+        "tests/test_headless_compaction.py",
+        "tests/test_unity_response_metadata.py",
         "tests/test_update_unity_mcp.py",
         "tests/test_update_unreal_mcp.py",
         "tests/test_integrated_installer.py",

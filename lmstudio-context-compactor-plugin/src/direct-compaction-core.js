@@ -42,6 +42,7 @@ const {
   sanitizeUserAuthoredText,
 } = require("./durable-memory-sanitizer.js");
 const { renderBudgetedCheckpoint } = require("./checkpoint-budget.js");
+const { CHANGE_DATA_MARKER, separateChangeData, renderChangeData, restoreChangeData, fileKey, fileIdentity, invalidateSupersededChanges } = require("./change-evidence-memory.js");
 
 function retainedUserText(value, maxChars) {
   return clip(sanitizeUserAuthoredText(value), maxChars, { trim: false });
@@ -231,7 +232,8 @@ function mergeEvidence(previous, current, maxItems) {
 }
 
 function generatedCheckpoint(message) {
-  return generatedAssistantCheckpoint(message) || Boolean(splitSystemCheckpoint(message));
+  return generatedAssistantCheckpoint(message) || Boolean(splitSystemCheckpoint(message))
+    || message.role === "assistant" && String(message.text || "").startsWith(CHANGE_DATA_MARKER);
 }
 
 function splitSystemCheckpoint(message) {
@@ -519,10 +521,10 @@ function renderCheckpoint(memory, maxChars) {
 
 function buildCheckpoint(messagesInput, options = {}) {
   const messages = messagesInput.map(normalizeMessage);
-  const previousState = mergePriorAssistantEvidence(
+  const previousState = restoreChangeData(mergePriorAssistantEvidence(
     extractPriorContinuityState(messages),
     extractPriorAssistantEvidence(messages),
-  );
+  ), messages);
   // Prior memory is merged through previousState. Feeding generated memory
   // back as conversational evidence recursively grows the next checkpoint.
   const semanticMessages = messages.filter((message) => !generatedCheckpoint(message));
@@ -578,6 +580,11 @@ function buildCheckpoint(messagesInput, options = {}) {
     recentBuildOrTestState: durableState.builds,
     openQuestionEvidence: openQuestions,
   }, { ...options, previousState });
+  // Raw retained results can supersede a prior checkpoint even when they do
+  // not become durable file facts until a later compaction.
+  const changeFiles = (continuity.currentWorkStatus?.modifiedOrObservedFiles || []).filter(file => file.changeEvidence);
+  if (changeFiles.length) invalidateSupersededChanges(changeFiles,
+    stateMemory(allRecentOutcomeRecords, { fileIdentities: new Set(changeFiles.map(fileIdentity)) }).files);
   const latestMessage = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
   const recentRequests = priorUserRequestsForContinuation(messages, latestUserIndex);
   const memory = sanitizeStructuredDurableValue({
@@ -599,6 +606,7 @@ function buildCheckpoint(messagesInput, options = {}) {
   });
   const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 22000));
   const { systemMemory, assistantEvidence } = splitAssistantEvidence(memory);
+  const changeData = separateChangeData(systemMemory);
   const assistantCheckpoint = options.checkpointPolicy === "mandatory" ? "" : renderAssistantCheckpoint(
     assistantEvidence,
     // Preserve the factual checkpoint's emergency file/evidence budget first.
@@ -608,12 +616,26 @@ function buildCheckpoint(messagesInput, options = {}) {
     ? renderBudgetedCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length,
       options.checkpointPolicy === "mandatory")
     : renderCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length);
+  // Data competes only for the remaining whole-checkpoint allowance. System
+  // facts and existing assistant judgments are never reduced to admit hunks.
+  let changeDataCheckpoint = "";
   let serializedState = {};
   try {
     const marker = checkpoint.indexOf(CONTINUITY_MARKER);
     serializedState = JSON.parse(checkpoint.slice(checkpoint.indexOf("{", marker)));
   } catch {
     // Keep diagnostics conservative if a future checkpoint format changes.
+  }
+  if (options.checkpointPolicy !== "mandatory") {
+    const admittedKeys = new Set((serializedState.currentWorkStatus?.modifiedOrObservedFiles || []).map(fileKey));
+    const admitted = [];
+    for (const item of changeData) {
+      if (!admittedKeys.has(item.fileKey)) continue;
+      const rendered = renderChangeData([...admitted, item]);
+      if (checkpoint.length + assistantCheckpoint.length + rendered.length <= maxCheckpointChars) {
+        admitted.push(item); changeDataCheckpoint = rendered;
+      }
+    }
   }
   const sourceFiles = systemMemory.currentWorkStatus?.modifiedOrObservedFiles || [];
   const serializedFiles = serializedState.currentWorkStatus?.modifiedOrObservedFiles || [];
@@ -632,6 +654,7 @@ function buildCheckpoint(messagesInput, options = {}) {
     checkpoint,
     assistantCheckpoint,
     memory,
+    changeDataCheckpoint,
     tailStart,
     latestUserIndex,
     latestUserVerbatim: latestUser,

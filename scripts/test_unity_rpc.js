@@ -48,7 +48,7 @@ async function main() {
   const lostArgs = { action: "create", name: `LostReply_${Date.now()}`, scenePath: "Assets/TestScene.unity", operationId: id() };
   await new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: "127.0.0.1", port: discovery.port }, () => {
-      const request = { protocolVersion: 1, requestId: id(), token: discovery.token, projectIdentity: discovery.projectIdentity,
+      const request = { protocolVersion: discovery.protocolVersion, requestId: id(), token: discovery.token, projectIdentity: discovery.projectIdentity,
         canonicalProjectRoot: discovery.canonicalProjectRoot, editorSessionId: discovery.editorSessionId, domainGeneration: discovery.domainGeneration,
         method: "unity_scene", args: lostArgs };
       socket.write(JSON.stringify(request) + "\n", () => { socket.destroy(); resolve(); });

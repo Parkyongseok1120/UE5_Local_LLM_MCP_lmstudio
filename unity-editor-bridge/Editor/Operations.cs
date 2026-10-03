@@ -25,7 +25,7 @@ namespace EvidenceFirst.UnityBridge
                 PathSafety.CheckInternal(file);
                 var record = JObject.Parse(File.ReadAllText(file));
                 if ((string)record["status"] == "running")
-                { record["status"] = "outcome_unknown"; record["result"] = new JObject { ["status"] = "outcome_unknown", ["operationId"] = record["operationId"], ["message"] = "Editor/domain ended before result was recorded; request will not be replayed" }; PathSafety.WritePrivate(file, record.ToString(Formatting.None)); }
+                { record["status"] = "outcome_unknown"; record["result"] = new JObject { ["status"] = "outcome_unknown", ["operationId"] = record["operationId"], ["origin"] = ResponseMetadata.Origin(record), ["message"] = "Editor/domain ended before result was recorded; request will not be replayed" }; PathSafety.WritePrivate(file, record.ToString(Formatting.None)); }
             }
         }
         static string Required(JObject args, string field)
@@ -37,6 +37,13 @@ namespace EvidenceFirst.UnityBridge
         {
             if (id == null || !Regex.IsMatch(id, "^[A-Za-z0-9_-]{8,100}$")) throw new BridgeException("invalid_operation_id", "operationId must contain 8..100 letters, digits, underscores or hyphens");
             var result = Path.Combine(Journal, id + ".json"); PathSafety.CheckInternal(result); return result;
+        }
+        static JObject StoredResult(JObject record)
+        {
+            var result = record["result"] is JObject saved ? (JObject)saved.DeepClone()
+                : new JObject { ["status"] = "outcome_unknown", ["operationId"] = record["operationId"] };
+            result["origin"] = record["origin"]?.DeepClone() ?? ResponseMetadata.Origin(result);
+            return result;
         }
         internal static JObject Dispatch(string method, JObject args)
         {
@@ -67,7 +74,7 @@ namespace EvidenceFirst.UnityBridge
                 }
                 if ((string)args["action"] == "cancel") return new JObject { ["status"] = "not_cancelled", ["operationId"] = args["operationId"], ["currentStatus"] = record["status"], ["reason"] = "Synchronous operations cannot be safely interrupted; no running API was aborted" };
                 if ((string)args["action"] != "get") throw new BridgeException("invalid_arguments", "Unknown operation action");
-                return (JObject)record["result"];
+                return StoredResult(record);
             }
             bool edit = method == "unity_object_patch" || method == "unity_scene" || method == "unity_asset" || method == "unity_prefab";
             bool execute = method == "unity_editor" || method == "unity_debug_action" || method == "unity_tests";
@@ -79,12 +86,12 @@ namespace EvidenceFirst.UnityBridge
             {
                 var previous = JObject.Parse(File.ReadAllText(filePath));
                 if ((string)previous["digest"] != digest) throw new BridgeException("operation_conflict", "operationId was already bound to different content or Editor session");
-                return previous["result"] as JObject ?? new JObject { ["status"] = "outcome_unknown", ["operationId"] = id };
+                return StoredResult(previous);
             }
             if (Approvals.Required(method, args)) Approvals.Check(method, args);
             if (Directory.GetFiles(Journal, "*.json").Length >= 1000) throw new BridgeException("operation_capacity", "Journal capacity reached; records are not evicted automatically");
             if (EditorApplication.isCompiling || EditorApplication.isUpdating) throw new BridgeException("editor_busy", "Editor is compiling/importing; request was not executed");
-            var recordNew = new JObject { ["operationId"] = id, ["method"] = method, ["digest"] = digest, ["status"] = "running" };
+            var recordNew = new JObject { ["operationId"] = id, ["method"] = method, ["digest"] = digest, ["status"] = "running", ["origin"] = Bridge.CurrentOrigin() };
             PathSafety.WritePrivate(filePath, recordNew.ToString(Formatting.None));
             JObject result;
             try
@@ -101,9 +108,18 @@ namespace EvidenceFirst.UnityBridge
             catch (BridgeException e) { result = Bridge.Error(e); }
             catch (Exception e) { result = Bridge.Error(e, "outcome_unknown"); }
             result["operationId"] = id;
+            result["origin"] = recordNew["origin"].DeepClone();
             recordNew["status"] = result["status"]; recordNew["result"] = result;
             try { PathSafety.WritePrivate(filePath, recordNew.ToString(Formatting.None)); }
-            catch { return new JObject { ["status"] = "outcome_unknown", ["operationId"] = id, ["errorCode"] = "journal_write_failed" }; }
+            catch
+            {
+                // Execution already returned. Persistence failure cannot change
+                // that observed outcome, but a later journal read may be unknown.
+                result["journalPersistence"] = new JObject {
+                    ["status"] = "unavailable", ["errorCode"] = "journal_write_failed",
+                    ["message"] = "Execution result is known in this response; its durable journal update failed. A later query may return outcome_unknown. Do not replay the operation."
+                };
+            }
             return result;
         }
         static string Canonical(JToken value)

@@ -132,9 +132,9 @@ def test_validator_tool_advertises_the_exact_nested_packet_shape() -> None:
     }
     assert evidence["required"] == ["kind", "location", "observation"]
     assert behavior_path["required"] == ["stage", "stageStatus", "location", "symbol"]
-    assert claim["properties"]["claim"]["pattern"] == r"\S"
-    assert evidence["properties"]["location"]["pattern"] == r"\S"
-    assert behavior_path["properties"]["symbol"]["pattern"] == r"\S"
+    for schema in (claim["properties"]["claim"], evidence["properties"]["location"], behavior_path["properties"]["symbol"]):
+        assert schema["minLength"] == 1
+        assert "pattern" not in schema
     assert set(claim["properties"]["verdict"]["enum"]) == set(module.contract_payload("audit")["verdicts"])
     assert set(claim["properties"]["severity"]["enum"]) == set(module.contract_payload("audit")["severities"])
 
@@ -179,6 +179,28 @@ def test_contract_shaped_neutral_architecture_packet_validates_on_first_call() -
     assert result["schemaVersion"] == module.SERVER_VERSION
     assert result["errorCount"] == 0
     assert result["errors"] == []
+    assert result["validationScope"] == "packet_structure_and_record_consistency"
+    assert result["factualEvidenceVerified"] is False
+    assert result["wholeTaskVerified"] is False
+
+
+def test_small_packet_policy_is_shared_and_does_not_certify_audit_completion() -> None:
+    module = _load_mcp()
+    from evidence_packet_contract import VALIDATION_POLICY, model_guidance_prompt
+
+    preset = json.loads((SCRIPTS.parent / "assets/lmstudio-evidence-first.preset.json").read_text(encoding="utf-8"))
+    assert preset["operation"]["fields"][0]["value"] == model_guidance_prompt()
+    description = next(t for t in module.tool_definitions() if t["name"] == "evidence_first_validate")["description"]
+    assert VALIDATION_POLICY in description
+    assert VALIDATION_POLICY in module.contract_payload("audit")["nextAction"]
+    # Separate valid packets remain independent; no accumulated session verdict.
+    for _ in range(2):
+        result, is_error = module.call_tool("evidence_first_validate", {"packet": _neutral_architecture_packet()})
+        assert not is_error and result["claimCount"] == 1
+        assert result["wholeTaskVerified"] is False
+    for mode in ("invalid", "", None, 42):
+        result, is_error = module.call_tool("evidence_first_contract", {"mode": mode})
+        assert is_error and result["ok"] is False
 
 
 def test_mcp_validation_groups_repeated_error_paths_and_bounds_diagnostics() -> None:

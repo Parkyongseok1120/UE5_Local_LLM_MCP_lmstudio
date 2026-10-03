@@ -37,6 +37,7 @@ export const directConfigSchematics = createConfigSchematics()
     subtitle: "Optional bundled guidance. Adds the common core and selected topic, plus the verified/configured engine. Never gates tools or replaces project evidence; omitted when it does not fit.",
     options: [
       { value: "off", displayName: "Off (default)" },
+      { value: "auto", displayName: "Auto (focused, no extra tool calls)" },
       { value: "core", displayName: "Common core" },
       { value: "design", displayName: "SSOT, SOLID and patterns" },
       { value: "debugging", displayName: "Debugging and API contracts" },
@@ -47,7 +48,7 @@ export const directConfigSchematics = createConfigSchematics()
   }, "off")
   .field("designGuidanceDelivery", "select", {
     displayName: "Design reference delivery",
-    subtitle: "Documents preserves existing delivery. Focused selects complete sections for your chosen topic and bounded returned observations; adds no tool calls or execution gates.",
+    subtitle: "Documents preserves existing delivery. Focused selects complete sections and bounded returned observations. Auto always uses Focused while preserving this saved choice; adds no tool calls or execution gates.",
     options: [
       { value: "documents", displayName: "Documents (compatible default)" },
       { value: "focused", displayName: "Focused sections and observations" },

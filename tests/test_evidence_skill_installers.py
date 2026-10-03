@@ -47,6 +47,46 @@ def test_skill_installer_rejects_destination_nested_under_source() -> None:
         installer.install(source / "nested")
 
 
+def test_published_skill_remains_successful_when_backup_cleanup_fails(tmp_path: Path, monkeypatch, capsys) -> None:
+    installer = _load("install_skill")
+    root = tmp_path / "skills"
+    destination = installer.install(root)
+    (destination / "old.txt").write_text("old", encoding="utf-8")
+    original = installer.shutil.rmtree
+
+    def fail_backup(path, *args, **kwargs):
+        target = Path(path).resolve()
+        assert target.is_relative_to(root.resolve())
+        if "-backup-" in target.name:
+            raise PermissionError("backup locked")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(installer.shutil, "rmtree", fail_backup)
+    assert installer.install(root, force=True) == destination
+    assert (destination / "SKILL.md").is_file()
+    assert not (destination / "old.txt").exists()
+    assert list(root.glob("*-backup-*/old.txt"))
+    assert "Cleanup warning" in capsys.readouterr().err
+
+
+def test_failed_publication_restores_old_skill_and_preserves_primary_error(tmp_path: Path, monkeypatch) -> None:
+    installer = _load("install_skill")
+    root = tmp_path / "skills"
+    destination = installer.install(root)
+    (destination / "old.txt").write_text("old", encoding="utf-8")
+    original = Path.replace
+
+    def fail_publish(path, target):
+        if "-staging-" in str(path):
+            raise PermissionError("publication locked")
+        return original(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_publish)
+    with pytest.raises(PermissionError, match="publication locked"):
+        installer.install(root, force=True)
+    assert (destination / "old.txt").read_text(encoding="utf-8") == "old"
+
+
 def test_portable_rule_installer_dry_run_force_and_source_guard(tmp_path: Path) -> None:
     installer = _load("install_portable_rule")
     output = tmp_path / "agent" / "evidence-first.md"

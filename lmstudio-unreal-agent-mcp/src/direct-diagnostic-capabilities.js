@@ -9,6 +9,7 @@ const { runUnrealBuildFromPlan, killProcessTree } = require("./build-executor.js
 const { runAutomationTests } = require("./automation-executor.js");
 const { buildDirectResponse } = require("./direct-build-response.js");
 const { parseAllowedCommand } = require("./command-policy.js");
+const { runBoundedProcess } = require("./bounded-process-runner.js");
 const { success, failure } = require("./direct-response.js");
 const {
   clamp,
@@ -71,7 +72,7 @@ function createDiagnosticCapabilities(context) {
       });
   }
 
-  async function staticValidate(args) {
+  async function staticValidate(args, requestContext = {}) {
     const active = await resolveCallProject(args.project);
     if (!active) return failure("ACTIVE_PROJECT_REQUIRED", "Select an active Unreal project or pass an exact project selector.");
     const selectedRoot = path.dirname(path.resolve(active));
@@ -84,6 +85,9 @@ function createDiagnosticCapabilities(context) {
     }
     const result = await runStaticValidation(projectRoot, {
       env,
+      signal: requestContext.signal,
+      shutdownTimeoutMs: options.shutdownTimeoutMs,
+      terminate: terminateProcessTree,
       timeoutMs: clamp(args.timeoutMs, 120000, 1000, 30 * 60 * 1000),
       scopeTargets: Array.isArray(args.scopeTargets) ? args.scopeTargets.slice(0, 64) : [],
     });
@@ -91,6 +95,10 @@ function createDiagnosticCapabilities(context) {
       advisory: true,
       blocksBuild: false,
       validationOk: result.ok === true,
+      cancelled: result.cancelled === true,
+      processStarted: result.processStarted,
+      processExited: result.processExited,
+      terminationStatus: result.terminationStatus,
       projectRoot,
       scanMode: result.scanMode,
       scopeKind: result.scopeKind,
@@ -101,7 +109,7 @@ function createDiagnosticCapabilities(context) {
     });
   }
 
-  async function buildProject(args) {
+  async function buildProject(args, requestContext = {}) {
     if (!envFlag(env, "ALLOW_UNREAL_BUILD", false)) return failure("BUILD_DISABLED", "Unreal build execution is disabled. Start the MCP with ALLOW_UNREAL_BUILD=1.");
     const plan = await resolvePlan(args);
     if (!plan.ok) {
@@ -119,6 +127,9 @@ function createDiagnosticCapabilities(context) {
       expectedEngineVersion: plan.build.requestedEngineAssociation || plan.build.engineAssociation,
       timeoutMs: clamp(args.timeoutMs, 45 * 60 * 1000, 1000, 4 * 60 * 60 * 1000),
       logPath,
+      signal: requestContext.signal,
+      shutdownTimeoutMs: options.shutdownTimeoutMs,
+      terminate: terminateProcessTree,
     });
     const command = [result.executable || plan.build.buildTool || "UnrealBuildTool", ...(result.args || [])].join(" ");
     const payload = buildDirectResponse({
@@ -135,7 +146,7 @@ function createDiagnosticCapabilities(context) {
     return payload.ok ? success(payload) : { ...payload, ok: false, retry: { allowed: false, mode: "none" } };
   }
 
-  async function runAutomation(args) {
+  async function runAutomation(args, requestContext = {}) {
     if (!envFlag(env, "ALLOW_UNREAL_BUILD", false)) return failure("AUTOMATION_DISABLED", "Unreal automation execution is disabled. Start the MCP with ALLOW_UNREAL_BUILD=1.");
     const plan = await resolvePlan(args);
     if (!plan.ok) return failure(plan.errorCode || "AUTOMATION_PLAN_FAILED", plan.error || "Could not resolve project/engine", { retryAllowed: true });
@@ -146,6 +157,9 @@ function createDiagnosticCapabilities(context) {
       testFilter: String(args.testFilter || ""),
       timeoutMs: clamp(args.timeoutMs, 30 * 60 * 1000, 1000, 4 * 60 * 60 * 1000),
       logPath,
+      signal: requestContext.signal,
+      shutdownTimeoutMs: options.shutdownTimeoutMs,
+      terminate: terminateProcessTree,
       scopeTargets: Array.isArray(args.scopeTargets) ? args.scopeTargets : undefined,
     });
     const payload = {
@@ -157,6 +171,10 @@ function createDiagnosticCapabilities(context) {
     return result.ok ? success(payload) : failure(result.errorCode || "AUTOMATION_FAILED", result.error || "Automation tests failed", {
       details: {
         exitCode: result.exitCode,
+        cancelled: result.cancelled,
+        processStarted: result.processStarted,
+        processExited: result.processExited,
+        terminationStatus: result.terminationStatus,
         failedCount: result.failedCount,
         succeededCount: result.succeededCount,
         missingTests: result.missingTests,
@@ -165,7 +183,7 @@ function createDiagnosticCapabilities(context) {
     });
   }
 
-  async function runCommand(args) {
+  async function runCommand(args, requestContext = {}) {
     if (!envFlag(env, "ALLOW_COMMANDS", false)) return failure("COMMANDS_DISABLED", "Command execution is disabled. Start the MCP with ALLOW_COMMANDS=1.");
     const parsed = parseAllowedCommand(String(args.command || ""));
     if (!parsed) return failure("COMMAND_NOT_ALLOWED", "Command is not in the read/build diagnostic allowlist.");
@@ -173,77 +191,22 @@ function createDiagnosticCapabilities(context) {
     const cwdStat = await statOrNull(cwdResolution.absolutePath);
     if (!cwdStat?.isDirectory()) return failure("INVALID_CWD", "cwd must resolve to an existing contained directory", { retryAllowed: true });
     const timeoutMs = clamp(args.timeoutMs, limits.commandTimeoutMs, 1000, 60 * 60 * 1000);
-    const result = await new Promise((resolve) => {
-      const child = spawnCommand(parsed.file, parsed.args, {
-        cwd: cwdResolution.absolutePath,
-        shell: false,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: process.platform !== "win32",
-      });
-      const stdout = [];
-      const stderr = [];
-      let capturedBytes = 0;
-      let settled = false;
-      let termination = null;
-      let terminationPromise = null;
-      let killFallback = null;
-      let timer = null;
-      const finish = (exitCode, error = "", timedOut = false, outputLimited = false) => {
-        if (settled) return;
-        settled = true;
-        if (timer) clearTimeout(timer);
-        if (killFallback) clearTimeout(killFallback);
-        resolve({
-          exitCode,
-          error,
-          timedOut,
-          outputLimited,
-          stdout: Buffer.concat(stdout).toString("utf8"),
-          stderr: Buffer.concat(stderr).toString("utf8"),
-        });
-      };
-      const terminate = async (kind, message) => {
-        if (termination || settled) return;
-        termination = { kind, message };
-        terminationPromise = Promise.resolve().then(() => terminateProcessTree(child.pid, process.platform));
-        try {
-          await terminationPromise;
-        } catch {
-          // The output/timeout failure must still settle even if OS tree cleanup
-          // itself reports an error. The bounded fallback prevents a hung call.
-          terminationPromise = Promise.resolve();
-        }
-        killFallback = setTimeout(() => finish(1, message, kind === "timeout", kind === "output"), 5000);
-      };
-      const capture = (collection, chunk) => {
-        const buffer = Buffer.from(chunk);
-        const remaining = Math.max(0, limits.maxCommandOutputBytes - capturedBytes);
-        if (remaining > 0) collection.push(buffer.subarray(0, remaining));
-        capturedBytes += Math.min(buffer.length, remaining);
-        if (buffer.length > remaining) void terminate("output", `Command output exceeded ${limits.maxCommandOutputBytes} bytes`);
-      };
-      child.stdout.on("data", (chunk) => capture(stdout, chunk));
-      child.stderr.on("data", (chunk) => capture(stderr, chunk));
-      child.on("close", (code) => {
-        if (termination) {
-          void Promise.resolve(terminationPromise)
-            .catch(() => undefined)
-            .then(() => finish(
-              1,
-              termination.message,
-              termination.kind === "timeout",
-              termination.kind === "output",
-            ));
-        } else {
-          finish(code ?? 1);
-        }
-      });
-      child.on("error", (error) => finish(1, String(error.message || error)));
-      timer = setTimeout(() => {
-        void terminate("timeout", `Command timed out after ${timeoutMs}ms`);
-      }, timeoutMs);
+    const result = await runBoundedProcess({
+      start: () => spawnCommand(parsed.file, parsed.args, {
+        cwd: cwdResolution.absolutePath, shell: false, windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
+      }),
+      timeoutMs, signal: requestContext.signal,
+      shutdownTimeoutMs: options.shutdownTimeoutMs,
+      terminate: terminateProcessTree,
+      maxOutputBytes: limits.maxCommandOutputBytes,
+      outputLimitBytes: limits.maxCommandOutputBytes,
+      decode: chunks => Buffer.concat(chunks).toString("utf8"),
     });
+    result.error = result.cancelled ? "Command cancellation requested."
+      : result.timedOut ? `Command timed out after ${timeoutMs}ms`
+        : result.outputLimited ? `Command output exceeded ${limits.maxCommandOutputBytes} bytes`
+          : result.spawnError || result.outputDecodeError || "";
     const commandOk = result.exitCode === 0 && !result.error;
     const outputChars = commandOk
       ? Math.max(1024, Math.floor((limits.maxResponseChars - 4096) / 16))
@@ -252,13 +215,17 @@ function createDiagnosticCapabilities(context) {
       ok: commandOk,
       exitCode: result.exitCode,
       timedOut: result.timedOut,
+      cancelled: result.cancelled,
+      processStarted: result.processStarted,
+      processExited: result.processExited,
+      terminationStatus: result.terminationStatus,
       outputLimited: result.outputLimited,
       stdout: result.stdout.slice(-outputChars),
       stderr: result.stderr.slice(-outputChars),
       error: result.error,
     };
     return payload.ok ? success(payload) : failure(
-      result.timedOut ? "COMMAND_TIMEOUT" : result.outputLimited ? "COMMAND_OUTPUT_LIMIT" : "COMMAND_FAILED",
+      result.cancelled ? "COMMAND_CANCELLED" : result.timedOut ? "COMMAND_TIMEOUT" : result.outputLimited ? "COMMAND_OUTPUT_LIMIT" : "COMMAND_FAILED",
       result.error || `Command exited ${result.exitCode}`,
       { details: payload },
     );

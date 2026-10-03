@@ -2,15 +2,22 @@ import {
   Chat,
   ChatMessage
 } from "@lmstudio/sdk";
-import { toolMemory } from "./context-ports";
 import type { DirectConfig, FinalizationTrigger } from "./execution-contracts";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
 import { containsUnresolvedToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
-import { sourceObservationFailed } from "./evidence-manager";
+import { coverageRange, observationRecords, sourceObservationFailed } from "./evidence-manager";
+import type { RemoteToolLike } from "./tool-capability-registry";
 const { redact } = require("./evidence-archive.js") as { redact(value: string): string };
 
 export class DeliveryController {
   attempts = 0;
+  constructor(private readonly tools: Array<RemoteToolLike> = []) { }
+  // Terminal parse failure never repairs or retries an operation. Deliver only
+  // returned observations; unfinished model claims are not report evidence.
+  failedToolRequest(history: Chat, messages: Array<ChatMessage>, reason: string) {
+    const report = evidenceBackedPartialReport(history, messages, reason, this.tools);
+    return { ...report, text: `${report.text}\n- 도구 요청 인수를 완성하지 못해 해당 요청은 실행되지 않았습니다.\n- 실행되지 않은 요청의 검증 결과는 없으며, 반환 기록만으로 전체 조사나 원인 판단이 완료된 것은 아닙니다.` };
+  }
   limits(config: Pick<DirectConfig, "maxOutputReserve" | "auditFinalMaxTokens" | "auditFinalSeconds"
     | "outputRecoveryMaxTokens" | "outputRecoverySeconds">, bounded: boolean, trigger: FinalizationTrigger | null) {
     // A context/read recovery does not opt the user into bounded audit. Keep
@@ -49,7 +56,7 @@ export class DeliveryController {
       objectiveSatisfied,
       taskCompleted: objectiveSatisfied === true && delivery.deliveryState === "complete",
 delivery, partial: needsPartial ? evidenceBackedPartialReport(history, captured.messages,
-        delivery.rejectionReason || trigger || "research_incomplete") : null
+        delivery.rejectionReason || trigger || "research_incomplete", this.tools) : null
 };
   }
 }
@@ -153,7 +160,8 @@ export function classifyFinalDelivery(
   };
 }
 
-export function evidenceBackedPartialReport(history: Chat, currentMessages: Array<ChatMessage>, reason: string): {
+export function evidenceBackedPartialReport(history: Chat, currentMessages: Array<ChatMessage>, reason: string,
+  tools: Array<RemoteToolLike> = []): {
   text: string;
   evidenceCount: number;
   errorCount: number;
@@ -164,57 +172,61 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
   const excerpts: Array<string> = [];
   let excerptChars = 0;
   // Favor the most recent returned evidence, not the oldest eight results.
-  for (const message of [...history.getMessagesArray(), ...currentMessages].reverse()) {
-    for (const result of message.getToolCallResults()) {
-      const value = toolMemory.decodeToolResultRecord(result.content).value;
-      if (!value || typeof value !== "object") continue;
-      const failed = sourceObservationFailed(value);
-      if (failed) {
-        const error = String(value.errorCode || value.error || value.status || "unknown_error").slice(0, 120);
-        if (!errors.includes(error)) errors.push(error);
-        continue;
-      }
-      const kind = String(value.kind || "");
-      let fact = "";
-      if (kind === "workspace_file_observation") {
-        const status = String(value.resultStatus || value.status || "");
-        if (value.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(status)
-          || !(value.ok === true || ["observed", "complete"].includes(status))) continue;
-        const target = String(value.path || value.sourcePath || "unknown-file").slice(0, 240);
-        const byteRange = value.range as { unit?: unknown; start?: unknown; endExclusive?: unknown } | undefined;
-        const range = Number.isInteger(value.startLine) && Number.isInteger(value.endLine)
-          ? `lines ${value.startLine}–${value.endLine}`
-          : byteRange?.unit === "byte" ? `bytes [${byteRange.start}, ${byteRange.endExclusive})`
-            : "range unknown";
-        fact = `file ${target} ${range} (반환된 관측 범위)`;
-        const body = [value.text, value.content, value.body].find(item => typeof item === "string");
-        if (!seen.has(fact) && typeof body === "string" && body && excerptChars < 2400) {
-          const excerpt = redact(body).slice(0, Math.min(800, 2400 - excerptChars));
-          excerptChars += excerpt.length;
-          excerpts.push(`${target} — 본문 일부 발췌, 전체 파일 분석 아님:\n${excerpt.split(/\r?\n/u).map(line => `    ${line}`).join("\n")}`);
-        }
-      } else if (kind === "historical_evidence_range") {
-        const id = String(value.evidenceId || "unknown-evidence").slice(0, 80);
-        const range = Array.isArray(value.returnedRange) ? JSON.stringify(value.returnedRange) : "unknown-range";
-        fact = `archive ${id} range ${range}`;
-      } else if (kind === "archived_tool_result_projection") {
-        const id = String((value.archiveRef as Record<string, unknown> | undefined)?.evidenceId
-          || "unknown-evidence").slice(0, 80);
-        const range = Array.isArray(value.projectedBodyRanges)
-          ? JSON.stringify(value.projectedBodyRanges) : "unknown-range";
-        fact = `archived projection ${id} body range ${range}`;
-      } else if (kind === "git_observation" || value.action || value.sourceAction) {
-        const action = String(value.action || value.sourceAction || "read").slice(0, 80);
-        const target = String(value.path || value.sourcePath || "workspace").slice(0, 160);
-        const pageStart = value.pageStart ?? value.sourcePageStart;
-        const pageEnd = value.pageEnd ?? value.sourcePageEnd;
-        const page = pageStart !== undefined || pageEnd !== undefined
-          ? ` page ${String(pageStart ?? "?")}–${String(pageEnd ?? "?")}` : "";
-        fact = `${action} ${target}${page}`;
-      }
-      if (fact && !seen.has(fact)) { seen.add(fact); facts.push(fact); }
-      if (facts.length >= 8) break;
+  // Normalize each paired history independently: current messages may already
+  // be committed in history. Joining both first would duplicate their call IDs.
+  const pairing = { confirmedPairsOnly: tools.length > 0 };
+  const records = [...observationRecords(history.getMessagesArray(), tools, pairing),
+    ...observationRecords(currentMessages, tools, pairing)];
+  for (const record of records.reverse()) {
+    const value = record.value;
+    if (!value || typeof value !== "object") continue;
+    const failed = sourceObservationFailed(value);
+    if (failed) {
+      const error = String(value.errorCode || value.error || value.status || "unknown_error").slice(0, 120);
+      if (!errors.includes(error)) errors.push(error);
+      continue;
     }
+    const kind = String(value.kind || "");
+    let fact = "";
+    const nativeFile = record.trustedRead && value.provider === "mcp/unreal-agent"
+      && ["read_file", "read_file_range"].includes(String(value.toolName))
+      && typeof value.path === "string" && typeof value.content === "string";
+    if (kind === "workspace_file_observation" || nativeFile) {
+      const status = String(value.resultStatus || value.status || "");
+      if (value.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(status)
+        || !(value.ok === true || ["observed", "complete"].includes(status))) continue;
+      const target = String(value.path || value.sourcePath || "unknown-file").slice(0, 240);
+      const returned = coverageRange(value, "source");
+      const range = returned?.rangeUnit === "line" ? `lines ${returned.range[0]}–${returned.range[1]}`
+        : returned?.rangeUnit === "utf8_byte" ? `bytes [${returned.range[0]}, ${returned.range[1] + 1})`
+          : "range unknown";
+      fact = `file ${target} ${range} (반환된 관측 범위)`;
+      const body = [value.text, value.content, value.body].find(item => typeof item === "string");
+      if (!seen.has(fact) && typeof body === "string" && body && excerptChars < 2400) {
+        const excerpt = redact(body).slice(0, Math.min(800, 2400 - excerptChars));
+        excerptChars += excerpt.length;
+        excerpts.push(`${target} — 본문 일부 발췌, 전체 파일 분석 아님:\n${excerpt.split(/\r?\n/u).map(line => `    ${line}`).join("\n")}`);
+      }
+    } else if (kind === "historical_evidence_range") {
+      const id = String(value.evidenceId || "unknown-evidence").slice(0, 80);
+      const range = Array.isArray(value.returnedRange) ? JSON.stringify(value.returnedRange) : "unknown-range";
+      fact = `archive ${id} range ${range}`;
+    } else if (kind === "archived_tool_result_projection") {
+      const id = String((value.archiveRef as Record<string, unknown> | undefined)?.evidenceId
+        || "unknown-evidence").slice(0, 80);
+      const range = Array.isArray(value.projectedBodyRanges)
+        ? JSON.stringify(value.projectedBodyRanges) : "unknown-range";
+      fact = `archived projection ${id} body range ${range}`;
+    } else if (kind === "git_observation" || value.action || value.sourceAction) {
+      const action = String(value.action || value.sourceAction || "read").slice(0, 80);
+      const target = String(value.path || value.sourcePath || "workspace").slice(0, 160);
+      const pageStart = value.pageStart ?? value.sourcePageStart;
+      const pageEnd = value.pageEnd ?? value.sourcePageEnd;
+      const page = pageStart !== undefined || pageEnd !== undefined
+        ? ` page ${String(pageStart ?? "?")}–${String(pageEnd ?? "?")}` : "";
+      fact = `${action} ${target}${page}`;
+    }
+    if (fact && !seen.has(fact)) { seen.add(fact); facts.push(fact); }
     if (facts.length >= 8) break;
   }
   const lines = ["부분 조사 보고 (미완료)", "확인된 근거:"];

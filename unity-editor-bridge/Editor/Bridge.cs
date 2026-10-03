@@ -26,6 +26,7 @@ namespace EvidenceFirst.UnityBridge
     public static class Bridge
     {
         public const string Version = "1.4.0-beta.4";
+        internal const int ProtocolVersion = 2;
         internal static string Root, ProjectId, Session, PlaySession, StateDirectory;
         internal static int Generation;
         static string token;
@@ -79,7 +80,7 @@ namespace EvidenceFirst.UnityBridge
                 Snapshots.Recover();
                 Operations.Recover();
                 var discovery = new JObject {
-                    ["protocolVersion"] = 1, ["bridgeVersion"] = Version, ["projectIdentity"] = ProjectId,
+                    ["protocolVersion"] = ProtocolVersion, ["bridgeVersion"] = Version, ["projectIdentity"] = ProjectId,
                     ["canonicalProjectRoot"] = Root, ["editorSessionId"] = Session, ["domainGeneration"] = Generation,
                     ["processId"] = System.Diagnostics.Process.GetCurrentProcess().Id,
                     ["port"] = ((IPEndPoint)listener.LocalEndpoint).Port, ["token"] = token
@@ -147,7 +148,7 @@ namespace EvidenceFirst.UnityBridge
                 JObject result;
                 try
                 {
-                    if ((int?)request["protocolVersion"] != 1 || (string)request["projectIdentity"] != ProjectId ||
+                    if ((int?)request["protocolVersion"] != ProtocolVersion || (string)request["projectIdentity"] != ProjectId ||
                         PathSafety.Identity((string)request["canonicalProjectRoot"] ?? "") != PathSafety.Identity(Root) ||
                         (string)request["editorSessionId"] != Session || (int?)request["domainGeneration"] != Generation)
                         throw new BridgeException("binding_mismatch", "Project, Editor or domain changed");
@@ -155,23 +156,33 @@ namespace EvidenceFirst.UnityBridge
                     result = Operations.Dispatch((string)request["method"], args);
                 }
                 catch (Exception error) { result = Error(error); }
-                result["requestId"] = request["requestId"];
-                result["editorSessionId"] = Session;
-                result["domainGeneration"] = Generation;
-                result["observedAt"] = DateTime.UtcNow.ToString("O");
+                var currentOrigin = CurrentOrigin();
+                result = ResponseMetadata.Deliver(result, request["requestId"], currentOrigin);
                 if (Encoding.UTF8.GetByteCount(result.ToString(Formatting.None)) > 65000)
-                    result = new JObject { ["status"] = request["args"]?["operationId"] != null ? "outcome_unknown" : "not_applied", ["errorCode"] = "response_budget_exceeded",
-                        ["requestId"] = request["requestId"], ["editorSessionId"] = Session, ["operationId"] = request["args"]?["operationId"] };
+                {
+                    var compact = new JObject { ["status"] = result["status"] ?? "outcome_unknown",
+                        ["origin"] = result["origin"], ["bodyOmitted"] = true,
+                        ["deliveryWarning"] = "response_budget_exceeded" };
+                    foreach (string key in new[] { "operationId", "snapshotId", "recordingId", "indexId", "manifestId", "id", "errorCode", "journalPersistence", "metadataPersistence" })
+                        if (result[key] != null) compact[key] = result[key].DeepClone();
+                    result = ResponseMetadata.Deliver(compact, request["requestId"], currentOrigin);
+                }
                 pending.Response = result;
                 pending.Ready.Set();
             }
         }
+        internal static JObject CurrentOrigin() => new JObject {
+            ["schemaVersion"] = 1, ["state"] = "recorded", ["projectIdentity"] = ProjectId,
+            ["canonicalProjectRoot"] = Root, ["editorSessionId"] = Session,
+            ["domainGeneration"] = Generation, ["playSessionId"] = PlaySession,
+            ["observedAt"] = DateTime.UtcNow.ToString("O")
+        };
         internal static JObject Error(Exception error, string status = "not_applied") => new JObject {
             ["status"] = status, ["errorCode"] = error is BridgeException known ? known.Code : "unity_error",
             ["message"] = error.Message.Length > 1000 ? error.Message.Substring(0, 1000) : error.Message
         };
         internal static JObject Status() => new JObject {
-            ["status"] = "observed", ["connection"] = "connected", ["protocolVersion"] = 1, ["bridgeVersion"] = Version,
+            ["status"] = "observed", ["connection"] = "connected", ["protocolVersion"] = ProtocolVersion, ["bridgeVersion"] = Version,
             ["projectIdentity"] = ProjectId, ["canonicalProjectRoot"] = Root, ["editorVersion"] = Application.unityVersion,
             ["editorSessionId"] = Session, ["domainGeneration"] = Generation, ["playSessionId"] = PlaySession,
             ["compilationId"] = Observations.CompilationId, ["compiling"] = EditorApplication.isCompiling,

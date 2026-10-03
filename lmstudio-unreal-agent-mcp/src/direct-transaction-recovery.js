@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const fsp = fs.promises;
 const path = require("node:path");
 const { atomicWriteText } = require("./atomic-io");
-const { absolutePathIsWithin } = require("./filesystem-path-identity");
+const { absolutePathIsWithin, canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { sha256Text } = require("./safe-write");
 const { withPathLock } = require("./write-locks");
 const {
@@ -31,6 +31,14 @@ function assertRecoveryPaths(journal, entry, stateRoot) {
   if (!absolutePathIsWithin(target, journal.projectRoot)) {
     throw new Error(`Recovery target escapes project root: ${entry.relativePath}`);
   }
+  // canonicalAbsolutePath was frozen when the transaction acquired its target.
+  // Containment alone allows a parent to be rebound to another file in the same
+  // project. Equal bytes do not prove that this is still the owned target.
+  if (fs.existsSync(target)) {
+    const real = fs.realpathSync.native ? fs.realpathSync.native(target) : fs.realpathSync(target);
+    const frozen = (value) => canonicalAbsolutePathIdentity(value, process.platform, { realpath: false });
+    if (frozen(real) !== frozen(target)) throw new Error(`Recovery target physical identity changed: ${entry.relativePath}`);
+  }
   if (entry.existedBefore && entry.preContentBackupPath) {
     const backupRoot = runtimeTransactionPaths(stateRoot, journal.runtimeOwner).backups;
     if (!absolutePathIsWithin(path.resolve(entry.preContentBackupPath), backupRoot)) {
@@ -44,6 +52,7 @@ async function restoreEntry(journal, entry, stateRoot) {
   if (entry.writeStarted !== true) return { ok: true, restored: false, untouched: true };
   const target = path.resolve(entry.canonicalAbsolutePath);
   const recover = async () => {
+    assertRecoveryPaths(journal, entry, stateRoot);
     const existsNow = fs.existsSync(target);
     const currentHash = existsNow ? sha256Text(await fsp.readFile(target, "utf8")) : "";
     const preImageIntact = entry.existedBefore
@@ -63,8 +72,10 @@ async function restoreEntry(journal, entry, stateRoot) {
       if (sha256Text(preContent) !== entry.preHash) {
         return { ok: false, error: `Pre-image backup hash mismatch: ${entry.relativePath}` };
       }
+      assertRecoveryPaths(journal, entry, stateRoot);
       atomicWriteText(target, preContent, "utf8");
     } else {
+      assertRecoveryPaths(journal, entry, stateRoot);
       await fsp.unlink(target);
     }
     return { ok: true, restored: true };
@@ -111,11 +122,13 @@ async function rollbackRuntimeTransaction(journal, stateRoot, options = {}) {
               if (sha256Text(preContent) !== entry.preHash) {
                 result = { ok: false, error: `Pre-image backup hash mismatch: ${entry.relativePath}` };
               } else {
+                assertRecoveryPaths(journal, entry, stateRoot);
                 atomicWriteText(target, preContent, "utf8");
                 result = { ok: true, restored: true };
               }
             }
           } else {
+            assertRecoveryPaths(journal, entry, stateRoot);
             await fsp.unlink(target);
             result = { ok: true, restored: true };
           }

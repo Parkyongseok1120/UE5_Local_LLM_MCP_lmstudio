@@ -151,6 +151,7 @@ export function buildCompactedHistory(
   ].filter(Boolean).join("\n\n");
   if (systemText) compacted.append("system", systemText);
   if (checkpoint.assistantCheckpoint) compacted.append("assistant", checkpoint.assistantCheckpoint);
+  if (checkpoint.changeDataCheckpoint) compacted.append("assistant", checkpoint.changeDataCheckpoint);
   for (let index = 0;index < messages.length;index += 1) {
     if (!messages[index].isSystemPrompt() && retained.has(index)) compacted.append(messages[index]);
   }
@@ -387,7 +388,8 @@ type AssembledInput = Awaited<ReturnType<ReturnType<typeof createInputAssembler>
 /** Owns the final input post-condition. Every candidate is measured after all
  * continuity/availability metadata and the exact exposed schema are attached. */
 export class ContextManager {
-  constructor(readonly config: DirectConfig, readonly broker: BudgetBroker) { }
+  constructor(readonly config: DirectConfig, readonly broker: BudgetBroker,
+    readonly checkpointOptions: Record<string, unknown> = {}) { }
   /** Add optional material only after the existing evidence window is ready.
    * Admission reuses the exact assembler and shared broker; it never compacts
    * evidence, changes output limits, or creates a second execution gate. */
@@ -478,7 +480,7 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
 };
     }
     const floorCandidate = buildCompactedHistory(history, 0, this.config,
-      { maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" });
+      { ...this.checkpointOptions, maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" });
     const floorInput = floorCandidate.history === history ? before : await assemble(floorCandidate.history);
     // A checkpoint that expands an already minimal input is not its mandatory floor.
     const floor = floorInput.measurement.exact && floorInput.measurement.inputTokens < before.measurement.inputTokens ? floorInput : before;
@@ -500,7 +502,7 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
       // Complete exchanges are indivisible. Never assume token sizes are monotone.
       for (const choice of candidates) {
         const candidate = choice.name === "mandatory_floor" ? floorCandidate
-          : buildCompactedHistory(history, 0, this.config, choice.options);
+          : buildCompactedHistory(history, 0, this.config, { ...this.checkpointOptions, ...choice.options });
         const input = candidate.history === history ? before
           : choice.name === "mandatory_floor" ? floorInput : await assemble(candidate.history);
         const accepted = input.measurement.exact && input.measurement.inputTokens <= water.effectiveLowWaterTokens
@@ -543,6 +545,7 @@ history: candidate.history, assembled: input, checkpoint: candidate.checkpoint,
 }
 
 export async function prepareWorkingInput(options: {
+  checkpointOptions?: Record<string, unknown>;
   tokenSource: unknown; config: DirectConfig; workingHistory: Chat; activeNote: ContinuityNote | null;
   noteEnabled: boolean; roundScopeInstructions: Array<string>; roundTools: Array<RemoteToolLike>;
   roundOutputReserve: number; beforeInput: ReturnType<typeof composeModelHistory>;
@@ -576,6 +579,7 @@ export async function prepareWorkingInput(options: {
   if (shouldCompactContext(before, config, roundTools.some(hasReadCapability))) {
     const hard = before.remainingTokens <= config.hardRemainingTokens;
     const checkpointOptions = {
+      ...options.checkpointOptions,
       maxCheckpointChars: config.maxCheckpointChars - beforeInput.overhead,
     };
     let candidate: CompactedHistory;

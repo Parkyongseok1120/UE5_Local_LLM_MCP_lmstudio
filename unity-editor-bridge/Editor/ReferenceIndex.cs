@@ -18,7 +18,7 @@ namespace EvidenceFirst.UnityBridge
                 var index = Store.Get((string)args["indexId"]); var rows = ((JArray)index["edges"]).OfType<JObject>();
                 if (args["endpoint"] != null) { string side = (string)args["direction"] == "reverse" ? "to" : "from"; rows = rows.Where(e => JToken.DeepEquals(e[side], args["endpoint"])); }
                 var result = Objects.Page(rows.ToList(), args, Bridge.Digest((string)index["id"] + args["endpoint"] + (string)args["direction"]));
-                foreach (string key in new[] { "id", "scope", "kind", "startedAt", "endedAt", "editorSessionId", "playSessionId", "domainGeneration", "omissions", "completeWithinScope" }) result[key] = index[key]?.DeepClone();
+                foreach (string key in new[] { "id", "scope", "kind", "startedAt", "endedAt", "editorSessionId", "playSessionId", "domainGeneration", "origin", "omissions", "completeWithinScope" }) result[key] = index[key]?.DeepClone();
                 result["freshness"] = "immutable_collection_not_live"; result["unusedConclusion"] = "not_inferred"; return result;
             }
             if (action != "collect") throw new BridgeException("invalid_arguments", "Expected collect/query/release");

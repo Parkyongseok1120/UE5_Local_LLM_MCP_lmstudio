@@ -15,12 +15,15 @@ import direct_rag_projects
 import direct_rag_search
 import direct_rag_symbol
 from direct_rag_contract import (
+    DIRECT_RAG_MUTATING_TOOL_NAMES,
     DIRECT_RAG_TOOL_NAMES,
     direct_rag_tool_definitions,
     validate_tool_arguments,
 )
 from direct_rag_result import CapabilityResult, failure, to_mcp_tool_result
 from direct_rag_runtime import DirectRagRuntime
+from direct_rag_operation import RagOperationStopped, check_operation, operation_scope
+from direct_rag_stdio_requests import RequestInbox, normalize_line
 from mcp_stdio import write_json_line, write_utf8_line
 
 Handler = Callable[[DirectRagRuntime, dict[str, Any]], CapabilityResult]
@@ -49,7 +52,6 @@ def compose_handlers() -> dict[str, Handler]:
 
 class DirectRagServer:
     """Transport only: capabilities own all domain behavior."""
-
     def __init__(
         self,
         index: Path,
@@ -74,10 +76,10 @@ class DirectRagServer:
         )
 
     def run(self) -> None:
-        for raw_line in self._input:
-            line = raw_line.strip()
-            if line.startswith("\ufeff"):
-                line = line[1:].lstrip()
+        inbox = RequestInbox(self._input, self.send_error,
+                             is_mutating=lambda name: name not in self._tool_by_name or name in DIRECT_RAG_MUTATING_TOOL_NAMES)
+        for raw_line, operation in inbox:
+            line = normalize_line(raw_line)
             if not line:
                 continue
             request: dict[str, Any] | None = None
@@ -86,7 +88,11 @@ class DirectRagServer:
                 if not isinstance(parsed, dict):
                     raise ValueError("JSON-RPC request must be an object")
                 request = parsed
-                self.handle_message(request)
+                if operation is not None:
+                    with operation_scope(operation):
+                        self.handle_message(request)
+                else:
+                    self.handle_message(request)
             except (json.JSONDecodeError, ValueError) as exc:
                 request_id = request.get("id") if isinstance(request, dict) else None
                 if request_id is not None:
@@ -98,6 +104,9 @@ class DirectRagServer:
                 self.log(f"request failed: {type(exc).__name__}: {exc}")
                 if request_id is not None:
                     self.send_error(request_id, -32603, "Internal JSON-RPC error")
+            finally:
+                if isinstance(request, dict):
+                    inbox.finish(request.get("id"))
 
     def handle_message(self, request: dict[str, Any]) -> None:
         request_id = request.get("id")
@@ -162,7 +171,12 @@ class DirectRagServer:
             )
             return
         try:
+            check_operation()
             result = self._handlers[name](self.runtime, arguments)
+        except RagOperationStopped as exc:
+            result = failure(exc.code, str(exc), stageCommitted=False,
+                             terminationConfirmed=exc.termination_confirmed,
+                             terminationScope="collector_process", preservedScratch=exc.preserved_scratch)
         except Exception as exc:
             self.log(f"tool {name} failed: {type(exc).__name__}: {exc}")
             result = failure(

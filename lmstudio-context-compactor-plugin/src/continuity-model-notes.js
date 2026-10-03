@@ -9,6 +9,7 @@ const { pathApiFor, canonicalFilePath, projectDescriptor, normalizedObservationS
 const { normalizedTextKey } = require("./continuity-text.js");
 const { sanitizeDerivedOperationalText } = require("./durable-memory-sanitizer.js");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
+const { exchangeIndex } = require("./tool-exchange-index.js");
 
 const NOTE_START = "\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n";
 const NOTE_END = "\n</continuity-note>";
@@ -174,11 +175,13 @@ function provenanceFromMessages(messages) {
     toolRequests: message.getToolCallRequests(),
   }));
   const objectiveIndex = buildObjectiveContinuity(normalized).activeObjective?.messageIndex ?? 0;
+  const startIndex = Math.max(0, objectiveIndex);
+  const pairing = exchangeIndex(messages.slice(startIndex));
   const projects = new Map();
   const requestCounts = new Map();
   const completedIds = new Set();
   const observations = new Map();
-  for (let index = Math.max(0, objectiveIndex); index < messages.length; index += 1) {
+  for (let index = startIndex; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.getRole() === "assistant") {
       for (const request of message.getToolCallRequests()) {
@@ -187,10 +190,9 @@ function provenanceFromMessages(messages) {
       }
     }
     if (message.getRole() !== "tool") continue;
-    for (const result of message.getToolCallResults()) {
-      if (result.toolCallId && requestCounts.has(String(result.toolCallId))) {
-        completedIds.add(String(result.toolCallId));
-      }
+    for (const [ri, result] of message.getToolCallResults().entries()) {
+      if (!pairing.matches.has(`${index - startIndex}:${ri}`)) continue;
+      completedIds.add(String(result.toolCallId));
       const content = String(result.content || "");
       if (content.length > 262144) continue;
       const decoded = decodeToolResultRecord(content);
@@ -237,6 +239,9 @@ function verifiedRefs(draft, verifiedToolIds, provenance = {}, additionalVerifie
     }),
   ]));
   const records = [...(provenance.observations || new Map()).entries()].filter(([, value]) => value.kind !== "git_observation");
+  const availableFileObservation = value => value.ok !== false && !value.errorCode
+    && !["deleted", "conflict_observed", "unavailable"].includes(normalizedObservationState(value))
+    && !["failed", "error", "canceled", "cancelled", "outcome_unknown"].includes(String(value.status || "").toLowerCase());
   const fileKey = value => {
     const descriptor = projectDescriptor(value, provenance.projectDescriptor);
     const canonical = canonicalFilePath(value, descriptor);
@@ -247,11 +252,11 @@ function verifiedRefs(draft, verifiedToolIds, provenance = {}, additionalVerifie
     const identity = fileKey(claim);
     if (!identity) return false;
     const latest = records.filter(([, value]) => fileKey(value) === identity).at(-1);
-    if (!latest || normalizedObservationState(latest[1]) === "deleted"
+    if (!latest || !availableFileObservation(latest[1])
       || String(latest[1].sha256 || latest[1].hash).toLowerCase() !== claim.sha256.toLowerCase()) return false;
     return claim.refs.some(ref => {
       const observed = provenance.observations.get(ref.replace(/^tool-call:/, ""));
-      return /^tool-call:/.test(ref) && observed && observed.kind !== "git_observation" && fileKey(observed) === identity
+      return /^tool-call:/.test(ref) && observed && observed.kind !== "git_observation" && availableFileObservation(observed) && fileKey(observed) === identity
         && String(observed.sha256 || observed.hash).toLowerCase() === claim.sha256.toLowerCase();
     });
   }).map(claim => ({ ...claim, refs: claim.refs.filter(ref => verifiedToolIds.has(ref.replace(/^tool-call:/, ""))) }));
@@ -270,13 +275,19 @@ function attachScope(draft, fingerprint, messages = [], additionalVerifiedRefs =
   return JSON.stringify(note).length <= MAX_NOTE_CHARS ? note : null;
 }
 
-function reconcileStoredNote(note, messages, additionalVerifiedRefs = new Set()) {
+function reconcileStoredNote(note, messages, additionalVerifiedRefs = new Set(), options = {}) {
   const validated = validateStoredNote(note);
   if (!validated) return null;
+  const currentObjective = options.objectiveFingerprint ?? objectiveFingerprint(messages);
+  if (!currentObjective || validated.scope.objectiveFingerprint !== currentObjective) return null;
   const provenance = provenanceFromMessages(messages);
   if (validated.scope.projectIdentity && validated.scope.projectIdentity !== provenance.projectIdentity) return null;
+  const currentProject = normalizedProjectRoot(options.projectDescriptor);
+  if (validated.scope.projectIdentity && currentProject
+    && currentProject !== normalizedProjectRoot(provenance.projectDescriptor)) return null;
   const reconciled = { scope: validated.scope,
     ...verifiedRefs(validated, provenance.verifiedToolIds, provenance, additionalVerifiedRefs) };
+  if (options.discardReviewClaims) delete reconciled.reviewClaims;
   return validateStoredNote(reconciled);
 }
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from direct_rag_evidence import factual_rows, format_evidence_rows
-from direct_rag_freshness import project_freshness
+from direct_rag_freshness import cached_project_row_current, project_freshness
 from direct_rag_lexical import hybrid_search, lexical_search
 from direct_rag_limits import detail_limits, resolve_detail
 from direct_rag_selection import search_options
@@ -152,9 +152,10 @@ def retrieve(
 
     def keep_fresh(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         nonlocal suppressed
-        if not suppress_project_source:
+        if not suppress_project_source and "projectStates" not in freshness:
             return rows
-        kept = [row for row in rows if not _is_project_source_row(row, selected)]
+        kept = [row for row in rows if not _is_project_source_row(row, selected)
+                or cached_project_row_current(row, freshness)]
         suppressed += len(rows) - len(kept)
         return kept
 

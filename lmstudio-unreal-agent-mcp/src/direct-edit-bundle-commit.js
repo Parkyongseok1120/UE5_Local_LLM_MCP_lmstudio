@@ -1,4 +1,5 @@
 "use strict";
+const { committedChange } = require("./direct-change-evidence");
 
 const fs = require("node:fs");
 const fsp = fs.promises;
@@ -122,6 +123,7 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
   const writtenAbsolutePaths = [];
   const writtenSet = new Set();
   const postWriteHashes = {};
+  const changeEvidenceByPath = {};
   const patchedPaths = new Set();
   let stageIndex = 0;
 
@@ -190,6 +192,11 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
       writeCompleted: true,
     }, stateRoot);
     postWriteHashes[relativePath] = postHash;
+    // This optional calculation never throws into the transaction rollback.
+    if (result.preHash === original.preHash) {
+      const evidence = committedChange(result.priorContent, result.updated, result.preHash, postHash);
+      if (evidence) changeEvidenceByPath[relativePath] = evidence;
+    }
     patchedPaths.add(relativePath);
     if (!writtenSet.has(target.absolutePath)) {
       writtenSet.add(target.absolutePath);
@@ -199,7 +206,7 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
 
   journal.status = "committed";
   saveRuntimeTransaction(journal, stateRoot);
-  return { postWriteHashes, writtenAbsolutePaths };
+  return { postWriteHashes, writtenAbsolutePaths, changeEvidenceByPath };
 }
 
 module.exports = { captureBundleBaseline, commitBundle };

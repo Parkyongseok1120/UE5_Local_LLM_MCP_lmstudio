@@ -101,3 +101,63 @@ test("log write failure is data, not an unhandled rejection", async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("pre-aborted runner does not start or persist a log", async () => {
+  const controller = new AbortController(); controller.abort();
+  const result = await runBoundedProcess({ signal: controller.signal, timeoutMs: 5,
+    start: () => { throw Error("must not start"); }, logPath: "not-written", persistLog: () => { throw Error("must not write"); } });
+  assert.strictEqual(result.cancelled, true); assert.strictEqual(result.processStarted, false);
+  assert.strictEqual(result.terminationStatus, "not_started"); assert.strictEqual(result.spawnError, "");
+});
+
+for (const close of [false, true]) test(`hanging terminator cannot retain timeout response (close=${close})`, async () => {
+  const child = fakeChild();
+  const result = await runBoundedProcess({ start: () => child, timeoutMs: 5, shutdownTimeoutMs: 15,
+    terminate: () => { if (close) child.emit("close", 0); return new Promise(() => {}); } });
+  assert.strictEqual(result.timedOut, true); assert.strictEqual(result.exitCode, 1);
+  assert.strictEqual(result.processExited, close);
+  assert.strictEqual(result.terminationStatus, close ? "process_exited" : "unconfirmed");
+  child.stdout.write("late output"); child.emit("close", 0);
+});
+
+test("abort, close and rejecting termination settle once without claiming successful execution", async () => {
+  const child = fakeChild(); const controller = new AbortController(); let kills = 0;
+  const pending = runBoundedProcess({ start: () => child, timeoutMs: 5000, shutdownTimeoutMs: 10,
+    signal: controller.signal, terminate: () => { kills++; throw Error("cleanup failure"); } });
+  controller.abort();
+  const result = await pending;
+  assert.strictEqual(result.cancelled, true); assert.strictEqual(kills, 1); assert.strictEqual(result.processExited, false);
+  assert.match(result.terminationError, /cleanup failure/);
+  assert.strictEqual(require("node:events").getEventListeners(controller.signal, "abort").length, 0);
+});
+
+test("log persistence itself has a bounded response deadline", async () => {
+  const child = fakeChild();
+  const pending = runBoundedProcess({ start: () => child, timeoutMs: 5000, logPath: "fake", logTimeoutMs: 10,
+    persistLog: () => new Promise(() => {}) });
+  child.emit("close", 0);
+  const result = await pending;
+  assert.strictEqual(result.processExited, true); assert.match(result.logPersistenceError, /deadline/);
+});
+
+for (const close of [false, true]) test(`post-spawn error retains cleanup ownership (close=${close})`, async () => {
+  const child = fakeChild(); let kills = 0;
+  const pending = runBoundedProcess({ start: () => child, timeoutMs: 5000, shutdownTimeoutMs: 10,
+    terminate: () => { kills++; if (close) child.emit("close", 0); return new Promise(() => {}); } });
+  child.emit("error", Error("running child error"));
+  const result = await pending;
+  assert.strictEqual(kills, 1); assert.strictEqual(result.exitCode, 1);
+  assert.strictEqual(result.processStarted, true); assert.strictEqual(result.processExited, close);
+  assert.strictEqual(result.terminationStatus, close ? "process_exited" : "unconfirmed");
+  assert.match(result.spawnError, /running child error/);
+  child.emit("error", Error("late child error"));
+});
+
+test("spawn failure without a pid does not request process termination", async () => {
+  const child = fakeChild(); delete child.pid; let kills = 0;
+  const pending = runBoundedProcess({ start: () => child, timeoutMs: 5000, terminate: () => { kills++; } });
+  child.emit("error", Error("could not spawn"));
+  const result = await pending;
+  assert.strictEqual(kills, 0); assert.strictEqual(result.processStarted, false);
+  assert.strictEqual(result.terminationStatus, "not_started"); assert.match(result.spawnError, /could not spawn/);
+});

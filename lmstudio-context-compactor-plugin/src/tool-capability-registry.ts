@@ -86,7 +86,10 @@ function hasReadAuthority(
     if (readOperations[name]) return readOperations[name].includes(String(args.action || ""));
     return false;
   }
-  if (plugin === "mcp/unreal-agent" || plugin === "mcp/unreal-rag") {
+  if (plugin === "mcp/unreal-rag") {
+    return ["unreal_symbol_lookup", "unreal_rag_search"].includes(name);
+  }
+  if (plugin === "mcp/unreal-agent") {
     return UNREAL_OBSERVATION_TOOLS.has(name);
   }
   return false;

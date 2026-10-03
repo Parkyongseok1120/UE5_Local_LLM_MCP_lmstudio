@@ -209,10 +209,10 @@ def test_direct_composition_owners_stay_bounded() -> None:
         "direct_rag_engine_collection.py": 190,
         "direct_rag_engine_tier.py": 50,
         "direct_rag_backup_restore.py": 80,
-        "direct_rag_project_refresh.py": 180,
+        "direct_rag_project_refresh.py": 190,  # Preserve committed cleanup facts and typed cancellation.
         "direct_rag_project_collection.py": 180,
         "direct_rag_project_set.py": 100,
-        "direct_rag_project_merge.py": 140,
+        "direct_rag_project_merge.py": 155,  # Incoming collection provenance stays with merge ownership.
         "direct_rag_all_refresh.py": 160,
         "direct_rag_build_generation.py": 120,
         "direct_rag_public_build.py": 140,

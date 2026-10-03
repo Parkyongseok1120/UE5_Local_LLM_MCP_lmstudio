@@ -5,11 +5,14 @@ import hashlib
 import importlib.util
 import json
 import os
+import queue
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import threading
+import time
 import zipfile
 from pathlib import Path
 from urllib.parse import unquote
@@ -19,6 +22,49 @@ from conftest import gui_installer_command, plant_compactor_sdk_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_integrated_package.py"
+
+
+def _live_stdio_requests(command: list[str], requests: list[dict], **kwargs) -> subprocess.CompletedProcess:
+    """Keep the connection open until each mutation response is delivered."""
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **kwargs)
+    lines = queue.Queue()
+    errors = []
+    def read_output():
+        for line in process.stdout:
+            lines.put(line)
+        lines.put(None)
+    reader = threading.Thread(target=read_output, daemon=True)
+    error_reader = threading.Thread(target=lambda: errors.append(process.stderr.read()), daemon=True)
+    reader.start()
+    error_reader.start()
+    captured = []
+    deadline = time.monotonic() + 120
+    try:
+        for request in requests:
+            process.stdin.write(json.dumps(request) + "\n")
+            process.stdin.flush()
+            while True:
+                line = lines.get(timeout=max(.01, deadline - time.monotonic()))
+                assert line is not None, "Direct RAG exited before its response"
+                captured.append(line)
+                if json.loads(line).get("id") == request["id"]:
+                    break
+        process.stdin.close()
+        process.wait(timeout=10)
+        reader.join(timeout=2)
+        error_reader.join(timeout=2)
+        while not lines.empty():
+            line = lines.get_nowait()
+            if line is not None:
+                captured.append(line)
+        return subprocess.CompletedProcess(command, process.returncode, "".join(captured), "".join(errors))
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        for pipe in (process.stdin, process.stdout, process.stderr):
+            pipe.close()
 
 
 def _legacy_stdout_env() -> dict[str, str]:
@@ -109,6 +155,23 @@ def _load_builder_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_staged_local_engine_lookup_imports_only_packaged_runtime(tmp_path: Path) -> None:
+    builder = _load_builder_module()
+    for relative in builder.REQUIRED_RUNTIME_FILES:
+        if not relative.startswith("scripts/") or not relative.endswith(".py"):
+            continue
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, destination)
+    result = subprocess.run([sys.executable, "-I", "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); import direct_rag_engine_local; "
+        "import engine_header_evidence; import project_name_resolver; "
+        "assert direct_rag_engine_local.engine_local_symbol; print('staged local lookup imported')",
+        str(tmp_path / "scripts")], cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "staged local lookup imported" in result.stdout
 
 
 def test_builder_supports_package_import_used_by_release_ci() -> None:
@@ -1044,7 +1107,7 @@ void APackagedRefreshProbe::VerifyPackagedDirectRefresh() {}
             },
         },
     ]
-    completed = subprocess.run(
+    completed = _live_stdio_requests(
         [
             sys.executable,
             "-B",
@@ -1052,13 +1115,8 @@ void APackagedRefreshProbe::VerifyPackagedDirectRefresh() {}
             "--index",
             str(index),
         ],
+        requests,
         cwd=output,
-        input="".join(json.dumps(request) + "\n" for request in requests),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=120,
         env={
             **os.environ,
             "DIRECT_RAG_STATE_ROOT": str(tmp_path / "direct-state"),

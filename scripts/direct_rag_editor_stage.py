@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from direct_rag_operation import RagOperationStopped
 
 from direct_rag_build_generation import build_generation
 from direct_rag_refresh_lock import DirectRagRefreshBusyError, index_refresh_lock
@@ -126,7 +127,7 @@ def transactional_editor_ingest(
                 rebase_stage_manifest(stage, idx)
                 required = tuple(dict.fromkeys((*expected_raw, *BUILD_OUTPUTS)))
 
-            commit_refresh_stage(
+            publication = commit_refresh_stage(
                 stage,
                 idx,
                 required_files=required,
@@ -137,10 +138,15 @@ def transactional_editor_ingest(
                 "ingest": {"reason": reason, **ingest},
                 "rebuild": rebuild,
                 "stageCommitted": True,
+                **({"cleanup": publication["cleanup"]} if publication and publication.get("cleanup") else {}),
             }
             if recovery.get("recovered"):
                 result["recovery"] = recovery
             return result
+    except RagOperationStopped as exc:
+        return {"ok": False, "errorCode": exc.code, "error": str(exc),
+                "stageCommitted": False, "terminationConfirmed": exc.termination_confirmed,
+                "terminationScope": "collector_process", "preservedScratch": exc.preserved_scratch}
     except DirectRagRefreshBusyError as exc:
         return {
             "ok": False,

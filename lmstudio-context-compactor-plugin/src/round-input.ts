@@ -11,7 +11,8 @@ import { FIRST_CONSUMER_RAW_GIT_MAX_CHARS, MIN_FINAL_OUTPUT_TOKENS, RESEARCH_REC
 import { READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION } from "./execution-instructions";
 import { readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
-import { designGuidanceCandidates, focusedGuidanceCandidates, type GuidanceDocument } from "./design-guidance";
+import { autoGuidanceCandidates, designGuidanceCandidates, focusedGuidanceCandidates, type GuidanceCandidate, type GuidanceDocument } from "./design-guidance";
+import { selectGuidanceTopics, type GuidanceIntent } from "./guidance-topic-selection";
 import type { ToolScope } from "./tool-scope";
 
 type RoundInputOptions = {
@@ -28,6 +29,7 @@ type RoundInputOptions = {
   finalizing: boolean; boundedAudit: boolean; researchRecoveryEpisodeStarted: boolean;
   reasoningRecovery?: boolean;
   guidanceDocuments?: readonly GuidanceDocument[];
+  guidanceIntent?: GuidanceIntent;
   guidanceScope?: ToolScope;
   referenceRecovery?: boolean;
   finalizationTrigger: string | null;
@@ -52,6 +54,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     { outputReserve: roundOutputReserve });
   let { before, modelHistory, compacted, compactionAppliedCount, compactionAppliedModes,
     compactionCheckpoint, compactionRetention } = await prepareWorkingInput({ tokenSource, config,
+    checkpointOptions: contextManager.checkpointOptions,
     workingHistory, activeNote, noteEnabled, roundScopeInstructions, roundTools, roundOutputReserve,
     beforeInput, measureRoundInput, ctl, executionId, roundIndex });
   workingHistory = modelHistory;
@@ -152,6 +155,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   // candidate search below, rather than regular + emergency + LOW searches.
   if (config.contextManagementMode === "legacy" && assembledInput.measurement.remainingTokens < 0 && !config.observeOnly) {
     const emergency = buildCompactedHistory(workingHistory, 0, config, {
+      ...contextManager.checkpointOptions,
       maxCheckpointChars: config.maxCheckpointChars - assembledInput.composition.overhead, maxCurrentTurnMessages: 2 });
     if (emergency.history !== workingHistory) {
       workingHistory = emergency.history; compacted = true; compactionCheckpoint = emergency.checkpoint;
@@ -198,12 +202,23 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     modelInputId, roundIndex, ...lowWater.telemetry });
   // Optional references never enter workingHistory or the persisted checkpoint.
   // Always derive a fresh, measured candidate from the same evidence history.
-  const focused = config.designGuidanceDelivery === "focused";
+  const focused = config.designGuidanceDelivery === "focused" || config.designGuidanceMode === "auto";
   if (lowWater.canRun && !config.observeOnly && !finalizing && config.designGuidanceMode !== "off"
     && config.designGuidanceMaxTokens > 0 && (!focused || !options.referenceRecovery)) {
-    const candidates = focused && options.guidanceScope
-      ? focusedGuidanceCandidates(config.designGuidanceMode, options.guidanceScope, evidenceManager.referenceSnapshot(workingHistory))
-      : focused ? [] : designGuidanceCandidates(options.guidanceDocuments || []);
+    let candidates: GuidanceCandidate[] = [];
+    let selection: ReturnType<typeof selectGuidanceTopics> | undefined;
+    // A malformed optional catalogue/selector omits guidance. Cancellation and
+    // baseline measurement still belong to their existing execution owners.
+    ctl.guardAbort();
+    try {
+      if (focused && options.guidanceScope) {
+        const snapshot = evidenceManager.referenceSnapshot(workingHistory);
+        if (config.designGuidanceMode === "auto") {
+          selection = selectGuidanceTopics(options.guidanceIntent || { primary: "core", reason: "objective_completeness_unknown" }, snapshot);
+          candidates = selection.omitted ? [] : autoGuidanceCandidates(selection.primary, selection.supplement, options.guidanceScope, snapshot);
+        } else candidates = focusedGuidanceCandidates(config.designGuidanceMode, options.guidanceScope, snapshot);
+      } else if (!focused) candidates = designGuidanceCandidates(options.guidanceDocuments || []);
+    } catch { ctl.guardAbort(); }
     const guidance = await contextManager.addOptionalReferences(assembledInput,
       candidates,
       (instruction, referenceData) => assembleModelInput(workingHistory, { instructions: [...roundScopeInstructions, instruction], referenceData }),
@@ -211,7 +226,12 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort() });
     assembledInput = guidance.assembled;
     if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
-      mode: config.designGuidanceMode, delivery: config.designGuidanceDelivery, ...guidance.telemetry });
+      mode: config.designGuidanceMode, delivery: config.designGuidanceDelivery,
+      configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
+      effectiveDelivery: focused ? "focused" : "documents", objectiveFingerprint,
+      ...(selection ? { primaryTopic: selection.primary, supplementTopic: selection.supplement,
+        selectionReasonCodes: [...selection.reasons, ...(candidates[0]?.omissionReasons || [])],
+        selectionObservationIds: selection.observationIds } : {}), ...guidance.telemetry });
   }
   const finalMeasurement = assembledInput.measurement;
   if (!lowWater.canRun || (!config.observeOnly && finalMeasurement.remainingTokens < 0)) {

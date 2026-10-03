@@ -44,6 +44,54 @@ test("runtime observations and uncertain operations carry the adapter's bound sc
   assert.equal(unknown.status, "outcome_unknown"); assert.equal(unknown.canonicalProjectRoot, f.root);
   assert.equal(unknown.editorSessionId, undefined);
 });
+test("applied and stored outcomes survive post-dispatch response reduction", async t => {
+  const f = fixture(t);
+  let calls = 0;
+  const runtime = createRuntime({ UNITY_PROJECT_ROOT: f.root, ALLOW_WRITE: "1" }, {
+    async call(name, args) {
+      calls++;
+      return { status: name === "unity_snapshot" ? "stored" : "applied", operationId: args.operationId,
+        journalPersistence: { status: "unavailable", message: "x".repeat(3000) },
+        metadataPersistence: { status: "unavailable", message: "x".repeat(3000) },
+        snapshotId: name === "unity_snapshot" ? "s".repeat(32) : undefined, body: "x".repeat(3000) };
+    },
+  });
+  const changed = await runtime.call("unity_scene", { action: "create", name: "actor", operationId: "budget-case-1", byteBudget: 1024 });
+  assert.equal(changed.status, "applied"); assert.equal(changed.operationId, "budget-case-1");
+  assert.equal(changed.errorCode, undefined); assert.equal(changed.delivery.bodyOmitted, true);
+  assert.equal(changed.journalPersistence.status, "unavailable");
+  assert.equal(changed.metadataPersistence.status, "unavailable");
+  assert.ok(Buffer.byteLength(JSON.stringify(changed)) <= 1024);
+  const stored = await runtime.call("unity_snapshot", { action: "capture", byteBudget: 1024 });
+  assert.equal(stored.status, "stored"); assert.equal(stored.snapshotId, "s".repeat(32));
+  assert.equal(calls, 2);
+});
+test("pre-dispatch cancellation and closed runtime never invoke Bridge", async t => {
+  const f = fixture(t); let calls = 0;
+  const runtime = createRuntime({ UNITY_PROJECT_ROOT: f.root, ALLOW_COMMANDS: "1" }, {
+    async call() { calls++; return { status: "applied" }; },
+  });
+  const controller = new AbortController(); controller.abort();
+  const args = { action: "compile", operationId: "cancel-case-1" };
+  const cancelled = await runtime.call("unity_editor", args, { signal: controller.signal });
+  assert.equal(cancelled.status, "not_applied"); assert.equal(cancelled.errorCode, "request_cancelled");
+  runtime.close();
+  assert.equal((await runtime.call("unity_editor", args)).errorCode, "request_cancelled");
+  assert.equal(calls, 0);
+});
+test("runtime close cancels the active response wait and releases request listeners", async t => {
+  const f = fixture(t); const request = new AbortController();
+  const runtime = createRuntime({ UNITY_PROJECT_ROOT: f.root, ALLOW_COMMANDS: "1" }, {
+    call(name, args, { signal }) {
+      return new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(
+        Object.assign(new Error("submitted operation response unavailable"), { code: "request_cancelled", status: "outcome_unknown" })), { once: true }));
+    },
+  });
+  const pending = runtime.call("unity_editor", { action: "compile", operationId: "close-case-1" }, { signal: request.signal });
+  runtime.close();
+  assert.equal((await pending).status, "outcome_unknown");
+  assert.equal(require("node:events").getEventListeners(request.signal, "abort").length, 0);
+});
 test("receipt conflicts, forgery, cross-project isolation and re-read", async t => {
   const a = fixture(t), b = fixture(t);
   a.put("Assets/Code.cs", "class Before {}\r\n"); b.put("Assets/Code.cs", a.get("Assets/Code.cs"));
@@ -105,6 +153,14 @@ test("file observations carry the bound project and the observed file version", 
   assert.equal(changed.canonicalProjectRoot, a.root);
   assert.equal(changed.projectIdentity, a.policy.projectIdentity);
   assert.notEqual(changed.hash, aRead.hash);
+});
+test("failed reads retain unavailable observation scope without inventing deletion", async t => {
+  const f = fixture(t);
+  const missing = await f.call("read_file", { path: "Assets/Missing.cs" });
+  assert.equal(missing.path, "Assets/Missing.cs"); assert.equal(missing.observationState, "unavailable");
+  assert.equal(missing.canonicalProjectRoot, f.root); assert.equal(missing.hash, undefined);
+  const denied = await f.call("read_file", { path: "../Elsewhere.cs" });
+  assert.equal(denied.path, undefined); assert.equal(denied.observationState, undefined);
 });
 test("read_file reports exact ranges and reads Unity package and project settings files", async t => {
   const f = fixture(t);
@@ -284,6 +340,53 @@ test("RPC handshake binds identity and never emits discovery token", async t => 
   fs.writeFileSync(f.policy.discovery, JSON.stringify(discovery));
   await assert.rejects(() => bridge.call("unity_status", {}), { code: "binding_mismatch" });
   assert.equal(requests, 1);
+});
+test("RPC validates delivery identity while preserving historical evidence identity", async t => {
+  const f = fixture(t);
+  const server = net.createServer(socket => {
+    socket.once("data", bytes => {
+      const request = JSON.parse(bytes);
+      const result = { requestId: request.requestId, status: "stored", editorSessionId: "old",
+        domainGeneration: 1, observedAt: "past", delivery: { editorSessionId: "current", domainGeneration: 4 } };
+      socket.end(JSON.stringify(result) + "\n");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve)); t.after(() => server.close());
+  const bridge = new BridgeClient(f.policy);
+  const result = await bridge.send({ protocolVersion: 2, port: server.address().port, editorSessionId: "current", domainGeneration: 4 }, "unity_operation", {});
+  assert.equal(result.editorSessionId, "old"); assert.equal(result.domainGeneration, 1); assert.equal(result.observedAt, "past");
+  await assert.rejects(bridge.send({ port: server.address().port, editorSessionId: "wrong", domainGeneration: 4 }, "unity_operation", {}), { code: "protocol_error" });
+});
+test("protocol 2 refuses responses without an authenticated delivery identity", async t => {
+  const f = fixture(t);
+  const server = net.createServer(socket => {
+    socket.once("data", bytes => {
+      const request = JSON.parse(bytes); assert.equal(request.protocolVersion, 2);
+      socket.end(JSON.stringify({ requestId: request.requestId, editorSessionId: "current", domainGeneration: 4, status: "observed" }) + "\n");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve)); t.after(() => server.close());
+  await assert.rejects(new BridgeClient(f.policy).send({ protocolVersion: 2, port: server.address().port,
+    editorSessionId: "current", domainGeneration: 4 }, "unity_status", {}), { code: "protocol_error" });
+});
+test("RPC cancellation after dispatch reports unknown execution without replay", async t => {
+  const f = fixture(t); const controller = new AbortController(); let submitted = 0;
+  const server = net.createServer(socket => {
+    socket.once("data", () => { submitted++; controller.abort(); });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve)); t.after(() => server.close());
+  const bridge = new BridgeClient(f.policy);
+  await assert.rejects(bridge.send({ port: server.address().port }, "unity_scene", { operationId: "cancel-rpc-1" }, { signal: controller.signal }),
+    { code: "request_cancelled", status: "outcome_unknown" });
+  assert.equal(submitted, 1);
+});
+test("RPC loss after submission is unknown even without an operation identifier", async t => {
+  const f = fixture(t); let submitted = 0;
+  const server = net.createServer(socket => socket.once("data", () => { submitted++; socket.destroy(); }));
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve)); t.after(() => server.close());
+  await assert.rejects(new BridgeClient(f.policy).send({ port: server.address().port }, "unity_snapshot", {}),
+    { code: "editor_disconnected", status: "outcome_unknown" });
+  assert.equal(submitted, 1);
 });
 test("real MCP stdio initialize/list/call preserves structured offline evidence", async t => {
   const f = fixture(t);

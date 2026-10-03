@@ -8,6 +8,11 @@ const { isBinary, stableStatIdentity, statOrNull } = require("./direct-runtime-s
 
 const fsp = fs.promises;
 
+function readFailure(error) {
+  return { ok: false, errorCode: ["EACCES", "EPERM"].includes(error?.code) ? "ACCESS_DENIED" : error?.code === "ENOENT" ? "NOT_FOUND" : "READ_FAILED",
+    message: String(error?.message || error) };
+}
+
 async function openOrResult(target) {
   try {
     return { handle: await fsp.open(target, "r") };
@@ -15,7 +20,7 @@ async function openOrResult(target) {
     if (error.code === "ENOENT") {
       return { result: { ok: false, errorCode: "NOT_FOUND", message: `File not found: ${target}`, stat: null } };
     }
-    throw error;
+    return { result: readFailure(error) };
   }
 }
 
@@ -59,6 +64,8 @@ async function readStableTextFile(target, maxBytes) {
     if (buffer.length !== before.size || !(await snapshotStillCurrent(target, before, handle))) return changedResult();
     if (isBinary(buffer)) return { ok: false, errorCode: "BINARY_FILE", message: `File appears binary: ${target}`, stat: before };
     return { ok: true, stat: before, buffer, content: buffer.toString("utf8"), hash: sha256Buffer(buffer) };
+  } catch (error) {
+    return readFailure(error);
   } finally {
     await handle.close();
   }
@@ -86,6 +93,8 @@ async function readStableFileWindow(target, offset, maxBytes) {
     }
     if (position !== before.size || !(await snapshotStillCurrent(target, before, handle))) return changedResult();
     return { ok: true, stat: before, buffer: window, hash: digest.digest("hex") };
+  } catch (error) {
+    return readFailure(error);
   } finally {
     await handle.close();
   }

@@ -156,7 +156,20 @@ function buildObjectiveContinuity(messages, previousState = null, options = {}) 
   };
 }
 
+// Read-only view for optional guidance. The objective owner remains the sole
+// continuation parser; a checkpoint alone cannot prove verbatim completeness.
+function guidanceObjective(messages, previousState = null) {
+  const objective = buildObjectiveContinuity(messages, previousState).activeObjective;
+  if (!objective || objective.source !== "current_history") return { reason: "objective_completeness_unknown" };
+  const source = messages.find(m => m.index === objective.messageIndex && m.role === "user");
+  if (!source) return { reason: "objective_completeness_unknown" };
+  if (String(source.text || "").length > 4000) return { reason: "objective_truncated" };
+  if (objective.text !== retainedUserText(source.text)) return { reason: "objective_completeness_unknown" };
+  return { text: objective.text, reason: "user_objective_verified" };
+}
+
 module.exports = {
+  guidanceObjective,
   buildObjectiveContinuity,
   looksElliptical,
   substantiveUserMessages,

@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from direct_rag_operation import RagOperationStopped
 
 from direct_rag_refresh_transaction import (
     BUILD_OUTPUTS,
@@ -146,7 +147,7 @@ def refresh_project_source_generation(
         required = tuple(
             dict.fromkeys((*COLLECTOR_OUTPUTS, *expected_editor_raw, *BUILD_OUTPUTS))
         )
-        commit_refresh_stage(
+        publication = commit_refresh_stage(
             stage,
             idx,
             required_files=required,
@@ -161,8 +162,14 @@ def refresh_project_source_generation(
             "project": str(active),
             "indexDir": str(idx),
             "stageCommitted": True,
+            **({"cleanup": publication["cleanup"]} if publication and publication.get("cleanup") else {}),
             "steps": steps,
         }
+    except RagOperationStopped as exc:
+        return {"ok": False, "errorCode": exc.code, "error": str(exc),
+                "stageCommitted": False, "terminationConfirmed": exc.termination_confirmed,
+                "terminationScope": "collector_process", "preservedScratch": exc.preserved_scratch,
+                "project": str(active), "indexDir": str(idx), "steps": steps}
     except Exception as exc:
         return {
             "ok": False,

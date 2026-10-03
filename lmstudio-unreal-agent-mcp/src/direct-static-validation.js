@@ -4,10 +4,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const cp = require("node:child_process");
-const { promisify } = require("node:util");
+const { runBoundedProcess } = require("./bounded-process-runner");
 const { resolvePythonExe } = require("./python-executable");
 
-const execFile = promisify(cp.execFile);
 
 function resolveValidationRoot(options = {}) {
   const env = options.env || process.env;
@@ -90,56 +89,32 @@ async function runStaticValidation(projectRoot, options = {}) {
   const args = [script, "--project-root", projectRoot, "--json"];
   if (writeTarget) args.push("--write-target", writeTarget);
   for (const scopeTarget of scopeTargets) args.push("--scope-target", scopeTarget);
-  try {
-    const { stdout } = await execFile(resolvePythonExe(env), args, {
-      cwd: validationRoot,
-      timeout: timeoutMs,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-    return validationPayload(JSON.parse(stdout), projectRoot, writeTarget, scopeTargets);
-  } catch (error) {
-    const stderr = error.stderr ? String(error.stderr) : "";
-    const stdout = error.stdout ? String(error.stdout) : "";
-    try {
-      if (stdout) {
-        return validationPayload(JSON.parse(stdout), projectRoot, writeTarget, scopeTargets);
-      }
-    } catch {
-      // Fall through to a bounded infrastructure result.
-    }
-    if (error.killed === true) {
-      const reason = `validation exceeded time budget (${timeoutMs}ms)`;
-      return {
-        ok: false,
-        skipped: false,
-        timedOut: true,
-        projectRoot,
-        reason,
-        findingCount: 1,
-        findings: [{
-          severity: "warning",
-          code: "VALIDATOR_TIMEOUT",
-          path: projectRoot,
-          line: 0,
-          message: reason,
-        }],
-      };
-    }
-    const reason = `${error.message}${stderr ? `\n${stderr}` : ""}`;
-    return {
-      ok: false,
-      skipped: false,
-      reason,
-      findingCount: 1,
-      findings: [{
-        severity: "error",
-        code: "VALIDATOR_EXEC_FAILED",
-        path: projectRoot,
-        line: 0,
-        message: reason,
-      }],
-    };
+  const result = await runBoundedProcess({
+    start: () => cp.spawn(resolvePythonExe(env), args, {
+      cwd: validationRoot, windowsHide: true, shell: false,
+      stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
+    }),
+    timeoutMs, signal: options.signal, shutdownTimeoutMs: options.shutdownTimeoutMs,
+    ...(options.terminate ? { terminate: options.terminate } : {}),
+    maxOutputBytes: 4 * 1024 * 1024, outputLimitBytes: 4 * 1024 * 1024,
+    decode: chunks => Buffer.concat(chunks).toString("utf8"),
+  });
+  const lifecycle = { cancelled: result.cancelled, processStarted: result.processStarted,
+    processExited: result.processExited, terminationStatus: result.terminationStatus };
+  if (!result.cancelled && !result.timedOut && !result.outputLimited && !result.spawnError) {
+    try { return { ...validationPayload(JSON.parse(result.stdout), projectRoot, writeTarget, scopeTargets), ...lifecycle }; }
+    catch { /* Invalid output remains an infrastructure failure, never clean validation. */ }
   }
+  const code = result.cancelled ? "VALIDATOR_CANCELLED" : result.timedOut ? "VALIDATOR_TIMEOUT"
+    : result.outputLimited ? "VALIDATOR_OUTPUT_LIMIT" : "VALIDATOR_EXEC_FAILED";
+  const reason = result.cancelled ? "Validation cancellation requested."
+    : result.timedOut ? `validation exceeded time budget (${timeoutMs}ms)`
+      : result.spawnError || result.stderr || "Validator output was incomplete or invalid.";
+  return { ok: false, skipped: false, ...lifecycle, timedOut: result.timedOut,
+    projectRoot, reason, findingCount: 1,
+    findings: [{ severity: result.timedOut || result.cancelled ? "warning" : "error", code,
+      path: projectRoot, line: 0, message: reason }] };
+
 }
 
 module.exports = {

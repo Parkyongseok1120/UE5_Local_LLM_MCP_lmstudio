@@ -103,35 +103,36 @@ function runBoundedProcess(options) {
     maxOutputBytes = boundedOutputBytes(),
     terminate = killProcessTree,
     decode = decodeProcessOutput,
+    signal,
+    shutdownTimeoutMs = 5000,
+    outputLimitBytes = 0,
+    persistLog = persistProcessLog,
+    logTimeoutMs = 5000,
   } = options;
   return new Promise((resolve) => {
     const stdoutOwner = new BoundedProcessOutput(maxOutputBytes);
     const stderrOwner = new BoundedProcessOutput(maxOutputBytes);
     let child;
-    try {
-      child = start();
-    } catch (error) {
-      resolve({
-        exitCode: 1,
-        timedOut: false,
-        spawnError: String(error?.message || error),
-        outputDecodeError: "",
-        logPersistenceError: "",
-        stdout: "",
-        stderr: "",
-        stdoutCapture: stdoutOwner.summary(),
-        stderrCapture: stderrOwner.summary(),
-        fullLogPath: logPath || null,
-      });
-      return;
-    }
-
     let settled = false;
     let timer;
-    const finish = async (exitCode, timedOut = false, spawnError = "") => {
+    let shutdownTimer;
+    let terminationReason = "";
+    let terminationError = "";
+    let processExited = false;
+    let processError = "";
+    const finish = async (exitCode, spawnError = processError) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(shutdownTimer);
+      signal?.removeEventListener("abort", abort);
+      child?.stdout?.removeListener("data", captureStdout);
+      child?.stderr?.removeListener("data", captureStderr);
+      // A stuck cleanup must not retain the runtime forever. This is not proof
+      // that the OS process (or its descendants) has exited.
+      if (terminationReason && !processExited) {
+        child?.unref?.(); child?.stdout?.unref?.(); child?.stderr?.unref?.();
+      }
       let stdout = "";
       let stderr = "";
       let outputDecodeError = "";
@@ -142,10 +143,20 @@ function runBoundedProcess(options) {
         outputDecodeError = String(error?.message || error);
       }
       const fullOutput = `${stdout}\n${stderr}`.trim();
-      const logPersistenceError = await persistProcessLog(logPath, fullOutput);
+      let logTimer;
+      const logPersistenceError = child && logPath ? await Promise.race([
+        Promise.resolve().then(() => persistLog(logPath, fullOutput)).catch(error => String(error?.message || error)),
+        new Promise(done => { logTimer = setTimeout(() => done("Process log persistence deadline exceeded"), Math.max(1, Number(logTimeoutMs) || 5000)); }),
+      ]).finally(() => clearTimeout(logTimer)) : "";
       resolve({
         exitCode: exitCode ?? 1,
-        timedOut,
+        timedOut: terminationReason === "timeout",
+        cancelled: terminationReason === "abort",
+        outputLimited: terminationReason === "output",
+        processStarted: Boolean(child?.pid),
+        processExited,
+        terminationStatus: !child?.pid ? "not_started" : processExited ? "process_exited" : "unconfirmed",
+        terminationError,
         spawnError,
         outputDecodeError,
         logPersistenceError,
@@ -157,23 +168,39 @@ function runBoundedProcess(options) {
       });
     };
 
-    child.stdout?.on("data", (chunk) => stdoutOwner.push(chunk));
-    child.stderr?.on("data", (chunk) => stderrOwner.push(chunk));
-    timer = setTimeout(() => {
-      settled = true;
+    const requestTermination = (reason) => {
+      if (settled || terminationReason) return;
+      terminationReason = reason;
       clearTimeout(timer);
-      Promise.resolve(terminate(child.pid, hostPlatform))
-        .catch(() => undefined)
-        .then(async () => {
-          // The timeout owns settlement; a concurrent close event observes settled.
-          settled = false;
-          await finish(1, true);
-        });
-    }, Math.max(1, Number(timeoutMs) || 1));
-    child.once("close", (code) => { void finish(code ?? 1); });
-    child.once("error", (error) => {
-      void finish(1, false, String(error?.message || error));
+      // Arm before invoking the terminator: it can throw, hang, or emit close.
+      shutdownTimer = setTimeout(() => { void finish(1); }, Math.max(1, Math.min(30000, Number(shutdownTimeoutMs) || 5000)));
+      Promise.resolve().then(() => { if (!processExited) return terminate(child.pid, hostPlatform); }).catch(error => {
+        terminationError = String(error?.message || error);
+      });
+    };
+    const abort = () => requestTermination("abort");
+    const capture = (owner, chunk) => {
+      if (settled) return;
+      owner.push(chunk);
+      if (outputLimitBytes > 0 && stdoutOwner.totalBytes + stderrOwner.totalBytes > outputLimitBytes) requestTermination("output");
+    };
+    const captureStdout = chunk => capture(stdoutOwner, chunk);
+    const captureStderr = chunk => capture(stderrOwner, chunk);
+    if (signal?.aborted) { terminationReason = "abort"; void finish(1); return; }
+    try { child = start(); }
+    catch (error) { void finish(1, String(error?.message || error)); return; }
+    child.stdout?.on("data", captureStdout);
+    child.stderr?.on("data", captureStderr);
+    child.once("close", (code) => { processExited = true; void finish(terminationReason ? 1 : code ?? 1); });
+    child.on("error", (error) => {
+      if (settled) return;
+      processError = String(error?.message || error);
+      if (child.pid) requestTermination("process_error");
+      else void finish(1);
     });
+    timer = setTimeout(() => requestTermination("timeout"), Math.max(1, Number(timeoutMs) || 1));
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
   });
 }
 

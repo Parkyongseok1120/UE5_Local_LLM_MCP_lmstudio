@@ -43,7 +43,9 @@
 
 ## 컴팩터에서 제공하는 방법
 
-새 빌드의 GUI에서 `Design references`로 Off, Common core, SSOT/SOLID, Debugging, Formatting, Engine lifetime, Multiplayer 중 하나를 선택한다. `Design reference token allowance`의 기본값은 2048이며 0이면 본문을 제공하지 않는다.
+새 빌드의 GUI에서 `Design references`로 Off, Auto, Common core, SSOT/SOLID, Debugging, Formatting, Engine lifetime, Multiplayer 중 하나를 선택한다. 기본 Off는 자동 선택을 하지 않는다. `Design reference token allowance`의 기본값은 2048이며 0이면 본문을 제공하지 않는다.
+
+**Auto**는 출처와 완전성이 확인된 최신 사용자 목적에서 주요 주제를 고른다. 함께 명시한 주제가 둘이면 하나를 보조로 제공하고, 현재 유효한 진단이 있으면 debugging을 보조로 우선한다. 세 주제 이상, 불명확하거나 잘린 목적은 공통 기준으로 축소한다. Auto는 Focused 전달을 사용하며 저장된 delivery 설정은 바꾸지 않는다. 기존 문서 수·실제 토큰 상한과 예산·복구·최종화 조건에 따라 생략한다. 추가 모델 호출·도구 호출·API 조회·빌드를 시작하지 않는다. 아래 Documents와 수동 Focused 설명은 주제를 직접 선택한 경우에 적용된다.
 
 `Design reference delivery`는 **Documents**가 호환 기본값이다. 이 경우 core → 선택 주제 → 확인되거나 명시된 엔진 순서로 기존 문서 본문 전체를 제공한다. Formatting은 core와 표현 문서만 사용한다. 도구 목록만으로 추정한 엔진은 선택 근거로 쓰지 않는다. 예산에 맞지 않으면 뒤의 문서를 온전히 제외하며, core도 맞지 않으면 원래 입력으로 진행한다.
 

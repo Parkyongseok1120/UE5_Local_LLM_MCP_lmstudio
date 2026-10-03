@@ -5,13 +5,17 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const {Chat} = require('@lmstudio/sdk');
 const {createToolGuard, hostToolAutoApproval, readHostToolApprovalPolicy} = require('../dist/tool-boundary');
 const {createMessageEmitter, createToolGenerationTracker, VisibleHistoryRecorder} = require('../dist/prediction-ui');
+const {BatchReservation} = require('../dist/budget-broker');
+const {readOnlyOperationProfiles} = require('../dist/tool-capability-registry');
+const {telemetryFingerprint} = require('../dist/evidence-telemetry');
 
-function fixture(name = 'unreal_set_active_project', provider = 'mcp/unreal-rag', policy = {}) {
-  const events = [], cards = [], requests = [], abort = new AbortController();
+function fixture(name = 'unreal_set_active_project', provider = 'mcp/unreal-rag', policy = {}, guardOverrides = {}) {
+  const events = [], cards = [], requests = [], statuses = [], abort = new AbortController();
   const tool = {name, pluginIdentifier: provider, parametersJsonSchema: {type:'object', properties:{project:{type:'string'}}}};
   const request = {id:'provider-request', type:'function', name, arguments:{project:'wrong', path:'Source/A.cpp'}};
   const ctl = {abortSignal:abort.signal, guardAbort(){abort.signal.throwIfAborted()},
-    createStatus(){return {remove(){},setText(){},setState(){}}},
+    createStatus(state){const status={state,removed:false};statuses.push(status);
+      return {remove(){status.removed=true},setText(text){status.state={...status.state,text}},setState(value){status.state=value}}},
     createContentBlock(){return {appendToolRequest(value){requests.push(value);events.push('request')},
       replaceToolRequest(value){requests[requests.findIndex(x=>x.callId===value.callId)]=value},appendToolResult(){}}},
     createToolStatus(callId,state){const card={callId,state};cards.push(card);events.push(state.type);
@@ -28,12 +32,12 @@ function fixture(name = 'unreal_set_active_project', provider = 'mcp/unreal-rag'
   const guard=createToolGuard({ctl,emitter,roundTools:[tool],config:{observeOnly:false},scope:{projectIdentity:'C:/Game'},
     toolPlanningRetryRound:false,toolPlanningRetryBlockedFingerprints:new Set(),batchReservation:null,
     reservationIds:new Map(),toolGeneration:tracker,traceCall:(id,value)=>trace.push(value),
-    readApprovalPolicy:typeof policy==='function'?policy:()=>policy});
+    readApprovalPolicy:typeof policy==='function'?policy:()=>policy,...guardOverrides});
   let outcome;
   const invoke=()=>guard(0,42,{toolCallRequest:request,
     allow(){outcome={type:'allow',args:request.arguments}},
     allowAndOverrideParameters(args){outcome={type:'allow',args}},deny(reason){outcome={type:'deny',reason}}});
-  return {ctl,request,emitter,tracker,trace,events,cards,requests,invoke,abort,recorder,get outcome(){return outcome}};
+  return {ctl,tool,request,emitter,tracker,trace,events,cards,statuses,requests,invoke,abort,recorder,get outcome(){return outcome}};
 }
 
 test('Allow all and exact tool preferences use provider identity, not tool name alone',()=>{
@@ -99,4 +103,34 @@ test('failed result and missing result are not displayed as successful tool exec
     if(result)f.tracker.completed('provider-request',result);
     f.tracker.finishPending();assert.equal(f.cards[0].state.type,'toolCallFailed');
   }
+});
+
+test('budget, scope, read-profile and duplicate denials close their generation status before any finalization callback',async()=>{
+  const cases = [
+    ['denied_batch_budget',()=>fixture('read_file','mcp/unreal-agent',{}, {batchReservation:new BatchReservation(0)})],
+    ['denied_scope',()=>{const f=fixture();f.request.name='unknown_tool';return f}],
+    ['denied_read_profile_operation',()=>{const f=fixture('unity_prefab','mcp/unity-tools');
+      readOnlyOperationProfiles.add(f.tool);f.request.arguments.action='run';return f}],
+    ['denied_duplicate_retry',()=>fixture('read_file','mcp/unreal-agent',{}, {
+      scope:{projectIdentity:''},toolPlanningRetryRound:true,toolPlanningRetryBlockedFingerprints:new Set([
+        telemetryFingerprint({name:'read_file',arguments:{project:'wrong',path:'Source/A.cpp'}})])})],
+  ];
+  for(const [expected,make] of cases){
+    const f=make();f.tracker.start(0,42);f.tracker.name(0,42,f.request.name);f.tracker.end(0,42);
+    await f.invoke();
+    assert.equal(f.outcome.type,'deny');assert.equal(f.trace.at(-1).validationState,expected);
+    assert.equal(f.tracker.hasUnfinished(),false);assert.equal(f.statuses[0].state.status,'canceled');
+    assert.match(f.statuses[0].state.text,/도구 실행 거부/);assert.equal(f.cards.length,0);
+    const before=f.statuses[0].state;f.tracker.finishPending();assert.deepEqual(f.statuses[0].state,before);
+  }
+});
+
+test('round shutdown closes interrupted generation and unresolved read execution without claiming success',async()=>{
+  const generating=fixture();generating.tracker.start(0,42);generating.tracker.argument(0,42,'{"partial":');
+  generating.tracker.finishPending();assert.equal(generating.tracker.hasUnfinished(),false);
+  assert.equal(generating.statuses[0].state.status,'canceled');
+  const reading=fixture('read_file','mcp/unreal-agent');reading.tracker.start(0,42);reading.tracker.name(0,42,'read_file');
+  await reading.invoke();assert.equal(reading.outcome.type,'allow');assert.equal(reading.tracker.hasUnfinished(),true);
+  reading.tracker.finishPending();assert.equal(reading.tracker.hasUnfinished(),false);
+  assert.equal(reading.statuses[0].state.status,'canceled');assert.match(reading.statuses[0].state.text,/완료 결과를 확인하지 못했습니다/);
 });

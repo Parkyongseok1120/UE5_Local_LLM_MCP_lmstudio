@@ -149,7 +149,7 @@ function createStrictRuntime(options = {}) {
     tools,
     callTool,
     recoverTransactions: () => direct.recoverTransactions(),
-    close: (reason) => lifecycle.orphanOwned(reason),
+    close: (reason) => { direct.close?.(reason); lifecycle.orphanOwned(reason); },
     lifecycle,
   };
 }

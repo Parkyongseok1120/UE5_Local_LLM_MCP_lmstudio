@@ -29,11 +29,24 @@
 
 `Design references`는 기본 **Off**입니다. Common core, SSOT/SOLID, Debugging, Formatting, Engine lifetime, Multiplayer 중 하나를 선택하면 공통 기준과 관련 문서를 모델 입력에 제공합니다. 엔진 문서는 명시적 설정 또는 확인된 프로젝트 범위를 사용하며, 연결된 도구 목록만으로 엔진을 추정해 넣지 않습니다.
 
+**Auto**를 선택하면 출처와 완전성이 확인된 사용자 목적에서 주요 주제를 고릅니다. 명시적으로 함께 요청한 주제가 둘이면 하나를 보조로 제공하며, 현재 유효한 진단·대기 관찰이 있으면 debugging을 보조로 우선합니다. 세 주제 이상, 불명확하거나 잘린 목적은 짧은 공통 기준으로 축소합니다. API 조회·빌드·추가 모델 호출을 자동 실행하지 않습니다. Auto는 항상 Focused로 전달하며 저장된 delivery 설정은 유지합니다. 기존 문서 수·실제 토큰 상한을 적용하고 예산 부족·복구·최종화에서는 기존 규칙대로 생략합니다. 이전 버전에서 Auto 값을 읽으면 Off로 처리됩니다.
+
+활성 참고의 공통 기준에는 적용 버전의 API 선언, 소유자·종료·늦은 결과의 수명, 실제 수정 반환과 변경 내용의 대조가 포함됩니다. 참고를 명확히 제외한 요청은 Auto에서도 생략합니다. 코드 블록·인용·경로는 주제 선택 근거로 사용하지 않습니다.
+
 `Design reference token allowance`는 기본 **2048**이며, 참고 자료로 증가한 실제 입력 토큰의 상한입니다. 0이면 제공하지 않습니다. 기존 출력 예약과 작업 창·도구 결과의 공유 예산도 함께 지킵니다. 문서를 위한 추가 압축·출력 한도 축소·정적 검사 의무·도구 실행 차단은 없습니다. 예산이 부족하면 엔진/주제 문서부터 생략하고 core도 맞지 않으면 원래 입력을 사용합니다.
 
 자료는 각 입력에 한 번 합성하고 대화 이력·영속 메모리에 저장하지 않습니다. Observe only와 강제 최종 보고에서는 생략합니다. `Show debug info`의 `design_guidance_input`에 선택/생략 문서와 실제 증가 토큰이 기록됩니다.
 
 문서의 정본은 저장소의 `docs/model-guidance/catalog.json`과 해당 Markdown입니다. `npm run guidance:build`와 일반 build가 배포용 데이터를 생성합니다. 프로젝트별 현황·조사 예시는 번들에 넣지 않으며 실제 모델 품질 개선 효과는 아직 측정하지 않았습니다.
+
+## 적용 API와 실제 수정 근거
+
+`mcp/unreal-rag`의 `unreal_symbol_lookup`은 기존 index 조회 외에 명시적인 `sourceMode: "engine_local"`을 지원합니다. 예를 들어 `query: "AActor::SetLifeSpan"`, `project: "C:/Projects/Game/Game.uproject"`와 함께 요청합니다. `owner`와 단일 symbol을 따로 줄 수도 있습니다. 기본값은 기존 index이며 Auto가 조회를 대신 실행하지 않습니다.
+
+로컬 조회는 기존 프로젝트·엔진 resolver와 설치된 `Build.version`으로 출처를 확인합니다. Core/CoreUObject/Engine 및 Input 관련 EnhancedInput의 파일명 후보를 제한하여 최대 4개 헤더, 파일당 256 KiB, 총 1 MiB를 읽습니다. 헤더 단계에는 3초 deadline 확인이 있으며 프로젝트 이름 검색·OS I/O·transport 전체의 즉시 취소나 최대 지연을 보장하지는 않습니다. 잘린 파일의 SHA는 byte range로 표시합니다. 결과가 없다는 사실은 API 부재의 증명이 아니며 상속·매크로·overload의 실제 호출 가능성은 별도 확인이 필요합니다.
+
+Unreal Agent의 성공한 `write_file`/`replace_in_file`/`apply_edit_bundle`은 실제 적용 전후 내용에서 작은 `changeEvidence`를 선택적으로 반환합니다. 현재 실행에서 provider·호출 대응·프로젝트·hash가 확인된 경우만 기존 파일 관찰에 연결합니다. 압축된 시스템 사실에는 출처·hash만 남고 변경 본문은 별도 assistant 데이터에 최대 8개/2048자로 보존합니다. 본문은 예산에 따라 통째로 생략할 수 있으며 재읽기·수정 권한·기능 완료 증명이 아닙니다. 실패·충돌·다른 hash·순서가 불명확한 같은 파일의 동시 결과는 이전 변경 근거를 무효화합니다.
+
 
 ## 출력 표시
 
@@ -49,7 +62,9 @@
 
 ## 재조회 가능한 working context (실험적)
 
-새 설치의 `Working context` 기본값은 `Hybrid`입니다. `Legacy`는 기존 동작을 유지하는 명시적 호환 선택이고, `Deterministic archive/window`는 semantic handoff 없이 archive/window만 사용합니다. Hybrid와 Deterministic는 완료된 read-only 도구 결과를 현재 대화·fork·workspace·repository 범위의 로컬 archive에 먼저 보관하고 hash를 다시 검증한 뒤, 큰 결과만 bounded projection으로 바꿉니다. 직접 JSON, MCP text block, `structuredContent`처럼 SDK가 반환할 수 있는 envelope은 공통 decoder로 의미 payload를 얻되, archive에는 원래 provider envelope을 보관합니다. 아직 모델이 한 번도 소비하지 않은 8,192자 이하의 정상 Git observation은 archive ref만 남기는 projection으로 즉시 바꾸지 않고 첫 모델 입력에는 원문을 유지합니다. projection은 원래 call ID, tool 이름, status/error, source identity/hash/version, 실제 반환 범위, 모델에 제공한 발췌 범위, 생략 범위와 `evidenceId`/version을 유지합니다. 전체 raw를 제공했다고 표시하지 않습니다. `evidence_first_read_context`는 정확한 ID와 version, 제한된 문자 범위만 받고 과거 반환 자료를 다시 읽습니다. 응답 전체는 metadata를 포함해 byte budget 안에 맞추며 archive의 `archiveHasMore`/`archiveReachedEnd`와 원래 Git 결과의 `sourcePageHasMore`/`sourceResultComplete`를 별도로 표시합니다. archive EOF는 Git source 목록 완료를 뜻하지 않습니다. 파일 경로를 받지 않으며 현재 파일의 수정 권한이나 fresh-read receipt를 만들지 않습니다.
+새 설치의 `Working context` 기본값은 `Hybrid`입니다. `Legacy`는 기존 동작을 유지하는 명시적 호환 선택이고, `Deterministic archive/window`는 semantic handoff 없이 archive/window만 사용합니다. Hybrid와 Deterministic는 완료된 read-only 도구 결과를 현재 대화·fork·workspace·repository 범위의 로컬 archive에 먼저 보관하고 hash를 다시 검증한 뒤, 큰 결과만 bounded projection으로 바꿉니다. 직접 JSON, MCP text block, `structuredContent`처럼 SDK가 반환할 수 있는 envelope은 공통 decoder로 의미 payload를 얻되, archive에는 원래 provider envelope을 보관합니다. 아직 완료된 모델 입력에 제공하지 않은 정상 관찰은 크기만으로 미리 축소하지 않습니다. 최초 입력은 원문으로 측정하고, 전체 입력 예산이 맞지 않을 때 기존 bounded projection과 압축 경로를 적용해 다시 측정합니다. projection은 원래 call ID, tool 이름, status/error, source identity/hash/version, 실제 반환 범위, 모델에 제공한 발췌 범위, 생략 범위와 `evidenceId`/version을 유지합니다. 본문 발췌·생략 범위는 입력 노출 기록에도 남기며, 전체 raw를 제공했다고 표시하지 않습니다. `evidence_first_read_context`는 정확한 ID와 version, 제한된 문자 범위만 받고 과거 반환 자료를 다시 읽습니다. 응답 전체는 metadata를 포함해 byte budget 안에 맞추며 archive의 `archiveHasMore`/`archiveReachedEnd`와 원래 Git 결과의 `sourcePageHasMore`/`sourceResultComplete`를 별도로 표시합니다. archive EOF는 Git source 목록 완료를 뜻하지 않습니다. 파일 경로를 받지 않으며 현재 파일의 수정 권한이나 fresh-read receipt를 만들지 않습니다.
+
+Unreal 소스 읽기의 공개 스키마에 `maxBytes`가 있으면, 값이 생략된 요청은 기본 4 KiB 이하의 창으로 공유 배치 예산을 예약합니다. 명시한 큰 창은 공개 한계와 남은 예산 안에서 허용합니다. 예약은 반환 envelope을 위한 추정치이며 실제 반환량도 반영합니다. 과도한 반환 뒤에는 같은 배치의 다음 호출을 막고, 다음 모델 입력은 기존 정확한 토큰 측정으로 확인합니다. 승인된 모든 읽기의 실행이나 전체 파일 수집을 보장하는 설정은 아닙니다.
 
 pending/중복 call ID, 실행 효과가 불명확한 결과, write/build 결과는 projection하지 않습니다. archive 저장·hash·TTL·quota·scope 검증이 실패하면 원문을 유지합니다. receipt, approval capability, API token, Git cursor 같은 임시 값은 archive에서 제거하고 `redacted`와 원본/보관 hash를 구분합니다. Git cursor는 archive ID가 아니며 추측하거나 재구성하지 않습니다.
 
@@ -95,7 +110,9 @@ PDF·Word·텍스트 첨부가 있으면 모델에 파일 이름, 첨부 ID, 형
 
 ### 도구 인수 JSON 오류
 
-도구 인수 JSON 자체가 잘린 경우에는 SDK의 `handleInvalidToolRequest` 경계에서 파싱 실패를 기록하고 생성 종료 통계와 이미 진행 중인 다른 호출의 결과를 수집한 뒤 중단합니다. 종료 사유가 `maxPredictedTokensReached`일 때만 출력 한도 소진으로 표시하며, 일반 JSON 오류를 출력 한도 문제로 추정하지 않습니다. 잘린 JSON을 자동 완성하거나 삭제·수정 요청을 자동 재실행하지 않습니다. 스키마 검증에 실패한 완전한 요청의 기존 SDK 오류 피드백은 유지합니다. 사용자 취소와 통신 오류는 파싱 오류보다 우선하며 Observe only에서는 SDK 기본 동작을 유지합니다.
+도구 인수 JSON 자체가 잘린 경우에는 SDK의 `handleInvalidToolRequest` 경계에서 파싱 실패를 기록하고 생성 종료 통계와 이미 진행 중인 다른 호출의 결과를 수집한 뒤 중단합니다. 기존 결과 전달기가 구조화된 반환 관찰과 미완료 범위를 짧은 부분 보고로 남깁니다. 잘린 인수·미완료 assistant 계획은 근거로 사용하지 않고 전체 작업 완료로 표시하지 않습니다. 종료 사유가 `maxPredictedTokensReached`일 때만 출력 한도 소진으로 표시하며, 일반 JSON 오류를 출력 한도 문제로 추정하지 않습니다. 잘린 JSON을 자동 완성하거나 삭제·수정 요청을 자동 재실행하지 않습니다. 스키마 검증에 실패한 완전한 요청의 기존 SDK 오류 피드백은 유지합니다. 사용자 취소와 통신 오류는 파싱 오류보다 우선하며 Observe only에서는 SDK 기본 동작을 유지합니다.
+
+scope·읽기 프로필·중복·공유 예산으로 거부한 요청은 생성 상태를 즉시 종료합니다. 라운드 종료 시 남은 생성·실행 상태도 닫으며, 결과가 없는 호출은 성공으로 표시하지 않습니다. 이 종료 표시의 소유자는 기존 도구 상태 추적기입니다.
 
 ### 생각 단계의 출력 한도 복구
 

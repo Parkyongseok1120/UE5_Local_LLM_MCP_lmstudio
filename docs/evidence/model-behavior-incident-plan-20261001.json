@@ -5,6 +5,7 @@
     "timezone": "Asia/Seoul",
     "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio",
     "baselineCommit": "6a0e9b7",
+    "architectureReviewCommit": "6893493",
     "change": "planning_documents_only",
     "implementation": false,
     "modelInvoked": false,
@@ -269,6 +270,150 @@
       "unknowns": ["당시 실제 index identity·선택 engine root·patch를 전체 payload로 확인하지 못했다."]
     },
     {
+      "id": "A07",
+      "claim": "현재 RAG symbol/search는 내부 read/archive/recovery 분류에서 제외되어 있으며 reference ingest에는 별도의 project/provider 경계가 있다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts:51", "observation": "Unreal observation 집합에 unreal_symbol_lookup/unreal_rag_search가 없다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts:89", "observation": "mcp/unreal-rag에도 같은 집합을 적용하고 resolveCapability는 read가 아니면 recoveryEligible/rehydratable을 false로 둔다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:53", "observation": "기존 evidence 담당자는 observation-only 분류를 사용한다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_contract.py:18", "observation": "RAG catalog에는 조회뿐 아니라 project 변경/refresh도 있어 전체 이름을 read로 등록할 수 없다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:237", "observation": "reference ingest는 이 read 분류를 직접 확인하지 않고 capabilityScope와 paired-result/project 검증을 사용한다. 이 누락을 모든 reference 차단 원인으로 확대하지 않는다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["사건의 host 승인 대기 원인을 이 분류로 확정하지 않았다. 새 provider/name 분류 연결은 아직 제안이다."]
+    },
+    {
+      "id": "A08",
+      "claim": "현재 symbol 결과의 index 버전·selector와 실제 엔진 관찰은 구분되며 local declaration의 reference 적용 adapter가 아직 없다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "scripts/direct_rag_symbol.py:235", "observation": "projects는 selector 목록이며 engineVersion은 indexEngineVersion이다. canonicalProject/관찰 설치 identity는 반환하지 않는다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:61", "observation": "resultProject는 canonical descriptor 또는 bundle 각 파일의 정규 scope를 검증한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:136", "observation": "normalize에 RAG/local declaration adapter가 없다. 현재 UE build metadata의 engineRoot/association도 observed engineVersion으로 설정하지 않는다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:353", "observation": "snapshot은 채택한 단일 engineVersion을 사용한다. engine identity 변화/충돌 조건은 가산 adapter에서 확인해야 한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/working-context.js:62", "observation": "기존 archive source identity 투영 목록에는 local engine/module/range 전용 identity가 없다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/evidence-identity.js:40", "observation": "semanticQueryDigest는 기존 request 인자를 소화하므로 신규 모드를 별도 query parser로 중복 구현할 필요는 없다. 결과 source identity/범위 검증은 이 digest와 다르다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["현재도 모델은 원래 도구 반환을 직접 볼 수 있다. adapter 누락이 당시 모델 오답의 단일 원인인지는 확인하지 못했다."]
+    },
+    {
+      "id": "A09",
+      "claim": "실제 bundle buffer는 commit 담당자 안에 있고 공개 bundle은 파일당 하나/최대2 patch다. 보조 근거의 실패 격리는 기존 최종 응답 한도까지 필요하다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-plan.js:108", "observation": "중복 patches path를 거부한다. maxFilesPerEdit/maxBundleOperations의 hard 상한은2다."},
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-commit.js:165", "observation": "CAS result.updated를 검사하지만 마지막 반환은 postWriteHashes/writtenAbsolutePaths다."},
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-commit.js:202", "observation": "전체 final buffer나 좁은 변경 근거를 상위 capability로 반환하지 않는다."},
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/safe-write.js:65", "observation": "줄바꿈 정규화가 파일 전체에 적용될 수 있어 oldText==newText만으로 no_change를 증명하지 못한다."},
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/direct-response.js:176", "observation": "boundedJson은 transport 한도를 초과한 성공 응답을 OUTPUT_LIMIT_EXCEEDED로 변환한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/direct-runtime-context.js:103", "observation": "이미 payloadFits가 fileObservation 이후 전체 직렬화 크기를 확인하므로 별도 전역 transport 정책이 필요하지 않다."},
+        {"kind": "project_source", "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-commit.js:171", "observation": "내부 복수 patch 분기가 있지만 공개 plan이 먼저 중복 경로를 거부한다. 내부 hash-chain 한계를 일반 공개 실행 결함으로 확대하지 않는다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["추가 근거의 산출/생략은 아직 구현하지 않았다. 사건에서 외부 writer가 있었거나 transport oversize가 발생했다고 주장하지 않는다."]
+    },
+    {
+      "id": "A10",
+      "claim": "현재 file-fact 투영은 새 변경 근거를 보존하지 않으며 일반 pairing의 호환 계약은 새 diff에 필요한 strict origin과 다르다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:110", "observation": "retainedFileFact는 알려진 파일 metadata만 유지한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:342", "observation": "parseToolResult의 allowlist에 changeEvidence가 없다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:466", "observation": "rememberRequest에 project/search metadata는 있으나 provider/name origin 전달은 없다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:491", "observation": "기존 projectHintFor는 호환상 ID-less 짝을 받을 수 있다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:123", "observation": "fileObservation도 알려진 fields만 파생한다. 선택 필드 가산과 명시 merge가 필요하다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:591", "observation": "DERIVED_FILE_FIELDS로 file-fact/outcome 중복을 제거하므로 새 근거도 여기에 연결해야 한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:75", "observation": "reference 담당자에는 unique paired result 검증이 이미 있다. 새 universal pairing 원장을 만들 필요는 없다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:19", "observation": "기존 normalized messages는 원래 request/result를 전달한다. 실행 경계의 registry 검증 origin을 가산 전달하는 계획으로 좁힌다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["provider/name의 실제 trusted origin 전달 방식과 구버전 history 생략 fixture는 구현 단계에서 검증해야 한다."]
+    },
+    {
+      "id": "A11",
+      "claim": "현재 mandatory checkpoint는 파일 관찰 record 전체를 포함하고 그 실제 측정이 ContextManager의 최소 입력 계산에 쓰인다.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/checkpoint-budget.js:8", "observation": "mandatoryContinuity는 currentWorkStatus.modifiedOrObservedFiles 전체를 포함한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/checkpoint-budget.js:31", "observation": "mandatoryOnly는 capsule을 바로 반환하며 optional record는 이 capsule 이후 크기에 맞춰 추가한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:480", "observation": "mandatory checkpoint 실제 입력을 측정하고 floor/watermark/다음 행동 후보 계산에 사용한다."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/direct-compaction-core.js:433", "observation": "legacy emergency는 파일 record 전체를 넣거나 생략한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/checkpoint-budget.js:34", "observation": "기존 담당자에 whole-record optional admission이 이미 있으므로 예산 알고리즘을 새로 만들기보다 본문 projection만 보완할 수 있다."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:480", "symbol": "mandatory checkpoint candidate 요청"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/direct-compaction-core.js:608", "symbol": "renderBudgetedCheckpoint에 systemMemory와 mandatory policy 전달"},
+        {"stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/checkpoint-budget.js:31", "symbol": "file metadata 전체를 포함한 mandatory capsule 반환"},
+        {"stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:498", "symbol": "실제 floorInput 측정과 mandatory_floor 후보 계산"}
+      ],
+      "unknowns": ["현재 changeEvidence 본문은 아직 없어 추가 token 비용은 측정하지 않았다. 가산 본문을 optional로 투영하는 계획은 실행 확인 전이다."]
+    },
+    {
+      "id": "A12",
+      "claim": "Direct RAG는 현재 동기 stdio 처리이며 backend에 실행별 cancellation token이 없어 즉시 중단 전달을 가정할 수 없다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "scripts/direct_rag_server.py:76", "observation": "run은 입력 loop 안에서 handle_message와 tool handler를 동기로 실행한다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_server.py:104", "observation": "id 없는 notification은 바로 반환한다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_server.py:165", "observation": "등록된 capability handler를 직접 호출한다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_runtime.py:12", "observation": "frozen runtime은 index/workspace/notifier만 보유하며 execution cancellation context가 없다."},
+        {"kind": "project_source", "location": "scripts/direct_rag_symbol.py:113", "observation": "현재 index resolution이 symbol 검색의 선행 단계다. 새로운 local 분기는 이 앞에서 분리해야 한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "scripts/engine_header_evidence.py:278", "observation": "helper에 기존 timeout 기반 탐색 제한은 있다. 모델 소비자 취소와 backend 단계 deadline은 같은 보장이 아니다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["모델 취소 뒤 실제 stdio 결과가 소비자에서 폐기되는 fixture와 header 단계 지연 상한은 후속 구현에서 확인해야 한다."]
+    },
+    {
+      "id": "A13",
+      "claim": "기존 engine header helper는 source에 있어도 portable runtime allowlist에는 없어 실도구 import 연결과 함께 설치 inventory 편입이 필요하다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "scripts/build_integrated_package.py:192", "observation": "REQUIRED_RUNTIME_FILES에 engine_header_evidence.py가 없다."},
+        {"kind": "project_source", "location": "scripts/build_integrated_package.py:661", "observation": "portable 파일 목록은 required runtime/content의 명시 allowlist다."},
+        {"kind": "project_source", "location": "scripts/build_integrated_package.py:779", "observation": "일반 scripts prefix를 허용하지 않고 명시 path/prefix 규칙으로 include한다."}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "tests/test_integrated_package.py:270", "observation": "이미 portable Python runtime import closure 검사가 있으므로 별도 installer나 검사 framework를 추가할 필요는 없다."}
+      ],
+      "behaviorPath": [],
+      "unknowns": ["새 local handler가 설치본에서 실행되는지는 아직 제안이며 staged package 빌드/실행을 이번 리뷰에서 하지 않았다."]
+    },
+    {
       "id": "P01",
       "claim": "기존 공통 기준·명시 도구·파일 관찰 수명을 보완한 뒤 Auto를 연결하는 다중 파일 변경을 제안한다.",
       "claimType": "codegen",
@@ -277,7 +422,7 @@
       "proofLevel": "Proposed",
       "evidence": [
         {"kind": "requirement", "location": "user_request:2026-10-01", "observation": "사용자는 로그 분석과 계획을 먼저 요청하고 SSOT/SOLID·책임/계약/수명을 지키며 모델을 대신 판단하는 하네스를 우려했다."},
-        {"kind": "project_source", "location": "docs/Model_Behavior_Incident_Plan_20261001.md", "observation": "I0–I5, 변경A–C, 명시 local source 상한, mutation 근거 상한, V01–V18을 정의한다."},
+        {"kind": "project_source", "location": "docs/Model_Behavior_Incident_Plan_20261001.md", "observation": "I0–I5, 변경A–C, local source/identity 분류, mutation trusted origin/optional budget, 동기 서버·설치 경계, V01–V24와 현재 구조 재대조를 정의한다."},
         {"kind": "project_source", "location": "docs/Auto_Design_References_Plan_20261001.md", "observation": "Auto는 주요1/보조1 주제 선택, 기존 예산과 관찰, T01–T40으로 제한하는 앞선 계획이다."}
       ],
       "counterEvidence": [
@@ -301,9 +446,13 @@
   "proposed": [
     "core/proof의 짧은 API·수명·완료 근거 기준과 전문 절 사례 보강",
     "기존 symbol 도구의 선택적 engine_local 조회와 실제 version/source/coverage 관찰",
+    "정확 RAG provider/name의 조회 분류와 기존 archive/reference adapter 연결; Auto와 독립",
     "header helper의 plugin 범위·실제 비용·cache·owner 선언 영역 보완",
     "실제 committed 전후 영역의 제한된 changeEvidence 반환",
     "기존 파일 사실 경로의 versioned 근거 보존·생략·무효화",
+    "새 changeEvidence만 unique/trusted pairing으로 유지하고 checkpoint 본문을 optional로 투영",
+    "기존 payloadFits로 optional 근거를 생략하고 성공 outcome/hash/receipt 유지",
+    "header 단계 deadline과 소비자 취소를 분리하고 helper를 기존 portable runtime 목록에 편입",
     "선택/채택/SDK 입력을 구분하는 기존 telemetry 연결",
     "I1–I3 완료 뒤 기존 Auto 계획의 I4 연결"
   ],
@@ -314,6 +463,7 @@
     "도구 완료 짝·근거 원장·file/session identity·receipt/CAS",
     "model notes와 supersedes 상태 머신",
     "공유 budget/출력 예약/입력 측정/복구·취소 경계",
+    "기존 tool capability registry·archive source identity·checkpoint optional admission·runtime import closure 검사",
     "별도 완료 DB·설계 판정기·추가 classifier LLM·자율 서브 에이전트",
     "필수 static Validate·자동 API scan·자동 빌드 재시도"
   ],
@@ -323,11 +473,16 @@
     "사실·요청 의도·이전 assistant 판단을 분리",
     "실제 반환·committed 내용만 변경 관찰로 유지",
     "보조 changeEvidence 계산/serialization 실패는 성공 commit의 outcome/hash/receipt를 뒤집지 않음",
+    "최종 transport fit에서도 optional 본문을 먼저 생략하며 mandatory continuity floor에 본문을 넣지 않음",
+    "공개 bundle의 파일당1/최대2 patch 계약과 기존 ID-less 일반 file fact 호환 유지",
+    "새 diff만 unique paired ID/name/trusted provider/canonical scope/hash가 확인된 경우 보존",
+    "RAG 조회 분류는 정확 provider/name에 한정하고 refresh/set/unknown provider 권한을 확대하지 않음",
     "부분 헤더 fingerprint에는 hashScope/읽은 byte 범위/완전성을 표시하며 full-file hash로 승격하지 않음",
     "다른 project/root/hash/engine identity의 근거를 합치지 않음",
     "raw receipt/capability를 영속 메모에 보존하거나 재발급하지 않음",
     "검색 실패/부분 진단/ready 로그/build success를 기능 완료로 승격하지 않음",
-    "local 조회는 모델의 명시 기존 도구 요청이며 전체 byte/time/result 상한을 지킴",
+    "local 조회는 모델의 명시 기존 도구 요청이며 byte/result 상한과 header 단계 deadline을 지킴; 전체 OS/transport 지연 보장으로 확대하지 않음",
+    "동기 Direct RAG의 즉시 backend 취소를 가정하지 않고 모델 소비자 취소/cache generation/index generation을 분리",
     "Auto가 추가 act/tool/scan/gate/semantic completion 판정을 만들지 않음",
     "게임 코드·LM Studio 설정 수정은 이번 계획 작성 범위 밖"
   ],
@@ -336,6 +491,9 @@
     "scripts/direct_rag_contract.py/direct_rag_request_bounds.py/direct_rag_symbol.py/engine_header_evidence.py와 기존 engine binding",
     "Direct Agent mutation/bundle 반환·engine 관찰과 관련 테스트",
     "compactor tool facts/file observations/continuity/reference adapter/rendering/telemetry",
+    "tool-capability-registry/evidence-identity/working-context/reference-context의 기존 분류와 provenance",
+    "checkpoint-budget/direct-compaction-core/context-manager의 optional projection와 trusted origin 입력",
+    "Direct Agent bundle commit→apply→capability 반환과 기존 payloadFits 사용처",
     "기존 guidance/round-input/handler·수명·예산 테스트",
     "Auto 명시 설정·selector·GUI 설명·T01–T40",
     "통합 package 허용 목록/status source inventory/플랫폼CI"
@@ -346,6 +504,7 @@
     "V09–V14: index unavailable, real Source+Plugins, 잘못된 owner/동명 함수/상속, 실제 읽기·시간 한도, cache 무효화, 정확 root provenance",
     "V15–V16: build target와 runtime 분리, 입력 시작/종료·mapping과 엔진별 lifecycle 지침 연결",
     "V17–V18: Auto 전체 handler와 설치 bundle/source inventory/플랫폼 CI",
+    "V19–V24: 정확 조회 분류·trusted pairing 전경로·mandatory/emergency/transport 생략·동기 deadline·staged helper import·source identity/version 충돌",
     "모델 행동은 별도의 제한된 LM Studio 사례를 관찰한 뒤에만 개선됐다고 보고",
     "이번 턴은 근거 JSON 형식·UTF8·참조 경로/줄과 planning-only git status만 검사"
   ]

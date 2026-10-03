@@ -236,6 +236,9 @@ export function createToolGenerationTracker(ctl: PredictionLoopHandlerController
       controller: ctl.createToolStatus(callId, { type: autoApproved ? "toolCallQueued" : "confirmingToolCall" }) });
   };
   const denied = (callId: number, denyReason?: string) => {
+    const state = statuses.get(callId);
+    state?.controller.setState({ status: "canceled", text: `도구 실행 거부${state.name ? `: ${state.name}` : ""}${denyReason ? ` · ${denyReason}` : ""}` });
+    statuses.delete(callId);
     approvalCards.get(callId)?.controller.setStatus({ type: "toolCallDenied", denyReason });
     approvalCards.delete(callId);
   };
@@ -251,6 +254,10 @@ export function createToolGenerationTracker(ctl: PredictionLoopHandlerController
     approvalCards.delete(callId);
   };
   const finishPending = () => {
+    for (const [callId, state] of statuses) {
+      state.controller.setState({ status: "canceled", text: `도구 처리 중단${state.name ? `: ${state.name}` : ""} · 완료 결과를 확인하지 못했습니다.` });
+      statuses.delete(callId);
+    }
     for (const [callId, card] of approvalCards) {
       if (card.executing) card.controller.setStatus({ type: "toolCallFailed", error: "Tool result was not received; execution outcome is unknown." });
       else card.controller.setStatus({ type: "toolCallDenied", denyReason: "Confirmation interrupted; tool was not dispatched." });

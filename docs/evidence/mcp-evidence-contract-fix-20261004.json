@@ -1,0 +1,159 @@
+{
+  "mode": "codegen",
+  "existing": [
+    "실행·라운드는 PredictionLoop, 결과 전달은 DeliveryController, 예산은 BudgetBroker가 관리한다.",
+    "관찰과 pairing은 EvidenceManager/WorkingContext/tool-exchange-index, 선택은 순수 guidance selector가 관리한다.",
+    "stateless 형식 검사와 공통 계약 및 독립 skill installer를 재사용한다."
+  ],
+  "proposed": [
+    "저장소 변경을 검증한 상태이며 설치본 갱신과 라이브 UI·모델 검증은 별도 적용 단계다."
+  ],
+  "doNotDuplicate": [
+    "별도 검증 모델·서브 에이전트·상태 관리자·자동 mutation retry·필수 static Validate gate를 추가하지 않는다."
+  ],
+  "invariants": [
+    "잘린 요청을 실행하거나 자동 복원하지 않는다.",
+    "보고 성공·사실성·전체 완료를 구분하고 불완전 계획을 근거에 포함하지 않는다.",
+    "반환된 개별 pair 보고와 복구 complete-batch 계약을 구별한다.",
+    "UI 종료가 오류 분류의 관측을 바꾸지 않는다.",
+    "정확한 전체 입력 예산과 기존 guidance 상한을 유지한다."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-ui.ts",
+    "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+    "lmstudio-context-compactor-plugin/src/guidance-topic-selection.ts",
+    "lmstudio-context-compactor-plugin/src/design-guidance.ts",
+    "skills/evidence-first-code-audit/scripts/evidence_packet_contract.py",
+    "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py",
+    "skills/evidence-first-code-audit/scripts/validate_evidence_packet.py",
+    "skills/evidence-first-code-audit/scripts/install_skill.py",
+    "skills/evidence-first-code-audit/assets/lmstudio-evidence-first.preset.json",
+    "docs/MCP_Evidence_Contract_Fix_20261004.md",
+    "lmstudio-context-compactor-plugin/test/auto-guidance.test.cjs",
+    "lmstudio-context-compactor-plugin/test/runtime-policy.test.cjs",
+    "lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs",
+    "lmstudio-context-compactor-plugin/test/tool-approval.test.cjs",
+    "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+    "lmstudio-context-compactor-plugin/test/working-context.test.cjs",
+    "tests/test_evidence_first_mcp.py",
+    "tests/test_evidence_packet_validator.py",
+    "tests/test_evidence_skill_installers.py"
+  ],
+  "validationPlan": [
+    "완료: compactor 빌드 / 전체 506개 테스트 / guidance 일치 / diff 공백 검사.",
+    "완료: evidence·설치·패키징 143tests와 repository stdio 단일 claim 정상 응답.",
+    "미검증: 설치본 갱신 뒤 실제 모델 작은 인수·Auto·원문 노출·UI 종료·부분 보고 확인."
+  ],
+  "claims": [
+    {
+      "claim": "기존 compactor 담당자를 재사용해 읽기 예약, 최초 원문 전달, 생성 실패 뒤 부분 보고, 거부·종료 상태와 Auto 두 주제를 보정했고 전체 회귀가 통과했다.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:634",
+          "observation": "UI 종료 전에 미완성 생성 관측을 고정하며 기존 보고기와 오류 분류·복구 판단을 연결한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:338",
+          "observation": "기존 pairing을 재사용하고 보고에만 confirmedPairsOnly를 적용한다. 복구 기본 complete-batch 정책을 유지한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/runtime-policy.test.cjs:15",
+          "observation": "실제 native envelope, byte/line 범위, 실패·고립·중복·위조 provider·미완료 sibling·본문 없는 acknowledgment를 검사한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:4724",
+          "observation": "실제 native 읽기의 기존 결과와 완료 peer를 부분 보고하고, 미완료 계획 제외와 추가 생성 없음 및 완료 false를 검사한다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/mcp-evidence-audit-20261004/compactor-suite-final.log",
+          "observation": "npm test의 빌드와 전체 506개 테스트가 통과했다."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:134",
+          "observation": "전체 입력 예산 부족 시 원문이 축소될 수 있으며 정확한 측정 gate는 그대로 적용된다."
+        }
+      ],
+      "unknowns": [
+        "설치된 LM Studio의 실제 UI callback 순서, 모델 준수율과 품질 개선은 실행 검증하지 않았다."
+      ]
+    },
+    {
+      "claim": "검증 정책과 scope를 공통 계약에서 제공하고 제공된 obligation 타입·공백 검사를 유지했으며 설치 게시와 cleanup 결과를 구분하는 회귀가 통과했다.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "skills/evidence-first-code-audit/scripts/evidence_packet_contract.py:87",
+          "observation": "VALIDATION_POLICY와 model_guidance_prompt 및 validation_scope_metadata가 도구 설명·계약·프리셋을 연결한다."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_evidence_first_mcp.py:187",
+          "observation": "프리셋 parity와 별개 단일 claim packet, invalid mode를 검사한다."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_evidence_packet_validator.py:66",
+          "observation": "mode와 관계없는 여섯 제공 필드의 array 타입 및 공백·다중 행 문자열을 검사한다."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_evidence_skill_installers.py:50",
+          "observation": "게시 성공 뒤 backup cleanup fault와 게시 실패 뒤 기존 파일 복구를 확인한다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/mcp-evidence-audit-20261004/evidence-installer-suite-final.log",
+          "observation": "evidence MCP·validator·skill installer·통합 installer·package 143개 테스트가 통과했다."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "skills/evidence-first-code-audit/scripts/validate_evidence_packet.py:114",
+          "observation": "형식 검사는 실제 프로젝트 소스의 사실성이나 전체 조사 완료를 인증하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio schema 변환과 모델의 작은 패킷 생성은 설치본 갱신 뒤 확인해야 한다."
+      ]
+    }
+  ],
+  "verification": {
+    "compactorTests": 506,
+    "pythonTests": 143,
+    "failedTests": 0,
+    "guidanceCheck": "passed",
+    "repositoryStdio": {
+      "ok": true,
+      "schemaVersion": "1.1.2",
+      "claims": 1,
+      "stderr": ""
+    },
+    "liveLmStudioVerified": false,
+    "installedRuntimeUpdated": false,
+    "gitPublished": false
+  }
+}

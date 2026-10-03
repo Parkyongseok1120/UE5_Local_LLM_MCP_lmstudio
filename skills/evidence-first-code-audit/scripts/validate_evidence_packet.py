@@ -15,6 +15,7 @@ from evidence_packet_contract import (
     CLAIM_TYPES,
     EVIDENCE_KINDS,
     MODE_OBLIGATIONS,
+    OBLIGATION_FIELDS,
     MODES,
     NEUTRAL_EXCLUDED_CLAIM_TYPES,
     NEUTRAL_MODE,
@@ -26,6 +27,7 @@ from evidence_packet_contract import (
     SEVERITIES,
     VERDICTS,
     VERIFIED_PROOF_LEVELS,
+    validation_scope_metadata,
 )
 
 
@@ -113,11 +115,14 @@ def validate_packet(packet: Any) -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
     if not isinstance(packet, dict):
-        return {"ok": False, "errors": ["packet must be a JSON object"], "warnings": []}
+        return {"ok": False, **validation_scope_metadata(), "errors": ["packet must be a JSON object"], "warnings": []}
 
     mode = str(packet.get("mode") or "")
     if mode not in MODES:
         errors.append("mode must be audit, architecture, or codegen")
+    for field in OBLIGATION_FIELDS:
+        if field in packet and not isinstance(packet[field], list):
+            errors.append(f"{field} must be an array when provided")
 
     claims = packet.get("claims")
     if not _nonempty_list(claims):
@@ -246,6 +251,7 @@ def validate_packet(packet: Any) -> dict[str, Any]:
 
     return {
         "ok": not errors,
+        **validation_scope_metadata(),
         "mode": mode,
         "claimCount": len(claims),
         "errors": errors,

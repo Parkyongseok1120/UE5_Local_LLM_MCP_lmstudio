@@ -13,6 +13,7 @@ from typing import Any
 from evidence_packet_contract import (
     MODES,
     SCHEMA_VERSION,
+    VALIDATION_POLICY,
     contract_metadata,
     packet_input_schema,
     selected_mode,
@@ -70,10 +71,7 @@ def tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "evidence_first_validate",
             "title": "Validate evidence-first packet",
-            "description": (
-                "Validate the final structured audit, architecture, or code-generation packet. "
-                "Call before presenting causal P0/P1 findings or a multi-file implementation plan."
-            ),
+            "description": "Validate a small structured evidence packet. " + VALIDATION_POLICY,
             "inputSchema": _schema(
                 {
                     "packet": {
@@ -105,10 +103,7 @@ def contract_payload(mode: str) -> dict[str, Any]:
         "readOnly": True,
         "portableRule": PORTABLE_RULE.read_text(encoding="utf-8"),
         **contract_metadata(normalized_mode),
-        "nextAction": (
-            "Call evidence_first_validate before presenting causal P0/P1 findings or a multi-file "
-            "implementation plan; validation is optional for other final answers."
-        ),
+        "nextAction": VALIDATION_POLICY + " Validation is optional for other final answers.",
     }
     return payload
 
@@ -181,7 +176,10 @@ def bounded_validation_result(result: dict[str, Any]) -> dict[str, Any]:
 
 def call_tool(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     if name == "evidence_first_contract":
-        return contract_payload(str(arguments.get("mode") or "audit")), False
+        mode = arguments.get("mode", "audit")
+        if not isinstance(mode, str) or mode not in MODES:
+            return {"ok": False, "error": "mode must be audit, architecture, or codegen"}, True
+        return contract_payload(mode), False
     if name == "evidence_first_validate":
         result = bounded_validation_result(validate_packet(arguments.get("packet")))
         return result, not bool(result.get("ok"))

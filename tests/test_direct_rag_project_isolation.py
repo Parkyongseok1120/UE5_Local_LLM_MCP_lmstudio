@@ -58,6 +58,9 @@ def _document(
         "symbol_kind": "class" if symbol else "",
         "scope": "project" if project else "engine",
     }
+    if project is not None:
+        from direct_rag_source_snapshot import SNAPSHOT_KEY, source_snapshot
+        metadata[SNAPSHOT_KEY] = source_snapshot(project)["fingerprint"]
     return {
         "id": identifier,
         "source": source,

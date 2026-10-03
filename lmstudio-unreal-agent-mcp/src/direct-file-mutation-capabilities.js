@@ -16,6 +16,7 @@ const { textLineCount } = require("./direct-mutation-limits");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
 const { failure, success } = require("./direct-response");
+const { committedChange, withChangeEvidence } = require("./direct-change-evidence");
 const {
   registerCurrentVersion,
   resolveVersionEvidence,
@@ -188,7 +189,7 @@ function createFileMutationCapabilities(context) {
     }
     const hash = sha256Text(content);
     const snapshot = await registerCurrentVersion(context, resolution, hash, requestContext);
-    return success({
+    return withChangeEvidence(success({
       operation: "created",
       path: `project://${resolution.relativePath}`,
       bytesWritten: Buffer.byteLength(content, "utf8"),
@@ -198,7 +199,7 @@ function createFileMutationCapabilities(context) {
       ...(semanticAdvisory ? {
         semanticAdvisories: [{ ...semanticAdvisory, path: `project://${resolution.relativePath}` }],
       } : {}),
-    });
+    }), committedChange("", content, null, hash), context.payloadFits);
   }
 
   async function replaceInFile(args, requestContext = {}) {
@@ -310,7 +311,7 @@ function createFileMutationCapabilities(context) {
     }
     const nextHash = sha256Text(locked.result.updated);
     const snapshot = await registerCurrentVersion(context, resolution, nextHash, requestContext);
-    return success({
+    return withChangeEvidence(success({
       operation: "replaced",
       path: `project://${resolution.relativePath}`,
       occurrences: locked.result.occurrences,
@@ -322,7 +323,7 @@ function createFileMutationCapabilities(context) {
       ...(semanticAdvisory ? {
         semanticAdvisories: [{ ...semanticAdvisory, path: `project://${resolution.relativePath}` }],
       } : {}),
-    });
+    }), committedChange(read.buffer, locked.result.updated, locked.result.preHash, nextHash), context.payloadFits);
   }
 
   return { replace_in_file: replaceInFile, write_file: writeFile };

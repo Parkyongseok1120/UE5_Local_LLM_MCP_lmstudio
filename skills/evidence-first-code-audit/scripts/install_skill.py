@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -18,6 +19,17 @@ def _same_path(left: Path, right: Path) -> bool:
 def _default_destination_root() -> Path:
     codex_home = os.environ.get("CODEX_HOME")
     return (Path(codex_home) if codex_home else Path.home() / ".codex") / "skills"
+
+
+def _cleanup(path: Path) -> None:
+    """Cleanup cannot undo publication or replace the primary install error."""
+    try:
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+    except OSError as exc:
+        print(f"Cleanup warning: retained {path}: {exc}", file=sys.stderr)
 
 
 def install(destination_root: Path, *, force: bool = False, dry_run: bool = False) -> Path:
@@ -59,14 +71,9 @@ def install(destination_root: Path, *, force: bool = False, dry_run: bool = Fals
             backup.replace(destination)
         raise
     finally:
-        if staging_parent.exists():
-            shutil.rmtree(staging_parent)
+        _cleanup(staging_parent)
 
-    if backup.exists():
-        if backup.is_dir():
-            shutil.rmtree(backup)
-        else:
-            backup.unlink()
+    _cleanup(backup)
     print("Installed.")
     return destination
 

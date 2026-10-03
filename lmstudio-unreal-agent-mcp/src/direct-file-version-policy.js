@@ -62,15 +62,20 @@ function snapshotResultFields(snapshot) {
 }
 
 async function registerCurrentVersion(context, resolution, hash, requestContext = {}) {
-  const stat = await fsp.stat(resolution.absolutePath);
-  const snapshot = context.fileSnapshots.register({
-    projectPath: resolution.activeProject,
-    filePath: resolution.absolutePath,
-    hash,
-    stat,
-    requestContext,
-  });
-  return { canonicalProject: resolution.activeProject, ...snapshotResultFields(snapshot) };
+  // This runs after commit. Failure to obtain the next receipt cannot undo or
+  // erase that committed result (including an already archived bundle).
+  try {
+    const stat = await fsp.stat(resolution.absolutePath);
+    const snapshot = context.fileSnapshots.register({
+      projectPath: resolution.activeProject, filePath: resolution.absolutePath,
+      hash, stat, requestContext,
+    });
+    return { canonicalProject: resolution.activeProject, ...snapshotResultFields(snapshot) };
+  } catch (error) {
+    return { canonicalProject: resolution.activeProject, receiptStatus: "unavailable",
+      receiptError: String(error?.message || error).slice(0, 500),
+      receiptRecovery: "Re-read the file before the next mutation; this commit already completed." };
+  }
 }
 
 module.exports = {

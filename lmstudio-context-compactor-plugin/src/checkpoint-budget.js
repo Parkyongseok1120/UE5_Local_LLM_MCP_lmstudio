@@ -1,6 +1,7 @@
 "use strict";
 
 const { sanitizeStructuredDurableValue } = require("./durable-memory-sanitizer.js");
+const { changeMetadata } = require("./change-evidence-memory.js");
 
 // Mandatory continuity is independent of the amount of optional prose and
 // archived evidence accumulated so far. Tool bodies remain in the archive;
@@ -17,7 +18,8 @@ function mandatoryContinuity(memory) {
     latestUserConstraints: m.latestUserConstraints || [],
     historicalUserConstraintEvidence: m.historicalUserConstraintEvidence || [],
     currentWorkStatus: {
-      modifiedOrObservedFiles: m.currentWorkStatus?.modifiedOrObservedFiles || [],
+      modifiedOrObservedFiles: (m.currentWorkStatus?.modifiedOrObservedFiles || []).map(file => ({ ...file,
+        ...(file.changeEvidence ? { changeEvidence: changeMetadata(file.changeEvidence) } : {}) })),
       recentToolOutcomes: [], gitObservations: [], historicalEvidence: [], recentBuildOrTestState: [],
     },
     archiveDiscovery: "Use evidence_first_read_context with action=catalog to find prior observations by path; then read exact evidenceId and version. Catalog entries are historical, not current source observations.",

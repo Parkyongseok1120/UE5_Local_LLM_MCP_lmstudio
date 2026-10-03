@@ -26,6 +26,38 @@ function fixture(scope = unreal) {
 const read = (path, text, value = {}) => u({ path, text, hash: "a".repeat(64), startLine: 1,
   endLine: text.split("\n").length, totalLines: text.split("\n").length, status: "observed", truncated: false, ...value });
 
+test("Unreal applicability uses observed local identity; unrelated Unity files and later failed binding cannot assert it", () => {
+  const f = fixture();
+  const local = { ok: true, canonicalProject: unreal.projectIdentity, sourceMode: "engine_local",
+    observedEngineIdentity: { status: "observed", engineRoot: "C:/UE_5.8", version: "5.8.0", hashScope: "file", sha256: "b".repeat(64) } };
+  f.ingest("unreal_symbol_lookup", local, {}, "local", "mcp/unreal-rag");
+  assert.equal(f.snapshot().applicability.engineVersion, "5.8.0");
+  f.ingest("read_file", { ok: true, canonicalProject: unreal.projectIdentity, path: "project://ProjectSettings/ProjectVersion.txt",
+    text: "m_EditorVersion: 5.7.1f1", sha256: "a".repeat(64), startLine: 1, endLine: 1, totalLines: 1 });
+  assert.equal(f.snapshot().applicability.engineVersion, "5.8.0");
+  f.ingest("unreal_symbol_lookup", { ...local, ok: false, errorCode: "ENGINE_SOURCE_VERSION_MISMATCH" }, {}, "failed", "mcp/unreal-rag");
+  assert.equal(f.snapshot().applicability.engineVersion, undefined);
+});
+
+test("Auto diagnostic signals expire when a later Unity compilation observation supersedes them", () => {
+  const f = fixture(unity);
+  const common = { editorSessionId: "session", domainGeneration: 1 };
+  f.ingest("unity_logs", u({ ...common, compilationId: "c1", compilationOutcome: "failed", items: [
+    { ...common, source: "compiler", compilationId: "c1", message: "OLD_ERROR", severity: "error" }] }), { action: "read" });
+  assert.ok(f.snapshot().autoSignals.some(s => s.signal === "diagnostic_present"));
+  f.ingest("unity_status", u({ ...common, compilationId: "c2", compiling: false }));
+  assert.equal(f.snapshot().autoSignals.some(s => s.signal === "diagnostic_present"), false);
+});
+
+test("RAG observation classification grants only the exact published read tools", () => {
+  const { isObservationOnlyToolCall } = require("../dist/tool-capability-registry");
+  for (const name of ["unreal_symbol_lookup", "unreal_rag_search"])
+    assert.equal(isObservationOnlyToolCall({ name, pluginIdentifier: "mcp/unreal-rag" }, { name, arguments: {} }), true);
+  for (const [name, provider] of [["unreal_rag_refresh", "mcp/unreal-rag"], ["unreal_set_active_project", "mcp/unreal-rag"],
+    ["unreal_symbol_lookup", "mcp/unknown"]])
+    assert.equal(isObservationOnlyToolCall({ name, pluginIdentifier: provider }, { name, arguments: {} }), false);
+});
+
 test("returned failed build remains failed, bounded and scoped, without treating association as actual version", () => {
   const f = fixture(); f.ingest("build_unreal_project", build({ diagnostics: Array.from({ length: 30 }, (_, i) => "error " + i) }));
   const snapshot = f.snapshot(), data = snapshot.items[0].data;

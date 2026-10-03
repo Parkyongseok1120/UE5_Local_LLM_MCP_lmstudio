@@ -14,6 +14,9 @@ const identity = require("./evidence-identity.js") as {
   queryKey(value: Record<string, unknown>): string;
   normalizeObservation(value: Record<string, unknown>, request: ToolCallRequest, provider: string): Record<string, unknown>;
 };
+const { changePairKey } = require("./change-evidence-memory.js") as {
+  changePairKey(request: ToolCallRequest, content: unknown): string;
+};
 
 export type EvidenceIdentity = { provider: string; sourceKind: string; sourceIdentity: string; query: string };
 export type EvidenceVersion = { value: string; verified: boolean };
@@ -40,6 +43,20 @@ export class EvidenceManager {
   coverage: RecoveryCoverageLedger = new Map();
   private currentCoverage: RecoveryCoverageLedger = new Map();
   private readonly referenceState = emptyReferenceState();
+  // Bounded execution-local provenance at this existing observation owner.
+  // Historical raw results never gain a provider from today's tool registry.
+  private readonly changeOrigins = new Map<string, Record<string, string> | null>();
+  private changesDisabled = false;
+  initializeChangeOrigins(history: Chat) {
+    for (const message of history.getMessagesArray()) {
+      for (const result of message.getToolCallResults()) {
+        if (this.changeOrigins.size >= 2048) { this.changeOrigins.clear(); this.changesDisabled = true; return; }
+        this.changeOrigins.set(`historical:${telemetryFingerprint(result.content)}`, null);
+      }
+    }
+  }
+  changeOrigin = (request: ToolCallRequest, content: unknown) => this.changesDisabled ? undefined
+    : this.changeOrigins.get(changePairKey(request, content)) || undefined;
   constructor(readonly store: InstanceType<typeof workingContextModule.WorkingContext> | null,
     readonly tools: Array<RemoteToolLike>) { }
   ingestReferences(messages: readonly ChatMessage[], scope: ToolScope, executionId: string) {
@@ -61,8 +78,22 @@ export class EvidenceManager {
     this.currentCoverage = seedRecoveryProgress(history, this.tools).coverage;
     this.store?.captureExposure(history, modelInputId, completed);
   }
-  captureReturned(messages: Array<ChatMessage>, executionId: string) {
+  captureReturned(messages: Array<ChatMessage>, executionId: string, batchId = "") {
     const history = Chat.empty(); for (const message of messages) history.append(message);
+    const pairs = workingContextModule.exchangeIndex(history);
+    if (!pairs.ambiguous && batchId && !this.changesDisabled) for (const [mi, message] of messages.entries()) {
+      for (const [ri, result] of message.getToolCallResults().entries()) {
+        const request = pairs.matches.get(`${mi}:${ri}`);
+        const tools = this.tools.filter(t => t.name === request?.name);
+        if (!request?.id || tools.length !== 1 || tools[0].pluginIdentifier !== "mcp/unreal-agent"
+          || !["write_file", "replace_in_file", "apply_edit_bundle", "read_file", "read_file_range", "read_symbol"].includes(request.name)) continue;
+        if (this.changeOrigins.size >= 2048) { this.changeOrigins.clear(); this.changesDisabled = true; break; }
+        const key = changePairKey(request, result.content);
+        this.changeOrigins.set(key, this.changeOrigins.has(key)
+          || this.changeOrigins.has(`historical:${telemetryFingerprint(result.content)}`) ? null : { provider: tools[0].pluginIdentifier,
+          tool: request.name, executionId, batchId, toolCallId: request.id, observedAt: new Date().toISOString() });
+      }
+    }
     return this.store?.captureReturned(history, request => {
       const matches = this.tools.filter(tool => tool.name === request.name);
       return matches.length === 1 && isObservationOnlyToolCall(matches[0], request);
@@ -89,28 +120,11 @@ hasMore: typeof value.pageHasMore === "boolean" ? value.pageHasMore : "unknown",
 
 export function completedRequestFingerprints(history: Chat): Set<string> {
   const completed = new Set<string>();
-  let active: Map<string, ToolCallRequest> | null = null;
-  const consumed = new Set<string>();
-  for (const message of history.getMessagesArray()) {
-    const requests = message.getToolCallRequests();
-    if (requests.length) {
-      active = new Map();
-      consumed.clear();
-      for (const request of requests) {
-        const id = String(request.id || "");
-        if (!id || active.has(id)) {
-          active = null;
-          break;
-        }
-        active.set(id, request);
-      }
-    }
-    if (!active) continue;
-    for (const result of message.getToolCallResults()) {
-      const id = String(result.toolCallId || "");
-      const request = active.get(id);
-      if (!request || consumed.has(id)) continue;
-      consumed.add(id);
+  const index = workingContextModule.exchangeIndex(history);
+  history.getMessagesArray().forEach((message, mi) => {
+    message.getToolCallResults().forEach((result, ri) => {
+      const request = index.matches.get(`${mi}:${ri}`);
+      if (!request) return;
       const decoded = toolMemory.decodeToolResultRecord(result.content);
       const value = decoded.value;
       const status = String(value?.status || "").toLowerCase();
@@ -123,12 +137,8 @@ export function completedRequestFingerprints(history: Chat): Set<string> {
         name: request.name,
         arguments: request.arguments || {},
       }));
-    }
-    if (active && consumed.size === active.size) {
-      active = null;
-      consumed.clear();
-    }
-  }
+    });
+  });
   return completed;
 }
 
@@ -325,23 +335,28 @@ export function sourceObservationFailed(value: Record<string, unknown>): boolean
 /** Normalize native producer payloads using the actual paired request and trusted
  * provider. A payload cannot grant itself read authority. Pagination/size fields
  * identify a range within the query, rather than a different semantic query. */
-export function observationRecords(messages: Array<ChatMessage>, tools: Array<RemoteToolLike> = []) {
-  const records: Array<{ content: unknown; value: Record<string, unknown> | undefined }> = [];
+export function observationRecords(messages: Array<ChatMessage>, tools: Array<RemoteToolLike> = [],
+  options: { confirmedPairsOnly?: boolean } = {}) {
+  const records: Array<{ content: unknown; value: Record<string, unknown> | undefined; trustedRead: boolean }> = [];
   const history = Chat.empty(); for (const message of messages) history.append(message);
   const pairs = workingContextModule.exchangeIndex(history);
   // Do not manufacture observations out of canceled, orphaned or duplicate
   // callback sequences. The same pairing contract protects durable commit.
   // Pure range-algebra callers can supply already decoded result-only samples.
   // Runtime adapters always supply a registry and must prove complete pairing.
-  if (pairs.ambiguous && (tools.length || messages.some(m => m.getToolCallRequests().length))) return records;
+  if (!options.confirmedPairsOnly && pairs.ambiguous
+    && (tools.length || messages.some(m => m.getToolCallRequests().length))) return records;
   for (const [mi, message] of messages.entries()) {
     for (const [ri, result] of message.getToolCallResults().entries()) {
       const decoded = toolMemory.decodeToolResultRecord(result.content).value;
       const request = pairs.matches.get(`${mi}:${ri}`);
+      // Partial delivery may retain individually confirmed pairs beside a
+      // canceled sibling. Orphan/duplicate results still have no match.
+      if (options.confirmedPairsOnly && !request) continue;
       const matches = tools.filter(t => t.name === request?.name);
       const trusted = request && matches.length === 1 && isObservationOnlyToolCall(matches[0], request);
       const archived = ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(String(decoded?.kind));
-      records.push({ content: result.content, value: decoded && trusted && !archived ? {
+      records.push({ content: result.content, trustedRead: Boolean(trusted), value: decoded && trusted && !archived ? {
         ...identity.normalizeObservation(decoded, request, matches[0].pluginIdentifier || "local"), canonicalReadObservation: true,
       } : decoded });
     }

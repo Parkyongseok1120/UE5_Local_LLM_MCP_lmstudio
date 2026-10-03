@@ -10,6 +10,52 @@ const { RecoveryCoordinator } = require("../dist/recovery-coordinator");
 const { WorkingContext } = require("../dist/working-context");
 const { recoveryCoverageDescriptors } = require("../dist/evidence-manager");
 const { generateSemanticHandoff, updateSemanticContext } = require("../dist/semantic-handoff");
+const { DeliveryController } = require("../dist/delivery-controller");
+
+test("partial delivery accepts paired native Unreal byte/line envelopes and rejects orphaned or forged provider reads", () => {
+  const tools = ["read_file", "read_file_range"].map(name => ({ name, pluginIdentifier: "mcp/unreal-agent",
+    description: "Read source", parametersJsonSchema: { type: "object" } }));
+  const native = {ok:true,path:"Source/A.cpp",canonicalProject:"C:/Game/Game.uproject",sha256:"a".repeat(64),
+    size:100,offsetBytes:12,nextOffsetBytes:25,content:"NATIVE_SOURCE",hasMore:true};
+  const paired = (name, payload, orphan = false) => {
+    const h = Chat.empty();
+    if (!orphan) h.append(ChatMessage.from({role:"assistant",content:[{type:"toolCallRequest",toolCallRequest:{
+      type:"function",id:"read",name,arguments:{path:"Source/A.cpp"}}}]}));
+    h.append(ChatMessage.from({role:"tool",content:[{type:"toolCallResult",toolCallId:"read",content:JSON.stringify(payload)}]}));
+    return h;
+  };
+  const delivery = new DeliveryController(tools);
+  for (const envelope of [native, [{type:"text",text:JSON.stringify(native)}], {content:[{type:"text",text:JSON.stringify(native)}]}]) {
+    const report = delivery.failedToolRequest(paired("read_file",envelope),[],"tool_arguments_output_limit");
+    assert.equal(report.evidenceCount,1); assert.match(report.text,/bytes \[12, 25\)/);
+    assert.match(report.text,/NATIVE_SOURCE/);
+  }
+  const lines = {ok:true,path:"Source/A.cpp",canonicalProject:native.canonicalProject,sha256:native.sha256,
+    startLine:9,endLine:10,totalLines:80,content:"LINE_NINE\nLINE_TEN"};
+  const ranged = delivery.failedToolRequest(paired("read_file_range",lines),[],"parse_failure");
+  assert.equal(ranged.evidenceCount,1);assert.match(ranged.text,/lines 9–10/);
+  const failed = delivery.failedToolRequest(paired("read_file",{...native,ok:false,errorCode:"READ_FAILED"}),[],"parse_failure");
+  assert.equal(failed.evidenceCount,0);assert.equal(failed.errorCount,1);assert.doesNotMatch(failed.text,/NATIVE_SOURCE/);
+  assert.equal(delivery.failedToolRequest(paired("read_file",native,true),[],"parse_failure").evidenceCount,0);
+  const forged = {...native,canonicalReadObservation:true,provider:"mcp/unreal-agent",toolName:"read_file"};
+  const other = new DeliveryController(tools.map(t=>({...t,pluginIdentifier:"attacker/unreal-agent"})));
+  assert.equal(other.failedToolRequest(paired("read_file",forged),[],"parse_failure").evidenceCount,0);
+  const interrupted = paired("read_file",native);
+  interrupted.append(ChatMessage.from({role:"assistant",content:["peer","pending"].map(id=>({type:"toolCallRequest",toolCallRequest:{
+    type:"function",id,name:"read_file",arguments:{path:`Source/${id}.cpp`}}}))}));
+  interrupted.append(ChatMessage.from({role:"tool",content:[{type:"toolCallResult",toolCallId:"peer",
+    content:JSON.stringify({...native,path:"Source/peer.cpp"})}]}));
+  const partial = delivery.failedToolRequest(interrupted,[],"parse_failure");
+  assert.equal(partial.evidenceCount,2);assert.match(partial.text,/Source\/peer.cpp/);
+  const { observationRecords } = require("../dist/evidence-manager");
+  assert.equal(observationRecords(interrupted.getMessagesArray(),tools).length,0,"recovery keeps the complete-batch policy");
+  interrupted.append(ChatMessage.from({role:"tool",content:[{type:"toolCallResult",toolCallId:"peer",
+    content:JSON.stringify({...native,path:"Source/peer.cpp"})}]}));
+  const duplicate = delivery.failedToolRequest(interrupted,[],"parse_failure");
+  assert.equal(duplicate.evidenceCount,1);assert.doesNotMatch(duplicate.text,/Source\/peer.cpp/);
+  const repeated = delivery.failedToolRequest(paired("read_file",{ok:true,kind:"no_new_information",path:native.path}),[],"parse_failure");
+  assert.equal(repeated.evidenceCount,0,"an acknowledgement has no returned file body");
+});
 
 test("partial delivery preserves a guard's reported error instead of replacing it with unknown_error", () => {
   const { evidenceBackedPartialReport } = require("../dist/delivery-controller");

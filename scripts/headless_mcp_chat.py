@@ -277,7 +277,13 @@ def compact_in_background(
     soft_remaining_tokens: int,
     compact_above_messages: int,
 ) -> list[dict[str, Any]]:
-    estimated_input_tokens = (len(json.dumps(messages, ensure_ascii=False)) + len(json.dumps(tool_definitions))) // 4
+    def estimated_remaining(candidate: list[dict[str, Any]]) -> int:
+        # Keep the existing character estimate and the same output reservation
+        # before and after compaction; this is not an exact tokenizer measurement.
+        estimate = (len(json.dumps(candidate, ensure_ascii=False)) + len(json.dumps(tool_definitions))) // 4
+        return context_length - estimate - 8192 - 1536
+
+    estimated_input_tokens = context_length - estimated_remaining(messages) - 8192 - 1536
     measurement = {
         "contextLength": context_length,
         "inputTokens": estimated_input_tokens,
@@ -294,24 +300,34 @@ def compact_in_background(
             "maxOutputReserve": 8192,
             "safetyMarginTokens": 1536,
             "recentCompleteTurns": 2,
+            "maxCurrentTurnMessages": 8,
             "compactAboveMessageCount": compact_above_messages,
             "maxCheckpointChars": 22000,
             "maxToolResultChars": 1200,
         },
     }
-    completed = subprocess.run(
-        [node, str(adapter)],
-        input=json.dumps(payload, ensure_ascii=False),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=15,
-        check=False,
+    for cap in (8, 2, 0):
+        payload["options"]["maxCurrentTurnMessages"] = cap
+        # Rebuild each candidate from the original input, not a lossy candidate.
+        completed = subprocess.run(
+            [node, str(adapter)],
+            input=json.dumps(payload, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr or "Headless context compactor failed")
+        result = json.loads(completed.stdout)
+        candidate = list(result.get("messages", messages))
+        if estimated_remaining(candidate) >= 0:
+            return candidate
+    raise RuntimeError(
+        "Headless input still exceeds the estimated context budget after compaction; "
+        "the model request was not sent. Narrow the current input or increase the loaded context."
     )
-    if completed.returncode != 0:
-        raise RuntimeError(completed.stderr or "Headless context compactor failed")
-    result = json.loads(completed.stdout)
-    return list(result.get("messages", messages))
 
 
 def run_turn(
@@ -348,6 +364,7 @@ def run_turn(
             "tools": tool_definitions,
             "tool_choice": "auto",
             "temperature": 0,
+            "max_tokens": 8192,
             "stream": stream,
         }
         if stream:

@@ -64,7 +64,8 @@ class EvidenceArchive {
     if (!scope || !scope.conversation || !scope.workspace || !scope.repository || !scope.lineage)
       throw new Error("incomplete_archive_scope");
     this.scope = hash(scope);
-    this.options = { maxBytes: 8 * 1024 * 1024, maxRecords: 128, ttlMs: 24 * 3600 * 1000, ...options };
+    this.options = { maxBytes: 8 * 1024 * 1024, maxRecords: 128, ttlMs: 24 * 3600 * 1000,
+      maxWindows: 128, maxWindowBytes: 8 * 1024 * 1024, ...options };
     this.now = options.now || Date.now;
     this.records = new Map();
     this.root = null;
@@ -79,6 +80,109 @@ class EvidenceArchive {
       this.directory = path.join(canonicalRoot, this.scope);
     }
     this.stats = { captured: 0, reads: 0, returnedChars: 0, unavailable: 0 };
+    this.protectedWindows = new Set();
+    if (this.root) this.cleanupScopes();
+  }
+
+  // Passive retention stays at the existing storage owner. Current scopes and
+  // explicitly active lineage/parent files are never candidates for cleanup.
+  cleanupScopes() {
+    if (!this.root) return;
+    try {
+      const cutoff = this.now() - this.options.ttlMs;
+      let removed = 0;
+      for (const name of fs.readdirSync(this.root)) {
+        if (removed >= 16) break;
+        if (!/^[a-f0-9]{64}$/u.test(name) || name === this.scope) continue;
+        const directory = path.join(this.root, name), stat = fs.lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.mtimeMs > cutoff) continue;
+        if (fs.realpathSync.native(directory) !== directory) continue;
+        const files = fs.readdirSync(directory);
+        if (files.some(file => !/^(?:ev_[a-f0-9]{64}|window(?:-[A-Za-z0-9-]+)?)\.json$/u.test(file))) continue;
+        const paths = files.map(file => path.join(directory, file));
+        if (paths.some(file => { const s = fs.lstatSync(file); return !s.isFile() || s.isSymbolicLink() || s.nlink !== 1 || s.mtimeMs > cutoff; })) continue;
+        for (const file of paths) {
+          safeDirectory(directory);
+          if (fs.realpathSync.native(directory) !== directory) throw new Error("unsafe_scope_directory");
+          const current = fs.lstatSync(file);
+          if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.mtimeMs > cutoff)
+            throw new Error("scope_retention_changed");
+          fs.unlinkSync(file);
+        }
+        fs.rmdirSync(directory); removed++;
+      }
+    } catch { /* Cleanup is optional and must not turn a valid read into failure. */ }
+  }
+
+  windowMetadata() {
+    if (!this.directory) return [];
+    this.ensureDirectory(true);
+    return fs.readdirSync(this.directory).filter(name => /^window(?:-[A-Za-z0-9-]+)?\.json$/u.test(name)).map(name => {
+      const file = path.join(this.directory, name), stat = fs.lstatSync(file);
+      return { name, file, bytes: stat.size, modified: stat.mtimeMs,
+        safe: stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 };
+    });
+  }
+
+  windowEntries(metadata = this.windowMetadata()) {
+    return metadata.map(entry => {
+      const source = readFile(entry.file, 16 * 1024 * 1024);
+      let body = null;
+      try { const parsed = JSON.parse(source), { digest, ...value } = parsed;
+        if (digest === hash(value) && value.scope === this.scope) body = value;
+      } catch { /* Corrupt files are counted but never supply protected refs. */ }
+      return { ...entry, body, bytes: Buffer.byteLength(source) };
+    });
+  }
+
+  removeWindow(entry) {
+    this.ensureDirectory();
+    const stat = fs.lstatSync(entry.file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("unsafe_window_file");
+    fs.unlinkSync(entry.file);
+  }
+
+  cleanupWindows() {
+    let entries, manifestsRead = false;
+    try {
+      // Legacy archives may contain thousands of manifests. Prune by cheap
+      // file metadata before reading bodies, while keeping active/parent files.
+      entries = this.windowMetadata();
+      let bytes = entries.reduce((n, item) => n + item.bytes, 0);
+      let count = entries.length;
+      const removed = new Set();
+      const oldest = entries.filter(entry => entry.safe && !this.protectedWindows.has(entry.name))
+        .sort((a, b) => a.modified - b.modified || a.name.localeCompare(b.name));
+      for (const entry of oldest) {
+        if (this.now() - entry.modified < this.options.ttlMs && count <= this.options.maxWindows
+          && bytes <= this.options.maxWindowBytes) continue;
+        try { this.removeWindow(entry); } catch { continue; }
+        removed.add(entry.name); count--; bytes -= entry.bytes;
+      }
+      entries = this.windowEntries(entries.filter(entry => !removed.has(entry.name))); manifestsRead = true;
+      const expired = entry => this.now() - (entry.body?.createdAt ?? entry.modified) >= this.options.ttlMs;
+      const candidates = entries.filter(entry => !this.protectedWindows.has(entry.name))
+        .sort((a, b) => a.modified - b.modified || a.name.localeCompare(b.name));
+      for (const entry of candidates) {
+        const over = entries.length > this.options.maxWindows
+          || entries.reduce((n, item) => n + item.bytes, 0) > this.options.maxWindowBytes;
+        if (!expired(entry) && !over) continue;
+        try { this.removeWindow(entry); }
+        catch { continue; }
+        entries = entries.filter(item => item.name !== entry.name);
+      }
+      return entries;
+    } catch { return manifestsRead ? entries : null; }
+  }
+
+  windowRefs() {
+    const refs = new Set();
+    const windows = this.cleanupWindows();
+    if (!windows) throw new Error("window_retention_unavailable");
+    for (const entry of windows) for (const pair of entry.body?.refs || []) {
+      if (Array.isArray(pair) && ID.test(pair[0])) refs.add(pair[0]);
+    }
+    return refs;
   }
 
   ensureDirectory(create = false) {
@@ -90,6 +194,9 @@ class EvidenceArchive {
     const relative = path.relative(this.root, canonicalDirectory);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("unsafe_directory");
     if (path.resolve(canonicalDirectory) !== path.resolve(directory)) throw new Error("unsafe_directory");
+    // A read is activity too; passive scope expiration must not remove a
+    // concurrently used archive just because no new records were written.
+    try { fs.utimesSync(directory, new Date(this.now()), new Date(this.now())); } catch { /* Advisory only. */ }
     return directory;
   }
 
@@ -180,6 +287,7 @@ class EvidenceArchive {
       record.recordHash = hash(record);
       const bytes = Buffer.byteLength(JSON.stringify(record));
       const liveRefs = lifecycle.liveRefs instanceof Set ? lifecycle.liveRefs : new Set(lifecycle.liveRefs || []);
+      for (const id of this.windowRefs()) liveRefs.add(id);
       let entries = this.entries();
       const expiredDead = entries.filter(entry => !liveRefs.has(entry.key)
         && Number.isFinite(entry.record?.createdAt)

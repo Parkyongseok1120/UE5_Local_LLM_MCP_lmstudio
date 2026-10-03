@@ -28,6 +28,9 @@ async function runAutomationProcess(options) {
     logPath,
     hostPlatform,
     maxOutputBytes: options.maxOutputBytes,
+    signal: options.signal,
+    shutdownTimeoutMs: options.shutdownTimeoutMs,
+    ...(options.terminate ? { terminate: options.terminate } : {}),
   });
   return { ...result, executable, args };
 }

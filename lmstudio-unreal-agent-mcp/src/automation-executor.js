@@ -18,6 +18,8 @@ const {
 } = require("./automation-source-discovery");
 
 function processFailure(processResult, timeoutMs) {
+  if (processResult.cancelled) return { parsed: { ok: false, errorCode: "AUTOMATION_CANCELLED",
+    succeededCount: 0, failedCount: 0, queueEmpty: false }, error: "Automation cancellation requested." };
   if (processResult.timedOut) {
     return {
       parsed: {
@@ -115,6 +117,7 @@ async function runAutomationTests(options = {}) {
     timeoutMs,
     logPath,
     hostPlatform,
+    signal: options.signal, shutdownTimeoutMs: options.shutdownTimeoutMs, terminate: options.terminate,
   });
   const failure = processFailure(processResult, timeoutMs);
   const fullOutput = `${processResult.stdout}\n${processResult.stderr}`.trim();
@@ -124,6 +127,9 @@ async function runAutomationTests(options = {}) {
     ...parsed,
     exitCode: processResult.exitCode,
     timedOut: processResult.timedOut,
+    cancelled: processResult.cancelled,
+    processStarted: processResult.processStarted, processExited: processResult.processExited,
+    terminationStatus: processResult.terminationStatus,
     error: failure?.error || "",
     outputDecodeError: processResult.outputDecodeError,
     logPersistenceError: processResult.logPersistenceError,

@@ -31,6 +31,39 @@ test("symbol queue reserves before asynchronous manifest export and releases aft
   await assert.rejects(client.call({ action: "index", assemblies: ["Game"] }), { code: "analysis_busy" });
   resolveExport({ errorCode: "editor_busy" }); assert.equal((await first).errorCode, "editor_busy"); assert.equal((await client.call({ action: "status" })).job.status, "failed");
 });
+test("closing during manifest export prevents late worker creation", async () => {
+  const { Symbols } = require("../src/symbols"); let resolveExport, spawned = 0;
+  const client = new Symbols({}, { call: () => new Promise(resolve => { resolveExport = resolve; }) },
+    { UNITY_DOTNET: "configured", UNITY_SYMBOL_WORKER: "configured" }, { spawn() { spawned++; } });
+  const pending = client.call({ action: "index", assemblies: ["Game"] });
+  client.close(); resolveExport({ manifestId: "late" });
+  await assert.rejects(pending, { code: "request_cancelled" });
+  assert.equal(spawned, 0); assert.equal(client.job.status, "cancelled");
+});
+test("worker cancellation retains reservation until close and rejects late index", async t => {
+  const { Symbols } = require("../src/symbols"), { EventEmitter } = require("node:events");
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "symbol-lifecycle-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, "analysis-manifest.json"), JSON.stringify({ manifestId: "m", projectIdentity: "p" }));
+  const child = new EventEmitter(); child.pid = 123;
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.stdin = new EventEmitter();
+  const unreferenced = new Set();
+  for (const handle of [child, child.stdin, child.stdout, child.stderr]) handle.unref = () => unreferenced.add(handle);
+  child.stdin.end = () => {}; let killed = 0; child.kill = () => { killed++; return true; };
+  const client = new Symbols({ stateRoot: root, projectIdentity: "p" }, { call: async () => ({ manifestId: "m" }) },
+    { UNITY_DOTNET: "configured", UNITY_SYMBOL_WORKER: "configured" }, { spawn: () => child, shutdownMs: 5 });
+  const controller = new AbortController();
+  const result = await client.call({ action: "index" }, { signal: controller.signal });
+  assert.equal(result.status, "accepted"); controller.abort();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(client.job.status, "outcome_unknown"); assert.equal(client.job.terminationConfirmed, false);
+  assert.equal(unreferenced.size, 4);
+  await assert.rejects(client.call({ action: "index" }), { code: "analysis_busy" });
+  child.stdout.emit("data", Buffer.from(JSON.stringify({ projectIdentity: "p", manifestId: "m", indexVersion: "late" })));
+  child.emit("close", 0);
+  assert.equal(client.index, null); assert.equal(client.job.status, "cancelled");
+  assert.equal(client.job.terminationConfirmed, true); assert.equal(client.worker, null); assert.equal(killed, 1);
+});
 test("real external Roslyn: defines, partial compile error, declarations, binding, inheritance and interface implementations", { skip: !configured }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "evidence-symbol-test-"));
   const file = path.join(root, "Fixture.cs");

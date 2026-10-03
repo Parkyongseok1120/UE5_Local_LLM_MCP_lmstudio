@@ -8,6 +8,7 @@ const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
 const { REASONING_SEPARATOR, visibleAssistantText } = require("./continuity-text.js");
 const { isEphemeralCapabilityKey } = require("./durable-memory-sanitizer.js");
 const evidenceIdentity = require("./evidence-identity.js");
+const { exchangeIndex } = require("./tool-exchange-index.js");
 
 function serialize(history) {
   return history.getMessagesArray().map(m => {
@@ -22,45 +23,9 @@ function serialize(history) {
 
 function deserialize(messages) { const chat = Chat.empty(); for (const m of messages) chat.append(ChatMessage.from(m)); return chat; }
 
-function exchangeIndex(history) {
-  const matches = new Map();
-  let active = null, ambiguous = false;
-  const messages = history.getMessagesArray();
-  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
-    const message = messages[messageIndex], requests = message.getToolCallRequests();
-    if (active && !message.isAssistantMessage() && message.getRole() !== "tool") {
-      ambiguous = true; active = null;
-    }
-    if (requests.length) {
-      // Host history splits finalized requests into assistant blocks. Requests
-      // before the first result still belong to one batch; never merge across
-      // a partially returned exchange or accept duplicate request IDs.
-      if (active && active.consumed.size > 0) ambiguous = true;
-      const byId = active && active.consumed.size === 0 ? active.requests : new Map();
-      for (const request of requests) {
-        if (!request.id || byId.has(request.id)) ambiguous = true;
-        else byId.set(request.id, request);
-      }
-      active = { requests: byId, consumed: new Set() };
-    }
-    const results = message.getToolCallResults();
-    for (let resultIndex = 0; resultIndex < results.length; resultIndex++) {
-      const result = results[resultIndex], id = result.toolCallId;
-      if (!active || !id || !active.requests.has(id) || active.consumed.has(id)) {
-        ambiguous = true;
-        continue;
-      }
-      active.consumed.add(id);
-      matches.set(`${messageIndex}:${resultIndex}`, active.requests.get(id));
-    }
-    if (active && active.consumed.size === active.requests.size) active = null;
-  }
-  if (active && active.consumed.size !== active.requests.size) ambiguous = true;
-  return { matches, ambiguous };
-}
-
 const identityFields = ["repositoryIdentity", "workspaceIdentity", "projectIdentity", "canonicalProjectRoot",
-  "canonicalProject", "path", "action", "comparison", "base", "head", "currentHead", "blobOid"];
+  "canonicalProject", "path", "action", "comparison", "base", "head", "currentHead", "blobOid",
+  "sourceMode", "sourceIdentity", "observedEngineIdentity", "evidenceSource"];
 
 function sourceIdentity(payload) {
   const identity = {};
@@ -73,7 +38,8 @@ function semanticFacts(payload) {
   for (const key of ["kind", "ok", "status", "errorCode", "action", "comparison", "base", "head",
     "since", "until", "authorQuery", "authorQuerySemantics", "pageStart", "pageEnd", "pageHasMore",
     "hasMore", "sourceResultComplete", "returnedRange", "lineRange", "startLine", "endLine",
-    "totalLines", "returnedCount", "total"]) {
+    "totalLines", "returnedCount", "total", "sourceMode", "evidenceSource", "coverage", "declarationProof",
+    "matchCount", "matchMetadataOmitted", "readBytes"]) {
     if (payload[key] !== undefined) facts[key] = payload[key];
   }
   if (facts.pageHasMore === undefined && payload.hasMore !== undefined) facts.pageHasMore = payload.hasMore;
@@ -85,7 +51,19 @@ function semanticFacts(payload) {
 
 function semanticEvidenceView(payload, maxChars = 640) {
   const facts = semanticFacts(payload);
-  if (payload.kind !== "git_observation") return JSON.stringify(redact(payload)).slice(0, maxChars);
+  if (payload.kind !== "git_observation") {
+    const body = gitBodyView(payload);
+    if (!body) return JSON.stringify({ ...facts, metadataOnly: true }).slice(0, maxChars);
+    const view = { bodyField: body.field, excerpt: "", bodyTotalChars: body.body.length,
+      bodyRangeUnit: "utf16_code_units", projectedBodyRanges: [], bodyComplete: false,
+      fullRawProvided: false };
+    const allowance = Math.max(0, maxChars - JSON.stringify(view).length - 16);
+    view.excerpt = body.body.slice(0, allowance);
+    while (JSON.stringify(view).length > maxChars && view.excerpt.length) view.excerpt = view.excerpt.slice(0, -1);
+    view.projectedBodyRanges = [[0, view.excerpt.length]];
+    view.bodyComplete = view.excerpt.length === body.body.length;
+    return JSON.stringify(view);
+  }
   const view = { ...facts };
   if (Array.isArray(payload.items)) {
     view.items = [];
@@ -105,6 +83,7 @@ function gitBodyView(payload) {
   if (typeof payload.content === "string") return { field: "content", body: redact(payload.content) };
   if (typeof payload.text === "string") return { field: "text", body: redact(payload.text) };
   if (typeof payload.body === "string") return { field: "body", body: redact(payload.body) };
+  if (typeof payload.code === "string") return { field: "code", body: redact(payload.code) };
   if (Array.isArray(payload.items)) return { field: "items", body: JSON.stringify(redact(payload.items)) };
   if (Array.isArray(payload.rows)) return { field: "rows", body: JSON.stringify(redact(payload.rows)) };
   return null;
@@ -179,6 +158,7 @@ class WorkingContext {
     this.note = null;
     this.lineage = options.lineage || null;
     this.parentLineage = options.parentLineage || null;
+    this.archive.protectedWindows = new Set([this.windowFile(this.lineage), this.windowFile(this.parentLineage)]);
     this.lastSummaryInput = "";
     this.consumedRawResults = new Set();
     this.cost = { summaryCalls: 0, summaryPromptTokens: 0, summaryPredictedTokens: 0, summaryMs: 0, unknownUsageCalls: 0 };
@@ -362,8 +342,8 @@ class WorkingContext {
         const record = saved.record;
         this.refs.set(record.evidenceId, record.archivedBodyHash);
         const preserveLimit = Number(metadata.preserveUnconsumedRawMaxChars ?? metadata.preserveUnconsumedRawGitMaxChars ?? 0);
-        if (preserveLimit > 0
-          && originalEnvelope.length <= preserveLimit
+        if ((metadata.preserveUnconsumedRaw === true
+          || (preserveLimit > 0 && originalEnvelope.length <= preserveLimit))
           && !this.consumedRawResults.has(rawExposureKey(request, result, originalEnvelope))) {
           preservedFirstConsumer = true;
           return result;
@@ -496,6 +476,10 @@ class WorkingContext {
             stage: completed ? "generation_completed_after_input" : "included_in_sdk_input",
             hostInputVerification: "unknown", projectedRawRanges: value.projectedRawRanges,
             projectedSanitizedRanges: value.projectedSanitizedRanges,
+            bodyField: value.bodyField, bodyRangeUnit: value.bodyRangeUnit,
+            projectedBodyRanges: value.projectedBodyRanges, omittedBodyRanges: value.omittedBodyRanges,
+            bodyTotalChars: value.bodyTotalChars, bodyOmittedChars: value.bodyOmittedChars,
+            bodyComplete: value.bodyComplete,
             fullRawProvided: false, evidenceId: value.archiveRef.evidenceId });
         } else if (value.kind === "historical_evidence_range") {
           this.exposure.set(`${modelInputId}:${result.toolCallId}`, { modelInputId, callId: result.toolCallId,
@@ -589,6 +573,7 @@ class WorkingContext {
         sourcePrefixHash: expectedPrefix, sourceLength: prefix.length,
         replacement, refs: [...candidateRefs], rawBindings, consumedBindings,
         pendingRefs: [...this.returnedRefs], pendingHistoricalResults, note: this.note,
+        createdAt: this.archive.now(),
         lastSummaryInput: this.lastSummaryInput, modelFingerprint, measurement,
         measurementSubject: measurement ? "live_candidate_before_persistence_sanitization" : "terminal_unmeasured",
         remeasureRequired: true };
@@ -596,6 +581,7 @@ class WorkingContext {
       if (this.archive.directory) {
         this.archive.ensureDirectory(true);
         atomicWrite(this.archive.directory, this.windowFile(this.lineage), manifest);
+        this.archive.cleanupWindows();
       }
       this.manifest = manifest; this.generation = body.generation; this.refs = candidateRefs;
       return true;

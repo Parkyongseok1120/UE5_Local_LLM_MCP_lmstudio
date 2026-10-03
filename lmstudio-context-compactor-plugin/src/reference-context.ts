@@ -5,6 +5,7 @@ import { capabilityScope, type RemoteToolLike } from "./tool-capability-registry
 import { toolMemory } from "./context-ports";
 import { fileObservation, pathApiFor, projectDescriptor, projectRoot } from "./continuity-file-observations.js";
 import { sanitizeDerivedOperationalText } from "./durable-memory-sanitizer.js";
+import { exchangeIndex } from "./tool-exchange-index.js";
 
 /** All additional reference work is bounded here, independently of source
  * archival. These limits never grant an execution or context-budget allowance. */
@@ -22,6 +23,7 @@ export type ReferenceItem = {
 };
 type ObservedItem = ReferenceItem & {
   fileKey?: string; sourceBody?: boolean; engineVersion?: string; packages?: Record<string, string>;
+  engineIdentity?: string;
   groupKey?: string; signature?: string; runId?: string; diagnosticCount?: number;
 };
 type Observation = { id: string; fingerprint: string; batch: number; items: ObservedItem[];
@@ -29,6 +31,7 @@ type Observation = { id: string; fingerprint: string; batch: number; items: Obse
 export type ReferenceState = { observations: Observation[]; seen: Set<string>; disabled: boolean; batch: number };
 export type ReferenceSnapshot = {
   items: ReferenceItem[]; omittedItems: number; signals: ReferenceSignal[];
+  autoSignals?: Array<{ signal: ReferenceSignal; observationIds: string[]; order: "last_observation" | "order_unknown" }>;
   applicability: { engineVersion?: string; packages: Record<string, string>; networkPackagesAmbiguous: boolean };
 };
 export function emptyReferenceState(): ReferenceState { return { observations: [], seen: new Set(), disabled: false, batch: 0 }; }
@@ -41,6 +44,7 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 const text = (value: unknown, max: number = REFERENCE_LIMITS.textChars): string | undefined => typeof value === "string"
   ? sanitizeDerivedOperationalText(value).slice(0, max) : undefined;
 const integer = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+const readFailureTool = (tool: string) => ["read_file", "read_file_range", "read_symbol"].includes(tool);
 function pathIdentity(value: string) {
   const api = pathApiFor(value);
   if (!api.isAbsolute(value)) return "";
@@ -72,30 +76,16 @@ function originalResult(value: Record<string, any>) {
     .includes(String(value.kind || "")) && value.no_new_information !== true && !value.repeatReceipt
     && value.status !== "no_new_information";
 }
-/** Match only a unique request and result in one captured batch. A fresh
- * request block replaces the active block; orphans and duplicate IDs are not facts. */
+/** Use the shared causal batch matcher, including consecutive request blocks
+ * before the first result. Orphans and duplicate IDs are not facts. */
 function pairedResults(messages: readonly ChatMessage[]) {
-  const requests = new Map<string, ToolCallRequest>(), counts = new Map<string, number>();
+  const index = exchangeIndex([...messages]);
   const results: Array<{ request: ToolCallRequest; content: string }> = [];
-  let active = new Map<string, ToolCallRequest>();
-  for (const message of messages) {
-    const calls = message.getToolCallRequests();
-    if (calls.length) {
-      active = new Map();
-      for (const request of calls) {
-        const id = String(request.id || "");
-        if (requests.has(id)) counts.set(id, 2);
-        requests.set(id, request); active.set(id, request);
-      }
-    }
-    for (const result of message.getToolCallResults()) {
-      const id = String(result.toolCallId || "");
-      counts.set(id, (counts.get(id) || 0) + 1);
-      const request = active.get(id);
-      if (id && request && typeof result.content === "string") results.push({ request, content: result.content });
-    }
-  }
-  return { pairs: results.filter(p => counts.get(String(p.request.id || "")) === 1), duplicateIds: [...counts].filter(([, n]) => n > 1).map(([id]) => id) };
+  messages.forEach((message, mi) => message.getToolCallResults().forEach((result, ri) => {
+    const request = index.matches.get(`${mi}:${ri}`);
+    if (request && typeof result.content === "string") results.push({ request, content: result.content });
+  }));
+  return { pairs: results, duplicateIds: index.duplicateIds };
 }
 function deliveryStatus(value: Record<string, any>): { delivery: Delivery; operationStatus: OperationStatus } {
   if (value.status === "outcome_unknown") return { delivery: "transport_error", operationStatus: "outcome_unknown" };
@@ -107,13 +97,14 @@ function deliveryStatus(value: Record<string, any>): { delivery: Delivery; opera
   if (value.ok === true || value.status === "completed") return { delivery: "returned", operationStatus: "completed" };
   return { delivery: "returned", operationStatus: "unknown" };
 }
-function fileMetadata(path: string, body: string): { engineVersion?: string; packages?: Record<string, string>; formatting?: Record<string, unknown> } {
+function fileMetadata(path: string, body: string, project: string): { engineVersion?: string; packages?: Record<string, string>; formatting?: Record<string, unknown> } {
   const normalized = path.replace(/\\/g, "/");
-  if (normalized.endsWith("/ProjectSettings/ProjectVersion.txt")) {
+  const api = pathApiFor(project), root = projectRoot(project);
+  if (pathIdentity(path) === pathIdentity(api.join(root, "ProjectSettings", "ProjectVersion.txt"))) {
     const version = /^m_EditorVersion:\s*(\d+\.\d+\.\d+[abfp]\d+)\s*$/m.exec(body)?.[1];
     return version ? { engineVersion: version } : {};
   }
-  if (normalized.endsWith("/Packages/packages-lock.json")) {
+  if (pathIdentity(path) === pathIdentity(api.join(root, "Packages", "packages-lock.json"))) {
     try {
       const parsed = record(JSON.parse(body.replace(/^\uFEFF/, ""))), packages: Record<string, string> = {};
       for (const [id, entry] of Object.entries(record(parsed?.dependencies) || {}).slice(0, 512)) {
@@ -144,7 +135,19 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
     ? `${value.editorSessionId}:${value.domainGeneration}` : undefined;
   const status = deliveryStatus(value);
   let runtime = false, invalidateFiles = false;
-  if (engine === "unreal" && tool === "build_unreal_project" && record(value.project)) {
+  if (engine === "unreal" && tool === "unreal_symbol_lookup" && value.sourceMode === "engine_local") {
+    const observed = record(value.observedEngineIdentity);
+    const verified = value.ok === true && observed?.status === "observed" && typeof observed.engineRoot === "string"
+      && pathIdentity(observed.engineRoot) && observed.hashScope === "file" && /^[a-f0-9]{64}$/.test(observed.sha256 || "")
+      && /^\d+\.\d+(?:\.\d+)?$/.test(observed.version || "");
+    const identity = verified ? JSON.stringify([pathIdentity(observed.engineRoot), observed.version, observed.sha256]) : undefined;
+    add("project", { sourceMode: "engine_local", evidenceSource: text(value.evidenceSource),
+      engineIdentityStatus: verified ? "observed" : "unknown", requestedEngineAssociation: text(value.requestedEngineAssociation),
+      observedEngineRoot: verified ? text(observed.engineRoot) : undefined, observedEngineVersion: verified ? observed.version : undefined,
+      coverage: record(value.coverage) ? { completeness: text(value.coverage.completeness), scope: text(value.coverage.scope) } : { completeness: "unknown" } },
+      { engineVersion: verified ? observed.version : undefined, engineIdentity: identity,
+        groupKey: JSON.stringify([pathIdentity(project), "unreal_engine_source"]) });
+  } else if (engine === "unreal" && tool === "build_unreal_project" && record(value.project)) {
     const p = value.project;
     const raw = Array.isArray(value.diagnostics) ? value.diagnostics : [];
     const diagnostics = raw.slice(0, REFERENCE_LIMITS.diagnostics).flatMap(d => typeof d === "string" ? [text(d)] : []);
@@ -211,7 +214,11 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       const descriptor = projectDescriptor(raw, project);
       if (!provenProject({ canonicalProject: descriptor }, { projectIdentity: project } as ToolScope)) { invalidateFiles = true; continue; }
       const file = fileObservation({ ...raw, sha256: raw.sha256 || raw.hash }, project, value.operation);
-      if (!file || (value.ok === false || value.errorCode) && file.observationState !== "conflict_observed") continue;
+      if (!file) continue;
+      if ((value.ok === false || value.errorCode) && readFailureTool(tool)) {
+        file.observationState = "unavailable";
+        delete file.sha256AtObservation; delete file.observedLineRanges; delete file.readCoverageState;
+      } else if ((value.ok === false || value.errorCode) && file.observationState !== "conflict_observed") continue;
       const fileKey = pathIdentity(String(file.canonicalPath));
       const body = typeof raw.content === "string" ? raw.content : typeof raw.text === "string" ? raw.text : undefined;
       const read = ["read_file", "read_file_range", "read_symbol"].includes(tool) && file.observationState === "observed";
@@ -220,8 +227,12 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       const complete = read && (file.readCoverageState === "complete" || completeBytes) && file.sha256AtObservation
         && raw.truncated !== true && raw.hasMore !== true
         && raw.pageHasMore !== true && body !== undefined && body.length <= REFERENCE_LIMITS.decodeChars;
-      const metadata = complete ? fileMetadata(String(file.canonicalPath), body!) : {};
-      const { engineVersion, packages, formatting } = metadata;
+      const metadata = complete ? fileMetadata(String(file.canonicalPath), body!, project) : {};
+      // Unity project/package formats must not assert an Unreal version merely
+      // because an Unreal project contains a similarly named sample file.
+      const { formatting } = metadata;
+      const engineVersion = engine === "unity" ? metadata.engineVersion : undefined;
+      const packages = engine === "unity" ? metadata.packages : undefined;
       add("file", { path: text(file.canonicalPath, 4096), hash: text(file.sha256AtObservation, 128),
         observationState: file.observationState, ranges: file.observedLineRanges || [],
         coverage: file.readCoverageState || "unknown", engineVersion, packages, formatting,
@@ -312,6 +323,12 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
   const signals = new Set<ReferenceSignal>(), groups = new Set<string>();
   let diagnosticGroups = 0, diagnosticEntries = 0, metadata = 0;
   const ordered = [...state.observations].reverse();
+  const localEngineObservations = ordered.filter(o => o.items.some(i => i.data.sourceMode === "engine_local"));
+  const engineBatch = localEngineObservations[0]?.batch;
+  const currentEngineIdentities = localEngineObservations.filter(o => o.batch === engineBatch)
+    .flatMap(o => o.items.filter(i => i.data.sourceMode === "engine_local").map(i => i.engineIdentity));
+  const ambiguousEngine = currentEngineIdentities.some(i => !i) || new Set(currentEngineIdentities).size > 1;
+  const autoSignals: NonNullable<ReferenceSnapshot["autoSignals"]> = [];
   for (const observation of ordered) {
     const present = available.get(observation.id) === observation.fingerprint;
     for (const item of observation.items) {
@@ -321,18 +338,33 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
         if (++diagnosticGroups > REFERENCE_LIMITS.diagnosticGroups) { snapshot.omittedItems++; continue; }
       } else if (++metadata > REFERENCE_LIMITS.metadata) { snapshot.omittedItems++; continue; }
       let data = { ...item.data, returnedBodyInCurrentInput: present, hostInputVerification: "unknown" } as Record<string, any>;
+      const sameWork = (o: Observation) => o.items.some(i => item.groupKey ? i.groupKey === item.groupKey
+        : i.origin.tool === item.origin.tool && i.kind === item.kind);
+      const orderKnown = ordered.filter(o => o.batch === observation.batch && sameWork(o)).length === 1
+        && !ordered.some(o => o.batch > observation.batch && sameWork(o));
+      const laterUnityCompile = observation.runtime && ordered.some(o => o.batch >= observation.batch
+        && o !== observation && o.runtime && o.session === observation.session && o.items.some(i =>
+          ["project", "diagnostics"].includes(i.kind) && (o.batch === observation.batch
+            || !item.runId || i.data.compilationId !== item.runId)));
+      const autoSignal = (signal: ReferenceSignal) => {
+        if (!orderKnown || laterUnityCompile) return;
+        const existing = autoSignals.find(s => s.signal === signal);
+        if (existing) existing.observationIds = [...new Set([...existing.observationIds, item.id])].slice(0, 4);
+        else autoSignals.push({ signal, observationIds: [item.id], order: "last_observation" });
+      };
       if (item.kind === "diagnostics") {
         const diagnostics = Array.isArray(data.diagnostics) ? data.diagnostics : [];
         const shown = diagnostics.slice(0, REFERENCE_LIMITS.diagnostics - diagnosticEntries);
         diagnosticEntries += shown.length;
         data = { ...data, diagnostics: shown, coverage: { ...data.coverage, omittedBySnapshot: diagnostics.length - shown.length } };
-        if (shown.length) signals.add("diagnostic_present");
+        if (shown.length) { signals.add("diagnostic_present"); autoSignal("diagnostic_present"); }
         const peers = ordered.filter(o => o.batch === observation.batch && o.items.some(p => p.groupKey === item.groupKey));
         if (peers.length > 1) data.ordering = "multiple_results_in_same_batch; latest_run_unknown";
         const previous = ordered.find(o => o.batch < observation.batch && o.items.some(p => p.groupKey === item.groupKey));
         const prior = previous?.items.find(p => p.groupKey === item.groupKey);
         if (peers.length === 1 && item.signature && prior?.signature === item.signature && item.runId && prior.runId !== item.runId) {
           signals.add("diagnostic_recurred");
+          autoSignal("diagnostic_recurred");
           data.recurrence = { previousToolCallId: prior.origin.toolCallId, comparedScope: "bounded_displayed_diagnostics",
             sameRootCause: "unknown", mutationCausality: "unknown" };
         }
@@ -343,14 +375,16 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
         data.currentCompilationStatus = "not_inferred_from_prior_acceptance_or_status";
       } else if (data.operationStatus === "pending" || data.operationStatus === "accepted" || data.compiling === true) {
         signals.add("compilation_pending");
+        autoSignal("compilation_pending");
       }
-      if (data.operationStatus === "outcome_unknown") signals.add("operation_outcome_unknown");
+      if (data.operationStatus === "outcome_unknown") { signals.add("operation_outcome_unknown"); autoSignal("operation_outcome_unknown"); }
       if (item.kind === "file") {
         data.sourceBodyInCurrentInput = Boolean(present && item.sourceBody);
         if (!data.sourceBodyInCurrentInput) signals.add("source_body_unavailable");
         if (["modified", "deleted", "conflict_observed"].includes(String(data.observationState))) signals.add("observed_source_changed");
       }
-      if (item.engineVersion && !snapshot.applicability.engineVersion) snapshot.applicability.engineVersion = item.engineVersion;
+      if (item.engineVersion && !snapshot.applicability.engineVersion && !(item.engine === "unreal" && ambiguousEngine))
+        snapshot.applicability.engineVersion = item.engineVersion;
       if (item.packages) snapshot.applicability.packages = { ...item.packages };
       snapshot.items.push({ id: item.id, origin: item.origin, project: item.project, engine: item.engine, kind: item.kind, data });
     }
@@ -358,5 +392,6 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
   const packages = snapshot.applicability.packages;
   snapshot.applicability.networkPackagesAmbiguous = Boolean(packages["com.unity.netcode.gameobjects"] && packages["com.unity.netcode"]);
   snapshot.signals = [...signals];
+  snapshot.autoSignals = autoSignals;
   return snapshot;
 }

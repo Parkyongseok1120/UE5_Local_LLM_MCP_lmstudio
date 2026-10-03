@@ -834,6 +834,113 @@ test("hidden model notes survive a new user turn as assistant judgment and leave
   assert.doesNotMatch(changedInput.toString(), /Use extension OR filtering/u);
 });
 
+test("A01 working windows keep footer replace/clear and objective changes without note-store fallback", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "note-window-owner-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const boundary = new WorkingContextBoundary(path.join(root, "boundary"));
+  const archiveRoot = path.join(root, "archive");
+  const store = { read() { return null; }, write() { return true; } };
+  const config = { contextManagementMode: "deterministic", workingInputTargetTokens: 6000,
+    workingInputTriggerTokens: 7000, softRemainingTokens: 1000, hardRemainingTokens: 500 };
+  const footer = note => '\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n'
+    + JSON.stringify(note) + '\n</continuity-note>';
+  const note = statement => ({ decisions: [{ statement, rationale: "model judgment" }] });
+  let host = Chat.from([{ role: "system", content: "stable system" }]);
+  const advance = (source, text) => {
+    const next = Chat.from(source); next.append(boundary.capture(ChatMessage.create("user", text), next)); return next;
+  };
+  const run = async (source, draft) => {
+    let input;
+    const ctl = fakeController(source, exactCountingModel(async (chat, _tools, opts) => {
+      input = chat.toString();
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", "visible answer" + (draft === undefined ? "" : footer(draft))));
+    }), config);
+    ctl.getWorkingDirectory = () => root;
+    await createPredictionLoopHandler(store, undefined, boundary, { root: archiveRoot })(ctl);
+    const lineage = boundary.restore(source).scope.lineage;
+    const files = fs.readdirSync(archiveRoot).map(dir => path.join(archiveRoot, dir, `window-${lineage}.json`));
+    const manifest = JSON.parse(fs.readFileSync(files.find(file => fs.existsSync(file)), "utf8"));
+    const next = Chat.from(source); next.append("assistant", "visible answer");
+    return { input, next, manifest };
+  };
+  host = advance(host, "Inspect the current source goal.");
+  const first = await run(host, note("JUDGMENT_A"));
+  assert.equal(first.manifest.note.decisions[0].statement, "JUDGMENT_A");
+  const second = await run(advance(first.next, "Continue."), note("JUDGMENT_B"));
+  assert.match(second.input, /JUDGMENT_A/);
+  assert.equal(second.manifest.note.decisions[0].statement, "JUDGMENT_B");
+  const canceledSource = advance(second.next, "Continue.");
+  const abort = new AbortController(), reason = new Error("cancel note handoff");
+  const canceled = fakeController(canceledSource, exactCountingModel(async (_chat, _tools, opts) => {
+    opts.onMessage(ChatMessage.create("assistant", "uncommitted" + footer(note("UNCOMMITTED_JUDGMENT"))));
+    abort.abort(reason); throw reason;
+  }), config);
+  canceled.abortSignal = abort.signal; canceled.guardAbort = () => abort.signal.throwIfAborted();
+  canceled.getWorkingDirectory = () => root;
+  await assert.rejects(createPredictionLoopHandler(store, undefined, boundary, { root: archiveRoot })(canceled), error => error === reason);
+  const canceledHost = Chat.from(canceledSource);
+  for (const block of canceled.blocks) {
+    if (block.options.includeInContext === false || !block.text) continue;
+    canceledHost.append(block.options.roleOverride || "assistant", block.text);
+  }
+  const canceledNext = await run(advance(canceledHost, "Continue."));
+  assert.match(canceledNext.input, /JUDGMENT_B/);
+  assert.doesNotMatch(canceledNext.input, /UNCOMMITTED_JUDGMENT/);
+  const changed = await run(advance(second.next, "New unrelated objective."));
+  assert.doesNotMatch(changed.input, /JUDGMENT_A|JUDGMENT_B/);
+  assert.equal(changed.manifest.note, null);
+  const clear = await run(advance(second.next, "Continue."), {});
+  assert.match(clear.input, /JUDGMENT_B/);
+  assert.equal(clear.manifest.note, null);
+  const afterClear = await run(advance(clear.next, "Continue."));
+  assert.doesNotMatch(afterClear.input, /JUDGMENT_A|JUDGMENT_B/);
+  assert.equal(afterClear.manifest.note, null);
+});
+
+test("A01 working-window restore drops old attachment review claims and accepts a fresh claim", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "note-attachment-window-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const boundary = new WorkingContextBoundary(path.join(root, "boundary")), archiveRoot = path.join(root, "archive");
+  const project = "C:/Projects/Game/Game.uproject", sha256 = "a".repeat(64), client = { files: {} };
+  const history = Chat.from([{ role: "system", content: "stable system" }]);
+  history.append(boundary.capture(ChatMessage.create("user", "Review the current source goal."), history));
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    id: "source-read", type: "function", name: "read_file", arguments: { project, path: "Source/A.cpp" },
+  } }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "source-read",
+    content: JSON.stringify({ ok: true, canonicalProject: project, path: "project://Source/A.cpp", sha256,
+      startLine: 1, endLine: 1, totalLines: 1, text: "source" }) }] }));
+  const draft = statement => ({ decisions: [{ statement: "SAVED_DECISION", rationale: "model judgment" }], reviewClaims: [{
+    path: "project://Source/A.cpp", sha256, reviewScope: "attached criterion", statement, refs: ["tool-call:source-read"] }] });
+  const footer = note => '\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n' + JSON.stringify(note) + '\n</continuity-note>';
+  const config = { projectEngine: "unreal", projectIdentity: project, contextManagementMode: "deterministic",
+    workingInputTargetTokens: 6000, workingInputTriggerTokens: 7000, softRemainingTokens: 1000, hardRemainingTokens: 500 };
+  const tool = { name: "read_file", pluginIdentifier: "mcp/unreal-agent", description: "read", parametersJsonSchema: { type: "object" } };
+  const handler = () => createPredictionLoopHandler({ read() { return null; }, write() { return true; } }, client,
+    boundary, { root: archiveRoot });
+  const first = fakeController(history, exactCountingModel(async (_chat, _tools, opts) => {
+    opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+    opts.onMessage(ChatMessage.create("assistant", "visible answer" + footer(draft("OLD_REVIEW_CLAIM"))));
+  }), config, [tool]);
+  first.getWorkingDirectory = () => root; await handler()(first);
+  const host = Chat.from(history); host.append("assistant", "visible answer");
+  host.append(boundary.capture(ChatMessage.from({ role: "user", content: [{ type: "text", text: "Continue." },
+    { type: "file", identifier: "rubric", fileType: "application/pdf", name: "rubric.pdf", sizeBytes: 64 }] }), host));
+  let nextInput;
+  const next = fakeController(host, exactCountingModel(async (chat, _tools, opts) => {
+    nextInput = chat.toString();
+    opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+    opts.onMessage(ChatMessage.create("assistant", "new review" + footer(draft("FRESH_REVIEW_CLAIM"))));
+  }), config, [tool]);
+  next.getWorkingDirectory = () => root; await handler()(next);
+  assert.equal(next.debugValues.find(e => e.event === "working_context_restore").status, "restored_remeasure_required");
+  assert.match(nextInput, /SAVED_DECISION/); assert.doesNotMatch(nextInput, /OLD_REVIEW_CLAIM/);
+  const lineage = boundary.restore(host).scope.lineage;
+  const file = fs.readdirSync(archiveRoot).map(dir => path.join(archiveRoot, dir, `window-${lineage}.json`)).find(p => fs.existsSync(p));
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).note.reviewClaims[0].statement, "FRESH_REVIEW_CLAIM");
+});
+
 test("reserved note footers stay hidden when no stable working directory exists", async () => {
   const history = Chat.from([{ role: "user", content: "Inspect this search behavior." }]);
   const selectedModel = {
@@ -1707,6 +1814,7 @@ test("reasoning-only and tool-argument output limits do not enter report recover
           options.onPredictionFragment({ roundIndex: 0, content: "thinking", reasoningType: "reasoning",
             tokensCount: 9, containsDrafted: false, isStructural: false });
         } else {
+          options.onMessage(ChatMessage.create("assistant", "I will inspect the source next."));
           options.onToolCallRequestStart(0, 811, {});
           options.onToolCallRequestNameReceived(0, 811, "read_file");
           options.onToolCallRequestArgumentFragmentGenerated(0, 811, "{\\\"path\\\":");
@@ -3167,18 +3275,20 @@ function exactCountingModel(onAct) {
 }
 
 test("deterministic working context projects a completed large result and exposes bounded rehydration", async () => {
-  const history = archivedObservationHistory();
+  const history = archivedObservationHistory(72000);
   let receivedHistory, receivedTools;
   const model = exactCountingModel(async (chat, tools, options) => {
     receivedHistory = chat; receivedTools = tools;
     options.onMessage(ChatMessage.create("assistant", "bounded evidence answer"));
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 2000, predictedTokensCount: 20 } });
   });
+  model.getContextLength = async () => 20000;
   const tools = [{ name: "git_changed_files", pluginIdentifier: "mcp/unity-tools",
     description: "read git page", parametersJsonSchema: { type: "object" } }];
   const ctl = fakeController(history, model, {
     contextManagementMode: "deterministic", workingInputTargetTokens: 3000,
     workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
+    assumedContextLength: 20000, maxOutputReserve: 2048, safetyMarginTokens: 512,
     softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, tools);
   await createPredictionLoopHandler()(ctl);
@@ -3272,7 +3382,7 @@ test("low-pressure Git page stays raw for its first consumer without a semantic 
   const history = Chat.from([{ role: "user", content: "Summarize the returned commits before reading anything again." }]);
   const request = { id: "small-git-page", type: "function", name: "git_log",
     arguments: { since: "2026-09-14", authorQuery: "yongseokpark" } };
-  const items = Array.from({ length: 18 }, (_, index) => ({
+  const items = Array.from({ length: 48 }, (_, index) => ({
     commit: String(index).padStart(40, "a"), authoredAt: `2026-09-${String(14 + index % 7).padStart(2, "0")}T10:00:00+09:00`,
     authorName: "yongseokpark", authorEmail: "yongseok@example.invalid",
     subject: `USER_VISIBLE_SUBJECT_${index}_${"detail".repeat(5)}`,
@@ -3280,14 +3390,14 @@ test("low-pressure Git page stays raw for its first consumer without a semantic 
   const rawResult = JSON.stringify({ ok: true, kind: "git_observation", status: "observed", action: "log",
     since: "2026-09-14", authorQuery: "yongseokpark", pageStart: 1, pageEnd: items.length,
     pageHasMore: false, sourceResultComplete: true, returnedCount: items.length, total: items.length, items });
-  assert.ok(rawResult.length > 2500 && rawResult.length < 8192, rawResult.length);
+  assert.ok(rawResult.length > 8192, rawResult.length);
   history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
   history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
     toolCallId: request.id, content: rawResult }] }));
   let modelCalls = 0;
   const model = exactCountingModel(async (chat, _tools, options) => {
     modelCalls += 1;
-    assert.match(chat.toString(), /USER_VISIBLE_SUBJECT_17/u);
+    assert.match(chat.toString(), /USER_VISIBLE_SUBJECT_47/u);
     assert.doesNotMatch(chat.toString(), /archived_tool_result_projection/u);
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 1800,
       predictedTokensCount: 40 } });
@@ -3368,17 +3478,19 @@ test("image content keeps prediction alive and skips only the durable working-wi
   } }] }));
   history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "image-git-call",
     content: JSON.stringify({ ok: true, status: "complete", kind: "git_observation",
-      rows: ["x".repeat(24000)] }) }] }));
+      rows: ["x".repeat(72000)] }) }] }));
   let received;
   const model = exactCountingModel(async (chat, _tools, options) => {
     received = chat;
     options.onMessage(ChatMessage.create("assistant", "image-safe answer"));
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", promptTokensCount: 2000, predictedTokensCount: 20 } });
   });
+  model.getContextLength = async () => 20000;
   const tool = { name: "git_changed_files", pluginIdentifier: "mcp/unity-tools",
     description: "read git page", parametersJsonSchema: { type: "object" } };
   const ctl = fakeController(history, model, { contextManagementMode: "deterministic",
     workingInputTargetTokens: 3000, workingInputTriggerTokens: 3500,
+    assumedContextLength: 20000, maxOutputReserve: 2048, safetyMarginTokens: 512,
     toolResultProjectionChars: 512, softRemainingTokens: 1000, hardRemainingTokens: 500 }, [tool]);
   await createPredictionLoopHandler()(ctl);
   assert.equal(received.getMessagesArray().some(message => message.hasFiles()), true);
@@ -4602,6 +4714,46 @@ for (const stopReason of ['maxPredictedTokensReached', 'eosFound']) test(`unpars
   assert.equal(ctl.debugValues.some(e => e.event === 'reasoning_recovery_scheduled'), false);
   assert.match(ctl.statuses.at(-1).state.text, stopReason === 'maxPredictedTokensReached' ? /생성 한도에서 잘려/ : /해석할 수 없어/);
   assert.doesNotMatch(JSON.stringify(ctl.debugValues), /Source\/UNFINISHED/);
+  const partial = ctl.blocks.filter(block => block.text.startsWith('부분 조사 보고'));
+  assert.equal(partial.length, 1); assert.match(partial[0].text, /해당 요청은 실행되지 않았습니다/);
+  const delivery = ctl.debugValues.find(e => e.event === 'partial_report_delivery');
+  assert.equal(delivery.taskCompleted, false); assert.equal(delivery.generationCompleted, false);
+  assert.equal(delivery.failedRequestExecuted, false);
+});
+
+test('terminal invalid arguments deliver only returned observations and leave the unvalidated audit incomplete', async () => {
+  let calls = 0;
+  const history = Chat.from([{role:'user',content:'Audit ownership and lifetime.'}]);
+  const request = {type:'function',id:'prior',name:'read_file',arguments:{path:'Source/Prior.cpp'}};
+  history.append(ChatMessage.from({role:'assistant',content:[{type:'toolCallRequest',toolCallRequest:request}]}));
+  history.append(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:'prior',content:JSON.stringify({
+    content:[{type:'text',text:JSON.stringify({ok:true,path:'Source/Prior.cpp',canonicalProject:'C:/Game/Game.uproject',
+      sha256:'a'.repeat(64),size:100,offsetBytes:0,nextOffsetBytes:Buffer.byteLength('RETURNED_SOURCE_VALUE'),
+      hasMore:true,content:'RETURNED_SOURCE_VALUE'})}]
+  })}]}));
+  const model = reasoningModel(async (_chat,_tools,options) => {
+    calls++; await emitUnparsedRequest(options);
+    options.onMessage(ChatMessage.from({role:'assistant',content:[{type:'text',text:'INCOMPLETE_PLAN'},
+      {type:'toolCallRequest',toolCallRequest:{type:'function',id:'peer',name:'read_file_range',arguments:{path:'Source/Peer.cpp',startLine:4,endLine:4}}}]}));
+    options.onMessage(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:'peer',content:JSON.stringify({
+      content:[{type:'text',text:JSON.stringify({ok:true,path:'Source/Peer.cpp',canonicalProject:'C:/Game/Game.uproject',
+        sha256:'b'.repeat(64),startLine:4,endLine:4,totalLines:20,content:'RETURNED_PEER_VALUE'})}]
+    })}]}));
+    options.onRoundEnd(); throw options.signal.reason;
+  });
+  const tools = ['read_file','read_file_range'].map(name=>({name,pluginIdentifier:'mcp/unreal-agent',description:'Read source',parametersJsonSchema:{type:'object'}}));
+  const ctl = fakeController(history,model,{reasoningRecoveryMode:'on',outputRecoveryMode:'on'},tools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls,1);
+  const partial = ctl.blocks.filter(block => block.text.startsWith('부분 조사 보고'));
+  assert.equal(partial.length,1);
+  assert.match(partial[0].text,/RETURNED_SOURCE_VALUE/); assert.match(partial[0].text,/RETURNED_PEER_VALUE/);
+  assert.match(partial[0].text,/bytes \[0, 21\)/); assert.match(partial[0].text,/lines 4–4/);
+  assert.doesNotMatch(partial[0].text,/INCOMPLETE_PLAN|UNFINISHED/);
+  assert.match(partial[0].text,/검증 결과는 없으며/);
+  const delivery = ctl.debugValues.find(e => e.event === 'partial_report_delivery');
+  assert.equal(delivery.evidenceCount,2); assert.equal(delivery.taskCompleted,false);
+  assert.equal(ctl.debugValues.some(e=>e.event==='reasoning_recovery_scheduled'),false);
 });
 
 test('unparsed tool request preserves successful peer results and never completes partial planning', async () => {
@@ -4854,4 +5006,41 @@ for (const delivery of ['documents', 'focused']) test(`${delivery} follows its e
   await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: 'Inspect the supplied source.' }]), model,
     { designGuidanceMode: 'debugging', designGuidanceDelivery: delivery, maxOutputReserve: 8192, reasoningRecoveryMode: 'on', outputRecoveryMode: 'off' }));
   assert.equal(calls, 2);
+});
+
+for (const delivery of ['documents', 'focused']) test(`Auto uses a bounded focused pack with saved ${delivery} delivery and no extra act call`, async () => {
+  let calls = 0;
+  const model = { async getContextLength() { return 38912; }, async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 3); }, async act(chat, _tools, options) {
+      calls++; assert.match(chat.toString(), /reference id=core\/proof/);
+      assert.match(chat.toString(), /reference id=design\//);
+      assert.equal(options.maxTokens, 4096); completeRecoveryReply(options, 'Reviewed the structure.');
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'SSOT 구조를 검토해 줘.' }]), model,
+    { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceDelivery: delivery, designGuidanceMaxTokens: 8192 });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  const event = ctl.debugValues.find(e => e.event === 'design_guidance_input');
+  assert.equal(event.primaryTopic, 'design'); assert.equal(event.configuredDelivery, delivery);
+  assert.equal(event.effectiveDelivery, 'focused'); assert.ok(event.attempts <= 4);
+});
+
+for (const variant of ['excluded', 'observe', 'zero', 'final']) test(`Auto ${variant} respects existing omission boundaries`, async () => {
+  let calls = 0;
+  const model = { async getContextLength() { return 38912; }, async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 3); }, async act(chat, tools, options) {
+      if (++calls === 1 && variant === 'final') {
+        assert.match(chat.toString(), /Optional design reference/);
+        options.onPredictionCompleted({ stats: { stopReason: 'maxPredictedTokensReached', predictedTokensCount: 4096 } });
+        options.onMessage(ChatMessage.create('assistant', 'Truncated report.')); return;
+      }
+      assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
+      if (variant === 'final') assert.equal(tools.length, 0);
+      completeRecoveryReply(options, 'Done.');
+    } };
+  await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: variant === 'excluded'
+    ? '참고 문서를 추가하지 마. 타이머 수명을 수정해 줘.' : 'SSOT 구조를 검토해 줘.' }]), model,
+    { projectEngine: 'unreal', designGuidanceMode: 'auto', observeOnly: variant === 'observe',
+      designGuidanceMaxTokens: variant === 'zero' ? 0 : 8192, outputRecoveryMode: 'on' }));
+  assert.equal(calls, variant === 'final' ? 2 : 1);
 });

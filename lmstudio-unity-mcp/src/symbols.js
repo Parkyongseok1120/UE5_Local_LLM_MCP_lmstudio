@@ -6,43 +6,106 @@ const { spawn } = require("node:child_process");
 const { fail } = require("../../shared-tool-core/files");
 // One explicit analysis at a time. No build, analyzer, generator or model execution.
 class Symbols {
-  constructor(policy, bridge, env) { Object.assign(this, { policy, bridge, env, index: null, job: null }); }
-  async call(args) {
-    if (args.action === "assemblies") return this.bridge.call("unity_compilation_manifest", { action: "list" });
+  constructor(policy, bridge, env, dependencies = {}) {
+    Object.assign(this, { policy, bridge, env, index: null, job: null, worker: null, closed: false });
+    this.spawn = dependencies.spawn || spawn;
+    this.shutdownMs = dependencies.shutdownMs ?? 5000;
+  }
+  close(reason = "connection_closed") {
+    this.closed = true;
+    this.worker?.cancel(reason);
+    if (this.job?.status === "preparing") Object.assign(this.job, { status: "cancelled", reason });
+  }
+  assertActive(signal) {
+    if (this.closed || signal?.aborted) fail("request_cancelled", "Symbol request ended before dispatch");
+  }
+  startWorker(manifest, job, signal) {
+    this.assertActive(signal);
+    const child = this.spawn(this.env.UNITY_DOTNET, [this.env.UNITY_SYMBOL_WORKER], {
+      stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
+      env: { ...process.env, DOTNET_GCHeapHardLimit: "0x40000000" },
+    });
+    let chunks = [], bytes = 0, errors = "", stopped = false, cancelReason = "", shutdown;
+    const worker = { child, cancel: reason => {
+      if (stopped || cancelReason) return;
+      cancelReason = reason;
+      clearTimeout(timer);
+      chunks = [];
+      Object.assign(job, { status: "cancel_requested", reason, terminationConfirmed: false });
+      // Install the deadline before requesting termination. A missing close must
+      // keep the reservation, and cannot publish a late successful index.
+      shutdown = setTimeout(() => {
+        if (!stopped) {
+          Object.assign(job, { status: "outcome_unknown", terminationConfirmed: false });
+          // Retain the reservation while alive, but do not let a failed kill
+          // keep an otherwise closed adapter process running indefinitely.
+          child.unref?.();
+          for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.unref?.();
+        }
+      }, this.shutdownMs);
+      shutdown.unref?.();
+      try { child.kill("SIGKILL"); } catch (e) { job.terminationError = String(e.message).slice(0, 1000); }
+    } };
+    this.worker = worker;
+    const abort = () => worker.cancel("request_cancelled");
+    const timer = setTimeout(() => worker.cancel("analysis_resource_limit"), 90000);
+    const finish = (code, spawnError) => {
+      if (stopped) return;
+      stopped = true;
+      clearTimeout(timer); clearTimeout(shutdown);
+      signal?.removeEventListener("abort", abort);
+      if (this.worker === worker) this.worker = null;
+      try {
+        if (cancelReason) {
+          Object.assign(job, { status: cancelReason === "analysis_resource_limit" ? "failed" : "cancelled",
+            terminationConfirmed: true, error: cancelReason });
+          return;
+        }
+        if (spawnError || code !== 0) throw Error(spawnError || errors || `worker_exit_${code}`);
+        const index = JSON.parse(Buffer.concat(chunks));
+        if (index.projectIdentity !== this.policy.projectIdentity || index.manifestId !== job.manifestId)
+          throw Error("index_binding_mismatch");
+        this.index = index;
+        Object.assign(job, { status: "indexed", indexVersion: index.indexVersion, completeWithinScope: index.completeWithinScope });
+      } catch (e) { Object.assign(job, { status: "failed", error: e.message.slice(0, 2000) }); }
+      finally { chunks = []; }
+    };
+    child.stdout.on("data", b => {
+      if (stopped || cancelReason) return;
+      bytes += b.length;
+      if (bytes > 64 * 1024 * 1024) worker.cancel("analysis_resource_limit"); else chunks.push(b);
+    });
+    child.stderr.on("data", b => { errors = (errors + b).slice(0, 2000); });
+    child.stdin.on("error", () => {});
+    child.on("error", e => {
+      if (!child.pid) finish(null, e.message);
+      else { job.processError = String(e.message).slice(0, 1000); worker.cancel("worker_error"); }
+    });
+    child.on("close", code => finish(code));
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted || this.closed) abort();
+    else child.stdin.end(JSON.stringify(manifest));
+  }
+  async call(args, { signal } = {}) {
+    this.assertActive(signal);
+    if (args.action === "assemblies") return this.bridge.call("unity_compilation_manifest", { action: "list" }, { signal });
     if (args.action === "index") {
       if (!this.env.UNITY_SYMBOL_WORKER || !this.env.UNITY_DOTNET) fail("worker_not_configured", "Set UNITY_SYMBOL_WORKER (.dll) and UNITY_DOTNET (executable); no runtime is installed automatically");
-      if (["preparing", "running"].includes(this.job?.status)) fail("analysis_busy", "One analysis job is permitted");
+      if (this.worker || this.job?.status === "preparing") fail("analysis_busy", "One analysis job is permitted");
       // Reserve before the first await: concurrent MCP calls must not start two workers.
       const job = this.job = { jobId: crypto.randomUUID(), status: "preparing" };
       try {
-      const exported = await this.bridge.call("unity_compilation_manifest", args);
-      if (exported.errorCode) { Object.assign(job, { status: "failed", error: exported.errorCode }); return exported; }
-      const file = path.join(this.policy.stateRoot, "analysis-manifest.json");
-      if (fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > 16 * 1024 * 1024) fail("manifest_invalid", "Unsafe manifest");
-      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (manifest.manifestId !== exported.manifestId || manifest.projectIdentity !== this.policy.projectIdentity) fail("manifest_changed", "Manifest binding changed");
-      Object.assign(job, { status: "running", manifestId: manifest.manifestId });
-      const child = spawn(this.env.UNITY_DOTNET, [this.env.UNITY_SYMBOL_WORKER], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, DOTNET_GCHeapHardLimit: "0x40000000" } });
-      let chunks = [], bytes = 0, errors = "", exceeded = false;
-      const timer = setTimeout(() => { exceeded = true; child.kill("SIGKILL"); }, 90000);
-      child.stdout.on("data", b => { bytes += b.length; if (bytes > 64 * 1024 * 1024) { exceeded = true; child.kill("SIGKILL"); } else chunks.push(b); });
-      child.stderr.on("data", b => { errors = (errors + b).slice(0, 2000); });
-      child.stdin.on("error", () => {});
-      child.on("error", e => { clearTimeout(timer); Object.assign(job, { status: "failed", error: e.message }); });
-      child.on("close", code => {
-        clearTimeout(timer);
-        try {
-          if (code !== 0 || exceeded) throw Error(exceeded ? "analysis_resource_limit" : errors || `worker_exit_${code}`);
-          const index = JSON.parse(Buffer.concat(chunks));
-          if (index.projectIdentity !== this.policy.projectIdentity || index.manifestId !== job.manifestId) throw Error("index_binding_mismatch");
-          this.index = index;
-          Object.assign(job, { status: "indexed", indexVersion: index.indexVersion, completeWithinScope: index.completeWithinScope });
-        } catch (e) { Object.assign(job, { status: "failed", error: e.message.slice(0, 2000) }); }
-        chunks = [];
-      });
-      child.stdin.end(JSON.stringify(manifest));
-      return { ...job, status: "accepted", retention: "one index in adapter memory; explicit reindex replaces it" };
-      } catch (e) { Object.assign(job, { status: "failed", error: e.message }); throw e; }
+        const exported = await this.bridge.call("unity_compilation_manifest", args, { signal });
+        this.assertActive(signal);
+        if (exported.errorCode) { Object.assign(job, { status: "failed", error: exported.errorCode }); return exported; }
+        const file = path.join(this.policy.stateRoot, "analysis-manifest.json");
+        if (fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > 16 * 1024 * 1024) fail("manifest_invalid", "Unsafe manifest");
+        const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (manifest.manifestId !== exported.manifestId || manifest.projectIdentity !== this.policy.projectIdentity) fail("manifest_changed", "Manifest binding changed");
+        Object.assign(job, { status: "running", manifestId: manifest.manifestId });
+        this.startWorker(manifest, job, signal);
+        return { ...job, status: "accepted", retention: "one index in adapter memory; explicit reindex replaces it" };
+      } catch (e) { Object.assign(job, { status: e.code === "request_cancelled" ? "cancelled" : "failed", error: e.message }); throw e; }
     }
     if (args.action === "status") return { status: "observed", job: this.job, indexVersion: this.index?.indexVersion, configured: Boolean(this.env.UNITY_SYMBOL_WORKER && this.env.UNITY_DOTNET) };
     const index = this.index;

@@ -7,14 +7,8 @@ const crypto = require("node:crypto");
 const { assertReadChildContained, displayPath, pathMetadata } = require("./read-path-resolver.js");
 const { readStableFileWindow, readStableTextFile } = require("./direct-file-snapshot.js");
 const { success, failure } = require("./direct-response.js");
-const { registerReadSnapshot } = require("./direct-read-snapshot.js");
-const {
-  clamp,
-  isBinary,
-  relativeSlash,
-  statOrNull,
-  statSignature,
-} = require("./direct-runtime-shared.js");
+const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
+const { clamp, isBinary, relativeSlash, statOrNull, statSignature } = require("./direct-runtime-shared.js");
 
 const fsp = fs.promises;
 const DEFAULT_IGNORED_DIRS = new Set([
@@ -78,26 +72,30 @@ function createReadCapabilities(context) {
 
   async function collectSearchFiles(rootResolution, maxFiles) {
     const files = [];
+    let discoveryErrors = 0, excludedEntries = 0;
     async function walk(target) {
       if (files.length >= maxFiles) return;
-      const stat = await statOrNull(target);
-      if (!stat) return;
+      let stat;
+      try { stat = await statOrNull(target); } catch { discoveryErrors++; return; }
+      if (!stat) { discoveryErrors++; return; }
       if (stat.isFile()) {
         files.push({ target, stat });
         return;
       }
       if (!stat.isDirectory()) return;
-      const entries = await fsp.readdir(target, { withFileTypes: true });
+      let entries;
+      try { entries = await fsp.readdir(target, { withFileTypes: true }); } catch { discoveryErrors++; return; }
       for (const entry of entries) {
         if (files.length >= maxFiles) break;
-        if (entry.isDirectory() && DEFAULT_IGNORED_DIRS.has(entry.name)) continue;
+        if (entry.isDirectory() && DEFAULT_IGNORED_DIRS.has(entry.name)) { excludedEntries++; continue; }
         const child = path.join(target, entry.name);
         await assertReadChildContained(child, rootResolution);
         if (entry.isDirectory() || entry.isFile()) await walk(child);
+        else excludedEntries++;
       }
     }
     await walk(rootResolution.absolutePath);
-    return files;
+    return { files, discoveryErrors, excludedEntries };
   }
 
   async function searchFiles(args) {
@@ -121,7 +119,9 @@ function createReadCapabilities(context) {
     const matchesText = (value) => matcher ? matcher.test(value) : (caseSensitive ? value : value.toLowerCase()).includes(needle);
     const rootUri = displayPath(resolution);
     const resultUri = (rel) => rel === "." ? rootUri : `${rootUri}${rootUri.endsWith("/") ? "" : "/"}${rel}`;
-    const files = await collectSearchFiles(resolution, maxFiles);
+    const { files, discoveryErrors, excludedEntries } = await collectSearchFiles(resolution, maxFiles);
+    const skippedByReason = { size: 0, unsupported_extension: 0, binary: 0, read_error: 0 };
+    let filesRead = 0;
     const results = [];
     for (const item of files) {
       const rel = relativeSlash(resolution.absolutePath, item.target);
@@ -129,16 +129,17 @@ function createReadCapabilities(context) {
         results.push({ path: rel, uri: resultUri(rel), kind: "file_name" });
         if (results.length >= maxResults) break;
       }
-      if (item.stat.size > 2 * 1024 * 1024) continue;
+      if (item.stat.size > 2 * 1024 * 1024) { skippedByReason.size++; continue; }
       const ext = path.extname(item.target).toLowerCase();
-      if (ext && !TEXT_EXTENSIONS.has(ext)) continue;
+      if (ext && !TEXT_EXTENSIONS.has(ext)) { skippedByReason.unsupported_extension++; continue; }
       let buffer;
       try {
         buffer = await fsp.readFile(item.target);
       } catch {
-        continue;
+        skippedByReason.read_error++; continue;
       }
-      if (isBinary(buffer)) continue;
+      if (isBinary(buffer)) { skippedByReason.binary++; continue; }
+      filesRead++;
       const lines = buffer.toString("utf8").split(/\r?\n/);
       for (let index = 0; index < lines.length; index += 1) {
         if (!matchesText(lines[index])) continue;
@@ -155,33 +156,37 @@ function createReadCapabilities(context) {
       ...pathMetadata(resolution),
       query,
       results,
-      filesScanned: files.length,
+      filesScanned: files.length, // Legacy candidate count; filesRead is actual content coverage.
+      filesRead, filesSkipped: Object.values(skippedByReason).reduce((a, b) => a + b, 0),
+      readErrorCount: skippedByReason.read_error, discoveryErrorCount: discoveryErrors, excludedEntries, skippedByReason,
+      coverage: filesRead === files.length && !discoveryErrors && !excludedEntries && files.length < maxFiles && results.length < maxResults ? "complete" : "partial",
       maxFilesReached: files.length >= maxFiles,
       truncated: results.length >= maxResults,
     });
-    return dedupe("search_files", args, `${resolution.activeProject || ""}|${treeState}`, payload);
+    return dedupe("search_files", args, `${resolution.activeProject || ""}|${treeState}|${payload.coverage}|${filesRead}|${JSON.stringify(skippedByReason)}|${discoveryErrors}|${excludedEntries}`, payload);
   }
 
   async function readFile(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
+    try {
     const maxBytes = clamp(args.maxBytes, limits.maxReadBytes, 1024, 2 * 1024 * 1024);
     const offset = clamp(args.offsetBytes, 0, 0, Number.MAX_SAFE_INTEGER);
     const initialStat = await statOrNull(resolution.absolutePath);
     const initialState = `${resolution.activeProject || ""}|${statSignature(initialStat)}`;
     if (!initialStat) {
-      return dedupe("read_file", args, initialState, failure("NOT_FOUND", `File not found: ${args.path}`, {
+      return dedupe("read_file", args, initialState, unavailable(resolution, "NOT_FOUND", `File not found: ${args.path}`, {
         suggestion: {
           tool: "search_files",
           args: projectScopedSuggestionArgs(args, { query: path.basename(String(args.path)), path: "project://", matchFileNames: true }),
         },
       }));
     }
-    if (!initialStat.isFile()) return failure("NOT_A_FILE", `Not a file: ${args.path}`);
+    if (!initialStat.isFile()) return unavailable(resolution, "NOT_A_FILE", `Not a file: ${args.path}`);
     const stableRead = await readStableFileWindow(resolution.absolutePath, offset, maxBytes);
     if (!stableRead.ok) {
-      return failure(stableRead.errorCode, stableRead.message, { retryAllowed: true, retryMode: "after_state_change" });
+      return unavailable(resolution, stableRead.errorCode, stableRead.message, { retryAllowed: true, retryMode: "after_state_change" });
     }
-    if (isBinary(stableRead.buffer)) return failure("BINARY_FILE", `File appears binary: ${args.path}`);
+    if (isBinary(stableRead.buffer)) return unavailable(resolution, "BINARY_FILE", `File appears binary: ${args.path}`);
     const version = registerReadSnapshot(fileSnapshots, resolution, stableRead, requestContext);
     const makePayload = (slice, byteLength, decoded) => {
       const nextOffsetBytes = offset + byteLength;
@@ -208,13 +213,16 @@ function createReadCapabilities(context) {
       `${resolution.activeProject || ""}|${statSignature(stableRead.stat)}`,
       fitted.payload,
     );
+    } catch (error) {
+      return unavailable(resolution, ["EACCES", "EPERM"].includes(error.code) ? "ACCESS_DENIED" : "READ_FAILED", String(error.message || error));
+    }
   }
 
   async function readFileRange(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) {
-      return failure(read.errorCode, read.message, {
+      return unavailable(resolution, read.errorCode, read.message, {
         suggestion: read.errorCode === "NOT_FOUND" ? {
           tool: "search_files",
           args: projectScopedSuggestionArgs(args, { query: path.basename(String(args.path)), path: "project://", matchFileNames: true }),
@@ -272,7 +280,7 @@ function createReadCapabilities(context) {
   async function readSymbol(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
-    if (!read.ok) return failure(read.errorCode, read.message);
+    if (!read.ok) return unavailable(resolution, read.errorCode, read.message);
     const symbol = String(args.symbol || "").trim();
     const parts = symbol.split("::");
     const leaf = parts.at(-1) || "";

@@ -26,6 +26,9 @@ DIRECT_RAG_TOOL_NAMES: tuple[str, ...] = (
     "unreal_rag_capabilities",
 )
 
+# Domain classification remains with the catalog; transport receives a predicate.
+DIRECT_RAG_MUTATING_TOOL_NAMES = frozenset({"unreal_set_active_project", "unreal_rag_refresh"})
+
 
 def _schema(
     properties: dict[str, Any],
@@ -139,6 +142,8 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
             "description": (
                 "Return indexed declarations and source evidence for an Unreal class, "
                 "struct, interface, enum, function, or module symbol."
+                " Explicit sourceMode=engine_local reads bounded installed-engine declarations without an index; "
+                "use Symbol or Owner::Symbol and one exact project. Coverage limits never prove API absence."
             ),
             "inputSchema": _schema(
                 {
@@ -152,6 +157,8 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
                     "symbol_kind": bounded_string_schema(MAX_SYMBOL_HINT_CHARS),
                     "project": project_selector,
                     "expectedBaseType": bounded_string_schema(MAX_SYMBOL_HINT_CHARS),
+                    "sourceMode": {"type": "string", "enum": ["index", "engine_local"], "default": "index"},
+                    "owner": bounded_string_schema(128),
                     "directoryDomain": bounded_string_schema(MAX_SYMBOL_HINT_CHARS),
                     "detailLevel": detail_level,
                 },
@@ -283,6 +290,7 @@ def _value_matches_schema(value: Any, schema: dict[str, Any]) -> bool:
 
 __all__ = [
     "DIRECT_RAG_TOOL_NAMES",
+    "DIRECT_RAG_MUTATING_TOOL_NAMES",
     "direct_rag_tool_definitions",
     "validate_tool_arguments",
 ]

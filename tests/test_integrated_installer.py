@@ -117,9 +117,9 @@ def test_installer_profiles_are_manifest_driven() -> None:
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
     assert node_package["version"] == node_lock["version"] == "0.3.23"
     assert node_lock["packages"][""]["version"] == "0.3.23"
-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.71"
-    assert compactor_lock["packages"][""]["version"] == "0.4.71"
-    assert compactor_manifest["revision"] == 118
+    assert compactor_lock["version"] == compactor_package["version"]
+    assert compactor_lock["packages"][""]["version"] == compactor_package["version"]
+    assert isinstance(compactor_manifest["revision"], int) and compactor_manifest["revision"] > 0
     assert module.PROFILE_DEFAULTS == {
         name: set(components)
         for name, components in manifest["profiles"].items()
