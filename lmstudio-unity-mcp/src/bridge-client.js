@@ -18,7 +18,7 @@ class BridgeClient {
   async send(d, method, args, { signal } = {}) {
     if (signal?.aborted) fail("request_cancelled", "Request ended before Editor dispatch");
     const requestId = crypto.randomUUID();
-    const envelope = { protocolVersion: d.protocolVersion ?? 1, serverVersion: "1.4.0-beta.4", requestId, token: d.token,
+    const envelope = { protocolVersion: d.protocolVersion ?? 1, serverVersion: "1.4.0-rc.2", requestId, token: d.token,
       projectIdentity: d.projectIdentity, canonicalProjectRoot: d.canonicalProjectRoot, editorSessionId: d.editorSessionId,
       domainGeneration: d.domainGeneration, method, args };
     const bytes = Buffer.from(JSON.stringify(envelope) + "\n");

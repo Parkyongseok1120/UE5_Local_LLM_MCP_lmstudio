@@ -10,11 +10,11 @@
 
 검토 자료:
 
-- 채팅 첨부: `C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt` — 7,694줄.
-- 서버 첨부: `C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt` — 1,055줄, 2026-10-01 01:25:14–01:33:45.
-- 현재 게임 프로젝트의 C++·Config·Git diff: `C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat`.
+- 채팅 첨부: `ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt` — 7,694줄.
+- 서버 첨부: `ATTACHMENTS_ROOT/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt` — 1,055줄, 2026-10-01 01:25:14–01:33:45.
+- 현재 게임 프로젝트의 C++·Config·Git diff: `GAME_PROJECT_ROOT`.
 - 현재 compactor, Direct Agent, Direct RAG, 지침 정본·생성·선택·전달 소스.
-- 로컬 `C:/Program Files/Epic Games/UE_5.7/Engine/Build/Build.version` 및 관련 엔진 선언·구현. 현재 설치 버전은 **5.7.4**다. 당시 실제 빌드 실행의 patch 버전까지 입증하는 자료는 아니다.
+- 로컬 `UE_5_7_ROOT/Engine/Build/Build.version` 및 관련 엔진 선언·구현. 현재 설치 버전은 **5.7.4**다. 당시 실제 빌드 실행의 patch 버전까지 입증하는 자료는 아니다.
 
 첨부의 과거 명령은 조사 자료로 취급했다. 일부 도구 카드에는 반환 본문이 비어 있다. 따라서 모델의 오류 설명과 실제 도구 payload를 구분한다. 현재 소스는 사건 이후 바뀌었을 가능성이 있으며 서버 로그 구간은 전체 채팅보다 짧다. 누락된 모델 입력, 설정, 도구 결과를 추측으로 채우지 않는다.
 

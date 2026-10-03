@@ -246,7 +246,7 @@ Auto의 출력은 주제 ID·reason code·출처 식별자다. 다음 값은 출
 
 ## 13. 예상 변경 파일과 변경 범위
 
-모든 아래 경로는 `C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio` 기준이다.
+모든 아래 경로는 `.` 기준이다.
 
 | 파일 | 계획된 변경 |
 |---|---|

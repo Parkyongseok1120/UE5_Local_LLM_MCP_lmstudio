@@ -3,7 +3,7 @@
   "scope": {
     "date": "2026-10-01",
     "timezone": "Asia/Seoul",
-    "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio",
+    "root": ".",
     "baselineCommit": "6a0e9b7",
     "change": "planning_documents_only",
     "implementation": false,

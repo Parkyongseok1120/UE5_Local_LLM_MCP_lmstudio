@@ -657,7 +657,8 @@ def _local_catalog(module: Path, identity: str, deadline: float, host_platform: 
     try:
         while pending:
             if time.monotonic() >= deadline:
-                reason = "deadline"; break
+                reason = "deadline"
+                break
             directory = pending.pop()
             with os.scandir(directory) as listing:
                 for entry in listing:
@@ -785,40 +786,49 @@ def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str,
     tokens = [t.lower() for t in re.findall(r"[A-Z][a-z]+|[A-Z]+(?=[A-Z][a-z]|$)", stem)]
     for module in modules:
         if time.monotonic() >= deadline:
-            reasons.add("deadline"); break
+            reasons.add("deadline")
+            break
         paths, status = _local_catalog(module, identity, deadline, host_platform, generation)
-        if status != "complete_filename_catalog": reasons.add(status)
+        if status != "complete_filename_catalog":
+            reasons.add(status)
         for path in paths:
             if time.monotonic() >= deadline:
-                reasons.add("deadline"); break
+                reasons.add("deadline")
+                break
             name = path.stem.lower()
             score = 100 if name in names else sum(len(t) for t in tokens if len(t) >= 4 and t in name)
             if score:
                 key = _identity(path, host_platform=host_platform)
                 candidates.setdefault(key, (path, module, score))
     ranked = sorted(candidates.values(), key=lambda c: (-c[2], str(c[0])))
-    if len(ranked) > 4: reasons.add("candidate_limit")
+    if len(ranked) > 4:
+        reasons.add("candidate_limit")
     results = []
     read_bytes = 0
     inspected = 0
     for header, module, _ in ranked[:4]:
         if time.monotonic() >= deadline:
-            reasons.add("deadline"); break
+            reasons.add("deadline")
+            break
         if not _contained(header, module) or not _contained(module, root):
-            reasons.add("containment"); continue
+            reasons.add("containment")
+            continue
         try:
             with header.open("rb") as stream:
                 before = os.fstat(stream.fileno())
                 raw = stream.read(min(262144, 1048576 - read_bytes))
                 after = os.fstat(stream.fileno())
-            read_bytes += len(raw); inspected += 1
+            read_bytes += len(raw)
+            inspected += 1
             current = header.stat()
             stable = all((s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) ==
                          (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) for s in (after, current))
             if not stable or not _contained(header, module):
-                reasons.add("source_changed"); continue
+                reasons.add("source_changed")
+                continue
             complete = len(raw) == before.st_size
-            if not complete: reasons.add("read_limit")
+            if not complete:
+                reasons.add("read_limit")
             text = raw.decode("utf-8-sig", errors="replace")
             found = _bounded_declaration(text, symbol, owner)
             if not found:

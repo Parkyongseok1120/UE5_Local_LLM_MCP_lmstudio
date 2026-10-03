@@ -11,6 +11,7 @@ const { createDirectRuntime } = require("../src/direct-server");
 const { createStrictRuntime } = require("../src/strict-server");
 const { applyDirectEditBundle, validateBundleLimits } = require("../src/direct-edit-bundle");
 const { sha256Text } = require("../src/safe-write");
+const { resolveCanonicalAbsolutePath } = require("../src/filesystem-path-identity");
 const { releasePathLock, tryAcquirePathLock } = require("../src/write-locks");
 const {
   createRuntimeTransaction,
@@ -51,7 +52,7 @@ function createInterruptedTransaction(value, owner, fileName, before, after) {
   atomicWriteText(backup, before, "utf8");
   updateRuntimeTransactionEntry(journal, {
     relativePath,
-    canonicalAbsolutePath: target,
+    canonicalAbsolutePath: resolveCanonicalAbsolutePath(target),
     operation: "patch",
     existedBefore: true,
     preHash: sha256Text(before),

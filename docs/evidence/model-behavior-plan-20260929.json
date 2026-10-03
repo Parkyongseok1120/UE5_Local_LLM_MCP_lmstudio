@@ -2,7 +2,7 @@
   "mode": "architecture",
   "scope": {
     "date": "2026-09-29",
-    "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio",
+    "root": ".",
     "baselineCommit": "4d88404",
     "change": "planning_documents_only",
     "implementation": false,
@@ -21,17 +21,17 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs:9",
+          "location": "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs:9",
           "observation": "renderBundle은 catalog와 Markdown에서 본문 및 revision을 생성한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:21",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:21",
           "observation": "selectDesignGuidance는 mode와 scope로 문서를 고른다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:43",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:43",
           "observation": "designGuidanceCandidates는 문서 전체의 prefix 후보를 만든다."
         }
       ],
@@ -51,12 +51,12 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:81",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:81",
           "observation": "resolveToolScope를 호출하고 guidanceDocuments를 실행 시작에 계산한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:196",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:196",
           "observation": "선택 자료를 기존 ContextManager.addOptionalReferences로 전달한다."
         }
       ],
@@ -76,12 +76,12 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:213",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:213",
           "observation": "composeModelHistory가 systemInstructions를 받고 combinedSystemText에 결합한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:239",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:239",
           "observation": "instructions가 system 메시지에 포함된다."
         }
       ],
@@ -101,7 +101,7 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:391",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:391",
           "observation": "addOptionalReferences는 maxAddedTokens, 정확 측정, 모델 context, watermarks를 검사한다."
         }
       ],
@@ -121,22 +121,22 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/evidence-manager.ts:36",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:36",
           "observation": "EvidenceManager는 관찰 lifecycle과 가용성을 관리하고 store는 WorkingContext에 둔다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/continuity-model-notes.js:15",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:15",
           "observation": "MAX_NOTE_CHARS=1500과 MAX_NOTE_ITEMS=4이다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/continuity-model-notes.js:109",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:109",
           "observation": "validateDraftNote는 허용한 key 집합만 수용한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/continuity-model-notes.js:273",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:273",
           "observation": "reconcileStoredNote는 프로젝트 범위와 근거 참조를 확인한다."
         }
       ],
@@ -156,17 +156,17 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-build-response.js:56",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-build-response.js:56",
           "observation": "buildDirectResponse가 diagnostics, proof, target/configuration, fingerprints를 구성한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:90",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:90",
           "observation": "staticValidate는 advisory true와 blocksBuild false를 반환한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-response.js:4",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-response.js:4",
           "observation": "Direct 응답은 server-owned workflow가 없다는 계약을 명시한다."
         }
       ],
@@ -186,22 +186,22 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/Operations.cs:307",
+          "location": "unity-editor-bridge/Editor/Operations.cs:307",
           "observation": "compile 요청을 발행하고 accepted/verification unknown 및 compilationIdAtRequest를 반환한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/Observations.cs:65",
+          "location": "unity-editor-bridge/Editor/Observations.cs:65",
           "observation": "compiler 시작·assembly 완료·전체 완료 callback에서 compilationId와 관찰 결과를 관리한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/Observations.cs:95",
+          "location": "unity-editor-bridge/Editor/Observations.cs:95",
           "observation": "Read는 구독 범위·droppedCount·현재 compilation outcome과 필터링한 행을 반환한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unity-mcp/src/bridge-client.js:20",
+          "location": "lmstudio-unity-mcp/src/bridge-client.js:20",
           "observation": "request envelope와 handshake에 Editor session/domain generation을 사용한다."
         }
       ],
@@ -221,12 +221,12 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/build_integrated_package.py:545",
+          "location": "scripts/build_integrated_package.py:545",
           "observation": "필수 패키지 파일에 guidance 소스·생성물·생성기·정본·테스트를 열거한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/package.json:17",
+          "location": "lmstudio-context-compactor-plugin/package.json:17",
           "observation": "npm test는 명시된 테스트 파일 목록을 실행한다."
         }
       ],

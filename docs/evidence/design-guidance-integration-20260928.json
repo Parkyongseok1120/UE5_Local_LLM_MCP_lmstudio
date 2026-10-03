@@ -5,7 +5,7 @@
     "change": "documentation_only",
     "implementation": false,
     "modelInvoked": false,
-    "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio"
+    "root": "."
   },
   "claims": [
     {
@@ -17,24 +17,24 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:213",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:213",
           "observation": "composeModelHistory가 systemInstructions·이력·노트를 합성한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:44",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:44",
           "observation": "measureContext는 applyPromptTemplate과 countTokens로 최종 템플릿을 측정하며 대체 추정을 exact로 인정하지 않는다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:31",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:31",
           "observation": "prepareRoundInput이 후보 구성·복구·최종 측정의 기존 경계다."
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:134",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:134",
           "observation": "현재 scopeInstructions에는 도구·첨부·읽기 배치 설명이 있고 이번 문서 묶음의 공급 기능은 추가되지 않았다."
         }
       ],
@@ -52,12 +52,12 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/read-path-resolver.js:86",
+          "location": "lmstudio-unreal-agent-mcp/src/read-path-resolver.js:86",
           "observation": "resolveReadPath는 workspace/active project와 실경로 경계를 확인한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/attachment-tools.ts:128",
+          "location": "lmstudio-context-compactor-plugin/src/attachment-tools.ts:128",
           "observation": "첨부 안내는 존재와 실제 읽기를 구분하고 범위가 있는 read_attached_document를 안내한다."
         }
       ],

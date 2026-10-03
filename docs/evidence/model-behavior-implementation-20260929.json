@@ -2,7 +2,7 @@
   "mode": "codegen",
   "scope": {
     "date": "2026-09-29",
-    "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio",
+    "root": ".",
     "baselineCommit": "4d88404",
     "change": "P0-P5 focused optional guidance implementation",
     "installed": false,
@@ -21,17 +21,17 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs:17",
+          "location": "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs:17",
           "observation": "Markdown marker를 분리하고 v2 metadata와 의존성 검증을 수행한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:73",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:73",
           "observation": "focusedGuidanceCandidates는 같은 주제, 엔진/버전, 의존성 closure와 최대 4개 후보를 적용한다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/model-behavior-20260929/focused-final-tests.log",
+          "location": "artifacts/model-behavior-20260929/focused-final-tests.log",
           "observation": "최종 재빌드 후 관련 계약 fixture 통과."
         }
       ],
@@ -39,26 +39,26 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-config.ts:51",
+          "location": "lmstudio-context-compactor-plugin/src/execution-config.ts:51",
           "symbol": "readConfig"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:73",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:73",
           "symbol": "focusedGuidanceCandidates"
         },
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs:25",
+          "location": "lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs:25",
           "symbol": "topic/dependency/applicability fixture"
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:35",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:35",
           "observation": "기존 documents selector/prefix 경로를 별도로 보존한다."
         }
       ],
@@ -76,17 +76,17 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:248",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:248",
           "observation": "referenceData는 assistant 메시지로 추가된다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:394",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:394",
           "observation": "기존 optional admission이 instruction/data와 원래 전체 입력을 측정하고 baseline 대비 allowance를 적용한다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/model-behavior-20260929/focused-final-tests.log",
+          "location": "artifacts/model-behavior-20260929/focused-final-tests.log",
           "observation": "최종 재빌드 후 관련 계약 fixture 통과."
         }
       ],
@@ -94,32 +94,32 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:201",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:201",
           "symbol": "focused candidate admission"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:394",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:394",
           "symbol": "addOptionalReferences"
         },
         {
           "stage": "dispatch",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:299",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:299",
           "symbol": "createInputAssembler profile"
         },
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs:128",
+          "location": "lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs:128",
           "symbol": "atomic data fallback / injection boundary tests"
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:307",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:307",
           "observation": "캐시는 전체 SDK 입력과 도구 표면/예약을 키로 사용한다. source history에는 파생 data를 저장하지 않는다."
         }
       ],
@@ -137,22 +137,22 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/evidence-manager.ts:42",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:42",
           "observation": "referenceState가 manager instance 안에 생성된다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:237",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:237",
           "observation": "완료된 유일 요청/결과를 수집하고 파일/세션 불확실성을 배치 전체에서 유지한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:308",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:308",
           "observation": "현재 원본 이력에서 가용성을 다시 확인하고 과거 compilation 신호를 현재로 승격하지 않는다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/model-behavior-20260929/focused-final-tests.log",
+          "location": "artifacts/model-behavior-20260929/focused-final-tests.log",
           "observation": "최종 재빌드 후 관련 계약 fixture 통과."
         }
       ],
@@ -160,37 +160,37 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:622",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:622",
           "symbol": "captureReturned 이후 ingestReferences"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:237",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:237",
           "symbol": "ingestReferenceObservations scope/identity validation"
         },
         {
           "stage": "mutation",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:245",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:245",
           "symbol": "batch uncertainty invalidation"
         },
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/reference-context.test.cjs:1",
+          "location": "lmstudio-context-compactor-plugin/test/reference-context.test.cjs:1",
           "symbol": "25개 정규화/수명/반례 fixture"
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/evidence-manager.ts:68",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:68",
           "observation": "기존 captureReturned archive 필터는 observation-only로 유지한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/continuity-model-notes.js:1",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:1",
           "observation": "note v1을 현재 프로젝트 사실 데이터로 변환하거나 새 필드로 확장하지 않는다."
         }
       ],
@@ -208,17 +208,17 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:91",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:91",
           "observation": "focusedReferences 활성 조건은 mode, delivery, allowance, observeOnly를 모두 확인한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:201",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:201",
           "observation": "focused는 referenceRecovery/finalizing에서 후보를 추가하지 않는다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/model-behavior-20260929/focused-final-loop-tests.log",
+          "location": "artifacts/model-behavior-20260929/focused-final-loop-tests.log",
           "observation": "최종 재빌드 후 관련 계약 fixture 통과."
         }
       ],
@@ -226,37 +226,37 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:91",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:91",
           "symbol": "focused activation"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:201",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:201",
           "symbol": "reference stage eligibility"
         },
         {
           "stage": "dispatch",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:306",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:306",
           "symbol": "prepareRoundInput / existing model act"
         },
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:4775",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:4775",
           "symbol": "focused end-to-end SDK controller fixture"
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:202",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:202",
           "observation": "기존 Documents의 recovery 전달 정책은 유지한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/tool-boundary.ts:1",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts:1",
           "observation": "새 참고 기능이 ToolGuard 승인 결정을 소유하지 않는다."
         }
       ],

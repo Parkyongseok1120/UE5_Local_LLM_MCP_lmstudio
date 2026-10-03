@@ -17,24 +17,24 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-config.ts:49",
+          "location": "lmstudio-context-compactor-plugin/src/execution-config.ts:49",
           "observation": "GUI mode와 증가 토큰 allowance를 읽는다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:91",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:91",
           "observation": "기존 ToolScope로 문서를 선택하고 prepareRoundInput에 전달한다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/design-guidance-20260928/guidance-handler-tests.log",
+          "location": "artifacts/design-guidance-20260928/guidance-handler-tests.log",
           "observation": "일반 도구 승인, 반복 모델 입력, 엔진 전환, Off/Observe/예산 부족, 강제 최종 보고의 6개 SDK 대역 통합 테스트가 통과했다."
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/direct-config.ts:35",
+          "location": "lmstudio-context-compactor-plugin/src/direct-config.ts:35",
           "observation": "기본값은 Off이며 실행 중인 설치본과 GUI 값은 바꾸지 않았다."
         }
       ],
@@ -42,31 +42,31 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-config.ts:49",
+          "location": "lmstudio-context-compactor-plugin/src/execution-config.ts:49",
           "symbol": "readConfig"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/design-guidance.ts:21",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:21",
           "symbol": "selectDesignGuidance"
         },
         {
           "stage": "dispatch",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:199",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:199",
           "symbol": "addOptionalReferences"
         },
         {
           "stage": "mutation",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:204",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:204",
           "symbol": "최종 assembledInput 선택"
         },
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
           "symbol": "실제 handler에 연결한 SDK 대역의 act 입력·승인 확인"
         }
       ],
@@ -83,17 +83,17 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:391",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:391",
           "observation": "addOptionalReferences는 기존 assembler와 broker를 사용하고 추가 압축·출력 한도 변경을 하지 않는다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:198",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:198",
           "observation": "기존 근거 입력 준비 뒤 합성하며 workingHistory를 변경하지 않는다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/design-guidance-20260928/guidance-final-tests.log",
+          "location": "artifacts/design-guidance-20260928/guidance-final-tests.log",
           "observation": "선택·예산·본문 보존·실패·취소·0 allowance의 단위 테스트 9개가 최종 빌드에서 통과했다."
         }
       ],
@@ -112,17 +112,17 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs",
+          "location": "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs",
           "observation": "선언된 9개 Markdown의 본문·출처·sha256 개정에서 배포 모듈을 생성한다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/design-guidance-20260928/guidance-final-tests.log",
+          "location": "artifacts/design-guidance-20260928/guidance-final-tests.log",
           "observation": "생성 데이터가 Markdown 정본에서 그대로 만들어짐을 비교했다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/design-guidance-20260928/package-tests.log",
+          "location": "artifacts/design-guidance-20260928/package-tests.log",
           "observation": "새 런타임·생성기·문서가 패키지 선택 목록에 포함되고 프로젝트 예시가 제외됨을 확인했다."
         }
       ],

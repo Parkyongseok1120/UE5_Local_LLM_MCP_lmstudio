@@ -65,13 +65,13 @@ empty footer 처리로 activeNote=null이 된 뒤 seal/restore에서 이전 판�
 
 **근거 경로**
 
-- [lmstudio-context-compactor-plugin/src/prediction-loop.ts:174](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:174>) — noteStore 복구는 objective를 비교하지만 workingContext.note fallback은 비교하지 않는다.
-- [lmstudio-context-compactor-plugin/src/prediction-loop.ts:680](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:680>) — footer의 교체·clear는 activeNote만 갱신한다.
-- [lmstudio-context-compactor-plugin/src/working-context.js:593](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/working-context.js:593>) — window는 독립적인 this.note를 저장한다.
-- [lmstudio-context-compactor-plugin/src/continuity-model-notes.js:273](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/continuity-model-notes.js:273>) — reconcile은 refs/project를 검사하지만 현재 objective를 인수로 받지 않는다.
-- [artifacts/architecture-audit-20261003/reproduction-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reproduction-results.json>) — empty footer 처리로 activeNote=null이 된 뒤 seal/restore에서 이전 판단이 남고, 다른 objective에서도 복구되는 함수 경로를 재현했다.
+- [lmstudio-context-compactor-plugin/src/prediction-loop.ts:174](<lmstudio-context-compactor-plugin/src/prediction-loop.ts:174>) — noteStore 복구는 objective를 비교하지만 workingContext.note fallback은 비교하지 않는다.
+- [lmstudio-context-compactor-plugin/src/prediction-loop.ts:680](<lmstudio-context-compactor-plugin/src/prediction-loop.ts:680>) — footer의 교체·clear는 activeNote만 갱신한다.
+- [lmstudio-context-compactor-plugin/src/working-context.js:593](<lmstudio-context-compactor-plugin/src/working-context.js:593>) — window는 독립적인 this.note를 저장한다.
+- [lmstudio-context-compactor-plugin/src/continuity-model-notes.js:273](<lmstudio-context-compactor-plugin/src/continuity-model-notes.js:273>) — reconcile은 refs/project를 검사하지만 현재 objective를 인수로 받지 않는다.
+- [artifacts/architecture-audit-20261003/reproduction-results.json](<artifacts/architecture-audit-20261003/reproduction-results.json>) — empty footer 처리로 activeNote=null이 된 뒤 seal/restore에서 이전 판단이 남고, 다른 objective에서도 복구되는 함수 경로를 재현했다.
 
-**반대 근거·한계:** 일반 noteStore 복구는 objective를 비교하고, 참조된 근거와 project scope도 별도로 검증한다. ([lmstudio-context-compactor-plugin/src/prediction-loop.ts:174](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:174>)) 실제 LM Studio가 해당 fallback을 거친 순간의 입력은 없다. 이번 라이브 테스트 오판의 직접 원인으로 확정하지 않는다.
+**반대 근거·한계:** 일반 noteStore 복구는 objective를 비교하고, 참조된 근거와 project scope도 별도로 검증한다. ([lmstudio-context-compactor-plugin/src/prediction-loop.ts:174](<lmstudio-context-compactor-plugin/src/prediction-loop.ts:174>)) 실제 LM Studio가 해당 fallback을 거친 순간의 입력은 없다. 이번 라이브 테스트 오판의 직접 원인으로 확정하지 않는다.
 
 **최소 수정:** 현재 note의 replace/clear/reconcile를 단일 소유자의 전이로 만들고 두 저장 경로는 그 스냅샷만 저장한다. current objective/project/attachment 조건을 모든 복구에 동일하게 적용한다.
 
@@ -85,12 +85,12 @@ empty footer 처리로 activeNote=null이 된 뒤 seal/restore에서 이전 판�
 
 **근거 경로**
 
-- [lmstudio-context-compactor-plugin/src/working-context.js:25](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/working-context.js:25>) — canonical exchangeIndex는 연속된 request A/B와 뒤따른 result A/B를 모두 연결한다.
-- [lmstudio-context-compactor-plugin/src/evidence-manager.ts:121](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/evidence-manager.ts:121>) — completedRequestFingerprints는 새 assistant 요청 블록마다 active Map을 초기화한다.
-- [lmstudio-context-compactor-plugin/src/reference-context.ts:79](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:79>) — pairedResults에도 요청 블록마다 초기화하는 독립 구현이 있다.
-- [artifacts/architecture-audit-20261003/reproduction-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reproduction-results.json>) — 같은 입력에서 canonical matches=2, recovery completed=1을 재현했다. reference diagnostic도 별도 재현에서 마지막 요청 결과만 남았다.
+- [lmstudio-context-compactor-plugin/src/working-context.js:25](<lmstudio-context-compactor-plugin/src/working-context.js:25>) — canonical exchangeIndex는 연속된 request A/B와 뒤따른 result A/B를 모두 연결한다.
+- [lmstudio-context-compactor-plugin/src/evidence-manager.ts:121](<lmstudio-context-compactor-plugin/src/evidence-manager.ts:121>) — completedRequestFingerprints는 새 assistant 요청 블록마다 active Map을 초기화한다.
+- [lmstudio-context-compactor-plugin/src/reference-context.ts:79](<lmstudio-context-compactor-plugin/src/reference-context.ts:79>) — pairedResults에도 요청 블록마다 초기화하는 독립 구현이 있다.
+- [artifacts/architecture-audit-20261003/reproduction-results.json](<artifacts/architecture-audit-20261003/reproduction-results.json>) — 같은 입력에서 canonical matches=2, recovery completed=1을 재현했다. reference diagnostic도 별도 재현에서 마지막 요청 결과만 남았다.
 
-**반대 근거·한계:** 단일 assistant 블록에 요청이 함께 있으면 정상이다. compaction-tool-memory의 분리 요청 pairing은 현재 코드에서 이미 보정되어 있다. ([lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:590](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:590>)) 모든 LM Studio 버전의 메시지 분할 빈도는 측정하지 않았다.
+**반대 근거·한계:** 단일 assistant 블록에 요청이 함께 있으면 정상이다. compaction-tool-memory의 분리 요청 pairing은 현재 코드에서 이미 보정되어 있다. ([lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:590](<lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:590>)) 모든 LM Studio 버전의 메시지 분할 빈도는 측정하지 않았다.
 
 **최소 수정:** 순수 exchange matcher 하나를 기존 구현에서 추출하여 retry/evidence/reference 소비자가 같은 결과를 쓰게 한다. 소비자별 projection은 유지한다.
 
@@ -104,12 +104,12 @@ NOT_FOUND/FILE_NOT_FOUND/ACCESS_DENIED 후 이전 diff가 남았다. FILE_VERSIO
 
 **근거 경로**
 
-- [lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:824](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:824>) — 실패 응답은 FILE_VERSION_CONFLICT 외에는 파일 관찰에서 제외한다.
-- [lmstudio-context-compactor-plugin/src/direct-compaction-core.js:585](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/direct-compaction-core.js:585>) — 변경 근거 무효화는 추출된 stateMemory 관찰만 사용한다.
-- [lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:172](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:172>) — NOT_FOUND 등 실패 결과는 성공 응답과 달리 명시적인 path/project metadata가 없는 경로가 있다.
-- [artifacts/architecture-audit-20261003/reproduction-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reproduction-results.json>) — NOT_FOUND/FILE_NOT_FOUND/ACCESS_DENIED 후 이전 diff가 남았다. FILE_VERSION_CONFLICT는 정상 제거됐다. 재현은 실패 응답에 identity를 줘도 발생했다.
+- [lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:824](<lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:824>) — 실패 응답은 FILE_VERSION_CONFLICT 외에는 파일 관찰에서 제외한다.
+- [lmstudio-context-compactor-plugin/src/direct-compaction-core.js:585](<lmstudio-context-compactor-plugin/src/direct-compaction-core.js:585>) — 변경 근거 무효화는 추출된 stateMemory 관찰만 사용한다.
+- [lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:172](<lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:172>) — NOT_FOUND 등 실패 결과는 성공 응답과 달리 명시적인 path/project metadata가 없는 경로가 있다.
+- [artifacts/architecture-audit-20261003/reproduction-results.json](<artifacts/architecture-audit-20261003/reproduction-results.json>) — NOT_FOUND/FILE_NOT_FOUND/ACCESS_DENIED 후 이전 diff가 남았다. FILE_VERSION_CONFLICT는 정상 제거됐다. 재현은 실패 응답에 identity를 줘도 발생했다.
 
-**반대 근거·한계:** 성공한 hash 변경, 명시적인 삭제, conflict에는 기존 무효화 경로가 있다. ([lmstudio-context-compactor-plugin/src/change-evidence-memory.js:67](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/change-evidence-memory.js:67>)) 읽기 실패만으로 실제 삭제를 입증할 수 없다. 권한·일시 IO 실패일 수 있다.
+**반대 근거·한계:** 성공한 hash 변경, 명시적인 삭제, conflict에는 기존 무효화 경로가 있다. ([lmstudio-context-compactor-plugin/src/change-evidence-memory.js:67](<lmstudio-context-compactor-plugin/src/change-evidence-memory.js:67>)) 읽기 실패만으로 실제 삭제를 입증할 수 없다. 권한·일시 IO 실패일 수 있다.
 
 **최소 수정:** 생산자 또는 신뢰된 request/result 연결점에서 resolved identity와 관찰 불가 상태를 보존한다. 최신 유효 근거를 내리되 역사적 변경 사실까지 지우거나 삭제됐다고 단정하지 않는다.
 
@@ -123,12 +123,12 @@ NOT_FOUND/FILE_NOT_FOUND/ACCESS_DENIED 후 이전 diff가 남았다. FILE_VERSIO
 
 **근거 경로**
 
-- [lmstudio-context-compactor-plugin/src/working-context.js:88](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/working-context.js:88>) — non-git semanticEvidenceView는 JSON.stringify 결과 앞부분을 자른다.
-- [lmstudio-context-compactor-plugin/src/working-context.js:316](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/working-context.js:316>) — summaryEvidence는 항목별 640자 excerpt를 만든다.
-- [lmstudio-context-compactor-plugin/src/working-context.js:373](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/working-context.js:373>) — 일반 project 경로는 body-first projection을 이미 사용한다.
-- [artifacts/architecture-audit-20261003/reproduction-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reproduction-results.json>) — 앞 metadata가 긴 유효 envelope에서 summaryContainsBody=false, 일반 projectionContainsBody=true였다.
+- [lmstudio-context-compactor-plugin/src/working-context.js:88](<lmstudio-context-compactor-plugin/src/working-context.js:88>) — non-git semanticEvidenceView는 JSON.stringify 결과 앞부분을 자른다.
+- [lmstudio-context-compactor-plugin/src/working-context.js:316](<lmstudio-context-compactor-plugin/src/working-context.js:316>) — summaryEvidence는 항목별 640자 excerpt를 만든다.
+- [lmstudio-context-compactor-plugin/src/working-context.js:373](<lmstudio-context-compactor-plugin/src/working-context.js:373>) — 일반 project 경로는 body-first projection을 이미 사용한다.
+- [artifacts/architecture-audit-20261003/reproduction-results.json](<artifacts/architecture-audit-20261003/reproduction-results.json>) — 앞 metadata가 긴 유효 envelope에서 summaryContainsBody=false, 일반 projectionContainsBody=true였다.
 
-**반대 근거·한계:** 일반 working-context projection 전체가 JSON 앞부분만 보는 것은 아니다. git summary 경로도 본문을 별도로 처리한다. ([lmstudio-context-compactor-plugin/src/working-context.js:373](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/working-context.js:373>)) 합성 envelope 재현이며 첨부 라이브 로그에서 최종 summarizer 입력이 동일했는지는 확인할 수 없다.
+**반대 근거·한계:** 일반 working-context projection 전체가 JSON 앞부분만 보는 것은 아니다. git summary 경로도 본문을 별도로 처리한다. ([lmstudio-context-compactor-plugin/src/working-context.js:373](<lmstudio-context-compactor-plugin/src/working-context.js:373>)) 합성 envelope 재현이며 첨부 라이브 로그에서 최종 summarizer 입력이 동일했는지는 확인할 수 없다.
 
 **최소 수정:** 기존 bounded body projection을 재사용하고 identity/hash/range/truncation을 보존한다. 별도 요약기나 모델 호출은 추가하지 않는다.
 
@@ -142,11 +142,11 @@ NOT_FOUND/FILE_NOT_FOUND/ACCESS_DENIED 후 이전 diff가 남았다. FILE_VERSIO
 
 **근거 경로**
 
-- [lmstudio-context-compactor-plugin/src/working-context.js:189](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/working-context.js:189>) — lineage별 window 파일 이름을 만든다.
-- [lmstudio-context-compactor-plugin/src/working-context.js:598](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/working-context.js:598>) — window manifest는 archive.put과 별도로 기록한다.
-- [lmstudio-context-compactor-plugin/src/evidence-archive.js:96](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/evidence-archive.js:96>) — entries와 put의 quota/TTL 정리는 ev_ record만 대상으로 한다.
+- [lmstudio-context-compactor-plugin/src/working-context.js:189](<lmstudio-context-compactor-plugin/src/working-context.js:189>) — lineage별 window 파일 이름을 만든다.
+- [lmstudio-context-compactor-plugin/src/working-context.js:598](<lmstudio-context-compactor-plugin/src/working-context.js:598>) — window manifest는 archive.put과 별도로 기록한다.
+- [lmstudio-context-compactor-plugin/src/evidence-archive.js:96](<lmstudio-context-compactor-plugin/src/evidence-archive.js:96>) — entries와 put의 quota/TTL 정리는 ev_ record만 대상으로 한다.
 
-**반대 근거·한계:** 개별 evidence record에는 실제 quota/TTL이 있고 README는 수동 저장소 삭제 방법을 안내한다. ([lmstudio-context-compactor-plugin/src/evidence-archive.js:67](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/evidence-archive.js:67>)) 사용자 디스크 증가량과 전체 저장소 보존 기간 요구는 측정·확정하지 않았다. 8MiB가 전체 저장소의 약속이라고 확대하지 않는다.
+**반대 근거·한계:** 개별 evidence record에는 실제 quota/TTL이 있고 README는 수동 저장소 삭제 방법을 안내한다. ([lmstudio-context-compactor-plugin/src/evidence-archive.js:67](<lmstudio-context-compactor-plugin/src/evidence-archive.js:67>)) 사용자 디스크 증가량과 전체 저장소 보존 기간 요구는 측정·확정하지 않았다. 8MiB가 전체 저장소의 약속이라고 확대하지 않는다.
 
 **최소 수정:** 현 저장소 수명 담당자가 window와 record의 참조 관계를 함께 정리하도록 보존 정책을 정의한다. 활성 lineage/parent/pin은 보호한다.
 
@@ -160,12 +160,12 @@ NOT_FOUND/FILE_NOT_FOUND/ACCESS_DENIED 후 이전 diff가 남았다. FILE_VERSIO
 
 **근거 경로**
 
-- [scripts/headless_mcp_chat.py:280](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/headless_mcp_chat.py:280>) — 문자 기반 estimate로 압축을 호출하며 current-turn 제한 옵션을 전달하지 않는다.
-- [scripts/headless_compact.js:61](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/headless_compact.js:61>) — 기본 core 정책에서 omitted가 없으면 원본 messages를 반환한다.
-- [scripts/headless_mcp_chat.py:334](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/headless_mcp_chat.py:334>) — 압축 후 별도 fit 판정 없이 요청 입력을 구성한다.
-- [artifacts/architecture-audit-20261003/reproduction-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reproduction-results.json>) — 단일 user turn+40 tool exchange, remainingTokens=-5000에서 82개 메시지가 그대로 반환됐다. adapter는 새 assistantCheckpoint/changeDataCheckpoint도 조합하지 않는다.
+- [scripts/headless_mcp_chat.py:280](<scripts/headless_mcp_chat.py:280>) — 문자 기반 estimate로 압축을 호출하며 current-turn 제한 옵션을 전달하지 않는다.
+- [scripts/headless_compact.js:61](<scripts/headless_compact.js:61>) — 기본 core 정책에서 omitted가 없으면 원본 messages를 반환한다.
+- [scripts/headless_mcp_chat.py:334](<scripts/headless_mcp_chat.py:334>) — 압축 후 별도 fit 판정 없이 요청 입력을 구성한다.
+- [artifacts/architecture-audit-20261003/reproduction-results.json](<artifacts/architecture-audit-20261003/reproduction-results.json>) — 단일 user turn+40 tool exchange, remainingTokens=-5000에서 82개 메시지가 그대로 반환됐다. adapter는 새 assistantCheckpoint/changeDataCheckpoint도 조합하지 않는다.
 
-**반대 근거·한계:** GUI prediction-loop에는 별도 ContextManager/BudgetBroker fit 정책이 있다. 이번 발견은 headless 진입점이다. ([lmstudio-context-compactor-plugin/src/context-manager.ts:44](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:44>)) 재현은 adapter만 실행했고 모델 요청을 보내지 않았다. 토큰 추정의 정확도는 보증하지 않는다.
+**반대 근거·한계:** GUI prediction-loop에는 별도 ContextManager/BudgetBroker fit 정책이 있다. 이번 발견은 headless 진입점이다. ([lmstudio-context-compactor-plugin/src/context-manager.ts:44](<lmstudio-context-compactor-plugin/src/context-manager.ts:44>)) 재현은 adapter만 실행했고 모델 요청을 보내지 않았다. 토큰 추정의 정확도는 보증하지 않는다.
 
 **최소 수정:** 기존 core의 complete-exchange current-turn 정책과 checkpoint 조합을 headless adapter에 연결하고 전송 직전 estimate/fit 실패를 명시한다.
 
@@ -179,12 +179,12 @@ Assets/Templates/Packages/packages-lock.json의 NGO 버전과 하위 ProjectVers
 
 **근거 경로**
 
-- [lmstudio-context-compactor-plugin/src/reference-context.ts:112](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:112>) — ProjectVersion/packages-lock 경로를 suffix만으로 식별한다.
-- [lmstudio-context-compactor-plugin/src/reference-context.ts:237](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:237>) — 같은 프로젝트 안의 완전한 파일이면 metadata를 추출한다.
-- [lmstudio-context-compactor-plugin/src/reference-context.ts:241](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:241>) — 추출된 version/packages가 applicability에 들어간다.
-- [artifacts/architecture-audit-20261003/reference-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reference-results.json>) — Assets/Templates/Packages/packages-lock.json의 NGO 버전과 하위 ProjectVersion 값이 root applicability로 반영되는 경로를 재현했다.
+- [lmstudio-context-compactor-plugin/src/reference-context.ts:112](<lmstudio-context-compactor-plugin/src/reference-context.ts:112>) — ProjectVersion/packages-lock 경로를 suffix만으로 식별한다.
+- [lmstudio-context-compactor-plugin/src/reference-context.ts:237](<lmstudio-context-compactor-plugin/src/reference-context.ts:237>) — 같은 프로젝트 안의 완전한 파일이면 metadata를 추출한다.
+- [lmstudio-context-compactor-plugin/src/reference-context.ts:241](<lmstudio-context-compactor-plugin/src/reference-context.ts:241>) — 추출된 version/packages가 applicability에 들어간다.
+- [artifacts/architecture-audit-20261003/reference-results.json](<artifacts/architecture-audit-20261003/reference-results.json>) — Assets/Templates/Packages/packages-lock.json의 NGO 버전과 하위 ProjectVersion 값이 root applicability로 반영되는 경로를 재현했다.
 
-**반대 근거·한계:** 다른 프로젝트, scope 밖 파일, partial read, mutation/conflict는 기존 검사로 배제된다. ([lmstudio-context-compactor-plugin/src/reference-context.ts:225](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/reference-context.ts:225>)) 현재 사용자 Unity 프로젝트에 이런 샘플 경로가 존재하는지는 조사 범위가 아니다.
+**반대 근거·한계:** 다른 프로젝트, scope 밖 파일, partial read, mutation/conflict는 기존 검사로 배제된다. ([lmstudio-context-compactor-plugin/src/reference-context.ts:225](<lmstudio-context-compactor-plugin/src/reference-context.ts:225>)) 현재 사용자 Unity 프로젝트에 이런 샘플 경로가 존재하는지는 조사 범위가 아니다.
 
 **최소 수정:** 기존 canonical root/path identity로 정확한 루트 Packages/packages-lock.json과 ProjectSettings/ProjectVersion.txt만 설정 근거로 인정한다. 하위 파일의 일반 관찰은 유지한다.
 
@@ -198,12 +198,12 @@ fake bridge에서 create 1회 적용 후 큰 결과를 반환하면 byteBudget=1
 
 **근거 경로**
 
-- [lmstudio-unity-mcp/src/server.js:68](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unity-mcp/src/server.js:68>) — bridge.call 결과를 받은 뒤 응답을 조합한다.
-- [lmstudio-unity-mcp/src/server.js:76](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unity-mcp/src/server.js:76>) — 실행 뒤 bounded를 호출한다.
-- [shared-tool-core/files.js:17](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/shared-tool-core/files.js:17>) — bounded 실패가 not_applied 예외를 만들고 server catch가 그대로 반환한다.
-- [artifacts/architecture-audit-20261003/behavior-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/behavior-results.json>) — fake bridge에서 create 1회 적용 후 큰 결과를 반환하면 byteBudget=1024에서 not_applied가 된다. 재시도 판단의 실행 사실이 틀어진다.
+- [lmstudio-unity-mcp/src/server.js:68](<lmstudio-unity-mcp/src/server.js:68>) — bridge.call 결과를 받은 뒤 응답을 조합한다.
+- [lmstudio-unity-mcp/src/server.js:76](<lmstudio-unity-mcp/src/server.js:76>) — 실행 뒤 bounded를 호출한다.
+- [shared-tool-core/files.js:17](<shared-tool-core/files.js:17>) — bounded 실패가 not_applied 예외를 만들고 server catch가 그대로 반환한다.
+- [artifacts/architecture-audit-20261003/behavior-results.json](<artifacts/architecture-audit-20261003/behavior-results.json>) — fake bridge에서 create 1회 적용 후 큰 결과를 반환하면 byteBudget=1024에서 not_applied가 된다. 재시도 판단의 실행 사실이 틀어진다.
 
-**반대 근거·한계:** Bridge 자체의 큰 응답 처리는 operationId가 있으면 outcome_unknown을 사용한다. 이 발견은 Node adapter의 후처리이다. ([unity-editor-bridge/Editor/Bridge.cs:162](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/Bridge.cs:162>)) 실제 Unity Editor에서 중복 객체가 만들어졌다는 뜻은 아니다. 동일 operationId 원장도 재실행을 막는다.
+**반대 근거·한계:** Bridge 자체의 큰 응답 처리는 operationId가 있으면 outcome_unknown을 사용한다. 이 발견은 Node adapter의 후처리이다. ([unity-editor-bridge/Editor/Bridge.cs:162](<unity-editor-bridge/Editor/Bridge.cs:162>)) 실제 Unity Editor에서 중복 객체가 만들어졌다는 뜻은 아니다. 동일 operationId 원장도 재실행을 막는다.
 
 **최소 수정:** 변경 결과와 응답 전달 결과를 분리한다. 실행 전 최소 receipt 크기를 확보하고 실행 후 optional body만 줄이며 적용 결과와 operationId를 보존한다.
 
@@ -217,12 +217,12 @@ terminate가 끝나지 않는 fake child에서 timeout 이후 close까지 발생
 
 **근거 경로**
 
-- [lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:162](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:162>) — timeout 때 settled=true로 바꾼 후 terminate promise를 기다린다.
-- [lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:173](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:173>) — 그 사이 close는 settled 때문에 finish를 완료하지 못한다.
-- [lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:209](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:209>) — 별도 run_command도 kill 완료 뒤 fallback timer를 설치한다.
-- [artifacts/architecture-audit-20261003/behavior-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/behavior-results.json>) — terminate가 끝나지 않는 fake child에서 timeout 이후 close까지 발생해도 promise가 끝나지 않았다.
+- [lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:162](<lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:162>) — timeout 때 settled=true로 바꾼 후 terminate promise를 기다린다.
+- [lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:173](<lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:173>) — 그 사이 close는 settled 때문에 finish를 완료하지 못한다.
+- [lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:209](<lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:209>) — 별도 run_command도 kill 완료 뒤 fallback timer를 설치한다.
+- [artifacts/architecture-audit-20261003/behavior-results.json](<artifacts/architecture-audit-20261003/behavior-results.json>) — terminate가 끝나지 않는 fake child에서 timeout 이후 close까지 발생해도 promise가 끝나지 않았다.
 
-**반대 근거·한계:** 정상 종료 및 terminate가 정상 완료되는 timeout은 기존 경로로 끝난다. ([lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:130](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:130>)) 실제 OS 종료 함수의 hang 빈도나 현재 LM Studio 대기가 이 경로였는지는 증명하지 않았다.
+**반대 근거·한계:** 정상 종료 및 terminate가 정상 완료되는 timeout은 기존 경로로 끝난다. ([lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:130](<lmstudio-unreal-agent-mcp/src/bounded-process-runner.js:130>)) 실제 OS 종료 함수의 hang 빈도나 현재 LM Studio 대기가 이 경로였는지는 증명하지 않았다.
 
 **최소 수정:** 기존 runner가 종료 시작 전에 bounded shutdown deadline을 소유하고 close/abort/timeout 경쟁을 한 번만 정산한다. 종료 확인 여부를 별도 결과로 유지한다.
 
@@ -236,15 +236,15 @@ terminate가 끝나지 않는 fake child에서 timeout 이후 close까지 발생
 
 **근거 경로**
 
-- [lmstudio-unreal-agent-mcp/src/direct-server.js:103](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-server.js:103>) — SDK extra에서 sessionId만 requestContext로 전달하고 signal은 버린다.
-- [lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:168](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:168>) — run_command가 취소 신호를 소비하지 않고 실행을 시작한다.
-- [lmstudio-unity-mcp/src/server.js:93](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unity-mcp/src/server.js:93>) — Unity MCP handler 역시 extra를 받지 않는다.
-- [lmstudio-unreal-agent-mcp/src/direct-server.js:72](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-server.js:72>) — Direct runtime 반환 API에 close가 없다.
-- [lmstudio-unreal-agent-mcp/src/strict-server.js:152](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/strict-server.js:152>) — Strict close는 session orphan을 처리하며 child 회수에 연결되지 않는다.
-- [lmstudio-unity-mcp/src/symbols.js:25](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unity-mcp/src/symbols.js:25>) — symbol worker는 지역 child이며 runtime close에서 회수할 API가 없다.
-- [artifacts/architecture-audit-20261003/behavior-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/behavior-results.json>) — 이미 aborted인 context를 넣은 fake run_command에서도 spawn=1, kill=0이며 성공 결과가 나왔다. 공개 MCP 진입점에서는 signal 자체가 전달되지 않는다.
+- [lmstudio-unreal-agent-mcp/src/direct-server.js:103](<lmstudio-unreal-agent-mcp/src/direct-server.js:103>) — SDK extra에서 sessionId만 requestContext로 전달하고 signal은 버린다.
+- [lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:168](<lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js:168>) — run_command가 취소 신호를 소비하지 않고 실행을 시작한다.
+- [lmstudio-unity-mcp/src/server.js:93](<lmstudio-unity-mcp/src/server.js:93>) — Unity MCP handler 역시 extra를 받지 않는다.
+- [lmstudio-unreal-agent-mcp/src/direct-server.js:72](<lmstudio-unreal-agent-mcp/src/direct-server.js:72>) — Direct runtime 반환 API에 close가 없다.
+- [lmstudio-unreal-agent-mcp/src/strict-server.js:152](<lmstudio-unreal-agent-mcp/src/strict-server.js:152>) — Strict close는 session orphan을 처리하며 child 회수에 연결되지 않는다.
+- [lmstudio-unity-mcp/src/symbols.js:25](<lmstudio-unity-mcp/src/symbols.js:25>) — symbol worker는 지역 child이며 runtime close에서 회수할 API가 없다.
+- [artifacts/architecture-audit-20261003/behavior-results.json](<artifacts/architecture-audit-20261003/behavior-results.json>) — 이미 aborted인 context를 넣은 fake run_command에서도 spawn=1, kill=0이며 성공 결과가 나왔다. 공개 MCP 진입점에서는 signal 자체가 전달되지 않는다.
 
-**반대 근거·한계:** 개별 도구의 timeout 및 Unity operation cancel은 존재한다. 이것이 MCP 요청 취소의 전달을 대신하지는 않는다. ([unity-editor-bridge/Editor/Operations.cs:68](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/Operations.cs:68>)) 실제 LM Studio Stop이 어떤 MCP notification을 보내는지 이번 턴에서 wire trace를 수집하지 않았다. Unity의 모든 하위 worker 취소를 실행 재현한 것은 아니다.
+**반대 근거·한계:** 개별 도구의 timeout 및 Unity operation cancel은 존재한다. 이것이 MCP 요청 취소의 전달을 대신하지는 않는다. ([unity-editor-bridge/Editor/Operations.cs:68](<unity-editor-bridge/Editor/Operations.cs:68>)) 실제 LM Studio Stop이 어떤 MCP notification을 보내는지 이번 턴에서 wire trace를 수집하지 않았다. Unity의 모든 하위 worker 취소를 실행 재현한 것은 아니다.
 
 **최소 수정:** request context의 signal을 기존 capability와 runner로 전달하고 predispatch abort는 spawn=0으로 처리한다. 실행 뒤에는 취소 요청·실제 종료·적용 결과를 구분한다. runtime close에서 소유한 자원도 정리한다.
 
@@ -258,12 +258,12 @@ terminate가 끝나지 않는 fake child에서 timeout 이후 close까지 발생
 
 **근거 경로**
 
-- [lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:138](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:138>) — 파일 read 예외를 catch 후 continue하며 누락 이유를 결과에 싣지 않는다.
-- [lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:158](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:158>) — filesScanned는 수집한 후보 수이고 성공적으로 읽은 수와 다르다.
-- [lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:425](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:425>) — maxFilesReached/truncated=false로 complete_for_requested_scope를 만들 수 있다.
-- [artifacts/architecture-audit-20261003/behavior-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/behavior-results.json>) — 유일한 .cpp 읽기에 EACCES를 주입해도 ok=true, results=[], filesScanned=1, truncated=false가 반환됐다.
+- [lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:138](<lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:138>) — 파일 read 예외를 catch 후 continue하며 누락 이유를 결과에 싣지 않는다.
+- [lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:158](<lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:158>) — filesScanned는 수집한 후보 수이고 성공적으로 읽은 수와 다르다.
+- [lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:425](<lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:425>) — maxFilesReached/truncated=false로 complete_for_requested_scope를 만들 수 있다.
+- [artifacts/architecture-audit-20261003/behavior-results.json](<artifacts/architecture-audit-20261003/behavior-results.json>) — 유일한 .cpp 읽기에 EACCES를 주입해도 ok=true, results=[], filesScanned=1, truncated=false가 반환됐다.
 
-**반대 근거·한계:** 텍스트 확장자·크기·binary 제외 자체는 도구의 의도된 검색 범위일 수 있다. IO 실패에 의한 미관찰과 구분해야 한다. ([lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:132](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:132>)) 최종 모델이 반드시 없는 파일이라고 말한다는 의미는 아니다. 잘못된 completeness 근거를 생성하는 경로가 확인됐다.
+**반대 근거·한계:** 텍스트 확장자·크기·binary 제외 자체는 도구의 의도된 검색 범위일 수 있다. IO 실패에 의한 미관찰과 구분해야 한다. ([lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:132](<lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:132>)) 최종 모델이 반드시 없는 파일이라고 말한다는 의미는 아니다. 잘못된 completeness 근거를 생성하는 경로가 확인됐다.
 
 **최소 수정:** 검색 생산자가 attempted/read/skipped/errors와 coverage를 소유하고 consumer는 명시된 coverage만 사용한다. trace 제한과 읽기 성공을 하나의 truncated flag로 대체하지 않는다.
 
@@ -277,12 +277,12 @@ unreal_cpp rows의 receipt 뒤 source를 ue_api_reference로 제한해도 duplic
 
 **근거 경로**
 
-- [scripts/direct_rag_history.py:125](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_history.py:125>) — query key에서 source/layer/doc_type/genre/extension/required_term/use_active_project가 빠지고 query는 512자로 잘린다.
-- [scripts/direct_rag_search.py:177](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_search.py:177>) — preflight suppressed면 실제 retrieval 전에 no_new_information을 반환한다.
-- [scripts/direct_rag_selection.py:149](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_selection.py:149>) — 누락된 필터들은 실제 SearchOptions에는 영향을 준다.
-- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>) — unreal_cpp rows의 receipt 뒤 source를 ue_api_reference로 제한해도 duplicate=true였다. 앞 512자가 같은 다른 query도 key가 같았다.
+- [scripts/direct_rag_history.py:125](<scripts/direct_rag_history.py:125>) — query key에서 source/layer/doc_type/genre/extension/required_term/use_active_project가 빠지고 query는 512자로 잘린다.
+- [scripts/direct_rag_search.py:177](<scripts/direct_rag_search.py:177>) — preflight suppressed면 실제 retrieval 전에 no_new_information을 반환한다.
+- [scripts/direct_rag_selection.py:149](<scripts/direct_rag_selection.py:149>) — 누락된 필터들은 실제 SearchOptions에는 영향을 준다.
+- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>) — unreal_cpp rows의 receipt 뒤 source를 ue_api_reference로 제한해도 duplicate=true였다. 앞 512자가 같은 다른 query도 key가 같았다.
 
-**반대 근거·한계:** receipt가 없으면 재검색하며 index/detail 변경은 기존 key에서 구분한다. ([scripts/direct_rag_search.py:202](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_search.py:202>)) key는 index fingerprint와 detail 등 일부 변경을 구분한다. ([scripts/direct_rag_history.py:136](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_history.py:136>)) 첨부 라이브 로그의 개별 symbol 실패가 이 receipt 분기였는지는 확인하지 않았다.
+**반대 근거·한계:** receipt가 없으면 재검색하며 index/detail 변경은 기존 key에서 구분한다. ([scripts/direct_rag_search.py:202](<scripts/direct_rag_search.py:202>)) key는 index fingerprint와 detail 등 일부 변경을 구분한다. ([scripts/direct_rag_history.py:136](<scripts/direct_rag_history.py:136>)) 첨부 라이브 로그의 개별 symbol 실패가 이 receipt 분기였는지는 확인하지 않았다.
 
 **최소 수정:** 기존 normalized effective selection을 key 입력으로 사용하고 전체 bounded query를 hash한다. preflight와 최종 delivery가 같은 계약을 사용해야 한다.
 
@@ -296,12 +296,12 @@ unreal_cpp rows의 receipt 뒤 source를 ue_api_reference로 제한해도 duplic
 
 **근거 경로**
 
-- [scripts/direct_rag_generation_swap.py:97](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_generation_swap.py:97>) — 게시 후 committed를 기록한다.
-- [scripts/direct_rag_generation_swap.py:138](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_generation_swap.py:138>) — finally의 journal 정리 예외가 밖으로 전파된다.
-- [scripts/direct_rag_project_refresh.py:166](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_project_refresh.py:166>) — 모든 commit 예외를 stageCommitted=false와 rollback attempted로 반환한다.
-- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>) — 최종 journal unlink만 실패시켜 liveIndex=new, journalState=committed인데 ok=false/stageCommitted=false가 반환되는 것을 재현했다.
+- [scripts/direct_rag_generation_swap.py:97](<scripts/direct_rag_generation_swap.py:97>) — 게시 후 committed를 기록한다.
+- [scripts/direct_rag_generation_swap.py:138](<scripts/direct_rag_generation_swap.py:138>) — finally의 journal 정리 예외가 밖으로 전파된다.
+- [scripts/direct_rag_project_refresh.py:166](<scripts/direct_rag_project_refresh.py:166>) — 모든 commit 예외를 stageCommitted=false와 rollback attempted로 반환한다.
+- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>) — 최종 journal unlink만 실패시켜 liveIndex=new, journalState=committed인데 ok=false/stageCommitted=false가 반환되는 것을 재현했다.
 
-**반대 근거·한계:** 새 generation은 온전했고 committed journal이 남아 이후 recovery로 정리할 수 있다. ([scripts/direct_rag_generation_swap.py:97](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_generation_swap.py:97>)) 기존 backup 정리 실패 테스트에는 recovery 경로가 있다. ([tests/test_rag_refresh.py:1120](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/tests/test_rag_refresh.py:1120>)) 자료 손상이나 partial generation 노출을 입증한 사례가 아니다. public build/installer 영향은 호출부 소스로 확인했다.
+**반대 근거·한계:** 새 generation은 온전했고 committed journal이 남아 이후 recovery로 정리할 수 있다. ([scripts/direct_rag_generation_swap.py:97](<scripts/direct_rag_generation_swap.py:97>)) 기존 backup 정리 실패 테스트에는 recovery 경로가 있다. ([tests/test_rag_refresh.py:1120](<tests/test_rag_refresh.py:1120>)) 자료 손상이나 partial generation 노출을 입증한 사례가 아니다. public build/installer 영향은 호출부 소스로 확인했다.
 
 **최소 수정:** 기존 generation owner가 commit outcome과 cleanup warning을 분리하고 refresh/public build/installer가 실제 committed 상태를 유지하게 한다.
 
@@ -315,13 +315,13 @@ A의 rows는 Value=1, 실제 파일은 Value=2이고 DB mtime만 더 최신인 f
 
 **근거 경로**
 
-- [scripts/direct_rag_project_merge.py:78](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_project_merge.py:78>) — 선택하지 않은 프로젝트 rows는 유지한다.
-- [scripts/direct_rag_freshness.py:136](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_freshness.py:136>) — 프로젝트 소스 시각을 해당 수집 시각 대신 전역 SQLite mtime과 비교한다.
-- [scripts/direct_rag_retrieval.py:131](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_retrieval.py:131>) — freshness 결과가 stale suppression을 결정한다.
-- [scripts/direct_rag_freshness.py:38](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_freshness.py:38>) — 복수 selector 중 첫 번째 해석 가능한 프로젝트만 freshness 대상으로 선택한다. 이 추가 경로는 소스로 확인했다.
-- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>) — A의 rows는 Value=1, 실제 파일은 Value=2이고 DB mtime만 더 최신인 fixture에서 source/symbol/architectureFresh 모두 true였다. 복수 selector에서 첫 프로젝트만 검사하는 추가 경로도 소스로 확인했다.
+- [scripts/direct_rag_project_merge.py:78](<scripts/direct_rag_project_merge.py:78>) — 선택하지 않은 프로젝트 rows는 유지한다.
+- [scripts/direct_rag_freshness.py:136](<scripts/direct_rag_freshness.py:136>) — 프로젝트 소스 시각을 해당 수집 시각 대신 전역 SQLite mtime과 비교한다.
+- [scripts/direct_rag_retrieval.py:131](<scripts/direct_rag_retrieval.py:131>) — freshness 결과가 stale suppression을 결정한다.
+- [scripts/direct_rag_freshness.py:38](<scripts/direct_rag_freshness.py:38>) — 복수 selector 중 첫 번째 해석 가능한 프로젝트만 freshness 대상으로 선택한다. 이 추가 경로는 소스로 확인했다.
+- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>) — A의 rows는 Value=1, 실제 파일은 Value=2이고 DB mtime만 더 최신인 fixture에서 source/symbol/architectureFresh 모두 true였다. 복수 selector에서 첫 프로젝트만 검사하는 추가 경로도 소스로 확인했다.
 
-**반대 근거·한계:** 소스가 전역 DB보다 새로우면 stale 검사가 작동한다. exact project root와 generation 일관성 검사는 별도로 존재한다. ([scripts/direct_rag_freshness.py:141](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_freshness.py:141>)) 복수 selector 혼합 사례는 SourceVerified이며 별도 실행 재현하지 않았다.
+**반대 근거·한계:** 소스가 전역 DB보다 새로우면 stale 검사가 작동한다. exact project root와 generation 일관성 검사는 별도로 존재한다. ([scripts/direct_rag_freshness.py:141](<scripts/direct_rag_freshness.py:141>)) 복수 selector 혼합 사례는 SourceVerified이며 별도 실행 재현하지 않았다.
 
 **최소 수정:** collector→merge→build가 exact project별 수집 provenance를 보존하고 freshness는 그 자료를 사용한다. 구형 index의 provenance 부재는 unknown, 복수 프로젝트는 각각 판정한다.
 
@@ -335,12 +335,12 @@ A의 rows는 Value=1, 실제 파일은 Value=2이고 DB mtime만 더 최신인 f
 
 **근거 경로**
 
-- [scripts/build_integrated_package.py:1219](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/build_integrated_package.py:1219>) — 기존 output을 먼저 삭제한다.
-- [scripts/build_integrated_package.py:1221](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/build_integrated_package.py:1221>) — 그 뒤 staging.replace로 새 output을 게시한다.
-- [scripts/build_integrated_package.py:1224](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/build_integrated_package.py:1224>) — 게시 예외에서 staging도 삭제한다.
-- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>) — 임시 fixture에서 최종 rename만 실패시킨 결과 prior_package_exists=false, output_exists=false, remaining_staging=[]였다.
+- [scripts/build_integrated_package.py:1219](<scripts/build_integrated_package.py:1219>) — 기존 output을 먼저 삭제한다.
+- [scripts/build_integrated_package.py:1221](<scripts/build_integrated_package.py:1221>) — 그 뒤 staging.replace로 새 output을 게시한다.
+- [scripts/build_integrated_package.py:1224](<scripts/build_integrated_package.py:1224>) — 게시 예외에서 staging도 삭제한다.
+- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>) — 임시 fixture에서 최종 rename만 실패시킨 결과 prior_package_exists=false, output_exists=false, remaining_staging=[]였다.
 
-**반대 근거·한계:** required/private-path 검증은 교체 전에 끝나며 zip 출력은 별도 atomic replace를 사용한다. ([scripts/build_integrated_package.py:1152](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/build_integrated_package.py:1152>)) 새 staging의 required/private path 검증은 기존 output 교체 전에 수행한다. ([scripts/build_integrated_package.py:1181](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/build_integrated_package.py:1181>)) 실제 사용자의 배포 패키지에는 실행하지 않았다. 원본 저장소나 배포 서버 자료 손실을 뜻하지 않는다.
+**반대 근거·한계:** required/private-path 검증은 교체 전에 끝나며 zip 출력은 별도 atomic replace를 사용한다. ([scripts/build_integrated_package.py:1152](<scripts/build_integrated_package.py:1152>)) 새 staging의 required/private path 검증은 기존 output 교체 전에 수행한다. ([scripts/build_integrated_package.py:1181](<scripts/build_integrated_package.py:1181>)) 실제 사용자의 배포 패키지에는 실행하지 않았다. 원본 저장소나 배포 서버 자료 손실을 뜻하지 않는다.
 
 **최소 수정:** 기존 builder가 같은 부모의 backup→publish→성공 cleanup/실패 restore를 관리한다. rollback 실패면 복구 경로를 보존한다.
 
@@ -354,11 +354,11 @@ operation 재조회뿐 아니라 snapshot/reference 조회에서도 원래 증�
 
 **근거 경로**
 
-- [unity-editor-bridge/Editor/Operations.cs:87](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/Operations.cs:87>) — operation journal은 실행 origin 없이 상태와 결과를 저장한다.
-- [unity-editor-bridge/Editor/ReferenceIndex.cs:21](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/ReferenceIndex.cs:21>) — 저장된 reference 결과는 원래 editorSessionId/domainGeneration을 반환한다.
-- [unity-editor-bridge/Editor/Bridge.cs:158](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/Bridge.cs:158>) — Pump가 모든 결과의 session/domain/observedAt을 현재 값으로 덮는다.
+- [unity-editor-bridge/Editor/Operations.cs:87](<unity-editor-bridge/Editor/Operations.cs:87>) — operation journal은 실행 origin 없이 상태와 결과를 저장한다.
+- [unity-editor-bridge/Editor/ReferenceIndex.cs:21](<unity-editor-bridge/Editor/ReferenceIndex.cs:21>) — 저장된 reference 결과는 원래 editorSessionId/domainGeneration을 반환한다.
+- [unity-editor-bridge/Editor/Bridge.cs:158](<unity-editor-bridge/Editor/Bridge.cs:158>) — Pump가 모든 결과의 session/domain/observedAt을 현재 값으로 덮는다.
 
-**반대 근거·한계:** mutation replay는 session을 포함한 digest로 차단되고 reference의 immutable_collection_not_live 표시는 남는다. ([unity-editor-bridge/Editor/Operations.cs:78](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/Operations.cs:78>)) immutable_collection_not_live freshness 표시는 보존된다. ([unity-editor-bridge/Editor/ReferenceIndex.cs:22](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/unity-editor-bridge/Editor/ReferenceIndex.cs:22>)) 실제 Unity Editor 재시작/domain reload를 이번 턴에서 실행하지 않았다. 모든 역사 데이터를 live로 단정한다고 확대하지 않는다.
+**반대 근거·한계:** mutation replay는 session을 포함한 digest로 차단되고 reference의 immutable_collection_not_live 표시는 남는다. ([unity-editor-bridge/Editor/Operations.cs:78](<unity-editor-bridge/Editor/Operations.cs:78>)) immutable_collection_not_live freshness 표시는 보존된다. ([unity-editor-bridge/Editor/ReferenceIndex.cs:22](<unity-editor-bridge/Editor/ReferenceIndex.cs:22>)) 실제 Unity Editor 재시작/domain reload를 이번 턴에서 실행하지 않았다. 모든 역사 데이터를 live로 단정한다고 확대하지 않는다.
 
 **최소 수정:** Operations/EvidenceStore는 execution·observation origin을 보존하고 Bridge는 delivery session/time을 별도 의미로 표시한다. BridgeClient가 현재 응답 identity를 검증하므로 기존 최상위 session 필드만 제거하지 말고 producer/client 계약을 함께 바꾼다. 원장과 ID owner는 유지한다.
 
@@ -372,12 +372,12 @@ fake create가 한 번 성공한 뒤 stat에 EACCES를 주면 적용 정보 없�
 
 **근거 경로**
 
-- [lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:175](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:175>) — 락 안에서 createExclusive commit 후 락을 해제한다.
-- [lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:191](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:191>) — commit 뒤 registerCurrentVersion을 호출한다.
-- [lmstudio-unreal-agent-mcp/src/direct-file-version-policy.js:65](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-file-version-policy.js:65>) — 후속 stat/register 예외가 direct-server의 일반 INTERNAL_ERROR로 전파된다.
-- [artifacts/architecture-audit-20261003/behavior-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/behavior-results.json>) — fake create가 한 번 성공한 뒤 stat에 EACCES를 주면 적용 정보 없이 INTERNAL_ERROR가 반환됐다. replace와 bundle에도 같은 후처리 구조가 있다.
+- [lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:175](<lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:175>) — 락 안에서 createExclusive commit 후 락을 해제한다.
+- [lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:191](<lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js:191>) — commit 뒤 registerCurrentVersion을 호출한다.
+- [lmstudio-unreal-agent-mcp/src/direct-file-version-policy.js:65](<lmstudio-unreal-agent-mcp/src/direct-file-version-policy.js:65>) — 후속 stat/register 예외가 direct-server의 일반 INTERNAL_ERROR로 전파된다.
+- [artifacts/architecture-audit-20261003/behavior-results.json](<artifacts/architecture-audit-20261003/behavior-results.json>) — fake create가 한 번 성공한 뒤 stat에 EACCES를 주면 적용 정보 없이 INTERNAL_ERROR가 반환됐다. replace와 bundle에도 같은 후처리 구조가 있다.
 
-**반대 근거·한계:** optional change evidence 생성 실패는 현재 코드에서 이미 commit 성공을 보존한다. 아직 남은 문제는 receipt 후처리이다. ([lmstudio-unreal-agent-mcp/src/direct-change-evidence.js:33](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-change-evidence.js:33>)) 실제 사용자 파일을 변경한 재현은 아니다. 동시 외부 변경이면 현재 파일 hash는 commit 당시 hash와 다를 수 있다.
+**반대 근거·한계:** optional change evidence 생성 실패는 현재 코드에서 이미 commit 성공을 보존한다. 아직 남은 문제는 receipt 후처리이다. ([lmstudio-unreal-agent-mcp/src/direct-change-evidence.js:33](<lmstudio-unreal-agent-mcp/src/direct-change-evidence.js:33>)) 실제 사용자 파일을 변경한 재현은 아니다. 동시 외부 변경이면 현재 파일 hash는 commit 당시 hash와 다를 수 있다.
 
 **최소 수정:** commit 사실과 현재 version receipt 확보를 별도로 반환한다. receipt가 없으면 후속 mutation은 재읽기를 요구하되 이미 적용된 변경을 미적용으로 돌리지 않는다.
 
@@ -393,11 +393,11 @@ fake create가 한 번 성공한 뒤 stat에 EACCES를 주면 적용 정보 없�
 
 **근거 경로**
 
-- [filesystem-path-identity.js:77](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/filesystem-path-identity.js:77>) — 현재 물리 containment를 검사하는 기존 반대 근거.
-- [direct-transaction-recovery.js:29](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/src/direct-transaction-recovery.js:29>) — frozen target 동등성 및 락 안/쓰기 직전 재검증을 보완한 기존 복구 소유자.
-- [architecture-contract-regression.test.js:29](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-unreal-agent-mcp/test/architecture-contract-regression.test.js:29>) — 실제 임시 디렉터리와 junction으로 두 복구 분기를 확인한다.
-- [unreal-a18-os-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/unreal-a18-os-results.json>) — 수정 전 재현과 수정 후 결과.
-- [unreal-regression.log](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/unreal-regression.log>) — 전체 Unreal Node 회귀 실행 결과.
+- [filesystem-path-identity.js:77](<lmstudio-unreal-agent-mcp/src/filesystem-path-identity.js:77>) — 현재 물리 containment를 검사하는 기존 반대 근거.
+- [direct-transaction-recovery.js:29](<lmstudio-unreal-agent-mcp/src/direct-transaction-recovery.js:29>) — frozen target 동등성 및 락 안/쓰기 직전 재검증을 보완한 기존 복구 소유자.
+- [architecture-contract-regression.test.js:29](<lmstudio-unreal-agent-mcp/test/architecture-contract-regression.test.js:29>) — 실제 임시 디렉터리와 junction으로 두 복구 분기를 확인한다.
+- [unreal-a18-os-results.json](<artifacts/architecture-audit-20261003/unreal-a18-os-results.json>) — 수정 전 재현과 수정 후 결과.
+- [unreal-regression.log](<artifacts/architecture-audit-20261003/unreal-regression.log>) — 전체 Unreal Node 회귀 실행 결과.
 
 **최소 수정:** 기존 recovery owner에서 journal에 동결된 canonicalAbsolutePath와 현재 realpath의 동등성을 확인한다. 락 획득 뒤와 쓰기 직전에도 재검증하고 불일치는 rollback_incomplete/recoveryRequired로 남긴다. 기존 project/backup containment와 post-image hash 검사는 유지한다.
 
@@ -411,11 +411,11 @@ RAG local engine lookup의 bounded deadline을 refresh 전체의 deadline으로 
 
 **근거 경로**
 
-- [scripts/direct_rag_server.py:102](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_server.py:102>) — id 없는 notification은 반환하며 synchronous dispatch에 취소 token 경로가 없다.
-- [scripts/direct_rag_project_collection.py:15](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_project_collection.py:15>) — collector subprocess 호출에 timeout이 없다.
-- [scripts/direct_rag_freshness.py:72](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_freshness.py:72>) — freshness는 Source/Plugins 순회를 수행한다.
+- [scripts/direct_rag_server.py:102](<scripts/direct_rag_server.py:102>) — id 없는 notification은 반환하며 synchronous dispatch에 취소 token 경로가 없다.
+- [scripts/direct_rag_project_collection.py:15](<scripts/direct_rag_project_collection.py:15>) — collector subprocess 호출에 timeout이 없다.
+- [scripts/direct_rag_freshness.py:72](<scripts/direct_rag_freshness.py:72>) — freshness는 Source/Plugins 순회를 수행한다.
 
-**반대 근거·한계:** per-index lock, generation journal/recovery, 별도 local engine helper의 제한은 존재한다. ([scripts/direct_rag_project_refresh.py:34](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/scripts/direct_rag_project_refresh.py:34>)) 실제 hang, 순회 시간, 사용자 Stop의 notification과 허용 timeout 요구를 측정하지 않았다.
+**반대 근거·한계:** per-index lock, generation journal/recovery, 별도 local engine helper의 제한은 존재한다. ([scripts/direct_rag_project_refresh.py:34](<scripts/direct_rag_project_refresh.py:34>)) 실제 hang, 순회 시간, 사용자 Stop의 notification과 허용 timeout 요구를 측정하지 않았다.
 
 **최소 수정:** 장기 작업에 대한 취소·시간·commit 경계를 먼저 명세하고 기존 dispatcher/collector가 job 수명을 소유하게 한다. commit 후 취소로 미게시를 보고하지 않는다.
 
@@ -429,11 +429,11 @@ RAG local engine lookup의 bounded deadline을 refresh 전체의 deadline으로 
 
 **근거 경로**
 
-- [docs/ARCHITECTURE.md:9](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/docs/ARCHITECTURE.md:9>) — 설치·업데이트 시 기존 채팅 기본 ON으로 설명한다.
-- [docs/ARCHITECTURE.md:34](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/docs/ARCHITECTURE.md:34>) — 같은 문서가 설치만으로 켜지지 않고 사용자가 켤 때만 동작한다고 설명한다.
-- [docs/model-guidance/README.md:46](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/docs/model-guidance/README.md:46>) — GUI 선택 설명에 구현된 Auto가 빠져 있다.
+- [docs/ARCHITECTURE.md:9](<docs/ARCHITECTURE.md:9>) — 설치·업데이트 시 기존 채팅 기본 ON으로 설명한다.
+- [docs/ARCHITECTURE.md:34](<docs/ARCHITECTURE.md:34>) — 같은 문서가 설치만으로 켜지지 않고 사용자가 켤 때만 동작한다고 설명한다.
+- [docs/model-guidance/README.md:46](<docs/model-guidance/README.md:46>) — GUI 선택 설명에 구현된 Auto가 빠져 있다.
 
-**반대 근거·한계:** plugin README와 현재 설정/선택 구현에는 Auto 설명이 있다. ([lmstudio-context-compactor-plugin/README.md:32](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/README.md:32>)) 현재 설치된 GUI 설정을 이번 코드 감사에서 변경하거나 재조회하지 않았다.
+**반대 근거·한계:** plugin README와 현재 설정/선택 구현에는 Auto 설명이 있다. ([lmstudio-context-compactor-plugin/README.md:32](<lmstudio-context-compactor-plugin/README.md:32>)) 현재 설치된 GUI 설정을 이번 코드 감사에서 변경하거나 재조회하지 않았다.
 
 **최소 수정:** 현재 installer/config 소유자의 동작을 기준으로 기존 문서를 수정하고 generated guidance는 원본 catalogue 경로에서만 갱신한다.
 
@@ -564,14 +564,14 @@ Unity operation journal의 1,000개 상한과 자동 eviction 금지는 at-most-
 
 감사 재현은 **현재 결함이 나타나는지**를 assert한다. 통과했다고 수정 완료나 사용자 시나리오 성공을 뜻하지 않는다. 구현 시에는 원하는 불변식을 검증하는 회귀 테스트로 옮겨야 한다.
 
-- [artifacts/architecture-audit-20261003/reproduce.cjs](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reproduce.cjs>)
-- [artifacts/architecture-audit-20261003/reproduction-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reproduction-results.json>)
-- [artifacts/architecture-audit-20261003/reference-reproduce.cjs](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reference-reproduce.cjs>)
-- [artifacts/architecture-audit-20261003/reference-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/reference-results.json>)
-- [artifacts/architecture-audit-20261003/behavior-reproduce.cjs](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/behavior-reproduce.cjs>)
-- [artifacts/architecture-audit-20261003/behavior-results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/behavior-results.json>)
-- [artifacts/architecture-audit-20261003/rag-package-reproduce.py](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/rag-package-reproduce.py>)
-- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>)
-- [docs/evidence/architecture-contract-audit-20261003.json](<C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/docs/evidence/architecture-contract-audit-20261003.json>)
+- [artifacts/architecture-audit-20261003/reproduce.cjs](<artifacts/architecture-audit-20261003/reproduce.cjs>)
+- [artifacts/architecture-audit-20261003/reproduction-results.json](<artifacts/architecture-audit-20261003/reproduction-results.json>)
+- [artifacts/architecture-audit-20261003/reference-reproduce.cjs](<artifacts/architecture-audit-20261003/reference-reproduce.cjs>)
+- [artifacts/architecture-audit-20261003/reference-results.json](<artifacts/architecture-audit-20261003/reference-results.json>)
+- [artifacts/architecture-audit-20261003/behavior-reproduce.cjs](<artifacts/architecture-audit-20261003/behavior-reproduce.cjs>)
+- [artifacts/architecture-audit-20261003/behavior-results.json](<artifacts/architecture-audit-20261003/behavior-results.json>)
+- [artifacts/architecture-audit-20261003/rag-package-reproduce.py](<artifacts/architecture-audit-20261003/rag-package-reproduce.py>)
+- [artifacts/architecture-audit-20261003/rag-package-reproduce.results.json](<artifacts/architecture-audit-20261003/rag-package-reproduce.results.json>)
+- [docs/evidence/architecture-contract-audit-20261003.json](<docs/evidence/architecture-contract-audit-20261003.json>)
 
 근거 JSON의 validator는 주장 분류·근거 종류·동작 경로·아키텍처 계획의 형식을 검사한다. 코드 동작을 대신 검증하지 않는다.

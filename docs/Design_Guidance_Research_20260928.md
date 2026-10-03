@@ -285,7 +285,7 @@ SSOT는 자료의 정본과 참조 관계, SRP는 자료별 대상, DIP는 공�
 | 충돌 조회 API | `FCollisionObjectTypes::AllStatic` 오류를 헤더 부족으로 단정하고, 결국 Visibility 채널 조회로 변경함 | 실제 선언은 `FCollisionObjectQueryParams`와 `AllStaticObjects`다. 심볼·인자 계약 확인과 충돌 대상 설계를 먼저 구분한다 |
 | 빌드 진행 보고 | 다른 파일 오류가 나오자 이전 오류가 해결됐다고 보고했다가 같은 오류가 재등장함 | 처음 표시된 오류가 달라진 것, 해당 수정의 유효성 확인, 전체 빌드 성공, 실행 동작 확인을 구분한다 |
 
-로컬 근거: [PlayerState.h](<C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/GameFramework/PlayerState.h:48>), [DOREPLIFETIME 실제 정의](<C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Public/Net/UnrealNetwork.h:250>), [FDamageEvent 정의 파일](<C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/Engine/DamageEvents.h>), [충돌 객체 조회 인자](<C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Public/CollisionQueryParams.h:429>). 이 경로들은 이번 조사 장비 기준이며 다른 환경에서는 해당 설치 버전의 같은 상대 경로를 사용한다.
+로컬 근거: [PlayerState.h](<UE_5_7_ROOT/Engine/Source/Runtime/Engine/Classes/GameFramework/PlayerState.h:48>), [DOREPLIFETIME 실제 정의](<UE_5_7_ROOT/Engine/Source/Runtime/Engine/Public/Net/UnrealNetwork.h:250>), [FDamageEvent 정의 파일](<UE_5_7_ROOT/Engine/Source/Runtime/Engine/Classes/Engine/DamageEvents.h>), [충돌 객체 조회 인자](<UE_5_7_ROOT/Engine/Source/Runtime/Engine/Public/CollisionQueryParams.h:429>). 이 경로들은 이번 조사 장비 기준이며 다른 환경에서는 해당 설치 버전의 같은 상대 경로를 사용한다.
 
 ### 9.3 충돌 조회 변경에서 보존해야 할 계약
 
@@ -307,7 +307,7 @@ UE 5.7에는 `FCollisionObjectQueryParams::AllStaticObjects`와 이를 받는 �
 
 현재 코드의 Visibility 조회가 틀렸다고 단정하지 않는다. **빌드 성공으로 확인되는 범위를 넘어 충돌 대상과 데미지 판정 의미까지 보존됐다고 보고하지 않는 것**이 이 사례의 요점이다. 런타임 충돌 프로필, Blueprint 설정, 네트워크 권한 경로는 이번 보강에서 확인하지 않았다.
 
-근거: [World.h의 채널·객체 유형 조회 선언](<C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/Engine/World.h:2069>), [현재 TraceHit 구현](C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:131).
+근거: [World.h의 채널·객체 유형 조회 선언](<UE_5_7_ROOT/Engine/Source/Runtime/Engine/Classes/Engine/World.h:2069>), [현재 TraceHit 구현](GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:131).
 
 ### 9.4 추가할 짧은 조사 가이드
 

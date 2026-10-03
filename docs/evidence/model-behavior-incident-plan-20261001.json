@@ -3,7 +3,7 @@
   "scope": {
     "date": "2026-10-01",
     "timezone": "Asia/Seoul",
-    "root": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio",
+    "root": ".",
     "baselineCommit": "6a0e9b7",
     "architectureReviewCommit": "6893493",
     "change": "planning_documents_only",
@@ -28,19 +28,19 @@
       "severity": "P1",
       "proofLevel": "RuntimeVerified",
       "evidence": [
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7366", "observation": "최종 보고는 GameState bMatchStarted/StartMatch 변경 완료를 주장한다. 이 첨부에서 해당 심볼의 최초 출현도 최종 보고다."},
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7367", "observation": "PlayerState SetLifeSpan(0.f) 제거를 완료로 주장한다."},
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameState.cpp:1", "observation": "현재 git diff는 자기 헤더와 Net/UnrealNetwork.h의 include 순서 교환뿐이며 현재 GameState에는 보고된 bMatchStarted/StartMatch가 없다."},
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:18", "observation": "현재 BeginPlay는 부모 호출뿐이고 diff는 include 순서 교환이다."},
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7629", "observation": "후속 diff 확인과 7636–7637줄 정정은 두 기능 수정 주장을 부정한다. 현재 독립 소스 확인과 일치한다."}
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7366", "observation": "최종 보고는 GameState bMatchStarted/StartMatch 변경 완료를 주장한다. 이 첨부에서 해당 심볼의 최초 출현도 최종 보고다."},
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7367", "observation": "PlayerState SetLifeSpan(0.f) 제거를 완료로 주장한다."},
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameState.cpp:1", "observation": "현재 git diff는 자기 헤더와 Net/UnrealNetwork.h의 include 순서 교환뿐이며 현재 GameState에는 보고된 bMatchStarted/StartMatch가 없다."},
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:18", "observation": "현재 BeginPlay는 부모 호출뿐이고 diff는 include 순서 교환이다."},
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7629", "observation": "후속 diff 확인과 7636–7637줄 정정은 두 기능 수정 주장을 부정한다. 현재 독립 소스 확인과 일치한다."}
       ],
       "counterEvidence": [
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:5139", "observation": "실제 include 순서 수정은 자기 헤더 첫 include 오류를 해결하는 변경이다. 아무것도 해결하지 않았다는 평가도 부정확하다."}
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:5139", "observation": "실제 include 순서 수정은 자기 헤더 첫 include 오류를 해결하는 변경이다. 아무것도 해결하지 않았다는 평가도 부정확하다."}
       ],
       "behaviorPath": [
-        {"stage": "entry", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7349", "symbol": "모델이 빌드 성공 후 전체 변경을 요약"},
-        {"stage": "dispatch", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7366", "symbol": "최종 사용자 출력의 두 기능 완료 항목"},
-        {"stage": "observer", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7636", "symbol": "후속 diff 확인 및 보고 정정; 현재 독립 diff와 대조"}
+        {"stage": "entry", "stageStatus": "present", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7349", "symbol": "모델이 빌드 성공 후 전체 변경을 요약"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7366", "symbol": "최종 사용자 출력의 두 기능 완료 항목"},
+        {"stage": "observer", "stageStatus": "present", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7636", "symbol": "후속 diff 확인 및 보고 정정; 현재 독립 diff와 대조"}
       ],
       "unknowns": ["최초 보고를 생성한 내부 추론과 compactor 입력은 확인하지 못했다.", "누락된 mutation 반환 payload와 사건 이후 변경의 전부를 복원하지 않았다."]
     },
@@ -52,13 +52,13 @@
       "severity": "P1",
       "proofLevel": "SourceVerified",
       "evidence": [
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7529", "observation": "모델이 ULifetimeReplicatedObject::SetLifeSpan과 1초 후 파괴를 설명한다."},
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp:6514", "observation": "AActor::SetLifeSpan은 양수면 소멸 타이머를 설정하고 0 이하이면 기존 타이머를 해제한다."},
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2308", "observation": "0이면 타이머를 해제하고 actor는 파괴되지 않는다고 직접 명시한다."},
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Build/Build.version", "observation": "현재 설치 버전은 5.7.4, changelist 51494982다."}
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7529", "observation": "모델이 ULifetimeReplicatedObject::SetLifeSpan과 1초 후 파괴를 설명한다."},
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Source/Runtime/Engine/Private/Actor.cpp:6514", "observation": "AActor::SetLifeSpan은 양수면 소멸 타이머를 설정하고 0 이하이면 기존 타이머를 해제한다."},
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2308", "observation": "0이면 타이머를 해제하고 actor는 파괴되지 않는다고 직접 명시한다."},
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Build/Build.version", "observation": "현재 설치 버전은 5.7.4, changelist 51494982다."}
       ],
       "counterEvidence": [
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp:6521", "observation": "다른 양수 lifespan이나 부모/Blueprint 경로에서 파괴가 발생할 수 있지만 0의 의미를 뒷받침하지 않는다."}
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Source/Runtime/Engine/Private/Actor.cpp:6521", "observation": "다른 양수 lifespan이나 부모/Blueprint 경로에서 파괴가 발생할 수 있지만 0의 의미를 뒷받침하지 않는다."}
       ],
       "behaviorPath": [],
       "unknowns": ["현재 설치 버전이 당시 실제 실행 patch 버전과 같은지는 build payload 부재로 확인하지 못했다."]
@@ -71,15 +71,15 @@
       "severity": "P1",
       "proofLevel": "SourceVerified",
       "evidence": [
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Plugins/EnhancedInput/Source/EnhancedInput/Public/InputActionValue.h:10", "observation": "EInputActionValueType과 Axis2D를 선언한다."},
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Plugins/EnhancedInput/Source/EnhancedInput/Public/EnhancedInputSubsystems.h:37", "observation": "UEnhancedInputLocalPlayerSubsystem이 AddMappingContext를 선언한다."},
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/Components/InputComponent.h:1020", "observation": "BindKey의 key event 인자는 EInputEvent다."},
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h:30", "observation": "EInputEvent에는 Pressed/Released 외 Repeat/DoubleClick/Axis가 있다."},
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:6094", "observation": "앞선 컴파일 타입 오류만으로 뒤 표현식 GetEnhancedInputUser가 컴파일됐다고 추정한다."},
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7226", "observation": "검색 결과 없음을 근거로 enum이 두 값만 있으며 Down/Up이 제거됐다고 추정한다. 7370줄의 변경 역사 보고도 이전 버전 직접 근거가 없다."}
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Plugins/EnhancedInput/Source/EnhancedInput/Public/InputActionValue.h:10", "observation": "EInputActionValueType과 Axis2D를 선언한다."},
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Plugins/EnhancedInput/Source/EnhancedInput/Public/EnhancedInputSubsystems.h:37", "observation": "UEnhancedInputLocalPlayerSubsystem이 AddMappingContext를 선언한다."},
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Source/Runtime/Engine/Classes/Components/InputComponent.h:1020", "observation": "BindKey의 key event 인자는 EInputEvent다."},
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h:30", "observation": "EInputEvent에는 Pressed/Released 외 Repeat/DoubleClick/Axis가 있다."},
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:6094", "observation": "앞선 컴파일 타입 오류만으로 뒤 표현식 GetEnhancedInputUser가 컴파일됐다고 추정한다."},
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7226", "observation": "검색 결과 없음을 근거로 enum이 두 값만 있으며 Down/Up이 제거됐다고 추정한다. 7370줄의 변경 역사 보고도 이전 버전 직접 근거가 없다."}
       ],
       "counterEvidence": [
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7212", "observation": "모델은 후반에 소비 API와 EInputEvent를 찾아 잘못된 이름을 고쳤다. 조회 자체가 전혀 불가능했던 사례는 아니다."}
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7212", "observation": "모델은 후반에 소비 API와 EInputEvent를 찾아 잘못된 이름을 고쳤다. 조회 자체가 전혀 불가능했던 사례는 아니다."}
       ],
       "behaviorPath": [],
       "unknowns": ["17개의 visible build card 각각의 반환·작업시간은 export에서 검증하지 못했다.", "개별 RAG 실패의 원인이 stale index/budget/coverage 중 무엇인지 raw payload 부재로 단정하지 않았다."]
@@ -92,23 +92,23 @@
       "severity": "P1",
       "proofLevel": "SourceVerified",
       "evidence": [
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:59", "observation": "legacy axis는 MoveForward/MoveRight/Turn/LookUp에 바인딩되지만 Source/Config에서 해당 이름의 키 mapping 등록을 찾지 못했다."},
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Config/DefaultInput.ini:1", "observation": "전체 84줄에 AxisConfig는 있으나 AxisMappings가 없다."},
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/UserInterface/PlayerInput.cpp:1173", "observation": "named axis의 mapping이 없을 때 DetermineAxisValue는 기본 0을 반환하는 경로다."},
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp:16", "observation": "SetupEnhancedInput은 cast와 ready 로그뿐이다. Source에서 CombatMappingContext 사용/AddMappingContext를 찾지 못했다."},
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:65", "observation": "legacy LMB에는 Pressed만 등록되고 ShootReleased가 연결되지 않는다. 할당된 full-auto 무기 조건에서 놓음→반복 중단 연결이 없다."}
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:59", "observation": "legacy axis는 MoveForward/MoveRight/Turn/LookUp에 바인딩되지만 Source/Config에서 해당 이름의 키 mapping 등록을 찾지 못했다."},
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Config/DefaultInput.ini:1", "observation": "전체 84줄에 AxisConfig는 있으나 AxisMappings가 없다."},
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Source/Runtime/Engine/Private/UserInterface/PlayerInput.cpp:1173", "observation": "named axis의 mapping이 없을 때 DetermineAxisValue는 기본 0을 반환하는 경로다."},
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp:16", "observation": "SetupEnhancedInput은 cast와 ready 로그뿐이다. Source에서 CombatMappingContext 사용/AddMappingContext를 찾지 못했다."},
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:65", "observation": "legacy LMB에는 Pressed만 등록되고 ShootReleased가 연결되지 않는다. 할당된 full-auto 무기 조건에서 놓음→반복 중단 연결이 없다."}
       ],
       "counterEvidence": [
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:79", "observation": "CurrentWeapon null이면 full-auto Tick 조건이 false다. Enhanced 경로에는 ShootReleased가 바인딩돼 있다."},
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Config/DefaultInput.ini:77", "observation": "별도 Blueprint·에디터·사용자 설정·런타임 등록이 mapping을 제공할 수 있다. 실제 이 경로는 확인하지 못했다."}
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:79", "observation": "CurrentWeapon null이면 full-auto Tick 조건이 false다. Enhanced 경로에는 ShootReleased가 바인딩돼 있다."},
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Config/DefaultInput.ini:77", "observation": "별도 Blueprint·에디터·사용자 설정·런타임 등록이 mapping을 제공할 수 있다. 실제 이 경로는 확인하지 못했다."}
       ],
       "behaviorPath": [
-        {"stage": "entry", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:41", "symbol": "SetupPlayerInputComponent"},
-        {"stage": "decision", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:44", "symbol": "action 존재 조건으로 Enhanced/legacy 경로 선택"},
-        {"stage": "dispatch", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:59", "symbol": "BindAxis/BindKey"},
-        {"stage": "mutation", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:96", "symbol": "ShootPressed callback은 bWantsToFire를 true로 설정"},
-        {"stage": "side_effect", "stageStatus": "expected_missing", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:65", "symbol": "legacy의 버튼 놓음→ShootReleased 연결"},
-        {"stage": "observer", "stageStatus": "unknown", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Config/DefaultInput.ini", "symbol": "실제 PIE mapping·버튼 놓음 후 사격 상태"}
+        {"stage": "entry", "stageStatus": "present", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:41", "symbol": "SetupPlayerInputComponent"},
+        {"stage": "decision", "stageStatus": "present", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:44", "symbol": "action 존재 조건으로 Enhanced/legacy 경로 선택"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:59", "symbol": "BindAxis/BindKey"},
+        {"stage": "mutation", "stageStatus": "present", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:96", "symbol": "ShootPressed callback은 bWantsToFire를 true로 설정"},
+        {"stage": "side_effect", "stageStatus": "expected_missing", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:65", "symbol": "legacy의 버튼 놓음→ShootReleased 연결"},
+        {"stage": "observer", "stageStatus": "unknown", "location": "GAME_PROJECT_ROOT/Config/DefaultInput.ini", "symbol": "실제 PIE mapping·버튼 놓음 후 사격 상태"}
       ],
       "unknowns": ["PIE·에셋·외부 설정과 원격 입력을 실행 확인하지 않았다."]
     },
@@ -120,20 +120,20 @@
       "severity": "P2",
       "proofLevel": "SourceVerified",
       "evidence": [
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:99", "observation": "플레이어별 예약에 하나의 RespawnTimerHandle을 재사용하며 람다에 raw this/Controller를 캡처한다."},
-        {"kind": "framework_source", "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Public/TimerManager.h:150", "observation": "같은 유효 timer handle을 재사용하면 기존 timer를 교체하는 계약이다."},
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:110", "observation": "spawn/possess 성공 전에 ResetForRespawn한다. 이전 Pawn 폐기·실패 상태 복구는 해당 경로에서 찾지 못했다."},
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:140", "observation": "dead 상태의 재호출도 Die를 다시 부를 수 있고 개인 킬/예약 전에 중복·매치 종료를 거르는 경로가 없다."}
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:99", "observation": "플레이어별 예약에 하나의 RespawnTimerHandle을 재사용하며 람다에 raw this/Controller를 캡처한다."},
+        {"kind": "framework_source", "location": "UE_5_7_ROOT/Engine/Source/Runtime/Engine/Public/TimerManager.h:150", "observation": "같은 유효 timer handle을 재사용하면 기존 timer를 교체하는 계약이다."},
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:110", "observation": "spawn/possess 성공 전에 ResetForRespawn한다. 이전 Pawn 폐기·실패 상태 복구는 해당 경로에서 찾지 못했다."},
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:140", "observation": "dead 상태의 재호출도 Die를 다시 부를 수 있고 개인 킬/예약 전에 중복·매치 종료를 거르는 경로가 없다."}
       ],
       "counterEvidence": [
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Public/LatencyMultiCombatGameState.h:43", "observation": "팀 점수 증가에는 bMatchEnded 방어가 이미 있다."},
-        {"kind": "project_source", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:24", "observation": "현재 PostLogin은 팀을 배정한다. 초기 로그의 연결이 전혀 없다는 진단을 현재 사실로 사용하지 않았다."}
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Public/LatencyMultiCombatGameState.h:43", "observation": "팀 점수 증가에는 bMatchEnded 방어가 이미 있다."},
+        {"kind": "project_source", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:24", "observation": "현재 PostLogin은 팀을 배정한다. 초기 로그의 연결이 전혀 없다는 진단을 현재 사실로 사용하지 않았다."}
       ],
       "behaviorPath": [
-        {"stage": "entry", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:70", "symbol": "HandlePlayerDeath"},
-        {"stage": "decision", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:96", "symbol": "Controller의 존재 확인"},
-        {"stage": "dispatch", "stageStatus": "present", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:99", "symbol": "동일 handle timer와 RespawnPlayer callback"},
-        {"stage": "observer", "stageStatus": "unknown", "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:103", "symbol": "연속 사망·퇴장·spawn 실패의 실제 경기 결과"}
+        {"stage": "entry", "stageStatus": "present", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:70", "symbol": "HandlePlayerDeath"},
+        {"stage": "decision", "stageStatus": "present", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:96", "symbol": "Controller의 존재 확인"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:99", "symbol": "동일 handle timer와 RespawnPlayer callback"},
+        {"stage": "observer", "stageStatus": "unknown", "location": "GAME_PROJECT_ROOT/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:103", "symbol": "연속 사망·퇴장·spawn 실패의 실제 경기 결과"}
       ],
       "unknowns": ["실제 경기·크래시·원격 클라이언트에서 확인하지 않았다. 이번 계획은 게임 구현 수정으로 확대하지 않는다."]
     },
@@ -231,18 +231,18 @@
       "severity": "P2",
       "proofLevel": "RuntimeVerified",
       "evidence": [
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1045", "observation": "첨부에는 slot launch/release 각13개, release 모두 truncated=0이 있다."},
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:101", "observation": "prompt state 10289.126 MiB가 cache 한도8192.000 MiB를 넘겨 skipping한 경고다."},
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1047", "observation": "unanchored pattern \\S 지원 제한으로 schema 변환이 불완전하다는 경고가 전체59줄에 나타난다."},
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1045", "observation": "첨부에는 slot launch/release 각13개, release 모두 truncated=0이 있다."},
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:101", "observation": "prompt state 10289.126 MiB가 cache 한도8192.000 MiB를 넘겨 skipping한 경고다."},
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1047", "observation": "unanchored pattern \\S 지원 제한으로 schema 변환이 불완전하다는 경고가 전체59줄에 나타난다."},
         {"kind": "project_source", "location": "skills/evidence-first-code-audit/scripts/evidence_packet_contract.py:86", "observation": "현재 정본에도 동일한 unanchored nonempty pattern이 있다. 당시 설치 schema와 동일함은 아직 확인하지 못했다."}
       ],
       "counterEvidence": [
-        {"kind": "runtime", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1045", "observation": "백엔드 truncation 표시는 없다. 이 기록은 compactor의 의미 보존·지침 전달까지 보증하지 않는다."}
+        {"kind": "runtime", "location": "ATTACHMENTS_ROOT/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1045", "observation": "백엔드 truncation 표시는 없다. 이 기록은 compactor의 의미 보존·지침 전달까지 보증하지 않는다."}
       ],
       "behaviorPath": [
-        {"stage": "entry", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:173", "symbol": "설치 compactor의 모델 요청 기록"},
-        {"stage": "dispatch", "stageStatus": "present", "location": "C:/Users/sster/.codex/attachments/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1045", "symbol": "관찰된 slot 처리 종료"},
-        {"stage": "observer", "stageStatus": "unknown", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7366", "symbol": "정확히 대응되는 입력/설정/요약으로부터 완료 환각이 발생한 인과경로"}
+        {"stage": "entry", "stageStatus": "present", "location": "ATTACHMENTS_ROOT/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:173", "symbol": "설치 compactor의 모델 요청 기록"},
+        {"stage": "dispatch", "stageStatus": "present", "location": "ATTACHMENTS_ROOT/ead35800-120c-4909-8e06-8dafa366bfeb/붙여넣은 텍스트.txt:1045", "symbol": "관찰된 slot 처리 종료"},
+        {"stage": "observer", "stageStatus": "unknown", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:7366", "symbol": "정확히 대응되는 입력/설정/요약으로부터 완료 환각이 발생한 인과경로"}
       ],
       "unknowns": ["당시 Q5_1/KV/V cache 설정은 첨부에 없다.", "disconnect 원인이 crash/앱/사용자 동작 중 무엇인지 미확인이다.", "공유 budget·compactor 투영·Hybrid·guidance 채택의 당시 기록이 없다."]
     },
@@ -265,7 +265,7 @@
       "behaviorPath": [
         {"stage": "entry", "stageStatus": "present", "location": "scripts/direct_rag_symbol.py:113", "symbol": "project selector의 index resolution 요청"},
         {"stage": "decision", "stageStatus": "present", "location": "scripts/direct_rag_index_registry.py:80", "symbol": "project와 manifest version/association 비교"},
-        {"stage": "observer", "stageStatus": "unknown", "location": "C:/Users/sster/.codex/attachments/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:5316", "symbol": "사건 당시 raw symbol indexPath/engineVersion 반환"}
+        {"stage": "observer", "stageStatus": "unknown", "location": "ATTACHMENTS_ROOT/7057ee7f-378e-4ce1-b7fd-64f4e62759fc/붙여넣은 텍스트.txt:5316", "symbol": "사건 당시 raw symbol indexPath/engineVersion 반환"}
       ],
       "unknowns": ["당시 실제 index identity·선택 engine root·patch를 전체 payload로 확인하지 못했다."]
     },
