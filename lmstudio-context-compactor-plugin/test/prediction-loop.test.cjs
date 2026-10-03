@@ -2466,7 +2466,7 @@ test("context budget measures a narrowed registered Git catalogue before tools-d
   assert.equal(rescue.nextToolCount, 4);
   assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
   const identity = ctl.debugValues.find(value => value.event === "direct_runtime_identity");
-  assert.equal(identity.runtimeSourceRevision, 120);
+  assert.equal(identity.runtimeSourceRevision, require("../manifest.json").revision);
   assert.match(identity.installedSourceFingerprint, /^[a-f0-9]{64}$/u);
   assert.match(identity.installedDistFingerprint, /^[a-f0-9]{64}$/u);
   assert.match(identity.toolRegistryFingerprint, /^[a-f0-9]{64}$/u);
