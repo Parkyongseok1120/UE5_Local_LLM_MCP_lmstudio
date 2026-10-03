@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 # Local audit logs, reproductions, and temporary test/package fixtures.
 /artifacts/
+/lmstudio-context-compactor-plugin/eval-results/
 *.sqlite
 config/workspace.json
 config/workspace.local.json

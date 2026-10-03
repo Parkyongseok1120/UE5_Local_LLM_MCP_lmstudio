@@ -884,6 +884,8 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
     assert packaged_installer_manifest["version"] == "2.1.24"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
     assert (output / "docs" / "Release_Notes_1_4_0.md").is_file()
+    assert (output / "docs" / "Release_Notes_1_4_0_RC2.md").is_file()
+    assert "docs/Release_Notes_1_4_0_RC2.md" in (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
     assert (output / "UPDATE.bat").read_bytes() == (ROOT / "UPDATE.bat").read_bytes()
     source_launcher = (ROOT / "install.sh").read_bytes()
