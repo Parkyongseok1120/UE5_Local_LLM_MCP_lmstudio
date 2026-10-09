@@ -13,6 +13,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _intel_launcher_bash():
+    if sys.platform != "win32":
+        return shutil.which("bash")
+    # System32/bash.exe is a WSL launcher, not a native shell for this fixture.
+    git = shutil.which("git")
+    if not git:
+        return None
+    bash = Path(git).parent.parent / "bin" / "bash.exe"
+    return str(bash) if bash.is_file() else None
+
+
+INTEL_LAUNCHER_BASH = _intel_launcher_bash()
+
+
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
@@ -331,16 +345,10 @@ def test_combined_install_honors_explicit_unity_config(combined_install):
     assert not separate.exists()
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required for the Intel Mac launcher")
+@pytest.mark.skipif(INTEL_LAUNCHER_BASH is None, reason="Native Bash is required for the Intel Mac launcher")
 def test_intel_unity_dry_run_keeps_mcp_on_editor_host(fixture):
     _, _, project, _ = fixture
-    bash = "bash"
-    if sys.platform == "win32":
-        # System32/bash.exe is a WSL launcher, not the Git Bash used by this fixture.
-        git = Path(shutil.which("git") or "")
-        bash = str(git.parent.parent / "bin" / "bash.exe")
-        assert Path(bash).is_file(), "Git Bash is required for the Windows shell fixture"
-    r = subprocess.run([bash, (ROOT / "install-intel-mac.sh").as_posix(), "--engine", "unity", "--project", project.as_posix(), "--vm-name", "custom-unity-vm", "--model", "custom/model", "--dry-run"], env={**os.environ, "INTEL_MAC_INSTALLER_TEST": "1"}, capture_output=True, text=True)
+    r = subprocess.run([INTEL_LAUNCHER_BASH, (ROOT / "install-intel-mac.sh").as_posix(), "--engine", "unity", "--project", project.as_posix(), "--vm-name", "custom-unity-vm", "--model", "custom/model", "--dry-run"], env={**os.environ, "INTEL_MAC_INSTALLER_TEST": "1"}, capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "custom-unity-vm" in r.stdout and "custom/model" in r.stdout
     assert "local" in r.stdout.lower()
