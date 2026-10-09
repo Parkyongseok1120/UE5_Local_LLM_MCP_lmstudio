@@ -64,7 +64,7 @@ def test_compactor_patches_installed_sdk_after_home_sync_before_activation(tmp_p
     args = SimpleNamespace(lmstudio_home=tmp_path / "custom-home", runtime_npm="npm",
                            dry_run=False, skip_deps=True)
     monkeypatch.setattr(module, "_resolve_lms_cli", lambda _: "lms")
-    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(module, "_run", lambda command, **kw: events.append((command, kw.get("cwd"))))
     def sync(**kw):
         events.append(("sync", kw["lmstudio_home"]))
@@ -110,15 +110,15 @@ def test_installer_profiles_are_manifest_driven() -> None:
         (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
     )
     assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.4.0"
-    assert manifest["version"] == "2.1.24"
+    assert manifest["version"] == "2.1.25"
     assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
     assert manifest["safety"]["contextCompactorSkippedInHeadlessLmLinkMode"] is True
     assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is True
     assert manifest["safety"]["contextCompactionEnabledByDefault"] is True
     assert "contextCompactorEnabledByDefault" not in manifest["safety"]
     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
-    assert node_package["version"] == node_lock["version"] == "0.3.24"
-    assert node_lock["packages"][""]["version"] == "0.3.24"
+    assert node_package["version"] == node_lock["version"] == "0.3.25"
+    assert node_lock["packages"][""]["version"] == "0.3.25"
     assert compactor_lock["version"] == compactor_package["version"]
     assert compactor_lock["packages"][""]["version"] == compactor_package["version"]
     assert isinstance(compactor_manifest["revision"], int) and compactor_manifest["revision"] > 0
@@ -968,7 +968,7 @@ def test_failed_install_rolls_back_chat_activation_and_settings(tmp_path, monkey
         "--lmstudio-home", str(home), "--state-home", str(tmp_path / "state"),
         "--codex-home", str(tmp_path / "codex")])
     monkeypatch.setattr(module, "_resolve_lms_cli", lambda _: "lms")
-    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(module, "_run", lambda *a, **k: None)
     monkeypatch.setattr(module, "_ensure_context_compactor_on_disk", lambda **k: {"ready": True})
     def fail_after_activation(*_):

@@ -334,8 +334,14 @@ def test_combined_install_honors_explicit_unity_config(combined_install):
 @pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required for the Intel Mac launcher")
 def test_intel_unity_dry_run_keeps_mcp_on_editor_host(fixture):
     _, _, project, _ = fixture
-    r = subprocess.run(["bash", str(ROOT / "install-intel-mac.sh"), "--engine", "unity", "--project", str(project), "--vm-name", "custom-unity-vm", "--model", "custom/model", "--dry-run"], env={**os.environ, "INTEL_MAC_INSTALLER_TEST": "1"}, capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
+    bash = "bash"
+    if sys.platform == "win32":
+        # System32/bash.exe is a WSL launcher, not the Git Bash used by this fixture.
+        git = Path(shutil.which("git") or "")
+        bash = str(git.parent.parent / "bin" / "bash.exe")
+        assert Path(bash).is_file(), "Git Bash is required for the Windows shell fixture"
+    r = subprocess.run([bash, (ROOT / "install-intel-mac.sh").as_posix(), "--engine", "unity", "--project", project.as_posix(), "--vm-name", "custom-unity-vm", "--model", "custom/model", "--dry-run"], env={**os.environ, "INTEL_MAC_INSTALLER_TEST": "1"}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
     assert "custom-unity-vm" in r.stdout and "custom/model" in r.stdout
     assert "local" in r.stdout.lower()
 

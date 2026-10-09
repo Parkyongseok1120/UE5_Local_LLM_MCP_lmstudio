@@ -32,8 +32,8 @@ test(`bundle cancellation at ${phase} preserves its publication boundary`, async
   const result = await applyDirectEditBundle({ patches: ["a.txt", "b.txt"].map(name => ({ path: name,
     oldText: "before", newText: "after", expectedHash: sha256Text("before"), expectedOccurrences: 1 })) },
     async name => ({ ok: true, absolutePath: path.join(dir, name), expectedIdentity: {
-      absolutePath: identity(path.join(dir, name)), realPath: identity(fs.realpathSync(path.join(dir, name))),
-      lexicalRoot: identity(dir), allowedRealRoot: identity(fs.realpathSync(dir)) } }),
+      absolutePath: identity(path.join(dir, name)), realPath: canonicalAbsolutePathIdentity(path.join(dir, name)),
+      lexicalRoot: identity(dir), allowedRealRoot: canonicalAbsolutePathIdentity(dir) } }),
     { projectRoot: dir, projectPath: path.join(dir, "Demo.uproject"), runtimeOwner: "direct", stateRoot: path.join(dir, "state"),
       signal: ctrl.signal, transactionHooks: { [phase]: async () => ctrl.abort() } });
   const committed = phase === "afterDiskWrite";

@@ -10,17 +10,17 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/delivery-controller.ts:106",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:106",
           "observation": "같은 classifier가 알려진 정상 종료, 현재 시도의 텍스트, 미해결 도구 의도, 외부 중단을 분리한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:450",
+          "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:450",
           "observation": "현재 결과는 runtime terminalOutcome를 사용하고 과거 trace fallback도 공통 classifier를 호출한다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.codex/audits/harness-structural-repair-20261010/test-verified.log",
+          "location": "<CODEX_HOME>/audits/harness-structural-repair-20261010/test-verified.log",
           "observation": "npm test: 690 tests, 690 pass, 0 fail. Unknown, pending structured request, incomplete raw wrapper, literal examples, setup/provider/cancel/deadline/cleanup 경계와 평가 일치를 검증했다."
         }
       ],
@@ -28,32 +28,32 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:51",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:51",
           "symbol": "createPredictionLoopHandler"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/delivery-controller.ts:106",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:106",
           "symbol": "classifyExecutionOutcome"
         },
         {
           "stage": "mutation",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/delivery-controller.ts:35",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:35",
           "symbol": "DeliveryController.finish caches immutable outcome"
         },
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:1321",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1321",
           "symbol": "execution_outcome emitted after resource cleanup"
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/delivery-controller.ts:106",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:106",
           "observation": "EOS+visible report는 전달 완료만 의미하며 objectiveSatisfied 기본값 null/taskCompleted false를 유지한다."
         }
       ],
@@ -70,17 +70,17 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:1142",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1142",
           "observation": "한 번의 reasoning recovery 실패 뒤 기존 partialReport와 task progress 렌더러를 재사용한다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:5350",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:5350",
           "observation": "두 번의 생성만 허용하고 반환 source declaration과 범위를 부분 보고에 포함, 미완성 추론은 제외한다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.codex/audits/harness-structural-repair-20261010/test-verified.log",
+          "location": "<CODEX_HOME>/audits/harness-structural-repair-20261010/test-verified.log",
           "observation": "Observe only와 외부 취소 뒤 추가 보고/모델 호출 금지, retry input 불가 시 dispatch 없음, 원래 도구 권한과 evidence 보존 회귀 통과."
         }
       ],
@@ -88,38 +88,38 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:51",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:51",
           "symbol": "prediction loop"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:1142",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1142",
           "symbol": "single reasoning retry exhausted"
         },
         {
           "stage": "dispatch",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:237",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:237",
           "symbol": "existing deterministic evidenceBackedPartialReport"
         },
         {
           "stage": "side_effect",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:238",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:238",
           "symbol": "deliver explicit incomplete report"
         },
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:1321",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1321",
           "symbol": "reportDelivered true; reportCompleted/taskCompleted false"
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:236",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:236",
           "observation": "관찰 전용/명시적 취소는 부분 보고 주입 대상이 아니다. 일반 의미적 목표 완료를 자동 판정하지 않는다."
         }
       ],
@@ -136,22 +136,22 @@
       "evidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:32",
+          "location": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:32",
           "observation": "도구명·출력 예약·지침·이미 완료한 요청 fingerprint를 복사 보관하며 카운터는 coordinator가 갱신한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:136",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:136",
           "observation": "ready 또는 pressure와 fit이 확인된 후보만 반환한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-state.ts:35",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:35",
           "observation": "실행 phase와 회복 episode 수명으로 recover/finalize/stop을 결정한다."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.codex/audits/harness-structural-repair-20261010/test-verified.log",
+          "location": "<CODEX_HOME>/audits/harness-structural-repair-20261010/test-verified.log",
           "observation": "기존 recovery re-entry identity, narrowed catalogue exact measurement, read-only retry, no-progress, batch reservation, transaction/evidence lifecycle tests 유지 및 통과."
         }
       ],
@@ -159,32 +159,32 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:136",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:136",
           "symbol": "prepareRoundInput"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-state.ts:35",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:35",
           "symbol": "ExecutionState.resolveInputPressure"
         },
         {
           "stage": "mutation",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:32",
+          "location": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:32",
           "symbol": "RecoveryCoordinator.begin"
         },
         {
           "stage": "dispatch",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:311",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:311",
           "symbol": "dispatch uses the adopted tool scope and reserve"
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:393",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:393",
           "observation": "기존 예산, archive, 입력 측정, 도구 권한과 결과 transaction 구현을 재사용한다."
         }
       ],
