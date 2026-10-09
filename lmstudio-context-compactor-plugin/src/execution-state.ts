@@ -1,6 +1,8 @@
 import { ChatMessage, type Chat } from "@lmstudio/sdk";
 import type { FinalizationTrigger } from "./execution-contracts";
 import { isCompletedPredictionReason, type CapturedRound } from "./round-loop";
+import { renderInterruptedCalls } from "./interrupted-calls.js";
+import { RecoveryCoordinator, type RecoveryPlan } from "./recovery-coordinator";
 
 export type ExecutionPhase = "RESEARCH" | "READ_RECOVERY" | "TOOL_REPLAN"
   | "REASONING_RECOVERY" | "FINAL_DELIVERY" | "OUTPUT_RECOVERY" | "TERMINATED";
@@ -14,6 +16,7 @@ export const ALLOWED_TRANSITIONS: Readonly<Record<ExecutionPhase, readonly Execu
   TERMINATED: [],
 };
 export class ExecutionState {
+  readonly recovery = new RecoveryCoordinator();
   private current: ExecutionPhase = "RESEARCH";
   private trigger: FinalizationTrigger | null = null;
   private reasoningAttempts = 0;
@@ -27,6 +30,12 @@ from: ExecutionPhase; to: ExecutionPhase; reason: string;
   get replanning() { return this.current === "TOOL_REPLAN"; }
   get reasoningRecovery() { return this.current === "REASONING_RECOVERY"; }
   get reasoningRecoveryAttempts() { return this.reasoningAttempts; }
+  get canStartReadRecovery() { return !this.reasoningRecovery && !this.finalizing
+    && this.current !== "TERMINATED" && !this.recovery.episodeStarted; }
+  resolveInputPressure(recoveryCandidateFits: boolean): "recover" | "finalize" | "stop" {
+    if (this.reasoningRecovery || this.finalizing || this.current === "TERMINATED") return "stop";
+    return this.canStartReadRecovery && recoveryCandidateFits ? "recover" : "finalize";
+  }
   get finalizationTrigger() { return this.trigger; }
   transition(to: ExecutionPhase, reason: string) {
     if (!reason.trim() || !ALLOWED_TRANSITIONS[this.current].includes(to)) {
@@ -46,12 +55,18 @@ from: this.current, to, reason,
     this.transition(trigger === "output_recovery" ? "OUTPUT_RECOVERY" : "FINAL_DELIVERY", trigger);
     this.trigger = trigger;
   }
-  startRecovery(reason: string) { this.transition("READ_RECOVERY", reason); this.trigger = null; }
+  startRecovery(reason: string, plan?: Omit<RecoveryPlan, "reason">) {
+    this.transition("READ_RECOVERY", reason); this.trigger = null;
+    if (plan) this.recovery.begin({ ...plan, reason });
+  }
   startReasoningRecovery() { this.transition("REASONING_RECOVERY", "reasoning_output_limit"); }
   finishReasoningRecovery() {
     if (this.reasoningRecovery) this.transition("RESEARCH", "reasoning_retry_tools_returned");
   }
-  startReplan() { this.transition("TOOL_REPLAN", "fresh_structured_planning"); this.trigger = null; }
+  startReplan(plan?: RecoveryPlan) {
+    this.transition("TOOL_REPLAN", "fresh_structured_planning"); this.trigger = null;
+    if (plan) this.recovery.begin(plan, true);
+  }
   finishReplan() { if (this.replanning) this.transition("READ_RECOVERY", "planning_round_returned"); }
   endRecovery() { if (this.recovering) this.transition("RESEARCH", "recovery_report_returned"); }
   terminate(reason: string) { if (this.current !== "TERMINATED") this.transition("TERMINATED", reason); }
@@ -77,5 +92,20 @@ export class RoundTransaction {
       const durable = this.durable(message);
       if (durable) history.append(durable);
     }
+  }
+  interruptionMessage(runtimeTrace: Iterable<Record<string, unknown>>): ChatMessage | null {
+    const items = [...runtimeTrace].filter(item => item.providerRequestId
+      && !this.returnedIds.has(String(item.providerRequestId)) && item.generationState !== "failed")
+      .map(item => ({
+        callKey: item.callKey, causalModelInputId: item.causalModelInputId,
+        providerRequestId: item.providerRequestId, toolName: item.toolName,
+        provider: item.provider, projectIdentity: item.projectIdentity, operationId: item.operationId,
+        proposedArgumentsFingerprint: item.proposedArgumentsFingerprint,
+        generationState: item.generationState, validationState: item.validationState || "unknown",
+        approvalState: item.approvalState || "unknown", guardAllowed: item.guardAllowed === true,
+        providerDispatch: item.executionState === "not_executed" ? "not_dispatched" : "unknown",
+        resultObservation: "not_observed", effect: item.executionState === "not_executed" ? "not_applied" : "unknown",
+      }));
+    return items.length ? ChatMessage.create("assistant", renderInterruptedCalls(items)) : null;
   }
 }

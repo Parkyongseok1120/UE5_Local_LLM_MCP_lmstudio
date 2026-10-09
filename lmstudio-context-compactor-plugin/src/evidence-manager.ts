@@ -8,6 +8,9 @@ import { telemetryFingerprint } from "./evidence-telemetry";
 import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
 import { emptyReferenceState, ingestReferenceObservations, referenceSnapshot } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
+import { resultSemantics } from "./tool-result-semantics.js";
+import { retainInterruptedCalls, renderInterruptedCalls, resolveInterruptedCalls } from "./interrupted-calls.js";
+import { extractPriorContinuityState } from "./continuity-memory.js";
 const identity = require("./evidence-identity.js") as {
   sourceIdentity(value: Record<string, unknown>): string;
   sourceVersion(value: Record<string, unknown>): string;
@@ -61,11 +64,55 @@ export class EvidenceManager {
     readonly tools: Array<RemoteToolLike>) { }
   ingestReferences(messages: readonly ChatMessage[], scope: ToolScope, executionId: string) {
     ingestReferenceObservations(this.referenceState, messages, this.tools, scope, executionId);
+    if (this.store) this.store.referenceObservations = JSON.parse(JSON.stringify(this.referenceState.observations));
+  }
+  restoreReferences() {
+    const saved = this.store?.referenceObservations;
+    if (!Array.isArray(saved) || saved.length > 16) return;
+    const observations = saved.filter(o => o && typeof o.id === "string" && typeof o.fingerprint === "string"
+      && Number.isSafeInteger(o.batch) && Array.isArray(o.items) && o.items.length <= 16
+      && o.items.every((i: any) => i && typeof i.project === "string" && i.origin?.executionId && i.origin?.toolCallId
+        && ["mcp/unreal-agent", "mcp/unreal-rag", "mcp/unity-tools"].includes(i.origin?.provider)));
+    this.referenceState.observations = observations.map(o => ({ ...o, historical: true }));
+    this.referenceState.batch = Math.max(0, ...observations.map(o => o.batch));
+    this.referenceState.seen = new Set(observations.map(o => o.id));
   }
   referenceSnapshot(history: Chat) { return referenceSnapshot(this.referenceState, history); }
-  seed(history: Chat) { const state = seedRecoveryProgress(history, this.tools); this.fingerprints = state.fingerprints; this.coverage = state.coverage; }
-  observe(messages: Array<ChatMessage>) {
-    return observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools);
+  observeRoundReferences(history: Chat, returned: readonly ChatMessage[], scope: ToolScope, executionId: string,
+    collectReferences = false) {
+    const messages = history.getMessagesArray();
+    const prior = extractPriorContinuityState(messages.map(m => ({ role: m.getRole(), text: m.getText() })));
+    const current = retainInterruptedCalls(messages, prior?.interruptedCalls || []);
+    if (!collectReferences && !current.some((item: any) => !item.resolution)) return;
+    // One ingestion per round. Settlement also works with optional guidance
+    // disabled, using this owner's existing provider/pairing validation.
+    this.ingestReferences(returned, scope, executionId);
+    if (!current.length) return;
+    const resolved = resolveInterruptedCalls(current, this.referenceSnapshot(history).items);
+    if (JSON.stringify(current) !== JSON.stringify(resolved)) history.append("assistant", renderInterruptedCalls(resolved, prior?.interruptedCallRetention));
+  }
+  private readonly observedRounds = new Map<string, RecoveryProgress>();
+  seed(history: Chat) {
+    const state = seedRecoveryProgress(history, this.tools);
+    for (const fp of state.fingerprints) this.fingerprints.add(fp);
+    for (const [key, ranges] of state.coverage)
+      this.coverage.set(key, normalizedCoverageRanges([...(this.coverage.get(key) || []), ...ranges]));
+    this.boundProgress();
+  }
+  private boundProgress() {
+    for (const collection of [this.fingerprints, this.coverage, this.currentCoverage])
+      while (collection.size > 2048) collection.delete(collection.keys().next().value!);
+  }
+  observe(messages: Array<ChatMessage>, roundId?: string) {
+    if (roundId && this.observedRounds.has(roundId)) return this.observedRounds.get(roundId)!;
+    const progress = observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools);
+    Object.freeze(progress);
+    this.boundProgress();
+    if (roundId) {
+      this.observedRounds.set(roundId, progress);
+      while (this.observedRounds.size > 8) this.observedRounds.delete(this.observedRounds.keys().next().value!);
+    }
+    return progress;
   }
   project(history: Chat, metadata: Record<string, unknown>, maxChars: number) {
     return this.store?.project(history, request => {
@@ -85,8 +132,10 @@ export class EvidenceManager {
       for (const [ri, result] of message.getToolCallResults().entries()) {
         const request = pairs.matches.get(`${mi}:${ri}`);
         const tools = this.tools.filter(t => t.name === request?.name);
-        if (!request?.id || tools.length !== 1 || tools[0].pluginIdentifier !== "mcp/unreal-agent"
-          || !["write_file", "replace_in_file", "apply_edit_bundle", "read_file", "read_file_range", "read_symbol"].includes(request.name)) continue;
+        if (!request?.id || tools.length !== 1 || !(tools[0].pluginIdentifier === "mcp/unreal-agent"
+          && ["write_file", "replace_in_file", "apply_edit_bundle", "read_file", "read_file_range", "read_symbol"].includes(request.name)
+          || tools[0].pluginIdentifier === "mcp/unity-tools"
+          && ["patch_file", "create_file", "structured_data_patch", "read_file"].includes(request.name))) continue;
         if (this.changeOrigins.size >= 2048) { this.changeOrigins.clear(); this.changesDisabled = true; break; }
         const key = changePairKey(request, result.content);
         this.changeOrigins.set(key, this.changeOrigins.has(key)
@@ -131,7 +180,7 @@ export function completedRequestFingerprints(history: Chat): Set<string> {
       const currentRaw = value && !["archived_tool_result_projection", "historical_evidence_index"].includes(
         String(value.kind || ""),
       );
-      const succeeded = currentRaw && !sourceObservationFailed(value)
+      const succeeded = currentRaw && resultSemantics(value).operationStatus === "completed" && !sourceObservationFailed(value)
         && !["error", "failed", "timeout", "timed_out", "canceled", "cancelled"].includes(status);
       if (succeeded) completed.add(telemetryFingerprint({
         name: request.name,
@@ -163,22 +212,9 @@ export function normalizedCoverageRanges(ranges: Array<RecoveryCoverageRange>): 
   return inputAvailability.normalizeRanges(ranges as Array<unknown>);
 }
 
-export function subtractCoverageRanges(
-  candidate: RecoveryCoverageRange,
-  prior: Array<RecoveryCoverageRange>,
-): Array<RecoveryCoverageRange> {
-  let remaining: Array<RecoveryCoverageRange> = [candidate];
-  for (const [coveredStart, coveredEnd] of normalizedCoverageRanges(prior)) {
-    remaining = remaining.flatMap(([start, end]) => {
-      if (coveredEnd < start || coveredStart > end) return [[start, end]];
-      const parts: Array<RecoveryCoverageRange> = [];
-      if (start < coveredStart) parts.push([start, coveredStart - 1]);
-      if (coveredEnd < end) parts.push([coveredEnd + 1, end]);
-      return parts;
-    });
-  }
-  return normalizedCoverageRanges(remaining);
-}
+export const subtractCoverageRanges = require("./evidence-ranges.js").subtractRanges as (
+  candidate: RecoveryCoverageRange, prior: Array<RecoveryCoverageRange>
+) => Array<RecoveryCoverageRange>;
 
 export const coverageSourceIdentity = identity.sourceIdentity;
 export const coverageSourceVersion = identity.sourceVersion;
@@ -250,7 +286,8 @@ export function recoveryCoverageDescriptors(value: Record<string, unknown>): Arr
     return [{
       category: "archive", key: telemetryFingerprint({
         evidenceId, version,
-        representation: "sanitized_archived_tool_envelope", rangeUnit: ranged.rangeUnit
+        representation: value.representation === "sanitized_body"
+          ? `sanitized_body:${String(value.bodyField || "unknown")}` : "sanitized_archived_tool_envelope", rangeUnit: ranged.rangeUnit
       }, true), range: ranged.range, rangeUnit: ranged.rangeUnit,
       sourceVersion: version, sourceIdentity: evidenceId
     }];
@@ -325,7 +362,8 @@ export function recordRecoveryCoverage(
 }
 
 export function sourceObservationFailed(value: Record<string, unknown>): boolean {
-  return value.ok === false || value.resultStatus === false || Boolean(value.errorCode)
+  return ["failed", "outcome_unknown", "canceled", "pending", "accepted"].includes(resultSemantics(value).operationStatus)
+    || value.ok === false || value.resultStatus === false || Boolean(value.errorCode)
     // LM Studio SDK guard denials and implementation exceptions use {error}.
     || (value.error !== undefined && value.error !== null && value.error !== false)
     || [value.resultStatus, value.status].some(status =>
@@ -370,6 +408,7 @@ export function seedRecoveryProgress(history: Chat, tools: Array<RemoteToolLike>
   const fingerprints = new Set<string>();
   const coverage: RecoveryCoverageLedger = new Map();
   for (const result of observationRecords(history.getMessagesArray(), tools)) {
+      if (tools.length && !result.trustedRead) continue;
       fingerprints.add(telemetryFingerprint(result.content));
       const value = result.value;
       if (!value || typeof value !== "object") continue;
@@ -388,6 +427,7 @@ export function seedRecoveryProgress(history: Chat, tools: Array<RemoteToolLike>
 }
 
 export type RecoveryProgress = {
+  observationOnly?: boolean;
   newResultCount: number;
   newResponseFingerprintCount: number;
   newSuccessfulObservationCount: number;
@@ -422,7 +462,10 @@ export function observeRecoveryProgress(
   let duplicateCount = 0;
   let partialOverlapCount = 0;
   const coverage: Array<Record<string, unknown>> = [];
-  for (const result of observationRecords(messages, tools)) {
+  const records = observationRecords(messages, tools);
+  const observationOnly = records.length > 0 && records.every(result => !tools.length || result.trustedRead);
+  for (const result of records) {
+      if (tools.length && !result.trustedRead) continue;
       const value = result.value;
       const fingerprint = telemetryFingerprint(result.content);
       const isNewResult = !seen.has(fingerprint);
@@ -443,6 +486,7 @@ export function observeRecoveryProgress(
           else newArchiveUnits += 1;
         } else if (delta.overlapped) partialOverlapCount += 1;
         coverage.push({
+          key: descriptor.key,
           category: descriptor.category,
           kind: value.kind,
           sourceIdentity: descriptor.sourceIdentity,
@@ -457,6 +501,7 @@ export function observeRecoveryProgress(
   }
   const progressed = newSourceUnits > 0 || newArchiveUnits > 0 || restoredWorkingEvidenceUnits > 0;
   return {
+    observationOnly,
     newResultCount, newResponseFingerprintCount: newResultCount, newSuccessfulObservationCount,
     newSourceUnits, newArchiveUnits, currentInputAvailabilityGain, restoredWorkingEvidenceUnits,
     usefulProgress: progressed, progressed, errorCount, duplicateCount, partialOverlapCount, coverage

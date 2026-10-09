@@ -1,0 +1,253 @@
+{
+  "mode": "codegen",
+  "claims": [
+    {
+      "claim": "종료 전달 판정을 DeliveryController의 공통 계약으로 통합하여 일반 경로와 평가의 완료 오판을 수정하고, 초기화·취소·시간 초과·정리 실패도 실행당 한 번 기록한다.",
+      "claimType": "codegen",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/delivery-controller.ts:106",
+          "observation": "같은 classifier가 알려진 정상 종료, 현재 시도의 텍스트, 미해결 도구 의도, 외부 중단을 분리한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:450",
+          "observation": "현재 결과는 runtime terminalOutcome를 사용하고 과거 trace fallback도 공통 classifier를 호출한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.codex/audits/harness-structural-repair-20261010/test-verified.log",
+          "observation": "npm test: 690 tests, 690 pass, 0 fail. Unknown, pending structured request, incomplete raw wrapper, literal examples, setup/provider/cancel/deadline/cleanup 경계와 평가 일치를 검증했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:51",
+          "symbol": "createPredictionLoopHandler"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/delivery-controller.ts:106",
+          "symbol": "classifyExecutionOutcome"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/delivery-controller.ts:35",
+          "symbol": "DeliveryController.finish caches immutable outcome"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:1321",
+          "symbol": "execution_outcome emitted after resource cleanup"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/delivery-controller.ts:106",
+          "observation": "EOS+visible report는 전달 완료만 의미하며 objectiveSatisfied 기본값 null/taskCompleted false를 유지한다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio에서 신규 빌드를 로드한 모델 실행은 수행하지 않았다. 자동 테스트는 원래 모델의 추론 소진 빈도나 감사 내용의 정확성 개선을 증명하지 않는다."
+      ]
+    },
+    {
+      "claim": "추론 재시도 소진·입력 예산 차단 뒤 모델을 더 호출하지 않고 반환된 근거만으로 미완료 부분 보고를 전달한다.",
+      "claimType": "codegen",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:1142",
+          "observation": "한 번의 reasoning recovery 실패 뒤 기존 partialReport와 task progress 렌더러를 재사용한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:5350",
+          "observation": "두 번의 생성만 허용하고 반환 source declaration과 범위를 부분 보고에 포함, 미완성 추론은 제외한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.codex/audits/harness-structural-repair-20261010/test-verified.log",
+          "observation": "Observe only와 외부 취소 뒤 추가 보고/모델 호출 금지, retry input 불가 시 dispatch 없음, 원래 도구 권한과 evidence 보존 회귀 통과."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:51",
+          "symbol": "prediction loop"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:1142",
+          "symbol": "single reasoning retry exhausted"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:237",
+          "symbol": "existing deterministic evidenceBackedPartialReport"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:238",
+          "symbol": "deliver explicit incomplete report"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:1321",
+          "symbol": "reportDelivered true; reportCompleted/taskCompleted false"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:236",
+          "observation": "관찰 전용/명시적 취소는 부분 보고 주입 대상이 아니다. 일반 의미적 목표 완료를 자동 판정하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델이 다음 유용한 행동을 선택하는 능력이나 프로젝트 API 관련 환각은 별도 실모델/근거 검증이 필요하다."
+      ]
+    },
+    {
+      "claim": "분산된 복구 계획과 횟수를 기존 실행/복구 소유자로 모으고 입력 준비는 측정 후보, 실행 상태는 다음 phase 결정을 맡게 한다.",
+      "claimType": "codegen",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:32",
+          "observation": "도구명·출력 예약·지침·이미 완료한 요청 fingerprint를 복사 보관하며 카운터는 coordinator가 갱신한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:136",
+          "observation": "ready 또는 pressure와 fit이 확인된 후보만 반환한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-state.ts:35",
+          "observation": "실행 phase와 회복 episode 수명으로 recover/finalize/stop을 결정한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.codex/audits/harness-structural-repair-20261010/test-verified.log",
+          "observation": "기존 recovery re-entry identity, narrowed catalogue exact measurement, read-only retry, no-progress, batch reservation, transaction/evidence lifecycle tests 유지 및 통과."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/round-input.ts:136",
+          "symbol": "prepareRoundInput"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/execution-state.ts:35",
+          "symbol": "ExecutionState.resolveInputPressure"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:32",
+          "symbol": "RecoveryCoordinator.begin"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/prediction-loop.ts:311",
+          "symbol": "dispatch uses the adopted tool scope and reserve"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Local_LLM_MCP_lmstudio/lmstudio-context-compactor-plugin/src/context-manager.ts:393",
+          "observation": "기존 예산, archive, 입력 측정, 도구 권한과 결과 transaction 구현을 재사용한다."
+        }
+      ],
+      "unknowns": [
+        "의미적 감사 진행과 모델 주장 자체의 정답 여부를 검증하는 새 범용 판정기는 만들지 않았다."
+      ]
+    }
+  ],
+  "existing": [
+    "ExecutionState",
+    "RecoveryCoordinator",
+    "DeliveryController",
+    "ContextManager/BudgetBroker",
+    "EvidenceManager/WorkingContext",
+    "RoundTransaction/ToolCapabilityRegistry"
+  ],
+  "proposed": [
+    "이번 구현: common execution outcome, owned recovery plan, measured input candidate, deterministic incomplete delivery"
+  ],
+  "doNotDuplicate": [
+    "BudgetBroker/정확한 template 측정",
+    "EvidenceArchive/반환 근거 보존",
+    "도구 권한·scope·승인",
+    "기존 task progress/부분 보고 렌더러"
+  ],
+  "invariants": [
+    "debug 정책이 활성화된 실행은 setup부터cleanup까지 terminal event를 정확히 한 번 남긴다.",
+    "unknown/미실행 도구 의도/이전 진행문을 완료 보고로 올리지 않는다.",
+    "취소 후 새 모델/도구/부분보고 주입 없음, reasoning retry는 실행당 한 번.",
+    "원래 오류를 cleanup 오류로 바꾸지 않고 획득한 자원을 각각 해제한다.",
+    "복구 후보의 측정된 도구 목록과 output reserve를 함께 채택한다.",
+    "반환 근거·최신 요청·권한·정확한 입력 측정과 기존 저장 형식 유지."
+  ],
+  "impactedSurfaces": [
+    "src/execution-contracts.ts",
+    "src/execution-state.ts",
+    "src/recovery-coordinator.ts",
+    "src/delivery-controller.ts",
+    "src/raw-tool-intent.ts",
+    "src/prediction-loop.ts",
+    "src/round-input.ts",
+    "scripts/eval-audit-pressure.cjs",
+    "test/execution-outcome.test.cjs",
+    "test/prediction-loop.test.cjs",
+    "test/refactor-policies.test.cjs",
+    "README.md",
+    "generated-runtime-identity.ts"
+  ],
+  "validationPlan": [
+    "완료: npm test (build 포함) 690/690",
+    "완료: npm run identity:check 및 source layout status",
+    "완료: 독립 검토자가 22개 outcome + 11개 좁은 통합/수명 테스트 확인",
+    "미실행: 설치·Force Restart·실제 모델 비교 재실행. 따라서 TestVerified로 제한.",
+    "복구: 이번 턴 이전 src/scripts/test snapshot과 implementation.patch를 감사 디렉터리에 보존. 저장 데이터 migration 없음; 기존 사용자 변경을 되돌리지 않고 이번 수정만 비교 가능."
+  ],
+  "review": {
+    "independentReviewer": "harness_cause_review",
+    "verifiedTests": 33,
+    "unresolvedNewBlockers": 0
+  },
+  "runtimeVerification": {
+    "installed": false,
+    "realModelRun": false,
+    "gameProjectModified": false
+  }
+}

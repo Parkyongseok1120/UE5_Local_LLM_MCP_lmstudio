@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const { readStableTextFile } = require("../lmstudio-unreal-agent-mcp/src/direct-file-snapshot");
 const { withPathLock } = require("../lmstudio-unreal-agent-mcp/src/write-locks");
 const { atomicWriteText, uniqueTempPath } = require("../lmstudio-unreal-agent-mcp/src/atomic-io");
+const { committedChange } = require("../lmstudio-unreal-agent-mcp/src/direct-change-evidence");
 
 function fail(code, message) { throw Object.assign(new Error(message), { code, status: "not_applied" }); }
 function hash(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
@@ -86,10 +87,13 @@ class Files {
     }
     return bounded(makePage(Math.min(1, selected.length)), budget);
   }
-  async mutate(args, transform, create = false) {
+  async mutate(args, transform, create = false, { signal } = {}) {
+    const checkCanceled = () => { if (signal?.aborted) fail("request_cancelled", "Request ended before file publication"); };
+    checkCanceled();
     if (!this.allowWrite) fail("edit_disabled", "Edit requires ALLOW_WRITE=1 in the host configuration");
     const target = this.policy.resolve(args.path, true);
     const result = await withPathLock(target, "unity_file_edit", async () => {
+      checkCanceled();
       this.policy.resolve(args.path, true);
       let before;
       if (create) {
@@ -100,12 +104,14 @@ class Files {
         this.verify(args.receipt, args.path, before.hash);
       }
       const content = await transform(before?.content ?? "");
+      checkCanceled();
       if (typeof content !== "string" || Buffer.byteLength(content) > this.maxBytes) fail("file_budget_exceeded", "Output exceeds the file limit");
       this.policy.resolve(args.path, true);
       if (before) {
         const current = await this.snapshot(args.path);
         this.verify(args.receipt, args.path, current.hash);
       }
+      checkCanceled();
       let applied = false;
       try {
         if (create) {
@@ -113,25 +119,28 @@ class Files {
           const temporary = uniqueTempPath(target);
           const fd = fs.openSync(temporary, "wx", 0o600);
           try { fs.writeFileSync(fd, content); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-          try { this.policy.resolve(args.path, true); fs.linkSync(temporary, target); applied = true; }
+          try { this.policy.resolve(args.path, true); checkCanceled(); fs.linkSync(temporary, target); applied = true; }
           finally { fs.unlinkSync(temporary); }
         } else {
+          checkCanceled();
           atomicWriteText(target, content);
           applied = true;
         }
         const after = await this.snapshot(args.path);
+        const verified = after.hash === hash(Buffer.from(content));
         return { status: "applied", operation: create ? "created" : "modified",
           changed: before?.hash !== after.hash, saved: true, receipt: after.receipt,
           path: args.path, hash: after.hash, ...(before ? { previousHash: before.hash } : {}),
           import: "not_requested", compilation: "unknown",
-          verification: after.hash === hash(Buffer.from(content)) ? "bytes_match" : "changed_after_write",
+          verification: verified ? "bytes_match" : "changed_after_write",
+          ...(verified ? { changeEvidence: committedChange(before?.content ?? "", after.content, before?.hash, after.hash) } : {}),
           observedAt: new Date().toISOString() };
       } catch (error) { error.status = applied ? "partially_applied" : "not_applied"; throw error; }
     }, { stateRoot: this.policy.stateRoot });
     if (result.locked) fail("write_locked", "Another cooperating process is editing this file");
     return result.result;
   }
-  patch(args) {
+  patch(args, options = {}) {
     return this.mutate(args, text => {
       let result = text;
       for (const edit of args.edits) {
@@ -140,7 +149,7 @@ class Files {
         result = result.slice(0, index) + edit.newText + result.slice(index + edit.oldText.length);
       }
       return result;
-    });
+    }, false, options);
   }
   list(args) {
     const relative = discoveryPath(args.path);

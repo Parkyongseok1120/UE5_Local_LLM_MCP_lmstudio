@@ -504,6 +504,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/direct-file-snapshot.js",
     "lmstudio-unreal-agent-mcp/src/direct-project-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+    "lmstudio-unreal-agent-mcp/src/direct-symbol-extraction.js",
     "lmstudio-unreal-agent-mcp/src/direct-log-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-limits.js",
@@ -553,6 +554,32 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/write-locks.js",
     "lmstudio-unreal-agent-mcp/src/write-lock-reclaim-bridge.py",
     "lmstudio-context-compactor-plugin/src/index.ts",
+    "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+    "lmstudio-context-compactor-plugin/src/checkpoint-budget.js",
+    "lmstudio-context-compactor-plugin/src/context-manager.ts",
+    "lmstudio-context-compactor-plugin/src/context-ports.ts",
+    "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-identity.js",
+    "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-ranges.js",
+    "lmstudio-context-compactor-plugin/src/evidence-read-contract.js",
+    "lmstudio-context-compactor-plugin/src/semantic-handoff-policy.js",
+    "lmstudio-context-compactor-plugin/scripts/run-tests.cjs",
+    "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts",
+    "lmstudio-context-compactor-plugin/src/execution-config.ts",
+    "lmstudio-context-compactor-plugin/src/execution-contracts.ts",
+    "lmstudio-context-compactor-plugin/src/execution-instructions.ts",
+    "lmstudio-context-compactor-plugin/src/execution-state.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-ui.ts",
+    "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts",
+    "lmstudio-context-compactor-plugin/src/reasoning-recovery.ts",
+    "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+    "lmstudio-context-compactor-plugin/src/round-input.ts",
+    "lmstudio-context-compactor-plugin/src/runtime-identity.ts",
+    "lmstudio-context-compactor-plugin/src/semantic-handoff.ts",
+    "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+    "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+    "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs",
     "lmstudio-context-compactor-plugin/src/design-guidance.ts",
     "lmstudio-context-compactor-plugin/src/guidance-topic-selection.ts",
     "lmstudio-context-compactor-plugin/test/auto-guidance.test.cjs",
@@ -563,6 +590,11 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/test/reference-context.test.cjs",
     "lmstudio-context-compactor-plugin/src/generated-design-guidance.ts",
     "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs",
+    "lmstudio-context-compactor-plugin/scripts/build-runtime-identity.cjs",
+    "lmstudio-context-compactor-plugin/src/generated-runtime-identity.ts",
+    "lmstudio-context-compactor-plugin/src/config-defaults.ts",
+    "lmstudio-context-compactor-plugin/src/tool-result-semantics.js",
+    "lmstudio-context-compactor-plugin/src/interrupted-calls.js",
     "lmstudio-context-compactor-plugin/test/design-guidance.test.cjs",
     "docs/model-guidance/catalog.json",
     "docs/model-guidance/sources.md",
@@ -926,7 +958,7 @@ def _write_launchers(staging: Path) -> None:
         '## 설치 환경과 실행 방법\n'
         '\n'
         '- Windows는 `INSTALL.bat`, Ubuntu와 Apple Silicon macOS는 `./install.sh`를 실행합니다.\n'
-        '- Windows에서 설치된 Unity MCP, Unreal Agent/RAG, 대화 압축 플러그인을 함께 갱신할 때는 `UPDATE.bat`를 실행합니다. 설치되지 않은 엔진 구성은 건너뜁니다. MCP 설정이 기본 위치에 없으면 `UPDATE.bat "기존 mcp.json 경로"`를 사용합니다. 기존 프로젝트·엔진·인덱스·권한 설정은 유지하며, 완료 후 LM Studio를 재시작합니다.\n'
+        '- Windows에서 설치된 Unity MCP, Unreal Agent/RAG, 대화 압축 플러그인을 함께 갱신할 때는 `UPDATE.bat`를 실행합니다. 설치되지 않은 엔진 구성은 건너뜁니다. MCP 설정이 기본 위치에 없으면 `UPDATE.bat "기존 mcp.json 경로"`를 사용하며, 그 파일의 폴더를 LM Studio 홈으로 사용합니다. 기존 프로젝트·엔진·인덱스·권한 설정은 유지하며, 완료 후 LM Studio를 재시작합니다.\n'
         '- Python 3.10 이상이 없으면 SHA-256으로 확인한 uv를 자동으로 내려받고 선택한 사용자 상태 폴더에 Python 3.12를 설치합니다. `python3 install.py`를 직접 실행하려면 시스템 Python 3.10 이상이 필요합니다.\n'
         '- 언리얼·채팅 압축 구성에 필요한 Node.js 20 이상과 npm도 내려받습니다. 실행 파일 묶음은 SHA-256 확인값을 고정하고 CPU 종류에 맞춰 설치합니다.\n'
         '- SAFE, STANDARD, FULL, CUSTOM 중 필요한 범위를 선택합니다. 수정 기능과 별도 위험 확인을 모두 켜지 않으면 읽기 전용입니다. 명령행 옵션은 `python3 install.py --help`로 확인합니다.\n'

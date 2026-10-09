@@ -717,7 +717,7 @@ def _owner_region(masked: str, owner: str) -> tuple[int, int, int] | None:
 def _without_reflection_annotations(prefix: str) -> str:
     # Remove only known UE annotation invocations, with balanced parentheses.
     # This does not evaluate macros or assert their compiled expansion.
-    for match in reversed(list(re.finditer(r"\b(?:UFUNCTION|UPROPERTY|UMETA)\s*\(", prefix))):
+    for match in reversed(list(re.finditer(r"\b(?:UFUNCTION|UPROPERTY|UMETA|GENERATED_BODY|GENERATED_UCLASS_BODY)\s*\(", prefix))):
         depth, end = 1, match.end()
         while end < len(prefix) and depth:
             depth += (prefix[end] == "(") - (prefix[end] == ")")
@@ -735,6 +735,7 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
     start, opening, end = region
     enum_owner = bool(re.match(r"enum\b", masked[start:opening]))
     positions = [start] if not owner else []
+    kinds = {start: "type"} if not owner else {}
     if owner:
         depth = 0
         wanted = re.compile(r"\b" + re.escape(symbol) + r"\b")
@@ -752,14 +753,52 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
             tail = masked[match.end():match.end() + 2048]
             if (not enum_owner and re.match(r"\s*\(", tail)) or (enum_owner and re.match(r"\s*(?:UMETA\s*\(|=|,|}|$)", tail)):
                 positions.append(match.start())
+                kinds[match.start()] = "enum_value" if enum_owner else "method"
+            elif not enum_owner:
+                type_prefix = re.sub(r"\b(?:public|protected|private)\s*:", " ", declaration_prefix).strip()
+                # A bounded field declaration, not an initializer reference,
+                # nested member, friend, function call or arbitrary macro.
+                field_type = r"(?:(?:static|mutable|const|volatile|constexpr)\s+)*[A-Za-z_]\w*(?:::\w+)*(?:\s*<[^;{}()=]+>)?(?:\s*[*&])*"
+                field_tail = r"\s*(?:\[[^\]{};]*\]\s*)*(?::\s*\d+\s*|=\s*(?:\{[^{};]*\}|[^;{}]*)\s*|\{[^{};]*\}\s*)?;"
+                non_field = re.search(r"\b(?:using|typedef|class|struct|enum|union|friend|return)\b", type_prefix)
+                if not non_field and re.fullmatch(field_type, type_prefix) and re.match(field_tail, tail):
+                    positions.append(match.start())
+                    kinds[match.start()] = "field"
     if not positions:
         return None
     pos = positions[0]
     line = text.count("\n", 0, pos) + 1
     lines = text.splitlines()
-    excerpt = "\n".join(lines[max(0, line - 2):min(len(lines), line + 5)])
+    excerpt_start = max(0, line - 2)
+    # Include a preceding multiline reflection annotation when lexically
+    # adjacent. This bounded window does not prove absence or macro expansion.
+    prefix_start = max(0, line - 25)
+    prefix = "\n".join(lines[prefix_start:line - 1])
+    lexical_prefix = _lexical_source(prefix)
+    annotations = list(re.finditer(r"\b(?:UFUNCTION|UPROPERTY|UMETA)\s*\(", lexical_prefix))
+    if annotations:
+        annotation = annotations[-1]
+        depth, end_annotation = 1, annotation.end()
+        while end_annotation < len(prefix) and depth:
+            depth += (lexical_prefix[end_annotation] == "(") - (lexical_prefix[end_annotation] == ")")
+            end_annotation += 1
+        if depth == 0 and not re.search(r"[;{}]", lexical_prefix[end_annotation:]):
+            excerpt_start = prefix_start + prefix.count("\n", 0, annotation.start())
+    excerpt = "\n".join(lines[excerpt_start:min(len(lines), line + 5)])
     conditional = bool(re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif|define)\b", masked[:end], re.M))
-    return {"line": line, "excerpt": excerpt[:1800], "observedOwner": owner or symbol,
+    access = "public" if re.match(r"(?:struct|enum)\b", masked[start:opening]) else "private"
+    for label in re.finditer(r"\b(public|protected|private)\s*:", masked[opening + 1:pos]):
+        preceding = masked[opening + 1:opening + 1 + label.start()]
+        if preceding.count("{") == preceding.count("}"):
+            access = label.group(1)
+    bases = re.findall(r"\b(?:public|protected|private)\s+(?:virtual\s+)?([A-Za-z_]\w*(?:::\w+)*)", masked[start:opening])[:8]
+    return {"line": line, "excerpt": excerpt[:1800], "excerptStartLine": excerpt_start + 1,
+            "excerptTruncated": len(excerpt) > 1800,
+            "annotationVerification": "bounded_lexical_context; absence_and_expansion_unverified",
+            "observedOwner": owner or symbol,
+            "requestedOwner": owner or symbol, "declarationKind": kinds[pos],
+            "lexicalAccess": access if owner else "not_applicable",
+            "parentCandidates": bases, "inheritanceVerification": "parent_declarations_not_searched",
             "declarationStatus": "candidate_conditional" if conditional else "lexical_declaration",
             "signatureVerification": "lexical_only; overloads_inheritance_macros_and_callability_unverified"}
 

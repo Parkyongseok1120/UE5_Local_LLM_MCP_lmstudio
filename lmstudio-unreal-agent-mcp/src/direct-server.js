@@ -35,7 +35,7 @@ function createDirectRuntime(options = {}) {
     return { root: project ? path.dirname(project) : context.workspaceRoot, engine: "unreal", projectIdentity: project || null };
   } });
   const handlers = Object.freeze({
-    ...Object.fromEntries(workspaceToolDefinitions().map(t => [t.name, args => workspace(t.name, args)])),
+    ...Object.fromEntries(workspaceToolDefinitions().map(t => [t.name, (args, requestContext) => workspace(t.name, args, requestContext)])),
     ...createProjectCapabilities(context),
     ...createReadCapabilities(context),
     ...createLogCapabilities(context),
@@ -49,6 +49,12 @@ function createDirectRuntime(options = {}) {
 
   async function callTool(name, rawArgs = {}, requestContext = {}) {
     const args = cleanArgs(rawArgs);
+    // Only catalogued envelope contracts may affect transport serialization.
+    const publishedBudget = toolsByName.get(name)?.inputSchema?.properties?.byteBudget;
+    const byteContract = publishedBudget?.$comment === "direct-json-text-utf8" ? publishedBudget : undefined;
+    const responseArgs = byteContract && Number.isInteger(args.byteBudget)
+      && args.byteBudget >= byteContract.minimum && args.byteBudget <= byteContract.maximum
+      ? { byteBudget: args.byteBudget } : {};
     const controller = new AbortController();
     const sources = [lifetime.signal, requestContext.signal].filter(Boolean);
     const abort = () => controller.abort();
@@ -60,10 +66,12 @@ function createDirectRuntime(options = {}) {
       const signal = controller.signal;
       if (signal.aborted) return context.directResult(name, failure("REQUEST_CANCELLED", "Request cancelled before dispatch.", {
         details: { cancelled: true, executionState: "not_started" },
-      }));
+      }), responseArgs);
       requestContext = { ...requestContext, signal };
       const handler = toolsByName.has(name) ? handlers[name] : undefined;
       const definition = toolsByName.get(name);
+      if (byteContract && args.byteBudget !== undefined && responseArgs.byteBudget === undefined)
+        return context.directResult(name, failure("INVALID_ARGUMENT", "byteBudget must be an integer from 2048 to 65536."));
       const allowed = new Set(Object.keys(definition?.inputSchema?.properties || {}));
       const unsupported = Object.keys(args).filter((key) => !allowed.has(key));
       if (handler && unsupported.length) {
@@ -71,14 +79,14 @@ function createDirectRuntime(options = {}) {
           "INVALID_ARGUMENT",
           `${name} received unsupported argument(s): ${unsupported.join(", ")}`,
           { retryAllowed: true, retryMode: "different_arguments" },
-        ));
+        ), responseArgs);
       }
       const payload = handler
         ? await handler(args, requestContext)
         : failure("UNKNOWN_TOOL", `Unknown tool: ${name}`);
-      return context.directResult(name, payload);
+      return context.directResult(name, payload, responseArgs);
     } catch (error) {
-      return context.directResult(name, errorFromException(error));
+      return context.directResult(name, errorFromException(error), responseArgs);
     } finally {
       for (const source of sources) source.removeEventListener("abort", abort);
     }

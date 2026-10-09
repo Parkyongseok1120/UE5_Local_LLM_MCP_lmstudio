@@ -26,6 +26,112 @@ function fixture(scope = unreal) {
 const read = (path, text, value = {}) => u({ path, text, hash: "a".repeat(64), startLine: 1,
   endLine: text.split("\n").length, totalLines: text.split("\n").length, status: "observed", truncated: false, ...value });
 
+test('version provenance and conflicts survive display omission and disconnect',()=>{
+  const f=fixture(unity);
+  f.ingest('unity_status',u({connection:'connected',editorSessionId:'s',domainGeneration:1,editorVersion:'6000.0.44f1'}));
+  f.ingest('read_file',read('ProjectSettings/ProjectVersion.txt','m_EditorVersion: 6000.1.0f1'));
+  for(let i=0;i<7;i++) f.ingest('read_file',read(`Assets/F${i}.cs`,'class F {}'));
+  let s=f.snapshot(); assert.equal(s.applicability.versionConflict,true); assert.equal(s.applicability.engineVersion,undefined);
+  assert.equal(s.applicability.versions.runtime,'6000.0.44f1');
+  assert.equal(s.applicability.versions.saved_project,'6000.1.0f1');
+  f.ingest('unity_status',u({connection:'disconnected'})); s=f.snapshot();
+  assert.equal(s.applicability.versions.runtime,undefined);
+  assert.equal(s.applicability.versions.saved_project,'6000.1.0f1'); assert.equal(s.applicability.engineVersion,undefined);
+});
+
+test('descriptor observation invalidates engine applicability and same-batch order cannot restore it',()=>{
+  const local={ok:true,canonicalProject:unreal.projectIdentity,sourceMode:'engine_local',
+    observedEngineIdentity:{status:'observed',engineRoot:'C:/UE',version:'5.7.4',hashScope:'file',sha256:'b'.repeat(64)}};
+  const descriptor={ok:true,canonicalProject:unreal.projectIdentity,path:'project://Game.uproject',
+    content:'{"EngineAssociation":"5.8"}',sha256:'c'.repeat(64),startLine:1,endLine:1,totalLines:1};
+  const f=fixture(); f.ingest('unreal_symbol_lookup',local,{},'local','mcp/unreal-rag');
+  f.ingest('read_file',descriptor); assert.equal(f.snapshot().applicability.engineVersion,undefined);
+  assert.ok(f.snapshot().items.some(i=>i.data.observedEngineVersion==='5.7.4' && i.data.currentApplicability));
+  f.ingest('unreal_symbol_lookup',local,{},'new','mcp/unreal-rag'); assert.equal(f.snapshot().applicability.engineVersion,'5.7.4');
+  for(const reverse of [false,true]) {
+    const state=emptyReferenceState(), a=pair('a','unreal_symbol_lookup',local),b=pair('b','read_file',descriptor);
+    const messages=[a[0],b[0],...(reverse?[b[1],a[1]]:[a[1],b[1]])];
+    ingestReferenceObservations(state,messages,[{name:'unreal_symbol_lookup',pluginIdentifier:'mcp/unreal-rag'},
+      {name:'read_file',pluginIdentifier:'mcp/unreal-agent'}],unreal,'e');
+    assert.equal(referenceSnapshot(state,history(messages)).applicability.engineVersion,undefined);
+  }
+});
+
+test('reference project observations never change execution scope and preserve shared/default distinction',()=>{
+  const {referenceGuidanceScope}=require('../dist/reference-context');
+  const scope={engine:'unreal',source:'available_tools',projectIdentity:''}; const saved=JSON.stringify(scope),f=fixture(scope);
+  f.ingest('get_active_project',{ok:true,activeProject:unreal.projectIdentity});
+  assert.equal(referenceGuidanceScope(scope,f.snapshot()).engine,'unknown');
+  f.ingest('unreal_get_active_project',{ok:true,activeProject:unreal.projectIdentity,projectBindingStatus:'bound'}, {},'bound','mcp/unreal-rag');
+  assert.equal(referenceGuidanceScope(scope,f.snapshot()).engine,'unreal');
+  f.ingest('unreal_get_active_project',{ok:true,activeProject:unreal.projectIdentity,projectBindingStatus:'stale'}, {},'stale','mcp/unreal-rag');
+  assert.equal(referenceGuidanceScope(scope,f.snapshot()).engine,'unknown');
+  f.ingest('build_unreal_project',build(),{project:unreal.projectIdentity});
+  f.ingest('unreal_get_active_project',{ok:true,activeProject:'C:/Other/B.uproject',projectBindingStatus:'bound'}, {},'other','mcp/unreal-rag');
+  assert.equal(f.snapshot().projectObservation.project,unreal.projectIdentity);
+  assert.equal(JSON.stringify(scope),saved);
+  const fixed=fixture(); fixed.ingest('build_unreal_project',build(),{project:'C:/Other/B.uproject'});
+  assert.equal(fixed.snapshot().items.length,1,'post-binding actual target overrides pre-binding model args');
+});
+
+test('new implicit default selection expires old default-target applicability and diagnostics',()=>{
+  const scope={engine:'unreal',source:'available_tools',projectIdentity:''},f=fixture(scope);
+  f.ingest('build_unreal_project',build());
+  f.ingest('unreal_get_active_project',{ok:true,activeProject:null,projectBindingStatus:'unbound'},{},'clear','mcp/unreal-rag');
+  assert.equal(f.snapshot().projectObservation.usable,false);
+  assert.equal(f.snapshot().autoSignals.length,0);
+  f.ingest('build_unreal_project',build({project:{projectPath:'C:/Other/B.uproject'},diagnostics:[],ok:true}));
+  assert.equal(f.snapshot().projectObservation.project,'C:/Other/B.uproject');
+  assert.equal(f.snapshot().autoSignals.some(s=>s.signal==='diagnostic_present'),false);
+});
+
+test('macro observations are advisory signals only while the actual body is available',()=>{
+  const f=fixture(unity);f.ingest('read_file',read('Assets/A.cs','[SerializeField] int x;'));
+  assert.ok(f.snapshot().autoSignals.some(s=>s.signal==='api_contract_observed'));
+  assert.equal(f.snapshot([]).autoSignals.some(s=>s.signal==='api_contract_observed'),false);
+  assert.equal(f.snapshot().items[0].data.macroMissing,undefined);
+});
+
+test('package manifest and lock observations in the same batch never choose an order',()=>{
+  const lock=JSON.stringify({dependencies:{'com.unity.netcode.gameobjects':{version:'2.7.0'}}});
+  for(const reverse of [false,true]) {
+    const state=emptyReferenceState(),a=pair('lock','read_file',read('Packages/packages-lock.json',lock)),
+      b=pair('manifest','read_file',read('Packages/manifest.json','{}'));
+    const messages=[a[0],b[0],...(reverse?[b[1],a[1]]:[a[1],b[1]])];
+    ingestReferenceObservations(state,messages,[{name:'read_file',pluginIdentifier:'mcp/unity-tools'}],unity,'e');
+    assert.deepEqual(referenceSnapshot(state,history(messages)).applicability.packages,{});
+  }
+});
+
+test('only the project package manifest invalidates resolved package applicability', () => {
+  const f = fixture(unity);
+  const lock = JSON.stringify({ dependencies: { 'com.unity.netcode.gameobjects': { version: '2.7.0' } } });
+  f.ingest('read_file', read('Packages/packages-lock.json', lock));
+  f.ingest('read_file', read('Assets/Templates/Packages/manifest.json', '{}'));
+  assert.equal(f.snapshot().applicability.packages['com.unity.netcode.gameobjects'], '2.7.0');
+
+  f.ingest('read_file', read('Packages/manifest.json', '{}'));
+  assert.deepEqual(f.snapshot().applicability.packages, {});
+});
+
+test('target mismatch pauses only reference applicability until a later matching result',()=>{
+  const {referenceGuidanceScope}=require('../dist/reference-context');const f=fixture();
+  f.ingest('build_unreal_project',build({project:{projectPath:'C:/Other/B.uproject'}}));
+  assert.equal(referenceGuidanceScope(unreal,f.snapshot()).reason,'returned_target_mismatch');
+  assert.equal(unreal.projectIdentity,'C:/Projects/Game/Game.uproject');
+  f.ingest('build_unreal_project',build());
+  assert.equal(referenceGuidanceScope(unreal,f.snapshot()).engine,'unreal');
+});
+
+test('reviewed RAG read authority stays in parity with the provider catalogue',()=>{
+  const fs=require('node:fs'),path=require('node:path');
+  const contract=fs.readFileSync(path.join(__dirname,'../../scripts/direct_rag_contract.py'),'utf8');
+  const names=[...contract.match(/DIRECT_RAG_TOOL_NAMES:.*?= \(([\s\S]*?)\)/)[1].matchAll(/"(unreal_[^"]+)"/g)].map(m=>m[1]);
+  const mutations=[...contract.match(/DIRECT_RAG_MUTATING_TOOL_NAMES = frozenset\(\{([^}]+)\}/)[1].matchAll(/"([^"]+)"/g)].map(m=>m[1]);
+  const {UNREAL_RAG_OBSERVATION_TOOLS}=require('../dist/tool-capability-registry');
+  assert.deepEqual([...UNREAL_RAG_OBSERVATION_TOOLS].sort(),names.filter(n=>!mutations.includes(n)).sort());
+});
+
 test("Unreal applicability uses observed local identity; unrelated Unity files and later failed binding cannot assert it", () => {
   const f = fixture();
   const local = { ok: true, canonicalProject: unreal.projectIdentity, sourceMode: "engine_local",
@@ -141,10 +247,10 @@ test("unmatched, duplicate, replayed and malformed results do not invent relatio
   assert.equal(f.snapshot().items.length, 0);
 });
 
-test("archive projections and repeat receipts are not fresh observations", () => {
+test("archive projections and explicit repeated results are not fresh observations", () => {
   const f = fixture();
   for (const extra of [{ kind: "archived_tool_result_projection" }, { kind: "historical_evidence_range" },
-    { kind: "no_new_information" }, { repeatReceipt: "receipt" }]) f.ingest("build_unreal_project", build(extra));
+    { kind: "no_new_information" }, { status: "no_new_information", repeatReceipt: "receipt" }]) f.ingest("build_unreal_project", build(extra));
   assert.equal(f.snapshot().items.length, 0);
 });
 

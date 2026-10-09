@@ -1,0 +1,166 @@
+{
+  "invariants": [
+    "Preserve source identity, version, query and units; historical evidence never grants fresh-read or mutation authority.",
+    "Commit each returned pair once; preserve unknown outcomes and existing off/warn/pause choices.",
+    "Exactly measured model input and one batch reservation ledger remain authoritative."
+  ],
+  "existing": [
+    "EvidenceManager owns once-per-round observations in research and recovery.",
+    "Checkpoint and input availability consume unit-bearing range algebra from evidence-ranges.js."
+  ],
+  "doNotDuplicate": [
+    "No second source identity calculator, coverage ledger, progress planner, or archive store.",
+    "Do not call recovery observation separately after normal research has already ingested that round.",
+    "Use ExecutionState and existing delivery flow for policy actions."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+    "lmstudio-context-compactor-plugin/src/input-availability.js",
+    "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+    "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
+    "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+    "lmstudio-context-compactor-plugin/src/execution-contracts.ts",
+    "lmstudio-context-compactor-plugin/src/context-ports.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts",
+    "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+    "CommonJS range module extracted from existing operations",
+    "Compactor continuity, progress, input and recovery tests"
+  ],
+  "validationPlan": [
+    "Byte/line partial/full/empty/version fixtures survive checkpoint and restore without invented completeness.",
+    "A/B and A/B/C loops recognized; advancing pages, changed versions and necessary fresh reads remain allowed.",
+    "One ingestion per round in research/recovery; bounded retention eviction becomes unknown.",
+    "Old missing fields decode conservatively; derived legacy fields cannot become competing writers."
+  ],
+  "mode": "codegen",
+  "plan": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+  "implementationStatus": "implemented_automated_verification_passed_live_acceptance_not_met",
+  "buildId": "ef-build-v2-4f16d2122b43602f6f1bbe76cd766a4f82ec6f725130d1c95a12cc3e6c072d3b",
+  "claims": [
+    {
+      "id": "W1",
+      "claim": "체크포인트의 단위별 범위와 호환 line 필드를 공통 범위 계약에서 생성하고 현재 원문 가용성과 구분한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+          "observation": "사용자가 SSOT/SOLID 계획 구현을 승인했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:180",
+          "observation": "체크포인트의 단위별 범위와 호환 line 필드를 공통 범위 계약에서 생성하고 현재 원문 가용성과 구분한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/continuity-repair.test.cjs",
+          "observation": "다른 provider/query/extent/version, 실패 반환, 실제 checkpoint JSON 왕복 및 rawPresence=none을 검증했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:180",
+          "symbol": "기존 소유자에서 요청/관측 수용"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/input-availability.js:219",
+          "symbol": "단일 계약 및 수명 정책 적용"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/continuity-repair.test.cjs",
+          "symbol": "반환 값 및 상태 검증"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/input-availability.js:219",
+          "observation": "기존 권한·최종 입력 측정·설정 계약을 유지한다. 테스트 통과가 실제 모델 품질이나 Editor 실행의 증명은 아니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델에서 재독 절반 감소 및 품질 유지 목표는 미확정이다.",
+        "최종 수정 소스의 설치된 LM Studio 채팅 활성화는 이번 검사로 증명하지 않았다."
+      ]
+    },
+    {
+      "id": "W2",
+      "claim": "일반 조사와 복구가 단일 관측 결과를 소비하고 버전 없는 결과의 내용 변화와 실제 페이지 진척을 읽기 순환으로 오인하지 않는다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+          "observation": "사용자가 SSOT/SOLID 계획 구현을 승인했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:106",
+          "observation": "일반 조사와 복구가 단일 관측 결과를 소비하고 버전 없는 결과의 내용 변화와 실제 페이지 진척을 읽기 순환으로 오인하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "실제 loop off/warn/pause, 새 버전/페이지, 바뀌는 디렉터리 결과 및 once-per-round 계약을 검증했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:106",
+          "symbol": "기존 소유자에서 요청/관측 수용"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:750",
+          "symbol": "단일 계약 및 수명 정책 적용"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "symbol": "반환 값 및 상태 검증"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:750",
+          "observation": "기존 권한·최종 입력 측정·설정 계약을 유지한다. 테스트 통과가 실제 모델 품질이나 Editor 실행의 증명은 아니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델에서 재독 절반 감소 및 품질 유지 목표는 미확정이다.",
+        "최종 수정 소스의 설치된 LM Studio 채팅 활성화는 이번 검사로 증명하지 않았다."
+      ]
+    }
+  ],
+  "verification": "docs/evidence/harness-continuity-verification-20261009.json",
+  "existingAtPlanApproval": [
+    "evidence-identity owns canonical observation identity.",
+    "EvidenceManager owns range observations; input-availability derives final SDK availability.",
+    "continuity-file-observations owns per-file checkpoint facts; current fields are line based.",
+    "ExecutionState owns transitions; existing stagnation detector compares consecutive fingerprints."
+  ],
+  "implemented": [
+    "W1 extracts existing pure range operations for CommonJS and TypeScript consumers and adds versioned optional byte coverage to continuity.",
+    "W2 ingests confirmed results once in both research and recovery and feeds bounded cycle detection with immutable progress facts."
+  ],
+  "proposed": []
+}

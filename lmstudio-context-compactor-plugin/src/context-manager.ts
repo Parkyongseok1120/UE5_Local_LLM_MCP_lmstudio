@@ -12,6 +12,7 @@ import { numeric } from "./execution-config";
 import { type CheckpointResult, type ContextMeasurement, type ContinuityNote, type DirectConfig, type NormalizedMessage } from "./execution-contracts";
 import { visibleAssistantOutput } from "./raw-tool-intent";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
+import { renderTaskProgress } from "./continuity-memory.js";
 
 type MeasurementCost = { measurementCalls: number; measurementMs: number; templateCalls: number;
   tokenCountCalls: number; contextLengthCalls: number; cacheHits: number };
@@ -221,14 +222,15 @@ export function composeModelHistory(
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
+  const taskData = config.observeOnly ? "" : renderTaskProgress(messages);
   const systemIndexes = messages.map((message, index) => message.isSystemPrompt() ? index : -1)
     .filter((index) => index >= 0);
   const systemLayoutIsCompatible = systemIndexes.length === 0
     || (systemIndexes.length === 1 && systemIndexes[0] === 0);
-  if (!enableNoteProtocol && instructions.length === 0 && !referenceData && systemLayoutIsCompatible) {
+  if (!enableNoteProtocol && instructions.length === 0 && !referenceData && !taskData && systemLayoutIsCompatible) {
     return { history, overhead: 0 };
   }
-  const noteText = note ? modelNotes.renderAssistantNote(note) : "";
+  const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
   const instruction = config.reviewProgress ? modelNotes.NOTE_INSTRUCTION.replace(
     "No other keys. refs may contain",
     "The optional reviewClaims array uses [{path, sha256, reviewScope, statement, refs}]; reviewClaims require an observed file hash and tool-call refs and are assistant claims, never verified completion. No other keys. refs may contain") : modelNotes.NOTE_INSTRUCTION;
@@ -236,7 +238,7 @@ export function composeModelHistory(
     && config.maxCheckpointChars >= 2000 + instruction.length;
   const canIncludeNote = canIncludeInstruction
     && config.maxCheckpointChars >= 2000 + instruction.length + noteText.length;
-  const overhead = canIncludeInstruction ? instruction.length + (canIncludeNote ? noteText.length : 0) : 0;
+  const overhead = (canIncludeInstruction ? instruction.length + (canIncludeNote ? noteText.length : 0) : 0) + taskData.length;
   const composed = Chat.empty();
   const combinedSystemText = [
     ...messages.filter((message) => message.isSystemPrompt())
@@ -247,6 +249,7 @@ export function composeModelHistory(
   if (combinedSystemText) composed.append("system", combinedSystemText);
   if (canIncludeNote && noteText) composed.append("assistant", noteText);
   if (referenceData) composed.append("assistant", referenceData);
+  if (taskData) composed.append("assistant", taskData);
   for (const message of messages) {
     if (!message.isSystemPrompt()) composed.append(message);
   }
@@ -390,6 +393,11 @@ type AssembledInput = Awaited<ReturnType<ReturnType<typeof createInputAssembler>
 export class ContextManager {
   constructor(readonly config: DirectConfig, readonly broker: BudgetBroker,
     readonly checkpointOptions: Record<string, unknown> = {}) { }
+  shouldProjectEvidence(measurement: ContextMeasurement, hasReadTools: boolean, minimumReadTokens: number) {
+    if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !measurement.exact) return false;
+    const water = this.broker.watermarks(measurement, 0, hasReadTools, minimumReadTokens);
+    return measurement.remainingTokens < 0 || measurement.inputTokens > water.effectiveHighWaterTokens;
+  }
   /** Add optional material only after the existing evidence window is ready.
    * Admission reuses the exact assembler and shared broker; it never compacts
    * evidence, changes output limits, or creates a second execution gate. */

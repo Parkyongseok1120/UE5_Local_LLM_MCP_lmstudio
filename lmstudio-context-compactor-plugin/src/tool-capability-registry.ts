@@ -25,6 +25,12 @@ const readOperations: Readonly<Record<string, readonly string[]>> = {
   unity_approval: ["status"], unity_operation: ["get"], unity_tests: ["status", "results"],
 };
 export const readOnlyOperationProfiles = new WeakSet<object>();
+// Reviewed against scripts/direct_rag_contract.py; parity is tested locally,
+// never inferred from an arbitrary remote server's readOnlyHint.
+export const UNREAL_RAG_OBSERVATION_TOOLS = new Set([
+  "unreal_get_active_project", "unreal_rag_search", "unreal_symbol_lookup",
+  "unreal_rag_health", "unreal_rag_rebuild_status", "unreal_rag_capabilities",
+]);
 
 export function hasReadCapability(tool: RemoteToolLike): boolean {
   return isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} })
@@ -87,7 +93,7 @@ function hasReadAuthority(
     return false;
   }
   if (plugin === "mcp/unreal-rag") {
-    return ["unreal_symbol_lookup", "unreal_rag_search"].includes(name);
+    return UNREAL_RAG_OBSERVATION_TOOLS.has(name);
   }
   if (plugin === "mcp/unreal-agent") {
     return UNREAL_OBSERVATION_TOOLS.has(name);

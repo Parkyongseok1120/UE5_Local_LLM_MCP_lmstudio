@@ -8,6 +8,7 @@ import {
 } from "@lmstudio/sdk";
 
 type TokenSource = LLM | LLMGeneratorHandle;
+export type RoundToolGuard = (...args: [...Parameters<NonNullable<LLMActionOpts["guardToolCall"]>>, AbortSignal?]) => ReturnType<NonNullable<LLMActionOpts["guardToolCall"]>>;
 
 /** A normal tool handoff completes this prediction and consumes its input.
  * It does not deliver a final report. Truncation callbacks are not completion. */
@@ -20,7 +21,7 @@ const RAW_TOOL_INTENT_CARRY_CHARS = 96;
 
 type RoundCallbacks = {
   onToolCallRequestFinalized: NonNullable<LLMActionOpts["onToolCallRequestFinalized"]>;
-  guardToolCall: NonNullable<LLMActionOpts["guardToolCall"]>;
+  guardToolCall: RoundToolGuard;
   onPromptProcessingProgress?: NonNullable<LLMActionOpts["onPromptProcessingProgress"]>;
   onFirstToken?: NonNullable<LLMActionOpts["onFirstToken"]>;
   onPredictionFragment?: NonNullable<LLMActionOpts["onPredictionFragment"]>;
@@ -94,6 +95,7 @@ export async function runOneToolRound(
   let predictionStats: CapturedRound["predictionStats"];
   let fragmentAbortReason: Error | undefined;
   let visibleFragmentTail = "";
+  let closed = false;
   const predictionUsage = {
     fragmentCount: 0,
     reasoningTokensCount: 0,
@@ -122,6 +124,7 @@ export async function runOneToolRound(
   try {
     const { onMessageCaptured, abortAfterPredictionFragment, onFirstToken, captureUnparsedToolRequest, ...actCallbacks } = callbacks;
     const handleInvalidToolRequest: LLMActionOpts["handleInvalidToolRequest"] = (error, request) => {
+      if (closed) return undefined;
       // Preserve the SDK's result for a parsed request rejected by its schema.
       if (request !== undefined) return error.message;
       // No request exists to execute or attach a synthetic result to. Let the
@@ -135,12 +138,21 @@ export async function runOneToolRound(
       signal: roundAbort.signal,
       ...predictionOptions,
       ...actCallbacks,
+      guardToolCall: (...args) => {
+        if (closed || roundAbort.signal.aborted) { args[2].deny("Tool round is closed."); return; }
+        return actCallbacks.guardToolCall(...args, roundAbort.signal);
+      },
+      onPromptProcessingProgress: (...args) => {
+        if (!closed) actCallbacks.onPromptProcessingProgress?.(...args);
+      },
       ...(captureUnparsedToolRequest ? { handleInvalidToolRequest } : {}),
       onFirstToken: (...args) => {
+        if (closed) return;
         firstTokenAt ??= Date.now();
         onFirstToken?.(...args);
       },
       onPredictionFragment: (fragment) => {
+        if (closed) return;
         firstTokenAt ??= Date.now();
         const tokensCount = Number(fragment.tokensCount);
         predictionUsage.fragmentCount += 1;
@@ -173,30 +185,37 @@ export async function runOneToolRound(
         }
       },
       onToolCallRequestArgumentFragmentGenerated: (roundIndex, callId, content) => {
+        if (closed) return;
         predictionUsage.toolArgumentChars += String(content || "").length;
         actCallbacks.onToolCallRequestArgumentFragmentGenerated?.(roundIndex, callId, content);
       },
       onToolCallRequestStart: (...args) => {
+        if (closed) return;
         predictionUsage.sdkToolRequestStartedCount += 1;
         actCallbacks.onToolCallRequestStart?.(...args);
       },
       onToolCallRequestNameReceived: (...args) => {
+        if (closed) return;
         predictionUsage.sdkToolRequestNamedCount += 1;
         actCallbacks.onToolCallRequestNameReceived?.(...args);
       },
       onToolCallRequestEnd: (...args) => {
+        if (closed) return;
         predictionUsage.sdkToolRequestEndedCount += 1;
         actCallbacks.onToolCallRequestEnd?.(...args);
       },
       onToolCallRequestFailure: (...args) => {
+        if (closed) return;
         predictionUsage.sdkToolRequestFailureCount += 1;
         actCallbacks.onToolCallRequestFailure?.(...args);
       },
       onToolCallRequestFinalized: (...args) => {
+        if (closed) return;
         predictionUsage.sdkToolRequestFinalizedCount += 1;
         actCallbacks.onToolCallRequestFinalized?.(...args);
       },
       onPredictionCompleted: (result) => {
+        if (closed) return;
         const stats = (result as { stats?: {
           stopReason?: unknown;
           promptTokensCount?: unknown;
@@ -213,11 +232,13 @@ export async function runOneToolRound(
         };
       },
       onMessage: (message) => {
+        if (closed) return;
         messages.push(message);
         onMessageCaptured?.(message);
         if (message.getToolCallResults().length > 0) hasToolResults = true;
       },
       onRoundEnd: () => {
+        if (closed) return;
         if (!hasToolResults || roundAbort.signal.aborted) return;
         boundaryRequested = true;
         roundAbort.abort(boundaryReason);
@@ -226,7 +247,10 @@ export async function runOneToolRound(
   } catch (error) {
     if (!(boundaryRequested && error === boundaryReason) && error !== fragmentAbortReason) failure = error;
   } finally {
+    closed = true;
     parentSignal.removeEventListener("abort", forwardAbort);
+    // Release round-owned work on every exit. Closing is not a finish reason.
+    if (!roundAbort.signal.aborted) roundAbort.abort(boundaryReason);
   }
 
   // A transport error or external cancellation retains precedence over a
@@ -236,7 +260,7 @@ export async function runOneToolRound(
   return {
     predictionCompleted: Boolean(predictionStats && !fragmentAbortReason && !parentSignal.aborted
       && failure === undefined && isCompletedPredictionReason(predictionStats.stopReason)),
-    messages,
+    messages: [...messages],
     continueAfterTools: boundaryRequested,
     ...(fragmentAbortReason ? { finishReason: "generation_repetition_paused" }
       : finishReason === undefined ? {} : { finishReason }),

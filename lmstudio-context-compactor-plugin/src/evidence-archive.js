@@ -4,10 +4,37 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const { ARCHIVE_READ_CONTRACT } = require("./evidence-read-contract.js");
 const { sanitizeRawCapabilityText, isEphemeralCapabilityKey } = require("./durable-memory-sanitizer.js");
 const hash = value => crypto.createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const ID = /^ev_[a-f0-9]{64}$/u;
 const SECRET = /^(?:receipt|approval|approvaltoken|capability|authorization|password|secret|apikey|accesstoken|refreshtoken|nextcursor|cursor)$/iu;
+
+// Both projection and rehydration select the same sanitized representation.
+function evidenceBodyView(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  for (const field of ["content", "text", "body", "code"])
+    if (typeof payload[field] === "string") return { field, body: payload[field] };
+  for (const field of ["items", "rows", "entries", "matches"])
+    if (Array.isArray(payload[field])) return { field, body: JSON.stringify(payload[field]) };
+  return null;
+}
+
+function evidenceSemanticFacts(payload) {
+  const facts = {};
+  if (!payload || typeof payload !== "object") return facts;
+  for (const key of ["kind", "ok", "status", "errorCode", "action", "comparison", "base", "head",
+    "since", "until", "authorQuery", "authorQuerySemantics", "pageStart", "pageEnd", "pageHasMore",
+    "hasMore", "sourceResultComplete", "returnedRange", "lineRange", "startLine", "endLine",
+    "totalLines", "returnedCount", "total", "sourceMode", "evidenceSource", "coverage", "declarationProof",
+    "matchCount", "matchMetadataOmitted", "readBytes", "offsetBytes", "nextOffsetBytes", "size",
+    "rangeUnit", "truncated", "requestedEndLine", "nextStartLine", "representation", "symbol",
+    "candidateCount", "candidateLines", "selection", "ambiguity", "signatureVerification", "absenceProof"]) {
+    if (payload[key] !== undefined) facts[key] = payload[key];
+  }
+  if (facts.pageHasMore === undefined && payload.hasMore !== undefined) facts.pageHasMore = payload.hasMore;
+  return redact(facts);
+}
 
 // Preserve arrays and ordinary source identifiers; the existing durable fact
 // sanitizer's 80-item truncation is intentionally NOT an archive operation.
@@ -15,7 +42,7 @@ function redact(value, depth = 0) {
   if (depth > 40) throw new Error("archive_depth");
   if (typeof value === "string") {
     let text = sanitizeRawCapabilityText(value)
-      .replace(/[A-Za-z0-9_-]{30,}\.[a-f0-9]{64}/giu, "[redacted capability]")
+      .replace(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{30,}\.[a-f0-9]{64}/giu, "[redacted capability]")
       .replace(/\bBearer\s+[A-Za-z0-9_.~+\/-]+=*/giu, "Bearer [redacted]")
       .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})\b/gu, "[redacted secret]")
       .replace(/((?:api[_-]?key|password|secret|access[_-]?token|approval[_-]?token)\s*[=:]\s*)[^\s,;]+/giu, "$1[redacted]");
@@ -59,6 +86,50 @@ function atomicWrite(directory, name, value) {
   }
 }
 
+function withDirectoryLock(directory, action) {
+  safeDirectory(directory, true);
+  // A bounded bakery lock has no shared stale-reclamation lock. Each
+  // contender owns a unique file; dead contenders can be ignored without
+  // unlinking a file another writer might have replaced.
+  const nonce = crypto.randomUUID(), name = `lock-${nonce}.json`;
+  const file = path.join(directory, name);
+  const owner = { pid: process.pid, nonce, choosing: true, ticket: 0 };
+  const contenders = () => {
+    const names = fs.readdirSync(directory).filter(n => /^lock-[a-f0-9-]+\.json$/.test(n));
+    if (names.length > 256) throw new Error("archive_lock_capacity");
+    const live = [];
+    for (const entry of names) {
+      let value;
+      try { value = JSON.parse(readFile(path.join(directory, entry), 1024)); }
+      catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      if (!Number.isSafeInteger(value.pid) || value.pid < 1 || !Number.isSafeInteger(value.ticket)
+        || value.ticket < 0 || typeof value.nonce !== "string") throw new Error("archive_lock_unavailable");
+      let dead = false;
+      try { process.kill(value.pid, 0); } catch (error) { dead = error.code === "ESRCH"; }
+      if (dead) {
+        // Unique owner paths are never reused. Cleanup failure does not
+        // make a dead process a live contender.
+        try { fs.unlinkSync(path.join(directory, entry)); } catch { /* optional */ }
+      } else live.push(value);
+    }
+    return live;
+  };
+  try {
+    atomicWrite(directory, name, owner);
+    const ticket = Math.max(0, ...contenders().map(value => value.ticket)) + 1;
+    if (!Number.isSafeInteger(ticket)) throw new Error("archive_lock_capacity");
+    atomicWrite(directory, name, { ...owner, choosing: false, ticket });
+    for (const other of contenders()) {
+      if (other.nonce === nonce) continue;
+      if (other.choosing || other.ticket < ticket || other.ticket === ticket && other.nonce < nonce)
+        throw new Error("archive_lock_unavailable");
+    }
+    return action();
+  } finally {
+    try { fs.unlinkSync(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+}
+
 class EvidenceArchive {
   constructor(scope, options = {}) {
     if (!scope || !scope.conversation || !scope.workspace || !scope.repository || !scope.lineage)
@@ -68,10 +139,11 @@ class EvidenceArchive {
       maxWindows: 128, maxWindowBytes: 8 * 1024 * 1024, ...options };
     this.now = options.now || Date.now;
     this.records = new Map();
+    this.catalogSnapshots = new Map();
     this.root = null;
     this.directory = null;
     if (options.durable) {
-      const requestedRoot = path.resolve(options.root || path.join(os.homedir(), ".lmstudio", "unreal-context-compactor", "hybrid-v1"));
+      const requestedRoot = path.resolve(options.root || path.join(os.homedir(), ".lmstudio", "unreal-context-compactor", "hybrid-v1"), "contract-v2");
       fs.mkdirSync(requestedRoot, { recursive: true, mode: 0o700 });
       const canonicalRoot = fs.realpathSync.native(requestedRoot);
       const rootStat = fs.statSync(canonicalRoot);
@@ -81,7 +153,84 @@ class EvidenceArchive {
     }
     this.stats = { captured: 0, reads: 0, returnedChars: 0, unavailable: 0 };
     this.protectedWindows = new Set();
+    this.lineage = options.lineage || scope.lineage;
+    this.membership = new Map();
+    this.ownerId = crypto.randomUUID();
+    this.pins = new Set();
+    this.lockDepth = 0;
     if (this.root) this.cleanupScopes();
+  }
+
+  // A separate namespace fences old GC writers that do not understand leases.
+  setAccess(lineage, inherited = []) {
+    this.catalogSnapshots.clear();
+    this.lineage = lineage || this.lineage;
+    this.membership = new Map(inherited.slice(-this.options.maxRecords * 2));
+  }
+
+  exportMembership() {
+    const inherited = [...this.membership];
+    for (const entry of this.entries()) {
+      if (entry.record?.lineage === this.lineage) {
+        const loaded = this.load(entry.key);
+        if (loaded.ok) inherited.push([entry.key, loaded.record.archivedBodyHash]);
+      }
+    }
+    return [...new Map(inherited)].slice(-this.options.maxRecords * 2);
+  }
+
+  withStorageLock(action) {
+    if (!this.directory || this.lockDepth) return action();
+    this.ensureDirectory(true);
+    return withDirectoryLock(this.directory, () => {
+      this.lockDepth++;
+      try { return action(); } finally { this.lockDepth--; }
+    });
+  }
+
+  leaseFacts(directory = this.directory, reclaim = this.lockDepth > 0) {
+    if (!directory) return { refs: new Set(this.pins), windows: new Set(this.protectedWindows) };
+    const refs = new Set(), windows = new Set();
+    for (const name of fs.readdirSync(directory).filter(n => /^lease-[a-f0-9-]+\.json$/.test(n))) {
+      const file = path.join(directory, name);
+      let lease;
+      try { lease = JSON.parse(readFile(file, 256 * 1024)); }
+      catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      if (!Number.isSafeInteger(lease.pid) || lease.pid < 1) throw new Error("lease_liveness_unknown");
+      let dead = false;
+      try { process.kill(lease.pid, 0); } catch (error) { dead = error.code === "ESRCH"; }
+      if (dead) {
+        if (reclaim) try { fs.unlinkSync(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
+        continue;
+      }
+      for (const id of lease.refs || []) if (ID.test(id)) refs.add(id);
+      for (const name of lease.windows || []) windows.add(name);
+    }
+    return { refs, windows };
+  }
+
+  setPins(ids) {
+    return this.withStorageLock(() => {
+      const next = new Set(ids);
+      if (next.size > this.options.maxRecords * 2) throw new Error("pin_capacity");
+      if (this.directory) atomicWrite(this.directory, `lease-${this.ownerId}.json`, {
+        schemaVersion: 2, pid: process.pid, owner: this.ownerId, lineage: this.lineage,
+        refs: [...next], windows: [...this.protectedWindows], updatedAt: this.now(),
+      });
+      this.pins = next;
+    });
+  }
+
+  close() {
+    this.catalogSnapshots.clear();
+    // This unique owner path is never reused. Releasing it does not compete
+    // with publication/GC and must work while another instance holds the lock.
+    if (this.directory) {
+      const file = path.join(this.directory, `lease-${this.ownerId}.json`);
+      try { readFile(file, 256 * 1024); fs.unlinkSync(file); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+    }
+    this.pins.clear();
   }
 
   // Passive retention stays at the existing storage owner. Current scopes and
@@ -97,19 +246,28 @@ class EvidenceArchive {
         const directory = path.join(this.root, name), stat = fs.lstatSync(directory);
         if (!stat.isDirectory() || stat.isSymbolicLink() || stat.mtimeMs > cutoff) continue;
         if (fs.realpathSync.native(directory) !== directory) continue;
-        const files = fs.readdirSync(directory);
-        if (files.some(file => !/^(?:ev_[a-f0-9]{64}|window(?:-[A-Za-z0-9-]+)?)\.json$/u.test(file))) continue;
-        const paths = files.map(file => path.join(directory, file));
-        if (paths.some(file => { const s = fs.lstatSync(file); return !s.isFile() || s.isSymbolicLink() || s.nlink !== 1 || s.mtimeMs > cutoff; })) continue;
-        for (const file of paths) {
-          safeDirectory(directory);
-          if (fs.realpathSync.native(directory) !== directory) throw new Error("unsafe_scope_directory");
-          const current = fs.lstatSync(file);
-          if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.mtimeMs > cutoff)
-            throw new Error("scope_retention_changed");
-          fs.unlinkSync(file);
-        }
-        fs.rmdirSync(directory); removed++;
+        try {
+          withDirectoryLock(directory, () => {
+            // Re-enumerate under the target scope's lock. A stale pre-lock
+            // directory listing cannot authorize deletion after reactivation.
+            const live = this.leaseFacts(directory, true);
+            if (live.refs.size || live.windows.size) return;
+            const files = fs.readdirSync(directory).filter(file => !/^lock-[a-f0-9-]+\.json$/.test(file));
+            if (files.some(file => !/^(?:ev_[a-f0-9]{64}|window(?:-[A-Za-z0-9-]+)?)\.json$/u.test(file))) return;
+            const paths = files.map(file => path.join(directory, file));
+            if (paths.some(file => { const current = fs.lstatSync(file);
+              return !current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.mtimeMs > cutoff;
+            })) return;
+            for (const file of paths) {
+              safeDirectory(directory);
+              if (fs.realpathSync.native(directory) !== directory) throw new Error("unsafe_scope_directory");
+              fs.unlinkSync(file);
+            }
+          });
+          // A new owner may have started after unlock. Removing only an empty
+          // directory is safe; a new lock/lease makes this optional step fail.
+          fs.rmdirSync(directory); removed++;
+        } catch { /* Busy or reactivated scope: keep it. */ }
       }
     } catch { /* Cleanup is optional and must not turn a valid read into failure. */ }
   }
@@ -143,6 +301,9 @@ class EvidenceArchive {
   }
 
   cleanupWindows() {
+    if (this.directory && !this.lockDepth) {
+      try { return this.withStorageLock(() => this.cleanupWindows()); } catch { return null; }
+    }
     let entries, manifestsRead = false;
     try {
       // Legacy archives may contain thousands of manifests. Prune by cheap
@@ -151,7 +312,8 @@ class EvidenceArchive {
       let bytes = entries.reduce((n, item) => n + item.bytes, 0);
       let count = entries.length;
       const removed = new Set();
-      const oldest = entries.filter(entry => entry.safe && !this.protectedWindows.has(entry.name))
+      const protectedWindows = new Set([...this.protectedWindows, ...this.leaseFacts().windows]);
+      const oldest = entries.filter(entry => entry.safe && !protectedWindows.has(entry.name))
         .sort((a, b) => a.modified - b.modified || a.name.localeCompare(b.name));
       for (const entry of oldest) {
         if (this.now() - entry.modified < this.options.ttlMs && count <= this.options.maxWindows
@@ -161,7 +323,7 @@ class EvidenceArchive {
       }
       entries = this.windowEntries(entries.filter(entry => !removed.has(entry.name))); manifestsRead = true;
       const expired = entry => this.now() - (entry.body?.createdAt ?? entry.modified) >= this.options.ttlMs;
-      const candidates = entries.filter(entry => !this.protectedWindows.has(entry.name))
+      const candidates = entries.filter(entry => !protectedWindows.has(entry.name))
         .sort((a, b) => a.modified - b.modified || a.name.localeCompare(b.name));
       for (const entry of candidates) {
         const over = entries.length > this.options.maxWindows
@@ -237,6 +399,8 @@ class EvidenceArchive {
       const { recordHash, ...body } = record;
       if (hash(body) !== recordHash || hash(record.body) !== record.archivedBodyHash)
         return { ok: false, errorCode: "integrity_failed" };
+      if (record.lineage !== this.lineage && this.membership.get(id) !== record.archivedBodyHash)
+        return { ok: false, errorCode: "lineage_access_denied" };
       if (this.now() - record.createdAt >= this.options.ttlMs) return { ok: false, errorCode: "expired" };
       return { ok: true, record };
     } catch { return { ok: false, errorCode: "unavailable" }; }
@@ -271,15 +435,82 @@ class EvidenceArchive {
     return result;
   }
 
+  readHandleFor(record, view = "body") {
+    return `h_${hash([this.scope, this.lineage, record.evidenceId, record.archivedBodyHash, view]).slice(0, 24)}`;
+  }
+
+  readByHandle(handle, start = 0, maxChars = 4096, view = "body") {
+    if (!/^h_[a-f0-9]{24}$/.test(String(handle)) || !["body", "envelope"].includes(view))
+      return { ok: false, errorCode: "invalid_read_handle" };
+    const candidates = this.entries().map(e => this.load(e.key)).filter(e => e.ok
+      && this.readHandleFor(e.record, view) === handle);
+    if (candidates.length !== 1) return { ok: false, errorCode: "read_handle_unavailable", currentFile: false, grantsMutation: false };
+    const record = candidates[0].record;
+    return this.read(record.evidenceId, record.archivedBodyHash, start, maxChars, view);
+  }
+
+  // Bounded execution-local snapshots make continuation insensitive to GC and
+  // new records. Access and version are still revalidated for every page.
+  catalogPage({ path: sourcePath, continuation, maxChars = 4096 } = {}) {
+    if (!Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > 8192)
+      return { ok: false, errorCode: "invalid_range" };
+    const now = this.now();
+    for (const [key, value] of this.catalogSnapshots) if (now >= value.expires) this.catalogSnapshots.delete(key);
+    const match = typeof continuation === "string" && /^catalog_([a-f0-9]{24})\.(\d+)$/.exec(continuation);
+    const key = continuation ? match?.[1] : crypto.randomBytes(12).toString("hex");
+    let snapshot = key && this.catalogSnapshots.get(key);
+    let index = match ? Number(match[2]) : 0;
+    if (continuation && (!snapshot || !Number.isSafeInteger(index) || index > snapshot.refs.length
+      || (sourcePath !== undefined && sourcePath !== snapshot.path)))
+      return { ok: false, errorCode: "catalog_continuation_unavailable", retryAction: "restart_catalog" };
+    if (!snapshot) snapshot = { path: sourcePath, expires: now + Math.min(this.options.ttlMs, 300000),
+      refs: this.entries().map(e => this.load(e.key)).filter(e => e.ok).map(e => e.record)
+        .filter(r => !sourcePath || r.metadata?.sourceIdentity?.path === sourcePath)
+        .sort((a, b) => a.createdAt - b.createdAt || a.evidenceId.localeCompare(b.evidenceId))
+        .map(r => [r.evidenceId, r.archivedBodyHash]) };
+    const result = { ok: true, kind: "historical_evidence_index", catalogVersion: 2,
+      currentFile: false, grantsMutation: false, entries: [], hasMore: false, nextContinuation: null,
+      retention: "snapshot_membership; records may expire; restart catalog after execution restart" };
+    for (; index < snapshot.refs.length; index++) {
+      const [id, version] = snapshot.refs[index], loaded = this.load(id);
+      if (!loaded.ok || loaded.record.archivedBodyHash !== version) continue;
+      const r = loaded.record;
+      const entry = { evidenceId: id, version, readHandle: this.readHandleFor(r), view: "body",
+        path: r.metadata?.sourceIdentity?.path, toolName: r.metadata?.toolName,
+        sourceVersion: r.metadata?.sourceVersion, sourceRange: r.metadata?.originRanges };
+      result.entries.push(entry);
+      result.hasMore = index + 1 < snapshot.refs.length;
+      result.nextContinuation = result.hasMore ? `catalog_${key}.${index + 1}` : null;
+      if (JSON.stringify(result).length > maxChars) {
+        result.entries.pop(); result.hasMore = true; result.nextContinuation = `catalog_${key}.${index}`;
+        break;
+      }
+    }
+    if (index === snapshot.refs.length) { result.hasMore = false; result.nextContinuation = null; }
+    if (JSON.stringify(result).length > maxChars || (!result.entries.length && result.hasMore))
+      return { ok: false, errorCode: "response_budget_too_small", recommendedMaxChars: 4096 };
+    if (result.hasMore) {
+      if (!this.catalogSnapshots.has(key) && this.catalogSnapshots.size >= 16)
+        this.catalogSnapshots.delete(this.catalogSnapshots.keys().next().value);
+      this.catalogSnapshots.set(key, snapshot);
+    }
+    return result;
+  }
+
   put(body, metadata = {}, lifecycle = {}) {
+    if (this.directory && !this.lockDepth) {
+      try { return this.withStorageLock(() => this.put(body, metadata, lifecycle)); }
+      catch { return { ok: false, errorCode: "archive_lock_unavailable" }; }
+    }
     if (typeof body !== "string" || Buffer.byteLength(body) > this.options.maxBytes / 2) return { ok: false, errorCode: "quota" };
     try {
       const sanitized = redact(body);
       const safeMetadata = redact(metadata);
-      const id = `ev_${hash([this.scope, body, safeMetadata.callKey])}`;
+      const id = `ev_${hash([this.scope, this.lineage, body, safeMetadata.callKey])}`;
       const existing = this.load(id);
-      if (existing.ok) return existing;
+      if (existing.ok) { this.setPins(new Set([...this.pins, ...(lifecycle.liveRefs || []), id])); return existing; }
       const record = { schemaVersion: 1, scope: this.scope, evidenceId: id,
+        lineage: this.lineage,
         createdAt: this.now(), sourceHash: hash(body), archivedBodyHash: hash(sanitized),
         redacted: sanitized !== body, sourceChars: body.length,
         archivedRanges: [[0, sanitized.length]], rangeUnit: "utf16_code_units",
@@ -288,6 +519,7 @@ class EvidenceArchive {
       const bytes = Buffer.byteLength(JSON.stringify(record));
       const liveRefs = lifecycle.liveRefs instanceof Set ? lifecycle.liveRefs : new Set(lifecycle.liveRefs || []);
       for (const id of this.windowRefs()) liveRefs.add(id);
+      for (const id of this.leaseFacts().refs) liveRefs.add(id);
       let entries = this.entries();
       const expiredDead = entries.filter(entry => !liveRefs.has(entry.key)
         && Number.isFinite(entry.record?.createdAt)
@@ -311,13 +543,14 @@ class EvidenceArchive {
       if (overQuota()) return { ok: false, errorCode: "quota" };
       if (this.directory) atomicWrite(this.directory, `${id}.json`, record);
       else this.records.set(id, record);
+      this.setPins(new Set([...this.pins, ...(lifecycle.liveRefs || []), id]));
       const verified = this.load(id);
       if (verified.ok) this.stats.captured++;
       return verified;
     } catch { return { ok: false, errorCode: "archive_write_failed" }; }
   }
 
-  read(id, version, start = 0, maxChars = 4096) {
+  read(id, version, start = 0, maxChars = 4096, view = "envelope") {
     this.stats.reads++;
     if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > 8192)
       return { ok: false, errorCode: "invalid_range" };
@@ -325,16 +558,27 @@ class EvidenceArchive {
     if (!loaded.ok) { this.stats.unavailable++; return loaded; }
     const r = loaded.record;
     if (version !== r.archivedBodyHash) return { ok: false, errorCode: "version_mismatch" };
-    if (start > r.body.length) return { ok: false, errorCode: "invalid_range" };
+    if (!["envelope", "body"].includes(view)) return { ok: false, errorCode: "invalid_view" };
+    let selected = null, bodyFacts = null;
+    if (view === "body") {
+      const decoded = require("./compaction-tool-memory.js").decodeToolResultRecord(r.body);
+      selected = evidenceBodyView(decoded.value);
+      bodyFacts = evidenceSemanticFacts(decoded.value);
+      if (!selected) return { ok: false, errorCode: "body_view_unavailable", retryView: "envelope", evidenceId: id, version };
+    }
+    const body = selected ? selected.body : r.body;
+    if (start > body.length) return { ok: false, errorCode: "invalid_range" };
     const identity = r.metadata?.sourceIdentity || {};
-    const sourceFacts = r.metadata?.semanticFacts || {};
+    const sourceFacts = bodyFacts || r.metadata?.semanticFacts || {};
     const base = { ok: true, kind: "historical_evidence_range", evidenceId: id, version,
       originalCallId: r.metadata?.providerRequestId,
       sourceHash: r.sourceHash, sourceVersion: r.metadata?.sourceVersion,
-      sourceIdentity: identity, sourceIdentityDigest: hash(identity),
+      sourceIdentity: identity, sourceIdentityDigest: r.metadata?.sourceIdentityDigest || "unknown-source",
       toolName: r.metadata?.toolName, resultStatus: r.metadata?.resultStatus,
       errorCode: r.metadata?.errorCode ?? null,
-      sourceRange: r.metadata?.originRanges,
+      sourceRange: r.metadata?.originRanges || (Number.isInteger(sourceFacts.offsetBytes)
+        ? [sourceFacts.offsetBytes, sourceFacts.nextOffsetBytes] : undefined),
+      sourceRangeUnit: r.metadata?.originRangeUnit || (Number.isInteger(sourceFacts.offsetBytes) ? "utf8_byte" : undefined),
       sourceAction: sourceFacts.action,
       sourceSince: sourceFacts.since,
       sourceUntil: sourceFacts.until,
@@ -347,22 +591,24 @@ class EvidenceArchive {
       sourceReturnedCount: sourceFacts.returnedCount,
       sourceTotal: sourceFacts.total,
       redacted: r.redacted, currentFile: false, grantsMutation: false,
-      rangeUnit: r.rangeUnit, representation: "sanitized_archived_tool_envelope",
-      totalChars: r.body.length, availableRange: [0, r.body.length] };
+      rangeUnit: r.rangeUnit, representation: selected ? "sanitized_body" : "sanitized_archived_tool_envelope",
+      ...(selected ? { viewVersion: 1, bodyField: selected.field, readHandle: this.readHandleFor(r), sourceFacts } : {}),
+      totalChars: body.length, availableRange: [0, body.length], responseBudgetChars: maxChars };
     const totalBudget = maxChars;
     const overhead = JSON.stringify({ ...base, returnedRange: [start, start], hasMore: true,
       reachedEnd: false, fullRawProvided: false, coverageState: "partial", content: "" }).length;
     const contentBudget = Math.max(0, totalBudget - overhead);
-    let end = Math.min(r.body.length, start + contentBudget);
+    let end = Math.min(body.length, start + contentBudget);
     const response = () => {
-      const reachedEnd = end === r.body.length;
-      const fullRawProvided = start === 0 && reachedEnd && r.redacted === false;
-      return { ...base, returnedRange: [start, end],
+      const reachedEnd = end === body.length;
+      const fullRawProvided = !selected && start === 0 && reachedEnd && r.redacted === false;
+      return { ...base, returnedRange: [start, end], returnedContentChars: end - start,
         nextOffset: reachedEnd ? null : end,
         archiveHasMore: !reachedEnd, archiveReachedEnd: reachedEnd,
         hasMore: !reachedEnd, reachedEnd,
         fullRawProvided, coverageState: fullRawProvided ? "complete" : "partial",
-        content: r.body.slice(start, end) };
+        ...(selected ? { bodyComplete: start === 0 && reachedEnd } : {}),
+        content: body.slice(start, end) };
     };
     let result = response(), serialized = JSON.stringify(result);
     while (serialized.length > totalBudget && end > start) {
@@ -370,8 +616,12 @@ class EvidenceArchive {
       result = response();
       serialized = JSON.stringify(result);
     }
-    if (serialized.length > totalBudget || (end === start && end < r.body.length)) {
+    if (serialized.length > totalBudget || end - start < Math.min(ARCHIVE_READ_CONTRACT.minimumBodyChars, body.length - start)) {
       return { ok: false, errorCode: "response_budget_too_small", evidenceId: id,
+        minimumBodyChars: Math.min(ARCHIVE_READ_CONTRACT.minimumBodyChars, body.length - start),
+        responseBudgetChars: maxChars,
+        recommendedMaxChars: Math.min(ARCHIVE_READ_CONTRACT.maximumEnvelopeChars,
+          Math.max(ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, serialized.length + ARCHIVE_READ_CONTRACT.minimumBodyChars)),
         currentFile: false, grantsMutation: false };
     }
     this.stats.returnedChars += end - start;
@@ -379,4 +629,4 @@ class EvidenceArchive {
   }
 }
 
-module.exports = { EvidenceArchive, hash, redact, safeDirectory, readFile, atomicWrite };
+module.exports = { EvidenceArchive, evidenceBodyView, evidenceSemanticFacts, hash, redact, safeDirectory, readFile, atomicWrite };

@@ -1,8 +1,5 @@
 "use strict";
 
-// Included by the existing enumerated package test entry point.
-require("./astra-contract.test.cjs");
-
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -859,7 +856,7 @@ test("A01 working windows keep footer replace/clear and objective changes withou
     ctl.getWorkingDirectory = () => root;
     await createPredictionLoopHandler(store, undefined, boundary, { root: archiveRoot })(ctl);
     const lineage = boundary.restore(source).scope.lineage;
-    const files = fs.readdirSync(archiveRoot).map(dir => path.join(archiveRoot, dir, `window-${lineage}.json`));
+    const files = fs.readdirSync(path.join(archiveRoot, "contract-v2")).map(dir => path.join(archiveRoot, "contract-v2", dir, `window-${lineage}.json`));
     const manifest = JSON.parse(fs.readFileSync(files.find(file => fs.existsSync(file)), "utf8"));
     const next = Chat.from(source); next.append("assistant", "visible answer");
     return { input, next, manifest };
@@ -937,7 +934,7 @@ test("A01 working-window restore drops old attachment review claims and accepts 
   assert.equal(next.debugValues.find(e => e.event === "working_context_restore").status, "restored_remeasure_required");
   assert.match(nextInput, /SAVED_DECISION/); assert.doesNotMatch(nextInput, /OLD_REVIEW_CLAIM/);
   const lineage = boundary.restore(host).scope.lineage;
-  const file = fs.readdirSync(archiveRoot).map(dir => path.join(archiveRoot, dir, `window-${lineage}.json`)).find(p => fs.existsSync(p));
+  const file = fs.readdirSync(path.join(archiveRoot, "contract-v2")).map(dir => path.join(archiveRoot, "contract-v2", dir, `window-${lineage}.json`)).find(p => fs.existsSync(p));
   assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).note.reviewClaims[0].statement, "FRESH_REVIEW_CLAIM");
 });
 
@@ -3246,6 +3243,10 @@ test("archive-only raw recovery exposes the verified Git source catalogue and re
     options.onMessage(ChatMessage.create("assistant", "Archive evidence was rehydrated, then the real Git source page was read."));
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 40 } });
   });
+  // The first consumer has headroom. Only the next input experiences
+  // pressure, so this remains an archive recovery scenario under the new policy.
+  model.countTokens = async text => calls > 0 && String(text).length > 20000
+    ? 20000 : Math.ceil(String(text).length / 4);
   const ctl = fakeController(history, model, { contextManagementMode: "hybrid",
     workingInputTargetTokens: 10000, workingInputTriggerTokens: 12048,
     softRemainingTokens: 1000, hardRemainingTokens: 500,
@@ -3361,6 +3362,10 @@ test("raw Git replan keeps the archive reader beside the public source reader an
     options.onMessage(ChatMessage.create("assistant", "archive evidence was reread before the final report"));
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 30 } });
   });
+  // The first consumer has headroom. Only the next input experiences
+  // pressure, so this remains an archive recovery scenario under the new policy.
+  model.countTokens = async text => calls > 0 && String(text).length > 20000
+    ? 20000 : Math.ceil(String(text).length / 4);
   const ctl = fakeController(history, model, { contextManagementMode: "hybrid",
     workingInputTargetTokens: 12000, workingInputTriggerTokens: 16000,
     softRemainingTokens: 1000, hardRemainingTokens: 500,
@@ -3414,7 +3419,7 @@ test("low-pressure Git page stays raw for its first consumer without a semantic 
   assert.equal(ctl.debugValues.some(value => value.event === "semantic_handoff" && value.modelCalled), false);
   const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
   assert.equal(measurement.workingContext.projectionApplied, false);
-  assert.equal(measurement.workingContext.archive.captured, 1);
+  assert.equal(measurement.workingContext.archive.captured, 0);
 });
 
 test("aggregate first-consumer fit keeps a six-call pairing or projects every body, never metadata-only", async () => {
@@ -3885,6 +3890,7 @@ test("context-budget rescue keeps the normal output reserve when it fits", async
       finalTools = tools;
       finalMaxTokens = options.maxTokens;
       finalSignal = options.signal;
+      assert.equal(finalSignal.aborted, false, "rescue remains active during prediction");
       options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 35000,
         predictedTokensCount: 120, totalTokensCount: 35120 } });
       options.onMessage(ChatMessage.create("assistant", "Final report with the normal output reserve."));
@@ -3901,7 +3907,8 @@ test("context-budget rescue keeps the normal output reserve when it fits", async
   assert.equal(called, 1);
   assert.deepEqual(finalTools, []);
   assert.equal(finalMaxTokens, 8192);
-  assert.equal(finalSignal.aborted, false);
+  assert.equal(finalSignal.aborted, true, "settled round releases its own signal");
+  assert.equal(ctl.abortSignal.aborted, false, "cleanup is not user cancellation");
   const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
   assert.equal(finalization.trigger, "context_budget");
   assert.equal(finalization.deliveryState, "complete");
@@ -3932,6 +3939,7 @@ test("bounded context-budget rescue keeps the bounded final token and timeout li
       assert.deepEqual(tools, []);
       finalMaxTokens = options.maxTokens;
       finalSignal = options.signal;
+      assert.equal(finalSignal.aborted, false, "rescue remains active during prediction");
       options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 26000,
         predictedTokensCount: 120, totalTokensCount: 26120 } });
       options.onMessage(ChatMessage.create("assistant", "Bounded context rescue report."));
@@ -3949,7 +3957,8 @@ test("bounded context-budget rescue keeps the bounded final token and timeout li
 
   assert.equal(called, 1);
   assert.equal(finalMaxTokens, 4096);
-  assert.equal(finalSignal.aborted, false);
+  assert.equal(finalSignal.aborted, true, "settled round releases its own signal");
+  assert.equal(ctl.abortSignal.aborted, false, "cleanup is not user cancellation");
   assert.notEqual(finalSignal, ctl.abortSignal);
   const finalization = ctl.debugValues.find(value => value.event === "bounded_audit_finalization");
   assert.equal(finalization.trigger, "context_budget");
@@ -4538,6 +4547,17 @@ for (const retryResult of ['reasoning', 'visible', 'raw']) test(`reasoning recov
     { reasoningRecoveryMode: 'on', outputRecoveryMode: 'on' });
   await handlePredictionLoop(ctl);
   assert.equal(calls, 2);
+  const outcomes = ctl.debugValues.filter(e => e.event === 'execution_outcome');
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].reason, 'reasoning_recovery_exhausted');
+  assert.equal(outcomes[0].terminalPhase, 'REASONING_RECOVERY');
+  assert.equal(outcomes[0].reportDelivered, true);
+  assert.equal(outcomes[0].reportCompleted, false);
+  assert.equal(outcomes[0].taskCompleted, false);
+  assert.equal(outcomes[0].executionOutcome, 'truncated');
+  const partial = ctl.blocks.at(-1).text;
+  assert.match(partial, /부분 보고/);
+  assert.doesNotMatch(partial, /UNFINISHED-REASONING|partial visible answer|<tool_call>/);
   assert.equal(ctl.debugValues.some(e => ['output_recovery_scheduled', 'fresh_tool_planning_retry_scheduled'].includes(e.event)), false);
   assert.match(ctl.statuses.at(-1).state.text, /자동 재시도는 여기서 중단/);
 });
@@ -4554,6 +4574,7 @@ for (const mode of ['disabled', 'observe', 'bounded']) test(`reasoning recovery 
     auditCompletionMode: mode === 'bounded' ? 'bounded' : 'off' });
   await handlePredictionLoop(ctl);
   assert.equal(calls, mode === 'bounded' ? 2 : 1);
+  if (mode === 'observe') assert.equal(ctl.debugValues.some(e => e.event === 'partial_report_delivery'), false);
   assert.equal(ctl.debugValues.some(e => e.event === 'reasoning_recovery_scheduled'), false);
 });
 
@@ -4579,6 +4600,12 @@ test('reasoning recovery that cannot fit stops without a narrowed-tool or final-
   await handlePredictionLoop(ctl);
   assert.equal(calls, 1);
   assert.ok(ctl.debugValues.some(e => e.event === 'reasoning_recovery_blocked'));
+  const outcome = ctl.debugValues.find(e => e.event === 'execution_outcome');
+  assert.equal(outcome.reason, 'reasoning_recovery_context_budget');
+  assert.equal(outcome.reportDelivered, true);
+  assert.equal(outcome.reportCompleted, false);
+  assert.equal(outcome.finalFinishReason, 'unknown');
+  assert.match(outcome.modelInputId, /reasoning-recovery/);
   assert.ok(ctl.session.disposed);
 });
 
@@ -4626,7 +4653,7 @@ test('reasoning recovery in hybrid remeasures its exact input without invoking s
   assert.equal(measurements.length, 2);
   assert.ok(measurements.every(e => e.finalExactMeasurement && e.toolSurfaceMatchesMeasured && e.outputReserve === 8192));
   assert.ok(measurements[1].modelInputId.includes(':reasoning-recovery-'));
-  assert.deepEqual(projections, measurements.map(e => e.modelInputId), 'projection must share the actual input identity');
+  assert.deepEqual(projections, [], 'no evidence or pressure means no projection work on either measured input');
   assert.deepEqual(exposures, [
     { modelInputId: measurements[0].modelInputId, completed: false },
     { modelInputId: measurements[1].modelInputId, completed: false },
@@ -4957,6 +4984,66 @@ test('focused observations reach the next measured round without altering approv
   assert.equal(events[1].finalInputTokens, measurements[1].finalInputTokens);
 });
 
+test('Auto adopts returned engine guidance without rebinding later explicit tool targets', async () => {
+  let calls = 0;
+  const project = 'C:/Projects/A/A.uproject', other = 'C:/Projects/B/B.uproject';
+  const get = {
+    name: 'unreal_get_active_project', description: 'Get current selection', pluginIdentifier: 'mcp/unreal-rag',
+    parametersJsonSchema: { type: 'object', properties: {} },
+  };
+  const read = {
+    name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: {
+      project: { type: 'string' }, path: { type: 'string' }, startLine: { type: 'number' }, endLine: { type: 'number' },
+    } },
+  };
+  const model = {
+    async getContextLength() { return 50000; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 3); },
+    async act(chat, tools, options) {
+      calls++;
+      assert.deepEqual(tools.filter(t => t.pluginIdentifier).map(t => t.name), [get.name, read.name]);
+      assert.match(chat.toString(), /projectIdentity=not bound/);
+      if (calls === 1) assert.doesNotMatch(chat.toString(), /reference id=unreal\/api/);
+      else assert.match(chat.toString(), /reference id=unreal\/api/);
+      if (calls === 3) {
+        completeRecoveryReply(options, 'Declaration observed; macro necessity still requires usage evidence.');
+        return;
+      }
+      const request = {
+        id: 'auto-' + calls, type: 'function', name: calls === 1 ? get.name : read.name,
+        arguments: calls === 1 ? {} : { project: other, path: 'project://Source/B.h', startLine: 1, endLine: 2 },
+      };
+      let actual = request.arguments;
+      await options.guardToolCall(0, 900 + calls, {
+        toolCallRequest: request,
+        allow() {},
+        allowAndOverrideParameters(args) { actual = args; },
+        deny(reason) { assert.fail(reason); },
+      });
+      if (calls === 2) assert.equal(actual.project, other, 'reference A cannot bind execution to A');
+      const value = calls === 1
+        ? { ok: true, activeProject: project, projectBindingStatus: 'bound' }
+        : { ok: true, canonicalProject: other, path: 'project://Source/B.h', content: 'UFUNCTION()\nvoid Run();',
+          sha256: 'a'.repeat(64), startLine: 1, endLine: 2, totalLines: 2 };
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id, content: JSON.stringify(value) }] }));
+      options.onRoundEnd();
+      throw options.signal.reason;
+    },
+  };
+  const original = Chat.from([{ role: 'user', content: 'UPROPERTY와 UFUNCTION 사용을 검토해' }]);
+  const ctl = fakeController(original, model, {
+    designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid',
+  }, [get, read]);
+  ctl.requestConfirmToolCall = () => assert.fail('reviewed read tools do not need approval');
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 3);
+  assert.doesNotMatch(original.toString(), /Derived reference data/);
+});
+
 for (const variant of ['off', 'observe', 'zero']) test(`focused ${variant} skips new analysis and candidate admission`, async () => {
   const { EvidenceManager } = require('../dist/evidence-manager');
   const oldSnapshot = EvidenceManager.prototype.referenceSnapshot;
@@ -4973,7 +5060,8 @@ for (const variant of ['off', 'observe', 'zero']) test(`focused ${variant} skips
       designGuidanceDelivery: 'focused', designGuidanceMode: variant === 'off' ? 'off' : 'design',
       observeOnly: variant === 'observe', designGuidanceMaxTokens: variant === 'zero' ? 0 : 8192 });
     await handlePredictionLoop(ctl);
-    assert.equal(ctl.debugValues.some(e => e.event === 'design_guidance_input'), false);
+    assert.equal(ctl.debugValues.filter(e => e.event === 'design_guidance_input').length, 1);
+    assert.equal(ctl.debugValues.find(e => e.event === 'design_guidance_input').outcome, 'not_attempted');
   } finally { EvidenceManager.prototype.referenceSnapshot = oldSnapshot; EvidenceManager.prototype.ingestReferences = oldIngest; }
 });
 
@@ -5043,4 +5131,240 @@ for (const variant of ['excluded', 'observe', 'zero', 'final']) test(`Auto ${var
     { projectEngine: 'unreal', designGuidanceMode: 'auto', observeOnly: variant === 'observe',
       designGuidanceMaxTokens: variant === 'zero' ? 0 : 8192, outputRecoveryMode: 'on' }));
   assert.equal(calls, variant === 'final' ? 2 : 1);
+});
+
+for (const action of ["off", "warn", "pause"]) test(`ordinary research detects A/B cycles with ${action} policy`, async () => {
+  const history = Chat.from([{ role: "user", content: "Inspect A and B." }]);
+  const tool = { name: "read_file", description: "Read", parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unreal-agent" };
+  let calls = 0; const inputs = [];
+  const model = { identifier: "cycle-fixture", async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 100; },
+    async act(chat, _tools, options) {
+      inputs.push(chat.toString()); calls++;
+      if (calls === 7) {
+        options.onMessage(ChatMessage.from({ role: "assistant", content: "Returned the collected evidence." }));
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound" } }); return;
+      }
+      const path = `project://Source/${calls % 2 ? "A" : "B"}.cpp`;
+      const request = { id: `cycle-${calls}`, type: "function", name: "read_file", arguments: { path } };
+      await options.guardToolCall(0, 7, { toolCallRequest: request, allow() {}, allowAndOverrideParameters() {}, deny() {} });
+      options.onToolCallRequestFinalized(0, 7, { toolCallRequest: request });
+      options.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path, canonicalProject: "C:/Fixture/Fixture.uproject", sha256: "a".repeat(64),
+          offsetBytes: 0, nextOffsetBytes: 4, size: 4, hasMore: false, content: "data" }) }] }));
+      options.onRoundEnd(0); throw options.signal.reason;
+    } };
+  const ctl = fakeController(history, model, { toolStagnationAction: action, toolStagnationRounds: 3 }, [tool]);
+  await handlePredictionLoop(ctl);
+  const events = ctl.debugValues.filter(v => v.event === "tool_round_stagnation");
+  assert.equal(events.length, action === "off" ? 0 : 1);
+  if (action !== "off") assert.equal(events[0].cycleLength, 2);
+  assert.equal(calls, action === "pause" ? 4 : 7);
+  if (action === "warn") assert.match(inputs[4], /Runtime evidence observation/);
+  else if (action === "pause") assert.ok(ctl.blocks.some(block => /아직 완료되지/.test(block.text)));
+  else assert.ok(inputs.every(input => !input.includes("Runtime evidence observation")));
+});
+
+
+for (const [finishReason, answer, expected] of [
+  ['eosFound', 'Final report', 'completed'], ['stopStringFound', 'Final report', 'completed'],
+  ['eosFound', '', 'no_answer'], [undefined, 'Progress only', 'failed'],
+  ['toolCalls', 'Progress only', 'failed'],
+]) test(`one terminal outcome for ordinary ${finishReason} with ${answer || 'empty'} output`, async () => {
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    if (finishReason) options.onPredictionCompleted({ stats: { stopReason: finishReason } });
+    if (answer) options.onMessage(ChatMessage.create('assistant', answer));
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect.' }]), model);
+  await handlePredictionLoop(ctl);
+  const outcomes = ctl.debugValues.filter(e => e.event === 'execution_outcome');
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].executionOutcome, expected);
+  assert.equal(outcomes[0].taskCompleted, false);
+  assert.equal(outcomes[0].objectiveSatisfied, null);
+  assert.match(outcomes[0].modelInputId, /prediction-1$/);
+  const transitions = ctl.debugValues.find(e => e.event === 'execution_transitions');
+  assert.equal(transitions.transitions.at(-1).reason, outcomes[0].reason);
+  assert.ok(ctl.session.disposed);
+});
+
+test('last empty round cannot borrow a prior tool-round progress statement', async () => {
+  let calls = 0;
+  const tool = { name: 'read_file', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object' } };
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    calls++;
+    options.onPredictionCompleted({ stats: { stopReason: calls === 1 ? 'toolCalls' : 'eosFound' } });
+    if (calls !== 1) return;
+    options.onMessage(ChatMessage.create('assistant', 'I will inspect the source now.'));
+    options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest',
+      toolCallRequest: { type: 'function', id: 'prior', name: 'read_file', arguments: { path: 'A.h' } } }] }));
+    options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: 'prior',
+      content: JSON.stringify({ ok: true, path: 'A.h', content: 'class A {};' }) }] }));
+    options.onRoundEnd(); throw options.signal.reason;
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect A.h.' }]), model, {}, [tool]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  const outcome = ctl.debugValues.find(e => e.event === 'execution_outcome');
+  assert.equal(outcome.executionOutcome, 'no_answer');
+  assert.equal(outcome.reportPresent, false);
+  assert.equal(outcome.reportCompleted, false);
+  assert.match(outcome.modelInputId, /prediction-2$/);
+});
+
+for (const failureStage of ['history', 'registry', 'input', 'provider', 'cancel'])
+  test(`terminal contract includes ${failureStage} failure and disposes acquired resources`, async () => {
+    const problem = new Error(`failure at ${failureStage}`), cancel = new AbortController();
+    let calls = 0;
+    const model = reasoningModel(async (_chat, _tools, options) => {
+      calls++;
+      if (failureStage === 'cancel') cancel.abort(problem);
+      throw problem;
+    });
+    if (failureStage === 'input') model.countTokens = async () => NaN;
+    const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect.' }]), model,
+      { contextManagementMode: failureStage === 'input' ? 'hybrid' : 'legacy' });
+    ctl.abortSignal = cancel.signal; ctl.guardAbort = () => cancel.signal.throwIfAborted();
+    if (failureStage === 'history') ctl.pullHistory = async () => { throw problem; };
+    if (failureStage === 'registry') Object.defineProperty(ctl.session, 'tools', { get() { throw problem; } });
+    await assert.rejects(handlePredictionLoop(ctl), failureStage === 'input' ? /CONTEXT_EXECUTION_BLOCKED/ : error => error === problem);
+    const outcomes = ctl.debugValues.filter(e => e.event === 'execution_outcome');
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].executionOutcome, failureStage === 'cancel' ? 'canceled' : 'failed');
+    assert.equal(outcomes[0].reportCompleted, false);
+    assert.equal(calls, ['provider', 'cancel'].includes(failureStage) ? 1 : 0);
+    assert.equal(ctl.session.disposed, failureStage !== 'history');
+    if (['history', 'registry'].includes(failureStage)) {
+      assert.equal(outcomes[0].terminalPhase, 'SETUP');
+      assert.equal(outcomes[0].modelInputId, null);
+    }
+  });
+
+for (const providerFails of [false, true]) test(`seal failure closes context and retains ${providerFails ? 'provider error' : 'cleanup failure'}`, async t => {
+  const { WorkingContext } = require('../dist/working-context.js');
+  const seal = WorkingContext.prototype.seal, close = WorkingContext.prototype.close;
+  const providerError = new Error('provider failure'), sealError = new Error('seal failure');
+  let closed = 0;
+  WorkingContext.prototype.seal = function() { throw sealError; };
+  WorkingContext.prototype.close = function() { closed++; return close.call(this); };
+  t.after(() => { WorkingContext.prototype.seal = seal; WorkingContext.prototype.close = close; });
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    if (providerFails) throw providerError;
+    completeRecoveryReply(options, 'Report');
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect.' }]), model, { contextManagementMode: 'hybrid' });
+  await assert.rejects(handlePredictionLoop(ctl), error => error === (providerFails ? providerError : sealError));
+  assert.equal(closed, 1);
+  assert.ok(ctl.session.disposed);
+  const outcomes = ctl.debugValues.filter(e => e.event === 'execution_outcome');
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].executionOutcome, 'failed');
+  assert.equal(outcomes[0].reportCompleted, false);
+  assert.ok(outcomes[0].cleanupFailures.some(item => item.includes('seal failure')));
+});
+
+test('working context acquired before a setup failure is closed once', async t => {
+  const { WorkingContext } = require('../dist/working-context.js');
+  const restore = WorkingContext.prototype.restore, close = WorkingContext.prototype.close;
+  let closed = 0;
+  WorkingContext.prototype.restore = function() { throw new Error('restore failure'); };
+  WorkingContext.prototype.close = function() { closed++; return close.call(this); };
+  t.after(() => { WorkingContext.prototype.restore = restore; WorkingContext.prototype.close = close; });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect.' }]), reasoningModel(async () => assert.fail('no dispatch')),
+    { contextManagementMode: 'hybrid' });
+  await assert.rejects(handlePredictionLoop(ctl), /restore failure/);
+  assert.equal(closed, 1);
+  assert.ok(ctl.session.disposed);
+  assert.equal(ctl.debugValues.filter(e => e.event === 'execution_outcome').length, 1);
+});
+
+test('terminal telemetry respects disabled debug and observe-only does not inject a fallback', async () => {
+  for (const showDebugInfo of [false, true]) {
+    let calls = 0;
+    const model = reasoningModel(async (_chat, _tools, options) => { calls++; emitReasoningLimit(options); });
+    const ctl = fakeController(Chat.from([{ role: 'user', content: 'Observe.' }]), model,
+      { showDebugInfo, observeOnly: true, reasoningRecoveryMode: 'on' });
+    await handlePredictionLoop(ctl);
+    assert.equal(calls, 1);
+    assert.equal(ctl.debugValues.filter(e => e.event === 'execution_outcome').length, showDebugInfo ? 1 : 0);
+    assert.ok(ctl.blocks.every(block => !block.text.includes('부분 보고')));
+  }
+});
+
+
+test('ordinary EOS with a pending structured request is not a completed report', async () => {
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    options.onPredictionCompleted({ stats: { stopReason: 'eosFound' } });
+    options.onMessage(ChatMessage.from({ role: 'assistant', content: [
+      { type: 'text', text: 'I will inspect A.h next.' },
+      { type: 'toolCallRequest', toolCallRequest: { type: 'function', id: 'pending', name: 'read_file', arguments: { path: 'A.h' } } },
+    ] }));
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect A.h.' }]), model);
+  await handlePredictionLoop(ctl);
+  const outcome = ctl.debugValues.find(e => e.event === 'execution_outcome');
+  assert.equal(outcome.reportCompleted, false);
+  assert.equal(outcome.reportState, 'unresolved_tool_intent');
+  assert.equal(outcome.taskCompleted, false);
+});
+
+test('external evaluator deadline is a timeout in runtime and evaluation', async () => {
+  const abort = new AbortController();
+  const reason = new DOMException('Evaluation deadline', 'TimeoutError');
+  const model = reasoningModel(async () => { abort.abort(reason); throw reason; });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect.' }]), model);
+  ctl.abortSignal = abort.signal;
+  ctl.guardAbort = () => abort.signal.throwIfAborted();
+  await assert.rejects(handlePredictionLoop(ctl), error => error === reason);
+  const outcome = ctl.debugValues.find(e => e.event === 'execution_outcome');
+  assert.equal(outcome.executionOutcome, 'timed_out');
+  assert.equal(ctl.debugValues.filter(e => e.event === 'execution_outcome').length, 1);
+  const { classifyRunOutcome } = require('../scripts/eval-audit-pressure.cjs');
+  const evaluated = classifyRunOutcome({ timedOut: true, terminalOutcome: outcome });
+  assert.equal(evaluated, outcome);
+});
+
+
+for (const originalFailure of ['none', 'setup', 'provider']) test(`session disposal failure preserves ${originalFailure} execution failure and one outcome`, async () => {
+  const problem = new Error('original failure'), cleanup = new Error('dispose failure');
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    if (originalFailure === 'provider') throw problem;
+    completeRecoveryReply(options, 'Report');
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect.' }]), model);
+  let disposed = 0;
+  ctl.session[Symbol.dispose] = () => { disposed++; throw cleanup; };
+  if (originalFailure === 'setup') Object.defineProperty(ctl.session, 'tools', { get() { throw problem; } });
+  await assert.rejects(handlePredictionLoop(ctl), error => error === (originalFailure === 'none' ? cleanup : problem));
+  assert.equal(disposed, 1);
+  const outcomes = ctl.debugValues.filter(e => e.event === 'execution_outcome');
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].executionOutcome, 'failed');
+  assert.equal(outcomes[0].reportCompleted, false);
+  assert.ok(outcomes[0].cleanupFailures.some(item => item.includes('dispose failure')));
+  if (originalFailure === 'none') assert.equal(outcomes[0].reason, 'tool_session_dispose_failed');
+});
+
+test('reasoning exhaustion delivers returned source evidence without unfinished model claims', async () => {
+  const history = Chat.from([{ role: 'user', content: 'Inspect A.h for lifetime issues.' }]);
+  history.append(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest:
+    { type: 'function', id: 'prior', name: 'read_file_range', arguments: { path: 'A.h', startLine: 1, endLine: 1 } } }] }));
+  history.append(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: 'prior', content: JSON.stringify({
+    ok: true, path: 'A.h', canonicalProject: 'C:/Game/Game.uproject', sha256: 'c'.repeat(64),
+    startLine: 1, endLine: 1, totalLines: 20, content: 'RETURNED_SOURCE_DECLARATION',
+  }) }] }));
+  let calls = 0;
+  const model = reasoningModel(async (_chat, _tools, options) => { calls++; emitReasoningLimit(options, 'UNVERIFIED_ROOT_CAUSE'); });
+  const tool = { name: 'read_file_range', pluginIdentifier: 'mcp/unreal-agent', description: 'Read source', parametersJsonSchema: { type: 'object' } };
+  const ctl = fakeController(history, model, { reasoningRecoveryMode: 'on' }, [tool]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  const partials = ctl.blocks.filter(block => block.text.startsWith('부분 조사 보고'));
+  assert.equal(partials.length, 1);
+  assert.match(partials[0].text, /RETURNED_SOURCE_DECLARATION/);
+  assert.match(partials[0].text, /lines 1–1/);
+  assert.doesNotMatch(partials[0].text, /UNVERIFIED_ROOT_CAUSE/);
+  assert.equal(ctl.debugValues.find(e => e.event === 'partial_report_delivery').evidenceCount, 1);
 });

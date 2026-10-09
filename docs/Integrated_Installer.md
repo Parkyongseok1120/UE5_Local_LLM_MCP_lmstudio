@@ -101,6 +101,10 @@ LM Studio·언리얼 구성에는 압축기 파일 설치가 포함됩니다. �
 
 첫 설치에서는 `--skip-deps`를 쓰지 말아야 합니다. 이 옵션은 이미 있는 의존 패키지를 재사용할 때만 의미가 있습니다. `@modelcontextprotocol/sdk/server/index.js`를 못 찾는다면 옵션을 빼고 다시 실행하면 됩니다. Python이 없는 새 장비에서는 `--skip-runtime-bootstrap`도 빼야 합니다.
 
+Windows에서 같은 소스 폴더의 설치를 갱신하려면 `UPDATE.bat`를 사용합니다. 기존 Unity·Unreal 연결을 먼저 확인하고, 의존성 갱신과 압축기 설치를 진행합니다. `UPDATE.bat "C:\My LM Studio\mcp.json"`처럼 설정 파일을 지정하면 그 상위 폴더에 압축기도 설치합니다. 관리된 Python은 기본 상태 폴더의 `runtime-python.path`에서 읽으며, 별도 상태 폴더나 Python은 각각 `UPDATE_STATE_HOME`, `UPDATE_PYTHON` 환경변수로 지정할 수 있습니다. `UPDATE.bat --dry-run`은 실행 계획만 확인합니다.
+
+압축기 설치 검증은 `npm run verify:install`로 수행합니다. 배포본 소스 컴파일, SDK 보정, 생성된 빌드 식별자와 등록 구조를 확인합니다. 개발용 전체 의미·회귀 시험인 `npm test`는 저장소 CI에서 계속 실행합니다. 배포본에도 개발 시험 자료 전체가 있어야 설치되는 의존 관계는 두지 않습니다. 같은 revision의 오래된 production bundle은 빌드 식별자 검사에서 거절하며, 디스크 검증 성공은 현재 LM Studio 프로세스가 새 코드를 로드했다는 증거가 아닙니다.
+
 ## 설치 복구와 연결 상태 확인
 
 ```powershell
@@ -122,5 +126,7 @@ pwsh -NoProfile -File ./rag.ps1 refresh -RefreshScope project_source
 ```
 
 관리 대상 설정 파일을 이전 상태로 되돌리려면 `python3 install.py --rollback`을 사용합니다. 외부 패키지 설치와 생성한 검색 자료까지 모두 되돌리는 기능은 아닙니다.
+
+설치기가 변경한 플러그인 고정·개발 플러그인 허용 설정과 기존 채팅의 활성화 목록도 같은 복구 기록에 포함됩니다. 이후 설치 단계가 실패하면 원래 바이트로 복구합니다. 디렉터리 교체가 끝난 뒤 이전 폴더 정리에 실패한 경우에는 새 설치와 온전한 복구용 백업을 유지하고 `cleanupPending`을 기록합니다. 이미 일부 삭제된 정리 대상 폴더를 이전 설치로 되살리지 않습니다.
 
 Cline 설정 위치가 일반적인 위치와 다르면 `--cline-settings`를 사용합니다. 다른 AI 도구에 규칙 파일을 둘 위치는 `--rule-path`로 지정할 수 있습니다. Windows 배치 실행을 자동화할 때만 `INSTALL_NO_PAUSE=1`로 종료 후 키 입력 대기를 끌 수 있습니다.

@@ -84,6 +84,55 @@ function fixture(t, envOverrides = {}) {
   return { runtime, workspaceRoot, projectRoot, projectFile, configFile, sourceFile, stateRoot };
 }
 
+test("read envelope byte budgets preserve UTF-8, escaped text and contiguous whole-line pages", async t => {
+  const f=fixture(t), lines=Array.from({length:180},(_,i)=>`${i}: 한글 \\\" 데이터 ${'x'.repeat(45)}`);
+  fs.writeFileSync(f.sourceFile,lines.join('\r\n'));
+  const delivered=[]; let start=1;
+  while(start <= lines.length) {
+    const response=await f.runtime.callTool('read_file_range',{path:f.sourceFile,startLine:start,endLine:lines.length,byteBudget:4096});
+    assert.ok(Buffer.byteLength(response.content[0].text,'utf8') <= 4096);
+    const p=payloadOf(response); assert.equal(p.ok,true,JSON.stringify(p));
+    assert.equal(p.startLine,start); assert.equal(p.content,lines.slice(start-1,p.endLine).join('\n'));
+    delivered.push(...p.content.split('\n'));
+    if (p.nextStartLine === null) break;
+    assert.equal(p.nextStartLine,p.endLine+1); start=p.nextStartLine;
+  }
+  assert.deepEqual(delivered,lines);
+  const response=await f.runtime.callTool('read_file',{path:f.sourceFile,byteBudget:4096});
+  const p=payloadOf(response); assert.equal(p.ok,true); assert.ok(Buffer.byteLength(response.content[0].text)<=4096);
+  assert.equal(Buffer.byteLength(p.content),p.nextOffsetBytes); assert.doesNotMatch(p.content,/\ufffd/);
+});
+
+test("oversized lines expose a correct CRLF byte cursor and transport errors remain parseable", async t => {
+  const f=fixture(t), prefix='첫째\r\n둘째\r\n';
+  fs.writeFileSync(f.sourceFile,prefix+'한'.repeat(10000));
+  const response=await f.runtime.callTool('read_file_range',{path:f.sourceFile,startLine:3,endLine:3,byteBudget:2048});
+  const p=payloadOf(response); assert.equal(p.errorCode,'LINE_TOO_LARGE');
+  assert.equal(p.suggestion.args.offsetBytes,Buffer.byteLength(prefix));
+  assert.ok(Buffer.byteLength(response.content[0].text)<=2048);
+  const { toMcpResult }=require('../src/direct-response');
+  const huge=toMcpResult({ok:false,errorCode:'X',message:'한'.repeat(3000),suggestion:{tool:'read_file',args:{path:'길'.repeat(4000)}}},{maxBytes:2048});
+  payloadOf(huge); assert.ok(Buffer.byteLength(huge.content[0].text)<=2048);
+});
+
+test("symbol and search return bounded partial facts without claiming semantic resolution", async t => {
+  const f=fixture(t);
+  fs.writeFileSync(f.sourceFile,'void Foo() {\n'+Array.from({length:150},(_,i)=>`  // 한글 MATCH ${i}`).join('\n')+'\n}\nvoid Foo(int x) {}');
+  const response=await f.runtime.callTool('read_symbol',{path:f.sourceFile,symbol:'Foo',byteBudget:4096});
+  const p=payloadOf(response); assert.equal(p.ok,true,JSON.stringify(p));
+  assert.equal(p.representation,'lexical_body_candidate'); assert.equal(p.candidateCount,2);
+  assert.equal(p.truncated,true); assert.equal(p.nextStartLine,p.endLine+1);
+  assert.ok(Buffer.byteLength(response.content[0].text)<=4096);
+  const search=await f.runtime.callTool('search_files',{path:f.sourceFile,query:'MATCH',byteBudget:4096});
+  const s=payloadOf(search); assert.equal(s.ok,true); assert.equal(s.coverage,'partial');
+  assert.equal(s.omissionReason,'response_budget'); assert.ok(Buffer.byteLength(search.content[0].text)<=4096);
+  const bad=payloadOf(await f.runtime.callTool('read_file',{path:f.sourceFile,byteBudget:12}));
+  assert.equal(bad.errorCode,'INVALID_ARGUMENT');
+  const unsupported=await f.runtime.callTool('read_file',{path:f.sourceFile,byteBudget:2048,['미지'.repeat(900)]:'x'});
+  assert.equal(payloadOf(unsupported).ok,false);
+  assert.ok(Buffer.byteLength(unsupported.content[0].text)<=2048);
+});
+
 test("Direct and Strict use separate executable entries", () => {
   const pkg = require("../package.json");
   assert.strictEqual(pkg.main, "src/direct-server.js");
@@ -110,6 +159,11 @@ test("Workspace Git binds the selected Unreal project and rollback removes only 
   assert.equal(changes.queryPathBase, "workspace_root");
   assert.deepEqual(changes.requestedPaths, []);
   assert.deepEqual(changes.resolvedRepositoryPaths, ["."]);
+  // Shared Git owns its compact paging contract; Direct source-read byte
+  // limits must not reinterpret that page with pretty-JSON overhead.
+  for(let i=0;i<80;i++) fs.writeFileSync(path.join(f.projectRoot,`Changed-${i}.txt`),'new');
+  const gitPage=payloadOf(await f.runtime.callTool('git_changed_files',{project:f.projectFile,comparison:'worktree',byteBudget:4096}));
+  assert.notEqual(gitPage.ok,false,JSON.stringify(gitPage));
   const missingRange = payloadOf(await f.runtime.callTool("git_changed_files", {
     project: f.projectFile, comparison: "range",
   }));

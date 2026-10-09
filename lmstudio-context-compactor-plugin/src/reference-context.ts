@@ -1,3 +1,4 @@
+import { uniqueLatest } from "./tool-exchange-index.js";
 import { createHash } from "node:crypto";
 import type { Chat, ChatMessage, ToolCallRequest } from "@lmstudio/sdk";
 import type { ToolScope } from "./tool-scope";
@@ -6,13 +7,14 @@ import { toolMemory } from "./context-ports";
 import { fileObservation, pathApiFor, projectDescriptor, projectRoot } from "./continuity-file-observations.js";
 import { sanitizeDerivedOperationalText } from "./durable-memory-sanitizer.js";
 import { exchangeIndex } from "./tool-exchange-index.js";
+import { resultSemantics, retainedEffectFacts } from "./tool-result-semantics.js";
 
 /** All additional reference work is bounded here, independently of source
  * archival. These limits never grant an execution or context-budget allowance. */
 export const REFERENCE_LIMITS = Object.freeze({ observations: 16, diagnosticGroups: 3, diagnostics: 12,
   metadata: 8, sections: 6, candidates: 4, decodeChars: 262144, textChars: 700, seenCalls: 2048 });
 export type ReferenceSignal = "diagnostic_present" | "diagnostic_recurred" | "observed_source_changed"
-  | "source_body_unavailable" | "compilation_pending" | "operation_outcome_unknown";
+  | "source_body_unavailable" | "compilation_pending" | "operation_outcome_unknown" | "api_contract_observed";
 type Delivery = "returned" | "transport_error" | "canceled" | "unknown";
 type OperationStatus = "accepted" | "pending" | "completed" | "failed" | "canceled" | "outcome_unknown" | "unknown";
 type Origin = { provider: string; tool: string; executionId: string; toolCallId: string };
@@ -24,16 +26,35 @@ export type ReferenceItem = {
 type ObservedItem = ReferenceItem & {
   fileKey?: string; sourceBody?: boolean; engineVersion?: string; packages?: Record<string, string>;
   engineIdentity?: string;
+  versionSource?: "saved_project" | "runtime" | "installed_engine_source";
+  applicabilityInvalidated?: string;
   groupKey?: string; signature?: string; runId?: string; diagnosticCount?: number;
 };
-type Observation = { id: string; fingerprint: string; batch: number; items: ObservedItem[];
-  session?: string; runtime: boolean; engine: "unity" | "unreal" };
-export type ReferenceState = { observations: Observation[]; seen: Set<string>; disabled: boolean; batch: number };
+type Observation = { id: string; fingerprint: string; batch: number; items: ObservedItem[]; historical?: boolean;
+  session?: string; runtime: boolean; engine: "unity" | "unreal"; explicitTarget?: boolean };
+export type ReferenceState = { observations: Observation[]; seen: Set<string>; disabled: boolean; batch: number;
+  projectConflict?: { batch: number; engine: "unity" | "unreal" } };
 export type ReferenceSnapshot = {
   items: ReferenceItem[]; omittedItems: number; signals: ReferenceSignal[];
   autoSignals?: Array<{ signal: ReferenceSignal; observationIds: string[]; order: "last_observation" | "order_unknown" }>;
-  applicability: { engineVersion?: string; packages: Record<string, string>; networkPackagesAmbiguous: boolean };
+  applicability: { engineVersion?: string; engineVersionSource?: ObservedItem["versionSource"];
+    versions?: Partial<Record<NonNullable<ObservedItem["versionSource"]>, string>>;
+    versionConflict?: boolean; packages: Record<string, string>; networkPackagesAmbiguous: boolean };
+  projectObservation?: { engine: "unity" | "unreal"; project: string; usable: boolean; reason: string };
 };
+/** A reference-only view deliberately has no execution binding identity. */
+export type GuidanceScope = { engine: ToolScope["engine"]; source: ToolScope["source"] | "observation"; reason?: string };
+export function referenceGuidanceScope(scope: ToolScope, snapshot: ReferenceSnapshot): GuidanceScope {
+  if (scope.engine === "mixed") return { engine: "mixed", source: scope.source, reason: "mixed_engine_reference_partition_unsupported" };
+  if (snapshot.projectObservation?.reason === "returned_target_mismatch")
+    return { engine: "unknown", source: "ambiguous", reason: "returned_target_mismatch" };
+  if (scope.projectIdentity && !["available_tools", "ambiguous"].includes(scope.source))
+    return { engine: scope.engine, source: scope.source };
+  const observation = snapshot.projectObservation;
+  if (observation?.usable) return { engine: observation.engine, source: "observation", reason: observation.reason };
+  if (!["available_tools", "ambiguous"].includes(scope.source)) return { engine: scope.engine, source: scope.source };
+  return { engine: "unknown", source: "ambiguous", reason: observation?.reason || "project_observation_unavailable" };
+}
 export function emptyReferenceState(): ReferenceState { return { observations: [], seen: new Set(), disabled: false, batch: 0 }; }
 export function emptyReferenceSnapshot(): ReferenceSnapshot {
   return { items: [], omittedItems: 0, signals: [], applicability: { packages: {}, networkPackagesAmbiguous: false } };
@@ -55,7 +76,8 @@ function provenProject(value: Record<string, any>, scope: ToolScope): string {
   const descriptor = projectDescriptor(value) || (record(value.project) ? value.project.projectPath : "");
   if (typeof descriptor !== "string" || descriptor.length > 4096) return "";
   const expected = pathIdentity(scope.projectIdentity), observed = pathIdentity(descriptor);
-  if (!expected || !observed) return "";
+  if (!observed) return "";
+  if (!expected) return descriptor;
   // A .uproject descriptor cannot silently match a different descriptor in the
   // same directory. Directory-vs-descriptor matching uses the existing root rule.
   const bothDescriptors = scope.projectIdentity.toLowerCase().endsWith(".uproject") && descriptor.toLowerCase().endsWith(".uproject");
@@ -73,7 +95,7 @@ function resultProject(value: Record<string, any>, scope: ToolScope): string {
 }
 function originalResult(value: Record<string, any>) {
   return !["archived_tool_result_projection", "historical_evidence_index", "historical_evidence_range", "no_new_information"]
-    .includes(String(value.kind || "")) && value.no_new_information !== true && !value.repeatReceipt
+    .includes(String(value.kind || "")) && value.no_new_information !== true
     && value.status !== "no_new_information";
 }
 /** Use the shared causal batch matcher, including consecutive request blocks
@@ -87,15 +109,8 @@ function pairedResults(messages: readonly ChatMessage[]) {
   }));
   return { pairs: results, duplicateIds: index.duplicateIds };
 }
-function deliveryStatus(value: Record<string, any>): { delivery: Delivery; operationStatus: OperationStatus } {
-  if (value.status === "outcome_unknown") return { delivery: "transport_error", operationStatus: "outcome_unknown" };
-  if (["canceled", "cancelled"].includes(value.status)) return { delivery: "canceled", operationStatus: "canceled" };
-  if (value.timedOut === true) return { delivery: "returned", operationStatus: "outcome_unknown" };
-  if (value.status === "accepted") return { delivery: "returned", operationStatus: "accepted" };
-  if (["pending", "running", "compiling"].includes(value.status)) return { delivery: "returned", operationStatus: "pending" };
-  if (value.ok === false || value.status === "failed") return { delivery: "returned", operationStatus: "failed" };
-  if (value.ok === true || value.status === "completed") return { delivery: "returned", operationStatus: "completed" };
-  return { delivery: "returned", operationStatus: "unknown" };
+function deliveryStatus(value: Record<string, any>, provider: string) {
+  return resultSemantics(value, provider);
 }
 function fileMetadata(path: string, body: string, project: string): { engineVersion?: string; packages?: Record<string, string>; formatting?: Record<string, unknown> } {
   const normalized = path.replace(/\\/g, "/");
@@ -133,7 +148,7 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
   const tool = origin.tool, args = record(request.arguments) || {};
   const session = typeof value.editorSessionId === "string" && integer(value.domainGeneration) !== undefined
     ? `${value.editorSessionId}:${value.domainGeneration}` : undefined;
-  const status = deliveryStatus(value);
+  const status = deliveryStatus(value, origin.provider);
   let runtime = false, invalidateFiles = false;
   if (engine === "unreal" && tool === "unreal_symbol_lookup" && value.sourceMode === "engine_local") {
     const observed = record(value.observedEngineIdentity);
@@ -145,7 +160,7 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       engineIdentityStatus: verified ? "observed" : "unknown", requestedEngineAssociation: text(value.requestedEngineAssociation),
       observedEngineRoot: verified ? text(observed.engineRoot) : undefined, observedEngineVersion: verified ? observed.version : undefined,
       coverage: record(value.coverage) ? { completeness: text(value.coverage.completeness), scope: text(value.coverage.scope) } : { completeness: "unknown" } },
-      { engineVersion: verified ? observed.version : undefined, engineIdentity: identity,
+      { engineVersion: verified ? observed.version : undefined, engineIdentity: identity, versionSource: "installed_engine_source",
         groupKey: JSON.stringify([pathIdentity(project), "unreal_engine_source"]) });
   } else if (engine === "unreal" && tool === "build_unreal_project" && record(value.project)) {
     const p = value.project;
@@ -187,18 +202,28 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
         signature: diagnostics.length ? digest(JSON.stringify(diagnostics.map(({ sequence, compilationId, ...d }) => d))) : undefined,
         diagnosticCount: diagnostics.length });
   } else if (engine === "unity" && tool === "unity_editor" && args.action === "compile") {
-    runtime = true;
+    runtime = !value.operationId;
     add("operation", { ...status, operationKind: "unity_script_compilation_request", session: session || "unknown",
       compilationIdAtRequest: text(value.compilationIdAtRequest), operationId: text(value.operationId),
+      originalOrigin: record(value.origin) || undefined, requestFingerprint: digest(JSON.stringify([tool, args])),
       sourceAssemblyVerification: "unknown", playerBuildVerification: "unknown" });
   } else if (engine === "unity" && tool === "unity_status") {
     runtime = true;
     add("project", { connection: text(value.connection), session: session || "unknown", editorVersion: text(value.editorVersion),
       compiling: typeof value.compiling === "boolean" ? value.compiling : "unknown", compilationId: text(value.compilationId) },
-      { engineVersion: session ? text(value.editorVersion, 64) : undefined, groupKey: JSON.stringify([pathIdentity(project), "unity_status"]) });
-  } else if (value.status === "outcome_unknown") {
-    runtime = engine === "unity";
-    add("operation", { ...status, operationKind: "tool_transport", errorCode: text(value.errorCode), operationId: text(value.operationId) });
+      { engineVersion: session && value.connection !== "disconnected" ? text(value.editorVersion, 64) : undefined,
+        versionSource: "runtime", groupKey: JSON.stringify([pathIdentity(project), "unity_status"]) });
+  } else if (engine === "unity" && tool === "unity_operation" && args.action === "get") {
+    add("operation", { ...retainedEffectFacts(value), ...status, resultDelivery: record(value.delivery) || undefined, operationKind: "operation_lookup",
+      operationId: text(value.operationId), originalOrigin: record(value.origin) || undefined,
+      lookupSession: value.delivery?.editorSessionId ? `${value.delivery.editorSessionId}:${value.delivery.domainGeneration}` : "unknown", errorCode: text(value.errorCode) });
+  } else if (value.status === "outcome_unknown" || engine === "unity" && value.operationId) {
+    // An unresolved operation belongs to its original invocation, not the
+    // current Editor connection. Reconnect/reload cannot erase its outcome.
+    add("operation", { ...retainedEffectFacts(value), ...status, resultDelivery: record(value.delivery) || undefined, operationKind: "tool_operation",
+      errorCode: text(value.errorCode), operationId: text(value.operationId || args.operationId),
+      originalOrigin: record(value.origin) || undefined,
+      requestFingerprint: digest(JSON.stringify([tool, args])) });
   }
   const fileTools = engine === "unreal" ? ["read_file", "read_file_range", "read_symbol", "write_file", "replace_in_file", "apply_edit_bundle", "delete_file"]
     : ["read_file", "patch_file", "create_file", "structured_data_patch"];
@@ -215,10 +240,11 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       if (!provenProject({ canonicalProject: descriptor }, { projectIdentity: project } as ToolScope)) { invalidateFiles = true; continue; }
       const file = fileObservation({ ...raw, sha256: raw.sha256 || raw.hash }, project, value.operation);
       if (!file) continue;
-      if ((value.ok === false || value.errorCode) && readFailureTool(tool)) {
+      if (status.operationStatus === "failed" && readFailureTool(tool)) {
         file.observationState = "unavailable";
         delete file.sha256AtObservation; delete file.observedLineRanges; delete file.readCoverageState;
-      } else if ((value.ok === false || value.errorCode) && file.observationState !== "conflict_observed") continue;
+      } else if (["failed", "outcome_unknown", "canceled", "pending", "accepted"].includes(status.operationStatus)
+        && file.observationState !== "conflict_observed") continue;
       const fileKey = pathIdentity(String(file.canonicalPath));
       const body = typeof raw.content === "string" ? raw.content : typeof raw.text === "string" ? raw.text : undefined;
       const read = ["read_file", "read_file_range", "read_symbol"].includes(tool) && file.observationState === "observed";
@@ -237,7 +263,10 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
         observationState: file.observationState, ranges: file.observedLineRanges || [],
         coverage: file.readCoverageState || "unknown", engineVersion, packages, formatting,
         validity: "last_observation_only", editReceipt: "not_provided" },
-        { fileKey, sourceBody: read && body !== undefined, engineVersion, packages });
+        { fileKey, groupKey: JSON.stringify([pathIdentity(project), fileKey]),
+          sourceBody: read && body !== undefined, engineVersion, versionSource: "saved_project", packages });
+      if (read && body && /\b(?:UPROPERTY|UFUNCTION|DECLARE_DYNAMIC_\w+|AddDynamic|BindUFunction|TObjectPtr|SerializeField|UnityEvent)\b/.test(body.slice(0, 65536)))
+        items[items.length - 1].data.apiContractContext = "lexical_signal_only; necessity_and_correctness_unverified";
     }
   }
   return { items, runtime, session, invalidateFiles };
@@ -251,10 +280,13 @@ export function ingestReferenceObservations(state: ReferenceState, messages: rea
   const batch = ++state.batch;
   const batchFiles = new Set<string>(), ambiguousFiles = new Set<string>();
   const batchSessions = new Set<string>();
+  const changedDescriptors = new Set<string>();
+  const changedPackageManifests = new Set<string>();
   let batchFileUncertainty = false, batchSessionUncertainty = false;
   const invalidateFileFacts = () => {
     batchFileUncertainty = true;
-    state.observations = state.observations.map(o => ({ ...o, items: o.items.filter(i => !i.fileKey) })).filter(o => o.items.length);
+    state.observations = state.observations.map(o => ({ ...o, items: o.items.filter(i => !i.fileKey).map(i =>
+      i.versionSource === "installed_engine_source" ? { ...i, applicabilityInvalidated: "project_files_uncertain" } : i) })).filter(o => o.items.length);
   };
   const { pairs, duplicateIds } = pairedResults(messages);
   for (const id of duplicateIds) {
@@ -262,6 +294,9 @@ export function ingestReferenceObservations(state: ReferenceState, messages: rea
     state.observations = state.observations.filter(o => o.id !== id);
     state.seen.add(id);
   }
+  // Source invocation precedes its journal lookup for correlation, independent
+  // of callback arrival order. Other peers retain their unknown ordering.
+  pairs.sort((a, b) => Number(a.request.name === "unity_operation") - Number(b.request.name === "unity_operation"));
   for (const { request, content } of pairs) {
     const id = String(request.id || "");
     if (state.seen.has(id)) { state.observations = state.observations.filter(o => o.id !== id); continue; }
@@ -270,12 +305,30 @@ export function ingestReferenceObservations(state: ReferenceState, messages: rea
     const matches = tools.filter(tool => tool.name === request.name);
     if (matches.length !== 1) continue;
     const tool = matches[0], engine = capabilityScope(tool);
-    if (engine === "common" || scope.engine !== engine || ["available_tools", "ambiguous"].includes(scope.source)) continue;
+    if (engine === "common" || scope.engine === "mixed" || scope.engine !== "unknown" && scope.engine !== engine) continue;
     if (content.length > REFERENCE_LIMITS.decodeChars) { state.observations = []; batchFileUncertainty = true; continue; }
     const value = record(toolMemory.decodeToolResultRecord(content).value);
     if (!value || !originalResult(value)) continue;
+    // Shared selection is not the target of a particular request or an Editor
+    // observation. Preserve its weaker provenance, including stale/unbound.
+    if (engine === "unreal" && ["get_active_project", "unreal_get_active_project", "set_active_project", "unreal_set_active_project"].includes(request.name)
+      && value.ok === true) {
+      const selected = typeof value.activeProject === "string" && pathIdentity(value.activeProject) ? value.activeProject : "";
+      const binding = tool.pluginIdentifier === "mcp/unreal-rag" && request.name === "unreal_get_active_project"
+        ? String(value.projectBindingStatus || "unknown") : "configured_unverified";
+      state.observations.push({ id, fingerprint: digest(content), batch, runtime: false, engine,
+        items: [{ id: `${executionId}:${id}:selection`, origin: { provider: tool.pluginIdentifier!, tool: request.name, executionId, toolCallId: id },
+          engine, project: selected, kind: "project", groupKey: "shared_default_selection",
+          data: { projectFactKind: "shared_default_selection", bindingStatus: binding,
+            editorProjectVerification: "unverified", engineVersionVerification: "unverified" } }] });
+      state.observations = state.observations.slice(-REFERENCE_LIMITS.observations);
+      continue;
+    }
     const project = resultProject(value, scope);
     if (!project) {
+      const returnedTarget = projectDescriptor(value) || record(value.project)?.projectPath;
+      if (scope.projectIdentity && typeof returnedTarget === "string" && pathIdentity(returnedTarget))
+        state.projectConflict = { batch, engine };
       // Older mutation adapters report a real version conflict without a
       // canonical target. Invalidate prior file-derived assertions rather than
       // guessing a target from pre-binding model arguments. No fresh fact added.
@@ -285,7 +338,38 @@ export function ingestReferenceObservations(state: ReferenceState, messages: rea
       }
       continue;
     }
+    const requested = record(request.arguments)?.project;
+    if (!scope.projectIdentity && typeof requested === "string" && pathIdentity(requested)
+      && !provenProject({ canonicalProject: project }, { ...scope, projectIdentity: requested })) {
+      state.projectConflict = { batch, engine }; continue;
+    }
     const normalized = normalize(value, { provider: tool.pluginIdentifier!, tool: request.name, executionId, toolCallId: id }, project, engine, request);
+    for (const item of normalized.items.filter(i => i.kind === "operation" && i.data.operationId)) {
+      const matchesOperation = (i: ObservedItem) => i.kind === "operation"
+        && i.origin.provider === item.origin.provider && pathIdentity(i.project) === pathIdentity(item.project)
+        && i.data.operationId === item.data.operationId;
+      const prior = state.observations.flatMap(o => o.items).filter(matchesOperation);
+      const requests = new Set(prior.map(i => i.data.requestFingerprint).filter(Boolean));
+      const origins = new Set([...prior, item].map(i => i.data.originalOrigin).filter(Boolean).map(v => JSON.stringify(v)));
+      const conflict = requests.size > 1 || origins.size > 1 || item.data.requestFingerprint
+        && requests.size > 0 && !requests.has(item.data.requestFingerprint);
+      if (conflict) {
+        item.data.correlation = "conflicting_operation_identity";
+        item.data.operationStatus = "outcome_unknown";
+      } else if (request.name === "unity_operation" && (!value.errorCode || record(value.origin)) && prior.length
+        && ["completed", "failed", "canceled"].includes(String(item.data.operationStatus))) {
+        item.data.originalRequestRefs = prior.map(i => i.id);
+        item.data.requestFingerprint = prior.find(i => i.data.requestFingerprint)?.data.requestFingerprint;
+        state.observations = state.observations.map(o => ({ ...o, items: o.items.filter(i => !matchesOperation(i)) }))
+          .filter(o => o.items.length);
+      } else if (request.name === "unity_operation" && prior.some(i => ["completed", "failed", "canceled"].includes(String(i.data.operationStatus)))) {
+        // A missing journal or a later connectivity error cannot undo a
+        // previously observed terminal result for the same operation.
+        item.data.operationStatus = "unknown";
+        item.data.correlation = "lookup_does_not_supersede_terminal_observation";
+      }
+    }
+    normalized.items.forEach(i => { i.data.projectFactKind = "observed_result_target"; });
     if (normalized.invalidateFiles) invalidateFileFacts();
     if (normalized.runtime && normalized.session) batchSessions.add(normalized.session);
     if (batchSessions.size > 1) batchSessionUncertainty = true;
@@ -299,6 +383,23 @@ export function ingestReferenceObservations(state: ReferenceState, messages: rea
       state.observations = state.observations.filter(o => !o.runtime);
     }
     const touched = new Set(normalized.items.flatMap(i => i.fileKey ? [i.fileKey] : []));
+    // No descriptor fingerprint accompanied old engine-local bindings. A new
+    // descriptor observation therefore requires re-establishing applicability;
+    // it never erases the historical engine-source observation itself.
+    const descriptorChanged = normalized.items.some(i => i.fileKey === pathIdentity(project));
+    if (descriptorChanged) changedDescriptors.add(pathIdentity(project));
+    if (descriptorChanged) state.observations = state.observations.map(o => ({ ...o, items: o.items.map(i =>
+      i.versionSource === "installed_engine_source" && pathIdentity(i.project) === pathIdentity(project)
+        ? { ...i, applicabilityInvalidated: "project_descriptor_changed" } : i) }));
+    if (changedDescriptors.has(pathIdentity(project))) normalized.items = normalized.items.map(i =>
+      i.versionSource === "installed_engine_source" ? { ...i, applicabilityInvalidated: "parallel_descriptor_observation" } : i);
+    const manifestKey = pathIdentity(pathApiFor(project).join(projectRoot(project), "Packages", "manifest.json"));
+    const manifestChanged = engine === "unity" && normalized.items.some(i => i.fileKey === manifestKey);
+    if (manifestChanged) changedPackageManifests.add(pathIdentity(project));
+    if (manifestChanged) state.observations = state.observations.map(o => ({ ...o, items: o.items.map(i =>
+      i.packages && pathIdentity(i.project) === pathIdentity(project) ? { ...i, applicabilityInvalidated: "package_manifest_observed" } : i) }));
+    if (changedPackageManifests.has(pathIdentity(project))) normalized.items = normalized.items.map(i =>
+      i.packages ? { ...i, applicabilityInvalidated: "parallel_package_manifest_observation" } : i);
     for (const key of touched) {
       if (batchFiles.has(key)) ambiguousFiles.add(key);
       batchFiles.add(key);
@@ -309,7 +410,8 @@ export function ingestReferenceObservations(state: ReferenceState, messages: rea
     // file version order nor that a read followed a mutation. Drop both views.
     normalized.items = normalized.items.filter(i => !i.fileKey || !batchFileUncertainty && !ambiguousFiles.has(i.fileKey));
     if (normalized.items.length) state.observations.push({ id, fingerprint: digest(content), batch,
-      items: normalized.items, runtime: normalized.runtime, session: normalized.session, engine });
+      items: normalized.items, runtime: normalized.runtime, session: normalized.session, engine,
+      explicitTarget: Boolean(scope.projectIdentity || typeof requested === "string" && pathIdentity(requested)) });
     state.observations = state.observations.slice(-REFERENCE_LIMITS.observations);
   }
 }
@@ -318,36 +420,72 @@ export function ingestReferenceObservations(state: ReferenceState, messages: rea
  * References are never receipts, fresh reads or a second historical archive. */
 export function referenceSnapshot(state: ReferenceState, history: Chat): ReferenceSnapshot {
   const snapshot = emptyReferenceSnapshot();
-  if (!state.observations.length) return snapshot;
+  if (!state.observations.length) {
+    if (state.projectConflict) snapshot.projectObservation = { engine: state.projectConflict.engine, project: "",
+      usable: false, reason: "returned_target_mismatch" };
+    return snapshot;
+  }
   const available = new Map(pairedResults(history.getMessagesArray()).pairs.map(p => [p.request.id, digest(p.content)]));
   const signals = new Set<ReferenceSignal>(), groups = new Set<string>();
   let diagnosticGroups = 0, diagnosticEntries = 0, metadata = 0;
   const ordered = [...state.observations].reverse();
+  // Explicit call results outrank unrelated shared defaults. Within a batch,
+  // conflicting targets remain unknown; arrival order cannot choose a winner.
+  const targets = ordered.filter(o => o.items.some(i => i.data.projectFactKind === "observed_result_target"));
+  const selections = ordered.filter(o => o.items.some(i => i.data.projectFactKind === "shared_default_selection"));
+  const latestSelection = selections[0], latestTarget = targets[0];
+  const projectFacts = latestSelection && latestTarget && !latestTarget.explicitTarget && latestSelection.batch >= latestTarget.batch
+    ? [...selections, ...targets.filter(o => o.batch >= latestSelection.batch)] : targets.length ? targets : selections;
+  const projectBatch = projectFacts[0]?.batch;
+  const currentProjects = projectFacts.filter(o => o.batch === projectBatch).flatMap(o => o.items);
+  const currentProject = currentProjects[0];
+  const projectAmbiguous = new Set(currentProjects.map(i => `${i.engine}:${pathIdentity(i.project)}`)).size > 1;
+  if (currentProject) snapshot.projectObservation = { engine: currentProject.engine, project: currentProject.project,
+    usable: !projectAmbiguous && Boolean(currentProject.project) && (currentProject.data.projectFactKind === "observed_result_target"
+      || currentProjects.every(i => i.data.bindingStatus === "bound")),
+    reason: projectAmbiguous ? "parallel_project_targets_ambiguous" : currentProject.data.projectFactKind === "observed_result_target"
+      ? "returned_project_target" : `shared_selection_${currentProject.data.bindingStatus}` };
+  if (state.projectConflict && state.projectConflict.batch >= (projectBatch || 0)) snapshot.projectObservation = {
+    engine: state.projectConflict.engine, project: "", usable: false, reason: "returned_target_mismatch" };
   const localEngineObservations = ordered.filter(o => o.items.some(i => i.data.sourceMode === "engine_local"));
   const engineBatch = localEngineObservations[0]?.batch;
   const currentEngineIdentities = localEngineObservations.filter(o => o.batch === engineBatch)
     .flatMap(o => o.items.filter(i => i.data.sourceMode === "engine_local").map(i => i.engineIdentity));
   const ambiguousEngine = currentEngineIdentities.some(i => !i) || new Set(currentEngineIdentities).size > 1;
   const autoSignals: NonNullable<ReferenceSnapshot["autoSignals"]> = [];
+  const versions: NonNullable<ReferenceSnapshot["applicability"]["versions"]> = {};
+  const eligibleProject = (item: ObservedItem) => !projectAmbiguous && snapshot.projectObservation?.usable !== false
+    && (!currentProject || pathIdentity(item.project) === pathIdentity(currentProject.project));
+  const runtimeUnavailable = ordered.some(o => o.items.some(i => eligibleProject(i) && i.origin.tool === "unity_status"
+    && (i.data.connection === "disconnected" || i.data.session === "unknown")));
   for (const observation of ordered) {
     const present = available.get(observation.id) === observation.fingerprint;
     for (const item of observation.items) {
       if (item.groupKey && groups.has(item.groupKey)) continue;
       if (item.groupKey) groups.add(item.groupKey);
+      // Applicability derives from bounded observations, not the smaller UI
+      // projection. Omitting a displayed row cannot resolve a known conflict.
+      if (eligibleProject(item) && item.engineVersion && item.versionSource && !versions[item.versionSource]
+        && !item.applicabilityInvalidated && !(item.engine === "unreal" && ambiguousEngine)) versions[item.versionSource] = item.engineVersion;
+      if (eligibleProject(item) && item.packages && !item.applicabilityInvalidated) snapshot.applicability.packages = { ...item.packages };
       if (item.kind === "diagnostics") {
         if (++diagnosticGroups > REFERENCE_LIMITS.diagnosticGroups) { snapshot.omittedItems++; continue; }
       } else if (++metadata > REFERENCE_LIMITS.metadata) { snapshot.omittedItems++; continue; }
-      let data = { ...item.data, returnedBodyInCurrentInput: present, hostInputVerification: "unknown" } as Record<string, any>;
+      let data = { ...item.data, observationProvenance: observation.historical ? "restored_historical_observation" : "current_execution_return",
+        returnedBodyInCurrentInput: present, hostInputVerification: "unknown" } as Record<string, any>;
+      if (item.engineVersion) data.engineVersionSource = item.versionSource;
+      if (item.applicabilityInvalidated) data.currentApplicability = item.applicabilityInvalidated;
       const sameWork = (o: Observation) => o.items.some(i => item.groupKey ? i.groupKey === item.groupKey
         : i.origin.tool === item.origin.tool && i.kind === item.kind);
-      const orderKnown = ordered.filter(o => o.batch === observation.batch && sameWork(o)).length === 1
-        && !ordered.some(o => o.batch > observation.batch && sameWork(o));
-      const laterUnityCompile = observation.runtime && ordered.some(o => o.batch >= observation.batch
+      const orderKnown = uniqueLatest(ordered.filter(sameWork)) === observation;
+      const compileObservation = observation.runtime || item.data.operationKind === "unity_script_compilation_request";
+      const laterUnityCompile = compileObservation && ordered.some(o => o.batch >= observation.batch
         && o !== observation && o.runtime && o.session === observation.session && o.items.some(i =>
           ["project", "diagnostics"].includes(i.kind) && (o.batch === observation.batch
             || !item.runId || i.data.compilationId !== item.runId)));
+      const signal = (value: ReferenceSignal) => { if (eligibleProject(item)) signals.add(value); };
       const autoSignal = (signal: ReferenceSignal) => {
-        if (!orderKnown || laterUnityCompile) return;
+        if (!orderKnown || laterUnityCompile || !eligibleProject(item)) return;
         const existing = autoSignals.find(s => s.signal === signal);
         if (existing) existing.observationIds = [...new Set([...existing.observationIds, item.id])].slice(0, 4);
         else autoSignals.push({ signal, observationIds: [item.id], order: "last_observation" });
@@ -357,39 +495,45 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
         const shown = diagnostics.slice(0, REFERENCE_LIMITS.diagnostics - diagnosticEntries);
         diagnosticEntries += shown.length;
         data = { ...data, diagnostics: shown, coverage: { ...data.coverage, omittedBySnapshot: diagnostics.length - shown.length } };
-        if (shown.length) { signals.add("diagnostic_present"); autoSignal("diagnostic_present"); }
+        if (shown.length) { signal("diagnostic_present"); autoSignal("diagnostic_present"); }
         const peers = ordered.filter(o => o.batch === observation.batch && o.items.some(p => p.groupKey === item.groupKey));
         if (peers.length > 1) data.ordering = "multiple_results_in_same_batch; latest_run_unknown";
         const previous = ordered.find(o => o.batch < observation.batch && o.items.some(p => p.groupKey === item.groupKey));
         const prior = previous?.items.find(p => p.groupKey === item.groupKey);
         if (peers.length === 1 && item.signature && prior?.signature === item.signature && item.runId && prior.runId !== item.runId) {
-          signals.add("diagnostic_recurred");
+          signal("diagnostic_recurred");
           autoSignal("diagnostic_recurred");
           data.recurrence = { previousToolCallId: prior.origin.toolCallId, comparedScope: "bounded_displayed_diagnostics",
             sameRootCause: "unknown", mutationCausality: "unknown" };
         }
       }
-      const laterCompilationObservation = observation.runtime && ordered.some(o => o.batch > observation.batch
+      const laterCompilationObservation = compileObservation && ordered.some(o => o.batch > observation.batch
         && o.runtime && o.session === observation.session && o.items.some(i => i.kind === "project" || i.kind === "diagnostics"));
       if (laterCompilationObservation && (["pending", "accepted"].includes(String(data.operationStatus)) || data.compiling === true)) {
         data.currentCompilationStatus = "not_inferred_from_prior_acceptance_or_status";
       } else if (data.operationStatus === "pending" || data.operationStatus === "accepted" || data.compiling === true) {
-        signals.add("compilation_pending");
+        signal("compilation_pending");
         autoSignal("compilation_pending");
       }
-      if (data.operationStatus === "outcome_unknown") { signals.add("operation_outcome_unknown"); autoSignal("operation_outcome_unknown"); }
+      if (data.operationStatus === "outcome_unknown") { signal("operation_outcome_unknown"); autoSignal("operation_outcome_unknown"); }
       if (item.kind === "file") {
         data.sourceBodyInCurrentInput = Boolean(present && item.sourceBody);
-        if (!data.sourceBodyInCurrentInput) signals.add("source_body_unavailable");
-        if (["modified", "deleted", "conflict_observed"].includes(String(data.observationState))) signals.add("observed_source_changed");
+        if (!data.sourceBodyInCurrentInput) signal("source_body_unavailable");
+        if (["modified", "deleted", "conflict_observed"].includes(String(data.observationState))) signal("observed_source_changed");
+        if (present && item.sourceBody && data.apiContractContext) autoSignal("api_contract_observed");
       }
-      if (item.engineVersion && !snapshot.applicability.engineVersion && !(item.engine === "unreal" && ambiguousEngine))
-        snapshot.applicability.engineVersion = item.engineVersion;
-      if (item.packages) snapshot.applicability.packages = { ...item.packages };
       snapshot.items.push({ id: item.id, origin: item.origin, project: item.project, engine: item.engine, kind: item.kind, data });
     }
   }
   const packages = snapshot.applicability.packages;
+  snapshot.applicability.versions = versions;
+  snapshot.applicability.versionConflict = Boolean(versions.runtime && versions.saved_project && versions.runtime !== versions.saved_project);
+  const versionSource = versions.installed_engine_source ? "installed_engine_source" : versions.runtime ? "runtime"
+    : !runtimeUnavailable && versions.saved_project ? "saved_project" : undefined;
+  if (versionSource && !snapshot.applicability.versionConflict) {
+    snapshot.applicability.engineVersion = versions[versionSource];
+    snapshot.applicability.engineVersionSource = versionSource;
+  }
   snapshot.applicability.networkPackagesAmbiguous = Boolean(packages["com.unity.netcode.gameobjects"] && packages["com.unity.netcode"]);
   snapshot.signals = [...signals];
   snapshot.autoSignals = autoSignals;

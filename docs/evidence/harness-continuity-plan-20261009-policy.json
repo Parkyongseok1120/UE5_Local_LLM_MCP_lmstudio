@@ -1,0 +1,186 @@
+{
+  "mode": "architecture",
+  "plan": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+  "implementationStatus": "proposed_not_implemented",
+  "invariants": [
+    "Preserve source identity, version, query and units; historical evidence never grants fresh-read or mutation authority.",
+    "Commit each returned pair once; preserve unknown outcomes and existing off/warn/pause choices.",
+    "Exactly measured model input and one batch reservation ledger remain authoritative."
+  ],
+  "existing": [
+    "semantic-handoff owns generation and sets whole-execution cooldown after failure.",
+    "WorkingContext stores archive/window and validated note snapshot.",
+    "ContextManager and round-input own final input measurement and projection pressure.",
+    "BudgetBroker owns shared reservations; provider schema defines response limits."
+  ],
+  "proposed": [
+    "W3 replaces permanent failure cooldown with event-deduplicated, cost-bounded opportunities after material new evidence.",
+    "W3 coordinates optional handoff with meaningful evidence-removal boundaries while preserving deterministic progress and prior notes.",
+    "W4 exposes requested/effective/payload/body limits and shares actionable minimum read contract without weakening safety."
+  ],
+  "doNotDuplicate": [
+    "No second memory database or summary/judge model.",
+    "No extra context-token calculator or reservation ledger.",
+    "Do not redesign provider output status or auto-replay completed/unknown operations.",
+    "Use existing summaryEvidence, checkpoint generator, note validation and atomic window persistence."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/semantic-handoff.ts",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/src/round-input.ts",
+    "lmstudio-context-compactor-plugin/src/context-manager.ts",
+    "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+    "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+    "lmstudio-context-compactor-plugin/src/config-defaults.ts",
+    "lmstudio-context-compactor-plugin/src/direct-config.ts",
+    "lmstudio-context-compactor-plugin/src/execution-config.ts",
+    "lmstudio-context-compactor-plugin/src/context-ports.ts",
+    "lmstudio-context-compactor-plugin/src/execution-contracts.ts",
+    "runtime-policy/working-context/budget/projection tests",
+    "Generated settings/identity and installation checks"
+  ],
+  "validationPlan": [
+    "Same semantic event never retried; a new eligible event may consume the remaining execution budget.",
+    "Timeout/invalid refs/output-limit preserve old note; abort/finalization suppress new model work.",
+    "Restore maintains event deduplication while new execution budgets do not inherit raw wall-clock deadlines.",
+    "Tiny envelopes/Unicode/escaping respect caps and expose actionable failures; held reservations settle once.",
+    "Initial proposal max 2 summary calls / 60 seconds combined / 3 completed rounds cooldown must be evaluated live, not claimed as validated."
+  ],
+  "claims": [
+    {
+      "id": "W3",
+      "claim": "Give materially new summary events bounded opportunities after failure while retaining earlier notes and deterministic progress.",
+      "claimType": "wiring",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:131",
+          "observation": "Current gating requires compaction; ordinary projection skips handoff."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:177",
+          "observation": "Missing summary.note currently disables all later attempts."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:364",
+          "observation": "Projection after consumption does not require an accepted note."
+        },
+        {
+          "kind": "test",
+          "location": "docs/evidence/harness-continuity-plan-20261009-baseline.json",
+          "observation": "Projection with null note reproduced; live snapshot shows 30059ms failure and subsequent cooldown."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:121",
+          "symbol": "measured evidence-removal boundary"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "expected_missing",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:131",
+          "symbol": "deduplicate material event and remaining retry/cost budget"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:140",
+          "symbol": "existing bounded summary generator"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "expected_missing",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:628",
+          "symbol": "persist bounded attempt state and accepted note"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/test/runtime-policy.test.cjs:178",
+          "observation": "Current no-retry test intentionally prevents runaway summary cost; equivalent bounded-cost protection is required."
+        }
+      ],
+      "unknowns": [
+        "Impact on model reasoning and optimal retry budget need live comparison.",
+        "A successful handoff is still an assistant claim and cannot certify semantic completion."
+      ]
+    },
+    {
+      "id": "W4",
+      "claim": "Make read clamping and useful body capacity explicit through existing budget and provider contracts.",
+      "claimType": "wiring",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:110",
+          "observation": "readResultContract interprets provider fields and minimum reservations."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:163",
+          "observation": "Shared reservation clamps requested arguments."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts:158",
+          "observation": "Guard reserves once and forwards effective arguments."
+        },
+        {
+          "kind": "test",
+          "location": "docs/evidence/harness-continuity-plan-20261009-baseline.json",
+          "observation": "8192 requests clamp to 6668/5831/5103 under captured input budgets; a parallel peer is denied while held."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts:158",
+          "symbol": "observation request"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:163",
+          "symbol": "single reservation and explicit decision metadata"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "expected_missing",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "symbol": "envelope/body accounting and actionable minimum contract"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:121",
+          "symbol": "next input pressure selection and exact remeasurement"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:84",
+          "observation": "Existing held/consumed/released accounting works; no permanent reservation leak was confirmed."
+        }
+      ],
+      "unknowns": [
+        "Minimum useful body must be measured for actual serialized contracts, not inferred by lowering token multipliers.",
+        "Provider original output is not rewritten to claim awareness of the pre-clamp request."
+      ]
+    }
+  ]
+}

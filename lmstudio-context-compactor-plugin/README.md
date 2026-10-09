@@ -122,6 +122,12 @@ Legacy/Deterministic/Hybrid의 일반 `RESEARCH`에서만 진입하며, Observe 
 
 횟수는 실행 상태가 소유하며 도구 성공이나 컴팩션으로 초기화하지 않습니다. 도구 결과를 받으면 정상 진행으로 돌아가되 같은 사용자 요청에서는 생각 단계 복구를 다시 사용하지 않습니다. 잘린 생각은 GUI에만 남고 확정 이력에는 반영하지 않으며 이전 도구 결과는 보존합니다. 실행 여부가 불명확한 도구를 재실행하는 기능은 아닙니다. `reasoning_recovery_scheduled`, `reasoning_recovery_blocked`, `callPurpose=reasoning_recovery`로 복구 여부를 확인할 수 있습니다.
 
+생각 단계 재시도도 실패하거나 재시도 입력이 예산에 맞지 않으면, 추가 모델 호출 없이 반환된 관측과 보존된 미확인 항목으로 부분 보고를 전달합니다. 잘린 추론이나 미실행 도구 요청은 검증 결과로 사용하지 않습니다. 이 부분 보고는 `reportDelivered=true`, `reportCompleted=false`, `taskCompleted=false`이며 `Observe only` 또는 사용자 취소 뒤에는 새로 주입하지 않습니다.
+
+디버그가 켜져 있으면 실행마다 `execution_outcome`을 한 번 기록합니다. 초기화·입력 준비·생성·복구·정리 실패도 이 계약을 사용하며, `executionId`, 마지막 `modelInputId`, `terminalPhase`, 종료 이유와 전달 상태를 연결합니다. `DeliveryController`가 종료 판정을 소유하고 평가 스크립트가 같은 판정을 사용합니다. 이전 라운드의 진행문은 마지막 무응답의 보고로 승격하지 않으며, 알 수 없는 종료나 미실행 도구 의도가 남은 출력은 완료가 아닙니다. `objectiveSatisfied=null`은 사용자 목표의 의미적 충족이 아직 검증되지 않았다는 뜻이고, 정상 보고 생성만으로 `taskCompleted=true`가 되지 않습니다. 외부 제한 시간과 사용자 취소는 별도로 기록하며, 정리 중 오류가 발생해도 최초 실행 오류와 반환 근거를 보존합니다.
+
+복구 도구 목록·출력 예약·지침·시도 횟수는 `ExecutionState`가 소유한 `RecoveryCoordinator`에서 관리합니다. 입력 준비는 측정된 입력과 복구 후보를 반환하고, 실행 상태가 복구·최종 보고·중단을 결정합니다. 후보 측정에 사용한 도구 목록과 출력 예약을 실제 실행 계획에 함께 채택합니다.
+
 ### 복구의 책임과 수명
 
 | 담당 | 소유하는 판단·상태 | 경계 |

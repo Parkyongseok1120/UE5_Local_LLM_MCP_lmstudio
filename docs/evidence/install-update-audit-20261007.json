@@ -1,0 +1,380 @@
+{
+  "mode": "architecture",
+  "scope": {
+    "date": "2026-10-07",
+    "root": ".",
+    "task": "Installation and update audit",
+    "installedRuntimeModified": false
+  },
+  "claims": [
+    {
+      "id": "IU01",
+      "claim": "Portable installation previously failed because required runtime modules and the SDK patch were omitted; the explicit inventory and production installation verification now cover them.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/build_integrated_package.py",
+          "observation": "_source_files/_include omit 21 compactor source modules and scripts/patch-lmstudio-sdk.cjs."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/package.json",
+          "observation": "npm ci postinstall invokes patch-lmstudio-sdk.cjs; prebuild and prediction-loop imports require omitted files."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_package.py",
+          "observation": "test_portable_compactor_installs_dependencies_and_compiles_without_checkout_files reproduced MODULE_NOT_FOUND before the fix and passed actual npm ci and TypeScript compilation after it."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/install-update-package-red.log",
+          "observation": "Pre-fix production dependency installation failed because scripts/patch-lmstudio-sdk.cjs was absent."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_package.py",
+          "observation": "Prior package smoke uses --skip-deps and a fake LMS compiler; its success does not compile packaged TypeScript."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/build_integrated_package.py",
+          "symbol": "build"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/build_integrated_package.py",
+          "symbol": "_include"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "scripts/build_integrated_package.py",
+          "symbol": "_source_files and copy2"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "install.py",
+          "symbol": "_install_context_compactor npm ci"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/package.json",
+          "symbol": "postinstall references excluded script"
+        }
+      ],
+      "unknowns": [
+        "Live LMS compiler and runtime reload are not exercised."
+      ]
+    },
+    {
+      "id": "IU02",
+      "claim": "Update routes the selected configuration home consistently, reuses managed Python and preflights all engine bindings before dependency writes.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "UPDATE.bat",
+          "observation": "preflight/update_plugin"
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_update_launcher.py",
+          "observation": "Six isolated Windows launcher cases cover managed/explicit Python, selected home, dry run and binding failures."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_update_launcher.py",
+          "observation": "A real venv Python under a Korean path runs with no Python on PATH under CMD codepage 949; UTF-8 pointer decoding succeeds and the original codepage is restored."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Integrated_Installer.md",
+          "observation": "External npm/lms actions and generated indexes remain outside managed rollback; file/build verification does not prove live activation."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "UPDATE.bat",
+          "symbol": "preflight/update_plugin"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "UPDATE.bat",
+          "symbol": "preflight/update_plugin"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_update_launcher.py",
+          "symbol": "Six isolated Windows launcher cases cover managed/explicit Python, selected home, dry run and binding failures."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio reinstall/reload and Unity Editor execution were not performed."
+      ]
+    },
+    {
+      "id": "IU03",
+      "claim": "Plugin availability changes use the installer transaction and failed conversation writes are not counted as successful updates.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "install.py",
+          "observation": "_configure_context_compactor_availability/_enable_context_compactor_for_existing_chats"
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_installer.py",
+          "observation": "Post-activation failure restores both existing and absent settings and exact conversation bytes; failed writes count only as skipped."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Integrated_Installer.md",
+          "observation": "External npm/lms actions and generated indexes remain outside managed rollback; file/build verification does not prove live activation."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "install.py",
+          "symbol": "_configure_context_compactor_availability/_enable_context_compactor_for_existing_chats"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "install.py",
+          "symbol": "_configure_context_compactor_availability/_enable_context_compactor_for_existing_chats"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_integrated_installer.py",
+          "symbol": "Post-activation failure restores both existing and absent settings and exact conversation bytes; failed writes count only as skipped."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio reinstall/reload and Unity Editor execution were not performed."
+      ]
+    },
+    {
+      "id": "IU04",
+      "claim": "Published directories remain current if obsolete directory cleanup partially fails; rollback uses the untouched transaction backup.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "install.py",
+          "observation": "Transaction.replace_directory"
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_installer.py",
+          "observation": "Failure injected before and after deleting an old file preserves the new tree and successfully restores the complete old tree through rollback_actions."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Integrated_Installer.md",
+          "observation": "External npm/lms actions and generated indexes remain outside managed rollback; file/build verification does not prove live activation."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "install.py",
+          "symbol": "Transaction.replace_directory"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "install.py",
+          "symbol": "Transaction.replace_directory"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_integrated_installer.py",
+          "symbol": "Failure injected before and after deleting an old file preserves the new tree and successfully restores the complete old tree through rollback_actions."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio reinstall/reload and Unity Editor execution were not performed."
+      ]
+    },
+    {
+      "id": "IU05",
+      "claim": "Unity installation and update use the same npm lockfile, with explicit UTF-8 decoding and native Windows command dispatch.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "installer/unity_install.py",
+          "observation": "install_unity/run"
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_unity_install.py",
+          "observation": "Locked dependency command and process encoding assertions pass; live Editor/worker execution is not proven."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Integrated_Installer.md",
+          "observation": "External npm/lms actions and generated indexes remain outside managed rollback; file/build verification does not prove live activation."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "installer/unity_install.py",
+          "symbol": "install_unity/run"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "installer/unity_install.py",
+          "symbol": "install_unity/run"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_unity_install.py",
+          "symbol": "Locked dependency command and process encoding assertions pass; live Editor/worker execution is not proven."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio reinstall/reload and Unity Editor execution were not performed."
+      ]
+    }
+  ],
+  "existing": [
+    "Explicit release file allowlist in build_integrated_package.py",
+    "install.py owns compactor install and compiled-build readiness; CI owns the full semantic test suite",
+    "UPDATE.bat delegates binding verification to existing per-engine updaters",
+    "Runtime bootstrap writes state_home/runtime-python.path"
+  ],
+  "proposed": [],
+  "doNotDuplicate": [
+    "Do not add another configuration writer or worker process",
+    "Reuse install.py, existing updater dry-run and runtime bootstrap"
+  ],
+  "invariants": [
+    "Never change the live installation during audit tests",
+    "Preserve MCP permissions and existing project bindings on update",
+    "Never claim runtime activation from file or compilation checks",
+    "Fail before dependency mutation for known incompatible bindings; external npm/lms actions remain explicitly outside rollback",
+    "Keep release allowlist explicit and development evaluation runners excluded",
+    "Managed settings/conversations share the existing transaction; obsolete-tree cleanup cannot replace a published new tree."
+  ],
+  "impactedSurfaces": [
+    "UPDATE.bat",
+    "install.py",
+    "scripts/build_integrated_package.py",
+    "lmstudio-context-compactor-plugin/package.json",
+    "tests/test_integrated_package.py",
+    "tests/test_update_unreal_mcp.py",
+    "docs/Unity_Setup.md",
+    "installer/unity_install.py",
+    "tests/test_unity_install.py",
+    "tests/test_update_launcher.py",
+    "scripts/ci/ci_suites.py",
+    "docs/Integrated_Installer.md"
+  ],
+  "validationPlan": [
+    "Reproduce old artifact compilation failure in temporary directory",
+    "Run actual npm ci and production verification in staged package",
+    "Exercise Windows launcher with temporary homes and stub installer/updaters",
+    "Run installer/package/updater regressions and diff check",
+    "Independent review of ownership and rollback boundary"
+  ],
+  "implemented": [
+    "Explicit packaged runtime closure and production install verifier",
+    "Custom home and managed Python update routing",
+    "All-engine read-only preflight before dependency updates",
+    "Transactional settings and conversation activation",
+    "Postpublication cleanup isolation with intact rollback backup",
+    "Locked Unity dependencies and UTF-8 command output"
+  ],
+  "independentReview": {
+    "reviewer": "reference_contract_review",
+    "mode": "read_only",
+    "findingsAddressed": [
+      "missing runtime and SDK patch",
+      "development-test dependency in install path",
+      "untracked activation settings",
+      "partially deleted rollback source",
+      "UTF-8 managed Python pointer read under legacy CMD codepage"
+    ]
+  },
+  "validationResults": {
+    "status": "automated_verification_passed",
+    "installerUpdatePackage": {
+      "passed": 224,
+      "skipped": 14,
+      "failed": 0,
+      "log": "artifacts/install-update-full-tests.log"
+    },
+    "productionBuild": "passed",
+    "portableNpmCiAndCompile": "passed; included in aggregate count",
+    "ruff": "passed",
+    "compileall": "passed",
+    "diffCheck": "passed",
+    "actualConfigurationDryRun": {
+      "unreal": "passed",
+      "unity": "passed_with_bridge_missing_warning",
+      "mutated": false
+    },
+    "liveInstall": "not_run",
+    "liveReload": "not_run",
+    "liveEditor": "not_run",
+    "finalLauncherAndCiRegistry": {
+      "passed": 16,
+      "failed": 0,
+      "log": "artifacts/install-update-launcher-tests.log",
+      "note": "Includes six launcher and nine CI tests already in the aggregate, plus one new Korean path regression; do not sum suite counts."
+    }
+  },
+  "unknowns": [
+    "Real LM Studio CLI production compilation/reload on the user installation was not exercised.",
+    "macOS/POSIX-specific skipped paths require their CI hosts.",
+    "The current Unity project has no registered Editor Bridge; file-tool update remains available, Editor features require installation."
+  ]
+}

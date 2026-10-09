@@ -141,6 +141,12 @@ export function resolveToolScope(
   }
 
   const configuredProject = explicitProjectScope(configuredIdentity);
+  // An explicit but invalid identity must not borrow a workspace's proof or
+  // silently redirect execution to another project.
+  if (configuredIdentity && configuredProject.engine !== "unity" && configuredProject.engine !== "unreal") {
+    return { configuredEngine, engine: "unknown", projectIdentity: "", source: "ambiguous",
+      availableUnityTools, availableUnrealTools };
+  }
   if (configuredProject.engine === "unity" || configuredProject.engine === "unreal") {
     return {
       configuredEngine,
@@ -167,7 +173,7 @@ export function resolveToolScope(
     return {
       configuredEngine,
       engine: workspace.engine,
-      projectIdentity: configuredIdentity || workspace.projectIdentity,
+      projectIdentity: workspace.projectIdentity,
       source: "workspace",
       availableUnityTools,
       availableUnrealTools,

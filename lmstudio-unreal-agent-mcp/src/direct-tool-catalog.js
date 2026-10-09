@@ -4,6 +4,9 @@ const { workspaceToolDefinitions } = require("../../shared-tool-core/workspace")
 const { HARD_MUTATION_LIMITS } = require("./direct-mutation-limits");
 
 const DIRECT_TOOL_EFFECT = Symbol("directToolEffect");
+const readByteBudget = () => ({ type: "integer", minimum: 2048, maximum: 65536,
+  $comment: "direct-json-text-utf8",
+  description: "Optional UTF-8 byte limit for the returned JSON text, including metadata. Omitted keeps the configured response limit." });
 const VALID_TOOL_EFFECTS = new Set(["read", "ephemeral", "mutation", "long_running"]);
 const TOOL_EFFECTS = Object.freeze({
   get_workspace_info: "read",
@@ -187,6 +190,7 @@ function toolDefinitions() {
         caseSensitive: { type: "boolean" },
         maxResults: { type: "number", description: "Default 100, maximum 1000." },
         maxFiles: { type: "number", description: "Default 5000, maximum 50000." },
+        byteBudget: readByteBudget(),
       }), ["query"]),
     },
     {
@@ -197,26 +201,29 @@ function toolDefinitions() {
         project: projectArgument(),
         maxBytes: { type: "number", description: "Default 64 KiB, maximum 2 MiB." },
         offsetBytes: { type: "number", description: "Optional byte cursor, default 0." },
+        byteBudget: readByteBudget(),
       }), ["path"]),
     },
     {
       name: "read_file_range",
-      description: "Read an inclusive line range, register the whole-file version, and return its SHA-256 plus opaque fileVersionReceipt for conflict-safe edits.",
+      description: "Read an inclusive line range in whole-line pages fitting byteBudget including metadata. Follow nextStartLine; an oversized line fails with byte-window guidance. Whole-file SHA-256/receipt is version evidence, not proof the entire file was read.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
         startLine: { type: "number" },
         endLine: { type: "number" },
+        byteBudget: readByteBudget(),
       }), ["path", "startLine", "endLine"]),
     },
     {
       name: "read_symbol",
-      description: "Read one C/C++ function body with a small context window and return whole-file version evidence.",
+      description: "Extract a lexical C/C++ body candidate and context, not a verified definition. Comments/calls/overloads/inheritance/macros may be ambiguous; inspect the declaration separately. Whole-line pages fit byteBudget; continue with read_file_range(nextStartLine). Whole-file hash proves version, not coverage.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
         symbol: { type: "string" },
         contextLines: { type: "number" },
+        byteBudget: readByteBudget(),
       }), ["path", "symbol"]),
     },
     {

@@ -5,6 +5,7 @@ import {
   type ProjectEngineSetting
 } from "./tool-scope";
 import type { DesignGuidanceMode, DesignGuidanceDelivery } from "./design-guidance";
+import { CONTEXT_DEFAULTS } from "./config-defaults";
 
 export type ContinuityNote = {
   scope: { objectiveFingerprint: string; projectIdentity?: string };
@@ -114,7 +115,7 @@ export type OutputRecoveryMode = "off" | "on";
 
 export type ContextManagementMode = "legacy" | "deterministic" | "hybrid";
 
-export const DEFAULT_CONTEXT_MANAGEMENT_MODE: ContextManagementMode = "hybrid";
+export const DEFAULT_CONTEXT_MANAGEMENT_MODE: ContextManagementMode = CONTEXT_DEFAULTS.mode;
 
 export type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
   | "output_recovery"
@@ -124,6 +125,21 @@ export type FinalizationTrigger = "research_time_limit" | "research_timeout" | "
 export type FinalDeliveryState = "complete" | "truncated" | "partial" | "no_answer";
 
 export type FinalReportState = "report" | "partial_report" | "unresolved_tool_intent" | "no_answer";
+
+/** Delivery completion is not proof that the user's objective is satisfied. */
+export type ExecutionOutcome = Readonly<{
+  executionOutcome: "completed" | "truncated" | "no_answer" | "failed" | "canceled" | "timed_out";
+  reason: string;
+  finalFinishReason: string;
+  generationCompleted: boolean;
+  reportPresent: boolean;
+  reportDelivered: boolean;
+  reportCompleted: boolean;
+  deliveryState: FinalDeliveryState;
+  reportState: FinalReportState;
+  objectiveSatisfied: boolean | null;
+  taskCompleted: boolean;
+}>;
 
 export type OutputLimitStage = "reasoning" | "tool_arguments" | "visible_report" | "forced_final" | "unknown";
 

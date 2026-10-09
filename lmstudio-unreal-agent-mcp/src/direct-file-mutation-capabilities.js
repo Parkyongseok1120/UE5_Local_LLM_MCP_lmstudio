@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const fsp = fs.promises;
 const path = require("node:path");
 const {
+  assertMutationActive,
   calculateReplacement,
   createExclusive,
   replaceWithCAS,
@@ -137,6 +138,7 @@ function createFileMutationCapabilities(context) {
         },
       );
     }
+    assertMutationActive(requestContext.signal);
     const resolution = await mutationResolution(args.path, args.project);
     const targetIdentity = frozenMutationTarget(resolution);
     const guard = await validateWriteTarget({
@@ -169,14 +171,15 @@ function createFileMutationCapabilities(context) {
           allowExistingWrite: false,
         });
         if (!refreshedGuard.ok) throw new Error(refreshedGuard.message);
+        assertMutationActive(requestContext.signal);
         if (args.createDirs === true) {
           await fsp.mkdir(path.dirname(refreshed.absolutePath), { recursive: true });
         }
-        return createExclusive(refreshed.absolutePath, content);
+        return createExclusive(refreshed.absolutePath, content, requestContext.signal);
       }, { stateRoot });
     } catch (error) {
       return failure(
-        "WRITE_TARGET_BLOCKED",
+        error.code === "REQUEST_CANCELLED" ? error.code : "WRITE_TARGET_BLOCKED",
         `write_file locked containment revalidation failed: ${String(error.message || error)}`,
         { retryAllowed: true, retryMode: "after_state_change" },
       );
@@ -225,6 +228,7 @@ function createFileMutationCapabilities(context) {
         { retryAllowed: true },
       );
     }
+    assertMutationActive(requestContext.signal);
     const resolution = await mutationResolution(args.path, args.project);
     const targetIdentity = frozenMutationTarget(resolution);
     const version = resolveVersionEvidence(context, resolution, args, requestContext);
@@ -278,6 +282,7 @@ function createFileMutationCapabilities(context) {
           throw new Error("replace_in_file real target or containment root changed during locked revalidation");
         }
         return replaceWithCAS({
+          signal: requestContext.signal,
           targetPath: refreshed.absolutePath,
           priorContent: read.buffer,
           oldText,
@@ -288,7 +293,7 @@ function createFileMutationCapabilities(context) {
       }, { stateRoot });
     } catch (error) {
       return failure(
-        "WRITE_TARGET_BLOCKED",
+        error.code === "REQUEST_CANCELLED" ? error.code : "WRITE_TARGET_BLOCKED",
         `replace_in_file locked containment revalidation failed: ${String(error.message || error)}`,
         { retryAllowed: true, retryMode: "after_state_change" },
       );

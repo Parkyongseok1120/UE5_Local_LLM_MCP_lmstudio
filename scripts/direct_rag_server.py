@@ -176,7 +176,7 @@ class DirectRagServer:
         except RagOperationStopped as exc:
             result = failure(exc.code, str(exc), stageCommitted=False,
                              terminationConfirmed=exc.termination_confirmed,
-                             terminationScope="collector_process", preservedScratch=exc.preserved_scratch)
+                             terminationScope=exc.termination_scope, preservedScratch=exc.preserved_scratch)
         except Exception as exc:
             self.log(f"tool {name} failed: {type(exc).__name__}: {exc}")
             result = failure(

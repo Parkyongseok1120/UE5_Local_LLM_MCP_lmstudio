@@ -2,16 +2,80 @@
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-import pytest
-
 import headless_mcp_chat as chat
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 NODE = shutil.which("node")
 ADAPTER = ROOT / "scripts/headless_compact.js"
 pytestmark = pytest.mark.skipif(not NODE, reason="Node is required for the real compaction adapter")
+
+
+@pytest.mark.parametrize("failure", [chat.McpError("initialize rejected"), EOFError("closed"), TimeoutError("deadline"), KeyboardInterrupt()])
+def test_failed_start_reaps_owned_child_and_preserves_error(monkeypatch, failure):
+    created = []
+    original = subprocess.Popen
+
+    def track(*args, **kwargs):
+        process = original(*args, **kwargs)
+        created.append(process)
+        return process
+
+    def reject(*_args):
+        raise failure
+
+    monkeypatch.setattr(chat.subprocess, "Popen", track)
+    monkeypatch.setattr(chat.McpProcess, "request", reject)
+    client = chat.McpProcess("fixture", {"command": sys.executable,
+        "args": ["-u", "-c", "import sys; sys.stdin.read()"]}, timeout=0.1)
+    try:
+        with pytest.raises(type(failure)) as caught:
+            client.start()
+        assert caught.value is failure
+        assert len(created) == 1 and created[0].poll() is not None
+        assert created[0].stdin.closed and created[0].stdout.closed
+        assert client.process is None
+        client.close()
+    finally:
+        for process in created:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+
+
+def test_second_server_initialization_failure_cleans_first_server(monkeypatch, tmp_path):
+    config = tmp_path / "mcp.json"
+    config.write_text(json.dumps({"mcpServers": {"one": {}, "two": {}}}), encoding="utf-8")
+    closed = []
+
+    def start(self):
+        if self.label == "two":
+            raise chat.McpError("second initialize failed")
+
+    monkeypatch.setattr(chat.McpProcess, "start", start)
+    monkeypatch.setattr(chat.McpProcess, "tools", lambda self: [{"name": self.label, "inputSchema": {}}])
+    monkeypatch.setattr(chat.McpProcess, "close", lambda self: closed.append(self.label))
+    monkeypatch.setattr(sys, "argv", ["headless", "--mcp-config", str(config), "--list-tools"])
+    with pytest.raises(chat.McpError, match="second initialize"):
+        chat.main()
+    assert closed == ["two", "one"]
+
+
+def test_close_reaps_after_kill_when_graceful_and_terminate_waits_timeout():
+    from unittest.mock import Mock
+    process = Mock()
+    process.stdin = process.stdout = process.stderr = None
+    process.wait.side_effect = [subprocess.TimeoutExpired("child", 2), subprocess.TimeoutExpired("child", 2), 0]
+    process.poll.return_value = 0
+    client = chat.McpProcess("fixture", {}, 1, process=process)
+    client.close()
+    process.terminate.assert_called_once()
+    process.kill.assert_called_once()
+    assert process.wait.call_count == 3
+    assert client.process is None
 
 
 def history():

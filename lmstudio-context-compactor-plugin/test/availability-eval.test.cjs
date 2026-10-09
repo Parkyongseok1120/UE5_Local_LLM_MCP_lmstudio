@@ -21,6 +21,22 @@ const { reclassifyReport } = require("../scripts/reclassify-audit-results.cjs");
 const compactionCore = require("../src/direct-compaction-core.js");
 const predictionTest = require("../dist/prediction-loop.js").__test;
 
+test("pressure fixture keeps its synthetic read provider in the resolved tool scope", async () => {
+  const { resolveToolScope, filterToolsForScope } = require("../dist/tool-scope.js");
+  let checked = false;
+  const result = await auditEval.oneRun({ identifier: "fixture" }, {}, "A", "scope", 1, 1, "", {
+    createPredictionLoopHandler: () => async ctl => {
+      const config = ctl.getPluginConfig(), session = await ctl.startToolUseSession();
+      const scope = resolveToolScope(config.get("projectEngine"), config.get("projectIdentity"), "", session.tools);
+      assert.equal(scope.engine, "unreal");
+      assert.ok(filterToolsForScope(session.tools, scope).some(tool => tool.name === "read_file_range"));
+      checked = true;
+    },
+  });
+  assert.equal(result.error, null);
+  assert.equal(checked, true);
+});
+
 test("causal range metrics distinguish input overlap from historical reacquisition", () => {
   const metrics = calculateReadMetrics({
     rangeUnit: "line",

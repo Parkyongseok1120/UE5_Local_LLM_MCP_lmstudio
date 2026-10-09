@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -284,6 +285,24 @@ def test_generic_mcp_stdio_smoke() -> None:
     payload = json.loads(completed.stdout)
     assert payload["ok"] is True
     assert payload["status"]["readOnly"] is True
+    assert payload["contractCompatible"] is True
+
+
+def test_smoke_rejects_installed_contract_revision_drift(tmp_path: Path) -> None:
+    target = tmp_path / "skill" / "scripts"
+    shutil.copytree(SCRIPTS.parent, target.parent, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    contract = target / "evidence_packet_contract.py"
+    source = contract.read_text(encoding="utf-8")
+    import re
+    source, count = re.subn(r'SCHEMA_VERSION = "[^"]+"', 'SCHEMA_VERSION = "0.0.0"', source, count=1)
+    assert count == 1
+    contract.write_text(source, encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(SMOKE), "--server", str(target / "evidence_first_mcp.py")],
+                               capture_output=True, text=True, encoding="utf-8", timeout=30)
+    payload = json.loads(completed.stdout)
+    assert completed.returncode == 1
+    assert payload["contractCompatible"] is False
+    assert payload["observedSchemaVersion"] == "0.0.0"
 
 
 def test_generic_mcp_stdio_smoke_with_legacy_windows_code_page() -> None:

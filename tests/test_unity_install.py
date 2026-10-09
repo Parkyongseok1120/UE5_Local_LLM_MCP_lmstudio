@@ -48,6 +48,34 @@ def test_unity_dry_run_has_no_writes_and_no_model_ready_claim(fixture):
     assert (project / "Packages/manifest.json").read_bytes() == before
 
 
+def test_unity_install_uses_same_locked_dependencies_as_updater(fixture, monkeypatch):
+    u, i, _, args = fixture
+    args.dry_run = False
+    args.skip_deps = False
+    args.runtime_npm = str(args.state_home / "managed-node/npm.cmd")
+    commands = []
+    def run(command, **kwargs):
+        commands.append(command)
+        output = '{"initialized":true,"connection":"disconnected"}' if "check_unity_install.js" in " ".join(command) else "v24.0.0"
+        return subprocess.CompletedProcess(command, 0, output, "")
+    monkeypatch.setattr(u, "run", run)
+    monkeypatch.setattr(u, "worker", lambda *a: (Path(sys.executable), args.state_home / "worker.dll"))
+    report = u.install_unity(args, ROOT, i.Transaction, i.InstallLock)
+    assert report["ok"]
+    assert [args.runtime_npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"] in commands
+
+
+def test_unity_installer_process_output_has_explicit_utf8_decoding(fixture, monkeypatch):
+    u, _, _, args = fixture
+    observed = {}
+    def execute(command, **kwargs):
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, "설치 ✓", "")
+    monkeypatch.setattr(u.subprocess, "run", execute)
+    assert u.run([sys.executable, "--version"], cwd=args.state_home).stdout == "설치 ✓"
+    assert observed["encoding"] == "utf-8" and observed["errors"] == "replace"
+
+
 def test_interactive_unity_selection_reaches_installer(fixture, monkeypatch, capsys):
     _, i, project, original = fixture
     args = i.build_parser().parse_args(["--profile", "custom", "--components", "unity", "--dry-run", "--state-home", str(original.state_home)])

@@ -55,7 +55,7 @@ Intel Mac에서 VM 기반 모델 연결까지 설정하려면:
 
 ```sh
 cd /path/to/repository/lmstudio-unity-mcp
-pnpm install --frozen-lockfile --ignore-scripts
+npm ci --ignore-scripts --no-audit --no-fund
 ```
 
 3. 선택한 Unity 프로젝트의 Package Manager에서 **Add package from disk**를 선택하고 저장소의 `unity-editor-bridge/package.json`을 지정합니다. UPM이 선언된 Newtonsoft 의존성을 해결합니다. 실행 중인 MCP는 패키지를 설치하지 않습니다.
@@ -77,6 +77,8 @@ LM Studio의 MCP 설치 방법은 호스트 버전에 따라 달라질 수 있�
 Unity MCP 설정의 `unity-tools.args[0]`은 설치에 사용한 소스 폴더의 `lmstudio-unity-mcp/src/server.js`를 직접 가리킵니다. 같은 폴더에 새 소스를 반영한 다음, 아래 스크립트로 Node 의존성과 MCP 초기화를 확인합니다. 스크립트는 소스를 다운로드하거나 Git 상태를 변경하지 않습니다.
 
 Windows에서는 저장소 루트의 `UPDATE.bat`를 실행하면 설치된 Unity MCP, Unreal Agent/RAG, 대화 압축 플러그인을 순서대로 갱신합니다. 설치되지 않은 엔진은 건너뜁니다. 기본 설정은 `%LMSTUDIO_HOME%\mcp.json` 또는 `%USERPROFILE%\.lmstudio\mcp.json`을 사용합니다. 다른 위치에 설치했다면 `UPDATE.bat "C:\path\to\mcp.json"`처럼 기존 설정 파일을 지정합니다. 기존 프로젝트·엔진·인덱스·권한 설정은 다시 생성하지 않고 유지합니다. `UPDATE.bat --dry-run`은 세 단계의 계획만 확인합니다. 완료 후 LM Studio를 재시작합니다.
+
+설정 파일을 직접 지정하면 **그 파일이 있는 폴더를 압축기의 LM Studio 설치 홈으로도 사용**합니다. 업데이트는 두 엔진의 바인딩을 먼저 모두 확인한 뒤 의존성을 갱신합니다. 설치기가 기록한 `%USERPROFILE%\.evidence-first\runtime-python.path`를 먼저 사용하므로 관리된 Python을 PATH에 추가할 필요가 없습니다. 사용자 지정 상태 폴더는 `UPDATE_STATE_HOME`, 별도 Python 실행 파일은 `UPDATE_PYTHON` 환경변수로 지정합니다. Unity 설치와 업데이트는 모두 `package-lock.json` 기준 `npm ci`를 사용합니다.
 
 Unity MCP가 등록되어 있지만 프로젝트에서 Editor Bridge 패키지가 빠진 경우에는 `bridgeBinding: missing`과 안내를 출력하고 MCP 업데이트를 계속합니다. 파일 도구는 Editor Bridge 없이 사용할 수 있으며, 이 과정에서 프로젝트에 브릿지를 다시 추가하지 않습니다. 다른 브릿지 경로가 등록되어 있거나 등록 값이 잘못된 경우에는 기존 연결을 보존하기 위해 중단하며, 브릿지 설치·이전은 `install.py`에서 진행합니다.
 

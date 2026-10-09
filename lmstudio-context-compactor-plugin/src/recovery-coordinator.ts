@@ -7,16 +7,40 @@ import { FRESH_TOOL_PLANNING_RETRY_INSTRUCTION } from "./execution-instructions"
 import { type RawToolIntentClassification } from "./raw-tool-intent";
 import { isObservationOnlyToolCall, isUnregisteredGitReadIntent, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 
+export type RecoveryPlan = {
+  reason: string; toolNames: readonly string[]; outputReserve: number;
+  instruction?: string; blockedFingerprints?: ReadonlySet<string>;
+};
+
 export class RecoveryCoordinator {
-  toolRounds = 0;
-  paginationRounds = 0;
-  noProgressRounds = 0;
-  reset() { this.toolRounds = 0; this.paginationRounds = 0; this.noProgressRounds = 0; }
+  private rounds = 0;
+  private pages = 0;
+  private stagnant = 0;
+  private started = false;
+  private replans = 0;
+  private plan: RecoveryPlan = { reason: "", toolNames: [], outputReserve: 0 };
+  get toolRounds() { return this.rounds; }
+  get paginationRounds() { return this.pages; }
+  get noProgressRounds() { return this.stagnant; }
+  get episodeStarted() { return this.started; }
+  get planningAttempts() { return this.replans; }
+  get reason() { return this.plan.reason; }
+  get outputReserve() { return this.plan.outputReserve; }
+  get instruction() { return this.plan.instruction || FRESH_TOOL_PLANNING_RETRY_INSTRUCTION; }
+  get blockedFingerprints() { return new Set(this.plan.blockedFingerprints); }
+  allowsTool(name: string) { return this.plan.toolNames.includes(name); }
+  begin(plan: RecoveryPlan, replanning = false) {
+    this.plan = { ...plan, toolNames: [...plan.toolNames], blockedFingerprints: new Set(plan.blockedFingerprints) };
+    this.started = true;
+    if (replanning) this.replans++;
+    this.reset();
+  }
+  reset() { this.rounds = 0; this.pages = 0; this.stagnant = 0; }
   advance(progress: RecoveryProgress | null, maximum: number, continued: boolean,
     rawIntent: boolean, requestCount: number, resultCount: number, reportText: string, bounded = true) {
-    this.toolRounds++;
+    this.rounds++;
     const progressed = progress?.progressed === true;
-    if (progressed) { this.paginationRounds++; this.noProgressRounds = 0; } else this.noProgressRounds++;
+    if (progressed) { this.pages++; this.stagnant = 0; } else this.stagnant++;
     const noProgress = this.noProgressRounds >= 1;
     const paginationBound = bounded && this.paginationRounds >= Math.max(1, maximum);
     const evidence = Boolean(requestCount || resultCount || progress?.newSuccessfulObservationCount || progress?.errorCount);

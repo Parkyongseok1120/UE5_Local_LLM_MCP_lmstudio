@@ -1,0 +1,180 @@
+{
+  "mode": "architecture",
+  "plan": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+  "implementationStatus": "proposed_not_implemented",
+  "invariants": [
+    "Preserve source identity, version, query and units; historical evidence never grants fresh-read or mutation authority.",
+    "Commit each returned pair once; preserve unknown outcomes and existing off/warn/pause choices.",
+    "Exactly measured model input and one batch reservation ledger remain authoritative."
+  ],
+  "existing": [
+    "evidence-identity owns canonical observation identity.",
+    "EvidenceManager owns range observations; input-availability derives final SDK availability.",
+    "continuity-file-observations owns per-file checkpoint facts; current fields are line based.",
+    "ExecutionState owns transitions; existing stagnation detector compares consecutive fingerprints."
+  ],
+  "proposed": [
+    "W1 extracts existing pure range operations for CommonJS and TypeScript consumers and adds versioned optional byte coverage to continuity.",
+    "W2 ingests confirmed results once in both research and recovery and feeds bounded cycle detection with immutable progress facts."
+  ],
+  "doNotDuplicate": [
+    "No second source identity calculator, coverage ledger, progress planner, or archive store.",
+    "Do not call recovery observation separately after normal research has already ingested that round.",
+    "Use ExecutionState and existing delivery flow for policy actions."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+    "lmstudio-context-compactor-plugin/src/input-availability.js",
+    "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+    "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
+    "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+    "lmstudio-context-compactor-plugin/src/execution-contracts.ts",
+    "lmstudio-context-compactor-plugin/src/context-ports.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts",
+    "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+    "CommonJS range module extracted from existing operations",
+    "Compactor continuity, progress, input and recovery tests"
+  ],
+  "validationPlan": [
+    "Byte/line partial/full/empty/version fixtures survive checkpoint and restore without invented completeness.",
+    "A/B and A/B/C loops recognized; advancing pages, changed versions and necessary fresh reads remain allowed.",
+    "One ingestion per round in research/recovery; bounded retention eviction becomes unknown.",
+    "Old missing fields decode conservatively; derived legacy fields cannot become competing writers."
+  ],
+  "claims": [
+    {
+      "id": "W1",
+      "claim": "Preserve unit-aware byte coverage through deterministic continuity using one shared implementation.",
+      "claimType": "wiring",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js:366",
+          "observation": "Byte offsets omitted from retained scalar fields."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:122",
+          "observation": "Current file coverage is derived from line ranges."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:192",
+          "observation": "Current union delegates to inputAvailability.normalizeRanges; subtraction and decoding also exist."
+        },
+        {
+          "kind": "test",
+          "location": "docs/evidence/harness-continuity-plan-20261009-baseline.json",
+          "observation": "Byte coverage loss reproduced; line counterpart preserved."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:208",
+          "symbol": "provider returns native byte window"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "expected_missing",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:218",
+          "symbol": "shared range normalization after extraction"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "expected_missing",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js:122",
+          "symbol": "serialize versioned optional sourceCoverage"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:355",
+          "observation": "Archive/sourceFacts already retain historical evidence; this plan does not replace the archive."
+        }
+      ],
+      "unknowns": [
+        "Exact additive decoder compatibility must be tested against old windows before implementation is accepted.",
+        "A normalized range proves observed coverage, not semantic review completion."
+      ]
+    },
+    {
+      "id": "W2",
+      "claim": "Feed normal research and recovery from the same committed observation and recognize repeated cycles without blocking valid reacquisition.",
+      "claimType": "wiring",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:743",
+          "observation": "Coverage observation currently gated on researchRecoveryRound."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts:183",
+          "observation": "Consecutive-only previous fingerprint is the current policy."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:446",
+          "observation": "currentInputAvailabilityGain intentionally null without a final-input view."
+        },
+        {
+          "kind": "test",
+          "location": "docs/evidence/harness-continuity-plan-20261009-baseline.json",
+          "observation": "Alternating unchanged reads produce count 1; existing range detector can recognize no new source."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:711",
+          "symbol": "confirmed returned round"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "expected_missing",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:98",
+          "symbol": "single phase-independent ingestion"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "expected_missing",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts:183",
+          "symbol": "bounded cycle observation using normalized progress"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:19",
+          "symbol": "existing owner applies explicit policy"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/direct-config.ts:110",
+          "observation": "Existing off/warn/pause semantics and opt-in bounded mode must remain explicit."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:470",
+          "observation": "Reacquiring absent working evidence can be useful progress."
+        }
+      ],
+      "unknowns": [
+        "Initial cycle window and thresholds are proposed evaluation values, not established optimal settings.",
+        "No-progress evidence cannot by itself judge model reasoning quality."
+      ]
+    }
+  ]
+}

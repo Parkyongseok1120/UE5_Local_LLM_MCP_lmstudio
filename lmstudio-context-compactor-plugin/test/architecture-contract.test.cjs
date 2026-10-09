@@ -148,6 +148,7 @@ test("A05 inactive scopes expire conservatively and a cleanup failure does not b
   const scopeFor = id => ({ conversation: id, lineage: id, workspace: "w", repository: "r" });
   const opts = { durable: true, root, now: () => now, ttlMs: 1000 };
   const abandoned = new EvidenceArchive(scopeFor("abandoned"), opts), expired = abandoned.put("old", { callKey: "old" }).record;
+  abandoned.close(); // Expiration may only reclaim owners that have ended.
   const recent = new EvidenceArchive(scopeFor("recent"), opts); recent.put("active", { callKey: "active" });
   const oldTime = new Date(now - 2000);
   fs.utimesSync(path.join(abandoned.directory, `${expired.evidenceId}.json`), oldTime, oldTime);
@@ -180,7 +181,7 @@ test("A05 a legacy manifest backlog is pruned by file metadata before bodies are
   for (const name of ["live", "parent", ...Array.from({ length: 30 }, (_, i) => "old-" + i)])
     atomicWrite(archive.directory, "window-" + name + ".json", { ...body, digest: hash(body) });
   const read = fs.readFileSync; let bodyReads = 0;
-  fs.readFileSync = (file, ...args) => { if (String(file).includes("window-")) bodyReads++; return read(file, ...args); };
+  fs.readFileSync = (file, ...args) => { if (path.basename(String(file)).startsWith("window-")) bodyReads++; return read(file, ...args); };
   let retained;
   try { retained = archive.cleanupWindows(); } finally { fs.readFileSync = read; }
   assert.ok(bodyReads <= 4, `only retained manifest bodies may be read; read ${bodyReads}`);

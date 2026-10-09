@@ -23,7 +23,7 @@ test('orchestrator delegates policy and stays below structural size target', () 
   assert.ok(Buffer.byteLength(source)<=112000);
   for(const policy of ['function coverageRange','function subtractCoverageRanges','const UNITY_OBSERVATION_TOOLS',
     'const UNREAL_OBSERVATION_TOOLS','const gitInvestigation','const mutationIntent','function targetRemainingForInput']) assert.ok(!source.includes(policy),policy);
-  for(const owner of ['ContextManager','BudgetBroker','EvidenceManager','ExecutionState','ToolCapabilityRegistry','createToolGuard','RecoveryCoordinator','DeliveryController']) assert.ok(source.includes(owner),owner);
+  for(const owner of ['ContextManager','BudgetBroker','EvidenceManager','ExecutionState','ToolCapabilityRegistry','createToolGuard','execution.recovery','DeliveryController']) assert.ok(source.includes(owner),owner);
 });
 test('recovery uses typed provider authority, supports non-Git and ends on no progress', () => {
   const {readOnlyRecoveryProfile,RecoveryCoordinator}=require('../dist/recovery-coordinator');

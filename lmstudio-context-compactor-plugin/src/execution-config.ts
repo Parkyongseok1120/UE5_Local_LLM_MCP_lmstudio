@@ -2,6 +2,7 @@ import {
   type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import { directConfigSchematics } from "./direct-config";
+import { GUIDANCE_DEFAULTS, CONTEXT_DEFAULTS } from "./config-defaults";
 import { designGuidanceMode, designGuidanceDelivery } from "./design-guidance";
 import { DEFAULT_CONTEXT_MANAGEMENT_MODE, type AuditCompletionMode, type ContextManagementMode, type DirectConfig, type InputAvailabilityMode, type OutputRecoveryMode, type StagnationAction } from "./execution-contracts";
 import {
@@ -9,6 +10,7 @@ import {
 } from "./tool-scope";
 
 export function numeric(value: unknown, fallback: number, min: number, max: number): number {
+  if (value === null || value === undefined || typeof value === "boolean" || typeof value === "string" && !value.trim()) return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.trunc(parsed)));
@@ -42,21 +44,21 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     ? configuredEngine as ProjectEngineSetting : "auto";
   const maxOutputReserve = numeric(config.get("maxOutputReserve"), 8192, 256, 131072);
   const configuredRecoveryMaxTokens = numeric(config.get("outputRecoveryMaxTokens"), 0, 0, 131072);
-  const workingInputTargetTokens = numeric(config.get("workingInputTargetTokens"), 18000, 2048, 131072);
+  const workingInputTargetTokens = numeric(config.get("workingInputTargetTokens"), CONTEXT_DEFAULTS.target, 2048, 131072);
   return {
     projectEngine,
     projectIdentity: String(config.get("projectIdentity") || "").trim().slice(0, 4096),
     designGuidanceMode: designGuidanceMode(config.get("designGuidanceMode")),
     designGuidanceDelivery: designGuidanceDelivery(config.get("designGuidanceDelivery")),
-    designGuidanceMaxTokens: numeric(config.get("designGuidanceMaxTokens"), 2048, 0, 8192),
+    designGuidanceMaxTokens: numeric(config.get("designGuidanceMaxTokens"), GUIDANCE_DEFAULTS.maxTokens, 0, 8192),
     observeOnly: config.get("observeOnly") === true,
     contextManagementMode: contextManagementMode(config.get("contextManagementMode")),
     workingInputTargetTokens,
     workingInputTriggerTokens: Math.max(workingInputTargetTokens,
-      numeric(config.get("workingInputTriggerTokens"), 22000, 2048, 262144)),
-    toolResultProjectionChars: numeric(config.get("toolResultProjectionChars"), 512, 128, 8192),
-    semanticSummaryMaxTokens: numeric(config.get("semanticSummaryMaxTokens"), 1024, 128, 8192),
-    semanticSummarySeconds: numeric(config.get("semanticSummarySeconds"), 30, 1, 300),
+      numeric(config.get("workingInputTriggerTokens"), CONTEXT_DEFAULTS.trigger, 2048, 262144)),
+    toolResultProjectionChars: numeric(config.get("toolResultProjectionChars"), CONTEXT_DEFAULTS.projectionChars, 128, 8192),
+    semanticSummaryMaxTokens: numeric(config.get("semanticSummaryMaxTokens"), CONTEXT_DEFAULTS.summaryTokens, 128, 8192),
+    semanticSummarySeconds: numeric(config.get("semanticSummarySeconds"), CONTEXT_DEFAULTS.summarySeconds, 1, 300),
     showDebugInfo: config.get("showDebugInfo") !== false,
     reviewProgress: config.get("reviewProgress") === true,
     pastReasoningTokens: numeric(config.get("pastReasoningTokens"), 0, 0, 16384),

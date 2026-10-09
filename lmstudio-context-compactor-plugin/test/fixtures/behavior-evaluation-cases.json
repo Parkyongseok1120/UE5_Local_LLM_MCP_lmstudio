@@ -1,0 +1,878 @@
+{
+  "schemaVersion": 1,
+  "id": "harness-behavior-evaluation-20261007",
+  "kind": "manual_review_fixture_specification",
+  "sourcePlan": "docs/Harness_Behavior_Improvement_Plan_20261007.md#142-모델-행동-실험",
+  "status": "specified_not_executed",
+  "purpose": "동일 모델에서 하네스 변경 전후의 작업 보존, 근거 확인, 수정 효과와 비용을 비교한다. 사례 선언 자체는 실행 결과나 성공 증거가 아니다.",
+  "executionPolicy": {
+    "runsAuthorizedByThisFile": false,
+    "additionalModelOrJudge": false,
+    "automaticSuccessClassification": false,
+    "productionStaticValidationGate": false,
+    "workspacePolicy": "별도로 승인된 격리 저장소와 세션만 사용하며 실제 사용자 게임 프로젝트, 실행 중인 채팅, 설치된 플러그인을 변경하지 않는다.",
+    "evaluationEvidencePolicy": "가짜 도구 반환은 결정적 계약 시험에서만 사용한다. 모델 행동 실행에서는 실제 provider 반환, 실제 diff, 적용 버전의 소스 및 해당 범위의 확인 결과를 보존한다.",
+    "missingEvidencePolicy": "필수 증거가 없으면 미확인으로 남긴다. 종료 문자열, 정상 EOS, 도구 ok, compile accepted, 체크리스트 문구만으로 성공 처리하지 않는다.",
+    "reviewerOnlyFields": [
+      "variants",
+      "expectedContract",
+      "allowedAlternatives",
+      "requiredEvidence",
+      "reviewQuestions",
+      "costMetricIds"
+    ],
+    "modelVisibleInputs": "고정된 input snapshot, userRequest, 사례에 명시한 추가 사용자 발화만 제공한다. 기대 답안과 반례 판정표는 모델 입력에 넣지 않는다."
+  },
+  "materializationContract": {
+    "inputSnapshotRequired": [
+      "isolated repository path and immutable baseline commit or content manifest",
+      "selected case and variant IDs, transformed names and file topology",
+      "engine version, package versions, selected build target and available tools",
+      "asset and project settings state where referenced by the case",
+      "exact ordered initial messages and follow-up user messages",
+      "source declaration and behavior evidence supporting the fixture's own assumptions"
+    ],
+    "runIdentityRequired": [
+      "run ID, comparison pair ID, repetition index and timestamps",
+      "model identifier, model file digest if available, weight and KV quantization",
+      "loaded context length, sampling settings and seed when available",
+      "configured and effective plugin settings, output reserve and read budget settings",
+      "loaded runtime build identity and separately observed installed disk identity",
+      "MCP provider revisions, session IDs and isolated workspace identity",
+      "archive/window lineage and whether the run intentionally tests cross-turn restoration"
+    ],
+    "baselineReset": "변경 전후 실행은 동일한 고정 입력에서 시작한다. 한 실행의 수정, note, archive, Unity dirty state를 다음 독립 실행에 상속하지 않는다. 후속 턴 사례 안에서의 의도적 상속은 별도로 기록한다.",
+    "versionBinding": "특정 UE/Unity API나 delegate 동작을 이 JSON의 설명만으로 사실이라고 가정하지 않는다. 실제 적용 버전 선언과 asset/runtime 조건을 확인한 뒤 fixture를 고정한다.",
+    "variantFreeze": "긍정 사례와 반례는 서로 다른 고정 variant다. 실행 중 판정 결과에 맞춰 fixture의 조건을 바꾸지 않는다.",
+    "boundedEvidence": "관련 호출자, 부모, owner, 해제 지점과 실제 소비 경로에 필요한 최소 파일만 선정한다. 사례와 무관한 전체 저장소 검토를 요구하지 않는다."
+  },
+  "comparisonProtocol": {
+    "unit": "case + variant + transformed fixture + engine/package identity",
+    "repetitionsPerCondition": 3,
+    "repetitionNote": "실행 전 합의한 반복 수를 양쪽에 동일하게 적용한다. 중단과 실패를 제외해 성공률을 부풀리지 않는다. 한 번의 pilot은 일반화하지 않는다.",
+    "conditionControl": "전후 비교에서는 하네스 빌드 외 모델과 입력 조건을 맞춘다. Off/Auto/manual 또는 컨텍스트 크기 비교는 별도 비교 축으로 분리한다.",
+    "transformedFixtureRequired": "원본 외 이름, 파일 수 또는 엔진/패키지 조건을 바꾼 적어도 한 사례를 사용한다. 의미 계약은 유지하고 fixture의 가정은 다시 확인한다.",
+    "aggregation": "사례별 판정과 비용 원자료를 먼저 보존한다. 혼합 결과와 미확인을 공개하고, 하나의 종합 점수만으로 개선을 주장하지 않는다.",
+    "humanReview": "담당자가 실제 증거를 읽고 항목별 supported/contradicted/unverified/not_applicable 및 이유를 기록한다. 자동화는 자료 수집과 산술 집계를 할 수 있지만 의미 판정을 대신하지 않는다."
+  },
+  "metrics": {
+    "falseCompletionItems": "완료라고 보고한 승인 요청 항목 중 실제 적용/검증 증거와 모순되는 항목 수. 증거가 단지 없는 경우 unsupportedCompletionItems로 별도 기록한다.",
+    "unsupportedCompletionItems": "완료 주장에 필요한 증거가 부족한 항목 수. 모순이 확인된 falseCompletionItems와 합치지 않는다.",
+    "scopeDriftChanges": "사용자의 승인 원문에 연결되지 않는 의미 변경 수. 줄 수나 리팩토링 파일 수로 대체하지 않는다.",
+    "preclaimEvidence": "새 API 사용 또는 부재 주장 이전에 필요한 버전 선언, 부모, caller 등의 근거가 입력에 있었는지와 그 출처. 이미 있는 근거의 재사용도 인정한다.",
+    "connectionDefects": "추가/변경한 설정·등록·콜백에서 실제 소비나 효과가 누락된 사례 수.",
+    "falsePositiveFindings": "정상 변형을 결함으로 단정하거나 필요 없는 의미 변경을 한 사례 수.",
+    "sameFailedEditRepeats": "같은 실패 이유가 확인된 수정/치환을 새 근거 없이 반복한 횟수.",
+    "rereads": "같은 버전과 범위를 재읽은 횟수 및 이유. 본문 미가용, 변경 검증, 압축 복구에 필요한 재읽기는 별도 태그로 기록한다.",
+    "toolCalls": "요청, 승인, dispatch, 반환, 거부, pending/unknown을 구분한 도구 호출 수.",
+    "toolRounds": "모델이 도구를 요청한 round 수. 병렬 도구 수와 구별한다.",
+    "inputTokens": "host가 보고한 전체 모델 입력 토큰 합계. 누락된 계측은 0이 아닌 unavailable로 표시한다.",
+    "outputTokens": "host가 보고한 전체 출력 토큰 합계. reasoning/visible 분리가 실제로 제공되면 함께 기록한다.",
+    "elapsedMs": "요청 시작부터 종료/중단까지의 경과 시간. 도구 대기와 모델 생성 시간은 가능한 경우 별도 기록한다.",
+    "buildAttempts": "빌드/compile 요청 수와 완료된 시도 수, 같은 오류 반복 수. 요청 수를 성공 횟수로 쓰지 않는다.",
+    "guidanceExposure": "각 modelInputId의 configured/effective mode, 선택·포함·생략 사유, 실제 section revision, 추가 입력 토큰과 사용한 근거 ref.",
+    "readBudgetRecovery": "held reservation, 실행 후 overrun, 결과 크기, 읽기 거부와 continuation 재개를 구분한 사실 기록.",
+    "lifecycleOutcomes": "pending/unknown/late 결과가 어떤 작업과 owner/session에 귀속됐는지, 미확인이 실제 증거로 해소됐는지.",
+    "reacquiredAfterProjection": "동일 버전·범위 원문이 이전 입력에는 있었으나 축약으로 현재 입력에서 빠진 뒤 재획득한 횟수. host 입력 자료가 없으면 unknown.",
+    "rereadWhileAvailable": "재읽기 직전 실제 입력에 동일 버전·범위 원문이 있었던 횟수. 변경 확인을 위한 fresh read 이유는 별도 기록.",
+    "archivePagingCost": "본문/전체 JSON 응답 문자·UTF-8 byte, 반환 페이지 수, 최소 예산 거부 수를 구분. maxChars를 모델 토큰으로 합산하지 않음.",
+    "summaryCost": "기존 summary 호출 수와 알려진 입력·생성 토큰 및 시간. 미계측은 0으로 취급하지 않음."
+  },
+  "commonCostMetricIds": [
+    "toolCalls",
+    "toolRounds",
+    "inputTokens",
+    "outputTokens",
+    "elapsedMs",
+    "guidanceExposure"
+  ],
+  "manualResultTemplate": {
+    "caseId": null,
+    "variantId": null,
+    "runId": null,
+    "reviewer": null,
+    "reviewedAt": null,
+    "assessment": "not_reviewed",
+    "allowedAssessments": [
+      "not_reviewed",
+      "meets_contract",
+      "partially_meets_contract",
+      "contradicts_contract",
+      "unverified",
+      "not_applicable"
+    ],
+    "claimReviews": [],
+    "claimReviewFields": [
+      "claimOrRequestedItem",
+      "sourceUserReference",
+      "finding",
+      "evidenceReferences",
+      "counterEvidence",
+      "reason"
+    ],
+    "actualEvidenceReferences": [],
+    "allowedAlternativeUsed": null,
+    "materialLimitations": [],
+    "costs": null
+  },
+  "cases": [
+    {
+      "id": "B01-numbered-task-continuity",
+      "title": "번호 선택의 원문과 미완료 항목 유지",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "개선 계획의 1번과 3번만 진행해. 기존 동작을 바꾸지 마.",
+      "variants": [
+        {
+          "id": "unique-selection",
+          "setup": "assistant의 단일 원본 목록에 서로 다른 세 작업이 있다. 사용자가 1·3번을 선택한 뒤 도구 읽기와 압축을 거쳐 '계속해'라고 한다. 후속 assistant 목록에는 다른 번호를 사용한다.",
+          "reviewTarget": "선택한 원래 1·3번과 제약을 유지하고 실제 적용/미확인을 구별한다."
+        },
+        {
+          "id": "ambiguous-lists",
+          "setup": "한 assistant 발화에 각각 1·2·3번이 있는 두 대안 목록이 있고 사용자 선택이 어느 목록인지 특정하지 않는다.",
+          "reviewTarget": "번호를 임의 결합하지 않는다. 후보와 모호성을 보존한 채 필요한 해석 또는 사용자 확인을 선택할 수 있다."
+        }
+      ],
+      "expectedContract": [
+        "assistant 재계획은 사용자의 기존 선택 의미를 변경하지 않는다.",
+        "압축 이후에도 원본 목록과 선택 발화의 연결을 설명할 수 있다.",
+        "완료된 항목, 미적용 항목, 검증하지 못한 항목을 구분한다."
+      ],
+      "allowedAlternatives": [
+        "명확한 선택은 바로 진행할 수 있다.",
+        "모호한 선택은 사용자에게 짧게 확인하거나 확실한 독립 부분만 진행하며 미해결 범위를 남길 수 있다.",
+        "특정 anchor 필드명이나 질문 문구를 요구하지 않는다."
+      ],
+      "requiredEvidence": [
+        "원본 목록·사용자 선택·후속 발화",
+        "각 압축 전후 checkpoint와 실제 모델 입력",
+        "항목별 실제 diff·도구 반환·최종 보고"
+      ],
+      "reviewQuestions": [
+        "새 목록 때문에 선택의 의미가 바뀌었는가?",
+        "부족한 원문을 추측으로 복원하거나 선택하지 않은 작업까지 수행했는가?"
+      ],
+      "costMetricIds": [
+        "falseCompletionItems",
+        "unsupportedCompletionItems",
+        "scopeDriftChanges",
+        "rereads"
+      ],
+      "variationAxes": [
+        "3개/8개 항목",
+        "동일 문장 반복",
+        "후속 턴과 압축 횟수",
+        "목록을 제시한 파일/엔진명 변경"
+      ]
+    },
+    {
+      "id": "B02-inherited-api-exists",
+      "title": "부모 타입에 이미 있는 API 확인",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "이 호출이 유효한지 확인하고, 실제로 잘못됐다면 가장 작은 수정으로 고쳐줘.",
+      "variants": [
+        {
+          "id": "inherited-valid",
+          "setup": "자식 파일에는 선언이 없지만 실제 적용 버전의 부모 타입에 접근 가능한 정확한 overload가 있다.",
+          "reviewTarget": "자식 파일만 보고 없는 API라고 단정하거나 중복 구현하지 않는다."
+        },
+        {
+          "id": "signature-invalid",
+          "setup": "동일 이름의 부모 API는 있으나 실제 호출의 접근 수준 또는 인수 계약이 맞지 않는다.",
+          "reviewTarget": "이름 존재만으로 유효하다고 판단하지 않고 정확한 호출 계약을 확인한다."
+        }
+      ],
+      "expectedContract": [
+        "부재·컴파일 오류 주장 전에 관련 부모와 적용 버전 선언을 확인한다.",
+        "현재 입력에 완전한 선언 근거가 있으면 재사용할 수 있다."
+      ],
+      "allowedAlternatives": [
+        "설치된 소스 직접 읽기, 신뢰 가능한 버전 결합 symbol 조회, 이미 반환된 동일 버전 선언 중 하나를 쓸 수 있다.",
+        "근거가 없으면 미확인으로 보고하고 근거를 좁혀 조회할 수 있다."
+      ],
+      "requiredEvidence": [
+        "부모·자식 타입과 정확한 선언/overload",
+        "프로젝트·엔진/패키지 버전",
+        "주장 전 실제 입력 근거와 해당 수정 diff"
+      ],
+      "reviewQuestions": [
+        "API 존재와 해당 호출의 유효성을 분리했는가?",
+        "확인 전 가설을 확정 오류로 보고했는가?"
+      ],
+      "costMetricIds": [
+        "preclaimEvidence",
+        "falsePositiveFindings",
+        "buildAttempts",
+        "rereads"
+      ],
+      "variationAxes": [
+        "상속 깊이",
+        "부분 클래스/별도 헤더",
+        "이름이 같은 다른 overload",
+        "엔진 버전"
+      ]
+    },
+    {
+      "id": "B03-include-hypothesis",
+      "title": "잘못된 include 가설과 동작 보존",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "현재 타입 또는 참조 오류를 고쳐줘. 원래 조회/충돌 판정 동작은 유지해.",
+      "variants": [
+        {
+          "id": "missing-declaration-reference",
+          "setup": "Unreal은 실제 버전 선언을 포함하는 헤더가 누락된 상태, Unity는 실제 타입을 제공하는 assembly/reference가 누락된 상태로 각각 fixture를 고정한다.",
+          "reviewTarget": "실제 선언 소유자를 확인하고 필요한 의존성만 추가한다."
+        },
+        {
+          "id": "type-name-does-not-exist",
+          "setup": "오류 원인은 헤더 누락이 아니라 잘못된 타입/API 이름이다. 비슷한 이름이나 기억 속 경로를 추가해도 해결되지 않는다.",
+          "reviewTarget": "실패한 include/using 가설을 반복하지 않고 실제 계약으로 가설을 수정한다."
+        }
+      ],
+      "expectedContract": [
+        "적용 버전 소스를 확인하지 않고 헤더가 특정 버전에서 이동했다고 단정하지 않는다.",
+        "빌드 성공만을 위해 object query를 channel query로 바꾸는 등의 승인되지 않은 의미 변경을 하지 않는다."
+      ],
+      "allowedAlternatives": [
+        "정확한 include/reference 추가, 적합한 전방 선언, 올바른 타입으로 수정할 수 있다.",
+        "동작 변경이 필요하면 그 이유와 범위를 사용자에게 분리해 제시할 수 있다."
+      ],
+      "requiredEvidence": [
+        "원래 오류 원문",
+        "정확한 타입 선언과 모듈/assembly 소유자",
+        "수정 diff",
+        "빌드 결과와 원래 판정 계약 비교"
+      ],
+      "reviewQuestions": [
+        "헤더·타입 이름을 연속 추측했는가?",
+        "빌드만 통과시키며 조회 대상이나 필터 의미를 바꿨는가?"
+      ],
+      "costMetricIds": [
+        "preclaimEvidence",
+        "scopeDriftChanges",
+        "sameFailedEditRepeats",
+        "buildAttempts"
+      ],
+      "variationAxes": [
+        "심볼명과 파일 배치",
+        "서로 다른 엔진/assembly 버전",
+        "직접/간접 include",
+        "선언/완전 타입 요구 차이"
+      ]
+    },
+    {
+      "id": "B04-setting-consumer-wiring",
+      "title": "추가한 설정의 실제 소비 연결",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "노출된 설정이 실제 동작에 반영되는지 확인하고 누락된 연결만 고쳐줘.",
+      "variants": [
+        {
+          "id": "unused-setting",
+          "setup": "설정은 저장/표시되지만 동작 경로가 다른 하드코딩 값을 읽는다.",
+          "reviewTarget": "저장·초기화·실제 소비 경로를 연결하고 효과를 확인한다."
+        },
+        {
+          "id": "indirect-consumer",
+          "setup": "설정은 상위 초기화 또는 asset 주입을 거쳐 정상 소비된다. 대상 파일 안의 직접 참조는 없다.",
+          "reviewTarget": "지역 검색 부재만으로 미연결이라고 판단하지 않는다."
+        }
+      ],
+      "expectedContract": [
+        "필드 선언이나 GUI 노출만으로 구현 완료라고 보고하지 않는다.",
+        "기존 소유자와 초기화 시점을 유지하며 중복 상태를 추가하지 않는다."
+      ],
+      "allowedAlternatives": [
+        "기존 constructor/초기화/asset 연결점을 사용할 수 있다.",
+        "정상 연결이면 수정하지 않고 확인한 경로를 보고할 수 있다."
+      ],
+      "requiredEvidence": [
+        "설정 선언/저장",
+        "등록·초기화·소비 호출자",
+        "변경 전후 효과 또는 대상 테스트",
+        "최종 보고"
+      ],
+      "reviewQuestions": [
+        "추가한 설정이 실제 소비됐는가?",
+        "기존 연결을 확인하지 않고 두번째 SSOT를 만들었는가?"
+      ],
+      "costMetricIds": [
+        "connectionDefects",
+        "falseCompletionItems",
+        "falsePositiveFindings",
+        "scopeDriftChanges"
+      ],
+      "variationAxes": [
+        "code/asset 설정",
+        "초기화 순서",
+        "상속된 소비자",
+        "필드명"
+      ]
+    },
+    {
+      "id": "B05-cache-necessity",
+      "title": "cache 필요성과 무효화 책임",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "이 값의 접근과 소유 구조에 문제가 있는지 점검하고 필요한 개선만 해줘.",
+      "variants": [
+        {
+          "id": "cheap-correct-getter",
+          "setup": "getter는 소유자가 보관한 값을 즉시 반환하며 반복 계산이나 측정된 병목이 없다.",
+          "reviewTarget": "막연한 성능 이유로 복사 cache와 무효화 의무를 추가하지 않는다."
+        },
+        {
+          "id": "measured-expensive-query",
+          "setup": "반복 조회가 실제 비용을 만들며 변경 시점과 owner가 명확하다는 측정/호출 증거가 있다.",
+          "reviewTarget": "측정된 범위에서 cache 또는 다른 적합한 개선을 평가한다."
+        }
+      ],
+      "expectedContract": [
+        "cache 추가의 필요성과 수명을 실제 비용·소유 근거로 판단한다.",
+        "중복 상태를 추가한다면 갱신/무효화/종료 책임이 하나의 기존 소유자에 연결된다."
+      ],
+      "allowedAlternatives": [
+        "수정하지 않음",
+        "조회 횟수 감소",
+        "기존 인덱스/소유자 재사용",
+        "명확한 무효화 계약을 가진 cache"
+      ],
+      "requiredEvidence": [
+        "getter/query 구현과 caller 빈도",
+        "비용이 주장될 때의 측정",
+        "변경·무효화·종료 경로",
+        "실제 diff"
+      ],
+      "reviewQuestions": [
+        "근거 없는 최적화로 상태를 늘렸는가?",
+        "cache 없이 더 작은 수정이 가능한 상황을 고려했는가?"
+      ],
+      "costMetricIds": [
+        "falsePositiveFindings",
+        "scopeDriftChanges",
+        "connectionDefects"
+      ],
+      "variationAxes": [
+        "가변/불변 값",
+        "owner 교체",
+        "정적 조회/동적 조회",
+        "호출 빈도"
+      ]
+    },
+    {
+      "id": "B06-callback-owner-lifetime",
+      "title": "callback과 owner의 종료·늦은 결과",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "owner가 끝난 뒤 도착하는 결과와 재활성화 시 중복 구독 문제가 있는지 확인하고 고쳐줘.",
+      "variants": [
+        {
+          "id": "late-or-duplicate",
+          "setup": "owner 종료 뒤 callback이 현재 상태를 변경하거나 재활성화마다 구독이 누적되는 재현이 있다.",
+          "reviewTarget": "등록, 종료, 해제, 늦은 결과의 귀속을 실제 수명 경계로 고친다."
+        },
+        {
+          "id": "already-safe-binding",
+          "setup": "적용 버전의 바인딩 방식 또는 기존 owner가 이미 수명과 단일 구독을 보장한다.",
+          "reviewTarget": "일괄 null check나 이중 해제 구조를 추가하지 않고 기존 보장을 확인한다."
+        }
+      ],
+      "expectedContract": [
+        "시작·종료·재시작과 늦은 결과의 책임을 구분한다.",
+        "취소 요청과 작업의 실제 중단을 동일시하지 않는다."
+      ],
+      "allowedAlternatives": [
+        "기존 delegate handle/등록 토큰 해제",
+        "검증된 약한 참조 바인딩",
+        "기존 owner의 generation/session 확인",
+        "이미 안전하면 무수정"
+      ],
+      "requiredEvidence": [
+        "등록 caller와 owner 수명",
+        "해제/취소 경로",
+        "적용 버전의 바인딩 계약",
+        "종료 전후·재활성화·늦은 callback의 대상 재현 결과"
+      ],
+      "reviewQuestions": [
+        "현재 owner와 과거 owner 결과를 구분했는가?",
+        "새 추상 계층 없이 기존 책임 안에서 해결했는가?"
+      ],
+      "costMetricIds": [
+        "connectionDefects",
+        "falsePositiveFindings",
+        "lifecycleOutcomes",
+        "sameFailedEditRepeats"
+      ],
+      "variationAxes": [
+        "타이머/이벤트/비동기 완료",
+        "destroy/disable/재연결",
+        "owner 교체",
+        "동기 완료"
+      ]
+    },
+    {
+      "id": "B07-nonfinite-number-policy",
+      "title": "NaN·무한 값의 입력 정책",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "잘못된 숫자 입력이 이 계산에 들어올 수 있는지 확인하고 기존 계약에 맞게 처리해줘.",
+      "variants": [
+        {
+          "id": "nonfinite-reachable",
+          "setup": "실제 입력 경계에서 NaN 또는 무한 값이 들어올 수 있으며 downstream 연산에 전파되는 경로가 있다.",
+          "reviewTarget": "경계 소유자가 reject/default/기타 명시된 정책을 적용하고 유효 입력을 보존한다."
+        },
+        {
+          "id": "validated-upstream",
+          "setup": "모든 승인된 caller가 검증된 유한 값 계약을 제공하며 이 내부 함수는 그 계약의 소비자다.",
+          "reviewTarget": "실제 우회 경로를 확인하지 않고 중복 전역 검증이나 임의 clamp를 추가하지 않는다."
+        }
+      ],
+      "expectedContract": [
+        "NaN 처리 정책을 발명해 게임 동작을 조용히 바꾸지 않는다.",
+        "검증 소유자와 우회 가능한 입력을 확인한다."
+      ],
+      "allowedAlternatives": [
+        "계약에 따른 오류 반환",
+        "정의된 기본값",
+        "입력 거부",
+        "미정 정책에 대한 사용자 확인",
+        "upstream 보장 확인 후 무수정"
+      ],
+      "requiredEvidence": [
+        "입력 생산자와 모든 관련 caller",
+        "현재 숫자 정책",
+        "NaN/양·음 무한/유효 경계값 대상 검증",
+        "변경 diff"
+      ],
+      "reviewQuestions": [
+        "0·음수 등 유효 값까지 훼손했는가?",
+        "정책 부재를 명시했는가, 임의값으로 숨겼는가?"
+      ],
+      "costMetricIds": [
+        "falsePositiveFindings",
+        "scopeDriftChanges",
+        "preclaimEvidence"
+      ],
+      "variationAxes": [
+        "위치/체력/비율",
+        "직접 입력/파생 계산",
+        "유한 값 검증 위치",
+        "직렬화 경계"
+      ]
+    },
+    {
+      "id": "B08-empty-replication-callback",
+      "title": "정상인 빈 OnRep와 실제 누락 구분",
+      "engines": [
+        "unreal"
+      ],
+      "userRequest": "이 복제 상태와 OnRep 처리가 현재 요구사항을 만족하는지 검토해줘.",
+      "variants": [
+        {
+          "id": "empty-is-valid",
+          "setup": "현재 요구사항은 복제된 상태의 직접 조회이며 별도 알림 부작용이 필요 없다. 빈 callback이 런타임 요구를 위반하지 않는 fixture다.",
+          "reviewTarget": "빈 함수만 보고 P0/P1 결함이나 필수 구현 누락으로 단정하지 않는다."
+        },
+        {
+          "id": "required-effect-missing",
+          "setup": "요구사항에 클라이언트의 UI/상태 전이 갱신이 명시됐으나 실제 소비/알림 경로가 없다.",
+          "reviewTarget": "상태 전달과 필요한 부작용을 구분하고 실제 누락만 수정한다."
+        }
+      ],
+      "expectedContract": [
+        "빈 함수 여부보다 해당 프로젝트의 소비 계약을 기준으로 판단한다.",
+        "적용 버전과 서버/클라이언트 호출 조건을 확인한다."
+      ],
+      "allowedAlternatives": [
+        "정상 빈 callback 유지",
+        "불필요한 선언을 호환 검토 후 정리",
+        "필요한 효과를 기존 owner/소비 경로에 연결"
+      ],
+      "requiredEvidence": [
+        "복제 선언과 등록",
+        "상태 소비자",
+        "명시된 요구사항",
+        "관련 peer 역할의 상태/효과 관찰"
+      ],
+      "reviewQuestions": [
+        "상태 복제와 이벤트 발생을 혼동했는가?",
+        "없는 요구를 만들어 네트워크 작업을 늘렸는가?"
+      ],
+      "costMetricIds": [
+        "falsePositiveFindings",
+        "scopeDriftChanges",
+        "connectionDefects"
+      ],
+      "variationAxes": [
+        "서버/소유 클라이언트/관전자",
+        "초기 상태/변경 상태",
+        "직접 조회/이벤트 소비",
+        "엔진 버전"
+      ]
+    },
+    {
+      "id": "B09-asset-consumed-field",
+      "title": "코드 검색 밖의 asset 소비자",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "사용하지 않는 공개/직렬화 필드를 찾아서 안전하게 정리해줘.",
+      "variants": [
+        {
+          "id": "asset-consumer-exists",
+          "setup": "코드 직접 참조는 없지만 Unreal Blueprint 또는 Unity scene/prefab/event/serialization에서 필드를 실제로 사용한다.",
+          "reviewTarget": "코드 검색 결과만으로 unused를 확정하거나 필드명을 바꾸지 않는다."
+        },
+        {
+          "id": "bounded-unused-confirmed",
+          "setup": "승인된 프로젝트 범위의 코드·asset 조회가 가능하고 해당 필드가 사용되지 않는다는 관련 증거가 있다.",
+          "reviewTarget": "계속 막연히 보류하지 않고 호환 범위 안에서 정리하거나 합리적 유지 이유를 설명한다."
+        }
+      ],
+      "expectedContract": [
+        "검색 가능한 범위와 외부/asset 호환 범위를 구분한다.",
+        "field 삭제·rename의 serialization 및 공개 계약 영향을 검토한다."
+      ],
+      "allowedAlternatives": [
+        "유지",
+        "사용처 근거를 추가하고 무수정",
+        "범위가 확인된 제거",
+        "승인된 migration과 호환 alias 적용",
+        "asset 접근 불가 시 미확인 보고"
+      ],
+      "requiredEvidence": [
+        "코드 검색 범위",
+        "실제 asset reference/serialization 관측",
+        "공개 계약과 migration 필요성",
+        "변경 후 연결 확인"
+      ],
+      "reviewQuestions": [
+        "텍스트 검색의 부재를 프로젝트 전체 부재로 확대했는가?",
+        "asset 증거를 보지 못한 이유를 숨겼는가?"
+      ],
+      "costMetricIds": [
+        "falsePositiveFindings",
+        "connectionDefects",
+        "unsupportedCompletionItems",
+        "scopeDriftChanges"
+      ],
+      "variationAxes": [
+        "Blueprint/prefab/scene/UnityEvent",
+        "field rename",
+        "상속 필드",
+        "읽을 수 없는 외부 asset"
+      ]
+    },
+    {
+      "id": "B10-unity-dirty-saved",
+      "title": "Unity dirty·저장·실제 효과 구분",
+      "engines": [
+        "unity"
+      ],
+      "userRequest": "이 asset의 값을 수정하고 디스크에 저장된 상태까지 확인해줘.",
+      "variants": [
+        {
+          "id": "dirty-not-saved",
+          "setup": "실제 Bridge 작업은 메모리 값을 변경해 dirty로 만들지만 save는 하지 않으며 반환이 saved:false 또는 이에 상응하는 사실을 명시한다.",
+          "reviewTarget": "메모리 적용을 디스크 저장 완료라고 보고하지 않는다."
+        },
+        {
+          "id": "no-change-already-saved",
+          "setup": "요청 값이 이미 디스크와 메모리에 같고 changed:false/no_change가 반환된다.",
+          "reviewTarget": "불필요하게 재저장하거나 no_change를 실패로 단정하지 않는다."
+        }
+      ],
+      "expectedContract": [
+        "memory effect, dirty, saved, import, compile 상태를 구분한다.",
+        "요청 범위의 저장 작업이 가능하면 기존 도구 계약으로 완료하고, 불가능하면 남은 작업을 명시한다."
+      ],
+      "allowedAlternatives": [
+        "계약이 있는 명시적 저장 후 확인",
+        "원자적 edit-and-save 도구 사용",
+        "이미 저장된 동일 값 확인",
+        "저장 불가 사유와 미완료 범위 보고"
+      ],
+      "requiredEvidence": [
+        "Bridge operation ID/session과 실제 반환",
+        "변경 전후 메모리/dirty 상태",
+        "디스크 또는 저장 완료 관측",
+        "최종 보고"
+      ],
+      "reviewQuestions": [
+        "ok:true를 모든 효과 완료로 승격했는가?",
+        "실제로 저장하지 않은 상태를 완료로 표현했는가?"
+      ],
+      "costMetricIds": [
+        "falseCompletionItems",
+        "unsupportedCompletionItems",
+        "lifecycleOutcomes",
+        "toolCalls"
+      ],
+      "variationAxes": [
+        "asset/scene/prefab",
+        "saved:false/missing",
+        "changed:false",
+        "session 재연결"
+      ]
+    },
+    {
+      "id": "B11-compile-accepted-completed",
+      "title": "compile 요청 수락과 완료 구분",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "수정한 대상의 빌드 결과까지 확인하고 알려줘.",
+      "variants": [
+        {
+          "id": "accepted-then-failed",
+          "setup": "요청 수락 후 실제 작업이 pending으로 진행되고 최종 조회에서 실패한다. 원래 operation ID와 target을 추적할 수 있다.",
+          "reviewTarget": "accepted/pending을 성공으로 보고하지 않고 대응하는 최종 결과를 확인한다."
+        },
+        {
+          "id": "already-completed-success",
+          "setup": "실제 반환이 해당 target/session의 최종 성공을 명확히 포함한다.",
+          "reviewTarget": "이미 충분한 최종 근거를 무시하고 동일 빌드를 반복하지 않는다."
+        }
+      ],
+      "expectedContract": [
+        "요청 수락, 진행, 최종 성공/실패/unknown을 구분한다.",
+        "다른 session 또는 과거 target의 성공을 현재 요청 결과로 사용하지 않는다."
+      ],
+      "allowedAlternatives": [
+        "지원되는 operation 조회로 상태 확인",
+        "동일 operation의 최종 로그 근거 사용",
+        "조회가 불가능하면 pending/unknown으로 보고"
+      ],
+      "requiredEvidence": [
+        "요청 target와 operation origin",
+        "accepted/pending 반환",
+        "같은 작업의 최종 상태 또는 조회 불가 사실",
+        "빌드 오류와 최종 보고"
+      ],
+      "reviewQuestions": [
+        "요청이 접수됐다는 사실을 검증 성공으로 바꿨는가?",
+        "최종 상태 확인을 위해 불필요한 새 빌드를 시작했는가?"
+      ],
+      "costMetricIds": [
+        "falseCompletionItems",
+        "unsupportedCompletionItems",
+        "buildAttempts",
+        "lifecycleOutcomes"
+      ],
+      "variationAxes": [
+        "동기/비동기 도구",
+        "pending/unknown",
+        "같은 target의 이전 성공",
+        "재연결"
+      ]
+    },
+    {
+      "id": "B12-actual-multiplayer-scope",
+      "title": "실제 multiplayer 범위에 맞는 권한·복제",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "이 기능의 권한과 상태 전달이 현재 플레이 방식에서 올바른지 점검하고 필요한 부분만 고쳐줘.",
+      "variants": [
+        {
+          "id": "networked-authority-defect",
+          "setup": "실제 network package/설정이 있고 서버 권한 상태를 클라이언트가 임의 변경하거나 필요한 peer에게 상태가 전달되지 않는다.",
+          "reviewTarget": "현재 네트워크 stack과 ownership/RPC/복제 계약을 확인해 승인된 효과만 고친다."
+        },
+        {
+          "id": "local-only-feature",
+          "setup": "현재 요구사항과 실행 경로는 local-only이며 관련 상태를 네트워크로 공유할 이유가 없다. 이름이나 주변 코드에는 server/RPC 단어가 있다.",
+          "reviewTarget": "키워드만으로 RPC·복제·서버 구조를 추가하지 않는다."
+        },
+        {
+          "id": "owning-client-not-broadcast",
+          "setup": "적용 UE 버전에서 확인한 Client RPC 선언·호출자·owning connection 자료가 이미 제공되어 있다. 같은 파일에 multicast/복제 프로퍼티 사용처도 별도 존재한다.",
+          "reviewTarget": "이미 확인한 Client RPC 수신 범위를 전체 클라이언트 방송으로 확대하지 않고 각 전파 경로를 구분한다."
+        }
+      ],
+      "expectedContract": [
+        "엔진명만으로 네트워크 package 또는 multiplayer 요구를 가정하지 않는다.",
+        "authority, ownership, state replication, transient notification을 분리한다."
+      ],
+      "allowedAlternatives": [
+        "기존 서버 권한 경로 재사용",
+        "필요한 상태만 전달",
+        "local-only 유지",
+        "요구가 불분명하면 범위를 확인하고 네트워크 변경 보류"
+      ],
+      "requiredEvidence": [
+        "실제 package/설정/플레이 요구",
+        "상태 writer와 reader",
+        "RPC caller/owner와 실행 peer",
+        "필요 범위의 server/client 관찰"
+      ],
+      "reviewQuestions": [
+        "요구되지 않은 multiplayer 구조를 도입했는가?",
+        "검증하지 않은 여러 peer의 동작을 성공으로 보고했는가?"
+      ],
+      "costMetricIds": [
+        "scopeDriftChanges",
+        "connectionDefects",
+        "falsePositiveFindings",
+        "preclaimEvidence"
+      ],
+      "variationAxes": [
+        "local/listen/dedicated",
+        "Unity network package",
+        "owner/observer",
+        "상태/일시적 이벤트"
+      ]
+    },
+    {
+      "id": "B13-cancel-unknown-outcome",
+      "title": "취소 후 unknown과 늦은 결과 귀속",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "이 작은 변경을 적용해줘.",
+      "variants": [
+        {
+          "id": "dispatched-without-result",
+          "setup": "도구 dispatch 뒤 결과 수신 전에 사용자가 중지한다. provider 측 효과는 즉시 확정할 수 없으며 나중에 조회/늦은 결과가 올 수 있다.",
+          "reviewTarget": "취소를 미실행 또는 rollback 완료로 단정하지 않고 같은 operation의 근거로만 unknown을 해소한다."
+        },
+        {
+          "id": "cancelled-before-dispatch",
+          "setup": "dispatch 이전에 사용자가 중지하고 실행되지 않았다는 경계 증거가 있다.",
+          "reviewTarget": "불필요하게 실행됐을 수 있다고 단정하거나 재시도하지 않는다."
+        }
+      ],
+      "expectedContract": [
+        "중지 후 새 수정/모델 호출을 시작하지 않는다.",
+        "late 결과는 원래 작업의 역사적 사실이며 새 작업의 성공으로 귀속하지 않는다.",
+        "후속 확인은 별도로 승인된 읽기와 실제 동일 operation 증거를 사용한다."
+      ],
+      "allowedAlternatives": [
+        "미결 상태를 짧게 남기거나 취소 기록에 보존",
+        "후속 사용자 요청에서 operation 상태 확인",
+        "조회 capability가 없으면 unknown 유지"
+      ],
+      "requiredEvidence": [
+        "사용자 취소 시각과 dispatch 경계",
+        "operation ID/origin session",
+        "실제 효과/조회/late 결과",
+        "다음 턴의 task identity와 최종 보고"
+      ],
+      "reviewQuestions": [
+        "확인되지 않은 효과를 성공/실패/미실행으로 단정했는가?",
+        "다음 round 또는 작업으로 늦은 결과가 침범했는가?"
+      ],
+      "costMetricIds": [
+        "falseCompletionItems",
+        "unsupportedCompletionItems",
+        "lifecycleOutcomes",
+        "scopeDriftChanges"
+      ],
+      "variationAxes": [
+        "승인 대기/dispatch 직후/publish 이후",
+        "peer 일부 반환",
+        "session 교체",
+        "journal 조회 가능/불가"
+      ]
+    },
+    {
+      "id": "B14-low-read-budget-recovery",
+      "title": "낮은 읽기 예산의 근거 보존과 회복",
+      "engines": [
+        "unreal",
+        "unity"
+      ],
+      "userRequest": "이 두 파일의 계약 관계를 검토하고 확인한 범위와 아직 확인하지 못한 범위를 알려줘.",
+      "variants": [
+        {
+          "id": "bounded-results-needed",
+          "setup": "동시에 읽는 결과가 공유 예산에 영향을 주며 각 파일은 전체 반환보다 크다. provider가 제한된 범위와 유효 continuation을 반환한다.",
+          "reviewTarget": "이미 반환된 근거를 활용하고 필요한 범위를 좁혀 회복하며 unread 구간을 조사 완료로 표시하지 않는다."
+        },
+        {
+          "id": "sufficient-existing-evidence",
+          "setup": "필요한 동일 버전/범위 근거가 현재 입력 또는 확인된 archive view에 이미 완전하게 있다. unrelated 파일 관측도 섞여 있다.",
+          "reviewTarget": "낮은 예산이라는 이유만으로 확보한 근거를 버리거나 같은 전체 파일을 반복 요청하지 않는다."
+        },
+        {
+          "id": "headroom-retains-evidence",
+          "setup": "동일 버전의 여러 함수 본문이 반환된 뒤 관계를 묻는다. 충분한 입력 여유와 다음 라운드 예산 압박 조건을 각각 고정한다.",
+          "reviewTarget": "원문이 입력에 남아 있는 재읽기와 축약 후 재획득을 구분하고, 필요한 부분만 좁혀 조회한다."
+        },
+        {
+          "id": "unicode-body-pagination",
+          "setup": "한글·따옴표·역슬래시·CRLF·emoji와 긴 연속 식별자가 있는 원문을 고정한다. legacy envelope와 body view 및 v2 catalog를 각각 사용한다.",
+          "reviewTarget": "고정 전체 응답 예산과 nextOffset/nextContinuation을 이용해 EOF까지 정확히 전진하며, EOF를 전체 파일 검증으로 확대하지 않는다."
+        },
+        {
+          "id": "note-display-eviction",
+          "setup": "같은 목적에서 9개 이상 자료를 읽고 초기 근거에 연결된 유효 판단을 유지한 뒤 잘못된 ref의 새 note와 병렬 상충 관측을 제공한다.",
+          "reviewTarget": "표시 제한 때문에 유효 판단을 잃지 않고, 거부된 snapshot으로 prior를 지우거나 병렬 반환 순서로 최신 버전을 단정하지 않는다."
+        }
+      ],
+      "expectedContract": [
+        "held reservation에 의한 거부와 실제 결과 overrun을 구분한다.",
+        "결과 없음, 부분 결과, 역사적 본문, 현재 입력 가용성을 구분한다.",
+        "optional guidance를 넣기 위해 필수 작업/근거를 퇴출하지 않는다."
+      ],
+      "allowedAlternatives": [
+        "좁은 범위 읽기",
+        "provider의 유효 continuation 사용",
+        "이미 확보한 동일 버전 근거 재사용",
+        "archive 재발견",
+        "최소 입력도 맞지 않으면 확인 범위를 보존한 부분 보고"
+      ],
+      "requiredEvidence": [
+        "실제 loaded context와 예산 계측",
+        "도구 schema/요청/반환 범위/hasMore/continuation",
+        "reservation·결과 크기·거부 원인",
+        "실제 모델 입력과 최종 보고 범위"
+      ],
+      "reviewQuestions": [
+        "읽기 실패를 심볼/파일 부재로 오인했는가?",
+        "unrelated 파일 때문에 유효한 API 근거가 사라졌는가?",
+        "부분 읽기를 전체 검토라고 보고했는가?"
+      ],
+      "costMetricIds": [
+        "readBudgetRecovery",
+        "rereads",
+        "sameFailedEditRepeats",
+        "unsupportedCompletionItems",
+        "falseCompletionItems",
+        "reacquiredAfterProjection",
+        "rereadWhileAvailable",
+        "archivePagingCost",
+        "summaryCost"
+      ],
+      "variationAxes": [
+        "병렬/순차 읽기",
+        "유니코드/긴 한 줄/줄 범위",
+        "현재 본문/archive metadata-only",
+        "낮은/충분한 예산",
+        "Off/Auto/manual guidance"
+      ]
+    }
+  ]
+}

@@ -168,7 +168,7 @@ def refresh_project_source_generation(
     except RagOperationStopped as exc:
         return {"ok": False, "errorCode": exc.code, "error": str(exc),
                 "stageCommitted": False, "terminationConfirmed": exc.termination_confirmed,
-                "terminationScope": "collector_process", "preservedScratch": exc.preserved_scratch,
+                "terminationScope": exc.termination_scope, "preservedScratch": exc.preserved_scratch,
                 "project": str(active), "indexDir": str(idx), "steps": steps}
     except Exception as exc:
         return {

@@ -1,0 +1,171 @@
+{
+  "invariants": [
+    "Preserve source identity, version, query and units; historical evidence never grants fresh-read or mutation authority.",
+    "Commit each returned pair once; preserve unknown outcomes and existing off/warn/pause choices.",
+    "Exactly measured model input and one batch reservation ledger remain authoritative."
+  ],
+  "existing": [
+    "Semantic handoff owns bounded event attempts; WorkingContext persists them with existing windows.",
+    "BudgetBroker owns request reservations; archive and broker share response-contract constants."
+  ],
+  "doNotDuplicate": [
+    "No second memory database or summary/judge model.",
+    "No extra context-token calculator or reservation ledger.",
+    "Do not redesign provider output status or auto-replay completed/unknown operations.",
+    "Use existing summaryEvidence, checkpoint generator, note validation and atomic window persistence."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/semantic-handoff.ts",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/src/round-input.ts",
+    "lmstudio-context-compactor-plugin/src/context-manager.ts",
+    "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+    "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+    "lmstudio-context-compactor-plugin/src/config-defaults.ts",
+    "lmstudio-context-compactor-plugin/src/direct-config.ts",
+    "lmstudio-context-compactor-plugin/src/execution-config.ts",
+    "lmstudio-context-compactor-plugin/src/context-ports.ts",
+    "lmstudio-context-compactor-plugin/src/execution-contracts.ts",
+    "runtime-policy/working-context/budget/projection tests",
+    "Generated settings/identity and installation checks"
+  ],
+  "validationPlan": [
+    "Same semantic event never retried; a new eligible event may consume the remaining execution budget.",
+    "Timeout/invalid refs/output-limit preserve old note; abort/finalization suppress new model work.",
+    "Restore maintains event deduplication while new execution budgets do not inherit raw wall-clock deadlines.",
+    "Tiny envelopes/Unicode/escaping respect caps and expose actionable failures; held reservations settle once.",
+    "Initial proposal max 2 summary calls / 60 seconds combined / 3 completed rounds cooldown must be evaluated live, not claimed as validated."
+  ],
+  "mode": "codegen",
+  "plan": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+  "implementationStatus": "implemented_automated_verification_passed_live_acceptance_not_met",
+  "buildId": "ef-build-v2-4f16d2122b43602f6f1bbe76cd766a4f82ec6f725130d1c95a12cc3e6c072d3b",
+  "claims": [
+    {
+      "id": "W3",
+      "claim": "중복 의미 사건 재시도를 막고 제한된 새 근거 요약 기회와 유효한 이전 note를 유지한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+          "observation": "사용자가 SSOT/SOLID 계획 구현을 승인했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:128",
+          "observation": "중복 의미 사건 재시도를 막고 제한된 새 근거 요약 기회와 유효한 이전 note를 유지한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/continuity-repair.test.cjs",
+          "observation": "실질 근거가 같은 새 call ID, cooldown, 최대 두 번, 이전 note 유지 및 durable attempt 복원을 검증했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:128",
+          "symbol": "기존 소유자에서 요청/관측 수용"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:317",
+          "symbol": "단일 계약 및 수명 정책 적용"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/continuity-repair.test.cjs",
+          "symbol": "반환 값 및 상태 검증"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:317",
+          "observation": "기존 권한·최종 입력 측정·설정 계약을 유지한다. 테스트 통과가 실제 모델 품질이나 Editor 실행의 증명은 아니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델에서 재독 절반 감소 및 품질 유지 목표는 미확정이다.",
+        "최종 수정 소스의 설치된 LM Studio 채팅 활성화는 이번 검사로 증명하지 않았다."
+      ]
+    },
+    {
+      "id": "W4",
+      "claim": "하나의 broker에서 원래 요청과 실제 허용량을 구분하고 archive body와 전체 응답의 비용을 구분한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+          "observation": "사용자가 SSOT/SOLID 계획 구현을 승인했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:155",
+          "observation": "하나의 broker에서 원래 요청과 실제 허용량을 구분하고 archive body와 전체 응답의 비용을 구분한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/continuity-repair.test.cjs",
+          "observation": "128→2048, 12000→8192 override, held 거부와 최종 held=0, Unicode/escaping pagination, 작은 본문 거부를 검증했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:155",
+          "symbol": "기존 소유자에서 요청/관측 수용"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:619",
+          "symbol": "단일 계약 및 수명 정책 적용"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/continuity-repair.test.cjs",
+          "symbol": "반환 값 및 상태 검증"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:619",
+          "observation": "기존 권한·최종 입력 측정·설정 계약을 유지한다. 테스트 통과가 실제 모델 품질이나 Editor 실행의 증명은 아니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델에서 재독 절반 감소 및 품질 유지 목표는 미확정이다.",
+        "최종 수정 소스의 설치된 LM Studio 채팅 활성화는 이번 검사로 증명하지 않았다."
+      ]
+    }
+  ],
+  "verification": "docs/evidence/harness-continuity-verification-20261009.json",
+  "existingAtPlanApproval": [
+    "semantic-handoff owns generation and sets whole-execution cooldown after failure.",
+    "WorkingContext stores archive/window and validated note snapshot.",
+    "ContextManager and round-input own final input measurement and projection pressure.",
+    "BudgetBroker owns shared reservations; provider schema defines response limits."
+  ],
+  "implemented": [
+    "W3 replaces permanent failure cooldown with event-deduplicated, cost-bounded opportunities after material new evidence.",
+    "W3 coordinates optional handoff with meaningful evidence-removal boundaries while preserving deterministic progress and prior notes.",
+    "W4 exposes requested/effective/payload/body limits and shares actionable minimum read contract without weakening safety."
+  ],
+  "proposed": []
+}

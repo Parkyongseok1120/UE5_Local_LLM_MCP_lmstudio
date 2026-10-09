@@ -39,52 +39,62 @@ def _process_request(export_dir: Path, tools_dir: Path) -> None:
     project_file = str(job.get("projectFile") or "")
     run_id = str(job.get("jobId") or "")
 
-    run_all_path = tools_dir / "run_all_exports.py"
-    namespace: dict = {}
-    with open(run_all_path, encoding="utf-8") as handle:
-        source = handle.read()
-    exec(f"_TOOLS_DIR = {str(tools_dir)!r}\n" + source, namespace)
+    try:
+        run_all_path = tools_dir / "run_all_exports.py"
+        namespace: dict = {}
+        with open(run_all_path, encoding="utf-8") as handle:
+            source = handle.read()
+        exec(f"_TOOLS_DIR = {str(tools_dir)!r}\n" + source, namespace)
 
-    if scope in {"material", "materials"}:
-        manifest = namespace["export_materials_only"](
-            str(export_dir),
-            content_path=content_path,
-            tools_dir=str(tools_dir),
-            requested_project_file=project_file,
-            run_id=run_id,
-        )
-    elif scope in {"blueprint", "blueprints", "bp"}:
-        manifest = namespace["export_blueprints_only"](
-            str(export_dir),
-            content_path=content_path,
-            tools_dir=str(tools_dir),
-            requested_project_file=project_file,
-            run_id=run_id,
-        )
-    else:
-        manifest = namespace["run_all_metadata_exports"](
-            str(export_dir),
-            content_path=content_path,
-            maps_path=maps_path,
-            tools_dir=str(tools_dir),
-            requested_project_file=project_file,
-            run_id=run_id,
-            scope=scope,
-        )
+        if scope in {"material", "materials"}:
+            manifest = namespace["export_materials_only"](
+                str(export_dir),
+                content_path=content_path,
+                tools_dir=str(tools_dir),
+                requested_project_file=project_file,
+                run_id=run_id,
+            )
+        elif scope in {"blueprint", "blueprints", "bp"}:
+            manifest = namespace["export_blueprints_only"](
+                str(export_dir),
+                content_path=content_path,
+                tools_dir=str(tools_dir),
+                requested_project_file=project_file,
+                run_id=run_id,
+            )
+        else:
+            manifest = namespace["run_all_metadata_exports"](
+                str(export_dir),
+                content_path=content_path,
+                maps_path=maps_path,
+                tools_dir=str(tools_dir),
+                requested_project_file=project_file,
+                run_id=run_id,
+                scope=scope,
+            )
 
-    request_path.unlink(missing_ok=True)
-    _write_json(
-        export_dir / DONE_NAME,
-        {
-            "ok": True,
-            "mode": "request_watcher",
-            "exportDir": str(export_dir),
-            "contentPath": content_path,
-            "scope": scope,
-            "manifest": manifest,
-            "runId": run_id,
-        },
-    )
+        request_path.unlink(missing_ok=True)
+        _write_json(
+            export_dir / DONE_NAME,
+            {
+                "ok": True,
+                "mode": "request_watcher",
+                "exportDir": str(export_dir),
+                "contentPath": content_path,
+                "scope": scope,
+                "manifest": manifest,
+                "runId": run_id,
+            },
+        )
+    except Exception as exc:
+        # Correlate the failure with the job already read, never a later request.
+        _write_json(
+            export_dir / ERROR_NAME,
+            {"ok": False, "mode": "request_watcher", "runId": run_id,
+             "error": str(exc), "traceback": traceback.format_exc()},
+        )
+        request_path.unlink(missing_ok=True)
+
 
 
 def start_export_request_watcher(export_dir: str, tools_dir: str = "", poll_seconds: float = 2.0) -> None:

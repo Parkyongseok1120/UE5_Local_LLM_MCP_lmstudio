@@ -4,6 +4,7 @@ import {
 import crypto from "node:crypto";
 import { toolMemory } from "./context-ports";
 import { type ContinuityNote } from "./execution-contracts";
+import type { RecoveryProgress } from "./evidence-manager";
 
 export const VOLATILE_OBSERVATION_KEYS = new Set([
   "observedAt", "lastObservedAt", "snapshotCapturedAt", "snapshotId", "nextCursor", "compactionGeneration",
@@ -32,6 +33,15 @@ export function telemetryFingerprint(value: unknown, semantic = false): string {
   return crypto.createHash("sha256")
     .update(serialized === undefined ? "undefined" : serialized)
     .digest("hex");
+}
+
+export function readResultSize(content: unknown) {
+  const envelope = typeof content === "string" ? content : JSON.stringify(content) ?? "";
+  const decoded = toolMemory.decodeToolResultRecord(content).value;
+  const body = decoded && [decoded.content, decoded.body, decoded.text].find(value => typeof value === "string");
+  return { envelopeChars: envelope.length, envelopeBytes: Buffer.byteLength(envelope),
+    bodyChars: typeof body === "string" ? body.length : null,
+    bodyBytes: typeof body === "string" ? Buffer.byteLength(body) : null };
 }
 
 export function resultContent(result: unknown): unknown {
@@ -183,13 +193,17 @@ export function assistantNoteTelemetry(note: ContinuityNote | null, enabled: boo
 export class ToolRoundStagnationDetector {
   private previous = "";
   private count = 0;
+  private recent: Array<{ fingerprint: string; novel: boolean; restored: boolean }> = [];
+  private announced = new Set<string>();
+  acknowledge(key: string) { this.announced.add(key); }
 
-  observe(messages: Array<ChatMessage>) {
+  observe(messages: Array<ChatMessage>, progress?: RecoveryProgress) {
     const evidence = messageEvidenceTelemetry(messages);
     if (!evidence.calls.length || !evidence.results.length) {
       this.previous = "";
       this.count = 0;
-      return { repeated: false, count: 0, fingerprint: "" };
+      this.recent = []; this.announced.clear();
+      return { repeated: false, count: 0, fingerprint: "", warningKey: "", cycleLength: 0, cycleDetected: false, firstWarning: false, reacquisition: false };
     }
     const fingerprint = telemetryFingerprint({
       calls: evidence.calls.map(call => ({ toolName: call.toolName, argumentsFingerprint: call.argumentsFingerprint })),
@@ -197,6 +211,33 @@ export class ToolRoundStagnationDetector {
     });
     this.count = fingerprint === this.previous ? this.count + 1 : 1;
     this.previous = fingerprint;
-    return { repeated: this.count > 1, count: this.count, fingerprint };
+    let cycleLength = 0, cycleKey = "", reacquisition = false;
+    if (progress?.coverage.length && !progress.errorCount && progress.observationOnly !== false) {
+      const unversioned = progress.coverage.some(c => c.category === "source"
+        && (!c.sourceVersion || c.sourceVersion === "unknown-version"));
+      const semantic = telemetryFingerprint({ coverage: progress.coverage.map(c => ({ key: c.key,
+        category: c.category, version: c.sourceVersion, unit: c.rangeUnit, range: c.range }))
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+        // Listings and live state can change without a version or range change.
+        ...(unversioned ? { results: evidence.results.map(result => result.semanticResultFingerprint).sort() } : {}) });
+      this.recent.push({ fingerprint: semantic, novel: progress.newSourceUnits > 0 || progress.newArchiveUnits > 0,
+        restored: progress.restoredWorkingEvidenceUnits > 0 });
+      this.recent = this.recent.slice(-8);
+      if (this.recent.at(-1)!.novel) this.announced.clear();
+      for (let size = 2; size <= 4 && this.recent.length >= size * 2; size++) {
+        const last = this.recent.slice(-size), prior = this.recent.slice(-size * 2, -size);
+        if (last.every((frame, i) => !frame.novel && frame.fingerprint === prior[i].fingerprint)) {
+          cycleLength = size; reacquisition = last.some(frame => frame.restored);
+          cycleKey = telemetryFingerprint(last.map(frame => frame.fingerprint).sort()); break;
+        }
+      }
+    } else this.recent = [];
+    const key = cycleKey || fingerprint;
+    const firstWarning = !this.announced.has(key);
+    // Only remember actual repetition, so the first threshold warning is visible.
+    if (cycleLength) this.announced.add(key);
+    while (this.announced.size > 8) this.announced.delete(this.announced.values().next().value!);
+    return { repeated: this.count > 1 || cycleLength > 0, count: this.count, fingerprint, warningKey: key,
+      cycleLength, cycleDetected: cycleLength > 0, firstWarning, reacquisition };
   }
 }

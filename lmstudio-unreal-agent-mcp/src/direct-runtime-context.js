@@ -96,12 +96,15 @@ function createDirectRuntimeContext(options = {}) {
     };
   }
 
-  function directResult(toolName, payload) {
-    return toMcpResult(fileObservation(payload), { currentTool: toolName, maxChars: limits.maxResponseChars });
+  function directResult(toolName, payload, args = {}) {
+    return toMcpResult(fileObservation(payload), { currentTool: toolName, maxChars: limits.maxResponseChars,
+      maxBytes: args.byteBudget });
   }
 
-  function payloadFits(payload, reserveChars = 0) {
-    return JSON.stringify(fileObservation(payload), null, 2).length + reserveChars <= limits.maxResponseChars;
+  function payloadFits(payload, reserveChars = 0, byteBudget) {
+    const rendered = JSON.stringify(fileObservation(payload), null, 2);
+    return rendered.length + reserveChars <= limits.maxResponseChars
+      && (byteBudget === undefined || Buffer.byteLength(rendered, "utf8") + reserveChars <= byteBudget);
   }
 
   function projectScopedSuggestionArgs(args, suggestionArgs) {
@@ -109,14 +112,14 @@ function createDirectRuntimeContext(options = {}) {
     return selector ? { ...suggestionArgs, project: selector } : suggestionArgs;
   }
 
-  function fitUtf8Prefix(buffer, makePayload) {
+  function fitUtf8Prefix(buffer, makePayload, byteBudget) {
     let low = 0;
     let high = buffer.length;
     let best = null;
     while (low <= high) {
       const middle = Math.floor((low + high) / 2);
       const candidate = makePayload(buffer.subarray(0, middle), middle);
-      if (payloadFits(candidate, 256)) {
+      if (payloadFits(candidate, 256, byteBudget)) {
         best = { payload: candidate, bytes: middle };
         low = middle + 1;
       } else {
@@ -128,7 +131,7 @@ function createDirectRuntimeContext(options = {}) {
       try {
         const content = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytes));
         const payload = makePayload(Buffer.from(content, "utf8"), bytes, content);
-        if (payloadFits(payload, 256)) return { payload, bytes };
+        if (payloadFits(payload, 256, byteBudget)) return { payload, bytes };
       } catch {
         // Back up to the prior complete UTF-8 unit.
       }

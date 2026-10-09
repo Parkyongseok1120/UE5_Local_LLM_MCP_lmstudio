@@ -109,7 +109,7 @@ def build_public_index(
     except RagOperationStopped as exc:
         return {"ok": False, "errorCode": exc.code, "error": str(exc),
                 "stageCommitted": False, "terminationConfirmed": exc.termination_confirmed,
-                "terminationScope": "collector_process", "preservedScratch": exc.preserved_scratch}
+                "terminationScope": exc.termination_scope, "preservedScratch": exc.preserved_scratch}
     except DirectRagRefreshBusyError as exc:
         return {
             "ok": False,

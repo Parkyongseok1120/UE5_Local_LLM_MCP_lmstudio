@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import gui_installer_command, plant_compactor_sdk_fixture
+from conftest import gui_installer_command, plant_compactor_sdk_fixture, plant_compactor_lms_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.py"
@@ -74,7 +74,9 @@ def test_compactor_patches_installed_sdk_after_home_sync_before_activation(tmp_p
                         lambda *a, **k: events.append(("activate", None)) or {})
     result = module._install_context_compactor(args)
     assert result["installed"] is True
-    assert events == [(["lms", "dev", "--install", "-y"], ROOT / "lmstudio-context-compactor-plugin"),
+    assert events == [*[( ["npm", "run", script], ROOT / "lmstudio-context-compactor-plugin")
+                        for script in ["guidance:build", "identity:build", "identity:check"]],
+                      (["lms", "dev", "--install", "-y"], ROOT / "lmstudio-context-compactor-plugin"),
                       ("sync", args.lmstudio_home),
                       (["npm", "run", "patch:sdk"], module._context_compactor_install_path(args.lmstudio_home).parent),
                       ("activate", None)]
@@ -582,56 +584,7 @@ def test_interactive_engine_selector_rejects_invalid_custom_root(
 
 
 def _plant_fake_lms(lmstudio_home: Path) -> None:
-    """Provide an LMS CLI that installs the current compiled compactor identity."""
-    bindir = lmstudio_home / "bin"
-    bindir.mkdir(parents=True, exist_ok=True)
-    plugin_dir = (
-        lmstudio_home
-        / "extensions"
-        / "plugins"
-        / "codex"
-        / "unreal-context-compactor"
-    )
-    manifest = plugin_dir / "manifest.json"
-    plant_compactor_sdk_fixture(plugin_dir)
-    bundle = plugin_dir / ".lmstudio" / "production.js"
-    current_manifest = json.loads(
-        (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
-    )
-    manifest_json = json.dumps(current_manifest, separators=(",", ":"))
-    if os.name == "nt":
-        script = bindir / "lms.cmd"
-        script.write_text(
-            "\r\n".join(
-                [
-                    "@echo off",
-                    'if /I "%~1"=="--version" (echo lms 0.0.0-test & exit /b 0)',
-                    f'mkdir "{bundle.parent}" >nul 2>nul',
-                    f'echo {manifest_json} > "{manifest}"',
-                    f'echo module.exports = {{}}; > "{bundle}"',
-                    "exit /b 0",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-    else:
-        script = bindir / "lms"
-        script.write_text(
-            "\n".join(
-                [
-                    "#!/bin/sh",
-                    'if [ "$1" = "--version" ]; then echo "lms 0.0.0-test"; exit 0; fi',
-                    f'mkdir -p "{bundle.parent}"',
-                    f"printf '%s\\n' '{manifest_json}' > \"{manifest}\"",
-                    f"printf '%s\\n' 'module.exports = {{}};' > \"{bundle}\"",
-                    "exit 0",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        script.chmod(0o755)
+    plant_compactor_lms_fixture(lmstudio_home)
 
 
 def _run(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -996,12 +949,82 @@ def test_context_compactor_uses_the_conversation_specific_json_limit(
     sys.modules.pop("integrated_install", None)
 
 
+@pytest.mark.parametrize("existing_settings", [False, True])
+def test_failed_install_rolls_back_chat_activation_and_settings(tmp_path, monkeypatch, existing_settings):
+    from types import SimpleNamespace
+    module = _load_installer_module()
+    home = tmp_path / "lmstudio"
+    chats = home / "conversations"
+    chats.mkdir(parents=True)
+    conversation = chats / "test.conversation.json"
+    original_chat = b'{"plugins":["keep"],"pluginConfig":{"designGuidanceMode":"off"}}'
+    conversation.write_bytes(original_chat)
+    settings = home / "settings.json"
+    original_settings = b'{"chat":{"pinnedPlugins":["keep"]},"custom":"preserve"}'
+    if existing_settings:
+        settings.write_bytes(original_settings)
+    args = module.build_parser().parse_args([
+        "--profile", "custom", "--components", "context_compactor", "--yes", "--skip-deps",
+        "--lmstudio-home", str(home), "--state-home", str(tmp_path / "state"),
+        "--codex-home", str(tmp_path / "codex")])
+    monkeypatch.setattr(module, "_resolve_lms_cli", lambda _: "lms")
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(module, "_run", lambda *a, **k: None)
+    monkeypatch.setattr(module, "_ensure_context_compactor_on_disk", lambda **k: {"ready": True})
+    def fail_after_activation(*_):
+        assert module.CONTEXT_COMPACTOR_PLUGIN_ID in json.loads(conversation.read_bytes())["plugins"]
+        raise RuntimeError("failure after activation")
+    monkeypatch.setattr(module, "_live_server_status", fail_after_activation)
+    with pytest.raises(RuntimeError, match="failure after activation"):
+        module.install(args)
+    assert conversation.read_bytes() == original_chat
+    assert settings.read_bytes() == original_settings if existing_settings else not settings.exists()
+    assert not (tmp_path / "state/install.lock").exists()
+
+
+def test_failed_chat_write_is_not_reported_as_updated(tmp_path, monkeypatch):
+    module = _load_installer_module()
+    chats = tmp_path / "conversations"
+    chats.mkdir()
+    conversation = chats / "test.conversation.json"
+    conversation.write_text('{"plugins":[]}', encoding="utf-8")
+    def fail(*_):
+        raise OSError("locked conversation")
+    monkeypatch.setattr(module, "_write_json_atomic", fail)
+    result = module._enable_context_compactor_for_existing_chats(tmp_path, dry_run=False)
+    assert result["updatedConversationCount"] == 0
+    assert result["skippedConversationCount"] == 1
+    assert json.loads(conversation.read_text(encoding="utf-8"))["plugins"] == []
+
+
 def _make_context_compactor_source(tmp_path: Path) -> Path:
     source = tmp_path / "context-compactor-source"
     source.mkdir()
     for name in ("manifest.json", "package.json"):
         shutil.copy2(ROOT / "lmstudio-context-compactor-plugin" / name, source / name)
     return source
+
+
+def test_compiled_identity_rejects_same_revision_stale_bundle_without_claiming_runtime_activation(tmp_path):
+    from installer.lmstudio_plugin_install import source_plugin_identity, plugin_tree_readiness
+    source = _make_context_compactor_source(tmp_path)
+    (source / "src").mkdir()
+    generated = source / "src/generated-runtime-identity.ts"
+    current = "ef-build-v2-" + "a" * 64
+    stale = "ef-build-v2-" + "b" * 64
+    generated.write_text(f'export const LOADED_BUILD_ID = "{current}";', encoding="utf-8")
+    expected = source_plugin_identity(source)
+    (source / ".lmstudio").mkdir()
+    bundle = source / ".lmstudio/production.js"
+    bundle.write_text(f'module.exports = "{stale}";', encoding="utf-8")
+    assert plugin_tree_readiness(source, expected_identity=expected)["status"] == "compiled-build-identity-mismatch"
+    bundle.write_text(f'module.exports = "{current}";', encoding="utf-8")
+    ready = plugin_tree_readiness(source, expected_identity=expected)
+    assert ready["ready"] is True
+    assert ready["installedBuildId"] == current
+    assert ready["runtimeActivationProven"] is False
+    generated.write_text(f'export const LOADED_BUILD_ID = "{stale}";', encoding="utf-8")
+    assert plugin_tree_readiness(source, expected_identity=expected)["ready"] is False
 
 
 def _plant_current_context_compactor_install(module, home: Path, plugin_src: Path) -> Path:
@@ -1174,9 +1197,11 @@ def test_context_compactor_backup_cleanup_failure_keeps_new_install(
     sys.modules.pop("integrated_install", None)
 
 
-def test_directory_replacement_restores_original_when_old_cleanup_fails(
+@pytest.mark.parametrize("partially_deleted", [False, True])
+def test_directory_replacement_keeps_new_and_full_backup_when_old_cleanup_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    partially_deleted: bool,
 ) -> None:
     module = _load_installer_module()
     source = tmp_path / "source"
@@ -1195,14 +1220,18 @@ def test_directory_replacement_restores_original_when_old_cleanup_fails(
         candidate = Path(path)
         if not failed and candidate.name.startswith(".target-old-"):
             failed = True
+            if partially_deleted:
+                (candidate / "value.txt").unlink()
             raise OSError("simulated cleanup failure")
         return original_rmtree(path, *args, **kwargs)
 
     monkeypatch.setattr(module.shutil, "rmtree", fail_old_cleanup)
-    with pytest.raises(OSError, match="simulated cleanup failure"):
-        transaction.replace_directory(source, target)
+    transaction.replace_directory(source, target)
+    assert (target / "value.txt").read_text(encoding="utf-8") == "new"
+    assert len(transaction.actions) == 1
+    assert transaction.actions[0]["cleanupPending"]
+    transaction.rollback_actions()
     assert (target / "value.txt").read_text(encoding="utf-8") == "old"
-    assert transaction.actions == []
     sys.modules.pop("integrated_install", None)
 
 

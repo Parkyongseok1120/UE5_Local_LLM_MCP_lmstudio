@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -45,6 +46,12 @@ def source_plugin_identity(source_dir: Path) -> dict[str, Any]:
     identity = {key: manifest.get(key) for key in IDENTITY_KEYS}
     if not identity["owner"] or not identity["name"] or identity["revision"] is None:
         raise ValueError(f"LM Studio plugin source identity is incomplete: {manifest_path}")
+    generated = source_dir / "src" / "generated-runtime-identity.ts"
+    if generated.is_file():
+        match = re.search(r"ef-build-v2-[a-f0-9]{64}", generated.read_text(encoding="utf-8"))
+        if not match:
+            raise ValueError(f"Invalid generated runtime identity: {generated}")
+        identity["buildId"] = match.group(0)
     return identity
 
 
@@ -71,7 +78,7 @@ def plugin_tree_readiness(
         return result
     observed = {key: manifest.get(key) for key in IDENTITY_KEYS}
     result["observedIdentity"] = observed
-    if observed != expected_identity:
+    if observed != {key: expected_identity.get(key) for key in IDENTITY_KEYS}:
         result["status"] = "manifest-mismatch"
         return result
     try:
@@ -81,6 +88,17 @@ def plugin_tree_readiness(
     if not production_ready:
         result["status"] = "missing-production-bundle"
         return result
+    if expected_identity.get("buildId"):
+        try:
+            installed = source_plugin_identity(plugin_dir)
+            bundled = expected_identity["buildId"].encode("ascii") in production_path.read_bytes()
+        except (OSError, ValueError, UnicodeError):
+            installed, bundled = {}, False
+        if installed.get("buildId") != expected_identity["buildId"] or not bundled:
+            result["status"] = "compiled-build-identity-mismatch"
+            return result
+        result["installedBuildId"] = expected_identity["buildId"]
+        result["runtimeActivationProven"] = False
     result["ready"] = True
     result["status"] = "current"
     return result

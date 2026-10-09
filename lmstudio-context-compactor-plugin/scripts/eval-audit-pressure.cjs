@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+const { classifyExecutionOutcome } = require("../dist/delivery-controller.js");
 
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
@@ -135,7 +136,9 @@ function controller(history, tokenSource, tool, mode, recorder, configOverrides 
   const debugValues = [];
   const statuses = [];
   const config = {
-    projectEngine: "auto",
+    // The fixture uses an explicit synthetic identity, not a filesystem project.
+    // Match its trusted provider instead of asking auto-detection to prove it.
+    projectEngine: "unreal",
     projectIdentity: fixture.PROJECT_IDENTITY,
     observeOnly: false,
     showDebugInfo: true,
@@ -319,7 +322,7 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
   const started = Date.now();
   let error = null;
   try {
-    await createPredictionLoopHandler()(ctl);
+    await (runOptions.createPredictionLoopHandler || createPredictionLoopHandler)()(ctl);
   } catch (caught) {
     error = String(caught?.stack || caught);
   }
@@ -423,6 +426,7 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
     visibleAnswer,
     error,
     modelActs: recorder.modelActs,
+    terminalOutcome: ctl.debugValues.findLast(value => value.event === "execution_outcome") || null,
     boundedFinalizations: finalizations,
     outputRecoveries,
     boundedFinalModelCalls: recorder.modelActs.filter(act => /:final-report(?:-\d+)?$/u.test(act.modelInputId)).length,
@@ -444,32 +448,17 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
 }
 
 function classifyRunOutcome(run) {
-  const answer = String(run?.visibleAnswer || "").trim();
-  const finishReason = String(run?.trace?.roundFinishReasons?.at(-1) || "unknown");
-  const boundedFinalization = run?.boundedFinalizations?.at(-1) || null;
-  const outputRecovery = run?.outputRecoveries?.at(-1) || null;
-  const terminalDelivery = outputRecovery || boundedFinalization;
-  let executionOutcome;
-  if (run?.timedOut) executionOutcome = "timed_out";
-  else if (terminalDelivery?.finishReason === "final_timeout") executionOutcome = "timed_out";
-  else if (finishReason === "userStopped") executionOutcome = "canceled";
-  else if (run?.error) executionOutcome = "failed";
-  else if (terminalDelivery?.deliveryState === "no_answer") executionOutcome = "no_answer";
-  else if (terminalDelivery?.deliveryState === "truncated") executionOutcome = "truncated";
-  else if (terminalDelivery?.deliveryState === "partial") executionOutcome = "failed";
-  else if (terminalDelivery?.deliveryState === "complete") executionOutcome = "completed";
-  else if (finishReason === "maxPredictedTokensReached") executionOutcome = "truncated";
-  else if (!answer) executionOutcome = "no_answer";
-  else executionOutcome = "completed";
-  return {
-    executionOutcome,
-    reportPresent: Boolean(answer),
-    reportCompleted: executionOutcome === "completed",
-    deliveryState: executionOutcome === "completed" ? "complete"
-      : !answer ? "no_answer"
-        : executionOutcome === "truncated" ? "truncated" : "partial",
-    finalFinishReason: finishReason,
-  };
+  // Current runs carry the runtime's authoritative result, including the last
+  // attempt only. Do not promote earlier progress blocks into a final report.
+  if (run?.terminalOutcome) return run.terminalOutcome;
+  const terminalDelivery = run?.outputRecoveries?.at(-1) || run?.boundedFinalizations?.at(-1);
+  return classifyExecutionOutcome({
+    reportText: String(run?.visibleAnswer || ""),
+    finishReason: terminalDelivery?.finishReason || run?.trace?.roundFinishReasons?.at(-1),
+    timedOut: run?.timedOut === true,
+    failure: run?.error || undefined,
+    delivery: terminalDelivery || undefined,
+  });
 }
 
 function selectVisibleAnswer(visibleBlocks, finalizations, outputRecoveries = []) {

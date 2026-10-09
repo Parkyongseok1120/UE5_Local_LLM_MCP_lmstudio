@@ -2,16 +2,41 @@ import {
   Chat,
   ChatMessage
 } from "@lmstudio/sdk";
-import type { DirectConfig, FinalizationTrigger } from "./execution-contracts";
+import type { DirectConfig, ExecutionOutcome, FinalizationTrigger } from "./execution-contracts";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
-import { containsUnresolvedToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
+import { containsUnresolvedToolIntent, hasUnexecutedRawToolSyntax, visibleTextFromMessages } from "./raw-tool-intent";
 import { coverageRange, observationRecords, sourceObservationFailed } from "./evidence-manager";
 import type { RemoteToolLike } from "./tool-capability-registry";
+import { renderTaskProgress } from "./continuity-memory.js";
 const { redact } = require("./evidence-archive.js") as { redact(value: string): string };
 
 export class DeliveryController {
   attempts = 0;
+  private observation: ExecutionObservation = { reportText: "" };
+  private outcome: ExecutionOutcome | null = null;
   constructor(private readonly tools: Array<RemoteToolLike> = []) { }
+  // Only this attempt's answer can become a final report. Prior progress text
+  // and an interrupted earlier generation must never count as delivered work.
+  beginRound() { this.observation = { reportText: "" }; }
+  observe(captured: { messages: Array<ChatMessage>; finishReason?: string; failure?: unknown }, timedOut = false) {
+    this.observation = { reportText: visibleTextFromMessages(captured.messages).trim(),
+      messages: captured.messages, finishReason: captured.finishReason, failure: captured.failure, timedOut };
+  }
+  recordPartialDelivery(reason: string) {
+    this.observation = { ...this.observation, partialReportDelivered: true, reason };
+  }
+  get hasPartialDelivery() { return this.observation.partialReportDelivered === true; }
+  stop(reason: string) { this.observation = { ...this.observation, reason }; }
+  partialReport(history: Chat, reason: string) {
+    return evidenceBackedPartialReport(history, [], reason, this.tools);
+  }
+  finish(overrides: Pick<ExecutionObservation, "canceled" | "failure" | "timedOut"> = {}): ExecutionOutcome {
+    // Cleanup calls can ask again, but cannot overwrite an accepted outcome.
+    return this.outcome ??= Object.freeze(classifyExecutionOutcome({ ...this.observation,
+      ...(overrides.canceled ? { canceled: true } : {}),
+      ...(overrides.timedOut !== undefined ? { timedOut: overrides.timedOut } : {}),
+      ...(overrides.failure !== undefined ? { failure: overrides.failure } : {}) }));
+  }
   // Terminal parse failure never repairs or retries an operation. Deliver only
   // returned observations; unfinished model claims are not report evidence.
   failedToolRequest(history: Chat, messages: Array<ChatMessage>, reason: string) {
@@ -46,19 +71,73 @@ export class DeliveryController {
     const delivery = forced && classified.deliveryState === "complete"
       ? { ...classified, deliveryState: "partial" as const, reportState: "partial_report" as const, rejectionReason: "research_no_progress" }
       : classified;
+    this.observe(captured, timedOut);
+    this.observation = { ...this.observation, delivery, objectiveSatisfied };
     const needsPartial = delivery.deliveryState !== "complete" && (delivery.reportState === "unresolved_tool_intent"
       || ["research_recovery_complete", "research_recovery_exhausted"].includes(trigger || ""));
+    const partial = needsPartial ? evidenceBackedPartialReport(history, captured.messages,
+      delivery.rejectionReason || trigger || "research_incomplete", this.tools) : null;
+    const outcome = classifyExecutionOutcome({ ...this.observation, partialReportDelivered: needsPartial });
     return {
-      generationCompleted: ["eosFound", "stopStringFound"].includes(captured.finishReason || "")
-        && captured.failure === undefined && !timedOut,
-      reportDelivered: delivery.deliveryState === "complete" || needsPartial,
+      generationCompleted: outcome.generationCompleted,
+      reportDelivered: outcome.reportDelivered,
       researchTerminated: trigger !== null,
       objectiveSatisfied,
-      taskCompleted: objectiveSatisfied === true && delivery.deliveryState === "complete",
-delivery, partial: needsPartial ? evidenceBackedPartialReport(history, captured.messages,
-        delivery.rejectionReason || trigger || "research_incomplete", this.tools) : null
-};
+      taskCompleted: outcome.taskCompleted,
+      delivery, partial,
+    };
   }
+}
+
+export type ExecutionObservation = {
+  reportText: string;
+  messages?: Array<ChatMessage>;
+  finishReason?: string;
+  failure?: unknown;
+  canceled?: boolean;
+  timedOut?: boolean;
+  reason?: string;
+  partialReportDelivered?: boolean;
+  objectiveSatisfied?: boolean | null;
+  delivery?: { deliveryState: FinalDeliveryState; reportState?: FinalReportState; rejectionReason?: string };
+};
+
+/** Shared by the runtime and offline evaluators. Unknown stops fail closed. */
+export function classifyExecutionOutcome(observation: ExecutionObservation): ExecutionOutcome {
+  const finishReason = observation.finishReason || "unknown";
+  const timedOut = observation.timedOut === true || finishReason === "final_timeout";
+  const canceled = observation.canceled === true || finishReason === "userStopped";
+  const failed = observation.failure !== undefined && observation.failure !== null;
+  const classified = classifyFinalDelivery(observation.reportText,
+    { finishReason, ...(failed ? { failure: observation.failure } : {}) }, timedOut, observation.messages || []);
+  // Policy may reject an otherwise complete report, but cannot make an unknown
+  // stop or an empty answer complete (including legacy evaluation records).
+  const delivery = observation.delivery?.deliveryState === "complete"
+    ? classified : observation.delivery || classified;
+  const stopped = timedOut || canceled || failed;
+  const reportCompleted = !stopped && delivery.deliveryState === "complete";
+  const reportPresent = Boolean(observation.reportText.trim()) || observation.partialReportDelivered === true;
+  const deliveryState = observation.partialReportDelivered ? "partial"
+    : stopped && delivery.deliveryState === "complete" ? (reportPresent ? "partial" : "no_answer")
+      : delivery.deliveryState;
+  const outcome = timedOut ? "timed_out" : canceled ? "canceled" : failed ? "failed"
+    : reportCompleted && !observation.partialReportDelivered ? "completed"
+      : finishReason === "maxPredictedTokensReached" || delivery.deliveryState === "truncated" ? "truncated"
+        : delivery.deliveryState === "no_answer" ? "no_answer" : "failed";
+  const objectiveSatisfied = observation.objectiveSatisfied ?? null;
+  return {
+    executionOutcome: outcome,
+    reason: timedOut ? "timeout" : canceled ? "canceled"
+      : observation.reason || (failed ? "generation_failure" : delivery.rejectionReason || finishReason),
+    finalFinishReason: finishReason,
+    generationCompleted: !stopped && ["eosFound", "stopStringFound"].includes(finishReason),
+    reportPresent, reportDelivered: reportCompleted || observation.partialReportDelivered === true,
+    reportCompleted: outcome === "completed", deliveryState,
+    reportState: observation.partialReportDelivered ? "partial_report"
+      : deliveryState === "complete" ? "report" : deliveryState === "no_answer" ? "no_answer"
+      : delivery.reportState === "unresolved_tool_intent" ? "unresolved_tool_intent" : "partial_report",
+    objectiveSatisfied, taskCompleted: objectiveSatisfied === true && outcome === "completed",
+  };
 }
 
 export function classifyOutputLimitStage(
@@ -131,7 +210,7 @@ export function classifyFinalDelivery(
     rejectionReason: phaseTimedOut ? "final_timeout"
       : captured.failure !== undefined ? "generation_failure"
         : captured.finishReason === "maxPredictedTokensReached" ? "max_predicted_tokens" : "empty_visible_output" };
-  const unresolvedToolIntent = containsUnresolvedToolIntent(text, messages);
+  const unresolvedToolIntent = containsUnresolvedToolIntent(text, messages) || hasUnexecutedRawToolSyntax(text);
   let deliveryState: FinalDeliveryState;
   let rejectionReason: string | undefined;
   if (captured.finishReason === "maxPredictedTokensReached") {
@@ -237,5 +316,7 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
   lines.push(`- ${String(reason || "조사 복구가 진행되지 않음").slice(0, 240)}`);
   if (errors.length) lines.push(`- 도구 오류: ${errors.slice(0, 4).join(", ")}`);
   lines.push("- 이 출력은 안전한 부분 보고이며 전체 조사 완료로 처리하지 않았습니다.");
+  const taskProgress = renderTaskProgress(history.getMessagesArray());
+  if (taskProgress) lines.push("", "보존된 요청·미확인 실행 상태:", taskProgress);
   return { text: lines.join("\n"), evidenceCount: facts.length, errorCount: errors.length };
 }

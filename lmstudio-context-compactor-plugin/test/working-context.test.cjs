@@ -324,6 +324,7 @@ test("P2 expired unreferenced records are reclaimed while live records remain pr
   const archive = new EvidenceArchive(scope, { now: () => now, ttlMs: 50, maxRecords: 2 });
   const dead = archive.put("dead", { callKey: "dead" }).record;
   const live = archive.put("live", { callKey: "live" }).record;
+  archive.setPins([live.evidenceId]); // The dead observation has been consumed and left the input.
   now = 151;
   const inserted = archive.put("new", { callKey: "new" }, { liveRefs: new Set([live.evidenceId]) });
   assert.equal(inserted.ok, true);
@@ -637,6 +638,7 @@ test("S3 a semantic event attempt survives window restore and cannot be implicit
   const source = Chat.from([{ role: "user", content: "keep this request" }]);
   const first = new WorkingContext(scope, { root, durable: true, lineage: "lineage-1" });
   first.lastSummaryInput = "event-fingerprint-1";
+  first.summaryAttempts = ["a".repeat(64), "b".repeat(64)];
   assert.equal(first.commit(source, source, { exact: true, inputTokens: 100, remainingTokens: 1000 },
     hash(serialize(source)), "model-a"), true);
   const next = new WorkingContext(scope, {
@@ -644,4 +646,6 @@ test("S3 a semantic event attempt survives window restore and cannot be implicit
   });
   assert.equal(next.restore(source).reason, "restored_remeasure_required");
   assert.equal(next.lastSummaryInput, "event-fingerprint-1");
+  assert.deepEqual(next.summaryAttempts, first.summaryAttempts);
+  assert.equal(next.cost.summaryCalls, 0);
 });

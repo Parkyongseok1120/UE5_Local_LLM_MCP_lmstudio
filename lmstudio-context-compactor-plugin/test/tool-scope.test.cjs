@@ -24,6 +24,17 @@ const ragTool = { name: "search_guidance", description: "Unreal RAG", pluginIden
 const commonTool = { name: "common", description: "Common", pluginIdentifier: "mcp/other",
   parametersJsonSchema: { type: "object" } };
 
+test('invalid explicit auto identity cannot borrow workspace or message provenance', t => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'scope-invalid-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const descriptor=path.join(root,'Actual.uproject'); fs.writeFileSync(descriptor,'{}');
+  for (const invalid of [path.join(root,'Missing.uproject'),'relative.uproject']) {
+    const scope=resolveToolScope('auto',invalid,root,[unrealTool],{engine:'unreal',projectIdentity:descriptor});
+    assert.equal(scope.source,'ambiguous'); assert.equal(scope.projectIdentity,'');
+    assert.equal(scope.engine,'unknown'); assert.deepEqual(filterToolsForScope([unrealTool],scope),[]);
+  }
+});
+
 test("workspace markers select the nearest exact Unity project", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tool-scope-unity-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

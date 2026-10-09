@@ -2,6 +2,9 @@
 
 const crypto = require("node:crypto");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
+const { resultSemantics } = require("./tool-result-semantics.js");
+
+const { normalizeRanges, sourceCoverage } = require("./evidence-ranges.js");
 
 const MAX_ENTRIES = 24;
 
@@ -31,22 +34,6 @@ function fingerprint(value) {
 
 function normalizedPath(value) {
   return String(value || "").replace(/\\/gu, "/").replace(/^project:\/\//iu, "").trim();
-}
-
-function normalizeRanges(ranges) {
-  const candidates = (ranges || []).map((range) => {
-    const start = Number(Array.isArray(range) ? range[0] : range?.start);
-    const end = Number(Array.isArray(range) ? range[1] : range?.end);
-    return Number.isSafeInteger(start) && Number.isSafeInteger(end) && end >= start
-      ? [start, end] : null;
-  }).filter(Boolean).sort((left, right) => left[0] - right[0] || left[1] - right[1]);
-  const merged = [];
-  for (const range of candidates) {
-    const previous = merged.at(-1);
-    if (previous && range[0] <= previous[1] + 1) previous[1] = Math.max(previous[1], range[1]);
-    else merged.push([...range]);
-  }
-  return merged;
 }
 
 function rangeContains(ranges, target) {
@@ -151,6 +138,9 @@ function rawObservation(payload) {
   else bodyState = rangeUnit === "utf8_byte" ? "byte_body_mismatch" : "range_body_mismatch";
   return {
     sourceType,
+    provider: String(payload.provider || ""),
+    sourceQueryKey: String(payload.sourceQueryKey || ""),
+    representation: String(payload.representation || "source"),
     projectIdentity: identity,
     projectIdentityDigest: digest(identity || "unknown-project"),
     path,
@@ -187,6 +177,9 @@ function historicalObservation(item) {
   const total = Number(item.total ?? item.totalLinesAtObservation ?? item.totalLines ?? item.totalChars);
   return {
     sourceType,
+    provider: String(item.provider || ""),
+    sourceQueryKey: String(item.sourceQueryKey || ""),
+    representation: String(item.representation || "source"),
     projectIdentity: identity,
     projectIdentityDigest: digest(identity || "unknown-project"),
     path,
@@ -202,6 +195,7 @@ function historicalObservation(item) {
 function observationKey(item) {
   return JSON.stringify([
     item.sourceType, item.projectIdentity, item.path, item.versionRef, item.rangeUnit,
+    item.provider || "", item.sourceQueryKey || "", item.representation || "source",
     item.sourceType === "commit_blob" ? item.revisionRef : "",
   ]);
 }
@@ -226,15 +220,22 @@ function historicalAvailabilityFromMemory(memory) {
   const work = memory?.currentWorkStatus || memory || {};
   const observations = [];
   for (const item of work.modifiedOrObservedFiles || memory?.modifiedOrObservedFiles || []) {
-    const normalized = historicalObservation({
-      ...item,
-      sourceType: "worktree",
-      projectIdentity: item.canonicalProject || item.canonicalProjectRoot || item.projectIdentity,
-      versionRef: item.sha256AtObservation,
-      ranges: (item.observedLineRanges || []).map((range) => [range.startLine, range.endLine]),
-      total: item.totalLinesAtObservation,
-    });
-    if (normalized) observations.push(normalized);
+    const coverage = sourceCoverage(item).entries;
+    for (const entry of coverage.length ? coverage : [{ unit: "line", ranges: [], total: item.totalLinesAtObservation }]) {
+      const normalized = historicalObservation({
+        ...item,
+        sourceType: "worktree",
+        projectIdentity: item.canonicalProject || item.canonicalProjectRoot || item.projectIdentity,
+        versionRef: item.sha256AtObservation,
+        rangeUnit: entry.unit,
+        provider: entry.provider,
+        sourceQueryKey: entry.query,
+        representation: entry.representation,
+        ranges: entry.ranges,
+        total: entry.total,
+      });
+      if (normalized) observations.push(normalized);
+    }
   }
   for (const item of work.gitObservations || memory?.gitObservations || []) {
     if (item?.action !== "read_file") continue;
@@ -320,6 +321,9 @@ function projectInputAvailability(messages, historicalItems = [], options = {}) 
       ...(basis.revisionRef ? { revisionRef: basis.revisionRef } : {}),
       ...(basis.blobRef ? { blobRef: basis.blobRef } : {}),
       rangeUnit: basis.rangeUnit,
+      ...(basis.provider ? { provider: basis.provider } : {}),
+      ...(basis.sourceQueryKey ? { sourceQueryKey: basis.sourceQueryKey } : {}),
+      ...(basis.representation !== "source" ? { representation: basis.representation } : {}),
       historicallyReturnedRanges: historicalRanges,
       rawRangesInThisInput: rawRanges,
       rawPresence,
@@ -388,8 +392,7 @@ function traceToolRound(messages, options = {}) {
       if (queue.length === 0) pending.delete(providerRequestId);
       const payload = decodedResult(result);
       const observation = rawObservation(payload);
-      const failedStatus = ["failed", "error", "canceled", "cancelled", "not_applied"]
-        .includes(String(payload?.status || "").toLowerCase());
+      const semantics = resultSemantics(payload);
       results.push({
         callKey: request?.callKey || `${executionId}:${roundIndex}:${providerRequestId}:unmatched-${resultOrdinal}`,
         causalModelInputId: modelInputId,
@@ -397,9 +400,9 @@ function traceToolRound(messages, options = {}) {
         pairingState: ambiguous ? (result.toolCallId
           ? "ambiguous_duplicate_provider_id" : "unknown_idless_result")
           : request ? "exact_provider_id" : "unmatched_provider_id",
-        executionState: !payload ? "unknown" : payload.ok === false || payload.errorCode || failedStatus
-          ? String(payload?.status || "").toLowerCase().startsWith("cancel") ? "canceled" : "failed"
-          : "succeeded",
+        executionState: semantics.executionState,
+        operationStatus: semantics.operationStatus,
+        effect: semantics.effect,
         resultPayloadFingerprint: fingerprint(result?.content ?? result),
         rawBodyState: observation?.bodyState || "not_a_raw_file_result",
         ...(observation ? {
@@ -428,6 +431,9 @@ function renderInputAvailabilityMetadata(projection) {
       path: entry.path,
       versionRef: entry.versionRef,
       rangeUnit: entry.rangeUnit,
+      ...(entry.provider ? { provider: entry.provider } : {}),
+      ...(entry.sourceQueryKey ? { sourceQueryKey: entry.sourceQueryKey } : {}),
+      ...(entry.representation ? { representation: entry.representation } : {}),
       historicallyReturnedRanges: entry.historicallyReturnedRanges,
       rawRangesInThisInput: entry.rawRangesInThisInput,
       rawPresence: entry.rawPresence,

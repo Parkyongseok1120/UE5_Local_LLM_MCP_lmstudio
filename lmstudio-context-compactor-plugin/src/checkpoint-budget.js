@@ -14,6 +14,10 @@ function mandatoryContinuity(memory) {
     latestUserMessageVerbatimRetainedSeparately: true,
     activeObjective: m.activeObjective || null,
     continuationAntecedent: m.continuationAntecedent || null,
+    taskSelection: m.taskSelection || null,
+    interruptedCalls: m.interruptedCalls || [],
+    interruptedCallRetention: m.interruptedCallRetention || null,
+    unresolvedItems: m.unresolvedItems || [],
     activeProject: m.activeProject || null,
     latestUserConstraints: m.latestUserConstraints || [],
     historicalUserConstraintEvidence: m.historicalUserConstraintEvidence || [],
@@ -45,7 +49,7 @@ function renderBudgetedCheckpoint(memory, maxChars, mandatoryOnly = false) {
       add(candidate.currentWorkStatus, key, [value, ...candidate.currentWorkStatus[key]]);
     }
   }
-  for (const key of ["unresolvedItems", "completedOrArchivedObjectives", "recentRawTail", "priorUserRequestsForContinuation"]) {
+  for (const key of ["completedOrArchivedObjectives", "recentRawTail", "priorUserRequestsForContinuation"]) {
     candidate[key] = [];
     for (const value of [...(memory[key] || [])].reverse()) add(candidate, key, [value, ...candidate[key]]);
   }

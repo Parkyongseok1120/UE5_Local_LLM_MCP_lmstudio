@@ -5,6 +5,7 @@ import { modelNotes, workingContextModule } from "./context-ports";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import { type CheckpointResult, type ContinuityNote, type DirectConfig } from "./execution-contracts";
 import { visibleAssistantOutput } from "./raw-tool-intent";
+import { SUMMARY_POLICY } from "./config-defaults";
 
 export async function generateSemanticHandoff(options: {
   tokenSource: any;
@@ -17,6 +18,7 @@ export async function generateSemanticHandoff(options: {
   evidence: Array<Record<string, unknown>>;
   generation: number;
   parentWindow: string | null;
+  remainingMs?: number;
 }) {
   const startedAt = Date.now();
   if (options.refs.size === 0) return { note: null, reason: "no_verified_refs", elapsedMs: 0, modelCalled: false };
@@ -64,7 +66,9 @@ export async function generateSemanticHandoff(options: {
   };
   let output = "", finishReason = "unknown";
   let predictionStats: Record<string, unknown> | null = null;
-  const timeout = AbortSignal.timeout(options.config.semanticSummarySeconds * 1000);
+  const remainingMs = (options.remainingMs ?? SUMMARY_POLICY.maxElapsedMs) - (Date.now() - startedAt);
+  if (remainingMs <= 0) return { note: null, reason: "summary_budget_exhausted", elapsedMs: Date.now() - startedAt, modelCalled: false };
+  const timeout = AbortSignal.timeout(Math.max(1, Math.floor(Math.min(options.config.semanticSummarySeconds * 1000, remainingMs))));
   try {
     await options.tokenSource.act(input, [], {
       signal: AbortSignal.any([options.signal, timeout]),
@@ -118,24 +122,34 @@ export async function updateSemanticContext(options: {
   const semanticCheckpoint = compactionCheckpoint;
   const summaryEvidence = workingContext ? workingContext.summaryEvidence() : [];
   const summaryRefs = new Set(summaryEvidence.map(item => String(item.ref || "")).filter(Boolean));
+  // Display limits do not invalidate still-accessible prior note references.
+  for (const ref of workingContext?.verifiedNoteRefs(activeNote) || []) summaryRefs.add(ref);
+  const material = summaryEvidence.map(item => item.materialFingerprint);
+  const stableMaterial = material.length > 0 && material.every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value));
   const semanticEventKey = workingContext && semanticCheckpoint
     ? telemetryFingerprint({
-      checkpoint: semanticCheckpoint.checkpoint,
-      assistantCheckpoint: semanticCheckpoint.assistantCheckpoint,
-      refs: [...summaryRefs].sort(),
-      evidence: summaryEvidence,
+      // Old adapters without material fingerprints retain the legacy event key.
+      // Runtime archive identities are deliberately excluded from new events.
+      ...(stableMaterial ? { material: [...new Set(material)].sort(), objectiveFingerprint } : {
+        checkpoint: semanticCheckpoint.checkpoint,
+        assistantCheckpoint: semanticCheckpoint.assistantCheckpoint,
+        refs: [...summaryRefs].sort(), evidence: summaryEvidence,
+      }),
       latestUser: [...visibleHistory.getMessagesArray()].reverse()
         .find(message => message.isUserMessage())?.getText() || "",
     }, true) : "";
   const repeatedSemanticEvent = Boolean(workingContext && semanticEventKey
-    && workingContext.lastSummaryInput === semanticEventKey);
+    && (workingContext.lastSummaryInput === semanticEventKey || workingContext.summaryAttempts?.includes(semanticEventKey)));
+  const remainingMs = Math.max(0, SUMMARY_POLICY.maxElapsedMs - Number(workingContext?.cost.summaryMs || 0));
+  const summaryBudgetExhausted = Number(workingContext?.cost.summaryCalls || 0) >= SUMMARY_POLICY.maxCalls || remainingMs <= 0;
   const semanticSummaryCoolingDown = roundIndex < semanticSummaryCooldownUntilRound;
-  if (workingContext && config.contextManagementMode === "hybrid" && compacted
+  if (workingContext && config.contextManagementMode === "hybrid" && (compacted || projectionApplied)
     && semanticCheckpoint && !repeatedSemanticEvent && !semanticSummaryCoolingDown
-    && !boundedAudit && !finalizing) {
+    && !summaryBudgetExhausted && !boundedAudit && !finalizing) {
     // Mark before dispatch: length, timeout, cancellation and invalid output
     // must not recursively retry the same semantic event on the next round.
     workingContext.lastSummaryInput = semanticEventKey;
+    workingContext.summaryAttempts = [...(workingContext.summaryAttempts || []), semanticEventKey].slice(-SUMMARY_POLICY.retainedEvents);
     ctl.guardAbort();
     const summary = await generateSemanticHandoff({
       tokenSource,
@@ -149,10 +163,11 @@ export async function updateSemanticContext(options: {
       evidence: summaryEvidence,
       generation: roundIndex + 1,
       parentWindow: null,
+      remainingMs,
     });
+    workingContext.cost.summaryMs += summary.elapsedMs;
     if (summary.modelCalled) {
       workingContext.cost.summaryCalls += 1;
-      workingContext.cost.summaryMs += summary.elapsedMs;
       workingContext.cost.summaryPromptTokens += Number(summary.measurement?.inputTokens || 0);
       const predicted = Number((summary.predictionStats as Record<string, unknown> | null)?.predictedTokensCount);
       if (Number.isFinite(predicted)) workingContext.cost.summaryPredictedTokens += predicted;
@@ -160,21 +175,19 @@ export async function updateSemanticContext(options: {
     }
     if (summary.note) {
       const semantic = summary.note as Record<string, unknown>;
-      const scoped = modelNotes.attachScope({
+      const update = modelNotes.resolveNoteUpdate({
         decisions: semantic.decisions,
         rejectedHypotheses: semantic.rejectedHypotheses,
         openQuestions: semantic.openQuestions,
-      }, objectiveFingerprint, visibleHistory.getMessagesArray(), summaryRefs);
-      const scopedItemCount = scoped ? scoped.decisions.length + scoped.rejectedHypotheses.length
-        + scoped.openQuestions.length + (scoped.reviewClaims?.length || 0) : 0;
-      if (scoped && scopedItemCount > 0) {
-        activeNote = scoped;
-        workingContext.note = scoped;
+      }, objectiveFingerprint, visibleHistory.getMessagesArray(), summaryRefs, { allowClear: false });
+      if (update.kind === "accepted_update" && update.note) {
+        activeNote = update.note;
+        workingContext.note = update.note;
       }
     }
     // Optional summaries must not consume repeated timeout/output-limit calls
     // while deterministic pagination is progressing in this execution.
-    if (!summary.note) semanticSummaryCooldownUntilRound = Number.MAX_SAFE_INTEGER;
+    if (!summary.note) semanticSummaryCooldownUntilRound = roundIndex + SUMMARY_POLICY.failureCooldownRounds;
     else semanticSummaryCooldownUntilRound = -1;
     if (config.showDebugInfo) ctl.debug({
       event: "semantic_handoff",
@@ -211,7 +224,7 @@ export async function updateSemanticContext(options: {
       modelCalled: false,
       cost: workingContext.cost,
     });
-  } else if (workingContext && semanticSummaryCoolingDown && (compacted || projectionApplied)
+  } else if (workingContext && (semanticSummaryCoolingDown || summaryBudgetExhausted) && (compacted || projectionApplied)
     && !boundedAudit && !finalizing && config.showDebugInfo) {
     ctl.debug({
       event: "semantic_handoff",
@@ -222,7 +235,7 @@ export async function updateSemanticContext(options: {
       purpose: "context_summary",
       toolCount: 0,
       accepted: false,
-      reason: "failure_cooldown",
+      reason: summaryBudgetExhausted ? "summary_budget_exhausted" : "failure_cooldown",
       modelCalled: false,
       cooldownUntilRound: semanticSummaryCooldownUntilRound,
       cost: workingContext.cost,

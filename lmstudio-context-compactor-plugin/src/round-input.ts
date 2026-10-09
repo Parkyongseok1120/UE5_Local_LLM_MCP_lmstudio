@@ -14,6 +14,7 @@ import { hasReadCapability, type RemoteToolLike } from "./tool-capability-regist
 import { autoGuidanceCandidates, designGuidanceCandidates, focusedGuidanceCandidates, type GuidanceCandidate, type GuidanceDocument } from "./design-guidance";
 import { selectGuidanceTopics, type GuidanceIntent } from "./guidance-topic-selection";
 import type { ToolScope } from "./tool-scope";
+import { referenceGuidanceScope } from "./reference-context";
 
 type RoundInputOptions = {
   ctl: PredictionLoopHandlerController; config: DirectConfig;
@@ -26,7 +27,7 @@ type RoundInputOptions = {
   roundOutputReserve: number; activeNote: ContinuityNote | null; noteEnabled: boolean;
   historicalAvailabilityLedger: Array<Record<string, unknown>>;
   semanticSummaryCooldownUntilRound: number; objectiveFingerprint: string;
-  finalizing: boolean; boundedAudit: boolean; researchRecoveryEpisodeStarted: boolean;
+  finalizing: boolean; boundedAudit: boolean; researchRecoveryEpisodeStarted: boolean; allowReadRecovery: boolean;
   reasoningRecovery?: boolean;
   guidanceDocuments?: readonly GuidanceDocument[];
   guidanceIntent?: GuidanceIntent;
@@ -36,7 +37,7 @@ type RoundInputOptions = {
   projectionApplied: boolean; executionId: string; modelInputId: string; roundIndex: number;
 };
 
-/** Select and measure one executable input. This module returns a disposition;
+/** Select and measure one executable input. This module returns measured readiness and an optional recovery candidate;
  * it never changes execution phase, commits evidence, or dispatches research/report predictions. */
 export async function prepareRoundInput(options: RoundInputOptions) {
   const { ctl, config, tokenSource, contextManager, evidenceManager, workingContext,
@@ -68,6 +69,20 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     const assemble = (history: Chat) => assembleModelInput(history, {
       tools, instructions: [...scopeInstructions, instruction], outputReserve: reserve, modelInputId: candidateModelInputId });
     let assembled = await assemble(sourceHistory);
+    // A retry candidate can encounter pressure after the preceding generation
+    // consumed raw evidence. Use the same policy as normal round preparation.
+    if (workingContext && contextManager.shouldProjectEvidence(assembled.measurement,
+      tools.some(hasReadCapability), minimumReadBudget(tools))) {
+      const projected = evidenceManager.project(sourceHistory,
+        { executionId, roundIndex, modelInputId: candidateModelInputId,
+          proofLevel: "returned_tool_result", preserveUnconsumedRaw: true },
+        config.toolResultProjectionChars);
+      if (projected.changed) {
+        sourceHistory = projected.history;
+        projectionApplied = true;
+        assembled = await assemble(sourceHistory);
+      }
+    }
     const budget = resolveGenerationBudget({ desiredMaxTokens, contextLength: assembled.measurement.contextLength,
       inputTokens: assembled.measurement.inputTokens, safetyMarginTokens: config.safetyMarginTokens,
       minimumTokens: MIN_FINAL_OUTPUT_TOKENS });
@@ -101,10 +116,26 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       fit: finalBudget.fit && assembled.measurement.remainingTokens >= 0 && low.canRun };
   };
   let assembledInput = await assembleModelInput(workingHistory);
+  // Exposure does not prove review completion. Keep returned bodies while the
+  // measured shared budget permits; pressure is owned by ContextManager.
+  if (workingContext && !finalizing && contextManager.shouldProjectEvidence(assembledInput.measurement,
+    roundTools.some(hasReadCapability), minimumReadBudget(roundTools))) {
+    const projected = evidenceManager.project(workingHistory,
+      { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result", preserveUnconsumedRaw: true },
+      config.toolResultProjectionChars);
+    if (projected.changed) {
+      workingHistory = projected.history;
+      projectionApplied = true;
+      assembledInput = await assembleModelInput(workingHistory);
+    }
+    if (config.showDebugInfo) ctl.debug({ event: "working_context_projection", executionId, roundIndex,
+      changed: projected.changed, reason: "measured_input_pressure", archiveFailed: projected.archiveFailed === true,
+      inputTokens: assembledInput.measurement.inputTokens, exact: assembledInput.measurement.exact });
+  }
   const baseResult = () => ({ activeNote, semanticSummaryCooldownUntilRound });
-  const recoveryDisposition = async () => {
+  const measurePressure = async () => {
     const profile = readOnlyRecoveryProfile(workingHistory, modelTools);
-    const candidate = !options.reasoningRecovery && !researchRecoveryEpisodeStarted && profile.eligible
+    const candidate = options.allowReadRecovery && profile.eligible
       ? await assembleRecoveryCandidate(workingHistory, profile.tools, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION,
         `${executionId}:research-recovery-candidate-1`) : null;
     const measured = assembledInput.measurement;
@@ -122,15 +153,15 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       candidateRemainingTokens: candidate?.assembled.measurement.remainingTokens ?? null,
       candidateFit: candidate?.fit ?? false, nextToolCount: candidate?.fit ? profile.tools.length : 0,
       maxFinalAttempts: 1, unconsumedEvidenceProjectedBeforeCandidate: projectionApplied });
-    return candidate?.fit ? { kind: "recover" as const, ...baseResult(),
-      history: candidate.history, tools: profile.tools, outputReserve: candidate.budget.appliedMaxTokens }
-      : { kind: "finalize" as const, ...baseResult(), history: workingHistory };
+    return { kind: "pressure" as const, ...baseResult(), history: workingHistory,
+      recoveryCandidate: candidate?.fit ? { history: candidate.history, tools: profile.tools,
+        outputReserve: candidate.budget.appliedMaxTokens } : null };
   };
 
   if (assembledInput.measurement.remainingTokens < 0 && !finalizing && !config.observeOnly
     && !researchRecoveryEpisodeStarted) {
-    const rescue = await recoveryDisposition();
-    if (rescue.kind === "recover") return rescue;
+    const rescue = await measurePressure();
+    if (rescue.recoveryCandidate) return rescue;
   }
   // Preserve the complete first-consumer exchange. Only measured aggregate
   // pressure permits a bounded archive view of its body.
@@ -183,11 +214,15 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     compactionAppliedCount++; compactionAppliedModes.push("final_exact_low_water");
   };
   acceptLow();
-  if (!lowWater.canRun && !finalizing && !config.observeOnly) return recoveryDisposition();
+  if (!lowWater.canRun && !finalizing && !config.observeOnly) return measurePressure();
   if (lowWater.canRun && !options.reasoningRecovery) {
     const priorNote = activeNote;
+    // Build only the summary view from the pre-removal evidence. Do not replace
+    // or dispatch this unmeasured history as a research input.
+    const semanticCheckpoint = compactionCheckpoint || (projectionApplied
+      ? buildCompactedHistory(options.preProjectionHistory, 0, config, { maxCurrentTurnMessages: 0 }).checkpoint : null);
     ({ activeNote, semanticSummaryCooldownUntilRound } = await updateSemanticContext({ tokenSource, config, workingContext,
-      compactionCheckpoint, compacted, projectionApplied, visibleHistory, activeNote, semanticSummaryCooldownUntilRound,
+      compactionCheckpoint: semanticCheckpoint, compacted, projectionApplied, visibleHistory, activeNote, semanticSummaryCooldownUntilRound,
       boundedAudit, finalizing, roundIndex, executionId, objectiveFingerprint, ctl }));
     // A generated note changes the actual input. Reassemble under the same
     // contract; the summary completion itself never authorizes dispatch.
@@ -213,10 +248,11 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     try {
       if (focused && options.guidanceScope) {
         const snapshot = evidenceManager.referenceSnapshot(workingHistory);
+        const guidanceScope = referenceGuidanceScope(options.guidanceScope, snapshot);
         if (config.designGuidanceMode === "auto") {
           selection = selectGuidanceTopics(options.guidanceIntent || { primary: "core", reason: "objective_completeness_unknown" }, snapshot);
-          candidates = selection.omitted ? [] : autoGuidanceCandidates(selection.primary, selection.supplement, options.guidanceScope, snapshot);
-        } else candidates = focusedGuidanceCandidates(config.designGuidanceMode, options.guidanceScope, snapshot);
+          candidates = selection.omitted ? [] : autoGuidanceCandidates(selection.primary, selection.supplement, guidanceScope, snapshot);
+        } else candidates = focusedGuidanceCandidates(config.designGuidanceMode, guidanceScope, snapshot);
       } else if (!focused) candidates = designGuidanceCandidates(options.guidanceDocuments || []);
     } catch { ctl.guardAbort(); }
     const guidance = await contextManager.addOptionalReferences(assembledInput,
@@ -229,13 +265,21 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       mode: config.designGuidanceMode, delivery: config.designGuidanceDelivery,
       configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
       effectiveDelivery: focused ? "focused" : "documents", objectiveFingerprint,
+      outcome: guidance.telemetry.reason === "included" ? "included" : "omitted",
       ...(selection ? { primaryTopic: selection.primary, supplementTopic: selection.supplement,
         selectionReasonCodes: [...selection.reasons, ...(candidates[0]?.omissionReasons || [])],
         selectionObservationIds: selection.observationIds } : {}), ...guidance.telemetry });
-  }
+  } else if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
+    configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
+    effectiveDelivery: focused ? "focused" : "documents", outcome: "not_attempted",
+    reason: config.observeOnly ? "observe_only" : config.designGuidanceMode === "off" ? "disabled"
+      : config.designGuidanceMaxTokens <= 0 ? "zero_allowance" : finalizing ? "finalization"
+        : options.referenceRecovery ? "recovery_policy" : "input_unavailable",
+    addedTokens: 0, attempts: 0, selectedIds: [], selectedDataIds: [],
+    finalInputTokens: assembledInput.measurement.inputTokens });
   const finalMeasurement = assembledInput.measurement;
   if (!lowWater.canRun || (!config.observeOnly && finalMeasurement.remainingTokens < 0)) {
-    if (!finalizing && !config.observeOnly) return recoveryDisposition();
+    if (!finalizing && !config.observeOnly) return measurePressure();
     ctl.debug({ event: "context_execution_blocked", executionId, modelInputId,
       disposition: lowWater.disposition, exact: finalMeasurement.exact });
     if (finalMeasurement.remainingTokens < 0) {

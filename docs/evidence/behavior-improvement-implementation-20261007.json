@@ -1,0 +1,634 @@
+{
+  "mode": "architecture",
+  "scope": {
+    "date": "2026-10-07",
+    "baselineCommit": "78abd7fee5a1172b7bdb4d5e99c0dc3f51afbef8",
+    "root": ".",
+    "implementation": true,
+    "plan": "docs/Harness_Behavior_Improvement_Plan_20261007.md#16",
+    "installedRuntimeModified": false,
+    "gameProjectModified": false,
+    "proofBoundary": "Local repository tests and isolated provider/installer fixtures; no live model or Editor validation"
+  },
+  "claims": [
+    {
+      "id": "BI01",
+      "claim": "첫 receipt 읽기와 완료/수락/진행/미확인 의미를 구분하고 충돌하는 envelope를 사실로 채택하지 않는다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+          "observation": "decodeToolResultRecord"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-result-semantics.js",
+          "observation": "resultSemantics"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-contracts.test.cjs",
+          "observation": "fresh receipt, accepted/pending/partial, outer error, conflicting envelope"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Improvement_Plan_20261007.md",
+          "observation": "도구 성공은 사용자가 요청한 기능의 의미적 완료 증명이 아니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+          "symbol": "decodeToolResultRecord"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-result-semantics.js",
+          "symbol": "resultSemantics"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-contracts.test.cjs",
+          "symbol": "fresh receipt, accepted/pending/partial, outer error, conflicting envelope"
+        }
+      ],
+      "unknowns": [
+        "도구 성공은 사용자가 요청한 기능의 의미적 완료 증명이 아니다."
+      ]
+    },
+    {
+      "id": "BI02",
+      "claim": "Unity 파일 수정은 게시 전 취소를 반영하고 게시 후 확인된 효과와 저장 범위를 보존한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unity-mcp/src/server.js",
+          "observation": "request signal forwarding"
+        },
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/files.js",
+          "observation": "Files.mutate"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unity-mcp/test/behavior-contracts.test.js",
+          "observation": "prepublication abort, runtime close, committed abort, no-change, external postpublication edit"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Improvement_Plan_20261007.md",
+          "observation": "실제 Unity Editor 저장·import·compilation은 파일 byte 시험만으로 증명하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unity-mcp/src/server.js",
+          "symbol": "request signal forwarding"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "shared-tool-core/files.js",
+          "symbol": "Files.mutate"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unity-mcp/test/behavior-contracts.test.js",
+          "symbol": "prepublication abort, runtime close, committed abort, no-change, external postpublication edit"
+        }
+      ],
+      "unknowns": [
+        "실제 Unity Editor 저장·import·compilation은 파일 byte 시험만으로 증명하지 않는다."
+      ]
+    },
+    {
+      "id": "BI03",
+      "claim": "반환을 받지 못한 호출의 관측 단계와 후속 operation 조회는 별개 근거로 보존한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts",
+          "observation": "RoundTransaction.interruptionMessage"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "observation": "observeRoundReferences"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-contracts.test.cjs",
+          "observation": "trusted paired lookup, wrong provider/project/operation, duplicate identity, bounded omissions"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Improvement_Plan_20261007.md",
+          "observation": "guard 허용이나 조회 성공을 원래 SDK 반환 또는 정확한 dispatch 시점으로 승격하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts",
+          "symbol": "RoundTransaction.interruptionMessage"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "symbol": "observeRoundReferences"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-contracts.test.cjs",
+          "symbol": "trusted paired lookup, wrong provider/project/operation, duplicate identity, bounded omissions"
+        }
+      ],
+      "unknowns": [
+        "guard 허용이나 조회 성공을 원래 SDK 반환 또는 정확한 dispatch 시점으로 승격하지 않는다."
+      ]
+    },
+    {
+      "id": "BI04",
+      "claim": "분기 접근과 활성 자료 보존을 분리하고 프로세스 간 scope 잠금으로 보존·회수의 경쟁을 제어한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "restore / seal / close"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "observation": "withDirectoryLock / setPins / cleanupScopes"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-storage.test.cjs",
+          "observation": "20 cases including 4 independent processes, parent snapshot, sibling isolation, close contention, restore rollback"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Improvement_Plan_20261007.md",
+          "observation": "활성 소유자 여부가 불명확하면 새 저장을 거절하며 공정성 또는 무조건 lock 획득을 보장하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "symbol": "restore / seal / close"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "symbol": "withDirectoryLock / setPins / cleanupScopes"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-storage.test.cjs",
+          "symbol": "20 cases including 4 independent processes, parent snapshot, sibling isolation, close contention, restore rollback"
+        }
+      ],
+      "unknowns": [
+        "활성 소유자 여부가 불명확하면 새 저장을 거절하며 공정성 또는 무조건 lock 획득을 보장하지 않는다."
+      ]
+    },
+    {
+      "id": "BI05",
+      "claim": "선택한 번호 작업의 원문과 현재 작업 identity를 압축 후에도 유지하고 최신 제약을 적용한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
+          "observation": "buildObjectiveContinuity / objectiveIdentity"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+          "observation": "renderTaskProgress"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-continuity.test.cjs",
+          "observation": "19 cases including continuation identity, explicit replacement, exclusion persistence and numeric units"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Improvement_Plan_20261007.md",
+          "observation": "불명확한 지시를 자동 승인하거나 assistant의 설명으로 의미적 완료를 판정하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
+          "symbol": "buildObjectiveContinuity / objectiveIdentity"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+          "symbol": "renderTaskProgress"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-continuity.test.cjs",
+          "symbol": "19 cases including continuation identity, explicit replacement, exclusion persistence and numeric units"
+        }
+      ],
+      "unknowns": [
+        "불명확한 지시를 자동 승인하거나 assistant의 설명으로 의미적 완료를 판정하지 않는다."
+      ]
+    },
+    {
+      "id": "BI06",
+      "claim": "Reference는 첫 정상 읽기를 유지하고 operation 효과와 현재 Editor 연결의 수명을 분리한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "observation": "restoreReferences / ingestReferences"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "observation": "referenceSnapshot"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-contracts.test.cjs",
+          "observation": "reconnect, compile observation, origin collision, exact restored body"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Improvement_Plan_20261007.md",
+          "observation": "과거 관측 metadata는 현재 SDK 입력에 본문이 있다는 증명이 아니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "symbol": "restoreReferences / ingestReferences"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "symbol": "referenceSnapshot"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-contracts.test.cjs",
+          "symbol": "reconnect, compile observation, origin collision, exact restored body"
+        }
+      ],
+      "unknowns": [
+        "과거 관측 metadata는 현재 SDK 입력에 본문이 있다는 증명이 아니다."
+      ]
+    },
+    {
+      "id": "BI07",
+      "claim": "같은 task view를 일반·종료·복구·부분 보고에 사용하고 선택적 지침은 기존 정확 입력 예산 안에서만 추가한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "observation": "composeModelHistory / addOptionalReferences"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+          "observation": "evidenceBackedPartialReport"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-continuity.test.cjs",
+          "observation": "Off/zero/finalization outcomes, exact measurement, normal and fallback task view"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Improvement_Plan_20261007.md",
+          "observation": "지침 포함 여부와 모델의 이해·준수는 다른 사실이다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "symbol": "composeModelHistory / addOptionalReferences"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+          "symbol": "evidenceBackedPartialReport"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-continuity.test.cjs",
+          "symbol": "Off/zero/finalization outcomes, exact measurement, normal and fallback task view"
+        }
+      ],
+      "unknowns": [
+        "지침 포함 여부와 모델의 이해·준수는 다른 사실이다."
+      ]
+    },
+    {
+      "id": "BI08",
+      "claim": "기본값과 생성 식별을 공유하고 로드된 코드의 build ID를 현재 설치된 디스크 자료와 분리한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/scripts/build-runtime-identity.cjs",
+          "observation": "renderIdentity"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/runtime-identity.ts",
+          "observation": "runtimeInstallationIdentity"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-runtime-identity.test.cjs",
+          "observation": "tsconfig/SDK patch input changes, CRLF stability, disk replacement after load"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Improvement_Plan_20261007.md",
+          "observation": "설치 fixture의 compiled marker 검사는 실제 LM Studio가 로드했다는 실행 증명이 아니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/scripts/build-runtime-identity.cjs",
+          "symbol": "renderIdentity"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/runtime-identity.ts",
+          "symbol": "runtimeInstallationIdentity"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-runtime-identity.test.cjs",
+          "symbol": "tsconfig/SDK patch input changes, CRLF stability, disk replacement after load"
+        }
+      ],
+      "unknowns": [
+        "설치 fixture의 compiled marker 검사는 실제 LM Studio가 로드했다는 실행 증명이 아니다."
+      ]
+    },
+    {
+      "id": "BI09",
+      "claim": "같은 모델의 전후 비교를 위한 14개 사례군과 28개 변형을 준비하고 미실행 상태를 명시한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/test/fixtures/behavior-evaluation-cases.json",
+          "observation": "cases / executionPolicy"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-runtime-identity.test.cjs",
+          "observation": "behavior evaluation corpus contract"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-runtime-identity.test.cjs",
+          "observation": "positive/counterexample variants, required evidence, known metrics"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Improvement_Plan_20261007.md",
+          "observation": "실제 전후 모델 평가를 실행하지 않았으며 개선률이나 성능 점수는 주장하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/fixtures/behavior-evaluation-cases.json",
+          "symbol": "cases / executionPolicy"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-runtime-identity.test.cjs",
+          "symbol": "behavior evaluation corpus contract"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-runtime-identity.test.cjs",
+          "symbol": "positive/counterexample variants, required evidence, known metrics"
+        }
+      ],
+      "unknowns": [
+        "실제 전후 모델 평가를 실행하지 않았으며 개선률이나 성능 점수는 주장하지 않는다."
+      ]
+    }
+  ],
+  "existing": [
+    "EvidenceManager/Reference 관측 소유권",
+    "RoundTransaction/execution 종료 수명",
+    "WorkingContext/EvidenceArchive 보존 및 scope",
+    "continuity-objectives 사용자 작업",
+    "ContextManager/BudgetBroker 정확 입력 및 예약",
+    "Markdown/catalogue 정본과 generator",
+    "installer 원자적 교체/rollback 및 기존 사용자 설정"
+  ],
+  "proposed": [],
+  "doNotDuplicate": [
+    "두 번째 작업/operation DB",
+    "새 runtime 모델 또는 판단 subagent",
+    "추가 static validation 실행 게이트",
+    "새 토큰 예산 또는 실행 승인 owner",
+    "Unity Editor 효과를 파일 hunk로 제조하는 adapter"
+  ],
+  "invariants": [
+    "확인된 반환의 상태와 의미적 완료를 구분한다.",
+    "요청/승인과 provider 적용을 구분한다.",
+    "membership과 retention pin을 구분한다.",
+    "원문·출력·다음 읽기 공간을 optional guidance에 넘기지 않는다.",
+    "새 목적과 기존 미해결 작업의 수명을 구분한다.",
+    "source/installed/loaded 식별을 구분한다.",
+    "저장 실패를 성공 복원으로 보고하지 않는다."
+  ],
+  "impactedSurfaces": [
+    "compactor result decoding/trace/reference/evidence",
+    "round transaction/working window/archive/GC",
+    "objective/task view/note applicability",
+    "guidance/docs/generated/config defaults",
+    "Unity Files/server/data patch",
+    "runtime build identity/install/package/CI fixtures",
+    "existing Unreal/evidence tool module package closure"
+  ],
+  "validationPlan": [
+    "compactor build and complete npm suite",
+    "Unity offline full suite",
+    "Unreal Direct full suite",
+    "Python integrated installer/package and evidence-header tests",
+    "4-process storage contention",
+    "guidance/identity freshness and diff whitespace",
+    "evidence packet format/consistency validation"
+  ],
+  "independentReview": {
+    "reviewers": [
+      "read_lifecycle_review",
+      "reference_contract_review",
+      "budget_lifecycle_audit_20261007"
+    ],
+    "mode": "product_read_only_and_regression_test_authoring",
+    "resolved": [
+      "first-return terminal lifecycle",
+      "retention contention fallback",
+      "owner lease release",
+      "cross-scope GC race",
+      "restore state publication",
+      "raw/compacted objective identity",
+      "new objective selection applicability",
+      "reference exclusion across continuation",
+      "operation origin and current compile state",
+      "build input and developer generation coverage"
+    ]
+  },
+  "compatibility": {
+    "archiveNamespace": "contract-v2",
+    "legacyDataDeleted": false,
+    "bulkMigration": false,
+    "legacyBodyReuse": "not_implemented; fallback to visible history and new source reads as needed",
+    "oldInstalledBinaryRollback": "not_run",
+    "leaseLiveness": "conservative; ambiguous live owner is not forcibly evicted"
+  },
+  "validationResults": {
+    "status": "automated_verification_passed",
+    "compactor_full": {
+      "passed": 590,
+      "failed": 0,
+      "skipped": 0,
+      "log": "artifacts/behavior-full-tests.log"
+    },
+    "typescript_build": "passed",
+    "guidance_bundle": "passed",
+    "runtime_identity_freshness": "passed",
+    "python_compileall": "passed",
+    "diff_check": "passed",
+    "evidence_packet": "structure_and_record_consistency_passed; not factual or whole-task certification",
+    "compactor_new": {
+      "passed": 67,
+      "failed": 0,
+      "log": "artifacts/behavior-new-tests.log"
+    },
+    "unity_offline": {
+      "passed": 51,
+      "skipped": 4,
+      "failed": 0,
+      "log": "artifacts/behavior-unity-tests.log"
+    },
+    "unreal_direct": {
+      "passed": 273,
+      "skipped": 1,
+      "failed": 0,
+      "log": "artifacts/behavior-unreal-tests.log"
+    },
+    "python_installer_package": {
+      "passed": 141,
+      "failed": 0,
+      "log": "artifacts/behavior-installer-tests.log"
+    },
+    "python_evidence_headers": {
+      "passed": 17,
+      "failed": 0,
+      "log": "artifacts/behavior-evidence-tools-tests.log"
+    },
+    "live_model": "not_run",
+    "live_editor": "not_run",
+    "installed_runtime": "not_modified",
+    "note": "The new contract suite is a subset of the full compactor suite; counts are not model quality metrics."
+  },
+  "unknowns": [
+    "같은 모델의 행동 개선량 및 비용",
+    "실제 LM Studio transport timing",
+    "Unity Editor reload 및 실제 multiplayer execution",
+    "실제 이전 플러그인 설치/롤백 종단 동작"
+  ]
+}

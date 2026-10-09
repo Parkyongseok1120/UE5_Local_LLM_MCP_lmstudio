@@ -115,7 +115,7 @@ function dataTools(files, jsonc, Ajv) {
       receipt: s.receipt, columns: doc.columns, format: doc.format,
       ...page(rows, args, hash(s.hash + JSON.stringify([args.csv, args.filter]))) }, args.byteBudget);
   }
-  async function patch(args) {
+  async function patch(args, options = {}) {
     return files.mutate(args, async text => {
       if (args.format === "json") {
         jsonDocument(text);
@@ -155,7 +155,7 @@ function dataTools(files, jsonc, Ajv) {
       for (const cell of [...replacements.values()].sort((a, b) => b.start - a.start)) result = result.slice(0, cell.start) + cell.text + result.slice(cell.end);
       csvDocument(result, args.csv);
       return result;
-    });
+    }, false, options);
   }
   return { read, patch };
 }

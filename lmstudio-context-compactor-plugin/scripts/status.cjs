@@ -5,6 +5,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const DIRECT_SOURCE_FILES = Object.freeze([
+  "src/config-defaults.ts",
+  "src/generated-runtime-identity.ts",
+  "src/tool-result-semantics.js",
+  "src/interrupted-calls.js",
   "src/budget-broker.ts",
   "src/design-guidance.ts",
   "src/guidance-topic-selection.ts",
@@ -18,6 +22,9 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/context-ports.ts",
   "src/delivery-controller.ts",
   "src/evidence-manager.ts",
+  "src/evidence-ranges.js",
+  "src/evidence-read-contract.js",
+  "src/semantic-handoff-policy.js",
   "src/evidence-telemetry.ts",
   "src/execution-config.ts",
   "src/execution-contracts.ts",

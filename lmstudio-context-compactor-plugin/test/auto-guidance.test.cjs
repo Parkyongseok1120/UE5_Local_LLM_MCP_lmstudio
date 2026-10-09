@@ -9,6 +9,29 @@ const { bundledGuidanceSections } = require("../dist/generated-design-guidance")
 const scope = { engine: "unreal", source: "config" };
 const intent = text => selectGuidanceIntent({ text, reason: "user_objective_verified" });
 
+test('explicit API and macro tasks include an engine pack before optional common packs',()=>{
+  for(const text of ['언리얼 API 제대로 확인해서 위의 계획대로 다시 해봐','UPROPERTY와 UFUNCTION 사용이 맞는지 확인해',
+    'FORCEINLINE 필요한 함수인지 검토해','델리게이트 바인딩과 해제를 확인해','Enhanced Input API 구현해',
+    'Review UFUNCTION specifiers','Check SerializeField usage']) assert.equal(intent(text).primary,'debugging',text);
+  for(const engine of ['unreal','unity']) {
+    const cs=autoGuidanceCandidates('debugging',undefined,{engine,source:'config'},emptyReferenceSnapshot());
+    assert.ok(cs[0].ids.includes(engine === 'unreal' ? 'unreal/api' : 'unity/wiring'),cs[0].ids.join(','));
+    assert.match(cs[0].instruction,engine === 'unreal' ? /UFUNCTION/ : /SerializeField/);
+    assert.ok(cs.length<=4); cs.forEach(c=>assert.ok(c.ids.length<=6));
+    assert.deepEqual(cs.at(-1).ids,['core/proof']);
+  }
+  assert.equal(intent('UFUNCTION이 뭔지 설명해').primary,'core');
+  assert.equal(intent('> UFUNCTION 검토\n계속').primary,'core');
+});
+
+test('returned code context selects optional API guidance but never excludes user policy',()=>{
+  const s=emptyReferenceSnapshot(); s.autoSignals=[{signal:'api_contract_observed',observationIds:['file'],order:'last_observation'}];
+  assert.equal(selectGuidanceTopics(intent('캐릭터 기능 구현해'),s).supplement,'debugging');
+  assert.equal(selectGuidanceTopics(intent('참고 문서를 넣지 마'),s).supplement,undefined);
+  s.autoSignals[0].order='order_unknown';
+  assert.equal(selectGuidanceTopics(intent('캐릭터 기능 구현해'),s).supplement,undefined);
+});
+
 test("auto classifies only explicit bounded task text, not quoted examples or ordinary nouns", () => {
   for (const [text, expected] of [
     ["멀티플레이 RPC 구현해 줘", "multiplayer"], ["SSOT 구조를 검토해 줘", "design"],

@@ -9,6 +9,7 @@ import { type OutputLimitStage } from "./execution-contracts";
 import { createMessageEmitter, createToolGenerationTracker, toolPluginIdentifier } from "./prediction-ui";
 import { isObservationOnlyToolCall, readOnlyOperationProfiles, type RemoteToolLike } from "./tool-capability-registry";
 import { bindProjectArguments, type ScopedTool } from "./tool-scope";
+import type { RoundToolGuard } from "./round-loop";
 
 export type HostToolApprovalPolicy = {
   neverAskForToolConfirmation?: boolean;
@@ -47,6 +48,7 @@ export type ToolCallBoundary = {
   sdkStartedCount: number;
   sdkFinalizedCount: number;
   guardAllowedCount: number;
+  guardDeniedCount: number;
   dispatchCount: number | null;
   resultCount: number;
 };
@@ -70,7 +72,9 @@ export function classifyToolCallBoundary(options: {
     else state = "provider_returned_raw_tool_text_without_structured_event";
   } else if (options.structuredRequestCount > 0 && options.sdkFinalizedCount === 0) {
     state = "captured_structured_message_without_sdk_finalization";
-  } else if (options.sdkFinalizedCount > 0 && options.guardDeniedCount > 0) {
+  } else if (options.guardDeniedCount > 0 && options.guardAllowedCount > 0) {
+    state = "mixed_guard_outcomes";
+  } else if (options.guardDeniedCount > 0) {
     state = "guard_denied_before_provider_execution";
   } else if (options.sdkFinalizedCount > 0 && options.guardAllowedCount === 0) {
     state = "guard_not_allowed_or_not_observed";
@@ -93,6 +97,7 @@ export function classifyToolCallBoundary(options: {
     sdkStartedCount: options.sdkStartedCount,
     sdkFinalizedCount: options.sdkFinalizedCount,
     guardAllowedCount: options.guardAllowedCount,
+    guardDeniedCount: options.guardDeniedCount,
     dispatchCount: options.dispatchCount,
     resultCount: options.resultCount
   };
@@ -106,10 +111,11 @@ export function createToolGuard(options: {
   toolGeneration: ReturnType<typeof createToolGenerationTracker>;
   traceCall: (id: number, values: Record<string, unknown>) => void;
   readApprovalPolicy?: () => HostToolApprovalPolicy;
-}): NonNullable<LLMActionOpts["guardToolCall"]> {
+}): RoundToolGuard {
   const { ctl, emitter, roundTools, config, scope, toolPlanningRetryRound, toolPlanningRetryBlockedFingerprints,
     batchReservation, reservationIds, toolGeneration, traceCall } = options;
-  return async (_roundIndex, callId, controller) => {
+  return async (_roundIndex, callId, controller, roundSignal) => {
+    if (roundSignal?.aborted) { controller.deny("Tool round is closed."); return; }
     const request = controller.toolCallRequest;
     // The SDK does not invoke onToolCallRequestFinalized for denied
     // calls, so register the stable call ID at the confirmation edge.
@@ -119,6 +125,11 @@ export function createToolGuard(options: {
       controller.deny(reason);
     };
     const allowedTool = roundTools.find((tool) => tool.name === request.name);
+    traceCall(callId, { providerRequestId: request.id, toolName: request.name,
+      provider: allowedTool?.pluginIdentifier || "unknown", generationState: "finalized",
+      proposedArgumentsFingerprint: telemetryFingerprint(request.arguments || {}),
+      projectIdentity: scope.projectIdentity || "unknown", operationId: typeof request.arguments?.operationId === "string"
+        ? request.arguments.operationId.slice(0, 128) : undefined });
     if (!allowedTool) {
       traceCall(callId, { validationState: "denied_scope", executionState: "not_executed" });
       deny("Tool withheld by the deterministic project-engine scope.");
@@ -145,10 +156,11 @@ export function createToolGuard(options: {
       const reservationId = String(callId);
       const reservation = batchReservation
         ? reserveReadResult(batchReservation, reservationId, allowedTool, proposedArguments)
-        : { allowed: true, arguments: proposedArguments, reservedTokens: 0, bounded: false };
+        : { allowed: true, arguments: proposedArguments, reservedTokens: 0, bounded: false, denialReason: undefined, limit: undefined };
       if (!reservation.allowed) {
-        traceCall(callId, { validationState: "denied_batch_budget", executionState: "not_executed" });
-        deny("Shared read-result budget exhausted. Split the read batch; use the returned evidence before requesting more.");
+        traceCall(callId, { validationState: "denied_batch_budget", executionState: "not_executed",
+          budgetDenialReason: reservation.denialReason, budgetAtDenial: batchReservation?.snapshot(), readResultLimit: reservation.limit });
+        deny(`Shared read-result budget unavailable (${reservation.denialReason}). Split the read batch; use delivered results before requesting more.`);
         return;
       }
       reservationIds.set(String(request.id), reservationId);
@@ -161,6 +173,7 @@ export function createToolGuard(options: {
         executedArgumentsFingerprint: telemetryFingerprint(reservation.arguments),
         reservedToolResultTokens: reservation.reservedTokens,
         resultLimitBounded: reservation.bounded,
+        readResultLimit: reservation.limit,
       });
       if (boundArguments || reservation.arguments !== proposedArguments) controller.allowAndOverrideParameters(reservation.arguments);
       else controller.allow();
@@ -174,12 +187,14 @@ export function createToolGuard(options: {
     // by callId. A plain loading status and a confirmation request are invisible.
     emitter.emitRequest(callId, { ...request, arguments: proposedArguments });
     toolGeneration.approvalCard(callId, request.id, autoApproved);
+    traceCall(callId, { approvalState: autoApproved ? "allowed_host_policy" : "pending" });
     const decision = autoApproved ? { type: "allow" as const } : await ctl.requestConfirmToolCall({
       callId,
       pluginIdentifier,
       name: request.name,
       parameters: proposedArguments,
     });
+    if (roundSignal?.aborted) { controller.deny("Tool round is closed."); return; }
     ctl.guardAbort();
     if (decision.type === "deny") {
       traceCall(callId, { approvalState: "denied", executionState: "not_executed" });

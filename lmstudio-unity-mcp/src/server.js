@@ -90,20 +90,20 @@ function createRuntime(env = process.env, injectedBridge) {
       bounded({ ...responseScope, status: "outcome_unknown",
         delivery: { status: "truncated", reason: "response_budget_exceeded", bodyOmitted: true } }, (args.byteBudget ?? 65536) - 128);
       let result;
-      if (workspaceEnabled && (name === "workspace_status" || name.startsWith("git_"))) result = await workspace(name, args);
+      if (workspaceEnabled && (name === "workspace_status" || name.startsWith("git_"))) result = await workspace(name, args, { signal });
       else if (name === "unity_symbols") result = await symbols.call(args, { signal });
-      else if (name === "unity_git") result = versionControl.call(args);
+      else if (name === "unity_git") result = await versionControl.call(args, { signal });
       else if (name === "read_file") return await files.read(args, value => fileObservation({
         ...value, canonicalProjectRoot: policy.root, projectIdentity: policy.projectIdentity,
       }));
       else if (name === "list_directory") result = files.list(args);
       else if (name === "search_files") result = await files.search(args);
-      else if (name === "patch_file") result = await files.patch(args);
-      else if (name === "create_file") result = await files.mutate(args, () => args.content, true);
+      else if (name === "patch_file") result = await files.patch(args, { signal });
+      else if (name === "create_file") result = await files.mutate(args, () => args.content, true, { signal });
       else if (name === "structured_data_read") result = await data.read(args);
       else if (name === "structured_data_patch") {
         if (args.format === "json" && !args.changes?.length || args.format === "csv" && !args.cells?.length) fail("invalid_arguments", "Supply changes (JSON) or cells (CSV)");
-        result = await data.patch(args);
+        result = await data.patch(args, { signal });
       } else {
         const edit = name === "unity_object_patch" || name === "unity_asset" || name === "unity_scene" && args.action !== "list" || name === "unity_prefab" && !["read", "contents", "overrides"].includes(args.action) || name === "unity_approval" && args.action === "request";
         const execute = name === "unity_editor" || name === "unity_debug_action" || name === "unity_tests" && !["status", "results"].includes(args.action) || name === "unity_operation" && args.action === "cancel";

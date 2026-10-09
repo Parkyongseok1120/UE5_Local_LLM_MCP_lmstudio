@@ -7,9 +7,12 @@
 ## 버전과 실행 연결
 
 - ProjectVersion.txt, manifest.json과 실제 해결된 packages-lock.json, 관련 asmdef 참조를 확인한다.
+- API 도입·변경 전에 실행 Editor 버전, 저장된 ProjectVersion, 해결된 패키지 버전·asmdef를 구분해 선언과 호출 조건을 확인한다. 같은 근거를 재사용하되 버전/의존성이 바뀌면 재확인한다.
+- SerializeField는 필드 직렬화 목적과 지원 타입을 확인한다. 일반 C# property/event와 UnityEvent를 동일하게 취급하지 않는다. 선언뿐 아니라 에셋·Inspector 연결과 실제 콜백을 확인한다.
 - CS0246·CS1061에서는 수신 타입, 확장 메서드, 접근 범위, 패키지 소스·메타데이터와 적용 버전을 찾는다.
 - 새 외부 API를 사용할 때도 같은 선언 확인을 적용한다. 검색 후보·다른 패키지 버전의 예제를 실제 해결 버전의 계약으로 쓰지 않는다. 컴파일을 통과하려고 callback·async·네트워크 호출의 의미를 바꾼 경우 별도 동작 근거가 필요하다.
 - 인스펙터 필드·ScriptableObject·이벤트 선언 → 초기화·등록 → 실제 호출·변경의 연결을 확인한다.
+- 비기본 Inspector/ScriptableObject 값이 실제 소비자에 전달되는지 확인한다. 필드·UnityEvent 이름이나 시그니처를 바꾸기 전에 Scene/Prefab·직렬화 참조와 migration을 확인한다. C# 검색만으로 에셋 사용처 부재를 증명하지 않는다.
 - ScriptableObject 설정과 개체별 실행 상태를 구분한다. 공유 에셋의 변경을 의도한다면 범위와 복구·저장 책임을 명시한다.
 - 서로 다른 GameObject의 동일 콜백 순서를 임의로 가정하지 않는다. 초기화 의존성은 엔진 보장 또는 프로젝트의 명시적 연결로 해결한다.
 - Runtime/Editor·테스트·플랫폼 코드를 asmdef와 의존성 관점에서 확인한다.
@@ -27,6 +30,7 @@
 - 취소 요청, 실제 작업 중단, 늦은 결과의 적용 차단을 구분한다. 로컬 토큰 생성만으로 비동기 API에 취소가 연결됐다고 보고하지 않는다. 실패·중복 반환·재대여에서도 상태 초기화와 구독 수명을 확인한다.
 - Domain Reload를 끈 환경에서 static 값·이벤트가 Play 사이에 남을 수 있으므로 초기화 책임을 둔다.
 - 사망·반환·취소 뒤 늦은 재장전·로드 결과가 이전 상태를 복원하지 않게 한다.
+- GetComponent 등 조회를 캐시하기 전에 호출 빈도와 실제 비용, 교체·재대여 수명을 확인한다. 캐시 초기화가 Awake 한 번으로 충분한지 실제 소유자의 수명과 대조한다.
 
 <!-- /guidance-section: lifetime -->
 <!-- guidance-section: api -->
@@ -41,4 +45,6 @@
 | 콜백·이벤트 등록 | 메서드 존재와 호출 가능성은 다름. 이름·인자를 바꾼 뒤 실제 연결 확인 |
 
 Unity 네트워크의 Spawn·권한·복제는 채택한 패키지에 맞춰 unity-networking.md를 참고한다. 다른 Unity 네트코드의 API를 섞지 않는다.
+- 도구의 applied, changed, dirty, saved를 따로 읽는다. Editor 메모리 변경은 저장 완료가 아니며 compile accepted는 컴파일 성공이 아니다. 테스트 completed는 종료 상태이므로 testStatus와 실패 개수·실행 범위를 확인한다.
+- Editor/Play Mode 테스트와 Player 빌드, host 단독과 실제 원격 client 검증의 범위를 구분한다. 소유권과 서버의 상태 결정 책임은 동일한 개념으로 취급하지 않는다.
 <!-- /guidance-section: api -->

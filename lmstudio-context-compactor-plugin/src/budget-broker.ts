@@ -1,6 +1,7 @@
 import type { ContextMeasurement, DirectConfig } from "./execution-contracts";
 import type { RemoteToolLike } from "./tool-capability-registry";
 import { localObservationTools } from "./tool-capability-registry";
+const { ARCHIVE_READ_CONTRACT } = require("./evidence-read-contract.js");
 
 export type Watermarks = {
   contextLength: number; configuredTargetTokens: number; configuredTriggerTokens: number;
@@ -62,6 +63,15 @@ export class BatchReservation {
   get used() { return [...this.entries.values()].reduce((n, e) => n + (e.state === 'released' ? 0 : e.tokens), 0); }
   get available() { return Math.max(0, this.capacity - this.used); }
   get exceeded() { return this.used > this.capacity || [...this.entries.values()].some(e => e.overrun); }
+  denialReason(id: string, minimum: number): string | null {
+    if (this.closed) return "batch_closed";
+    if (this.entries.has(id)) return "duplicate_reservation";
+    if (this.exceeded) return "returned_result_overrun";
+    if (this.available < tokens(minimum) || this.available === 0)
+      return [...this.entries.values()].some(e => e.state === "held")
+        ? "held_reservations_insufficient" : "remaining_capacity_insufficient";
+    return null;
+  }
   reserve(id: string, requested: number, minimum = requested): number {
     if (this.closed || this.exceeded || this.entries.has(id)) return 0;
     const amount = Math.min(tokens(requested), this.available);
@@ -88,7 +98,10 @@ export class BatchReservation {
   close() { if (this.closed) return; for (const id of this.entries.keys()) this.settle(id, 'canceled'); this.closed = true; }
   snapshot() {
     return {
-capacity: this.capacity, used: this.used, available: this.available, closed: this.closed,
+      capacity: this.capacity, used: this.used, available: this.available, closed: this.closed,
+      accountingUnit: "conservative_byte_derived_allowance_not_exact_model_tokens",
+      held: [...this.entries.values()].filter(e => e.state === "held").reduce((n, e) => n + e.tokens, 0),
+      consumed: [...this.entries.values()].filter(e => e.state === "consumed").reduce((n, e) => n + e.tokens, 0),
       exceeded: this.exceeded, nextDispatchAllowed: !this.closed && !this.exceeded,
       disposition: this.exceeded ? "retain_result_remeasure_before_next_model_call" : "within_reservation",
       entries: [...this.entries].map(([id, e]) => ({ id, ...e }))
@@ -97,7 +110,7 @@ capacity: this.capacity, used: this.used, available: this.available, closed: thi
 }
 
 export function readResultContract(tool: RemoteToolLike) {
-  const properties = (tool.parametersJsonSchema as { properties?: Record<string, { minimum?: number; maximum?: number; default?: number }> })?.properties || {};
+  const properties = (tool.parametersJsonSchema as { properties?: Record<string, { minimum?: number; maximum?: number; default?: number; $comment?: string }> })?.properties || {};
   const nativeBytes = ["mcp/unreal-agent", "mcp/unreal-rag"].includes(tool.pluginIdentifier || "")
     && ["read_file", "read_file_range"].includes(tool.name);
   const field = properties.byteBudget ? "byteBudget" : properties.maxChars ? "maxChars"
@@ -107,13 +120,15 @@ export function readResultContract(tool: RemoteToolLike) {
   // A provider's source-file ceiling is not a useful default batch allocation.
   // Bound an omitted native window to 4 KiB; explicit requests can still ask
   // for more. Bytes already account for UTF-8, unlike character limits.
-  const defaultValue = field === "maxBytes" ? Math.min(contract.default ?? 4096, 4096)
+  const defaultValue = field === "byteBudget" && tool.pluginIdentifier === "mcp/unreal-agent"
+    && contract.$comment === "direct-json-text-utf8" ? contract.default ?? 8192
+    : field === "maxBytes" ? Math.min(contract.default ?? 4096, 4096)
     : contract.default ?? (field === "maxChars" ? 4096
     : tool.name === "git_changed_files" ? 4096 : 32768);
   return { field, defaultValue, multiplier: field === "byteBudget" ? 1 : field === "maxBytes" ? 2 : archiveEnvelope ? 3 : 6,
     // The archive's schema accepts maxChars=1 for range validation, but its
     // identity envelope needs usable headroom before any body can be returned.
-    minimum: archiveEnvelope ? Math.max(2048, tokens(contract.minimum ?? 1))
+    minimum: archiveEnvelope ? Math.max(ARCHIVE_READ_CONTRACT.minimumEnvelopeChars, tokens(contract.minimum ?? 1))
       : tokens(contract.minimum ?? (field === "maxChars" ? 128 : 1024)),
     maximum: tokens(contract.maximum ?? (field === "maxBytes" ? 2 * 1024 * 1024 : field === "byteBudget" ? 65536 : 4096)) };
 }
@@ -146,16 +161,30 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   // This allocation does not replace the final exact tokenizer gate.
   const multiplier = field ? contract.multiplier : 1;
   const envelopeTokens = 1024;
-  const requested = field ? Math.max(contract.minimum, Math.min(contract.maximum,
-    tokens(args[field] === undefined ? contract.defaultValue : Number(args[field])))) : 3072;
+  const requested = field ? tokens(args[field] === undefined ? contract.defaultValue : Number(args[field])) : 3072;
+  const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
-  const reserved = batch.reserve(id, requested * multiplier + envelopeTokens, minimum * multiplier + envelopeTokens);
-  if (!reserved) return { allowed: false, arguments: args, reservedTokens: 0, bounded: field !== null };
-  const boundedValue = Math.min(requested, Math.floor((reserved - envelopeTokens) / multiplier));
+  const reserved = batch.reserve(id, allocation * multiplier + envelopeTokens, minimum * multiplier + envelopeTokens);
+  if (!reserved) return { allowed: false, arguments: args, reservedTokens: 0, bounded: field !== null,
+    limit: { field, requested, effective: 0, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" },
+    denialReason: batch.denialReason(id, minimum * multiplier + envelopeTokens) || "invalid_reservation" };
+  const boundedValue = Math.min(allocation, Math.floor((reserved - envelopeTokens) / multiplier));
   return {
 allowed: true, arguments: field ? { ...args, [field]: boundedValue } : args,
-    reservedTokens: reserved, bounded: field !== null
+    reservedTokens: reserved, bounded: field !== null,
+    limit: { field, requested, effective: boundedValue, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" }
 };
+}
+
+export function readBudgetFeedback(trace: Array<Record<string, unknown>>): string {
+  const limits = trace.flatMap(call => {
+    const limit = call.readResultLimit as { field?: string; requested?: number; effective?: number; unit?: string } | undefined;
+    if (!limit?.field || limit.requested === limit.effective) return [];
+    return [{ field: limit.field, requested: limit.requested, effective: limit.effective, unit: limit.unit,
+      denial: call.budgetDenialReason || null, delivered: call.readResultSize || null }];
+  }).slice(0, 4);
+  return limits.length ? "Runtime read-result budget facts: " + JSON.stringify(limits)
+    + ". Limits bound the full response, not source body length. Keep the requested page budget stable while advancing the returned cursor; do not subtract previously read content. Consume delivered peers before retrying a denied read in a later round." : "";
 }
 
 export type GenerationBudget = {

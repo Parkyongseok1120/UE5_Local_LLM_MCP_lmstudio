@@ -1,0 +1,165 @@
+{
+  "invariants": [
+    "Preserve source identity, version, query and units; historical evidence never grants fresh-read or mutation authority.",
+    "Commit each returned pair once; preserve unknown outcomes and existing off/warn/pause choices.",
+    "Exactly measured model input and one batch reservation ledger remain authoritative."
+  ],
+  "existing": [
+    "McpProcess owns partially initialized child cleanup and reap.",
+    "Existing package, test, identity and evaluation entrypoints include new modules."
+  ],
+  "doNotDuplicate": [
+    "No new subprocess manager or cleanup daemon.",
+    "No public-path exclusions to conceal fixture leakage.",
+    "No second manually maintained test inventory or model evaluator."
+  ],
+  "impactedSurfaces": [
+    "scripts/headless_mcp_chat.py",
+    "tests/test_headless_compaction.py",
+    "headless lifecycle regression test if separated",
+    "scripts/ci/ci_suites.py",
+    "docs/evidence/harness-stability-implementation-20261007.json",
+    "tests/test_public_path_hygiene.py",
+    "lmstudio-context-compactor-plugin/package.json",
+    ".github/workflows/ci.yml",
+    "Existing eval and install identity scripts"
+  ],
+  "validationPlan": [
+    "Actual harmless child rejecting initialize/EOF/timeout leaves no owned child; first and second server failures covered.",
+    "Cleanup preserves original exception; repeated close and already-exited process are safe; kill is followed by reap.",
+    "Current public path/encoding/link checks pass for changed documents without widening exclusions.",
+    "Relevant tests then full required suites; baseline Node20/Python3.12; generated artifacts checked.",
+    "Matched live model/context/prompt/fixture, >=3 repetitions per behavioral case, report ranges and median; semantic coverage cannot shrink to improve time."
+  ],
+  "mode": "codegen",
+  "plan": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+  "implementationStatus": "implemented_automated_verification_passed_live_acceptance_not_met",
+  "buildId": "ef-build-v2-4f16d2122b43602f6f1bbe76cd766a4f82ec6f725130d1c95a12cc3e6c072d3b",
+  "claims": [
+    {
+      "id": "W5",
+      "claim": "헤드리스 MCP는 초기화 실패를 포함해 소유한 자식의 정리와 reap을 수행하며 원래 예외를 보존한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+          "observation": "사용자가 SSOT/SOLID 계획 구현을 승인했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/headless_mcp_chat.py:42",
+          "observation": "헤드리스 MCP는 초기화 실패를 포함해 소유한 자식의 정리와 reap을 수행하며 원래 예외를 보존한다."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_headless_compaction.py",
+          "observation": "실제 무해한 child의 initialize/EOF/timeout/KeyboardInterrupt 실패, 두 번째 서버 실패, kill 뒤 wait와 중복 close를 검증했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/headless_mcp_chat.py:42",
+          "symbol": "기존 소유자에서 요청/관측 수용"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "scripts/headless_mcp_chat.py:120",
+          "symbol": "단일 계약 및 수명 정책 적용"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_headless_compaction.py",
+          "symbol": "반환 값 및 상태 검증"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/headless_mcp_chat.py:120",
+          "observation": "기존 권한·최종 입력 측정·설정 계약을 유지한다. 테스트 통과가 실제 모델 품질이나 Editor 실행의 증명은 아니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델에서 재독 절반 감소 및 품질 유지 목표는 미확정이다.",
+        "최종 수정 소스의 설치된 LM Studio 채팅 활성화는 이번 검사로 증명하지 않았다."
+      ]
+    },
+    {
+      "id": "W6",
+      "claim": "새 공통 모듈과 테스트를 기존 배포 및 테스트 진입점에 연결했다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+          "observation": "사용자가 SSOT/SOLID 계획 구현을 승인했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/scripts/run-tests.cjs:1",
+          "observation": "새 공통 모듈과 테스트를 기존 배포 및 테스트 진입점에 연결했다."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_ci_release_readiness.py",
+          "observation": "실제 test --list 유일성/필수 멤버, Node20 전체 제품 테스트, source layout 및 개발 패키지 검증을 수행했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/scripts/run-tests.cjs:1",
+          "symbol": "기존 소유자에서 요청/관측 수용"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "scripts/build_integrated_package.py",
+          "symbol": "단일 계약 및 수명 정책 적용"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_ci_release_readiness.py",
+          "symbol": "반환 값 및 상태 검증"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/build_integrated_package.py",
+          "observation": "기존 권한·최종 입력 측정·설정 계약을 유지한다. 테스트 통과가 실제 모델 품질이나 Editor 실행의 증명은 아니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델에서 재독 절반 감소 및 품질 유지 목표는 미확정이다.",
+        "최종 수정 소스의 설치된 LM Studio 채팅 활성화는 이번 검사로 증명하지 않았다."
+      ]
+    }
+  ],
+  "verification": "docs/evidence/harness-continuity-verification-20261009.json",
+  "existingAtPlanApproval": [
+    "McpProcess launches and closes owned children; main currently registers after successful start.",
+    "Public path hygiene and existing release tests already exist.",
+    "Python test suite membership has a single owner in scripts/ci/ci_suites.py.",
+    "Existing compactor build/guidance/identity and evaluation tools are available."
+  ],
+  "implemented": [
+    "W5 makes start exception-safe, registers lifetime before initialize and makes close idempotent with reap.",
+    "W5 sanitizes public evidence paths while preserving local raw logs outside release.",
+    "W6 validates old data/settings, CI membership, generated artifacts and loaded build before live comparison."
+  ],
+  "proposed": []
+}

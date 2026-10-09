@@ -90,10 +90,17 @@ export function containsUnresolvedToolIntent(reportText: string, messages: Array
 
 export function hasUnexecutedRawToolSyntax(text: string): boolean {
   if (containsUnresolvedToolIntent(text, [])) return true;
-  const match = /<(?:tool_call|function=)|\|(?:tool_call|python_tag)\|/iu.exec(text);
-  if (!match || match.index === undefined) return false;
-  const lineEnd = text.indexOf("\n", match.index);
-  return !isLiteralRawToolWrapper(text, match.index, lineEnd < 0 ? text.length : lineEnd);
+  // Complete wrappers were already checked with their exact closing boundary.
+  // Do not reinterpret a quoted wrapper using the end of its surrounding line.
+  const complete = RAW_TOOL_WRAPPER_PATTERNS.flatMap(pattern => [...text.matchAll(pattern)]
+    .map(match => ({ start: match.index!, end: match.index! + match[0].length })));
+  return [...text.matchAll(/<(?:tool_call|function=)|\|(?:tool_call|python_tag)\|/giu)].some(match => {
+    const start = match.index!;
+    if (complete.some(wrapper => start >= wrapper.start && start < wrapper.end)) return false;
+    const lineEnd = text.indexOf("\n", start);
+    return !isLiteralRawToolWrapper(text, start, lineEnd < 0 ? text.length : lineEnd)
+      && !isLiteralRawToolWrapper(text, start, start + match[0].length);
+  });
 }
 
 export function visibleTextFromMessages(messages: Array<ChatMessage>): string {

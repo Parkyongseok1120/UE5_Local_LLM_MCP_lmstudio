@@ -1,14 +1,17 @@
 "use strict";
 
 const { Chat, ChatMessage, rawFunctionTool } = require("@lmstudio/sdk");
-const { EvidenceArchive, hash, redact, atomicWrite, readFile } = require("./evidence-archive.js");
+const { EvidenceArchive, evidenceBodyView, evidenceSemanticFacts: semanticFacts, hash, redact, atomicWrite, readFile } = require("./evidence-archive.js");
 const path = require("node:path");
 const modelNotes = require("./continuity-model-notes.js");
+const { SUMMARY_POLICY } = require("./semantic-handoff-policy.js");
+const { ARCHIVE_READ_CONTRACT } = require("./evidence-read-contract.js");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
 const { REASONING_SEPARATOR, visibleAssistantText } = require("./continuity-text.js");
 const { isEphemeralCapabilityKey } = require("./durable-memory-sanitizer.js");
 const evidenceIdentity = require("./evidence-identity.js");
 const { exchangeIndex } = require("./tool-exchange-index.js");
+const { retainInterruptedCalls } = require("./interrupted-calls.js");
 
 function serialize(history) {
   return history.getMessagesArray().map(m => {
@@ -33,21 +36,6 @@ function sourceIdentity(payload) {
   return redact(identity);
 }
 
-function semanticFacts(payload) {
-  const facts = {};
-  for (const key of ["kind", "ok", "status", "errorCode", "action", "comparison", "base", "head",
-    "since", "until", "authorQuery", "authorQuerySemantics", "pageStart", "pageEnd", "pageHasMore",
-    "hasMore", "sourceResultComplete", "returnedRange", "lineRange", "startLine", "endLine",
-    "totalLines", "returnedCount", "total", "sourceMode", "evidenceSource", "coverage", "declarationProof",
-    "matchCount", "matchMetadataOmitted", "readBytes"]) {
-    if (payload[key] !== undefined) facts[key] = payload[key];
-  }
-  if (facts.pageHasMore === undefined && payload.hasMore !== undefined) facts.pageHasMore = payload.hasMore;
-  if (facts.sourceResultComplete === undefined && payload.hasMore !== undefined) {
-    facts.sourceResultComplete = payload.hasMore === false;
-  }
-  return redact(facts);
-}
 
 function semanticEvidenceView(payload, maxChars = 640) {
   const facts = semanticFacts(payload);
@@ -80,13 +68,7 @@ function semanticEvidenceView(payload, maxChars = 640) {
 }
 
 function gitBodyView(payload) {
-  if (typeof payload.content === "string") return { field: "content", body: redact(payload.content) };
-  if (typeof payload.text === "string") return { field: "text", body: redact(payload.text) };
-  if (typeof payload.body === "string") return { field: "body", body: redact(payload.body) };
-  if (typeof payload.code === "string") return { field: "code", body: redact(payload.code) };
-  if (Array.isArray(payload.items)) return { field: "items", body: JSON.stringify(redact(payload.items)) };
-  if (Array.isArray(payload.rows)) return { field: "rows", body: JSON.stringify(redact(payload.rows)) };
-  return null;
+  return evidenceBodyView(redact(payload));
 }
 
 function rawExposureKey(request, result, originalEnvelope) {
@@ -153,13 +135,20 @@ class WorkingContext {
     this.rawRefs = new Map();
     this.lastCommitReason = null;
     this.committedInExecution = false;
+    this.capturedCurrentResult = false;
+    this.restoredResultKeys = new Set();
+    this.restoredInterruptionKeys = new Set();
     this.closed = false;
     this.exposure = new Map();
     this.note = null;
+    this.referenceObservations = [];
     this.lineage = options.lineage || null;
     this.parentLineage = options.parentLineage || null;
+    this.archive.setAccess(this.lineage || scope.lineage);
     this.archive.protectedWindows = new Set([this.windowFile(this.lineage), this.windowFile(this.parentLineage)]);
+    this.windowDigest = undefined;
     this.lastSummaryInput = "";
+    this.summaryAttempts = [];
     this.consumedRawResults = new Set();
     this.cost = { summaryCalls: 0, summaryPromptTokens: 0, summaryPredictedTokens: 0, summaryMs: 0, unknownUsageCalls: 0 };
   }
@@ -197,7 +186,11 @@ class WorkingContext {
       errorCode: value.errorCode ?? null, operationId: value.operationId ?? null,
       originRanges: value.range || value.returnedRange || value.lineRange || value.page
         || (Number.isInteger(value.startLine) && Number.isInteger(value.endLine) ? [value.startLine, value.endLine] : null)
-        || (value.pageStart !== undefined ? [value.pageStart, value.pageEnd] : null),
+        || (value.pageStart !== undefined ? [value.pageStart, value.pageEnd] : null)
+        || (Number.isInteger(value.offsetBytes) && Number.isInteger(value.nextOffsetBytes)
+          ? [value.offsetBytes, value.nextOffsetBytes] : null),
+      originRangeUnit: value.rangeUnit || (Number.isInteger(value.offsetBytes) ? "utf8_byte"
+        : Number.isInteger(value.startLine) ? "line" : value.pageStart !== undefined ? "page" : "unknown"),
     }, { liveRefs: new Set([...this.refs.keys(), ...this.returnedRefs.keys()]) });
     if (saved.ok) {
       const ref = [saved.record.evidenceId, saved.record.archivedBodyHash];
@@ -235,7 +228,16 @@ class WorkingContext {
       for (const id of live.keys()) this.returnedRefs.delete(id);
       for (const [key, [id]] of this.rawRefs) if (live.has(id)) this.consumedRawResults.add(key);
     }
-    this.refs = new Map([...(this.manifest?.refs || []), ...live, ...this.returnedRefs]);
+    this.refs = new Map([...(this.manifest?.refs || []), ...live, ...this.returnedRefs, ...this.noteRecordRefs(this.note)]);
+    try {
+      this.archive.setPins(this.refs.keys());
+      this.lastRetentionReason = null;
+    } catch (error) {
+      // Existing puts/windows already pin these records. A failed retention
+      // update keeps those conservative pins and must not reject raw input.
+      this.lastRetentionReason = error.message || "archive_retention_unavailable";
+      this.archive.stats.retentionUpdateFailures = (this.archive.stats.retentionUpdateFailures || 0) + 1;
+    }
     for (const [key, [id]] of this.rawRefs) if (!this.refs.has(id)) {
       this.rawRefs.delete(key); this.consumedRawResults.delete(key);
     }
@@ -267,8 +269,10 @@ class WorkingContext {
       const results = messages[mi].getToolCallResults();
       for (let ri = 0; ri < results.length; ri++) {
         const result = results[ri], request = index.matches.get(`${mi}:${ri}`);
-        if (!request || !isObservation(request)) continue;
+        if (!request) continue;
         const envelope = serializedResultContent(result.content);
+        if (!this.restoredResultKeys.has(rawExposureKey(request, result, envelope))) this.capturedCurrentResult = true;
+        if (!isObservation(request)) continue;
         // Duplicate callbacks/replays cannot reopen a completed consumer.
         if (this.consumedRawResults.has(rawExposureKey(request, result, envelope))) continue;
         const value = decodeToolResultRecord(envelope).value;
@@ -291,8 +295,28 @@ class WorkingContext {
     return new Set(this.summaryEvidence().map(item => item.ref));
   }
 
+  noteRecordRefs(note) {
+    const requested = new Set(["decisions", "rejectedHypotheses", "openQuestions", "reviewClaims"]
+      .flatMap(key => (note?.[key] || []).flatMap(item => item.refs || [])));
+    const verified = new Map();
+    if (!requested.size) return verified;
+    for (const [id, version] of this.refs) {
+      const ref = `tool-call:archive-${hash([id, version]).slice(0, 32)}`;
+      if (!requested.has(ref)) continue;
+      const loaded = this.archive.load(id);
+      if (loaded.ok && loaded.record.archivedBodyHash === version) verified.set(id, version);
+    }
+    return verified;
+  }
+
+  verifiedNoteRefs(note) {
+    return new Set([...this.noteRecordRefs(note)].map(([id, version]) =>
+      `tool-call:archive-${hash([id, version]).slice(0, 32)}`));
+  }
+
   summaryEvidence(maxItems = 8, maxChars = 6000) {
     const output = [];
+    const seen = new Set();
     const entries = [...this.refs].reverse();
     for (const [id, version] of entries) {
       const loaded = this.archive.load(id);
@@ -302,12 +326,18 @@ class WorkingContext {
       const decoded = decodeToolResultRecord(record.body);
       const semantic = decoded.value || {};
       const excerpt = semanticEvidenceView(semantic, 640);
+      const facts = record.metadata?.semanticFacts || semanticFacts(semantic);
+      // A new archive/call ID alone is not new material for a summary.
+      const materialFingerprint = hash([record.metadata?.sourceIdentityDigest,
+        record.metadata?.sourceVersion, record.metadata?.semanticQueryDigest, facts, excerpt]);
+      if (seen.has(materialFingerprint)) continue;
       const item = { ref: `tool-call:archive-${hash([id, version]).slice(0, 32)}`, evidenceId: id, version,
         source: record.metadata?.toolName || record.metadata?.sourceKind || "observation",
-        sourceIdentityDigest: hash(record.metadata?.sourceIdentity || {}),
+        sourceIdentityDigest: record.metadata?.sourceIdentityDigest || "unknown-source",
         verifiedExcerpt: excerpt,
-        facts: record.metadata?.semanticFacts || semanticFacts(semantic) };
+        facts, materialFingerprint };
       if (JSON.stringify([...output, item]).length > maxChars) continue;
+      seen.add(materialFingerprint);
       output.push(item);
       if (output.length >= maxItems) break;
     }
@@ -363,6 +393,7 @@ class WorkingContext {
           sourceIdentity: identity, sourceIdentityDigest: record.metadata.sourceIdentityDigest,
           sourceVersion: record.metadata.sourceVersion, sourceQueryKey: record.metadata.sourceQueryKey,
           provider: record.metadata.provider, semanticQueryDigest: record.metadata.semanticQueryDigest,
+          sourceFacts: facts, sourceRangeUnit: record.metadata.originRangeUnit,
           sourceRange: record.metadata.originRanges
             || (parsed.pageStart !== undefined || parsed.pageEnd !== undefined ? [parsed.pageStart, parsed.pageEnd] : null),
           sourceCollectionComplete: parsed.sourceResultComplete ?? "unknown",
@@ -379,7 +410,8 @@ class WorkingContext {
           pageHasMore: parsed.pageHasMore ?? parsed.hasMore ?? "unknown",
           ...(typeof parsed.nextCursor === "string" && parsed.nextCursor
             ? { transport: { nextCursor: parsed.nextCursor, durable: false, guessed: false } } : {}),
-          archiveRef: { evidenceId: record.evidenceId, version: record.archivedBodyHash, archiveState: record.archiveState },
+          archiveRef: { evidenceId: record.evidenceId, version: record.archivedBodyHash, archiveState: record.archiveState,
+            readHandle: this.archive.readHandleFor(record), view: "body" },
           sourceHash: record.sourceHash, redacted: record.redacted,
           rangeUnit: record.rangeUnit, archivedRanges: record.archivedRanges,
           bodyRangeUnit: record.rangeUnit,
@@ -440,17 +472,31 @@ class WorkingContext {
 
   tool() {
     return rawFunctionTool({ name: "evidence_first_read_context",
-      description: "Read previously returned historical evidence by exact archive ID and version. Use action=catalog with an optional exact path to discover IDs lost from working context; continue catalog pages using nextOffset as startOffset. Then use action=read with the returned evidenceId and version. Historical access is not a fresh file read and grants no write/build approval.",
+      description: "Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or exact evidenceId/version for the original envelope. Keep maxChars fixed across pages and use nextOffset; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.",
       parametersJsonSchema: { type: "object", additionalProperties: false,
-        properties: { action: { type: "string", enum: ["read", "catalog"] }, path: { type: "string" },
+        properties: { action: { type: "string", enum: ["read", "catalog"] },
+          catalogVersion: { type: "integer", enum: [1, 2], description: "Use 2 for stable snapshot continuation; omitted preserves legacy offset paging." }, path: { type: "string" },
           evidenceId: { type: "string" }, version: { type: "string" },
-          startOffset: { type: "integer", minimum: 0 }, maxChars: { type: "integer", minimum: 1, maximum: 8192 } },
+          readHandle: { type: "string" }, view: { type: "string", enum: ["body", "envelope"] },
+          continuation: { type: "string", description: "Copy catalog nextContinuation exactly; unavailable after execution restart." },
+          startOffset: { type: "integer", minimum: 0, description: "UTF-16 offset in the selected representation; use read nextOffset." },
+          maxChars: { type: "integer", minimum: 1, maximum: ARCHIVE_READ_CONTRACT.maximumEnvelopeChars,
+            description: "Whole serialized JSON response budget, including metadata and escaping. Default 4096. Keep fixed while paging; do not subtract already-read content." } },
         anyOf: [ { required: ["evidenceId", "version"], properties: { action: { const: "read" } } },
+          { required: ["readHandle"], properties: { action: { const: "read" } } },
           { required: ["action"], properties: { action: { const: "catalog" } } } ] },
       implementation: async (args, ctx) => {
         if (ctx.signal.aborted) throw ctx.signal.reason;
-        if (args.action === "catalog") return this.archive.catalog(args);
-        return this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? 4096);
+        if (args.readHandle && (args.evidenceId !== undefined || args.version !== undefined))
+          return { ok: false, errorCode: "selector_conflict" };
+        if (args.action === "catalog") {
+          if (args.continuation && args.startOffset !== undefined || args.catalogVersion === 2 && args.startOffset !== undefined
+            || args.continuation && args.catalogVersion === 1) return { ok: false, errorCode: "pagination_conflict" };
+          return args.catalogVersion === 2 || args.continuation ? this.archive.catalogPage(args) : this.archive.catalog(args);
+        }
+        if (args.readHandle) return this.archive.readByHandle(args.readHandle,
+          args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "body");
+        return this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "envelope");
       } });
   }
 
@@ -519,18 +565,31 @@ class WorkingContext {
     if (this.closed) { this.lastCommitReason = "execution_closed"; return false; }
     // A terminal checkpoint extends an already measured window in this
     // execution. It is not a measurement and must never authorize dispatch.
-    if (!this.committedInExecution || !this.manifest) {
-      this.lastCommitReason = "no_committed_window_in_execution"; return false;
+    const firstInterruption = !this.committedInExecution && (this.capturedCurrentResult
+      || retainInterruptedCalls(candidate.getMessagesArray()).some(item => !this.restoredInterruptionKeys.has(item.callKey)));
+    if ((!this.committedInExecution || !this.manifest) && !firstInterruption) {
+      this.lastCommitReason = "no_committed_window_in_execution";
+      try { this.archive.close(); } catch { /* The inherited durable window still protects pending refs. */ }
+      return false;
     }
     try {
       const prefix = serialize(source);
-      if (hash(prefix.slice(0, this.manifest.sourceLength)) !== this.manifest.sourcePrefixHash) {
+      if (this.manifest && hash(prefix.slice(0, this.manifest.sourceLength)) !== this.manifest.sourcePrefixHash) {
         this.lastCommitReason = "source_prefix_changed"; return false;
       }
-      const saved = this.#writeWindow(source, candidate, null, hash(prefix), this.manifest.modelFingerprint);
-      if (saved) this.closed = true;
+      const saved = this.#writeWindow(source, candidate, null, hash(prefix), this.manifest?.modelFingerprint || "terminal_observation_only");
+      if (saved) { this.closed = true; try { this.archive.close(); } catch { /* Window remains pinned; diagnostics retain the lease. */ } }
       return saved;
     } catch (error) { this.lastCommitReason = error.message || "window_write_failed"; return false; }
+  }
+
+  close() {
+    this.closed = true;
+    try { this.archive.close(); return true; }
+    catch (error) {
+      this.lastRetentionReason = error.message || "archive_close_unavailable";
+      return false;
+    }
   }
 
   #writeWindow(source, candidate, measurement, expectedPrefix, modelFingerprint) {
@@ -545,6 +604,7 @@ class WorkingContext {
             : [...this.returnedRefs.keys()].some(id => !candidateRefs.has(id))
               || [...this.pendingHistoricalResults].some(key => !candidateKeys.has(key)) ? "pending_evidence_omitted" : null;
       if (rejection) { this.lastCommitReason = rejection; return false; }
+      for (const ref of this.noteRecordRefs(this.note)) candidateRefs.set(...ref);
       // Validate the exact live candidate first. Persistence owns sanitization;
       // stripping capabilities before validation changes raw-envelope identity.
       const persisted = this.persistable(candidate), replacement = serialize(persisted);
@@ -567,21 +627,33 @@ class WorkingContext {
         || replacement.some(m => m.content.some(p => p.type === "text" && p.text.includes(REASONING_SEPARATOR)))) {
         this.lastCommitReason = "non_persistable_live_material"; return false;
       }
-      const body = { schemaVersion: 1, scope: this.scope, windowId: hash([this.scope, expectedPrefix, replacement]),
+      const returned = new Map(persistedMessages.flatMap(m => m.getToolCallResults()).map(r => [r.toolCallId, hash(r.content)]));
+      const referenceObservations = this.referenceObservations.map(o => ({ ...o,
+        fingerprint: returned.get(o.id) || o.fingerprint }));
+      const body = { schemaVersion: 2, scope: this.scope, windowId: hash([this.scope, expectedPrefix, replacement]),
         generation: this.generation + 1, parentWindowId: this.manifest?.windowId || null,
         lineage: this.lineage, parentLineage: this.parentLineage,
         sourcePrefixHash: expectedPrefix, sourceLength: prefix.length,
-        replacement, refs: [...candidateRefs], rawBindings, consumedBindings,
-        pendingRefs: [...this.returnedRefs], pendingHistoricalResults, note: this.note,
+        replacement, refs: [...candidateRefs], membership: this.archive.exportMembership(), rawBindings, consumedBindings,
+        pendingRefs: [...this.returnedRefs], pendingHistoricalResults, note: this.note, referenceObservations,
         createdAt: this.archive.now(),
-        lastSummaryInput: this.lastSummaryInput, modelFingerprint, measurement,
+        lastSummaryInput: this.lastSummaryInput, summaryAttempts: this.summaryAttempts.slice(-SUMMARY_POLICY.retainedEvents), modelFingerprint, measurement,
         measurementSubject: measurement ? "live_candidate_before_persistence_sanitization" : "terminal_unmeasured",
         remeasureRequired: true };
       const manifest = { ...body, digest: hash(body) };
       if (this.archive.directory) {
         this.archive.ensureDirectory(true);
-        atomicWrite(this.archive.directory, this.windowFile(this.lineage), manifest);
-        this.archive.cleanupWindows();
+        this.archive.withStorageLock(() => {
+          const target = path.join(this.archive.directory, this.windowFile(this.lineage));
+          let existing;
+          try { existing = JSON.parse(readFile(target, this.archive.options.maxBytes)).digest; }
+          catch (error) { if (error.code !== "ENOENT") throw error; }
+          if (existing !== this.windowDigest) throw new Error("window_writer_conflict");
+          if (!this.refsValid([...candidateRefs])) throw new Error("archive_refs_unavailable");
+          atomicWrite(this.archive.directory, this.windowFile(this.lineage), manifest);
+          this.windowDigest = manifest.digest;
+          this.archive.cleanupWindows();
+        });
       }
       this.manifest = manifest; this.generation = body.generation; this.refs = candidateRefs;
       return true;
@@ -589,6 +661,10 @@ class WorkingContext {
   }
 
   restore(source) {
+    if (this.archive.directory && !this.archive.lockDepth) {
+      try { return this.archive.withStorageLock(() => this.restore(source)); }
+      catch { return { history: source, reason: "archive_lock_unavailable" }; }
+    }
     try {
       let manifest = this.manifest;
       if (this.archive.directory) {
@@ -599,21 +675,45 @@ class WorkingContext {
       const { digest, ...body } = manifest;
       const messages = serialize(source);
       const rejection = digest !== hash(body) ? "manifest_integrity_failed"
-        : body.schemaVersion !== 1 ? "manifest_schema_mismatch"
+        : ![1, 2].includes(body.schemaVersion) ? "manifest_schema_mismatch"
           : body.scope !== this.scope ? "scope_mismatch"
             : this.parentLineage && body.lineage !== this.parentLineage ? "lineage_mismatch"
               : !Number.isSafeInteger(body.sourceLength) || body.sourceLength < 0
                 || body.sourceLength > messages.length ? "source_length_mismatch"
                 : hash(messages.slice(0, body.sourceLength)) !== body.sourcePrefixHash ? "source_prefix_mismatch"
-                  : !this.refsValid(body.refs) ? "archive_refs_unavailable" : null;
+                  : null;
       if (rejection) return { history: source, reason: rejection };
-      this.manifest = manifest; this.generation = body.generation; this.refs = new Map(body.refs); this.note = body.note;
-      this.rawRefs = new Map(body.rawBindings || []);
-      this.returnedRefs = new Map(body.pendingRefs || []);
-      this.pendingHistoricalResults = new Set(body.pendingHistoricalResults || []);
-      this.consumedRawResults = new Set(body.consumedBindings || []);
+      // Only a verified ancestor window can grant inherited membership. Raw
+      // refs in SDK messages are pin candidates, never access authorization.
+      const oldMembership = [...this.archive.membership];
+      let restored, refs, rawRefs, returnedRefs, pendingHistoricalResults, consumedRawResults;
+      try {
+        restored = deserialize([...body.replacement, ...messages.slice(body.sourceLength)]);
+        refs = new Map(body.refs); rawRefs = new Map(body.rawBindings || []);
+        returnedRefs = new Map(body.pendingRefs || []);
+        pendingHistoricalResults = new Set(body.pendingHistoricalResults || []);
+        consumedRawResults = new Set(body.consumedBindings || []);
+        this.archive.setAccess(this.archive.lineage, body.schemaVersion === 2 ? body.membership || [] : body.refs || []);
+        if (!this.refsValid(body.refs)) {
+          this.archive.setAccess(this.archive.lineage, oldMembership);
+          return { history: source, reason: "archive_refs_unavailable" };
+        }
+        this.archive.setPins(refs.keys());
+      } catch (error) {
+        this.archive.setAccess(this.archive.lineage, oldMembership);
+        throw error;
+      }
+      if (body.lineage === this.lineage) this.windowDigest = manifest.digest;
+      this.manifest = manifest; this.generation = body.generation; this.refs = refs; this.note = body.note;
+      this.referenceObservations = Array.isArray(body.referenceObservations) ? body.referenceObservations : [];
+      this.rawRefs = rawRefs; this.returnedRefs = returnedRefs;
+      this.pendingHistoricalResults = pendingHistoricalResults; this.consumedRawResults = consumedRawResults;
+      this.restoredResultKeys = inputResultKeys(restored);
+      this.restoredInterruptionKeys = new Set(retainInterruptedCalls(restored.getMessagesArray()).map(item => item.callKey));
       this.lastSummaryInput = typeof body.lastSummaryInput === "string" ? body.lastSummaryInput : "";
-      return { history: deserialize([...body.replacement, ...messages.slice(body.sourceLength)]), reason: "restored_remeasure_required" };
+      this.summaryAttempts = Array.isArray(body.summaryAttempts)
+        ? body.summaryAttempts.filter(key => typeof key === "string" && /^[a-f0-9]{64}$/.test(key)).slice(-SUMMARY_POLICY.retainedEvents) : [];
+      return { history: restored, reason: "restored_remeasure_required" };
     } catch { return { history: source, reason: "unavailable" }; }
   }
 }

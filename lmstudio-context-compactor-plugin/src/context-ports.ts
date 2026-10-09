@@ -29,12 +29,16 @@ export const modelNotes = require("./continuity-model-notes.js") as {
   };
   attachScope(draft: unknown, fingerprint: string, messages: Array<ChatMessage>,
     additionalVerifiedRefs?: Set<string>): ContinuityNote | null;
+  resolveNoteUpdate(draft: unknown, fingerprint: string, messages: Array<ChatMessage>,
+    additionalVerifiedRefs?: Set<string>, options?: { allowClear?: boolean }):
+    { kind: "accepted_update"; note: ContinuityNote } | { kind: "explicit_clear"; note: null }
+    | { kind: "rejected"; reason: string };
   historyKey(messages: Array<ChatMessage>, workingDirectory: string): string;
   objectiveFingerprint(messages: Array<ChatMessage>): string;
   reconcileStoredNote(note: ContinuityNote, messages: Array<ChatMessage>,
     additionalVerifiedRefs?: Set<string>, options?: { objectiveFingerprint?: string; projectDescriptor?: string;
       discardReviewClaims?: boolean }): ContinuityNote | null;
-  renderAssistantNote(note: ContinuityNote): string;
+  renderAssistantNote(note: ContinuityNote, messages?: ChatMessage[]): string;
   splitVisibleAnswer(text: string): { visibleText: string; hasFooter: boolean; note: unknown };
 };
 
@@ -46,7 +50,9 @@ export const workingContextModule = require("./working-context.js") as {
     cost: Record<string, number>;
     exposure: Map<string, unknown>;
     note: unknown;
+    referenceObservations: any[];
     lastSummaryInput: string;
+    summaryAttempts?: string[];
     lastCommitReason: string | null;
     persistable(history: Chat): Chat;
     project(history: Chat, observation: (request: ToolCallRequest) => boolean,
@@ -58,9 +64,11 @@ export const workingContextModule = require("./working-context.js") as {
     commit(source: Chat, candidate: Chat, measurement: ContextMeasurement,
       expectedPrefix: string, modelFingerprint: string): boolean;
     seal(source: Chat, candidate: Chat): boolean;
+    close(): boolean;
     captureExposure(history: Chat, modelInputId: string, completed?: boolean): void;
     captureReturned(history: Chat, observation: (request: ToolCallRequest) => boolean, metadata?: Record<string, unknown>): number;
     summaryRefs(): Set<string>;
+    verifiedNoteRefs(note: unknown): Set<string>;
     summaryEvidence(maxItems?: number, maxChars?: number): Array<Record<string, unknown>>;
   };
   serialize(history: Chat): Array<unknown>;

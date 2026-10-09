@@ -9,10 +9,11 @@ function changePairKey(request, content) {
   return hash([request?.id, request?.name, request?.arguments || {}, content]);
 }
 function validOrigin(origin) {
-  return origin && origin.provider === "mcp/unreal-agent" && typeof origin.executionId === "string"
+  return origin && typeof origin.executionId === "string"
     && typeof origin.toolCallId === "string" && typeof origin.batchId === "string"
     && [origin.executionId, origin.toolCallId, origin.batchId].every(value => value.length > 0 && value.length <= 256)
-    && ["write_file", "replace_in_file", "apply_edit_bundle"].includes(origin.tool);
+    && (origin.provider === "mcp/unreal-agent" && ["write_file", "replace_in_file", "apply_edit_bundle"].includes(origin.tool)
+      || origin.provider === "mcp/unity-tools" && ["patch_file", "create_file", "structured_data_patch"].includes(origin.tool));
 }
 function normalizedChange(evidence, file) {
   if (!evidence || evidence.schemaVersion !== 1 || !validOrigin(evidence.origin)

@@ -19,6 +19,8 @@ class RagOperationStopped(RuntimeError):
         super().__init__(code)
         self.code = code
         self.termination_confirmed = termination_confirmed
+        self.termination_scope = "collector_process"
+        self.process_started = False
         self.preserved_scratch: list[str] = []
 
 
@@ -98,6 +100,50 @@ def _terminate_tree(process: subprocess.Popen) -> bool:
         return False
 
 
+def _wait_owned_process(process, streams, deadline, scratch, max_output_bytes):
+    try:
+        while process.poll() is None:
+            check_operation()
+            if sum(os.fstat(stream.fileno()).st_size for stream in streams) > max_output_bytes:
+                raise RagOperationStopped("RAG_COLLECTOR_OUTPUT_LIMIT")
+            if time.monotonic() >= deadline:
+                raise RagOperationStopped("RAG_COLLECTOR_TIMEOUT")
+            time.sleep(0.05)
+        check_operation()
+        if sum(os.fstat(stream.fileno()).st_size for stream in streams) > max_output_bytes:
+            raise RagOperationStopped("RAG_COLLECTOR_OUTPUT_LIMIT")
+    except BaseException as exc:
+        confirmed = _terminate_tree(process)
+        if isinstance(exc, RagOperationStopped):
+            exc.termination_confirmed = confirmed
+        if not confirmed:
+            protected = scratch.resolve() if scratch is not None else None
+            _PENDING.append((process, protected))
+            if isinstance(exc, RagOperationStopped) and protected is not None:
+                exc.preserved_scratch = [str(protected)]
+        raise
+
+
+def run_owned_process(command, *, cwd, env, stdout, stderr, text, timeout, check=False, scratch=None):
+    """Run an owned Editor child with the same stop/termination contract as collectors."""
+    check_operation()
+    _PENDING[:] = [(process, path) for process, path in _PENDING if process.poll() is None]
+    if _PENDING:
+        stopped = RagOperationStopped("RAG_COLLECTOR_SHUTDOWN_PENDING", termination_confirmed=False)
+        stopped.preserved_scratch = [str(path) for _, path in _PENDING if path is not None]
+        raise stopped
+    process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+        stdout=stdout, stderr=stderr, text=text,
+        **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}))
+    try:
+        _wait_owned_process(process, (stdout,), time.monotonic() + timeout, scratch, 64 * 1024 * 1024)
+    except RagOperationStopped as exc:
+        exc.process_started = True
+        exc.termination_scope = "owned_editor_process"
+        raise
+    return subprocess.CompletedProcess(command, process.returncode)
+
+
 def run_collector(command: list[str], *, cwd: Path, timeout: float = 600.0,
                   scratch: Path | None = None, max_output_bytes: int = 16 * 1024 * 1024) -> dict[str, Any]:
     """File-backed output avoids descendant pipe EOF holding shutdown forever."""
@@ -115,27 +161,7 @@ def run_collector(command: list[str], *, cwd: Path, timeout: float = 600.0,
             env={**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"},
             **({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}),
         )
-        try:
-            while process.poll() is None:
-                check_operation()
-                if sum(os.fstat(stream.fileno()).st_size for stream in (stdout, stderr)) > max_output_bytes:
-                    raise RagOperationStopped("RAG_COLLECTOR_OUTPUT_LIMIT")
-                if time.monotonic() >= deadline:
-                    raise RagOperationStopped("RAG_COLLECTOR_TIMEOUT")
-                time.sleep(0.05)
-            check_operation()
-            if sum(os.fstat(stream.fileno()).st_size for stream in (stdout, stderr)) > max_output_bytes:
-                raise RagOperationStopped("RAG_COLLECTOR_OUTPUT_LIMIT")
-        except BaseException as exc:
-            confirmed = _terminate_tree(process)
-            if isinstance(exc, RagOperationStopped):
-                exc.termination_confirmed = confirmed
-            if not confirmed:
-                protected = scratch.resolve() if scratch is not None else None
-                _PENDING.append((process, protected))
-                if isinstance(exc, RagOperationStopped) and protected is not None:
-                    exc.preserved_scratch = [str(protected)]
-            raise
+        _wait_owned_process(process, (stdout, stderr), deadline, scratch, max_output_bytes)
         tails = []
         for stream in (stdout, stderr):
             stream.seek(0, os.SEEK_END)
@@ -145,4 +171,4 @@ def run_collector(command: list[str], *, cwd: Path, timeout: float = 600.0,
                 "command": command, "outputTail": "".join(tails)[-4000:]}
 
 
-__all__ = ["RagOperation", "RagOperationStopped", "operation_scope", "check_operation", "begin_publication", "run_collector", "collector_cleanup_safe"]
+__all__ = ["RagOperation", "RagOperationStopped", "operation_scope", "check_operation", "begin_publication", "run_collector", "collector_cleanup_safe", "run_owned_process"]

@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
-from conftest import gui_installer_command, plant_compactor_sdk_fixture
+from conftest import gui_installer_command, plant_compactor_sdk_fixture, plant_compactor_lms_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_integrated_package.py"
@@ -74,56 +74,7 @@ def _legacy_stdout_env() -> dict[str, str]:
 
 
 def _plant_fake_lms(lmstudio_home: Path) -> None:
-    """Hermetic LMS stub so package smoke installs do not require a real LM Studio app."""
-    bindir = lmstudio_home / "bin"
-    bindir.mkdir(parents=True, exist_ok=True)
-    plugin_dir = (
-        lmstudio_home
-        / "extensions"
-        / "plugins"
-        / "codex"
-        / "unreal-context-compactor"
-    )
-    manifest = plugin_dir / "manifest.json"
-    plant_compactor_sdk_fixture(plugin_dir)
-    bundle = plugin_dir / ".lmstudio" / "production.js"
-    current_manifest = json.loads(
-        (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
-    )
-    manifest_json = json.dumps(current_manifest, separators=(",", ":"))
-    if os.name == "nt":
-        script = bindir / "lms.cmd"
-        script.write_text(
-            "\r\n".join(
-                [
-                    "@echo off",
-                    'if /I "%~1"=="--version" (echo lms 0.0.0-test & exit /b 0)',
-                    f'mkdir "{bundle.parent}" >nul 2>nul',
-                    f'echo {manifest_json} > "{manifest}"',
-                    f'echo module.exports = {{}}; > "{bundle}"',
-                    "exit /b 0",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-    else:
-        script = bindir / "lms"
-        script.write_text(
-            "\n".join(
-                [
-                    "#!/bin/sh",
-                    'if [ "$1" = "--version" ]; then echo "lms 0.0.0-test"; exit 0; fi',
-                    f'mkdir -p "{bundle.parent}"',
-                    f"printf '%s\\n' '{manifest_json}' > \"{manifest}\"",
-                    f"printf '%s\\n' 'module.exports = {{}};' > \"{bundle}\"",
-                    "exit 0",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    plant_compactor_lms_fixture(lmstudio_home)
 
 
 def _build(tmp_path: Path, name: str, *, legacy_stdout: bool = False) -> tuple[Path, Path]:
@@ -155,6 +106,27 @@ def _load_builder_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_portable_compactor_installs_dependencies_and_compiles_without_checkout_files(tmp_path):
+    """Use the shipped artifact and real compiler, not the LMS protocol fixture."""
+    npm = shutil.which("npm")
+    assert npm, "npm is required for the portable installation contract"
+    output, _ = _build(tmp_path, "compiled-portable")
+    plugin = output / "lmstudio-context-compactor-plugin"
+    for arguments in (["ci", "--no-audit", "--no-fund"], ["run", "verify:install"]):
+        command = [npm, *arguments]
+        shell = os.name == "nt" and Path(npm).suffix.lower() in {".cmd", ".bat"}
+        result = subprocess.run(subprocess.list2cmdline(command) if shell else command,
+                                cwd=plugin, shell=shell, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=180)
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert (plugin / "dist/prediction-loop.js").is_file()
+    # New runtime files must enter the reviewed allowlist, not rely on the
+    # checkout's node resolution or a wildcard admitting development runners.
+    for source in (ROOT / "lmstudio-context-compactor-plugin/src").glob("*"):
+        if source.suffix in {".js", ".ts"}:
+            assert (plugin / "src" / source.name).is_file(), source.name
 
 
 def test_staged_local_engine_lookup_imports_only_packaged_runtime(tmp_path: Path) -> None:

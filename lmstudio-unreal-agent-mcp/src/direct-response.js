@@ -173,16 +173,17 @@ function failure(errorCode, message, options = {}) {
   return normalizeDirectPayload(payload, { ok: false });
 }
 
-function boundedJson(payload, maxChars) {
+function boundedJson(payload, maxChars, maxBytes) {
   const limit = Math.max(512, Number(maxChars || 32_000));
+  const fits = value => value.length <= limit && (maxBytes === undefined || Buffer.byteLength(value, "utf8") <= maxBytes);
   let rendered = JSON.stringify(payload, null, 2);
-  if (rendered.length <= limit) return { payload, rendered, truncated: false };
+  if (fits(rendered)) return { payload, rendered, truncated: false };
 
   // Never silently clip a successful payload after a capability has computed
   // byte/line cursors. Doing so would advance the cursor past data the model
   // never received. Capabilities with cursors fit their own payloads; any
   // unexpected oversize result becomes a retryable, data-preserving error.
-  const minimal = payload.ok === false
+  let minimal = payload.ok === false
     ? failure(payload.errorCode, payload.message || payload.error || "The tool call failed.", {
       retryAllowed: payload.retry?.allowed === true,
       retryMode: payload.retry?.mode,
@@ -194,9 +195,14 @@ function boundedJson(payload, maxChars) {
       { retryAllowed: true, retryMode: "different_arguments" },
     );
   rendered = JSON.stringify(minimal, null, 2);
+  if (!fits(rendered)) {
+    minimal = failure("OUTPUT_LIMIT_EXCEEDED", "Result metadata exceeds the response budget; request a larger budget or narrower scope.",
+      { retryAllowed: true, retryMode: "different_arguments" });
+    rendered = JSON.stringify(minimal, null, 2);
+  }
   return {
     payload: minimal,
-    rendered: rendered.length <= limit ? rendered : clipString(rendered, limit),
+    rendered,
     truncated: true,
   };
 }
@@ -209,7 +215,7 @@ function toMcpResult(payload, options = {}) {
   const limit = normalized.ok === false
     ? Math.min(4096, Number(options.maxChars || 4096))
     : Number(options.maxChars || 256_000);
-  const bounded = boundedJson(normalized, limit);
+  const bounded = boundedJson(normalized, limit, options.maxBytes);
   return {
     content: [{ type: "text", text: bounded.rendered }],
     structuredContent: bounded.payload,

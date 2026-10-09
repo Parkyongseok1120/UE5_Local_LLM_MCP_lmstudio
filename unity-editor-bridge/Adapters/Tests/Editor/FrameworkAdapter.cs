@@ -125,8 +125,17 @@ namespace EvidenceFirst.Adapters
                 if (!r.Test.IsSuite) { if (!selected.Remove(r.FullName)) { Finish("outcome_unknown", "unexpected_or_duplicate_test_result"); return; } leaves++; }
             }
             if ((string)active["rootFullName"] != result.FullName || (leaves == 0 && (string)active["status"] != "cancel_requested")) { Finish("outcome_unknown", "test_result_correlation_incomplete"); return; }
-            active["correlation"] = "single_owned_run_observed_start_root_name_and_exact_result_leaf_names";
-            active["testStatus"] = result.ResultState; active["passed"] = result.PassCount; active["failed"] = result.FailCount; active["skipped"] = result.SkipCount; active["inconclusive"] = result.InconclusiveCount;
+            active["missingSelectedCount"] = selected.Count;
+            active["requestedCoverageComplete"] = selected.Count == 0;
+            if (selected.Count != 0 && (string)active["status"] != "cancel_requested") {
+                active["testStatus"] = "incomplete";
+                Finish("outcome_unknown", "selected_test_results_missing");
+                return;
+            }
+            active["correlation"] = selected.Count == 0
+                ? "single_owned_run_observed_start_root_name_and_exact_result_leaf_names"
+                : "single_owned_cancelled_run_with_partial_selected_results";
+            active["testStatus"] = selected.Count == 0 ? result.ResultState : "incomplete"; active["passed"] = result.PassCount; active["failed"] = result.FailCount; active["skipped"] = result.SkipCount; active["inconclusive"] = result.InconclusiveCount;
             Finish("completed");
         }
     }

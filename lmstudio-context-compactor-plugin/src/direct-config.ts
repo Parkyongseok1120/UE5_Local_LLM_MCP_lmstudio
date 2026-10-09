@@ -1,4 +1,5 @@
 import { createConfigSchematics } from "@lmstudio/sdk";
+import { GUIDANCE_DEFAULTS, CONTEXT_DEFAULTS } from "./config-defaults";
 
 export const directConfigSchematics = createConfigSchematics()
   .field(
@@ -45,7 +46,7 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "lifecycle", displayName: "Engine ownership and lifetime" },
       { value: "multiplayer", displayName: "Multiplayer contracts" },
     ],
-  }, "off")
+  }, GUIDANCE_DEFAULTS.mode)
   .field("designGuidanceDelivery", "select", {
     displayName: "Design reference delivery",
     subtitle: "Documents preserves existing delivery. Focused selects complete sections and bounded returned observations. Auto always uses Focused while preserving this saved choice; adds no tool calls or execution gates.",
@@ -53,11 +54,11 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "documents", displayName: "Documents (compatible default)" },
       { value: "focused", displayName: "Focused sections and observations" },
     ],
-  }, "documents")
+  }, GUIDANCE_DEFAULTS.delivery)
   .field("designGuidanceMaxTokens", "numeric", {
     displayName: "Design reference token allowance",
     subtitle: "Maximum measured increase in the final input (default 2048). Existing working-context and tool-result budgets also apply. 0 disables references.",
-  }, 2048)
+  }, GUIDANCE_DEFAULTS.maxTokens)
   .field("contextManagementMode", "select", {
     displayName: "Working context",
     subtitle: "Hybrid is the installed default: deterministic scoped evidence archive, bounded result views, measured working window, and at most one tool-free local semantic handoff per accepted compaction. Legacy remains available for an explicit compatibility choice.",
@@ -66,12 +67,12 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "deterministic", displayName: "Deterministic archive/window" },
       { value: "legacy", displayName: "Legacy (compatibility)" },
     ],
-  }, "hybrid")
-  .field("workingInputTargetTokens", "numeric", { displayName: "Working input target", subtitle: "Full templated input target after compaction, including system and tool definitions. Mandatory input is never removed merely to meet it." }, 18000)
-  .field("workingInputTriggerTokens", "numeric", { displayName: "Working input trigger", subtitle: "Start target-based compaction above this full templated input size; kept separate from the post-compaction target." }, 22000)
-  .field("toolResultProjectionChars", "numeric", { displayName: "Archived result excerpt", subtitle: "Maximum archived observation excerpt exposed in a model-facing tool-result projection." }, 512)
-  .field("semanticSummaryMaxTokens", "numeric", { displayName: "Semantic handoff output", subtitle: "Maximum output tokens for the single tool-free local summary call per accepted compaction." }, 1024)
-  .field("semanticSummarySeconds", "numeric", { displayName: "Semantic handoff seconds", subtitle: "Timeout for the optional local summary call. Invalid or interrupted summaries are discarded." }, 30)
+  }, CONTEXT_DEFAULTS.mode)
+  .field("workingInputTargetTokens", "numeric", { displayName: "Working input target", subtitle: "Full templated input target after compaction, including system and tool definitions. Mandatory input is never removed merely to meet it." }, CONTEXT_DEFAULTS.target)
+  .field("workingInputTriggerTokens", "numeric", { displayName: "Working input trigger", subtitle: "Start target-based compaction above this full templated input size; kept separate from the post-compaction target." }, CONTEXT_DEFAULTS.trigger)
+  .field("toolResultProjectionChars", "numeric", { displayName: "Archived result excerpt", subtitle: "Maximum archived observation excerpt exposed in a model-facing tool-result projection." }, CONTEXT_DEFAULTS.projectionChars)
+  .field("semanticSummaryMaxTokens", "numeric", { displayName: "Semantic handoff output", subtitle: "Maximum output tokens for the single tool-free local summary call per accepted compaction." }, CONTEXT_DEFAULTS.summaryTokens)
+  .field("semanticSummarySeconds", "numeric", { displayName: "Semantic handoff seconds", subtitle: "Timeout for the optional local summary call. Invalid or interrupted summaries are discarded." }, CONTEXT_DEFAULTS.summarySeconds)
   .field(
     "showDebugInfo",
     "boolean",

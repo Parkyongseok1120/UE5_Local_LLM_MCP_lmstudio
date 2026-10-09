@@ -9,14 +9,47 @@ from pathlib import Path
 from typing import Any
 
 from atomic_io import atomic_write_text
+from direct_rag_operation import check_operation, RagOperationStopped
 from editor_export_settings import ExportScope
 
 REQUEST_NAME = "lmstudio_export_request.json"
 DONE_NAME = "lmstudio_export_done.json"
 ERROR_NAME = "lmstudio_export_error.json"
+PENDING_NAME = "lmstudio_export_interrupted.json"
+
+
+def preserve_interrupted_export(export_dir: Path, job_id: str) -> None:
+    """An external Editor may still publish after its caller stops waiting."""
+    atomic_write_text(export_dir / PENDING_NAME, json.dumps({"jobId": job_id}))
+
+
+def ensure_export_available(export_dir: Path) -> None:
+    pending = export_dir / PENDING_NAME
+    if not pending.exists():
+        return
+    try:
+        payload = json.loads(pending.read_text(encoding="utf-8"))
+        job_id = payload.get("jobId") if isinstance(payload, dict) else None
+    except (OSError, ValueError):
+        job_id = None
+    if isinstance(job_id, str) and job_id:
+        for name in (DONE_NAME, ERROR_NAME):
+            marker = export_dir / name
+            try:
+                value = json.loads(marker.read_text(encoding="utf-8"))
+                if isinstance(value, dict) and value.get("runId") == job_id:
+                    pending.unlink()
+                    return
+            except (OSError, ValueError):
+                continue
+    stopped = RagOperationStopped("EDITOR_EXPORT_PREVIOUS_JOB_UNCONFIRMED", termination_confirmed=False)
+    stopped.termination_scope = "external_editor_job"
+    stopped.preserved_scratch = [str(export_dir)]
+    raise stopped
 
 
 def clear_export_markers(export_dir: Path) -> None:
+    ensure_export_available(export_dir)
     for name in (DONE_NAME, ERROR_NAME, REQUEST_NAME):
         (export_dir / name).unlink(missing_ok=True)
 
@@ -53,6 +86,7 @@ def build_export_job(
 
 
 def submit_export_request(job: dict[str, Any]) -> None:
+    check_operation()
     export_dir = Path(str(job["exportDir"]))
     clear_export_markers(export_dir)
     request = {
@@ -76,11 +110,13 @@ def wait_for_export_markers(
     poll_sec: float = 2.0,
     expected_run_id: str = "",
 ) -> dict[str, Any]:
+    check_operation()
     done_path = export_dir / DONE_NAME
     error_path = export_dir / ERROR_NAME
     deadline = time.monotonic() + timeout_sec
     last_invalid = ""
     while time.monotonic() < deadline:
+        check_operation()
         for marker_path, is_error in ((error_path, True), (done_path, False)):
             if not marker_path.is_file():
                 continue
@@ -98,7 +134,11 @@ def wait_for_export_markers(
                 continue
             payload["ok"] = False if is_error else bool(payload.get("ok", True))
             return payload
-        time.sleep(poll_sec)
+        wake_at = min(deadline, time.monotonic() + max(0.01, poll_sec))
+        while time.monotonic() < wake_at:
+            check_operation()
+            time.sleep(min(0.05, max(0, wake_at - time.monotonic())))
+    check_operation()
     detail = f" Last marker error: {last_invalid}" if last_invalid else ""
     return {
         "ok": False,

@@ -40,6 +40,7 @@ from editor_export_settings import (
     editor_export_timeout_sec,
 )
 from workspace_paths import find_workspace_root, resolve_engine_root_for_association
+from direct_rag_operation import RagOperationStopped
 
 _clear_markers = clear_export_markers
 
@@ -87,7 +88,6 @@ def run_headless_export(
         timeout_sec=timeout_sec,
         workspace=find_workspace_root(),
         wait_for_markers=wait_for_export_markers,
-        run_process=subprocess.run,
         log_path=log_path,
     )
 
@@ -183,15 +183,21 @@ def main() -> int:
     parser.add_argument("--project", default="")
     parser.add_argument("--timeout-sec", type=int, default=0)
     args = parser.parse_args()
-    payload = run_editor_export(
-        export_dir=args.export_dir or None,
-        content_path=args.content_path or None,
-        maps_path=args.maps_path or None,
-        scope=args.scope or None,
-        mode=args.mode,
-        uproject=args.project or None,
-        timeout_sec=args.timeout_sec or None,
-    )
+    try:
+        payload = run_editor_export(
+            export_dir=args.export_dir or None,
+            content_path=args.content_path or None,
+            maps_path=args.maps_path or None,
+            scope=args.scope or None,
+            mode=args.mode,
+            uproject=args.project or None,
+            timeout_sec=args.timeout_sec or None,
+        )
+    except RagOperationStopped as exc:
+        payload = {"ok": False, "errorCode": exc.code, "error": str(exc),
+                   "terminationConfirmed": exc.termination_confirmed,
+                   "terminationScope": exc.termination_scope,
+                   "preservedScratch": exc.preserved_scratch}
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if payload.get("ok") else 1
 

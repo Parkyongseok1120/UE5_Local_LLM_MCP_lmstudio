@@ -34,9 +34,9 @@ function fixture(name = 'unreal_set_active_project', provider = 'mcp/unreal-rag'
     reservationIds:new Map(),toolGeneration:tracker,traceCall:(id,value)=>trace.push(value),
     readApprovalPolicy:typeof policy==='function'?policy:()=>policy,...guardOverrides});
   let outcome;
-  const invoke=()=>guard(0,42,{toolCallRequest:request,
+  const invoke=(roundSignal)=>guard(0,42,{toolCallRequest:request,
     allow(){outcome={type:'allow',args:request.arguments}},
-    allowAndOverrideParameters(args){outcome={type:'allow',args}},deny(reason){outcome={type:'deny',reason}}});
+    allowAndOverrideParameters(args){outcome={type:'allow',args}},deny(reason){outcome={type:'deny',reason}}},roundSignal);
   return {ctl,tool,request,emitter,tracker,trace,events,cards,statuses,requests,invoke,abort,recorder,get outcome(){return outcome}};
 }
 
@@ -95,6 +95,16 @@ test('denial and interrupted confirmation never permit execution or leave a load
   canceled.ctl.requestConfirmToolCall=async()=>{canceled.abort.abort(new Error('stopped'));return {type:'allow'}};
   await assert.rejects(canceled.invoke(),/stopped/);canceled.tracker.finishPending();
   assert.equal(canceled.outcome,undefined);assert.equal(canceled.cards[0].state.type,'toolCallDenied');
+});
+
+test('approval arriving after round cleanup cannot resume execution or mutate current trace/UI',async()=>{
+  const f=fixture(),round=new AbortController();let resolve;
+  f.ctl.requestConfirmToolCall=()=>new Promise(r=>{resolve=r;});
+  const pending=f.invoke(round.signal);
+  const before=JSON.stringify({events:f.events,trace:f.trace,requests:f.requests,cards:f.cards});
+  round.abort(new Error('round settled')); resolve({type:'allow'}); await pending;
+  assert.equal(f.outcome.type,'deny');
+  assert.equal(JSON.stringify({events:f.events,trace:f.trace,requests:f.requests,cards:f.cards}),before);
 });
 
 test('failed result and missing result are not displayed as successful tool execution',async()=>{

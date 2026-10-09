@@ -10,6 +10,8 @@ const { success, failure } = require("./direct-response.js");
 const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
 const { clamp, isBinary, relativeSlash, statOrNull, statSignature } = require("./direct-runtime-shared.js");
 
+const { lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
+
 const fsp = fs.promises;
 const DEFAULT_IGNORED_DIRS = new Set([
   ".git", ".vs", ".idea", "Binaries", "DerivedDataCache", "Intermediate",
@@ -163,6 +165,13 @@ function createReadCapabilities(context) {
       maxFilesReached: files.length >= maxFiles,
       truncated: results.length >= maxResults,
     });
+    const foundCount = results.length;
+    while (payload.results.length && !payloadFits(payload, 256, args.byteBudget)) {
+      payload.results.pop(); payload.truncated = true; payload.coverage = "partial";
+      payload.omissionReason = "response_budget";
+    }
+    if (!payloadFits(payload, 256, args.byteBudget) || !payload.results.length && foundCount && payload.omissionReason)
+      return failure("OUTPUT_LIMIT_EXCEEDED", "Search metadata or first match exceeds the response budget; increase byteBudget or narrow the search.", { retryAllowed: true });
     return dedupe("search_files", args, `${resolution.activeProject || ""}|${treeState}|${payload.coverage}|${filesRead}|${JSON.stringify(skippedByReason)}|${discoveryErrors}|${excludedEntries}`, payload);
   }
 
@@ -203,7 +212,7 @@ function createReadCapabilities(context) {
         ...version,
       });
     };
-    const fitted = fitUtf8Prefix(stableRead.buffer, makePayload);
+    const fitted = fitUtf8Prefix(stableRead.buffer, makePayload, args.byteBudget);
     if (!fitted || (stableRead.buffer.length > 0 && fitted.bytes === 0)) {
       return failure("OUTPUT_LIMIT_EXCEEDED", "The next UTF-8 unit cannot fit in the response limit. Reduce surrounding metadata or use a larger configured response limit.", { retryAllowed: true, retryMode: "different_arguments" });
     }
@@ -252,7 +261,7 @@ function createReadCapabilities(context) {
     while (low <= high) {
       const middle = Math.floor((low + high) / 2);
       const candidate = makePayload(middle);
-      if (payloadFits(candidate, 256)) {
+      if (payloadFits(candidate, 256, args.byteBudget)) {
         payload = candidate;
         low = middle + 1;
       } else {
@@ -260,7 +269,9 @@ function createReadCapabilities(context) {
       }
     }
     if (!payload) {
-      const byteOffset = Buffer.byteLength(lines.slice(0, start - 1).join("\n") + (start > 1 ? "\n" : ""), "utf8");
+      // Count original newline bytes, including CRLF, for the byte reader.
+      const prefix = read.content.match(/[^\n]*\n/g)?.slice(0, start - 1).join("") || "";
+      const byteOffset = Buffer.byteLength(prefix, "utf8");
       return failure("LINE_TOO_LARGE", `Line ${start} cannot fit in one response. Read it with read_file byte windows instead.`, {
         retryAllowed: true,
         retryMode: "different_arguments",
@@ -270,6 +281,7 @@ function createReadCapabilities(context) {
             path: args.path,
             offsetBytes: byteOffset,
             maxBytes: Math.max(1024, Math.floor(limits.maxResponseChars / 4)),
+            ...(args.byteBudget === undefined ? {} : { byteBudget: args.byteBudget }),
           }),
         },
       });
@@ -281,65 +293,38 @@ function createReadCapabilities(context) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) return unavailable(resolution, read.errorCode, read.message);
-    const symbol = String(args.symbol || "").trim();
-    const parts = symbol.split("::");
-    const leaf = parts.at(-1) || "";
-    if (!/^[A-Za-z_~][A-Za-z0-9_~]*$/.test(leaf)) return failure("INVALID_SYMBOL", "symbol must be a C/C++ identifier", { retryAllowed: true });
-    const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const qualified = new RegExp(`\\b${parts.map(escape).join("\\s*::\\s*")}\\s*\\(`, "m");
-    const fallback = new RegExp(`\\b${escape(leaf)}\\s*\\(`, "m");
-    const match = qualified.exec(read.content) || fallback.exec(read.content);
-    if (!match) {
-      return failure("SYMBOL_NOT_FOUND", `Symbol not found: ${symbol}`, {
-        suggestion: { tool: "search_files", args: projectScopedSuggestionArgs(args, { query: leaf, path: "project://Source" }) },
-      });
-    }
-    const braceStart = read.content.indexOf("{", match.index + match[0].length);
-    const semicolon = read.content.indexOf(";", match.index + match[0].length);
-    if (braceStart < 0 || (semicolon >= 0 && semicolon < braceStart)) {
-      return failure("SYMBOL_BODY_NOT_FOUND", `Definition body not found: ${symbol}`, {
-        suggestion: { tool: "search_files", args: projectScopedSuggestionArgs(args, { query: `${leaf}(`, path: "project://Source" }) },
-      });
-    }
-    let depth = 0;
-    let endOffset = -1;
-    let quote = "";
-    let escaped = false;
-    for (let index = braceStart; index < read.content.length; index += 1) {
-      const char = read.content[index];
-      if (quote) {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === quote) quote = "";
-        continue;
-      }
-      if (char === "\"" || char === "'") {
-        quote = char;
-        continue;
-      }
-      if (char === "{") depth += 1;
-      if (char === "}" && --depth === 0) {
-        endOffset = index;
-        break;
-      }
-    }
-    if (endOffset < 0) return failure("UNBALANCED_SYMBOL_BODY", `Unbalanced function body: ${symbol}`);
-    const allLines = read.content.split(/\r?\n/);
-    const lineAt = (offset) => read.content.slice(0, offset).split(/\r?\n/).length;
-    const contextLines = clamp(args.contextLines, 3, 0, 30);
-    const start = Math.max(1, lineAt(match.index) - contextLines);
-    const end = Math.min(allLines.length, lineAt(endOffset) + contextLines);
-    const payload = success({
+    const window = lexicalSymbolWindow(read.content, args.symbol, args.contextLines);
+    if (!window.ok) return window;
+    const { symbol, allLines, start, end, candidateCount } = window;
+    const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const makePayload = returnedEnd => success({
       path: displayPath(resolution),
       symbol,
       ...pathMetadata(resolution),
-      content: allLines.slice(start - 1, end).join("\n"),
+      content: allLines.slice(start - 1, returnedEnd).join("\n"),
       startLine: start,
-      endLine: end,
+      endLine: returnedEnd,
+      requestedEndLine: end,
+      nextStartLine: returnedEnd < end ? returnedEnd + 1 : null,
+      hasMore: returnedEnd < end,
+      truncated: returnedEnd < end,
+      representation: "lexical_body_candidate",
+      candidateCount,
+      candidateLines: window.candidateLines,
+      selection: window.selection,
+      ambiguity: candidateCount > 1 ? "multiple_lexical_matches" : "semantic_resolution_unverified",
+      signatureVerification: "lexical_only; overloads_inheritance_macros_and_callability_unverified",
       totalLines: allLines.length,
       sha256: read.hash,
-      ...registerReadSnapshot(fileSnapshots, resolution, read, requestContext),
+      ...version,
     });
+    let low = start, high = end, payload = null;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2), candidate = makePayload(middle);
+      if (payloadFits(candidate, 256, args.byteBudget)) { payload = candidate; low = middle + 1; }
+      else high = middle - 1;
+    }
+    if (!payload) return failure("LINE_TOO_LARGE", "The first candidate line or metadata exceeds the response budget; use read_file byte windows or increase byteBudget.", { retryAllowed: true });
     return dedupe("read_symbol", args, `${resolution.activeProject || ""}|${statSignature(read.stat)}`, payload);
   }
 

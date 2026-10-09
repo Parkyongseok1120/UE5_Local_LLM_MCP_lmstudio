@@ -176,14 +176,14 @@ test("summary deadline is classified as timeout when SDK returns userStopped nor
   assert.equal(result.reason, "timeout"); assert.equal(result.note, null);
 });
 
-test("a failed optional handoff is not retried for later compactions in the same execution", async () => {
+test("failed handoffs permit only one later material event within the execution budget", async () => {
   let calls = 0;
   const config = readConfig({ getPluginConfig: () => ({ get: key => key === "contextManagementMode" ? "hybrid" : undefined }) });
   const source = { async getContextLength() { return 38912; }, async applyPromptTemplate() { return "summary"; },
     async countTokens() { return 100; }, async act(_chat, _tools, options) {
       calls++; options.onPredictionCompleted({ stats: { stopReason: "maxPredictedTokensReached" } });
     } };
-  const workingContext = { summaryEvidence: () => [{ ref: "tool-call:1", verifiedExcerpt: "FACT" }],
+  const workingContext = { verifiedNoteRefs: () => new Set(), summaryEvidence: () => [{ ref: "tool-call:1", verifiedExcerpt: "FACT" }],
     lastSummaryInput: "", cost: { summaryCalls: 0, summaryPromptTokens: 0, summaryPredictedTokens: 0, summaryMs: 0, unknownUsageCalls: 0 } };
   let state = { activeNote: null, semanticSummaryCooldownUntilRound: -1 };
   for (let round = 0; round < 5; round++) state = await updateSemanticContext({ tokenSource: source, config,
@@ -191,7 +191,7 @@ test("a failed optional handoff is not retried for later compactions in the same
     compacted: true, projectionApplied: false, visibleHistory: Chat.from([{ role: "user", content: "read" }]),
     ...state, boundedAudit: false, finalizing: false, roundIndex: round * 10, executionId: "x", objectiveFingerprint: "x",
     ctl: { abortSignal: new AbortController().signal, guardAbort() {}, debug() {} } });
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 
 test("actual SDK act loop does not cancel a completed channel but still cancels active generation", async () => {

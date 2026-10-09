@@ -1,6 +1,7 @@
 # 근거와 적용 버전
 
 확인일: 2026-09-28. 이 파일은 근거 조회용이며 상시 입력 대상이 아니다.
+매크로·직렬화 확인 보강: 2026-10-07. 주입 기준은 목적과 실제 프로젝트 선언을 대조하는 범위이며 자동 의미 판정을 제공하지 않는다.
 세부 관찰과 한계는 저장소 전용 조사 기록 `docs/Design_Guidance_Research_20260928.md`에 보관한다. 아래 버전은 조사한 문헌의 버전이다.
 
 <a id="design"></a>
@@ -27,6 +28,9 @@ Epic 문서는 조사 당시 주로 5.8로 표시되었다. 아래 일반 계약
 - [Gameplay Framework](https://dev.epicgames.com/documentation/unreal-engine/gameplay-framework-in-unreal-engine)
 - [Subsystems](https://dev.epicgames.com/documentation/en-us/unreal-engine/programming-subsystems-in-unreal-engine)
 - [Object pointers](https://dev.epicgames.com/documentation/en-us/unreal-engine/object-pointers-in-unreal-engine)
+- [UFunctions (UE 5.7)](https://dev.epicgames.com/documentation/en-us/unreal-engine/ufunctions-in-unreal-engine?application_version=5.7), [Object pointers (UE 5.7)](https://dev.epicgames.com/documentation/en-us/unreal-engine/object-pointers-in-unreal-engine?application_version=5.7)
+- [Microsoft 인라인 설명](https://learn.microsoft.com/en-us/cpp/cpp/inline-functions-cpp?view=msvc-170): 강제 인라인의 한계와 코드 크기. UE 5.7 설치 소스 `Core/Public/Windows/WindowsPlatform.h`의 FORCEINLINE 정의와 대조했다.
+- UE 5.7 설치 소스 `Core/Public/Delegates/DelegateSignatureImpl.inl`, `__Internal_BindDynamic`/`__Internal_AddDynamic`: 함수 이름 기반 리플렉션 바인딩과 UFUNCTION/객체 상태 진단. 바인딩 실패 하나만으로 매크로 누락을 확정하지 않는다.
 - [Gameplay timers](https://dev.epicgames.com/documentation/en-us/unreal-engine/gameplay-timers-in-unreal-engine)
 - [Modules](https://dev.epicgames.com/documentation/en-us/unreal-engine/unreal-engine-modules)
 - [AActor](https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/Engine/AActor), [EndPlay reasons](https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/Engine/EEndPlayReason__Type)
@@ -56,6 +60,7 @@ Epic 문서는 조사 당시 주로 5.8로 표시되었다. 아래 일반 계약
 Unity 6.0 및 Input System 1.14 문헌:
 
 - [Execution order](https://docs.unity3d.com/6000.0/Documentation/Manual/execution-order.html), [Domain Reload](https://docs.unity3d.com/6000.0/Documentation/Manual/domain-reloading.html)
+- [SerializeField](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/SerializeField.html), [UnityEvents](https://docs.unity3d.com/6000.0/Documentation/Manual/unity-events.html)
 - [ScriptableObject](https://docs.unity3d.com/6000.0/Documentation/Manual/class-ScriptableObject.html), [Assembly definitions](https://docs.unity3d.com/6000.0/Documentation/Manual/assembly-definition-files.html)
 - [Package resolution lock](https://docs.unity3d.com/kr/6000.0/Manual/upm-conflicts-auto.html)
 - [Coroutines](https://docs.unity3d.com/6000.0/Documentation/Manual/Coroutines.html), [destroyCancellationToken](https://docs.unity3d.com/6000.0/Documentation/ScriptReference/MonoBehaviour-destroyCancellationToken.html)

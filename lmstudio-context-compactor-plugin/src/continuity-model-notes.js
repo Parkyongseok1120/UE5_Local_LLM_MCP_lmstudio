@@ -4,12 +4,13 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { buildObjectiveContinuity } = require("./continuity-objectives.js");
+const { buildObjectiveContinuity, objectiveIdentity } = require("./continuity-objectives.js");
 const { pathApiFor, canonicalFilePath, projectDescriptor, normalizedObservationState } = require("./continuity-file-observations.js");
 const { normalizedTextKey } = require("./continuity-text.js");
 const { sanitizeDerivedOperationalText } = require("./durable-memory-sanitizer.js");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
-const { exchangeIndex } = require("./tool-exchange-index.js");
+const { exchangeIndex, uniqueLatest } = require("./tool-exchange-index.js");
+const { resultSemantics } = require("./tool-result-semantics.js");
 
 const NOTE_START = "\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n";
 const NOTE_END = "\n</continuity-note>";
@@ -157,9 +158,8 @@ function objectiveFingerprint(messages) {
     role: message.getRole(), text: message.getText(), index,
     toolRequests: message.getToolCallRequests(),
   }));
-  const objective = buildObjectiveContinuity(normalized).activeObjective?.text;
-  const key = normalizedTextKey(objective);
-  return key ? crypto.createHash("sha256").update(key).digest("hex") : "";
+  const prior = require("./continuity-memory.js").extractPriorContinuityState(normalized);
+  return objectiveIdentity(buildObjectiveContinuity(normalized, prior));
 }
 
 function normalizedProjectRoot(value) {
@@ -181,6 +181,7 @@ function provenanceFromMessages(messages) {
   const requestCounts = new Map();
   const completedIds = new Set();
   const observations = new Map();
+  const observationBatches = new Map();
   for (let index = startIndex; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.getRole() === "assistant") {
@@ -198,7 +199,10 @@ function provenanceFromMessages(messages) {
       const decoded = decodeToolResultRecord(content);
       if (!decoded.value) continue;
       const value = decoded.value;
-      if (result.toolCallId) observations.set(String(result.toolCallId), value);
+      if (result.toolCallId) {
+        observations.set(String(result.toolCallId), value);
+        observationBatches.set(String(result.toolCallId), pairing.batches.get(`${index - startIndex}:${ri}`));
+      }
       const unityRoot = normalizedProjectRoot(value.canonicalProjectRoot);
       if (unityRoot && typeof value.projectIdentity === "string"
         && /^[a-f0-9]{64}$/iu.test(value.projectIdentity)) {
@@ -223,7 +227,20 @@ function provenanceFromMessages(messages) {
     projectState: projects.size === 0 ? "unobserved" : projects.size === 1 ? "single" : "mixed",
     verifiedToolIds,
     observations: new Map([...observations].filter(([id]) => verifiedToolIds.has(id))),
+    observationBatches,
   };
+}
+
+function availableFileObservation(value) { return value.ok !== false && !value.errorCode
+    && !["deleted", "conflict_observed", "unavailable"].includes(normalizedObservationState(value))
+    && !["failed", "error", "canceled", "cancelled", "outcome_unknown"].includes(String(value.status || "").toLowerCase()); }
+
+function noteFileIdentity(value, fallback) {
+  const descriptor = projectDescriptor(value, fallback);
+  const canonical = canonicalFilePath(value, descriptor);
+  if (!canonical) return "";
+  return JSON.stringify([normalizedProjectRoot(descriptor),
+    pathApiFor(descriptor) === path.win32 ? canonical.toLowerCase() : canonical]);
 }
 
 function verifiedRefs(draft, verifiedToolIds, provenance = {}, additionalVerifiedRefs = new Set()) {
@@ -239,19 +256,13 @@ function verifiedRefs(draft, verifiedToolIds, provenance = {}, additionalVerifie
     }),
   ]));
   const records = [...(provenance.observations || new Map()).entries()].filter(([, value]) => value.kind !== "git_observation");
-  const availableFileObservation = value => value.ok !== false && !value.errorCode
-    && !["deleted", "conflict_observed", "unavailable"].includes(normalizedObservationState(value))
-    && !["failed", "error", "canceled", "cancelled", "outcome_unknown"].includes(String(value.status || "").toLowerCase());
-  const fileKey = value => {
-    const descriptor = projectDescriptor(value, provenance.projectDescriptor);
-    const canonical = canonicalFilePath(value, descriptor);
-    return pathApiFor(descriptor) === path.win32 ? canonical.toLowerCase() : canonical;
-  };
+  const fileKey = value => noteFileIdentity(value, provenance.projectDescriptor);
   const claims = (draft.reviewClaims || []).filter(claim => {
     if (provenance.projectState !== "single") return false;
     const identity = fileKey(claim);
     if (!identity) return false;
-    const latest = records.filter(([, value]) => fileKey(value) === identity).at(-1);
+    const latest = uniqueLatest(records.filter(([, value]) => fileKey(value) === identity),
+      ([id]) => provenance.observationBatches?.get(id));
     if (!latest || !availableFileObservation(latest[1])
       || String(latest[1].sha256 || latest[1].hash).toLowerCase() !== claim.sha256.toLowerCase()) return false;
     return claim.refs.some(ref => {
@@ -273,6 +284,25 @@ function attachScope(draft, fingerprint, messages = [], additionalVerifiedRefs =
     ...(provenance.projectIdentity ? { projectIdentity: provenance.projectIdentity } : {}) },
   ...verifiedRefs(validated, provenance.verifiedToolIds, provenance, additionalVerifiedRefs) };
   return JSON.stringify(note).length <= MAX_NOTE_CHARS ? note : null;
+}
+
+function noteItemCount(note) {
+  return ["decisions", "rejectedHypotheses", "openQuestions", "reviewClaims"]
+    .reduce((count, key) => count + (note?.[key]?.length || 0), 0);
+}
+
+// v1 is a complete snapshot, not an implicit merge. Reject an incomplete
+// snapshot atomically so a malformed update cannot erase valid prior work.
+function resolveNoteUpdate(draft, fingerprint, messages = [], additionalVerifiedRefs = new Set(), options = {}) {
+  const validated = validateDraftNote(draft);
+  if (!validated) return { kind: "rejected", reason: "invalid_note" };
+  if (!noteItemCount(validated)) return options.allowClear === false
+    ? { kind: "rejected", reason: "empty_summary" } : { kind: "explicit_clear", note: null };
+  const scoped = attachScope(validated, fingerprint, messages, additionalVerifiedRefs);
+  if (!scoped || noteItemCount(scoped) !== noteItemCount(validated)) {
+    return { kind: "rejected", reason: "invalid_or_unavailable_evidence" };
+  }
+  return { kind: "accepted_update", note: scoped };
 }
 
 function reconcileStoredNote(note, messages, additionalVerifiedRefs = new Set(), options = {}) {
@@ -310,8 +340,28 @@ function validateStoredNote(value) {
   return JSON.stringify(note).length <= MAX_NOTE_CHARS ? note : null;
 }
 
-function renderAssistantNote(note) {
-  return `${NOTE_MARKER}\nPrior assistant judgments, not verified facts. reviewClaims are assistant-claimed reviews, never verified semantic completion; file coverage only proves delivered evidence. Current user instructions and newer tool observations take precedence. ${note.scope.projectIdentity ? "Project identity was bound to a tool observation." : "No single project identity was proven; do not attribute these notes to the active project."}\n${JSON.stringify({ modelNotes: note })}`;
+function renderAssistantNote(note, messages = []) {
+  const provenance = provenanceFromMessages(messages);
+  const records = [...provenance.observations];
+  const identity = value => noteFileIdentity(value, provenance.projectDescriptor);
+  const applicability = [];
+  for (const item of [...note.decisions, ...note.rejectedHypotheses, ...note.openQuestions]) {
+    for (const ref of item.refs || []) {
+      const value = provenance.observations.get(ref.replace(/^tool-call:/, ""));
+      let state = "source_unavailable";
+      if (value?.kind === "git_observation") state = "historical";
+      else if (value && identity(value)) {
+        const latest = uniqueLatest(records.filter(([, v]) => v.kind !== "git_observation" && identity(v) === identity(value)),
+          ([id]) => provenance.observationBatches.get(id))?.[1];
+        const version = value.sha256 || value.hash, current = latest?.sha256 || latest?.hash;
+        state = !latest ? "applicability_unknown"
+          : !availableFileObservation(latest) || ["failed", "outcome_unknown"].includes(resultSemantics(latest).operationStatus) ? "source_unavailable"
+          : version && current ? version === current ? "same_observed_version" : "source_superseded" : "applicability_unknown";
+      }
+      applicability.push({ id: item.id, ref, state });
+    }
+  }
+  return `${NOTE_MARKER}\nPrior assistant judgments, not verified facts. reviewClaims are assistant-claimed reviews, never verified semantic completion; file coverage only proves delivered evidence. Current user instructions and newer tool observations take precedence. ${note.scope.projectIdentity ? "Project identity was bound to a tool observation." : "No single project identity was proven; do not attribute these notes to the active project."}\n${JSON.stringify({ modelNotes: note, sourceApplicability: applicability })}`;
 }
 
 function historyKey(messages, workingDirectory) {
@@ -370,6 +420,7 @@ class ContinuityNoteStore {
 }
 
 module.exports = {
+  resolveNoteUpdate,
   NOTE_INSTRUCTION,
   NOTE_MARKER,
   ContinuityNoteStore,

@@ -1,4 +1,5 @@
 "use strict";
+const { resultSemantics, retainedEffectFacts } = require("./tool-result-semantics.js");
 
 const path = require("node:path");
 const { normalizedChange, fileIdentity } = require("./change-evidence-memory.js");
@@ -115,6 +116,7 @@ function retainedFileFact(file, fallbackOperation = "observed") {
     "canonicalProjectRoot", "canonicalPath", "absolutePath", "projectRelativePath",
     "workspaceRelativePath", "resolvedRootType", "errorCode", "startLine", "endLine",
     "returnedLineCount", "nextStartLine", "totalLines", "hasMore", "observedLineRanges",
+    "offsetBytes", "nextOffsetBytes", "size", "sourceCoverage", "provider", "sourceQueryKey", "representation",
     "totalLinesAtObservation", "readCoverageState", "changeEvidence", "changeReadVerified", "changeEvidenceInvalidated",
   ]) {
     if (file[key] !== undefined) fact[key] = file[key];
@@ -206,6 +208,7 @@ function decodeToolResultRecord(content) {
     return { error: "oversized" };
   }
 
+  const envelopeIsError = isRecord(value) && value.isError === true;
   // LM Studio serializes MCP CallToolResult.content as an array of content
   // blocks. File facts live in the JSON string of one text block. Accept only
   // one unambiguous block so facts from separate results or projects can never
@@ -221,7 +224,19 @@ function decodeToolResultRecord(content) {
       return { error: "malformed_embedded_json" };
     }
   } else if (isRecord(value) && isRecord(value.structuredContent)) {
-    value = value.structuredContent;
+    const structured = value.structuredContent;
+    let conflictingEnvelopeFields = [];
+    if (Array.isArray(value.content) && value.content.length === 1 && value.content[0]?.type === "text") {
+      try {
+        const embedded = JSON.parse(value.content[0].text);
+        if (isRecord(embedded)) conflictingEnvelopeFields = ["ok", "status", "errorCode", "operationId", "projectIdentity",
+          "canonicalProject", "canonicalProjectRoot", "path", "sha256", "hash", "changed", "saved", "dirty"]
+          .filter(key => structured[key] !== undefined && embedded[key] !== undefined
+            && structured[key] !== embedded[key]);
+      } catch { /* A human-readable text summary is not a second structured contract. */ }
+    }
+    if (conflictingEnvelopeFields.length) return { error: "conflicting_envelope" };
+    value = structured;
   } else if (isRecord(value) && Array.isArray(value.content)) {
     if (value.content.length !== 1 || !isRecord(value.content[0])
       || value.content[0].type !== "text" || typeof value.content[0].text !== "string"
@@ -234,7 +249,7 @@ function decodeToolResultRecord(content) {
       return { error: "malformed_embedded_json" };
     }
   }
-  return isRecord(value) ? { value } : { error: "unsupported_value" };
+  return isRecord(value) ? { value: envelopeIsError ? { ...value, envelopeIsError: true } : value } : { error: "unsupported_value" };
 }
 
 function historicalEvidenceObservation(source) {
@@ -255,6 +270,11 @@ function historicalEvidenceObservation(source) {
     originalEnvelopeBytes: source.originalEnvelopeBytes,
     sourceIdentity: identity,
     sourceIdentityDigest: source.sourceIdentityDigest,
+    sourceFacts: source.sourceFacts,
+    sourceRangeUnit: source.sourceRangeUnit,
+    archiveRangeUnit: source.rangeUnit,
+    representation: source.representation,
+    viewVersion: source.viewVersion,
     sourceVersion: source.sourceVersion,
     sourceHash: source.sourceHash,
     resultStatus: source.resultStatus ?? source.status,
@@ -347,6 +367,7 @@ function parseToolResult(content) {
     for (const key of [
       "ok", "status", "summary", "message", "errorCode", "path", "operation", "observationState", "mode", "changeEvidence",
       "sha256", "previousSha256", "size", "truncated", "hasMore",
+      "offsetBytes", "nextOffsetBytes", "sourceCoverage", "provider", "sourceQueryKey", "representation",
       "startLine", "endLine", "returnedLineCount", "nextStartLine", "totalLines", "filesScanned", "findingCount",
       "coverage", "filesRead", "filesSkipped", "readErrorCount", "skippedByReason", "discoveryErrorCount", "excludedEntries",
       "validationOk", "blocksBuild", "exitCode", "likelyErrors", "fullLogPath",
@@ -361,6 +382,9 @@ function parseToolResult(content) {
     ]) {
       if (source[key] !== undefined) out[key] = source[key];
     }
+    Object.assign(out, retainedEffectFacts(source));
+    if (["ok", "status", "errorCode", "resultStatus", "envelopeIsError"].some(key => source[key] !== undefined))
+      out.resultSemantics = resultSemantics(source);
     for (const key of ["errors", "warnings"]) {
       const diagnostics = retainedDiagnosticList(source[key]);
       if (diagnostics.length) out[key] = diagnostics;
@@ -552,7 +576,7 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     if ((parsed.ok === false || parsed.errorCode) && parsed.path
       && ["read_file", "read_file_range", "read_symbol"].includes(requestScope?.request?.name)
       && exactProjectIdentity(projectDescriptor(parsed))) parsed.observationState = "unavailable";
-    const succeeded = parsed.ok === true && !parsed.errorCode;
+    const succeeded = resultSemantics(decoded.value, origin?.provider).operationStatus === "completed";
     const fileRecords = [parsed, ...(Array.isArray(parsed.files) ? parsed.files : [])];
     for (const file of fileRecords) {
       const evidence = file.changeEvidence;

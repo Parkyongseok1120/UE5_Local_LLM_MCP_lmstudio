@@ -4,6 +4,18 @@ const fs = require("node:fs"), os = require("node:os"), path = require("node:pat
 const { execFileSync } = require("node:child_process");
 const { createRuntime } = require("../src/server");
 const { VersionControl } = require("../../shared-tool-core/git");
+
+test("Git cancellation stays request-local and does not block the event loop", async t => {
+  const f = fixture(t), git = new VersionControl({ root: f.root });
+  const stopped = new AbortController(); stopped.abort();
+  await assert.rejects(git.call({ action: "status" }, { signal: stopped.signal }), e => e.code === "request_cancelled");
+  const controller = new AbortController();
+  const pending = git.call({ action: "status" }, { signal: controller.signal });
+  const rejection = assert.rejects(pending, e => e.code === "request_cancelled");
+  await new Promise(resolve => setImmediate(() => { controller.abort(); resolve(); }));
+  await rejection;
+  assert.equal((await git.call({ action: "status" })).status, "observed");
+});
 function fixture(t) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "workspace-git-long-name-")));
   // Git may finish writing a temporary object just as the fixture is removed
@@ -217,7 +229,7 @@ test("Git cursors distinguish query mismatch, TTL, cache eviction, and server re
   }
 
   const restarted = new VersionControl({ root: f.root });
-  assert.throws(
+  await assert.rejects(
     () => restarted.call({ ...query, cursor: first.nextCursor }),
     error => error?.code === "invalid_cursor",
   );
@@ -323,7 +335,7 @@ test("Windows short root aliases identify the same Git project", { skip: process
   const r = await runtime.call("unity_git", { action: "status" }); assert.equal(r.status, "observed", JSON.stringify(r));
 });
 
-test("nested workspaces report exact requested and repository query scopes without guessing prefixes", t => {
+test("nested workspaces report exact requested and repository query scopes without guessing prefixes", async t => {
   const repositoryRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "nested-workspace-git-")));
   const workspaceRoot = path.join(repositoryRoot, "SyntheticGame");
   t.after(() => fs.rmSync(repositoryRoot, { recursive: true, force: true }));
@@ -342,26 +354,26 @@ test("nested workspaces report exact requested and repository query scopes witho
   const vc = new VersionControl({ root: workspaceRoot });
   const changed = paths => vc.call({ action: "changed_files", comparison: "range", base, head, paths });
 
-  const ordinary = changed(["Assets/A.cs"]);
+  const ordinary = await changed(["Assets/A.cs"]);
   assert.deepEqual(ordinary.requestedPaths, ["Assets/A.cs"]);
   assert.deepEqual(ordinary.resolvedRepositoryPaths, ["SyntheticGame/Assets/A.cs"]);
   assert.equal(ordinary.queryPathBase, "workspace_root");
   assert.deepEqual(ordinary.items.map(item => item.path), ["Assets/A.cs"]);
 
-  const actualNestedDirectory = changed(["SyntheticGame/Assets/Nested.cs"]);
+  const actualNestedDirectory = await changed(["SyntheticGame/Assets/Nested.cs"]);
   assert.deepEqual(actualNestedDirectory.resolvedRepositoryPaths,
     ["SyntheticGame/SyntheticGame/Assets/Nested.cs"]);
   assert.deepEqual(actualNestedDirectory.items.map(item => item.path), ["SyntheticGame/Assets/Nested.cs"]);
 
-  const repeatedPrefixDoesNotMatchAnotherFile = changed(["SyntheticGame/Assets/A.cs"]);
+  const repeatedPrefixDoesNotMatchAnotherFile = await changed(["SyntheticGame/Assets/A.cs"]);
   assert.deepEqual(repeatedPrefixDoesNotMatchAnotherFile.items, []);
   assert.equal(repeatedPrefixDoesNotMatchAnotherFile.complete, true);
   assert.deepEqual(repeatedPrefixDoesNotMatchAnotherFile.resolvedRepositoryPaths,
     ["SyntheticGame/SyntheticGame/Assets/A.cs"]);
 
-  const historicalDeletion = changed(["Assets/Deleted.cs"]);
+  const historicalDeletion = await changed(["Assets/Deleted.cs"]);
   assert.deepEqual(historicalDeletion.items, [{ status: "deleted", path: "Assets/Deleted.cs" }]);
-  const empty = changed(["Assets/DoesNotExist.cs"]);
+  const empty = await changed(["Assets/DoesNotExist.cs"]);
   assert.deepEqual(empty.items, []);
   assert.equal(empty.complete, true);
   assert.deepEqual(empty.requestedPaths, ["Assets/DoesNotExist.cs"]);

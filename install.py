@@ -930,7 +930,6 @@ class Transaction:
         staging = staging_parent / target.name
         old = target.parent / f".{target.name}-old-{uuid.uuid4().hex}"
         moved_old = False
-        installed_new = False
         try:
             shutil.copytree(
                 source,
@@ -941,22 +940,26 @@ class Transaction:
                 target.replace(old)
                 moved_old = True
             staging.replace(target)
-            installed_new = True
-            if old.exists():
-                shutil.rmtree(old) if old.is_dir() else old.unlink()
             _sync_directory(target.parent)
         except Exception:
             if moved_old and old.exists():
-                if installed_new and target.exists():
-                    shutil.rmtree(target) if target.is_dir() else target.unlink()
                 old.replace(target)
+                _sync_directory(target.parent)
+            shutil.rmtree(staging_parent, ignore_errors=True)
             raise
-        finally:
-            if staging_parent.exists():
-                shutil.rmtree(staging_parent)
-        self.actions.append(
-            {"kind": "dir", "target": str(target), "existed": existed, "backup": str(backup or "")}
-        )
+        # Publication has succeeded. Cleanup may partly delete old; it must
+        # never be used as a rollback source after that point. The transaction
+        # owns an intact backup and must record the action before cleanup.
+        action = {"kind": "dir", "target": str(target), "existed": existed, "backup": str(backup or "")}
+        self.actions.append(action)
+        for obsolete in (old, staging_parent):
+            try:
+                if obsolete.exists():
+                    shutil.rmtree(obsolete) if obsolete.is_dir() else obsolete.unlink()
+                    _sync_directory(obsolete.parent)
+            except OSError as exc:
+                action.setdefault("cleanupPending", []).append({"path": str(obsolete), "error": str(exc)})
+                print(f"[warning] Installed {target}; cleanup pending at {obsolete}: {exc}", file=sys.stderr)
 
     def rollback_actions(self) -> None:
         if self.dry_run:
@@ -1727,6 +1730,7 @@ def _enable_context_compactor_for_existing_chats(
     lmstudio_home: Path,
     *,
     dry_run: bool,
+    transaction: Transaction | None = None,
 ) -> dict[str, Any]:
     conversations_root = lmstudio_home / "conversations"
     result: dict[str, Any] = {
@@ -1764,10 +1768,13 @@ def _enable_context_compactor_for_existing_chats(
             if CONTEXT_COMPACTOR_PLUGIN_ID in plugins:
                 result["alreadyEnabledConversationCount"] += 1
                 continue
-            result["updatedConversationCount"] += 1
             if not dry_run:
                 conversation["plugins"] = [*plugins, CONTEXT_COMPACTOR_PLUGIN_ID]
-                _write_json_atomic(conversation_path, conversation)
+                if transaction is not None:
+                    transaction.write_file(conversation_path, _json_bytes(conversation))
+                else:
+                    _write_json_atomic(conversation_path, conversation)
+            result["updatedConversationCount"] += 1
         except (OSError, ValueError, json.JSONDecodeError):
             result["skippedConversationCount"] += 1
     return result
@@ -1777,6 +1784,7 @@ def _configure_context_compactor_availability(
     lmstudio_home: Path,
     *,
     dry_run: bool,
+    transaction: Transaction | None = None,
 ) -> dict[str, Any]:
     """Pin the plugin and enable its GUI switch in existing chats."""
     settings_path = lmstudio_home / "settings.json"
@@ -1812,6 +1820,7 @@ def _configure_context_compactor_availability(
     activation = _enable_context_compactor_for_existing_chats(
         lmstudio_home,
         dry_run=dry_run,
+        transaction=transaction,
     )
     result["activation"] = activation
     if activation["updatedConversationCount"]:
@@ -1819,13 +1828,18 @@ def _configure_context_compactor_availability(
     if dry_run:
         result["dryRun"] = True
     elif result["changed"]:
-        _write_json_atomic(settings_path, settings)
+        if transaction is not None:
+            transaction.write_file(settings_path, _json_bytes(settings))
+        else:
+            _write_json_atomic(settings_path, settings)
     return result
 
 
 def _install_context_compactor(
     args: argparse.Namespace,
     external_actions_started: list[str] | None = None,
+    *,
+    transaction: Transaction | None = None,
 ) -> dict[str, Any]:
     plugin = ROOT / "lmstudio-context-compactor-plugin"
     if not plugin.is_dir():
@@ -1866,7 +1880,14 @@ def _install_context_compactor(
             dry_run=args.dry_run,
             timeout=600,
         )
-        _run([npm, "test"], cwd=plugin, dry_run=args.dry_run, timeout=600)
+        # Developer semantic/evaluation fixtures belong to CI, not the portable
+        # installer. Compile and verify the production surface shipped here.
+        _run([npm, "run", "verify:install"], cwd=plugin, dry_run=args.dry_run, timeout=120)
+    # lms can compile TypeScript directly and skip npm lifecycle hooks. Generate
+    # and verify the exact source identity on both dependency installation paths.
+    _run([npm, "run", "guidance:build"], cwd=plugin, dry_run=args.dry_run, timeout=30)
+    _run([npm, "run", "identity:build"], cwd=plugin, dry_run=args.dry_run, timeout=30)
+    _run([npm, "run", "identity:check"], cwd=plugin, dry_run=args.dry_run, timeout=30)
     if not args.dry_run and external_actions_started is not None:
         external_actions_started.append("context-compactor-plugin-install")
     _run([lms, "dev", "--install", "-y"], cwd=plugin, dry_run=args.dry_run, timeout=120)
@@ -1904,6 +1925,7 @@ def _install_context_compactor(
     availability = _configure_context_compactor_availability(
         args.lmstudio_home,
         dry_run=args.dry_run,
+        transaction=transaction,
     )
     return {
         "lms": lms,
@@ -2240,7 +2262,7 @@ def install(
 
         if "context_compactor" in components:
             report["contextCompactor"] = _install_context_compactor(
-                args, external_actions_started
+                args, external_actions_started, transaction=tx
             )
 
         if args.build_rag:

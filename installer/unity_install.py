@@ -27,9 +27,11 @@ def checked_path(path: Path) -> Path:
 def run(command: list[str], *, cwd: Path, timeout: int = 300) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     # The installer may have bootstrapped Node outside the caller's PATH.
-    if Path(command[0]).name.lower() in {"node", "node.exe"}:
-        env["PATH"] = str(Path(command[0]).parent) + os.pathsep + env.get("PATH", "")
-    result = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+    env["PATH"] = str(Path(command[0]).parent) + os.pathsep + env.get("PATH", "")
+    shell = os.name == "nt" and Path(command[0]).suffix.lower() in {".cmd", ".bat"}
+    result = subprocess.run(subprocess.list2cmdline(command) if shell else command,
+                            cwd=cwd, env=env, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", shell=shell, timeout=timeout)
     if result.returncode:
         raise RuntimeError(f"Unity install command failed: {command[0]}: {(result.stderr or result.stdout)[-3000:]}")
     return result
@@ -114,16 +116,13 @@ def install_unity(args, root: Path, transaction_type, lock_type, *, transaction=
     try:
         adapter = root / "lmstudio-unity-mcp"
         if not args.skip_deps:
-            pnpm = shutil.which("pnpm")
             npm = str(getattr(args, "runtime_npm", None) or shutil.which("npm") or "")
-            command = [pnpm, "install", "--frozen-lockfile", "--ignore-scripts"] if pnpm else [npm, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock"]
-            if not command[0]:
-                raise ValueError("npm or pnpm is required, or use --skip-deps with verified installed dependencies")
+            if not npm:
+                raise ValueError("npm is required, or use --skip-deps with verified installed dependencies")
             report["externalActions"].append("node-dependencies")
-            env = os.environ.copy(); env["PATH"] = str(Path(node).parent) + os.pathsep + env.get("PATH", "")
-            result = subprocess.run(command, cwd=adapter, env=env, capture_output=True, text=True, timeout=300)
-            if result.returncode:
-                raise RuntimeError((result.stderr or result.stdout)[-3000:])
+            # Install and update share package-lock.json; host pnpm presence
+            # must not select a different dependency graph.
+            run([npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=adapter)
         run([node, "-e", "require('./src/server.js')"], cwd=adapter)
         dotnet, binary = worker(args, root, project, state, node, report["externalActions"])
         config = {"mcpServers": {"unity-tools": {"command": node, "args": [str(adapter / "src/server.js")], "env": {
@@ -134,7 +133,8 @@ def install_unity(args, root: Path, transaction_type, lock_type, *, transaction=
             current = json.loads(config_path.read_text(encoding="utf-8"))
             if not isinstance(current, dict) or not isinstance(current.get("mcpServers", {}), dict):
                 raise ValueError("Existing MCP configuration is invalid")
-            current.setdefault("mcpServers", {}).update(config["mcpServers"]); config = current
+            current.setdefault("mcpServers", {}).update(config["mcpServers"])
+            config = current
         if manifest_path.read_bytes() != original:
             raise ValueError("Unity package manifest changed during installation; no project settings overwritten")
         tx.write_file(manifest_path, (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode())
@@ -144,7 +144,8 @@ def install_unity(args, root: Path, transaction_type, lock_type, *, transaction=
         check = run([node, str(root / "scripts/check_unity_install.js"), str(config_path)], cwd=root, timeout=45)
         report["verification"] = json.loads(check.stdout)
         report["ready"] = report["verification"].get("connection") == "connected"
-        report["worker"] = str(binary); report["ok"] = True
+        report["worker"] = str(binary)
+        report["ok"] = True
         if transaction is None:
             report["journal"] = str(tx.commit(report))
         return report

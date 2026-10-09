@@ -49,7 +49,7 @@ function workspaceToolDefinitions() {
 function createWorkspaceCapabilities({ resolveBinding }) {
   const repositories = new Map();
   const schemas = new Map(workspaceToolDefinitions().map(tool => [tool.name, tool.inputSchema]));
-  return async (name, args) => {
+  return async (name, args, requestContext = {}) => {
     // The two transports must enforce the same declared arguments before root
     // resolution. This small validator covers only this closed schema family.
     const schema = schemas.get(name);
@@ -91,7 +91,7 @@ function createWorkspaceCapabilities({ resolveBinding }) {
       git = new VersionControl({ root }); repositories.set(key, git);
     }
     const { project, ...query } = args;
-    return { ...git.call({ action: GIT_ACTIONS[name], ...query }), projectIdentity: binding.projectIdentity,
+    return { ...await git.call({ action: GIT_ACTIONS[name], ...query }, requestContext), projectIdentity: binding.projectIdentity,
       ...(binding.engine === "unity" ? { canonicalProjectRoot: root } : { canonicalProject: binding.projectIdentity }) };
   };
 }

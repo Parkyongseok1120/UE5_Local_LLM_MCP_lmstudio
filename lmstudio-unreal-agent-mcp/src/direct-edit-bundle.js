@@ -15,6 +15,7 @@ const {
   saveRuntimeTransaction,
 } = require("./direct-transaction-store");
 const { releasePathLock, tryAcquirePathLock } = require("./write-locks");
+const { assertMutationActive } = require("./safe-write");
 
 const EDIT_BUNDLE_OPTION_FIELDS = new Set([
   "maxFilesPerEdit",
@@ -24,6 +25,7 @@ const EDIT_BUNDLE_OPTION_FIELDS = new Set([
   "runtimeOwner",
   "stateRoot",
   "transactionHooks",
+  "signal",
 ]);
 
 function emptyRollback() {
@@ -38,6 +40,7 @@ function emptyRollback() {
 }
 
 async function applyDirectEditBundle(bundle, resolvePath, options = {}) {
+  assertMutationActive(options.signal);
   for (const key of Object.keys(options)) {
     if (!EDIT_BUNDLE_OPTION_FIELDS.has(key)) {
       throw new Error(`Direct edit bundle contains unsupported option: ${key}`);
@@ -93,6 +96,7 @@ async function applyDirectEditBundle(bundle, resolvePath, options = {}) {
 
     try {
       const baseline = await captureBundleBaseline(targets, journal, stateRoot);
+      assertMutationActive(options.signal);
       validateBundleBaselineHashes(bundle, baseline);
       const committed = await commitBundle(
         bundle,
@@ -101,6 +105,7 @@ async function applyDirectEditBundle(bundle, resolvePath, options = {}) {
         journal,
         stateRoot,
         options.transactionHooks || {},
+        options.signal,
       );
       journal.status = "completed";
       journal.error = "";
@@ -140,6 +145,7 @@ async function applyDirectEditBundle(bundle, resolvePath, options = {}) {
       return {
         ok: false,
         error: String(error.message || error),
+        errorCode: error.code,
         ...(error.mutationFailure ? { mutationFailure: { ...error.mutationFailure } } : {}),
         transactionId: journal.transactionId,
         rollback,

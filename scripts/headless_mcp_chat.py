@@ -19,9 +19,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 PROTOCOL_VERSION = "2025-11-25"
 
@@ -39,6 +40,8 @@ class McpProcess:
     next_id: int = 1
 
     def start(self) -> None:
+        if self.process is not None and self.process.poll() is None:
+            raise McpError(f"{self.label}: MCP process is already running")
         command = [str(self.spec["command"]), *map(str, self.spec.get("args", []))]
         env = os.environ.copy()
         env.update({str(key): str(value) for key, value in self.spec.get("env", {}).items()})
@@ -52,15 +55,22 @@ class McpProcess:
             bufsize=1,
             env=env,
         )
-        self.request(
-            "initialize",
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "lmstudio-headless-mcp-chat", "version": "1.0"},
-            },
-        )
-        self.notify("notifications/initialized", {})
+        try:
+            self.request(
+                "initialize",
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "lmstudio-headless-mcp-chat", "version": "1.0"},
+                },
+            )
+            self.notify("notifications/initialized", {})
+        except BaseException:
+            try:
+                self.close()
+            except Exception as cleanup_error:  # noqa: BLE001 - preserve the original initialization failure
+                print(f"{self.label}: cleanup failed: {cleanup_error}", file=sys.stderr)
+            raise
 
     def _write(self, payload: dict[str, Any]) -> None:
         if self.process is None or self.process.stdin is None:
@@ -108,18 +118,33 @@ class McpProcess:
         return self.request("tools/call", {"name": name, "arguments": arguments})
 
     def close(self) -> None:
-        if self.process is None:
+        process = self.process
+        if process is None:
             return
-        if self.process.stdin is not None:
-            self.process.stdin.close()
         try:
-            self.process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            self.process.terminate()
+            if process.stdin is not None and not process.stdin.closed:
+                try:
+                    process.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass
             try:
-                self.process.wait(timeout=2)
+                process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                self.process.kill()
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+        finally:
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                if pipe is not None and not pipe.closed:
+                    try:
+                        pipe.close()
+                    except OSError:
+                        pass
+            if process.poll() is not None:
+                self.process = None
 
 
 def post_chat(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
@@ -469,8 +494,8 @@ def main() -> int:
     try:
         for label, spec in config.get("mcpServers", {}).items():
             process = McpProcess(label=label, spec=spec, timeout=min(args.timeout, float(spec.get("timeout", 30000)) / 1000))
-            process.start()
             processes.append(process)
+            process.start()
             for tool in process.tools():
                 name = str(tool["name"])
                 if name in tool_owners:
@@ -548,8 +573,16 @@ def main() -> int:
                 stream=not args.no_stream,
             )
     finally:
+        active_error = sys.exc_info()[0] is not None
+        cleanup_errors = []
         for process in reversed(processes):
-            process.close()
+            try:
+                process.close()
+            except Exception as cleanup_error:  # noqa: BLE001 - close all owned children before reporting failures
+                cleanup_errors.append(cleanup_error)
+                print(f"{process.label}: cleanup failed: {cleanup_error}", file=sys.stderr)
+        if cleanup_errors and not active_error:
+            raise McpError("MCP subprocess cleanup failed") from cleanup_errors[0]
 
 
 if __name__ == "__main__":
