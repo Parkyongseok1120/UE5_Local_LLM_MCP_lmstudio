@@ -1,4 +1,4 @@
-# Unity MCP — v1.4.0 beta 1
+# Unity MCP — v1.4.0
 
 Unity 프로젝트의 상태를 모델이 읽고 명시한 작업만 실행하는 별도 MCP 서버입니다. 내부 모델 호출, Planner, 자동 수정·재시도, 패키지 설치·빌드·Git 작업은 없습니다. 기존 Unreal 서버와 실행 경로를 공유하지 않습니다.
 
@@ -8,7 +8,7 @@ Unity 프로젝트의 상태를 모델이 읽고 명시한 작업만 실행하�
 - 특정 Editor 설치 경로, 프로젝트 이름, 게임 assembly, MonoBehaviour/SO 클래스 이름을 제품 코드에 넣지 않습니다. 프로젝트 루트는 `UNITY_PROJECT_ROOT`, 타입은 호출 인자, 버전·기능은 handshake에서 결정합니다.
 - 프로젝트를 복사하면 실제 정규 경로가 달라지므로 다른 연결 대상입니다. 각 프로젝트에 별도 MCP 프로세스를 연결합니다.
 - Node.js 20 이상. RPC Bridge는 Editor-only이며 UPM 패키지는 작은 runtime debug 등록 계약과 선택 패키지별 관찰 probe도 포함합니다. 기본 Bridge는 특정 게임 assembly나 Test Framework를 참조하지 않습니다. Test Framework가 설치되어 있으면 분리된 선택 어댑터 assembly가 활성화됩니다.
-- Editor와 Node MCP는 **같은 OS 호스트**에서 실행합니다. loopback과 PID·실제 경로를 확인하므로 Intel Mac의 Linux VM에서 Mac Editor에 직접 연결하는 구성은 이 alpha에 포함되지 않습니다. 모델 추론은 MCP 호스트가 지원하는 원격 연결을 사용할 수 있습니다.
+- Editor와 Node MCP는 **같은 OS 호스트**에서 실행합니다. loopback과 PID·실제 경로를 확인하므로 Intel Mac의 Linux VM에서 Mac Editor에 직접 연결하는 구성은 지원하지 않습니다. 모델 추론은 MCP 호스트가 지원하는 원격 연결을 사용할 수 있습니다.
 - 지원하지 않는 기능은 capability=false 및 `capability_unavailable`로 반환합니다. 모델이 필요로 한다는 이유로 패키지를 설치하거나 다른 구현을 선택하지 않습니다.
 
 ## 설치
@@ -172,7 +172,7 @@ Prefab 원본·승인·Test Framework의 요청/결과 계약과 제한은 [Auth
 
 Unity 정수는 64비트 정확도를 위해 decimal 문자열로 전달합니다. enum/flags는 정수값, 벡터는 숫자 배열, 객체 참조는 ObjectRef 또는 명시적 null입니다. `sceneInstance`는 일반 Scene 객체, `asset`은 ScriptableObject 에셋 수정 범위입니다. Prefab 원본을 이 두 범위로 수정할 수 없습니다.
 
-배열 인덱스는 현재 Receipt의 순서 기준입니다. `array_insert`는 삽입한 원소의 `value`를 반드시 지정합니다. 이 alpha에서는 직접 set이 가능한 원소 타입만 삽입합니다. `array_remove`는 객체 참조 배열의 null 처리 후 실제 슬롯 제거까지 수행합니다. `array_move`의 `toIndex`는 이동 후 위치입니다. 관리 참조의 타입 변경/공유관계 재구성은 비활성화되어 있습니다.
+배열 인덱스는 현재 Receipt의 순서 기준입니다. `array_insert`는 삽입한 원소의 `value`를 반드시 지정합니다. 현재 버전에서는 직접 set이 가능한 원소 타입만 삽입합니다. `array_remove`는 객체 참조 배열의 null 처리 후 실제 슬롯 제거까지 수행합니다. `array_move`의 `toIndex`는 이동 후 위치입니다. 관리 참조의 타입 변경/공유관계 재구성은 비활성화되어 있습니다.
 
 Scene/SO 변경은 dirty만 만듭니다. 저장하려면 정확한 Scene 경로 또는 SO target/receipt와 `acknowledgeExistingDirty=true`를 전달합니다. 같은 Scene 또는 같은 asset 파일 내의 기존 사용자 변경·sub-asset도 저장될 수 있습니다. SO 저장은 SaveAssetIfDirty이며 OnWillSaveAssets 훅을 호출하지 않습니다.
 

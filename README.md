@@ -6,7 +6,7 @@ AI에게 프로젝트 전체를 매번 붙여 넣는 대신, 필요한 내용을
 
 ## 설치 방법
 
-Unity 지원은 v1.4.0 **beta 1**에서 별도 서버와 Editor Bridge로 제공합니다. 특정 프로젝트나 Editor 설치 경로를 고정하지 않으며, 실제 구현 기능과 미구현 capability를 구분합니다. [Unity 설치·지원 범위](docs/Unity_Setup.md), [설계 및 기존 구조 분석](docs/Unity_1_4_Design.md), [검증 기록](docs/Unity_Validation.md)을 참고하세요. 아래의 기존 설치 흐름은 Unreal용입니다.
+Unity 지원은 별도 서버와 Editor Bridge로 제공합니다. 특정 프로젝트나 Editor 설치 경로를 고정하지 않으며, 실제 구현 기능과 미구현 capability를 구분합니다. [Unity 설치·지원 범위](docs/Unity_Setup.md), [설계 및 기존 구조 분석](docs/Unity_1_4_Design.md), [검증 기록](docs/Unity_Validation.md)을 참고하세요. 아래의 기존 설치 흐름은 Unreal용입니다.
 
 ```powershell
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
@@ -114,7 +114,7 @@ python install.py --profile standard --yes --build-rag --index-tier standard --e
 | 오류 해결 | [문제 해결](docs/Troubleshooting.md) |
 | 수정·빌드 권한 이해 | [권한 설정](docs/Safe_Agent_Mode.md), [도구 사용 규칙](docs/LMStudio_MCP_Tool_Discipline.md) |
 | 내부 구조 확인 | [구성 설명](docs/ARCHITECTURE.md), [검색 대상 구분](docs/Project_Routing.md), [Build.cs 읽기](docs/Build_Cs_Parser.md) |
-| 이번 버전 변경 확인 | [1.4.0 RC3 변경 사항](docs/Release_Notes_1_4_0_RC3.md), [버전 관리](docs/VERSIONING.md) |
+| 이번 버전 변경 확인 | [1.4.0 정식 변경 사항](docs/Release_Notes_1_4_0.md), [버전 관리](docs/VERSIONING.md) |
 
 실제 프로젝트에서의 동작은 엔진 버전, 플러그인, 개발 환경에 따라 확인이 필요합니다. 자동 검사를 통과한 것과 에디터에서 직접 실행해 본 것은 구분해서 적어야 합니다.
 
