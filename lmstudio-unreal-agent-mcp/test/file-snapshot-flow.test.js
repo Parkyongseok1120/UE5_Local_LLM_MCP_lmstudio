@@ -65,6 +65,43 @@ function writeConfig(project, name, value) {
   return file;
 }
 
+test("committed change evidence contains actual bytes and preserves mutation receipts", async t => {
+  const { runtime, first } = fixture(t);
+  const owner = { sessionId: "changes" };
+  const target = writeConfig(first, "Evidence.ini", "alpha");
+  const read = payloadOf(await runtime.callTool("read_file", { path: "project://Config/Evidence.ini" }, owner));
+  const result = payloadOf(await runtime.callTool("replace_in_file", { path: "project://Config/Evidence.ini",
+    oldText: "Value=alpha", newText: "Value=beta", expectedOccurrences: 1, fileVersionReceipt: read.fileVersionReceipt }, owner));
+  assert.equal(result.ok, true);
+  assert.match(result.fileVersionReceipt, /^fvr1_/);
+  assert.equal(result.changeEvidence.previousSha256, read.sha256);
+  assert.equal(result.changeEvidence.sha256, result.sha256);
+  assert.equal(result.changeEvidence.hunks[0].before, "Value=alpha\n");
+  assert.equal(result.changeEvidence.hunks[0].after, "Value=beta\n");
+  assert.match(fs.readFileSync(target, "utf8"), /Value=beta/);
+  const bundle = payloadOf(await runtime.callTool("apply_edit_bundle", { patches: [{ path: "project://Config/Evidence.ini",
+    oldText: "Value=beta", newText: "Value=gamma", expectedOccurrences: 1, fileVersionReceipt: result.fileVersionReceipt }] }, owner));
+  assert.equal(bundle.ok, true);
+  assert.equal(bundle.files[0].changeEvidence.sha256, bundle.files[0].sha256);
+  assert.equal(bundle.files[0].changeEvidence.hunks[0].after, "Value=gamma\n");
+});
+
+test("optional evidence cannot flip success and no_change uses actual hashes including line endings", () => {
+  const { committedChange, withChangeEvidence, withBundleChangeEvidence } = require("../src/direct-change-evidence");
+  const { sha256Text, calculateReplacement } = require("../src/safe-write");
+  const before = "a\r\nb\n";
+  const replacement = calculateReplacement({ priorContent: before, oldText: "a", newText: "a", expectedOccurrences: 1 });
+  const evidence = committedChange(before, replacement.updated, replacement.preHash, sha256Text(replacement.updated));
+  assert.equal(evidence.status, "changed");
+  assert.equal(committedChange("a", "a", sha256Text("a"), sha256Text("a")).status, "no_change");
+  const payload = { ok: true, sha256: evidence.sha256, fileVersionReceipt: "fvr1_test" };
+  assert.equal(withChangeEvidence(payload, evidence, () => { throw Error("serialization failed"); }), payload);
+  assert.equal(withChangeEvidence(payload, evidence, () => false), payload);
+  const bundle = { ok: true, files: [{ path: "a", sha256: evidence.sha256 }] };
+  assert.equal(withBundleChangeEvidence(bundle, { a: evidence }, () => false), bundle);
+  assert.equal(committedChange("x".repeat(2100000), "a", "x", "y").hunks.length, 0);
+});
+
 test("snapshot scenario 1: same-session mutation still requires explicit version evidence", async (t) => {
   const { runtime, first } = fixture(t);
   const target = writeConfig(first, "One.ini", "alpha");

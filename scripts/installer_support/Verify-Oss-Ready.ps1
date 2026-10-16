@@ -187,7 +187,7 @@ foreach ($file in $scanFiles) {
         foreach ($entry in $forbiddenContentPatterns) {
             $pattern = $entry.Regex
             $name = $entry.Name
-            if ($text -notmatch $pattern) {
+            if (-not $text -or $text -notmatch $pattern) {
                 continue
             }
             if ($name -in @('win-users-backslash', 'win-users-slash', 'unix-users', 'unix-home') -and

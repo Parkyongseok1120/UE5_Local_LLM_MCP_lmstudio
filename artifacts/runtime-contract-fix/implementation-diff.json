@@ -1,0 +1,13 @@
+{
+  "baseSha": "868dedf8069c5b6d015794e32e5435ad540db219",
+  "trackedDiffSha256": "11501fb2641811d18905f3e87a7d70e083fc1e6b0dc6dd912c17d465f57b7110",
+  "newFiles": {
+    "lmstudio-context-compactor-plugin/test/tool-round-lifecycle.test.cjs": "07eef6be34233ee8da7e399c8ca0d582ac12743b448a784e1dc63a9029cf0083"
+  },
+  "implementationDiffHash": "653dd502b5f9b578d3894aa3ae09f105fba17e559ec49bc26b2b4fef5ea7efc3",
+  "definition": "SHA256 of canonical JSON (sorted keys, compact separators) containing baseSha, trackedDiffSha256, newFiles.",
+  "excludes": [
+    "artifacts/**",
+    "unity-symbol-worker/bin/Release/net8.0/**"
+  ]
+}

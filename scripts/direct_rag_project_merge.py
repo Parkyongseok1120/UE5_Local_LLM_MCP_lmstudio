@@ -11,6 +11,7 @@ from typing import Any
 
 from atomic_io import atomic_write_text
 from direct_rag_symbol_legacy import legacy_symbol_belongs_to_project
+from direct_rag_source_snapshot import SNAPSHOT_KEY
 from workspace_paths import filesystem_path_identity
 
 PROJECT_RAW_FILES = (
@@ -131,9 +132,22 @@ def merge_project_collection(stage: Path, collection: Path, project: Path) -> No
     replace_project_architecture(stage / "project_architecture", architecture, project)
 
 
+def stamp_project_collection(collection: Path, fingerprint: str) -> None:
+    """Stamp incoming rows only; retained projects keep their collection proof."""
+    for name in PROJECT_RAW_FILES:
+        path = collection / name
+        rows = _rows(path)
+        for row in rows:
+            metadata = dict(row.get("metadata") or {})
+            metadata[SNAPSHOT_KEY] = fingerprint
+            row["metadata"] = metadata
+        atomic_write_text(path, "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+
+
 __all__ = [
     "PROJECT_RAW_FILES",
     "merge_project_collection",
     "merge_project_jsonl",
     "replace_project_architecture",
+    "stamp_project_collection",
 ]

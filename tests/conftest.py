@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -11,10 +14,79 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def plant_compactor_sdk_fixture(plugin_dir: Path) -> None:
+    """Fake LMS dependency tree with the real, version-checked patch command.
+
+    The actual upstream act loop is exercised separately by the Node suite.
+    Installer fixtures must still execute and validate their post-install patch.
+    """
+    scripts = plugin_dir / "scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs", scripts)
+    (plugin_dir / "package.json").write_text(json.dumps({"scripts": {
+        "patch:sdk": "node scripts/patch-lmstudio-sdk.cjs"}}), encoding="utf-8")
+    sdk = plugin_dir / "node_modules/@lmstudio/sdk"
+    (sdk / "dist").mkdir(parents=True, exist_ok=True)
+    (sdk / "package.json").write_text('{"version":"1.5.0"}', encoding="utf-8")
+    source = "handlePredictionEnd: endPacket => {\n                const predictionResult = makePredictionResult({"
+    for name in ["index.cjs", "index.mjs"]:
+        (sdk / "dist" / name).write_bytes(source.encode("utf-8"))
+
+
+def plant_compactor_lms_fixture(lmstudio_home: Path) -> None:
+    """One hermetic compiler stub for repository, portable-package and CI installs.
+
+    Read the install command's current source tree, including its freshly
+    generated ID. The marker verifies synchronization, not a real LMS build.
+    """
+    bindir = lmstudio_home / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    plugin = lmstudio_home / "extensions/plugins/codex/unreal-context-compactor"
+    plant_compactor_sdk_fixture(plugin)
+    helper = bindir / "compile_compactor_fixture.py"
+    helper.write_text(
+        "from pathlib import Path\nimport re, shutil\n"
+        f"target = Path({str(plugin)!r})\n"
+        "source = Path.cwd()\n"
+        "shutil.copy2(source / 'manifest.json', target / 'manifest.json')\n"
+        "text = (source / 'src/generated-runtime-identity.ts').read_text(encoding='utf-8')\n"
+        "(target / 'src').mkdir(exist_ok=True)\n"
+        "(target / 'src/generated-runtime-identity.ts').write_text(text, encoding='utf-8')\n"
+        "build = re.search(r'ef-build-v2-[a-f0-9]{64}', text).group(0)\n"
+        "(target / '.lmstudio').mkdir(exist_ok=True)\n"
+        "(target / '.lmstudio/production.js').write_text('module.exports = ' + repr(build) + ';', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        script = bindir / "lms.cmd"
+        script.write_text("\r\n".join([
+            "@echo off", 'if /I "%~1"=="--version" (echo lms 0.0.0-test & exit /b 0)',
+            f'"{sys.executable}" "{helper}"', "exit /b %errorlevel%", "",
+        ]), encoding="utf-8")
+    else:
+        script = bindir / "lms"
+        script.write_text("\n".join([
+            "#!/bin/sh", 'if [ "$1" = "--version" ]; then echo "lms 0.0.0-test"; exit 0; fi',
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(helper))}", "",
+        ]), encoding="utf-8")
+        script.chmod(0o755)
+
 sys.path.insert(0, str(ROOT / "scripts"))
 
 AGENT_MCP_ROOT = ROOT / "lmstudio-unreal-agent-mcp"
 AGENT_MCP_SDK = AGENT_MCP_ROOT / "node_modules" / "@modelcontextprotocol" / "sdk"
+
+
+def gui_installer_command(installer: Path) -> list[str]:
+    """GUI-profile fixture tests simulate a supported Mac, not Intel GUI support.
+
+    Native Intel refusal/headless behavior is covered separately, without this helper.
+    No production installer switch or environment bypass is introduced.
+    """
+    if sys.platform == "darwin":
+        return [sys.executable, "-c", "import platform,runpy,sys; platform.machine=lambda:'arm64'; p=sys.argv.pop(1); sys.argv[0]=p; runpy.run_path(p,run_name='__main__')", str(installer)]
+    return [sys.executable, str(installer)]
 
 
 def powershell_prefix() -> list[str]:

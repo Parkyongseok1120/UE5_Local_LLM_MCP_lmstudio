@@ -46,7 +46,7 @@ def swap_refresh_generation(
     planned_names: tuple[str, ...],
     previous_names: tuple[str, ...],
     prune_names: set[str],
-) -> None:
+) -> dict:
     """Promote companions first and the immutable SQLite file last."""
 
     backup = Path(
@@ -59,13 +59,12 @@ def swap_refresh_generation(
     preserved: dict[str, tuple[Path, Path]] = {}
     cleanup_backup = True
     committed = False
-    journal = begin_refresh_journal(
-        target,
-        stage,
-        backup,
-        planned_names,
-        previous_names,
-    )
+    try:
+        journal = begin_refresh_journal(target, stage, backup, planned_names, previous_names)
+    except BaseException:
+        shutil.rmtree(backup, ignore_errors=True)
+        raise
+    cleanup_warning = ""
     try:
         for name in _ordered(previous_names):
             destination = target / name
@@ -139,7 +138,20 @@ def swap_refresh_generation(
         if cleanup_backup:
             shutil.rmtree(backup, ignore_errors=True)
         if committed and not backup.exists():
-            clear_refresh_journal(journal)
+            try:
+                clear_refresh_journal(journal)
+            except OSError as exc:
+                cleanup_warning = str(exc)
+        elif committed:
+            cleanup_warning = "Generation published; backup cleanup is pending."
+    result = {"stageCommitted": True}
+    if cleanup_warning:
+        result["cleanup"] = {
+            "status": "pending", "warning": cleanup_warning,
+            "journal": str(journal),
+            "backup": str(backup) if backup.exists() else None,
+        }
+    return result
 
 
 __all__ = ["swap_refresh_generation"]

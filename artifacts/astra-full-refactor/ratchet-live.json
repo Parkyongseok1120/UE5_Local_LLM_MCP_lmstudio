@@ -1,0 +1,189 @@
+{
+  "mode": "live_sdk_exact_template",
+  "cycles": 3,
+  "results": [
+    {
+      "cycle": 1,
+      "rounds": 8,
+      "before": 15415,
+      "contextLength": 38912,
+      "configuredTargetTokens": 6000,
+      "configuredTriggerTokens": 9000,
+      "requiredGenerationReserve": 1024,
+      "safetyMarginTokens": 2048,
+      "mandatoryFloorTokens": 931,
+      "configuredLowWaterTokens": 6000,
+      "effectiveLowWaterTokens": 6000,
+      "effectiveHighWaterTokens": 9000,
+      "hardInputCeiling": 35840,
+      "reservedToolResultTokens": 0,
+      "requiredPostToolOverhead": 0,
+      "projectedNextInput": 15415,
+      "preDispatchCompaction": false,
+      "targetUnreachable": false,
+      "blockingComponent": null,
+      "tokenMetric": "exact_templated_model_input",
+      "beforeExactInputTokens": 15415,
+      "candidateMeasurements": [
+        {
+          "candidate": "complete_exchange_cap_8",
+          "finalExactInputTokens": 15415,
+          "accepted": false
+        },
+        {
+          "candidate": "complete_exchange_cap_4",
+          "finalExactInputTokens": 8579,
+          "accepted": false
+        },
+        {
+          "candidate": "complete_exchange_cap_2",
+          "finalExactInputTokens": 4737,
+          "accepted": true
+        }
+      ],
+      "selectedCandidate": "complete_exchange_cap_2",
+      "postHistoryTokens": 4737,
+      "postProjectionTokens": 4737,
+      "postMetadataTokens": 4737,
+      "postToolSchemaTokens": 4737,
+      "finalExactInputTokens": 4737,
+      "targetDelta": -1263,
+      "compactionSucceeded": true,
+      "compactionRequested": true,
+      "metadataTokens": 0,
+      "toolSchemaTokens": 0,
+      "reclaimRatio": 0.6927019137204022
+    },
+    {
+      "cycle": 2,
+      "rounds": 8,
+      "before": 20105,
+      "contextLength": 38912,
+      "configuredTargetTokens": 6000,
+      "configuredTriggerTokens": 9000,
+      "requiredGenerationReserve": 1024,
+      "safetyMarginTokens": 2048,
+      "mandatoryFloorTokens": 927,
+      "configuredLowWaterTokens": 6000,
+      "effectiveLowWaterTokens": 6000,
+      "effectiveHighWaterTokens": 9000,
+      "hardInputCeiling": 35840,
+      "reservedToolResultTokens": 0,
+      "requiredPostToolOverhead": 0,
+      "projectedNextInput": 20105,
+      "preDispatchCompaction": false,
+      "targetUnreachable": false,
+      "blockingComponent": null,
+      "tokenMetric": "exact_templated_model_input",
+      "beforeExactInputTokens": 20105,
+      "candidateMeasurements": [
+        {
+          "candidate": "complete_exchange_cap_8",
+          "finalExactInputTokens": 16259,
+          "accepted": false
+        },
+        {
+          "candidate": "complete_exchange_cap_4",
+          "finalExactInputTokens": 8575,
+          "accepted": false
+        },
+        {
+          "candidate": "complete_exchange_cap_2",
+          "finalExactInputTokens": 4733,
+          "accepted": true
+        }
+      ],
+      "selectedCandidate": "complete_exchange_cap_2",
+      "postHistoryTokens": 4733,
+      "postProjectionTokens": 4733,
+      "postMetadataTokens": 4733,
+      "postToolSchemaTokens": 4733,
+      "finalExactInputTokens": 4733,
+      "targetDelta": -1267,
+      "compactionSucceeded": true,
+      "compactionRequested": true,
+      "metadataTokens": 0,
+      "toolSchemaTokens": 0,
+      "reclaimRatio": 0.7645859238995275
+    },
+    {
+      "cycle": 3,
+      "rounds": 8,
+      "before": 20101,
+      "contextLength": 38912,
+      "configuredTargetTokens": 6000,
+      "configuredTriggerTokens": 9000,
+      "requiredGenerationReserve": 1024,
+      "safetyMarginTokens": 2048,
+      "mandatoryFloorTokens": 927,
+      "configuredLowWaterTokens": 6000,
+      "effectiveLowWaterTokens": 6000,
+      "effectiveHighWaterTokens": 9000,
+      "hardInputCeiling": 35840,
+      "reservedToolResultTokens": 0,
+      "requiredPostToolOverhead": 0,
+      "projectedNextInput": 20101,
+      "preDispatchCompaction": false,
+      "targetUnreachable": false,
+      "blockingComponent": null,
+      "tokenMetric": "exact_templated_model_input",
+      "beforeExactInputTokens": 20101,
+      "candidateMeasurements": [
+        {
+          "candidate": "complete_exchange_cap_8",
+          "finalExactInputTokens": 16259,
+          "accepted": false
+        },
+        {
+          "candidate": "complete_exchange_cap_4",
+          "finalExactInputTokens": 8575,
+          "accepted": false
+        },
+        {
+          "candidate": "complete_exchange_cap_2",
+          "finalExactInputTokens": 4733,
+          "accepted": true
+        }
+      ],
+      "selectedCandidate": "complete_exchange_cap_2",
+      "postHistoryTokens": 4733,
+      "postProjectionTokens": 4733,
+      "postMetadataTokens": 4733,
+      "postToolSchemaTokens": 4733,
+      "finalExactInputTokens": 4733,
+      "targetDelta": -1267,
+      "compactionSucceeded": true,
+      "compactionRequested": true,
+      "metadataTokens": 0,
+      "toolSchemaTokens": 0,
+      "reclaimRatio": 0.7645390776578279
+    }
+  ],
+  "baselines": [
+    4737,
+    4733,
+    4733
+  ],
+  "drift": 4,
+  "duplicateSourceReads": 0,
+  "compactionsPer10Rounds": 1.25,
+  "taskCompleted": true,
+  "prediction": {
+    "text": "The user is asking me to return the invariant \"SENTINEL-731\" exactly. This is a simple request - I just need to output that exact string.\n__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__SENTINEL-731",
+    "stats": {
+      "stopReason": "eosFound",
+      "tokensPerSecond": 49.76554896930019,
+      "timeToFirstTokenSec": 0.155271,
+      "totalTimeSec": 1.0595109999999999,
+      "promptTokensCount": 4794,
+      "predictedTokensCount": 46,
+      "totalTokensCount": 4840,
+      "totalDraftTokensCount": 42,
+      "acceptedDraftTokensCount": 32,
+      "rejectedDraftTokensCount": 10
+    },
+    "taskCompleted": true
+  },
+  "interpretation": "Synthetic repeated equivalent evidence; live mode uses actual loaded tokenizer/template and one real prediction. Does not prove installed GUI plugin or editor workflows.",
+  "status": "PASS"
+}

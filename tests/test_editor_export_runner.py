@@ -535,3 +535,133 @@ def test_headless_process_failures_return_fail_closed_result(
 
     assert result["ok"] is False
     assert result["errorCode"] == error_code
+
+
+@pytest.mark.parametrize("stop_kind", ["cancel", "timeout"])
+def test_request_stop_preserves_external_job_without_launching_fallback(tmp_path, stop_kind):
+    from direct_rag_operation import RagOperationStopped
+    from editor_export_mode import execute_export_mode
+    from editor_export_markers import PENDING_NAME, ensure_export_available, ERROR_NAME
+    def wait(*args, **kwargs):
+        if stop_kind == "cancel":
+            raise RagOperationStopped("RAG_OPERATION_CANCELLED")
+        return {"ok": False, "errorCode": "EDITOR_EXPORT_MARKER_TIMEOUT"}
+    with pytest.raises(RagOperationStopped) as caught:
+        execute_export_mode(chosen_mode="request", active_project=tmp_path / "Game.uproject", workspace=tmp_path,
+            export_dir=tmp_path, job={"jobId": "exact-job"}, timeout_sec=1,
+            resolve_engine=lambda *_: pytest.fail("No resolution after unconfirmed external job"),
+            run_headless=lambda **_: pytest.fail("No second writer"), submit_request=lambda _: None, wait_for_markers=wait)
+    assert caught.value.termination_confirmed is False
+    assert caught.value.termination_scope == "external_editor_job"
+    assert json.loads((tmp_path / PENDING_NAME).read_text())["jobId"] == "exact-job"
+    (tmp_path / ERROR_NAME).write_text(json.dumps({"runId": "other-job", "ok": False}))
+    with pytest.raises(RagOperationStopped, match="PREVIOUS_JOB_UNCONFIRMED"):
+        ensure_export_available(tmp_path)
+    (tmp_path / ERROR_NAME).write_text(json.dumps({"runId": "exact-job", "ok": False}))
+    ensure_export_available(tmp_path)
+    assert not (tmp_path / PENDING_NAME).exists()
+
+
+def test_request_matching_failure_can_fallback_and_success_does_not(tmp_path):
+    from editor_export_mode import execute_export_mode
+    for ok in (True, False):
+        calls = []
+        result, _, _ = execute_export_mode(chosen_mode="request", active_project=tmp_path / "Game.uproject", workspace=tmp_path,
+            export_dir=tmp_path, job={"jobId": "exact-job"}, timeout_sec=1,
+            resolve_engine=lambda *_: {"ok": True, "engineRoot": str(tmp_path)},
+            run_headless=lambda **_: calls.append("headless") or {"ok": True}, submit_request=lambda _: None,
+            wait_for_markers=lambda *_, **__: {"ok": ok, "runId": "exact-job"})
+        assert result["ok"] is True
+        assert calls == ([] if ok else ["headless"])
+
+
+def test_marker_wait_cooperates_with_operation_cancellation(tmp_path):
+    from direct_rag_operation import RagOperation, RagOperationStopped, operation_scope
+    operation = RagOperation()
+    operation.cancelled.set()
+    with operation_scope(operation), pytest.raises(RagOperationStopped, match="RAG_OPERATION_CANCELLED"):
+        wait_for_export_markers(tmp_path, timeout_sec=60)
+
+
+def test_owned_export_child_deadline_terminates_and_allows_next_child(tmp_path):
+    from direct_rag_operation import run_owned_process, RagOperationStopped
+    with (tmp_path / "child.log").open("w") as log:
+        with pytest.raises(RagOperationStopped) as caught:
+            run_owned_process([sys.executable, "-c", "import time; time.sleep(30)"], cwd=str(tmp_path), env=None,
+                stdout=log, stderr=subprocess.STDOUT, text=True, timeout=0.1, scratch=tmp_path)
+        assert caught.value.termination_confirmed is True
+        completed = run_owned_process([sys.executable, "-c", "print('done')"], cwd=str(tmp_path), env=None,
+            stdout=log, stderr=subprocess.STDOUT, text=True, timeout=5, scratch=tmp_path)
+        assert completed.returncode == 0
+
+
+def test_watcher_failure_retains_captured_job_identity(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("export_watcher_fixture", ROOT / "tools/ue_export/export_request_watcher.py")
+    watcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(watcher)
+    (tmp_path / watcher.REQUEST_NAME).write_text(json.dumps({"jobId": "captured-job", "scope": "all"}))
+    (tmp_path / "run_all_exports.py").write_text("raise RuntimeError('export failed')")
+    watcher._process_request(tmp_path, tmp_path)
+    marker = json.loads((tmp_path / watcher.ERROR_NAME).read_text())
+    assert marker["runId"] == "captured-job"
+    assert marker["ok"] is False
+    assert not (tmp_path / watcher.REQUEST_NAME).exists()
+
+
+def test_capture_and_cli_preserve_stop_contract(tmp_path, monkeypatch, capsys):
+    from direct_rag_operation import RagOperationStopped
+    from editor_sync_capture import EditorSyncCapture
+    stopped = RagOperationStopped("EDITOR_EXPORT_JOB_UNCONFIRMED", termination_confirmed=False)
+    stopped.termination_scope = "external_editor_job"
+    stopped.preserved_scratch = [str(tmp_path)]
+    def fail(**_):
+        raise stopped
+    monkeypatch.setattr(runner, "run_editor_export", fail)
+    capture = EditorSyncCapture(context=SimpleNamespace(project_file=tmp_path / "Game.uproject"), export_dir=tmp_path)
+    with pytest.raises(RagOperationStopped) as caught:
+        capture.run_export(launch_authorized=True, content_path=None, export_scope=None, export_mode="request")
+    assert caught.value is stopped
+    monkeypatch.setattr(sys, "argv", ["editor_export_runner.py"])
+    assert runner.main() == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["terminationConfirmed"] is False
+    assert result["terminationScope"] == "external_editor_job"
+    assert result["preservedScratch"] == [str(tmp_path)]
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_headless_pending_is_owned_by_a_started_job_only(tmp_path, monkeypatch, started):
+    import editor_export_process as process
+    from direct_rag_operation import RagOperationStopped
+    from editor_export_markers import PENDING_NAME
+    scripts = tmp_path / "tools/ue_export"
+    scripts.mkdir(parents=True)
+    (scripts / "headless_export_job.py").write_text("# fixture")
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    monkeypatch.setattr(process, "resolve_editor_executable", lambda _: tmp_path / "fake-editor")
+    def stop(*args, **kwargs):
+        exc = RagOperationStopped("RAG_COLLECTOR_SHUTDOWN_PENDING", termination_confirmed=False)
+        exc.process_started = started
+        raise exc
+    monkeypatch.setattr(process, "run_owned_process", stop)
+    with pytest.raises(RagOperationStopped):
+        process.run_headless_export(uproject=tmp_path / "Game.uproject", engine_root=tmp_path,
+            job={"jobId": "new-job", "exportDir": str(exports), "jobPath": str(tmp_path / "job.json")},
+            timeout_sec=1, workspace=tmp_path, wait_for_markers=lambda *_: pytest.fail("Never reached"))
+    assert (exports / PENDING_NAME).exists() is started
+
+
+def test_malformed_pending_marker_never_authorizes_new_export(tmp_path):
+    from editor_export_markers import PENDING_NAME, DONE_NAME, ERROR_NAME, ensure_export_available
+    from direct_rag_operation import RagOperationStopped
+    for payload in ([], None, {"jobId": ""}):
+        (tmp_path / PENDING_NAME).write_text(json.dumps(payload))
+        with pytest.raises(RagOperationStopped, match="PREVIOUS_JOB_UNCONFIRMED"):
+            ensure_export_available(tmp_path)
+    (tmp_path / PENDING_NAME).write_text(json.dumps({"jobId": "exact-job"}))
+    (tmp_path / DONE_NAME).write_text("invalid")
+    (tmp_path / ERROR_NAME).write_text(json.dumps({"runId": "exact-job", "ok": False}))
+    ensure_export_available(tmp_path)
+    assert not (tmp_path / PENDING_NAME).exists()

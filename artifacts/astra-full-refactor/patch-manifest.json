@@ -1,0 +1,40 @@
+{
+  "startSha": "3c4375fd3041da16b4e6af721c17fa2c230d2f50",
+  "finalHeadSha": "3c4375fd3041da16b4e6af721c17fa2c230d2f50",
+  "gitBinaryDiffAndUntrackedPluginSha256": "13594a93adad7d858155e5f2cf3a657824b6d6fd221220491d524f07876a54ab",
+  "hashMethod": "SHA-256 over git diff --binary bytes followed by sorted untracked plugin paths, NUL, file bytes, NUL; artifacts excluded",
+  "trackedChangedFiles": [
+    "lmstudio-context-compactor-plugin/package.json",
+    "lmstudio-context-compactor-plugin/scripts/status.cjs",
+    "lmstudio-context-compactor-plugin/src/context-budget.ts",
+    "lmstudio-context-compactor-plugin/src/continuity-text.js",
+    "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/tool-scope.ts",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+    "lmstudio-context-compactor-plugin/test/status.test.cjs"
+  ],
+  "untrackedPluginFiles": [
+    "lmstudio-context-compactor-plugin/scripts/astra-live-flow.cjs",
+    "lmstudio-context-compactor-plugin/scripts/astra-ratchet.cjs",
+    "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+    "lmstudio-context-compactor-plugin/src/context-manager.ts",
+    "lmstudio-context-compactor-plugin/src/context-ports.ts",
+    "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts",
+    "lmstudio-context-compactor-plugin/src/execution-config.ts",
+    "lmstudio-context-compactor-plugin/src/execution-contracts.ts",
+    "lmstudio-context-compactor-plugin/src/execution-instructions.ts",
+    "lmstudio-context-compactor-plugin/src/execution-state.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-ui.ts",
+    "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts",
+    "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+    "lmstudio-context-compactor-plugin/src/runtime-identity.ts",
+    "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+    "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+    "lmstudio-context-compactor-plugin/test/refactor-policies.test.cjs"
+  ],
+  "predictionLoopUtf8LfBytes": 80622
+}

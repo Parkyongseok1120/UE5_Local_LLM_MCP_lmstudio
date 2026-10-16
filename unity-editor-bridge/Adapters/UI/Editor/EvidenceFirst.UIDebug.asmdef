@@ -1,0 +1,1 @@
+{"name":"EvidenceFirst.UIDebug","references":["EvidenceFirst.UnityBridge","EvidenceFirst.DebugRuntime","EvidenceFirst.UIDebugRuntime","Unity.Newtonsoft.Json","UnityEngine.UI"],"includePlatforms":["Editor"],"defineConstraints":["EVIDENCE_UI"],"versionDefines":[{"name":"com.unity.ugui","expression":"1.0.0","define":"EVIDENCE_UI"}],"autoReferenced":true}

@@ -1,0 +1,206 @@
+{
+  "date": "2026-10-09",
+  "head": "78abd7fee5a1172b7bdb4d5e99c0dc3f51afbef8",
+  "dirtyWorktree": true,
+  "stage": "proposed_not_implemented",
+  "priorAudit": {
+    "unity": {
+      "skip": 4,
+      "pass": 52,
+      "fail": 0
+    },
+    "pythonVersion": "3.12.10",
+    "failure": "Existing untracked evidence document violates public path hygiene",
+    "compactor": {
+      "skip": 0,
+      "pass": 643,
+      "fail": 0
+    },
+    "python": {
+      "skip": 19,
+      "pass": 1137,
+      "fail": 1
+    },
+    "node": "24.17.0",
+    "unreal": {
+      "skip": 1,
+      "pass": 277,
+      "fail": 0
+    }
+  },
+  "runtime": {
+    "correction": "First exposure occurred before projection; no persistent reservation leak confirmed",
+    "buildId": "ef-build-v2-1066996bbe3673c4b166e72845ce9738fe43376c65fb82a087aca99e74ddbfe2",
+    "rawInitiallyEnteredSdkInput": true,
+    "hostInputVerification": "unknown",
+    "summaryFailureMs": 30059,
+    "loadedMatchesInstalled": true,
+    "elapsedMs": 1511383,
+    "snapshotTime": "2026-10-09T14:40:25.457155+09:00",
+    "completedRounds": 91
+  },
+  "reproductions": {
+    "byteCoverageLoss": {
+      "byteFacts": [
+        {
+          "canonicalProject": "C:/Fixture/Fixture.uproject",
+          "canonicalProjectRoot": "C:/Fixture",
+          "canonicalPath": "C:\\Fixture\\Source\\A.cpp",
+          "path": "project://Source/A.cpp",
+          "observationState": "observed",
+          "sha256AtObservation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "mutationSnapshotState": "fresh_read_required"
+        }
+      ],
+      "lineFacts": [
+        {
+          "canonicalProject": "C:/Fixture/Fixture.uproject",
+          "canonicalProjectRoot": "C:/Fixture",
+          "canonicalPath": "C:\\Fixture\\Source\\A.cpp",
+          "path": "project://Source/A.cpp",
+          "observationState": "observed",
+          "sha256AtObservation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observedLineRanges": [
+            {
+              "startLine": 1,
+              "endLine": 2
+            }
+          ],
+          "totalLinesAtObservation": 10,
+          "readCoverageState": "partial",
+          "mutationSnapshotState": "fresh_read_required"
+        }
+      ],
+      "parsedByteFields": [
+        "ok",
+        "path",
+        "sha256",
+        "size",
+        "hasMore",
+        "canonicalProject",
+        "resultSemantics",
+        "mutationSnapshotState"
+      ]
+    },
+    "projectionWithoutAnalysisNote": {
+      "excerptChars": 512,
+      "bodyTotalChars": 12000,
+      "note": null,
+      "originalArchivedAndAccessible": true
+    },
+    "alternatingRepeatedReads": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "existingCoverageDetectorRecognizesRepeat": {
+      "newSourceUnits": 0,
+      "progressed": false
+    },
+    "budgetClamping": [
+      {
+        "inputTokens": 39790,
+        "capacity": 26002,
+        "effectiveMaxChars": 8192,
+        "secondAllowed": false,
+        "secondDenial": "held_reservations_insufficient"
+      },
+      {
+        "inputTokens": 44763,
+        "capacity": 21029,
+        "effectiveMaxChars": 6668,
+        "secondAllowed": false,
+        "secondDenial": "held_reservations_insufficient"
+      },
+      {
+        "inputTokens": 47274,
+        "capacity": 18518,
+        "effectiveMaxChars": 5831,
+        "secondAllowed": false,
+        "secondDenial": "held_reservations_insufficient"
+      },
+      {
+        "inputTokens": 49459,
+        "capacity": 16333,
+        "effectiveMaxChars": 5103,
+        "secondAllowed": false,
+        "secondDenial": "held_reservations_insufficient"
+      },
+      {
+        "inputTokens": 55262,
+        "capacity": 10530,
+        "effectiveMaxChars": 3168,
+        "secondAllowed": false,
+        "secondDenial": "held_reservations_insufficient"
+      }
+    ]
+  },
+  "headless": {
+    "fixtureChildrenClosed": true,
+    "childAliveAfterMainFinally": true,
+    "injection": "_read_response immediate initialize error; actual main/start/Popen/cleanup"
+  },
+  "sourceHashes": [
+    {
+      "sha256": "6bb7082ba57e8fcaecfa47600a13721fec09500f1a2fb951ff995b765e10e310",
+      "path": "lmstudio-context-compactor-plugin/src/evidence-manager.ts"
+    },
+    {
+      "sha256": "3727cb3e2fd13292ffdfc23bfa6c67e5607be57639b99268492e1ba7eea49cca",
+      "path": "lmstudio-context-compactor-plugin/src/evidence-identity.js"
+    },
+    {
+      "sha256": "b07bdff7b0177d22eef459639e17c15c99e843875f4aa279283ac7e4523dcc45",
+      "path": "lmstudio-context-compactor-plugin/src/input-availability.js"
+    },
+    {
+      "sha256": "801da2158cd2683e72a751b87371104442606c94fe51192959510d4036bd23c5",
+      "path": "lmstudio-context-compactor-plugin/src/continuity-file-observations.js"
+    },
+    {
+      "sha256": "f71fa7a9fc2489eff1debc91ab7339feaa90c8726010305965f99053d4c061c9",
+      "path": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js"
+    },
+    {
+      "sha256": "1134a60ae6539b77d688ff56c52e43dd84f2310d081256d0a08e9bc54a75b0be",
+      "path": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts"
+    },
+    {
+      "sha256": "cae8c8550979c28faef4c6fd5e6c4fac0cac93db1a2dbf33518f70d622dd57a1",
+      "path": "lmstudio-context-compactor-plugin/src/working-context.js"
+    },
+    {
+      "sha256": "80b4ddcb6e96d69f311b030f1550e7c7b2b751fee6dcd767b4d56e5e31a5f56e",
+      "path": "lmstudio-context-compactor-plugin/src/round-input.ts"
+    },
+    {
+      "sha256": "e208180a2402340eb17a991bb341aeb77a8ad34a79d7714d0d54c952c64ad404",
+      "path": "lmstudio-context-compactor-plugin/src/prediction-loop.ts"
+    },
+    {
+      "sha256": "ae09011e1dc273908df827226d9190274781df1331ca03cbe15721f48b5482b2",
+      "path": "lmstudio-context-compactor-plugin/src/budget-broker.ts"
+    },
+    {
+      "sha256": "1560575289ad0f178f6297f539c8059fd6a37662a5a283c2c616f81bfb464a7b",
+      "path": "lmstudio-context-compactor-plugin/src/execution-state.ts"
+    },
+    {
+      "sha256": "be3769a13d16c60b36137df33095f3bb9e267c9dc90b2d1653fd4becea65efc5",
+      "path": "scripts/headless_mcp_chat.py"
+    },
+    {
+      "sha256": "4fbdae4d0efa8f9008a6c289e37ff9eb0a1156e9576deeae507fb4fd78cc46d5",
+      "path": "scripts/ci/ci_suites.py"
+    }
+  ],
+  "limits": [
+    "Prior audit results, not rerun while writing this plan",
+    "No live Editor or engine build proof",
+    "Policy proposals require runtime evaluation",
+    "Fixture C:/Fixture paths are synthetic"
+  ]
+}

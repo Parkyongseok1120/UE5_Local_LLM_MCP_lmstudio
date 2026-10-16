@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: ["main", "Develop"]
+    branches: ["main", "Develop", "v*"]
   pull_request:
-    branches: ["main", "Develop"]
+    branches: ["main", "Develop", "v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -50,6 +51,10 @@ jobs:
         run: npm ci --no-fund --no-audit
         working-directory: lmstudio-unreal-agent-mcp
 
+      - name: Install Unity MCP dependencies for updater probes
+        run: npm ci --no-fund --no-audit
+        working-directory: lmstudio-unity-mcp
+
       - name: Portable Direct and release pytest suites
         run: python scripts/ci/run_ci_suite.py portable_direct portable_release
 
@@ -66,52 +71,11 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          import stat
+          import sys
           from pathlib import Path
-
-          home = Path(os.environ["RUNNER_TEMP"]) / "lmstudio"
-          bindir = home / "bin"
-          plugin = home / "extensions" / "plugins" / "codex" / "unreal-context-compactor"
-          source_manifest = Path.cwd() / "lmstudio-context-compactor-plugin" / "manifest.json"
-          production = plugin / ".lmstudio" / "production.js"
-          if not source_manifest.is_file():
-              raise SystemExit("context compactor manifest is missing before LMS stub setup")
-          bindir.mkdir(parents=True, exist_ok=True)
-          plugin.mkdir(parents=True, exist_ok=True)
-          if os.name == "nt":
-              (bindir / "lms.cmd").write_text(
-                  "\r\n".join(
-                      [
-                          "@echo off",
-                          'if /I "%~1"=="--version" (echo lms 0.0.0-ci & exit /b 0)',
-                          f'mkdir "{plugin}" >nul 2>nul',
-                          f'mkdir "{production.parent}" >nul 2>nul',
-                          f'copy /Y "{source_manifest}" "{plugin / "manifest.json"}" >nul',
-                          f'echo module.exports = {{}}; > "{production}"',
-                          "exit /b 0",
-                          "",
-                      ]
-                  ),
-                  encoding="utf-8",
-              )
-          else:
-              script = bindir / "lms"
-              script.write_text(
-                  "\n".join(
-                      [
-                          "#!/bin/sh",
-                          'if [ "$1" = "--version" ]; then echo "lms 0.0.0-ci"; exit 0; fi',
-                          f'mkdir -p "{production.parent}"',
-                          f'cp "{source_manifest}" "{plugin / "manifest.json"}"',
-                          f"printf '%s\\n' 'module.exports = {{}};' > \"{production}\"",
-                          "exit 0",
-                          "",
-                      ]
-                  ),
-                  encoding="utf-8",
-              )
-              script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-          print(f"planted lms under {bindir}")
+          sys.path.insert(0, str(Path.cwd() / "tests"))
+          from conftest import plant_compactor_lms_fixture
+          plant_compactor_lms_fixture(Path(os.environ["RUNNER_TEMP"]) / "lmstudio")
           PY
 
       - name: SAFE isolated install and MCP stdio smoke
@@ -150,6 +114,10 @@ jobs:
       - name: Install agent MCP dependencies
         run: npm.cmd ci --no-fund --no-audit
         working-directory: lmstudio-unreal-agent-mcp
+
+      - name: Install Unity MCP dependencies for updater probes
+        run: npm.cmd ci --no-fund --no-audit
+        working-directory: lmstudio-unity-mcp
 
       - name: Fail on UTF-8 BOM in tracked text files
         shell: pwsh
@@ -231,6 +199,33 @@ jobs:
           $ErrorActionPreference = 'Stop'
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts\installer_support\Verify-UnrealMcp.ps1 -RepoOnly
 
+  unity-mcp:
+    name: Unity MCP (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: lmstudio-unity-mcp/package-lock.json
+
+      - name: Install Unity MCP dependencies
+        run: npm ci --no-fund --no-audit
+        working-directory: lmstudio-unity-mcp
+
+      - name: Unity MCP full test suite
+        run: npm test
+        working-directory: lmstudio-unity-mcp
+
   context-compactor:
     name: Context Compactor (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -253,6 +248,10 @@ jobs:
       - name: Install Context Compactor dependencies
         run: npm ci --no-fund --no-audit
         working-directory: lmstudio-context-compactor-plugin
+
+      - name: Install Unity MCP dependencies used by compactor integration tests
+        run: npm ci --no-fund --no-audit
+        working-directory: lmstudio-unity-mcp
 
       - name: Context Compactor build and full semantic test suite
         run: npm test

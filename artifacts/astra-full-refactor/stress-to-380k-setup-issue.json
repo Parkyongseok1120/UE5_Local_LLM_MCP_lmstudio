@@ -1,0 +1,7 @@
+{
+  "status": "HARNESS_RESTARTED_AFTER_SETUP_ERROR",
+  "error": "Initial artifact harness import resolved @lmstudio/sdk package main to the absent legacy dist/index.js. The installed SDK package exports dist/index.cjs.",
+  "modelCallsDuringFailedStart": 0,
+  "productCodeModified": false,
+  "testHarnessOnlyPathCorrection": "require installed @lmstudio/sdk/dist/index.cjs"
+}

@@ -17,19 +17,8 @@ test("status verifies every direct prediction-loop source and its index wiring",
   assert.equal(result.modelOwner, "lmstudio_selected_model");
   assert.equal(result.toolsOwner, "lmstudio_selected_model");
   assert.equal(result.runtimeActivationProven, false);
-  assert.deepEqual(DIRECT_SOURCE_FILES, [
-    "src/index.ts",
-    "src/prediction-loop.ts",
-    "src/round-loop.ts",
-    "src/direct-compaction-core.js",
-    "src/compaction-tool-memory.js",
-    "src/continuity-file-observations.js",
-    "src/continuity-memory.js",
-    "src/continuity-objectives.js",
-    "src/continuity-text.js",
-    "src/durable-memory-sanitizer.js",
-    "src/direct-config.ts",
-  ]);
+  assert.deepEqual([...DIRECT_SOURCE_FILES].sort(), fs.readdirSync(path.join(root, "src"))
+    .filter(name => /\.(?:ts|js)$/.test(name)).map(name => `src/${name}`).sort());
 });
 
 test("status fails closed when a direct runtime source is absent", () => {
@@ -46,6 +35,52 @@ test("status fails closed when a direct runtime source is absent", () => {
     const result = inspect(root);
     assert.equal(result.ok, false);
     assert.deepEqual(result.missing, ["src/prediction-loop.ts"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("status fails closed when the package entry does not register the prompt preprocessor", () => {
+  const source = path.resolve(__dirname, "..");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "compactor-status-entry-"));
+  try {
+    for (const relative of ["manifest.json", "package.json", ".lmstudio/entry.ts", ...DIRECT_SOURCE_FILES]) {
+      const from = path.join(source, relative);
+      const to = path.join(root, relative);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(from, to);
+    }
+    const entryPath = path.join(root, ".lmstudio", "entry.ts");
+    const entry = fs.readFileSync(entryPath, "utf8");
+    fs.writeFileSync(entryPath, entry.replace("host.setPromptPreprocessor(handler);", "throw new Error(\"disabled\");"));
+    const result = inspect(root);
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join("; "), /prompt preprocessor/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("status accepts the CLI generated entry and rejects missing host registration", () => {
+  const source = path.resolve(__dirname, "..");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "compactor-status-cli-entry-"));
+  try {
+    for (const relative of ["manifest.json", "package.json", ".lmstudio/entry.ts", ...DIRECT_SOURCE_FILES]) {
+      const to = path.join(root, relative);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(path.join(source, relative), to);
+    }
+    const entryPath = path.join(root, ".lmstudio", "entry.ts");
+    const entry = `const selfRegistrationHost = client.plugins.getSelfRegistrationHost();
+      const pluginContext = { withPromptPreprocessor: (preprocess) => {
+        selfRegistrationHost.setPromptPreprocessor(preprocess);
+        return pluginContext;
+      } };`;
+    fs.writeFileSync(entryPath, entry);
+    assert.equal(inspect(root).ok, true);
+    assert.equal(inspect(root).runtimeActivationProven, false);
+    fs.writeFileSync(entryPath, entry.replace("selfRegistrationHost.setPromptPreprocessor(preprocess);", ""));
+    assert.equal(inspect(root).ok, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

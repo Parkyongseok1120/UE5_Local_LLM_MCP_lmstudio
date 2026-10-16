@@ -2,36 +2,23 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
 
 const { assertReadChildContained, displayPath, pathMetadata } = require("./read-path-resolver.js");
+const { createSearchCapability } = require("./direct-search-capability.js");
 const { readStableFileWindow, readStableTextFile } = require("./direct-file-snapshot.js");
 const { success, failure } = require("./direct-response.js");
-const { registerReadSnapshot } = require("./direct-read-snapshot.js");
-const {
-  clamp,
-  isBinary,
-  relativeSlash,
-  statOrNull,
-  statSignature,
-} = require("./direct-runtime-shared.js");
+const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
+const { clamp, isBinary, statOrNull, statSignature } = require("./direct-runtime-shared.js");
+
+const { lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
 
 const fsp = fs.promises;
-const DEFAULT_IGNORED_DIRS = new Set([
-  ".git", ".vs", ".idea", "Binaries", "DerivedDataCache", "Intermediate",
-  "node_modules", ".gradle", ".cache", ".pytest_cache",
-]);
-const TEXT_EXTENSIONS = new Set([
-  ".h", ".hpp", ".inl", ".cpp", ".c", ".cc", ".cxx", ".cs",
-  ".ini", ".json", ".uproject", ".uplugin", ".md", ".txt", ".py",
-  ".js", ".ts", ".tsx", ".jsx", ".ps1", ".sh", ".bat", ".cmd",
-  ".xml", ".yaml", ".yml", ".toml", ".cmake", ".build", ".target",
-]);
 
 function createReadCapabilities(context) {
   const {
     dedupe,
     fileSnapshots,
+    fitCount,
     fitUtf8Prefix,
     limits,
     payloadFits,
@@ -53,8 +40,9 @@ function createReadCapabilities(context) {
     if (!stat.isDirectory()) return failure("NOT_A_DIRECTORY", `Not a directory: ${args.path}`);
     const maxEntries = clamp(args.maxEntries, 200, 1, 2000);
     const rawEntries = await fsp.readdir(resolution.absolutePath, { withFileTypes: true });
+    const offset = clamp(args.offset, 0, 0, rawEntries.length);
     const entries = [];
-    for (const entry of rawEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of rawEntries.sort((a, b) => a.name.localeCompare(b.name)).slice(offset, offset + maxEntries)) {
       const candidate = path.join(resolution.absolutePath, entry.name);
       await assertReadChildContained(candidate, resolution);
       const childStat = await statOrNull(candidate);
@@ -64,124 +52,48 @@ function createReadCapabilities(context) {
         size: childStat?.isFile() ? childStat.size : undefined,
         modifiedAt: childStat ? childStat.mtime.toISOString() : undefined,
       });
-      if (entries.length >= maxEntries) break;
     }
-    const payload = success({
-      path: displayPath(resolution),
-      ...pathMetadata(resolution),
-      entries,
-      totalEntries: rawEntries.length,
-      truncated: entries.length < rawEntries.length,
-    });
-    return dedupe("list_directory", args, `${resolution.activeProject || ""}|${statSignature(stat)}`, payload);
-  }
-
-  async function collectSearchFiles(rootResolution, maxFiles) {
-    const files = [];
-    async function walk(target) {
-      if (files.length >= maxFiles) return;
-      const stat = await statOrNull(target);
-      if (!stat) return;
-      if (stat.isFile()) {
-        files.push({ target, stat });
-        return;
-      }
-      if (!stat.isDirectory()) return;
-      const entries = await fsp.readdir(target, { withFileTypes: true });
-      for (const entry of entries) {
-        if (files.length >= maxFiles) break;
-        if (entry.isDirectory() && DEFAULT_IGNORED_DIRS.has(entry.name)) continue;
-        const child = path.join(target, entry.name);
-        await assertReadChildContained(child, rootResolution);
-        if (entry.isDirectory() || entry.isFile()) await walk(child);
-      }
+    const makePayload = (count) => {
+      const nextOffset = offset + count < rawEntries.length ? offset + count : null;
+      return success({
+        path: displayPath(resolution),
+        ...pathMetadata(resolution),
+        entries: entries.slice(0, count),
+        offset,
+        nextOffset,
+        totalEntries: rawEntries.length,
+        truncated: nextOffset !== null,
+        ...(count < entries.length ? { omissionReason: "response_budget" } : {}),
+      });
+    };
+    const fitted = fitCount(entries.length, makePayload, args.byteBudget);
+    if (!fitted || (entries.length && fitted.count === 0)) {
+      return failure("OUTPUT_LIMIT_EXCEEDED", "Directory metadata or the first entry exceeds the response budget; increase byteBudget.", { retryAllowed: true, retryMode: "different_arguments" });
     }
-    await walk(rootResolution.absolutePath);
-    return files;
-  }
-
-  async function searchFiles(args) {
-    const query = String(args.query || "");
-    if (!query) return failure("INVALID_ARGUMENT", "query is required", { retryAllowed: true });
-    const resolution = await resolveToolPath(args.path || "workspace://", args.project);
-    const rootStat = await statOrNull(resolution.absolutePath);
-    if (!rootStat) return failure("NOT_FOUND", `Search path not found: ${args.path || "."}`);
-    const maxResults = clamp(args.maxResults, 100, 1, 1000);
-    const maxFiles = clamp(args.maxFiles, 5000, 1, 50000);
-    const caseSensitive = args.caseSensitive === true;
-    let matcher;
-    try {
-      matcher = args.regex === true ? new RegExp(query, caseSensitive ? "" : "i") : null;
-    } catch (error) {
-      return failure("INVALID_REGEX", String(error.message || error), { retryAllowed: true, retryMode: "different_arguments" });
-    }
-    const inferredFileName = /\\\.[A-Za-z0-9]+\$$/.test(query) || /^\*\./.test(query);
-    const matchFileNames = args.matchFileNames !== undefined ? args.matchFileNames === true : inferredFileName;
-    const needle = caseSensitive ? query : query.toLowerCase();
-    const matchesText = (value) => matcher ? matcher.test(value) : (caseSensitive ? value : value.toLowerCase()).includes(needle);
-    const rootUri = displayPath(resolution);
-    const resultUri = (rel) => rel === "." ? rootUri : `${rootUri}${rootUri.endsWith("/") ? "" : "/"}${rel}`;
-    const files = await collectSearchFiles(resolution, maxFiles);
-    const results = [];
-    for (const item of files) {
-      const rel = relativeSlash(resolution.absolutePath, item.target);
-      if (matchFileNames && matchesText(path.basename(item.target))) {
-        results.push({ path: rel, uri: resultUri(rel), kind: "file_name" });
-        if (results.length >= maxResults) break;
-      }
-      if (item.stat.size > 2 * 1024 * 1024) continue;
-      const ext = path.extname(item.target).toLowerCase();
-      if (ext && !TEXT_EXTENSIONS.has(ext)) continue;
-      let buffer;
-      try {
-        buffer = await fsp.readFile(item.target);
-      } catch {
-        continue;
-      }
-      if (isBinary(buffer)) continue;
-      const lines = buffer.toString("utf8").split(/\r?\n/);
-      for (let index = 0; index < lines.length; index += 1) {
-        if (!matchesText(lines[index])) continue;
-        results.push({ path: rel, uri: resultUri(rel), line: index + 1, text: lines[index].slice(0, 1200) });
-        if (results.length >= maxResults) break;
-      }
-      if (results.length >= maxResults) break;
-    }
-    const treeState = crypto.createHash("sha256")
-      .update(files.map(({ target, stat }) => `${relativeSlash(resolution.absolutePath, target)}:${statSignature(stat)}`).join("\n"))
-      .digest("hex");
-    const payload = success({
-      path: rootUri,
-      ...pathMetadata(resolution),
-      query,
-      results,
-      filesScanned: files.length,
-      maxFilesReached: files.length >= maxFiles,
-      truncated: results.length >= maxResults,
-    });
-    return dedupe("search_files", args, `${resolution.activeProject || ""}|${treeState}`, payload);
+    return dedupe("list_directory", args, `${resolution.activeProject || ""}|${statSignature(stat)}`, fitted.payload);
   }
 
   async function readFile(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
+    try {
     const maxBytes = clamp(args.maxBytes, limits.maxReadBytes, 1024, 2 * 1024 * 1024);
     const offset = clamp(args.offsetBytes, 0, 0, Number.MAX_SAFE_INTEGER);
     const initialStat = await statOrNull(resolution.absolutePath);
     const initialState = `${resolution.activeProject || ""}|${statSignature(initialStat)}`;
     if (!initialStat) {
-      return dedupe("read_file", args, initialState, failure("NOT_FOUND", `File not found: ${args.path}`, {
+      return dedupe("read_file", args, initialState, unavailable(resolution, "NOT_FOUND", `File not found: ${args.path}`, {
         suggestion: {
           tool: "search_files",
           args: projectScopedSuggestionArgs(args, { query: path.basename(String(args.path)), path: "project://", matchFileNames: true }),
         },
       }));
     }
-    if (!initialStat.isFile()) return failure("NOT_A_FILE", `Not a file: ${args.path}`);
+    if (!initialStat.isFile()) return unavailable(resolution, "NOT_A_FILE", `Not a file: ${args.path}`);
     const stableRead = await readStableFileWindow(resolution.absolutePath, offset, maxBytes);
     if (!stableRead.ok) {
-      return failure(stableRead.errorCode, stableRead.message, { retryAllowed: true, retryMode: "after_state_change" });
+      return unavailable(resolution, stableRead.errorCode, stableRead.message, { retryAllowed: true, retryMode: "after_state_change" });
     }
-    if (isBinary(stableRead.buffer)) return failure("BINARY_FILE", `File appears binary: ${args.path}`);
+    if (isBinary(stableRead.buffer)) return unavailable(resolution, "BINARY_FILE", `File appears binary: ${args.path}`);
     const version = registerReadSnapshot(fileSnapshots, resolution, stableRead, requestContext);
     const makePayload = (slice, byteLength, decoded) => {
       const nextOffsetBytes = offset + byteLength;
@@ -198,7 +110,7 @@ function createReadCapabilities(context) {
         ...version,
       });
     };
-    const fitted = fitUtf8Prefix(stableRead.buffer, makePayload);
+    const fitted = fitUtf8Prefix(stableRead.buffer, makePayload, args.byteBudget);
     if (!fitted || (stableRead.buffer.length > 0 && fitted.bytes === 0)) {
       return failure("OUTPUT_LIMIT_EXCEEDED", "The next UTF-8 unit cannot fit in the response limit. Reduce surrounding metadata or use a larger configured response limit.", { retryAllowed: true, retryMode: "different_arguments" });
     }
@@ -208,13 +120,16 @@ function createReadCapabilities(context) {
       `${resolution.activeProject || ""}|${statSignature(stableRead.stat)}`,
       fitted.payload,
     );
+    } catch (error) {
+      return unavailable(resolution, ["EACCES", "EPERM"].includes(error.code) ? "ACCESS_DENIED" : "READ_FAILED", String(error.message || error));
+    }
   }
 
   async function readFileRange(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) {
-      return failure(read.errorCode, read.message, {
+      return unavailable(resolution, read.errorCode, read.message, {
         suggestion: read.errorCode === "NOT_FOUND" ? {
           tool: "search_files",
           args: projectScopedSuggestionArgs(args, { query: path.basename(String(args.path)), path: "project://", matchFileNames: true }),
@@ -244,7 +159,7 @@ function createReadCapabilities(context) {
     while (low <= high) {
       const middle = Math.floor((low + high) / 2);
       const candidate = makePayload(middle);
-      if (payloadFits(candidate, 256)) {
+      if (payloadFits(candidate, 256, args.byteBudget)) {
         payload = candidate;
         low = middle + 1;
       } else {
@@ -252,7 +167,9 @@ function createReadCapabilities(context) {
       }
     }
     if (!payload) {
-      const byteOffset = Buffer.byteLength(lines.slice(0, start - 1).join("\n") + (start > 1 ? "\n" : ""), "utf8");
+      // Count original newline bytes, including CRLF, for the byte reader.
+      const prefix = read.content.match(/[^\n]*\n/g)?.slice(0, start - 1).join("") || "";
+      const byteOffset = Buffer.byteLength(prefix, "utf8");
       return failure("LINE_TOO_LARGE", `Line ${start} cannot fit in one response. Read it with read_file byte windows instead.`, {
         retryAllowed: true,
         retryMode: "different_arguments",
@@ -262,6 +179,7 @@ function createReadCapabilities(context) {
             path: args.path,
             offsetBytes: byteOffset,
             maxBytes: Math.max(1024, Math.floor(limits.maxResponseChars / 4)),
+            ...(args.byteBudget === undefined ? {} : { byteBudget: args.byteBudget }),
           }),
         },
       });
@@ -272,65 +190,39 @@ function createReadCapabilities(context) {
   async function readSymbol(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
-    if (!read.ok) return failure(read.errorCode, read.message);
-    const symbol = String(args.symbol || "").trim();
-    const parts = symbol.split("::");
-    const leaf = parts.at(-1) || "";
-    if (!/^[A-Za-z_~][A-Za-z0-9_~]*$/.test(leaf)) return failure("INVALID_SYMBOL", "symbol must be a C/C++ identifier", { retryAllowed: true });
-    const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const qualified = new RegExp(`\\b${parts.map(escape).join("\\s*::\\s*")}\\s*\\(`, "m");
-    const fallback = new RegExp(`\\b${escape(leaf)}\\s*\\(`, "m");
-    const match = qualified.exec(read.content) || fallback.exec(read.content);
-    if (!match) {
-      return failure("SYMBOL_NOT_FOUND", `Symbol not found: ${symbol}`, {
-        suggestion: { tool: "search_files", args: projectScopedSuggestionArgs(args, { query: leaf, path: "project://Source" }) },
-      });
-    }
-    const braceStart = read.content.indexOf("{", match.index + match[0].length);
-    const semicolon = read.content.indexOf(";", match.index + match[0].length);
-    if (braceStart < 0 || (semicolon >= 0 && semicolon < braceStart)) {
-      return failure("SYMBOL_BODY_NOT_FOUND", `Definition body not found: ${symbol}`, {
-        suggestion: { tool: "search_files", args: projectScopedSuggestionArgs(args, { query: `${leaf}(`, path: "project://Source" }) },
-      });
-    }
-    let depth = 0;
-    let endOffset = -1;
-    let quote = "";
-    let escaped = false;
-    for (let index = braceStart; index < read.content.length; index += 1) {
-      const char = read.content[index];
-      if (quote) {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === quote) quote = "";
-        continue;
-      }
-      if (char === "\"" || char === "'") {
-        quote = char;
-        continue;
-      }
-      if (char === "{") depth += 1;
-      if (char === "}" && --depth === 0) {
-        endOffset = index;
-        break;
-      }
-    }
-    if (endOffset < 0) return failure("UNBALANCED_SYMBOL_BODY", `Unbalanced function body: ${symbol}`);
-    const allLines = read.content.split(/\r?\n/);
-    const lineAt = (offset) => read.content.slice(0, offset).split(/\r?\n/).length;
-    const contextLines = clamp(args.contextLines, 3, 0, 30);
-    const start = Math.max(1, lineAt(match.index) - contextLines);
-    const end = Math.min(allLines.length, lineAt(endOffset) + contextLines);
-    const payload = success({
+    if (!read.ok) return unavailable(resolution, read.errorCode, read.message);
+    const window = lexicalSymbolWindow(read.content, args.symbol, args.contextLines);
+    if (!window.ok) return window;
+    const { symbol, allLines, start, end, candidateCount } = window;
+    const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const makePayload = returnedEnd => success({
       path: displayPath(resolution),
       symbol,
-      content: allLines.slice(start - 1, end).join("\n"),
+      ...pathMetadata(resolution),
+      content: allLines.slice(start - 1, returnedEnd).join("\n"),
       startLine: start,
-      endLine: end,
+      endLine: returnedEnd,
+      requestedEndLine: end,
+      nextStartLine: returnedEnd < end ? returnedEnd + 1 : null,
+      hasMore: returnedEnd < end,
+      truncated: returnedEnd < end,
+      representation: "lexical_body_candidate",
+      candidateCount,
+      candidateLines: window.candidateLines,
+      selection: window.selection,
+      ambiguity: candidateCount > 1 ? "multiple_lexical_matches" : "semantic_resolution_unverified",
+      signatureVerification: "lexical_only; overloads_inheritance_macros_and_callability_unverified",
       totalLines: allLines.length,
       sha256: read.hash,
-      ...registerReadSnapshot(fileSnapshots, resolution, read, requestContext),
+      ...version,
     });
+    let low = start, high = end, payload = null;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2), candidate = makePayload(middle);
+      if (payloadFits(candidate, 256, args.byteBudget)) { payload = candidate; low = middle + 1; }
+      else high = middle - 1;
+    }
+    if (!payload) return failure("LINE_TOO_LARGE", "The first candidate line or metadata exceeds the response budget; use read_file byte windows or increase byteBudget.", { retryAllowed: true });
     return dedupe("read_symbol", args, `${resolution.activeProject || ""}|${statSignature(read.stat)}`, payload);
   }
 
@@ -339,7 +231,7 @@ function createReadCapabilities(context) {
     read_file: readFile,
     read_file_range: readFileRange,
     read_symbol: readSymbol,
-    search_files: searchFiles,
+    ...createSearchCapability(context),
   };
 }
 

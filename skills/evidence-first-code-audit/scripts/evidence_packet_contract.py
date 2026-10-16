@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-SCHEMA_VERSION = "1.1.1"
+SCHEMA_VERSION = "1.1.2"
 MODES = ("audit", "architecture", "codegen")
 NEUTRAL_VERDICT = "Confirmed"
 NEUTRAL_SEVERITY = "Info"
@@ -80,10 +80,47 @@ MODE_OBLIGATIONS = {
     "architecture": ("existing", "proposed", "doNotDuplicate"),
     "codegen": ("invariants", "impactedSurfaces", "validationPlan"),
 }
+OBLIGATION_FIELDS = tuple(dict.fromkeys(field for fields in MODE_OBLIGATIONS.values() for field in fields))
+
+# One policy feeds tools/list, contract responses and the checked preset asset.
+# Validation is stateless; a small packet never certifies an entire audit.
+VALIDATION_POLICY = (
+    "Call evidence_first_validate for causal P0/P1 findings or a multi-file implementation plan. "
+    "Validate one claim or a small coherent group at a time; do not rewrite the entire audit in one call. "
+    "Keep evidence concise and leave room for JSON arguments after reasoning. "
+    "Each call checks only that packet's structure and reasoning-record consistency, not source truth "
+    "or whole-task completion. If validation is unavailable or an argument is cut off, report returned "
+    "facts and unresolved scope as partial; do not present unvalidated causal claims as confirmed."
+)
+
+
+def validation_scope_metadata() -> dict[str, Any]:
+    return {
+        "validationScope": "packet_structure_and_record_consistency",
+        "factualEvidenceVerified": False,
+        "wholeTaskVerified": False,
+    }
+
+
+def model_guidance_prompt() -> str:
+    return (
+        "For code audit, architecture, refactor planning, or code generation, work evidence-first. "
+        "evidence_first_contract is an optional exact-schema lookup: call it only when machine-readable "
+        "obligations are needed and are not already available, never as a routine preflight, authority "
+        "check, or RAG/read/write/build sequence. " + VALIDATION_POLICY + " "
+        "Read direct contracts and framework semantics. Trace entry through decision/dispatch to mutation, "
+        "side effect, or observer. Distinguish present, constructed, registered, reachable, called, "
+        "mutating, and observed. Report claimType, verdict, severity, evidence, behaviorPath with "
+        "stageStatus, counterEvidence, proofLevel, and unknowns. Match proof levels to source, static-analysis, "
+        "build, test, or runtime evidence. Reuse existing owners, list impacted surfaces, and define "
+        "invariants and validation obligations before code generation. Do not modify files unless explicitly authorized."
+    )
 
 
 def _nonempty_string_schema() -> dict[str, Any]:
-    return {"type": "string", "minLength": 1, "pattern": r"\S"}
+    # The server owns the non-blank check, including multiline strings.
+    # Generation uses minLength without unsupported regex restrictions.
+    return {"type": "string", "minLength": 1}
 
 
 def selected_mode(mode: str) -> str:
@@ -217,6 +254,8 @@ def contract_metadata(mode: str) -> dict[str, Any]:
     }
     return {
         "schemaVersion": SCHEMA_VERSION,
+        "validationPolicy": VALIDATION_POLICY,
+        **validation_scope_metadata(),
         "requiredClaimFields": list(REQUIRED_CLAIM_FIELDS),
         "claimTypes": list(CLAIM_TYPES),
         "verdicts": list(VERDICTS),

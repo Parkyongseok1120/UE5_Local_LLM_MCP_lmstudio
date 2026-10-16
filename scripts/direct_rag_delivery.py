@@ -23,6 +23,7 @@ def deliver(
     projects: Any,
     repeat_receipt: str = "",
     rows: list[Any] | None = None,
+    selection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     semantic, delivery_key = query_keys(
         tool=tool,
@@ -35,6 +36,7 @@ def deliver(
         top_k=top_k,
         hybrid=hybrid,
         index=index_path,
+        selection=selection,
     )
     if receipt_matches(repeat_receipt, delivery_key):
         return {"suppressed": True, "deliveryVariantKey": delivery_key}

@@ -1,0 +1,59 @@
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 20%]
+..........................................................s............. [ 26%]
+........................................................................ [ 33%]
+.....................................................ssssssss........F.. [ 40%]
+........................................................................ [ 47%]
+................................s....................................... [ 53%]
+...........................................................s............ [ 60%]
+...................................................ss................... [ 67%]
+...........................................s............................ [ 74%]
+...........................................................s............ [ 80%]
+....................................ss.......s.......................... [ 87%]
+........................................................................ [ 94%]
+....................................s.......................             [100%]
+================================== FAILURES ===================================
+_________________ test_installer_profiles_are_manifest_driven _________________
+
+    def test_installer_profiles_are_manifest_driven() -> None:
+        module = _load_installer_module()
+        sys.modules.pop("integrated_install", None)
+        manifest = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
+        node_package = json.loads(
+            (ROOT / "lmstudio-unreal-agent-mcp" / "package.json").read_text(encoding="utf-8")
+        )
+        node_lock = json.loads(
+            (ROOT / "lmstudio-unreal-agent-mcp" / "package-lock.json").read_text(encoding="utf-8")
+        )
+        compactor_package = json.loads(
+            (ROOT / "lmstudio-context-compactor-plugin" / "package.json").read_text(encoding="utf-8")
+        )
+        compactor_lock = json.loads(
+            (ROOT / "lmstudio-context-compactor-plugin" / "package-lock.json").read_text(encoding="utf-8")
+        )
+        compactor_manifest = json.loads(
+            (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert module.PRODUCT_VERSION == manifest["productVersion"] == "1.4.0"
+        assert manifest["version"] == "2.1.22"
+        assert manifest["safety"]["contextCompactorInstalledWithLmStudio"] is True
+        assert manifest["safety"]["contextCompactorSkippedInHeadlessLmLinkMode"] is True
+        assert manifest["safety"]["contextCompactorChatActivationManagedByInstaller"] is True
+        assert manifest["safety"]["contextCompactionEnabledByDefault"] is True
+        assert "contextCompactorEnabledByDefault" not in manifest["safety"]
+        assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
+        assert node_package["version"] == node_lock["version"] == "0.3.23"
+        assert node_lock["packages"][""]["version"] == "0.3.23"
+>       assert compactor_package["version"] == compactor_lock["version"] == "0.4.66"
+E       AssertionError: assert '0.4.67' == '0.4.66'
+E         
+E         - 0.4.66
+E         ?      ^
+E         + 0.4.67
+E         ?      ^
+
+tests\test_integrated_installer.py:89: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_integrated_installer.py::test_installer_profiles_are_manifest_driven
+1 failed, 1048 passed, 19 skipped in 163.23s (0:02:43)

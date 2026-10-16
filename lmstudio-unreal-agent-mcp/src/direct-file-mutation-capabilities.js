@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const fsp = fs.promises;
 const path = require("node:path");
 const {
+  assertMutationActive,
   calculateReplacement,
   createExclusive,
   replaceWithCAS,
@@ -16,6 +17,7 @@ const { textLineCount } = require("./direct-mutation-limits");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
 const { failure, success } = require("./direct-response");
+const { committedChange, withChangeEvidence } = require("./direct-change-evidence");
 const {
   registerCurrentVersion,
   resolveVersionEvidence,
@@ -136,6 +138,7 @@ function createFileMutationCapabilities(context) {
         },
       );
     }
+    assertMutationActive(requestContext.signal);
     const resolution = await mutationResolution(args.path, args.project);
     const targetIdentity = frozenMutationTarget(resolution);
     const guard = await validateWriteTarget({
@@ -168,14 +171,15 @@ function createFileMutationCapabilities(context) {
           allowExistingWrite: false,
         });
         if (!refreshedGuard.ok) throw new Error(refreshedGuard.message);
+        assertMutationActive(requestContext.signal);
         if (args.createDirs === true) {
           await fsp.mkdir(path.dirname(refreshed.absolutePath), { recursive: true });
         }
-        return createExclusive(refreshed.absolutePath, content);
+        return createExclusive(refreshed.absolutePath, content, requestContext.signal);
       }, { stateRoot });
     } catch (error) {
       return failure(
-        "WRITE_TARGET_BLOCKED",
+        error.code === "REQUEST_CANCELLED" ? error.code : "WRITE_TARGET_BLOCKED",
         `write_file locked containment revalidation failed: ${String(error.message || error)}`,
         { retryAllowed: true, retryMode: "after_state_change" },
       );
@@ -188,7 +192,7 @@ function createFileMutationCapabilities(context) {
     }
     const hash = sha256Text(content);
     const snapshot = await registerCurrentVersion(context, resolution, hash, requestContext);
-    return success({
+    return withChangeEvidence(success({
       operation: "created",
       path: `project://${resolution.relativePath}`,
       bytesWritten: Buffer.byteLength(content, "utf8"),
@@ -198,7 +202,7 @@ function createFileMutationCapabilities(context) {
       ...(semanticAdvisory ? {
         semanticAdvisories: [{ ...semanticAdvisory, path: `project://${resolution.relativePath}` }],
       } : {}),
-    });
+    }), committedChange("", content, null, hash), context.payloadFits);
   }
 
   async function replaceInFile(args, requestContext = {}) {
@@ -224,6 +228,7 @@ function createFileMutationCapabilities(context) {
         { retryAllowed: true },
       );
     }
+    assertMutationActive(requestContext.signal);
     const resolution = await mutationResolution(args.path, args.project);
     const targetIdentity = frozenMutationTarget(resolution);
     const version = resolveVersionEvidence(context, resolution, args, requestContext);
@@ -277,6 +282,7 @@ function createFileMutationCapabilities(context) {
           throw new Error("replace_in_file real target or containment root changed during locked revalidation");
         }
         return replaceWithCAS({
+          signal: requestContext.signal,
           targetPath: refreshed.absolutePath,
           priorContent: read.buffer,
           oldText,
@@ -287,7 +293,7 @@ function createFileMutationCapabilities(context) {
       }, { stateRoot });
     } catch (error) {
       return failure(
-        "WRITE_TARGET_BLOCKED",
+        error.code === "REQUEST_CANCELLED" ? error.code : "WRITE_TARGET_BLOCKED",
         `replace_in_file locked containment revalidation failed: ${String(error.message || error)}`,
         { retryAllowed: true, retryMode: "after_state_change" },
       );
@@ -310,7 +316,7 @@ function createFileMutationCapabilities(context) {
     }
     const nextHash = sha256Text(locked.result.updated);
     const snapshot = await registerCurrentVersion(context, resolution, nextHash, requestContext);
-    return success({
+    return withChangeEvidence(success({
       operation: "replaced",
       path: `project://${resolution.relativePath}`,
       occurrences: locked.result.occurrences,
@@ -322,7 +328,7 @@ function createFileMutationCapabilities(context) {
       ...(semanticAdvisory ? {
         semanticAdvisories: [{ ...semanticAdvisory, path: `project://${resolution.relativePath}` }],
       } : {}),
-    });
+    }), committedChange(read.buffer, locked.result.updated, locked.result.preHash, nextHash), context.payloadFits);
   }
 
   return { replace_in_file: replaceInFile, write_file: writeFile };

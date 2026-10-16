@@ -6,6 +6,9 @@ venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+# Local audit logs, reproductions, and temporary test/package fixtures.
+/artifacts/
+/lmstudio-context-compactor-plugin/eval-results/
 *.sqlite
 config/workspace.json
 config/workspace.local.json
@@ -26,6 +29,7 @@ lmstudio-unreal-agent-mcp/config/lmstudio-mcp-unreal-agent.json
 PORTABLE_ROOT.txt
 docs/internal/
 lmstudio-context-compactor-plugin/dist/
+unity-symbol-worker/obj/
 .agent/
 .DS_Store
 

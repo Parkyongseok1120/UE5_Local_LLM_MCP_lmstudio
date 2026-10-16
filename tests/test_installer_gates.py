@@ -59,10 +59,10 @@ def test_context_compactor_status_verifies_direct_source_layout() -> None:
     status = _run_activation_status()
     assert status.returncode == 0, status.stderr or status.stdout
     assert "Transparent context-compactor source layout verified" in status.stdout
-    assert "top-level chat-plugin switch" in status.stdout
-    assert "OFF" in status.stdout
-    assert "single switch" in status.stdout
-    assert "no nested compaction gate" in status.stdout
+    assert "Activation is per chat" in status.stdout
+    assert "enables the top-level switch in existing chats" in status.stdout
+    assert "restart LM Studio" in status.stdout
+    assert "OFF" not in status.stdout
 
 
 def test_context_compactor_status_does_not_fabricate_runtime_activation() -> None:

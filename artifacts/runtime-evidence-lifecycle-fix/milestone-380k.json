@@ -1,0 +1,26 @@
+{
+  "observedAt": "2026-09-25T16:55:22.595346+09:00",
+  "firstCrossingRound": {
+    "modelInputId": "48a24d7e-aab7-4f18-993d-699a80dc43aa:research-recovery-29",
+    "roundIndex": 29,
+    "beforeExactInput": 18711,
+    "finalExactInput": 18711,
+    "compacted": false,
+    "configuredLow": 16128,
+    "effectiveLow": 16128,
+    "high": 21504,
+    "mandatoryFloor": 13923,
+    "generationReserve": 4096,
+    "hardCeiling": 32768,
+    "toolSchemaTokens": 8492,
+    "backendPromptTokens": 18711,
+    "prefillMs": 7265,
+    "finishReason": "toolCalls",
+    "postCompactionCumulative": 396285
+  },
+  "model": "swift-qwen3.8-27b",
+  "contextLength": 38912,
+  "runtimeRevision": 116,
+  "metric": "sum of exact templated inputs of completed actual research/report predictions; after first real compaction",
+  "criterion": "quantity only; correctness and final delivery assessed separately"
+}

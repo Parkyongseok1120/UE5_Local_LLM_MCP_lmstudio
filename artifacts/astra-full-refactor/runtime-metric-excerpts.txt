@@ -1,0 +1,24 @@
+4101:[2026-09-23 10:49:19][DEBUG] 32.26.307.817 I slot print_timing: id  3 | task 6159 | prompt eval time =     981.90 ms /   629 tokens (    1.56 ms per token,   640.59 tokens per second)
+4102:32.26.307.823 I slot print_timing: id  3 | task 6159 |        eval time =   13029.17 ms /   661 tokens (   19.74 ms per token,    50.66 tokens per second)
+4106:[2026-09-23 10:49:19][DEBUG] 32.26.307.939 I slot      release: id  3 | task 6159 | stop processing: n_tokens = 2090, truncated = 0
+4116:[2026-09-23 10:49:26][DEBUG] 32.32.975.139 I slot print_timing: id  3 | task 6392 | prompt eval time =     700.90 ms /   484 tokens (    1.45 ms per token,   690.54 tokens per second)
+4117:32.32.975.145 I slot print_timing: id  3 | task 6392 |        eval time =    5139.97 ms /   309 tokens (   16.69 ms per token,    59.92 tokens per second)
+4121:[2026-09-23 10:49:26][DEBUG] 32.32.975.298 I slot      release: id  3 | task 6392 | stop processing: n_tokens = 2882, truncated = 0
+4132:[2026-09-23 10:49:34][DEBUG] 32.40.973.545 I slot print_timing: id  3 | task 6484 | prompt eval time =     258.45 ms /   106 tokens (    2.44 ms per token,   410.14 tokens per second)
+4133:32.40.973.551 I slot print_timing: id  3 | task 6484 |        eval time =    6911.43 ms /   371 tokens (   18.68 ms per token,    53.53 tokens per second)
+4137:[2026-09-23 10:49:34][DEBUG] 32.40.973.712 I slot      release: id  3 | task 6484 | stop processing: n_tokens = 3360, truncated = 0
+4147:[2026-09-23 10:49:39][DEBUG] 32.46.055.851 I slot print_timing: id  3 | task 6607 | prompt eval time =     255.51 ms /   104 tokens (    2.46 ms per token,   407.02 tokens per second)
+4148:32.46.055.856 I slot print_timing: id  3 | task 6607 |        eval time =    3946.16 ms /   257 tokens (   15.41 ms per token,    64.87 tokens per second)
+4152:[2026-09-23 10:49:39][DEBUG] 32.46.056.040 I slot      release: id  3 | task 6607 | stop processing: n_tokens = 3722, truncated = 0
+4162:[2026-09-23 10:49:44][DEBUG] 32.51.292.618 I slot print_timing: id  3 | task 6677 | prompt eval time =     282.55 ms /   104 tokens (    2.72 ms per token,   368.08 tokens per second)
+4163:32.51.292.623 I slot print_timing: id  3 | task 6677 |        eval time =    4110.15 ms /   255 tokens (   16.18 ms per token,    61.80 tokens per second)
+4167:[2026-09-23 10:49:44][DEBUG] 32.51.292.783 I slot      release: id  3 | task 6677 | stop processing: n_tokens = 4081, truncated = 0
+4179:[2026-09-23 10:49:57][DEBUG] 33.03.733.229 I slot print_timing: id  3 | task 6749 | prompt eval time =     263.33 ms /   105 tokens (    2.51 ms per token,   398.73 tokens per second)
+4180:33.03.733.235 I slot print_timing: id  3 | task 6749 |        eval time =   11338.31 ms /   563 tokens (   20.17 ms per token,    49.57 tokens per second)
+4184:[2026-09-23 10:49:57][DEBUG] 33.03.733.410 I slot      release: id  3 | task 6749 | stop processing: n_tokens = 4750, truncated = 0
+4195:[2026-09-23 10:50:07][DEBUG] 33.13.708.919 I slot print_timing: id  3 | task 6948 | prompt eval time =     256.81 ms /   104 tokens (    2.47 ms per token,   404.97 tokens per second)
+4196:33.13.708.924 I slot print_timing: id  3 | task 6948 |        eval time =    8872.12 ms /   454 tokens (   19.59 ms per token,    51.06 tokens per second)
+4200:[2026-09-23 10:50:07][DEBUG] 33.13.709.115 I slot      release: id  3 | task 6948 | stop processing: n_tokens = 5309, truncated = 0
+4212:[2026-09-23 10:50:18][DEBUG] 33.24.881.360 I slot print_timing: id  3 | task 7103 | prompt eval time =     257.22 ms /   104 tokens (    2.47 ms per token,   404.32 tokens per second)
+4213:33.24.881.365 I slot print_timing: id  3 | task 7103 |        eval time =   10018.53 ms /   497 tokens (   20.20 ms per token,    49.51 tokens per second)
+4217:[2026-09-23 10:50:18][DEBUG] 33.24.881.563 I slot      release: id  3 | task 7103 | stop processing: n_tokens = 5910, truncated = 0

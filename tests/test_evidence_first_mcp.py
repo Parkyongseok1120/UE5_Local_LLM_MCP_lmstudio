@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,9 +133,9 @@ def test_validator_tool_advertises_the_exact_nested_packet_shape() -> None:
     }
     assert evidence["required"] == ["kind", "location", "observation"]
     assert behavior_path["required"] == ["stage", "stageStatus", "location", "symbol"]
-    assert claim["properties"]["claim"]["pattern"] == r"\S"
-    assert evidence["properties"]["location"]["pattern"] == r"\S"
-    assert behavior_path["properties"]["symbol"]["pattern"] == r"\S"
+    for schema in (claim["properties"]["claim"], evidence["properties"]["location"], behavior_path["properties"]["symbol"]):
+        assert schema["minLength"] == 1
+        assert "pattern" not in schema
     assert set(claim["properties"]["verdict"]["enum"]) == set(module.contract_payload("audit")["verdicts"])
     assert set(claim["properties"]["severity"]["enum"]) == set(module.contract_payload("audit")["severities"])
 
@@ -178,6 +180,28 @@ def test_contract_shaped_neutral_architecture_packet_validates_on_first_call() -
     assert result["schemaVersion"] == module.SERVER_VERSION
     assert result["errorCount"] == 0
     assert result["errors"] == []
+    assert result["validationScope"] == "packet_structure_and_record_consistency"
+    assert result["factualEvidenceVerified"] is False
+    assert result["wholeTaskVerified"] is False
+
+
+def test_small_packet_policy_is_shared_and_does_not_certify_audit_completion() -> None:
+    module = _load_mcp()
+    from evidence_packet_contract import VALIDATION_POLICY, model_guidance_prompt
+
+    preset = json.loads((SCRIPTS.parent / "assets/lmstudio-evidence-first.preset.json").read_text(encoding="utf-8"))
+    assert preset["operation"]["fields"][0]["value"] == model_guidance_prompt()
+    description = next(t for t in module.tool_definitions() if t["name"] == "evidence_first_validate")["description"]
+    assert VALIDATION_POLICY in description
+    assert VALIDATION_POLICY in module.contract_payload("audit")["nextAction"]
+    # Separate valid packets remain independent; no accumulated session verdict.
+    for _ in range(2):
+        result, is_error = module.call_tool("evidence_first_validate", {"packet": _neutral_architecture_packet()})
+        assert not is_error and result["claimCount"] == 1
+        assert result["wholeTaskVerified"] is False
+    for mode in ("invalid", "", None, 42):
+        result, is_error = module.call_tool("evidence_first_contract", {"mode": mode})
+        assert is_error and result["ok"] is False
 
 
 def test_mcp_validation_groups_repeated_error_paths_and_bounds_diagnostics() -> None:
@@ -261,6 +285,38 @@ def test_generic_mcp_stdio_smoke() -> None:
     payload = json.loads(completed.stdout)
     assert payload["ok"] is True
     assert payload["status"]["readOnly"] is True
+    assert payload["contractCompatible"] is True
+
+
+def test_smoke_rejects_installed_contract_revision_drift(tmp_path: Path) -> None:
+    target = tmp_path / "skill" / "scripts"
+    shutil.copytree(SCRIPTS.parent, target.parent, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    contract = target / "evidence_packet_contract.py"
+    source = contract.read_text(encoding="utf-8")
+    import re
+    source, count = re.subn(r'SCHEMA_VERSION = "[^"]+"', 'SCHEMA_VERSION = "0.0.0"', source, count=1)
+    assert count == 1
+    contract.write_text(source, encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(SMOKE), "--server", str(target / "evidence_first_mcp.py")],
+                               capture_output=True, text=True, encoding="utf-8", timeout=30)
+    payload = json.loads(completed.stdout)
+    assert completed.returncode == 1
+    assert payload["contractCompatible"] is False
+    assert payload["observedSchemaVersion"] == "0.0.0"
+
+
+def test_generic_mcp_stdio_smoke_with_legacy_windows_code_page() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(SMOKE)],
+        cwd=str(ROOT),
+        env={**os.environ, "PYTHONIOENCODING": "cp949"},
+        capture_output=True,
+        text=True,
+        encoding="cp949",
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert json.loads(completed.stdout)["ok"] is True
 
 
 def test_lmstudio_preset_contains_contract_and_low_temperature() -> None:

@@ -1,0 +1,14 @@
+✔ normal progressing recovery outlives twelve pages; bounded and no-progress limits remain (0.5811ms)
+✔ same source page growth repeats compaction below a fixed derived LOW without inflating floor (179.5233ms)
+✔ archive catalog rediscovers consumed evidence with bounded pages and no fresh-source authority (3.9486ms)
+✔ summary deadline is classified as timeout when SDK returns userStopped normally (10.974ms)
+✔ a failed optional handoff is not retried for later compactions in the same execution (1.1542ms)
+✔ actual SDK act loop does not cancel a completed channel but still cancels active generation (7.4402ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 397.7778

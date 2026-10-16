@@ -1,8 +1,10 @@
 "use strict";
+const { normalizedChange, boundChangeBodies } = require("./change-evidence-memory.js");
 
 const path = require("node:path");
 
 const { sanitizeStructuredDurableValue } = require("./durable-memory-sanitizer.js");
+const { normalizeRanges, sourceCoverage, normalizeSourceCoverage } = require("./evidence-ranges.js");
 
 function isRecord(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -11,6 +13,8 @@ function isRecord(value) {
 function projectDescriptor(item, fallback = "") {
   const candidate = item?.canonicalProject || item?.activeProject || item?.projectPath
     || (String(item?.project || "").toLowerCase().endsWith(".uproject") ? item.project : "")
+    || (item?.projectIdentity && pathApiFor(item.canonicalProjectRoot).isAbsolute(String(item.canonicalProjectRoot || ""))
+      ? item.canonicalProjectRoot : "")
     || fallback;
   return candidate ? String(candidate) : "";
 }
@@ -63,7 +67,7 @@ function canonicalFilePath(item, descriptor) {
 
 function normalizedObservationState(item, fallbackOperation) {
   const explicit = String(item?.observationState || "").toLowerCase();
-  if (["observed", "modified", "deleted", "conflict_observed"].includes(explicit)) return explicit;
+  if (["observed", "modified", "deleted", "conflict_observed", "unavailable"].includes(explicit)) return explicit;
   const operation = String(item?.operation || fallbackOperation || "observed").toLowerCase();
   const errorCode = String(item?.errorCode || "").toUpperCase();
   if (errorCode === "FILE_VERSION_CONFLICT" || operation.includes("conflict")) return "conflict_observed";
@@ -74,21 +78,72 @@ function normalizedObservationState(item, fallbackOperation) {
   return "observed";
 }
 
+const MAX_OBSERVED_LINE_RANGES = 16;
+
+function positiveInteger(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 1 ? number : null;
+}
+
+function normalizeObservedLineRanges(item) {
+  const candidates = Array.isArray(item?.observedLineRanges)
+    ? item.observedLineRanges.slice(0, 80)
+    : [];
+  const startLine = positiveInteger(item?.startLine);
+  const endLine = positiveInteger(item?.endLine);
+  if (startLine !== null && endLine !== null && endLine >= startLine) {
+    candidates.push({ startLine, endLine });
+  }
+  const ranges = candidates.map((range) => ({
+    startLine: positiveInteger(range?.startLine),
+    endLine: positiveInteger(range?.endLine),
+  })).filter((range) => (
+    range.startLine !== null && range.endLine !== null && range.endLine >= range.startLine
+  )).sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
+  const merged = normalizeRanges(ranges.map(r => [r.startLine, r.endLine]))
+    .map(([startLine, endLine]) => ({ startLine, endLine }));
+  if (merged.length <= MAX_OBSERVED_LINE_RANGES) return merged;
+  const headCount = Math.ceil(MAX_OBSERVED_LINE_RANGES / 2);
+  return [...merged.slice(0, headCount), ...merged.slice(-(MAX_OBSERVED_LINE_RANGES - headCount))];
+}
+
+function lineCoverageState(ranges, totalLines) {
+  if (!ranges.length) return undefined;
+  return ranges.length === 1 && ranges[0].startLine === 1
+    && totalLines !== null && ranges[0].endLine >= totalLines
+    ? "complete"
+    : "partial";
+}
+
 function fileObservation(item, fallbackProject = "", fallbackOperation = "observed") {
   if (!isRecord(item) || !item.path) return null;
   const descriptor = projectDescriptor(item, fallbackProject);
   const canonicalPath = canonicalFilePath(item, descriptor);
   if (!descriptor || !canonicalPath) return null;
+  const observationState = normalizedObservationState(item, fallbackOperation);
+  const sha256AtObservation = observationState === "unavailable" ? undefined : item.sha256AtObservation || item.sha256 || undefined;
+  const usableRead = sha256AtObservation && item.ok !== false && !item.errorCode
+    && !["deleted", "unavailable", "conflict_observed"].includes(observationState);
+  const observedLineRanges = usableRead ? normalizeObservedLineRanges(item) : [];
+  const totalLinesAtObservation = positiveInteger(item.totalLinesAtObservation ?? item.totalLines);
+  const coverage = usableRead ? sourceCoverage(item) : { schemaVersion: 1, entries: [] };
   return sanitizeStructuredDurableValue({
     canonicalProject: descriptor || undefined,
     canonicalProjectRoot: projectRoot(descriptor) || undefined,
     canonicalPath: canonicalPath || undefined,
     path: String(item.path),
-    observationState: normalizedObservationState(item, fallbackOperation),
-    sha256AtObservation: item.sha256AtObservation || item.sha256 || undefined,
+    observationState,
+    sha256AtObservation,
     previousSha256AtObservation: item.previousSha256AtObservation || item.previousSha256 || undefined,
     lastObservedAt: item.lastObservedAt || item.snapshotCapturedAt || undefined,
+    observedLineRanges: observedLineRanges.length ? observedLineRanges : undefined,
+    totalLinesAtObservation: observedLineRanges.length ? totalLinesAtObservation || undefined : undefined,
+    readCoverageState: lineCoverageState(observedLineRanges, totalLinesAtObservation),
+    sourceCoverage: coverage.entries.length ? coverage : undefined,
     mutationSnapshotState: "fresh_read_required",
+    changeEvidence: observationState === "unavailable" ? undefined : normalizedChange(item.changeEvidence, item),
+    changeReadVerified: item.changeReadVerified === true ? true : undefined,
+    changeEvidenceInvalidated: item.changeEvidenceInvalidated === true ? true : undefined,
   });
 }
 
@@ -102,14 +157,70 @@ function coalesceFileObservations(items, maxItems = 16, fallbackProject = "") {
       observation.canonicalPath || observation.path || "",
     ]);
     const previous = observations.get(identity);
+    const previousHash = String(previous?.sha256AtObservation || "");
+    const currentHash = String(observation.sha256AtObservation || "");
+    const sameObservedVersion = Boolean(observation.observationState !== "unavailable"
+      && previous && previousHash && (!currentHash || currentHash === previousHash));
+    const observedLineRanges = normalizeObservedLineRanges({
+      observedLineRanges: [
+        ...(sameObservedVersion ? previous.observedLineRanges || [] : []),
+        ...(observation.observedLineRanges || []),
+      ],
+    });
+    const totalLinesAtObservation = positiveInteger(observation.totalLinesAtObservation)
+      || (sameObservedVersion ? positiveInteger(previous.totalLinesAtObservation) : null);
     if (observations.has(identity)) observations.delete(identity);
-    observations.set(identity, {
+    const merged = {
       ...previous,
       ...observation,
       mutationSnapshotState: "fresh_read_required",
-    });
+    };
+    // Byte/source coverage requires an explicit equal version. Missing versions
+    // never inherit an old interval or continuation cursor.
+    const source = normalizeSourceCoverage([
+      ...(sameObservedVersion && currentHash === previousHash ? previous?.sourceCoverage?.entries || [] : []),
+      ...(observation.sourceCoverage?.entries || []),
+    ]);
+    delete merged.sourceCoverage;
+    if (source.entries.length && !["deleted", "unavailable", "conflict_observed"].includes(observation.observationState))
+      merged.sourceCoverage = source;
+    if (observation.observationState === "unavailable") {
+      delete merged.sha256AtObservation; delete merged.changeReadVerified;
+    }
+    // Read coverage has a more permissive legacy contract; change evidence
+    // requires an explicit matching hash and a paired read, never spread carry.
+    delete merged.changeEvidence;
+    if (!observation.changeEvidenceInvalidated && !["deleted", "conflict_observed", "outcome_unknown", "unavailable"].includes(observation.observationState)) {
+      if (observation.changeEvidence) merged.changeEvidence = observation.changeEvidence;
+      else if (observation.changeReadVerified && currentHash && previousHash === currentHash && previous?.changeEvidence)
+        merged.changeEvidence = previous.changeEvidence;
+    }
+    if (observedLineRanges.length) {
+      merged.observedLineRanges = observedLineRanges;
+      if (totalLinesAtObservation !== null) merged.totalLinesAtObservation = totalLinesAtObservation;
+      merged.readCoverageState = lineCoverageState(observedLineRanges, totalLinesAtObservation);
+    } else {
+      delete merged.observedLineRanges;
+      delete merged.totalLinesAtObservation;
+      delete merged.readCoverageState;
+    }
+    // New coverage owns the compatibility view too. Never merge two query or
+    // provider scopes back into a misleading legacy "complete" line range.
+    if (previous?.sourceCoverage || observation.sourceCoverage || item.sourceCoverage) {
+      delete merged.observedLineRanges;
+      delete merged.totalLinesAtObservation;
+      delete merged.readCoverageState;
+      const entries = merged.sourceCoverage?.entries || [];
+      const lines = entries.filter(entry => entry.unit === "line");
+      if (lines.length === 1) {
+        merged.observedLineRanges = lines[0].ranges.map(([startLine, endLine]) => ({ startLine, endLine }));
+        if (lines[0].total !== null) merged.totalLinesAtObservation = lines[0].total;
+      }
+      if (entries.length) merged.readCoverageState = entries.some(entry => entry.state === "complete") ? "complete" : "partial";
+    }
+    observations.set(identity, merged);
   }
-  return [...observations.values()].slice(-maxItems);
+  return boundChangeBodies([...observations.values()].slice(-maxItems));
 }
 
 function migratePriorFileObservations(items, previousState, maxItems = 16) {
@@ -140,6 +251,7 @@ module.exports = {
   normalizedObservationState,
   pathApiFor,
   isContainedPath,
+  normalizeObservedLineRanges,
   migratePriorFileObservations,
   projectDescriptor,
   projectRoot,

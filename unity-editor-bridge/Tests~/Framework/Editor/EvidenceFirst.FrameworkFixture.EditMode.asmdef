@@ -1,0 +1,6 @@
+{
+  "name": "EvidenceFirst.FrameworkFixture.EditMode",
+  "references": [],
+  "includePlatforms": ["Editor"],
+  "optionalUnityReferences": ["TestAssemblies"]
+}

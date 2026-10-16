@@ -1,0 +1,16 @@
+
+> unreal-context-compactor@0.4.67 prebuild
+> node scripts/patch-lmstudio-sdk.cjs
+
+
+> unreal-context-compactor@0.4.67 build
+> npm run clean && tsc -p tsconfig.json
+
+
+> unreal-context-compactor@0.4.67 clean
+> node scripts/clean-dist.cjs
+
+src/prediction-loop.ts(1147,3): error TS18004: No value exists in scope for the shorthand property 'buildCompactedHistory'. Either declare one or provide an initializer.
+src/prediction-loop.ts(1148,3): error TS18004: No value exists in scope for the shorthand property 'measureContext'. Either declare one or provide an initializer.
+src/prediction-loop.ts(1162,3): error TS18004: No value exists in scope for the shorthand property 'resolveGenerationBudget'. Either declare one or provide an initializer.
+src/prediction-loop.ts(1174,3): error TS18004: No value exists in scope for the shorthand property 'selectSoftCompaction'. Either declare one or provide an initializer.

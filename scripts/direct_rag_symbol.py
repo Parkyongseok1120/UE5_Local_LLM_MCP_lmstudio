@@ -15,8 +15,8 @@ from direct_rag_evidence import (
     fit_evidence_payload,
     format_evidence_rows,
 )
-from direct_rag_freshness import project_freshness
-from direct_rag_limits import detail_limits, next_detail, resolve_detail
+from direct_rag_freshness import cached_project_row_current, project_freshness
+from direct_rag_limits import detail_limits, next_detail, resolve_detail, response_char_limit
 from direct_rag_request_bounds import rag_request_bound_error
 from direct_rag_index_registry import resolve_request_index
 from direct_rag_selection import (
@@ -25,6 +25,7 @@ from direct_rag_selection import (
     project_selectors,
 )
 from direct_rag_symbol_query import symbol_lookup
+from direct_rag_engine_local import engine_local_symbol
 from target_resolver import resolve_symbol_target
 from workspace_paths import active_project_names, resolve_active_project_path
 
@@ -86,9 +87,9 @@ def symbol_lookup_capability(
     runtime: SymbolRuntime,
     arguments: dict[str, Any],
 ) -> CapabilityResult:
-    request_limits = detail_limits(str(arguments.get("detailLevel") or "compact"))
-    request_limit = min(
-        int(request_limits["max_tool_chars"]),
+    request_limit = response_char_limit(
+        str(arguments.get("detailLevel") or "compact"),
+        arguments.get("maxChars"),
         configured_result_limit(),
     )
     bound_error = rag_request_bound_error(
@@ -110,6 +111,13 @@ def symbol_lookup_capability(
             retry_allowed=True,
         )
     workspace = getattr(runtime, "workspace", Path.cwd())
+    mode = arguments.get("sourceMode", "index")
+    if mode not in {"index", "engine_local"}:
+        return failure("INVALID_TOOL_ARGUMENTS", "sourceMode must be index or engine_local.")
+    if mode == "engine_local":
+        return engine_local_symbol(runtime, arguments, request_limit)
+    if arguments.get("owner"):
+        return failure("INVALID_TOOL_ARGUMENTS", "owner is only supported with engine_local.")
     index_resolution = resolve_request_index(
         runtime.index,
         workspace,
@@ -204,11 +212,12 @@ def symbol_lookup_capability(
         expected_generation=expected_generation,
     )
     suppressed = 0
-    if (
+    if "projectStates" in freshness or (
         freshness.get("directSourcePreferred")
         and freshness.get("projectSymbolsFresh") is False
     ):
-        kept = [row for row in rows if not _source_derived(row, selected_projects)]
+        kept = [row for row in rows if not _source_derived(row, selected_projects)
+                or cached_project_row_current(row, freshness)]
         suppressed = len(rows) - len(kept)
         rows = kept
 
@@ -226,7 +235,7 @@ def symbol_lookup_capability(
         max_chars=int(limits["assembly_chars"]),
         max_chars_per_row=int(limits["row_chars"]),
     )
-    limit = min(int(limits["max_tool_chars"]), configured_result_limit())
+    limit = response_char_limit(detail, arguments.get("maxChars"), configured_result_limit())
     match_refs = compact_match_refs(
         rows,
         max_chars=min(int(limits["match_chars"]), max(512, limit // 3)),

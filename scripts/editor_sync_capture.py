@@ -14,6 +14,7 @@ from direct_rag_editor_snapshot import (
 from direct_rag_refresh_lock import DirectRagRefreshBusyError, index_refresh_lock
 from editor_export_contract import EditorExportContractError
 from editor_sync_context import EditorSyncContext
+from direct_rag_operation import RagOperationStopped
 
 
 @dataclass
@@ -85,6 +86,8 @@ class EditorSyncCapture:
                 "errorCode": "EDITOR_EXPORT_CONTRACT_INVALID",
                 "error": str(exc),
             }
+        except RagOperationStopped:
+            raise
         except Exception as exc:
             self.export_result = {
                 "ok": False,
@@ -109,6 +112,8 @@ class EditorSyncCapture:
                 "errorCode": "EDITOR_EXPORT_CONTRACT_INVALID",
                 "error": str(exc),
             }
+        except RagOperationStopped:
+            raise
         except Exception as exc:
             self.error = {
                 "errorCode": "EDITOR_EXPORT_SNAPSHOT_FAILED",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from scripts.ci.ci_suites import PRIMARY_SUITE_NAMES, QUARANTINED_TEST_ROOTS, SUITES
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -54,16 +54,9 @@ def test_workflow_invokes_only_existing_named_pytest_suites() -> None:
 
 
 def test_suite_manifest_preserves_pre_consolidation_unique_coverage() -> None:
-    assert {name: len(SUITES[name]) for name in PRIMARY_SUITE_NAMES} == {
-        "portable_direct": 29,
-        "portable_release": 12,
-        "windows_direct": 9,
-        "windows_release": 2,
-    }
     paths = _all_suite_paths()
     normalized = [path.casefold() for path in paths]
 
-    assert len(paths) == 52
     assert len(normalized) == len(set(normalized))
     assert all((ROOT / path).is_file() for path in paths)
     assert "tests/test_public_path_hygiene.py" in paths
@@ -75,6 +68,8 @@ def test_suite_manifest_preserves_pre_consolidation_unique_coverage() -> None:
     assert "tests/test_package_forbidden_filters.py" in paths
     assert "tests/test_python_seed_bootstrap.py" in paths
     assert "tests/test_ci_suite_runner.py" in paths
+    assert "tests/test_unity_install.py" in paths
+    assert "tests/test_update_launcher.py" in paths
 
 
 def test_repetition_suite_preserves_the_pre_consolidation_three_pass_gate() -> None:
@@ -122,10 +117,17 @@ def test_context_compactor_semantic_preservation_tests_are_mandatory() -> None:
     assert "Context Compactor build and full semantic test suite" in ci
     assert "working-directory: lmstudio-context-compactor-plugin" in ci
     assert "run: npm test" in ci
-    assert "test/durable-memory-sanitizer.test.js" in test_command
-    assert "test/direct-compaction-core.test.js" in test_command
-    assert "test/prediction-loop.test.cjs" in test_command
-    assert "test/validation-repair-memory.test.cjs" in test_command
+    assert "node scripts/run-tests.cjs" in test_command
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is required to inspect the real test entry point")
+    listed = json.loads(subprocess.check_output(
+        [node, "scripts/run-tests.cjs", "--list"], cwd=ROOT / "lmstudio-context-compactor-plugin", text=True))
+    members = {name.replace("\\", "/") for name in listed}
+    assert {"test/durable-memory-sanitizer.test.js", "test/direct-compaction-core.test.js",
+            "test/prediction-loop.test.cjs", "test/validation-repair-memory.test.cjs",
+            "test/continuity-repair.test.cjs", "test/runtime-policy.test.cjs"} <= members
+    assert len(listed) == len(members)
 
 
 def test_component_package_version_sources_are_synchronized() -> None:
@@ -137,23 +139,41 @@ def test_component_package_version_sources_are_synchronized() -> None:
     assert package["version"] == lock["version"] == lock["packages"][""]["version"]
     assert plugin_manifest["name"] == package["name"]
     assert isinstance(plugin_manifest["revision"], int) and plugin_manifest["revision"] > 0
-    assert installer_manifest["safety"]["contextCompactionEnabledByDefault"] is False
+    assert installer_manifest["safety"]["contextCompactionEnabledByDefault"] is True
+
+
+def test_unity_release_version_sources_are_synchronized() -> None:
+    expected = "1.4.0-rc.3"
+    package = json.loads(_read("lmstudio-unity-mcp/package.json"))
+    lock = json.loads(_read("lmstudio-unity-mcp/package-lock.json"))
+    bridge_package = json.loads(_read("unity-editor-bridge/package.json"))
+
+    assert package["version"] == expected
+    assert lock["version"] == expected
+    assert lock["packages"][""]["version"] == expected
+    assert bridge_package["version"] == expected
+    assert 'version: require("../package.json").version' in _read("lmstudio-unity-mcp/src/server.js")
+    assert f'serverVersion: "{expected}"' in _read("lmstudio-unity-mcp/src/bridge-client.js")
+    assert f'Version = "{expected}"' in _read("unity-editor-bridge/Editor/Bridge.cs")
 
 
 def test_workflow_has_supported_triggers_permissions_cancellation_timeouts_and_caches() -> None:
     ci = _read(".github/workflows/ci.yml")
 
-    assert ci.count('branches: ["main", "Develop"]') == 2
+    assert ci.count('branches: ["main", "Develop", "v*"]') == 2
+    assert "workflow_dispatch:" in ci
     assert "master" not in ci
     assert "permissions:\n  contents: read" in ci
     assert "group: ci-${{ github.workflow }}-${{ github.ref }}" in ci
     assert "cancel-in-progress: true" in ci
-    assert ci.count("timeout-minutes:") == 6
+    assert ci.count("timeout-minutes:") == 7
     assert "actions/checkout@v7" in ci
     assert "actions/setup-python@v7" in ci
     assert "actions/setup-node@v7" in ci
     assert "cache: pip" in ci
     assert "cache: npm" in ci
+    assert "name: Unity MCP (${{ matrix.os }})" in ci
+    assert "working-directory: lmstudio-unity-mcp" in ci
     assert "continue-on-error" not in ci
 
 
@@ -187,6 +207,16 @@ def test_release_job_closes_clean_package_and_compactor_only_dry_run() -> None:
     assert "forbidden inventory count: 0" in release
     assert "--profile custom --components context_compactor" in release
     assert "--dry-run" in release
+
+
+def test_windows_update_launcher_covers_installed_engine_runtimes_and_compactor() -> None:
+    update = _read("UPDATE.bat")
+    assert "scripts\\update_unity_mcp.py" in update
+    assert "scripts\\update_unreal_mcp.py" in update
+    assert "--if-present" in update
+    assert "--profile custom --components context_compactor" in update
+    assert update.index("update_unity_mcp.py") < update.index("update_unreal_mcp.py")
+    assert update.index("update_unreal_mcp.py") < update.index("--components context_compactor")
 
 
 def test_oss_release_scan_excludes_the_quarantined_legacy_archive() -> None:

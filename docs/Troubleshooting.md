@@ -64,7 +64,7 @@ Python이 없으면 `install.py`를 직접 실행하지 말고 `INSTALL.bat` 또
 
 ## 대화 길이 초과와 응답 오류
 
-실제 모델이 선택됐는지 확인하고 `codex/unreal-context-compactor`는 기본 `OFF`로 두어야 합니다. 필요할 때 해당 채팅의 단일 스위치를 켭니다. `npm --prefix lmstudio-context-compactor-plugin run status`는 설치 파일 확인용이며 채팅 활성화를 증명하지 않습니다.
+실제 모델이 선택됐는지 확인하고 설치·업데이트 뒤 `codex/unreal-context-compactor` 단일 스위치가 `ON`인지 확인합니다. 필요 없는 채팅에서는 끌 수 있습니다. `npm --prefix lmstudio-context-compactor-plugin run status`는 설치 파일 확인용이며 현재 열린 채팅의 활성화를 증명하지 않습니다.
 
 이미 대화 한도나 KV 캐시가 찼다면 새 채팅에 정확한 프로젝트, 현재 요청, 바꾼 파일, 마지막 빌드 결과, 남은 오류만 넘겨야 합니다.
 

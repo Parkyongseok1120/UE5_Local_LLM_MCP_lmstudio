@@ -5,14 +5,65 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const DIRECT_SOURCE_FILES = Object.freeze([
+  "src/config-defaults.ts",
+  "src/generated-runtime-identity.ts",
+  "src/generated-tool-contract.ts",
+  "src/tool-result-semantics.js",
+  "src/interrupted-calls.js",
+  "src/budget-broker.ts",
+  "src/design-guidance.ts",
+  "src/guidance-topic-selection.ts",
+  "src/reference-context.ts",
+  "src/reference-rendering.ts",
+  "src/generated-design-guidance.ts",
+  "src/checkpoint-budget.js",
+  "src/round-input.ts",
+  "src/semantic-handoff.ts",
+  "src/context-manager.ts",
+  "src/context-ports.ts",
+  "src/delivery-controller.ts",
+  "src/evidence-manager.ts",
+  "src/evidence-ranges.js",
+  "src/evidence-read-contract.js",
+  "src/semantic-handoff-policy.js",
+  "src/evidence-telemetry.ts",
+  "src/execution-config.ts",
+  "src/execution-contracts.ts",
+  "src/execution-instructions.ts",
+  "src/execution-state.ts",
+  "src/prediction-ui.ts",
+  "src/raw-tool-intent.ts",
+  "src/recovery-coordinator.ts",
+  "src/reasoning-recovery.ts",
+  "src/runtime-identity.ts",
+  "src/tool-boundary.ts",
+  "src/tool-capability-registry.ts",
+
   "src/index.ts",
   "src/prediction-loop.ts",
+  "src/context-budget.ts",
+  "src/attachment-boundary.ts",
   "src/round-loop.ts",
+  "src/prediction-stream.ts",
+  "src/tool-scope.ts",
+  "src/attachment-tools.ts",
   "src/direct-compaction-core.js",
   "src/compaction-tool-memory.js",
+  "src/input-availability.js",
+  "src/evidence-archive.js",
+  "src/evidence-identity.js",
+  "src/working-context.js",
+  "src/note-persistence.ts",
+  "src/terminal-persistence.ts",
+  "src/tool-exchange-index.js",
+  "src/transcript-canonical.js",
+  "src/working-context-boundary.ts",
+  "src/continuity-assistant-evidence.js",
   "src/continuity-file-observations.js",
   "src/continuity-memory.js",
+  "src/continuity-model-notes.js",
   "src/continuity-objectives.js",
+  "src/change-evidence-memory.js",
   "src/continuity-text.js",
   "src/durable-memory-sanitizer.js",
   "src/direct-config.ts",
@@ -27,16 +78,27 @@ function inspect(root = path.resolve(__dirname, "..")) {
   ];
   const missing = required.filter((relative) => !fs.existsSync(path.join(root, relative)));
   let index = "";
+  let entry = "";
   try { index = fs.readFileSync(path.join(root, "src", "index.ts"), "utf8"); } catch { /* reported below */ }
+  try { entry = fs.readFileSync(path.join(root, ".lmstudio", "entry.ts"), "utf8"); } catch { /* reported below */ }
   const directWiring = index.includes("./prediction-loop")
     && index.includes("./direct-config")
-    && /withPredictionLoopHandler\s*\(\s*handlePredictionLoop\s*\)/.test(index);
+    && index.includes("./working-context-boundary")
+    && /withPromptPreprocessor\s*\(/.test(index)
+    && /withPredictionLoopHandler\s*\(\s*createPredictionLoopHandler\s*\(/.test(index);
+  const repositoryEntryWiring = /withPromptPreprocessor\s*\(\s*handler\s*\)/.test(entry)
+    && /host\.setPromptPreprocessor\s*\(\s*handler\s*\)/.test(entry);
+  // lms dev --install generates its own entry instead of copying ours.
+  const installedEntryWiring = /withPromptPreprocessor\s*:\s*\(\s*preprocess\s*\)\s*=>/.test(entry)
+    && /selfRegistrationHost\.setPromptPreprocessor\s*\(\s*preprocess\s*\)/.test(entry);
+  const preprocessorHostWiring = repositoryEntryWiring || installedEntryWiring;
   const legacyWiring = /withGenerator\s*\(|["']\.\/generator["']|["']\.\/compaction-core["']/.test(index);
   const issues = [];
   if (missing.length) issues.push(`missing: ${missing.join(", ")}`);
   if (index && !directWiring) issues.push("src/index.ts does not register the direct prediction-loop handler");
+  if (entry && !preprocessorHostWiring) issues.push(".lmstudio/entry.ts does not register the prompt preprocessor with the host");
   if (legacyWiring) issues.push("src/index.ts still registers a removed legacy handler");
-  const sourceLayoutVerified = missing.length === 0 && directWiring && !legacyWiring;
+  const sourceLayoutVerified = missing.length === 0 && directWiring && preprocessorHostWiring && !legacyWiring;
   return {
     ok: sourceLayoutVerified,
     sourceLayoutVerified,
@@ -65,13 +127,13 @@ function main(argv = process.argv.slice(2)) {
   if (json) process.stdout.write(`${JSON.stringify(result)}\n`);
   else if (result.ok) {
     process.stdout.write("[PASS] Transparent context-compactor source layout verified.\n");
-    process.stdout.write("Default policy: keep the top-level chat-plugin switch OFF. Enable that single switch only for a long chat that needs compaction; there is no nested compaction gate.\n");
+    process.stdout.write("Activation is per chat. The integrated installer enables the top-level switch in existing chats; restart LM Studio after installation or update.\n");
   } else {
     process.stdout.write(`[FAIL] Context-compactor source verification failed: ${result.issues.join("; ")}\n`);
   }
   if (!result.ok) return 2;
   if (requireRuntime) {
-    if (!json) process.stdout.write("[UNPROVEN] Chat activation is host-owned; default policy keeps it OFF.\n");
+    if (!json) process.stdout.write("[UNPROVEN] The currently open chat activation is host-owned and cannot be inferred from plugin source files alone.\n");
     return 3;
   }
   return 0;

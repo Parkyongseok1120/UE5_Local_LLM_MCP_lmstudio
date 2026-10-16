@@ -1,0 +1,203 @@
+{
+  "mode": "codegen",
+  "claims": [
+    {
+      "claim": "작업 창의 원본 경계가 SDK 메시지 구성에 의존하여 실제 화면 블록의 다음 턴 기록과 불일치할 수 있습니다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-ui.ts:createMessageEmitter",
+          "observation": "요청마다 화면 블록을 먼저 생성하며 스트리밍 텍스트는 별도 블록입니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:visibleHistory",
+          "observation": "저장 경계는 화면 블록 대신 SDK가 캡처한 묶음 메시지를 추가합니다."
+        },
+        {
+          "kind": "runtime",
+          "location": "local interrupted conversation, 2026-09-25",
+          "observation": "서명된 사용자 prefix를 재구성하여 모두 일치 확인. 화면은 요청을 개별 메시지로 보관합니다. 다음 턴은 서명 검증 성공 후 작업 창 복원 거부. 창 digest와 32개 참조의 본문 및 기록 해시는 정상입니다. 원본 대화와 경로는 개인정보 보호를 위해 포함하지 않습니다."
+        },
+        {
+          "kind": "test",
+          "location": "test/prediction-loop.test.cjs:split host blocks survive canceled multi-tool research and a report-only next turn",
+          "observation": "화면 블록을 독립적으로 다시 읽어 다음 요청을 서명하고 복원 성공, 마지막 반환 본문 보존, 미완료 계획과 일회성 값 배제를 확인했습니다."
+        },
+        {
+          "kind": "runtime",
+          "location": "offline replay of 2026-09-25 stopped execution",
+          "observation": "397개 호스트 메시지와 sourceLength 384인 기존 창을 실제 restore 경로로 검사했습니다. 32개 참조 검증 성공, 거부 사유 source_prefix_mismatch였습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts",
+          "symbol": "onToolCallRequestFinalized"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "src/prediction-ui.ts",
+          "symbol": "emitRequest creates separate content blocks"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts",
+          "symbol": "visibleHistory.append SDK message"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "src/working-context.js",
+          "symbol": "restore rejects differing source prefix"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "test/prediction-loop.test.cjs:signed next user turn",
+          "observation": "기존 단일 응답 테스트는 성공하지만 실제 화면 블록을 왕복하지 않습니다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 GUI의 중단→다음 턴 복원 전체 경로는 아직 재실행하지 않았습니다."
+      ]
+    },
+    {
+      "claim": "성공한 파일 읽기와 예산 거부가 섞이면 복구를 즉시 소진 처리하고, 일반 모드의 최종 보고에 bounded audit 시간 제한을 적용합니다. 대체 보고는 raw workspace_file_observation을 누락합니다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "local follow-up retry c167c8ed (2026-09-25)",
+          "observation": "성공 파일 결과 2개, 예산 거부 1개, progressed=true 다음 즉시 research_recovery_exhausted. 보고 70012ms에서 final_timeout, visibleChars=0. 대체 보고 evidenceCount=0."
+        },
+        {
+          "kind": "project_source",
+          "location": "src/recovery-coordinator.ts:RecoveryCoordinator.advance",
+          "observation": "errorCount만으로 progressed 여부와 무관하게 exhausted를 반환합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "src/prediction-loop.ts:phaseTimeoutSignal; src/delivery-controller.ts:evidenceBackedPartialReport",
+          "observation": "context_budget 외 자동 복구 최종 단계는 audit 제한을 사용하고 raw file kind의 분기가 없습니다."
+        },
+        {
+          "kind": "test",
+          "location": "npm test; test/refactor-policies.test.cjs; test/prediction-loop.test.cjs",
+          "observation": "전체 376개 통과. 혼합 batch의 다음 소비 라운드, 일반 보고 제한 분리, 반환된 파일 범위와 발췌를 포함하는 대체 보고 확인."
+        },
+        {
+          "kind": "runtime",
+          "location": "local LM Studio SDK replay, 2026-09-25",
+          "observation": "실제 반환 결과 3개만 재생. swift-qwen3.8-27b, context 86272, prompt 6203, maxTokens 8192, timeoutMs null. 약 189초 실행, visible 13539자 생성. maxPredictedTokensReached 종료로 완결 미확인. GUI 대화 수정 및 외부 도구 실행 없음."
+        },
+        {
+          "kind": "runtime",
+          "location": "lms dev --install -y; installed plugin source and dist hashes",
+          "observation": "설치 성공, 작업본과 source/dist 지문 일치, production bundle에 수정 경로 포함, SDK 패치 및 설치 상태 검사 통과. GUI 활성화 증명과 구분."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/recovery-coordinator.ts",
+          "symbol": "advance mixed tool outcomes"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/prediction-loop.ts",
+          "symbol": "research_recovery_exhausted with audit timeout"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "src/delivery-controller.ts",
+          "symbol": "evidenceBackedPartialReport returns zero evidence"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "same retry direct_context_measurement",
+          "observation": "최종 입력에는 currentRawObservationCount=2, remainingTokens=62782로 근거와 입력 여유가 실제로 있습니다. GPU context 초과가 최종 중단 이유는 아닙니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델 재현에서 보고 13539자를 생성했지만 8192 출력 토큰 한도로 종료하여 보고 완결은 미확인입니다.",
+        "수정본 설치 및 지문 일치는 확인했으나 GUI 대화에서 새 실행은 아직 하지 않았습니다."
+      ]
+    }
+  ],
+  "existing": [
+    "WorkingContext는 창 및 아카이브 참조를 소유합니다.",
+    "RoundTransaction은 완료한 계획과 반환된 결과를 구분합니다.",
+    "ContextManager는 정확한 입력 측정과 실행 허용을 소유합니다.",
+    "화면 생성은 PredictionStreamRenderer와 createMessageEmitter가 담당합니다."
+  ],
+  "proposed": [
+    "화면 블록을 기록하는 단일 소유자로 다음 턴 source prefix를 구성합니다.",
+    "종료 시 미완성 계획을 제외한 작업 창을 저장하고 반드시 재측정하도록 표시합니다.",
+    "복원 거부 사유를 무결성, 범위, prefix, 참조로 구분합니다.",
+    "응급 축약 전에 기존 아카이브 투영 경로를 거칩니다.",
+    "도구 세션 획득 직후부터 using 수명으로 해제를 보장합니다.",
+    "혼합 batch에서 관측 진행이 있으면 오류 하나로 복구를 종료하지 않습니다.",
+    "DeliveryController에서 일반/명시적 bounded/output recovery의 출력 및 시간 정책을 한 번 결정합니다.",
+    "대체 보고에 반환된 파일 범위와 짧은 본문 발췌를 포함하고 정확한 종료 원인을 표시합니다."
+  ],
+  "doNotDuplicate": [
+    "EvidenceArchive",
+    "RoundTransaction",
+    "ContextManager exact measurement",
+    "WorkingContextBoundary signed scope",
+    "기존 의미 요약 및 재조회 도구"
+  ],
+  "invariants": [
+    "대화/프로젝트/분기 및 편집된 prefix의 검증을 완화하지 않습니다.",
+    "반환된 근거는 취소 후 살아남고 미완료 계획은 승격하지 않습니다.",
+    "종료 스냅샷은 실행 허가가 아니며 다음 호출 전 정확한 측정을 거칩니다.",
+    "비밀, reasoning, 영수증과 일회성 cursor를 영속화하지 않습니다.",
+    "의미 요약 실패와 무관하게 결정적 복원 경로가 동작합니다.",
+    "일반 모드 자동 복구는 사용자가 선택하지 않은 bounded audit 시간 제한을 상속하지 않습니다.",
+    "성공 결과는 같은 batch 오류와 독립적으로 보고하며 무근거 완료를 주장하지 않습니다.",
+    "사용자 취소는 내부 시간 초과와 구분합니다."
+  ],
+  "impactedSurfaces": [
+    "prediction-ui.ts",
+    "prediction-stream.ts",
+    "prediction-loop.ts",
+    "working-context.js",
+    "context-ports.ts",
+    "round-input.ts",
+    "test/prediction-loop.test.cjs",
+    "test/working-context.test.cjs",
+    "delivery-controller.ts",
+    "recovery-coordinator.ts",
+    "test/refactor-policies.test.cjs",
+    "scripts/status.cjs",
+    "test/status.test.cjs"
+  ],
+  "validationPlan": [
+    "분리된 화면 블록, 다중 도구 요청, 스트리밍 및 취소 후 다음 턴을 재현합니다.",
+    "편집/분기/잘못된 참조/만료 시 복원 거부를 검사합니다.",
+    "빌드와 기존 전체 플러그인 테스트를 실행합니다.",
+    "저장 실패는 이전 원자적 창을 보존하며 다음 턴은 원래 대화로 안전하게 돌아갑니다.",
+    "두 파일 성공+세 번째 예산 거부 후 보고 생성 흐름을 재현합니다.",
+    "명시적 bounded mode와 output recovery의 시간/출력 제한 유지, 일반 복구는 별도 제한을 상속하지 않는지 검사합니다.",
+    "성공 파일+오류 결과가 있는 시간 초과 대체 보고를 검사합니다.",
+    "CLI가 생성한 entry 형식 및 host 등록 누락을 검사하는 상태 테스트 5개 통과. 런타임 활성화 미검증 상태 유지."
+  ]
+}

@@ -14,6 +14,7 @@ const {
   createDirectRuntime,
   toolDefinitions,
 } = require("../src/direct-server.js");
+const { createWorkspaceCapabilities } = require("../../shared-tool-core/workspace.js");
 
 const CONTROL_FIELD_PATTERN = /taskAuthorization|ownerCapability|routeHash|toolRoute|serverControl|synthesisReadiness|claimLedger/;
 
@@ -83,6 +84,55 @@ function fixture(t, envOverrides = {}) {
   return { runtime, workspaceRoot, projectRoot, projectFile, configFile, sourceFile, stateRoot };
 }
 
+test("read envelope byte budgets preserve UTF-8, escaped text and contiguous whole-line pages", async t => {
+  const f=fixture(t), lines=Array.from({length:180},(_,i)=>`${i}: 한글 \\\" 데이터 ${'x'.repeat(45)}`);
+  fs.writeFileSync(f.sourceFile,lines.join('\r\n'));
+  const delivered=[]; let start=1;
+  while(start <= lines.length) {
+    const response=await f.runtime.callTool('read_file_range',{path:f.sourceFile,startLine:start,endLine:lines.length,byteBudget:4096});
+    assert.ok(Buffer.byteLength(response.content[0].text,'utf8') <= 4096);
+    const p=payloadOf(response); assert.equal(p.ok,true,JSON.stringify(p));
+    assert.equal(p.startLine,start); assert.equal(p.content,lines.slice(start-1,p.endLine).join('\n'));
+    delivered.push(...p.content.split('\n'));
+    if (p.nextStartLine === null) break;
+    assert.equal(p.nextStartLine,p.endLine+1); start=p.nextStartLine;
+  }
+  assert.deepEqual(delivered,lines);
+  const response=await f.runtime.callTool('read_file',{path:f.sourceFile,byteBudget:4096});
+  const p=payloadOf(response); assert.equal(p.ok,true); assert.ok(Buffer.byteLength(response.content[0].text)<=4096);
+  assert.equal(Buffer.byteLength(p.content),p.nextOffsetBytes); assert.doesNotMatch(p.content,/\ufffd/);
+});
+
+test("oversized lines expose a correct CRLF byte cursor and transport errors remain parseable", async t => {
+  const f=fixture(t), prefix='첫째\r\n둘째\r\n';
+  fs.writeFileSync(f.sourceFile,prefix+'한'.repeat(10000));
+  const response=await f.runtime.callTool('read_file_range',{path:f.sourceFile,startLine:3,endLine:3,byteBudget:2048});
+  const p=payloadOf(response); assert.equal(p.errorCode,'LINE_TOO_LARGE');
+  assert.equal(p.suggestion.args.offsetBytes,Buffer.byteLength(prefix));
+  assert.ok(Buffer.byteLength(response.content[0].text)<=2048);
+  const { toMcpResult }=require('../src/direct-response');
+  const huge=toMcpResult({ok:false,errorCode:'X',message:'한'.repeat(3000),suggestion:{tool:'read_file',args:{path:'길'.repeat(4000)}}},{maxBytes:2048});
+  payloadOf(huge); assert.ok(Buffer.byteLength(huge.content[0].text)<=2048);
+});
+
+test("symbol and search return bounded partial facts without claiming semantic resolution", async t => {
+  const f=fixture(t);
+  fs.writeFileSync(f.sourceFile,'void Foo() {\n'+Array.from({length:150},(_,i)=>`  // 한글 MATCH ${i}`).join('\n')+'\n}\nvoid Foo(int x) {}');
+  const response=await f.runtime.callTool('read_symbol',{path:f.sourceFile,symbol:'Foo',byteBudget:4096});
+  const p=payloadOf(response); assert.equal(p.ok,true,JSON.stringify(p));
+  assert.equal(p.representation,'lexical_body_candidate'); assert.equal(p.candidateCount,2);
+  assert.equal(p.truncated,true); assert.equal(p.nextStartLine,p.endLine+1);
+  assert.ok(Buffer.byteLength(response.content[0].text)<=4096);
+  const search=await f.runtime.callTool('search_files',{path:f.sourceFile,query:'MATCH',byteBudget:4096});
+  const s=payloadOf(search); assert.equal(s.ok,true); assert.equal(s.coverage,'partial');
+  assert.equal(s.omissionReason,'response_budget'); assert.ok(Buffer.byteLength(search.content[0].text)<=4096);
+  const bad=payloadOf(await f.runtime.callTool('read_file',{path:f.sourceFile,byteBudget:12}));
+  assert.equal(bad.errorCode,'INVALID_ARGUMENT');
+  const unsupported=await f.runtime.callTool('read_file',{path:f.sourceFile,byteBudget:2048,['미지'.repeat(900)]:'x'});
+  assert.equal(payloadOf(unsupported).ok,false);
+  assert.ok(Buffer.byteLength(unsupported.content[0].text)<=2048);
+});
+
 test("Direct and Strict use separate executable entries", () => {
   const pkg = require("../package.json");
   assert.strictEqual(pkg.main, "src/direct-server.js");
@@ -90,6 +140,92 @@ test("Direct and Strict use separate executable entries", () => {
   assert.strictEqual(pkg.scripts["start:strict"], "node src/strict-server.js");
   const directSource = fs.readFileSync(path.resolve(__dirname, "../src/direct-server.js"), "utf8");
   assert.doesNotMatch(directSource, /MCP_EXECUTION_MODE|strict-server|createStrictRuntime/);
+});
+
+test("Workspace Git binds the selected Unreal project and rollback removes only new capabilities", async t => {
+  const f = fixture(t);
+  const git = (...args) => {
+    const result = spawnSync("git", args, { cwd: f.projectRoot, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+  };
+  git("init", "-q"); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid");
+  git("add", "."); git("commit", "-qm", "base"); const base = git("rev-parse", "HEAD");
+  fs.appendFileSync(f.sourceFile, "// changed\n"); git("add", "."); git("commit", "-qm", "head");
+  const status = payloadOf(await f.runtime.callTool("workspace_status", { project: f.projectFile }));
+  assert.equal(status.engine, "unreal"); assert.equal(status.independentWriter, false);
+  const changes = payloadOf(await f.runtime.callTool("git_changed_files", { project: f.projectFile, comparison: "range", base, head: "HEAD" }));
+  assert.equal(changes.canonicalProject, f.projectFile);
+  assert.deepEqual(changes.items.map(item => item.path), ["Source/DirectFixture/DirectFixture.cpp"]);
+  assert.equal(changes.queryPathBase, "workspace_root");
+  assert.deepEqual(changes.requestedPaths, []);
+  assert.deepEqual(changes.resolvedRepositoryPaths, ["."]);
+  // Shared Git owns its compact paging contract; Direct source-read byte
+  // limits must not reinterpret that page with pretty-JSON overhead.
+  for(let i=0;i<80;i++) fs.writeFileSync(path.join(f.projectRoot,`Changed-${i}.txt`),'new');
+  const gitPage=payloadOf(await f.runtime.callTool('git_changed_files',{project:f.projectFile,comparison:'worktree',byteBudget:4096}));
+  assert.notEqual(gitPage.ok,false,JSON.stringify(gitPage));
+  const missingRange = payloadOf(await f.runtime.callTool("git_changed_files", {
+    project: f.projectFile, comparison: "range",
+  }));
+  assert.match(missingRange.errorCode, /invalid_argument/i);
+  const forbiddenRangeEndpoints = payloadOf(await f.runtime.callTool("git_changed_files", {
+    project: f.projectFile, comparison: "worktree", base,
+  }));
+  assert.match(forbiddenRangeEndpoints.errorCode, /invalid_argument/i);
+  const invalid = payloadOf(await f.runtime.callTool("git_log", { limit: "bad" }));
+  assert.match(invalid.errorCode, /invalid_argument/i);
+  const rollback = createDirectRuntime({ workspaceRoot: f.workspaceRoot, configPath: f.runtime.configPath,
+    env: { WORKSPACE_CAPABILITIES: "0", AGENT_STATE_ROOT: f.stateRoot }, getActiveProject: () => f.projectFile });
+  assert(!rollback.tools.some(tool => tool.name === "git_log"));
+  assert.equal(payloadOf(await rollback.callTool("git_log", {})).errorCode, "UNKNOWN_TOOL");
+  assert(rollback.tools.some(tool => tool.name === "read_file"));
+});
+
+test("Workspace comparison endpoints are rejected before binding", async () => {
+  let bindingCalls = 0;
+  const workspace = createWorkspaceCapabilities({
+    resolveBinding: async () => {
+      bindingCalls += 1;
+      throw new Error("resolveBinding must not run for invalid comparison endpoints");
+    },
+  });
+
+  for (const name of ["git_changed_files", "git_diff_file"]) {
+    for (const args of [
+      { comparison: "worktree", base: "HEAD" },
+      { comparison: "staged", head: "HEAD" },
+    ]) {
+      const request = name === "git_diff_file" ? { path: "Source/DirectFixture/DirectFixture.cpp", ...args } : args;
+      await assert.rejects(
+        workspace(name, request),
+        error => error?.code === "invalid_arguments",
+      );
+    }
+  }
+  assert.equal(bindingCalls, 0);
+});
+
+test("all Workspace Git schemas describe paths from the bound workspace root", () => {
+  const tools = toolDefinitions().filter(tool => /^git_/u.test(tool.name));
+  assert.ok(tools.length >= 5);
+  for (const tool of tools) {
+    assert.match(tool.description, /workspace(?:-| )relative|relative to the bound workspace root/iu, tool.name);
+    const pathRule = tool.inputSchema.properties.path;
+    const pathsRule = tool.inputSchema.properties.paths;
+    if (pathRule) assert.match(pathRule.description, /workspace root/iu, tool.name);
+    if (pathsRule) {
+      assert.match(pathsRule.description, /workspace root/iu, tool.name);
+      assert.match(pathsRule.items.description, /workspace root/iu, tool.name);
+    }
+  }
+  for (const name of ["git_changed_files", "git_diff_file"]) {
+    const tool = tools.find(item => item.name === name);
+    assert.ok(tool.inputSchema.oneOf, `${name} should publish conditional comparison branches`);
+    const range = tool.inputSchema.oneOf.find(branch => branch.properties?.comparison?.const === "range");
+    assert.deepStrictEqual(range.required, ["comparison", "base", "head"]);
+    const nonRange = tool.inputSchema.oneOf.find(branch => branch.properties?.comparison?.enum?.includes("worktree"));
+    assert.deepStrictEqual(nonRange.required, ["comparison"]);
+  }
 });
 
 test("Direct catalog is static capability surface without task/control schemas", () => {
@@ -118,10 +254,11 @@ test("Direct catalog is static capability surface without task/control schemas",
   }
   const workspaceInfo = tools.find((tool) => tool.name === "get_workspace_info");
   const search = tools.find((tool) => tool.name === "search_files");
-  assert.match(workspaceInfo.description, /useful early authority check when the current flags are unknown/u);
-  assert.match(workspaceInfo.description, /does not own tool order/u);
-  assert.match(search.description, /directly reusable uri/u);
-  assert.match(search.description, /exact activeProject/u);
+  // Descriptions are compressed (fixed per-round prompt cost) but keep the
+  // advisory authority check and the project:// URI reuse contract.
+  assert.match(workspaceInfo.description, /Early authority check when flags are unknown; advisory only/u);
+  assert.match(search.description, /reusable uri/u);
+  assert.match(search.description, /activeProject as project/u);
 });
 
 test("mutation schemas expose focused per-round edit bounds", () => {
@@ -139,7 +276,7 @@ test("mutation schemas expose focused per-round edit bounds", () => {
 
   assert.strictEqual(write.inputSchema.properties.path.minLength, 1);
   assert.strictEqual(write.inputSchema.properties.content.maxLength, 12_000);
-  assert.match(write.description, /apply_edit_bundle never creates files/u);
+  assert.match(write.description, /never overwrites/u);
 
   const replaceProperties = replace.inputSchema.properties;
   assert.deepStrictEqual(
@@ -163,10 +300,10 @@ test("mutation schemas expose focused per-round edit bounds", () => {
     { required: ["fileVersionReceipt"] },
     { required: ["expectedHash"] },
   ]);
-  assert.match(replace.description, /Emit this tool call immediately/u);
-  assert.match(replace.description, /4000 combined characters/u);
-  assert.match(replace.description, /next prediction round/u);
-  assert.match(replace.description, /no same-session evidence is selected automatically/u);
+  assert.match(replace.description, /Emit the call immediately/u);
+  assert.match(replace.description, /4000 combined chars/u);
+  assert.match(replace.description, /next round with the returned receipt/u);
+  assert.match(replace.description, /never auto-selected/u);
   assert.match(replace.description, /Requires ALLOW_WRITE=1/u);
 
   const patches = bundle.inputSchema.properties.patches;
@@ -181,12 +318,10 @@ test("mutation schemas expose focused per-round edit bounds", () => {
     { required: ["fileVersionReceipt"] },
     { required: ["expectedHash"] },
   ]);
-  assert.match(patches.description, /server-enforced because JSON Schema cannot express them/u);
   assert.match(bundle.description, /at most 2 distinct existing files/u);
-  assert.match(bundle.description, /server additionally enforces unique normalized paths/u);
-  assert.match(bundle.description, /at most 64 aggregate changed lines/u);
-  assert.match(bundle.description, /next prediction round/u);
-  assert.match(bundle.description, /New files are created only with standalone write_file/u);
+  assert.match(bundle.description, /unique paths, max 64 changed lines/u);
+  assert.match(bundle.description, /Same-file regions: replace_in_file/u);
+  assert.match(bundle.description, /Never creates files/u);
   assert.match(bundle.description, /Requires ALLOW_WRITE=1/u);
 
   const deletionFiles = proposeDelete.inputSchema.properties.files;
@@ -375,6 +510,7 @@ test("Direct exact patch succeeds without plan/task and stale hash is rejected",
   assert.strictEqual(patchedResult.isError, false);
   assert.strictEqual(patched.ok, true);
   assert.strictEqual(patched.operation, "replaced");
+  assert.strictEqual(patched.kind, "workspace_mutation_observation");
   assert.match(fs.readFileSync(configFile, "utf8"), /Value=beta/);
   assert.doesNotMatch(JSON.stringify(patched), CONTROL_FIELD_PATTERN);
 

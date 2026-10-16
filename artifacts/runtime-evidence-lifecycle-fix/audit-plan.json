@@ -1,0 +1,165 @@
+{
+  "mode": "architecture",
+  "existing": [
+    "PredictionLoop: 실행 단계 연결과 UI, 입력 준비, 복구 후보 선택도 함께 보유",
+    "ContextManager: 입력 조립, 압축 후보 측정, Low-water 검증, 영속 commit",
+    "WorkingContext: archive/ref pin, 첫 소비 상태, projection, 영속 window",
+    "BudgetBroker: 모델 예산과 라운드별 반환 예산 예약",
+    "ToolBoundary: scope/권한/예산 검사, SDK dispatch 승인",
+    "Files.read + Unity server: 파일 범위 조회와 최종 응답 메타데이터"
+  ],
+  "proposed": [
+    "BudgetBroker requires both source acquisition and archive rehydration when scoped historical evidence exists.",
+    "WorkingContext validates live evidence before sanitization and owns durable identity and pending-consumer restoration.",
+    "Archive ranges carry source line bounds; successful body pages must advance; catalog declares quota/TTL retention limits.",
+    "Recovery candidate admission remeasures after compaction."
+  ],
+  "doNotDuplicate": [
+    "DeliveryController의 최종 답변 판정",
+    "BudgetBroker의 예약/정확 입력 구분",
+    "범위/해시/continuation 계약",
+    "pending evidence 보호 검사"
+  ],
+  "invariants": [
+    "toolCalls 완료는 최종 보고 완료가 아님",
+    "새 반환 결과는 다음 소비자까지 보존",
+    "실패/취소/잘림은 소비 완료로 인정하지 않음",
+    "본문은 줄 중간에서 자르지 않으며 합친 페이지는 원문과 일치",
+    "exact input <= effective Low-water 검사를 우회하지 않음",
+    "필수 목표/명시적 제약/최신 미소비 결과를 예산 때문에 버리지 않는다.",
+    "선택적 checkpoint는 mandatory floor를 올리지 않는다.",
+    "아카이브 검색은 현재 대화 scope의 검증된 과거 record만 반환한다.",
+    "도구 scope/range/exposure/dispatch 계측과 사용자 취소를 보존한다.",
+    "일반 조회의 진전은 최종 완료가 아니며 무진전은 무한 재시도로 숨기지 않는다."
+  ],
+  "impactedSurfaces": [
+    "budget-broker.ts",
+    "round-input.ts",
+    "context-manager.ts",
+    "context-ports.ts",
+    "working-context.js",
+    "evidence-archive.js",
+    "production handler, restart, quota and paging tests",
+    "installed revision 116"
+  ],
+  "validationPlan": [
+    "Observed revision115 denial reproduced as broker test",
+    "Real production handler guard/catalog/read/final-answer integration",
+    "Raw identity commit, cancellation and process restart tests",
+    "Full regression and UPDATE.bat",
+    "Loaded 38912 model live 380K plus early-fact recovery, independent source oracle"
+  ],
+  "claims": [
+    {
+      "claim": "Revision115 admitted a source read while archive rehydration was unaffordable.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "artifacts/runtime-policy-fix/live-gui.json",
+          "observation": "16250 exact input with G8192 gives4230 capacity; source minimum2048 fits but archive minimum7168 fails."
+        },
+        {
+          "kind": "runtime",
+          "location": "artifacts/runtime-policy-fix/live-gui.json",
+          "observation": "Two real catalog requests denied across initial and single-continue executions."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/round-input.ts",
+          "symbol": "minimumReadResultTokens"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/budget-broker.ts",
+          "symbol": "source-only minimum"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "src/tool-boundary.ts",
+          "symbol": "reserveReadResult archive denied"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/runtime-policy-fix/live-gui.json",
+          "symbol": "early facts unavailable even after one continue"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "artifacts/runtime-policy-fix/test-policy.log",
+          "observation": "Archive catalog itself worked in isolation; source body integrity was intact."
+        }
+      ],
+      "unknowns": [
+        "Runtime repair must be verified in revision116 GUI; source/test proof alone does not prove final report quality."
+      ]
+    },
+    {
+      "claim": "Sanitizing before pending evidence validation changed envelope identity and rejected valid durable windows.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "observation": "Caller sanitized before WorkingContext rawExposureKey lookup; new restart test verifies identity preservation and pending state."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/runtime-evidence-lifecycle-fix/test-lifecycle.log",
+          "observation": "Pending raw commit, cancellation/restart and first consumer assertions passed."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/context-manager.ts",
+          "symbol": "commit"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/working-context.js",
+          "symbol": "inputRefs original raw hash"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "src/working-context.js",
+          "symbol": "sanitize and persist bindings only after validation"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "test/working-context.test.cjs",
+          "symbol": "pending raw identity restart"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "artifacts/runtime-policy-fix/test-policy.log",
+          "observation": "Archive catalog itself worked in isolation; source body integrity was intact."
+        }
+      ],
+      "unknowns": [
+        "Runtime repair must be verified in revision116 GUI; source/test proof alone does not prove final report quality."
+      ]
+    }
+  ],
+  "scope": "Revision 115 implementation audit. Before-fix five findings remain in audit-plan.json and runtime-contract-fix."
+}

@@ -1,4 +1,5 @@
 "use strict";
+const { withBundleChangeEvidence } = require("./direct-change-evidence");
 
 const path = require("node:path");
 const { calculateReplacement } = require("./safe-write");
@@ -160,12 +161,13 @@ function createBundleCapability(context) {
         runtimeOwner,
         stateRoot,
         transactionHooks: options.transactionHooks,
+        signal: requestContext.signal,
       });
     } catch (error) {
       return failure(
-        "BUNDLE_FAILED",
+        error.code === "REQUEST_CANCELLED" ? error.code : "BUNDLE_FAILED",
         `Atomic edit bundle target validation failed: ${String(error.message || error)}`,
-        { retryAllowed: true, retryMode: "after_state_change" },
+        { retryAllowed: error.code !== "REQUEST_CANCELLED", retryMode: "after_state_change" },
       );
     }
     if (!result.ok) {
@@ -174,11 +176,11 @@ function createBundleCapability(context) {
           ? "ROLLBACK_INCOMPLETE"
           : result.mutationFailure?.errorCode === "FILE_VERSION_CONFLICT"
             ? "FILE_VERSION_CONFLICT"
-            : "BUNDLE_FAILED",
+            : result.errorCode === "REQUEST_CANCELLED" ? result.errorCode : "BUNDLE_FAILED",
         result.error || "Atomic edit bundle failed",
         {
           details: { transactionId: result.transactionId, rollback: result.rollback },
-          retryAllowed: !result.rollbackIncomplete,
+          retryAllowed: !result.rollbackIncomplete && result.errorCode !== "REQUEST_CANCELLED",
           retryMode: "after_state_change",
         },
       );
@@ -188,15 +190,15 @@ function createBundleCapability(context) {
       const resolution = resolutions.get(filePath)
         || await mutationResolution(filePath, args.project);
       const snapshot = await registerCurrentVersion(context, resolution, hash, requestContext);
-      files.push({ path: filePath, sha256: hash, ...snapshot });
+      files.push({ path: filePath, sha256: hash, previousSha256: result.preChangeHashes?.[filePath], ...snapshot });
     }
-    return success({
+    return withBundleChangeEvidence(success({
       operation: "bundle_applied",
       transactionId: result.transactionId,
       files,
       advisory: "The atomic edit committed. Build can run immediately; static validation is optional diagnostic evidence.",
       ...(semanticAdvisories.length ? { semanticAdvisories } : {}),
-    });
+    }), result.changeEvidenceByPath, context.payloadFits);
   }
 
   return { apply_edit_bundle: applyEditBundle };

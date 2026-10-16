@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
+from direct_rag_operation import RagOperationStopped
 
 SourceScope = Literal["project_source", "all"]
 
@@ -46,6 +47,8 @@ def _snapshot_editor_exports(
     except DirectRagRefreshBusyError as exc:
         error = {"ok": False, "errorCode": "EDITOR_EXPORT_BUSY", "error": str(exc)}
         return None, None, error
+    except RagOperationStopped:
+        raise
     except Exception as exc:
         error = {
             "ok": False,

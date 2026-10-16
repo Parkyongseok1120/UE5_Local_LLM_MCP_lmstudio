@@ -29,12 +29,12 @@ python install.py --profile standard --yes
 1. 사용할 AI 모델을 불러오고 모델 선택 목록에서 직접 고릅니다.
 2. 채팅에서 `unreal-rag`, `unreal-agent`를 켭니다.
 3. 시스템 지시문에는 [lmstudio_direct_model_system.md](../prompts/lmstudio_direct_model_system.md)를 사용합니다.
-4. `codex/unreal-context-compactor`는 기본적으로 꺼두어야 합니다(`OFF`). 기존 채팅에 켜져 있으면 직접 끕니다.
+4. 설치·업데이트 시 기존 채팅의 `codex/unreal-context-compactor`가 기본 `ON`으로 설정됩니다. 필요 없는 채팅에서는 단일 스위치를 끕니다.
 5. 언리얼 파일 작업에 `js-code-sandbox`를 사용하지 않도록 해당 플러그인을 끕니다.
 
 현재 기본 방식은 `Direct`입니다. AI가 필요한 도구와 순서, 끝낼 시점과 최종 답변을 정합니다. 서버가 정해 준 계획을 먼저 시작할 필요는 없습니다.
 
-압축기는 긴 대화를 줄여 주는 선택 기능입니다. 설치는 사용 가능한 파일을 준비할 뿐 채팅에서 활성화하지 않습니다. 필요할 때 해당 채팅의 단일 스위치만 켜면 됩니다. `Observe only`는 대화를 바꾸지 않고 사용량만 측정합니다.
+압축기는 긴 대화를 줄여 주는 선택 기능입니다. 설치기는 당시 저장된 기존 채팅에서 활성화합니다. `Observe only`는 대화를 바꾸지 않고 사용량만 측정합니다.
 
 ```powershell
 npm --prefix lmstudio-context-compactor-plugin run status

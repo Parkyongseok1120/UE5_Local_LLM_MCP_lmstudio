@@ -23,16 +23,30 @@ const {
   extractPriorContinuityState,
 } = require("./continuity-memory.js");
 const {
+  extractPriorAssistantEvidence,
+  generatedAssistantCheckpoint,
+  isDeliveredPartialResponse,
+  mergePriorAssistantEvidence,
+  renderAssistantCheckpoint,
+  splitAssistantEvidence,
+} = require("./continuity-assistant-evidence.js");
+const {
   clip,
   clipHeadTail,
   looksElliptical,
   normalizedTextKey,
   sentenceCandidates,
+  visibleAssistantText,
 } = require("./continuity-text.js");
 const {
+  sanitizeDerivedOperationalText,
   sanitizeStructuredDurableValue,
   sanitizeUserAuthoredText,
 } = require("./durable-memory-sanitizer.js");
+const { renderBudgetedCheckpoint } = require("./checkpoint-budget.js");
+const { exchangeIndex } = require("./tool-exchange-index.js");
+const { createHash } = require("node:crypto");
+const { CHANGE_DATA_MARKER, separateChangeData, renderChangeData, restoreChangeData, fileKey, fileIdentity, invalidateSupersededChanges } = require("./change-evidence-memory.js");
 
 function retainedUserText(value, maxChars) {
   return clip(sanitizeUserAuthoredText(value), maxChars, { trim: false });
@@ -87,7 +101,7 @@ function historicalConstraintEvidence(messages, latestUserIndex, maxItems = 12) 
 function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
   const candidates = [];
   const start = Math.max(0, latestUserIndex - 8);
-  const window = messages.slice(start, latestUserIndex + 1);
+  const window = messages.filter((message) => message.index >= start && message.index <= latestUserIndex);
   for (let offset = 0; offset < window.length; offset += 1) {
     const message = window[offset];
     if (message.role !== "user") continue;
@@ -95,7 +109,9 @@ function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
     const answerBoundary = nextUserOffset >= 0 ? nextUserOffset : window.length;
     const laterAnswerExists = window
       .slice(offset + 1, answerBoundary)
-      .some((candidate) => candidate.role === "assistant" && candidate.text.trim() && candidate.toolRequests.length === 0);
+      .some((candidate) => candidate.role === "assistant"
+        && visibleAssistantText(candidate.text).trim()
+        && candidate.toolRequests.length === 0);
     if (laterAnswerExists) continue;
     for (const sentence of sentenceCandidates(message.text)) {
       if (/[?？]\s*$/u.test(sentence) || /^(?:whether|which|what|why|how|where|when|누가|무엇|왜|어떻게|어디|언제)/iu.test(sentence)) {
@@ -112,14 +128,32 @@ function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
   }).slice(-maxItems);
 }
 
-function previousTurnFinalResponseEvidence(messages, latestUserIndex) {
-  if (latestUserIndex <= 0) return { present: false, reason: "no_previous_turn" };
-  const prior = messages[latestUserIndex - 1];
-  if (!prior) return { present: false, reason: "no_previous_message" };
-  if (prior.role === "assistant" && prior.toolRequests.length === 0 && prior.text.trim()) {
-    return { present: true, messageIndex: prior.index };
+const PREVIOUS_RESPONSE_MAX_CHARS = 3000;
+const userTurnKey = text => createHash("sha256").update(normalizedTextKey(text)).digest("hex");
+
+// The prior answer (or the last visible progress of an interrupted turn) is
+// the most important context for "continue". Retain a bounded head/tail of
+// its text, and carry it across re-compaction within the same user turn.
+function previousTurnFinalResponseEvidence(messages, latestUserIndex, previousState = null) {
+  const latestUser = latestUserIndex >= 0 ? messages.find(message => message.index === latestUserIndex) : null;
+  const forUserTurn = latestUser ? userTurnKey(latestUser.text) : "";
+  const carried = previousState?.previousTurnFinalResponseEvidence;
+  const carry = reason => carried?.present === true && typeof carried.text === "string" && carried.text
+    && carried.forUserTurn === forUserTurn ? { ...carried, source: "prior_checkpoint" } : { present: false, reason };
+  if (latestUserIndex <= 0) return carry("no_previous_turn");
+  const prior = messages.filter((message) => message.index < latestUserIndex).at(-1);
+  if (!prior) return carry("no_previous_message");
+  const record = (message, final) => ({ present: true, messageIndex: message.index, final, forUserTurn,
+    text: clipHeadTail(sanitizeDerivedOperationalText(visibleAssistantText(message.text)), PREVIOUS_RESPONSE_MAX_CHARS, { trim: false }) });
+  if (prior.role === "assistant" && prior.toolRequests.length === 0
+    && visibleAssistantText(prior.text).trim()) {
+    return record(prior, !isDeliveredPartialResponse(prior.text));
   }
-  return { present: false, reason: "previous_turn_ended_with_tool_activity" };
+  const previousUserIndex = messages.filter(m => m.role === "user" && m.index < latestUserIndex).at(-1)?.index ?? -1;
+  const progress = messages.filter(m => m.role === "assistant" && m.index > previousUserIndex && m.index < latestUserIndex
+    && !generatedCheckpoint(m) && visibleAssistantText(m.text).trim()).at(-1);
+  if (progress) return { ...record(progress, false), reason: "previous_turn_ended_with_tool_activity" };
+  return carry("previous_turn_ended_with_tool_activity");
 }
 
 function priorUserRequestsForContinuation(messages, latestUserIndex, limit = 3) {
@@ -208,6 +242,24 @@ function boundedCurrentTurnIndexes(messages, latestUserIndex, maxMessages) {
   return retained;
 }
 
+function requiredExchangeIndexes(messages, requiredIndexes) {
+  const required = new Set((Array.isArray(requiredIndexes) ? requiredIndexes : [])
+    .filter(index => Number.isSafeInteger(index) && index >= 0 && index < messages.length));
+  if (!required.size) return [];
+  const { batches } = exchangeIndex(messages);
+  const batchStarts = new Set();
+  for (const [key, start] of batches) if (required.has(Number(key.split(":")[0]))) batchStarts.add(start);
+  const output = new Set(required);
+  for (const start of batchStarts) {
+    for (const [key, batch] of batches) {
+      if (batch !== start) continue;
+      const end = Number(key.split(":")[0]);
+      for (let index = start; index <= end; index += 1) output.add(index);
+    }
+  }
+  return [...output];
+}
+
 function mergeEvidence(previous, current, maxItems) {
   const seen = new Set();
   return [...(previous || []), ...(current || [])].filter((item) => {
@@ -219,9 +271,104 @@ function mergeEvidence(previous, current, maxItems) {
 }
 
 function generatedCheckpoint(message) {
+  return generatedAssistantCheckpoint(message) || Boolean(splitSystemCheckpoint(message))
+    || message.role === "assistant" && String(message.text || "").startsWith(CHANGE_DATA_MARKER);
+}
+
+function splitSystemCheckpoint(message) {
+  if (message?.role !== "system") return null;
   const text = String(message?.text || "");
-  return CONTINUITY_MARKERS.some((marker) => text.includes(marker))
-    || text.startsWith("[Context memory: deterministic factual compression");
+  const starts = [
+    "[Context memory: deterministic factual compression; not a workflow instruction]",
+    ...CONTINUITY_MARKERS,
+  ];
+  const candidates = [];
+  for (const start of starts) {
+    let offset = text.indexOf(start);
+    while (offset >= 0) {
+      if (offset === 0 || text.slice(Math.max(0, offset - 2), offset) === "\n\n") {
+        candidates.push(offset);
+      }
+      offset = text.indexOf(start, offset + start.length);
+    }
+  }
+  for (const offset of [...new Set(candidates)].sort((left, right) => right - left)) {
+    const checkpointText = text.slice(offset).trim();
+    const marker = CONTINUITY_MARKERS.find(value => checkpointText.includes(value));
+    if (!marker) continue;
+    const jsonStart = checkpointText.indexOf("{", checkpointText.indexOf(marker) + marker.length);
+    if (jsonStart < 0) continue;
+    try {
+      const parsed = JSON.parse(checkpointText.slice(jsonStart));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      return { instructionText: text.slice(0, offset).trim(), checkpointText };
+    } catch {
+      // A literal marker or malformed quoted example is ordinary system text.
+    }
+  }
+  return null;
+}
+
+function invariantSystemText(message) {
+  if (message?.role !== "system") return "";
+  return splitSystemCheckpoint(message)?.instructionText ?? String(message?.text || "").trim();
+}
+
+function compactEmergencyGitObservation(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const compact = {};
+  for (const key of [
+    "action", "comparison", "base", "head", "currentHead", "blobOid", "path",
+    "repositoryIdentity", "workspaceIdentity", "hasMore", "complete", "incomplete",
+    "pageStart", "pageEnd", "pageHasMore", "sourceResultComplete",
+    "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total",
+    "since", "until", "authorQuery", "authorQuerySemantics", "identitySemantics",
+    "sourceConsistency", "submoduleWorktrees", "queryPathBase", "requestedPathsOmitted",
+    "requestedPathsCount", "requestedPathsSha256", "resolvedRepositoryPathsOmitted",
+    "resolvedRepositoryPathsCount", "resolvedRepositoryPathsSha256", "omittedItems", "canonicalProjectRoot", "canonicalProject",
+    "projectIdentity",
+  ]) {
+    if (value[key] !== undefined) compact[key] = value[key];
+  }
+  for (const key of ["requestedPaths", "resolvedRepositoryPaths"]) {
+    if (!Array.isArray(value[key])) continue;
+    compact[key] = value[key].slice(0, 2).map(item => clip(item, 160, { trim: false }));
+    const omitted = value[key].length - compact[key].length;
+    if (omitted > 0) compact[`${key}Omitted`] = Number(compact[`${key}Omitted`] || 0) + omitted;
+  }
+  const sourceOmittedItems = Number(value.sourceOmittedItems ?? value.omittedItems ?? 0);
+  const priorMemoryOmittedItems = Number(value.memoryOmittedItems || 0);
+  compact.sourceOmittedItems = Math.max(0, sourceOmittedItems);
+  if (Array.isArray(value.items) && value.items.length) {
+    compact.items = value.items.slice(0, 1);
+    compact.memoryOmittedItems = Math.max(0, priorMemoryOmittedItems + value.items.length - compact.items.length);
+  } else {
+    compact.memoryOmittedItems = Math.max(0, priorMemoryOmittedItems);
+  }
+  compact.omittedItems = compact.sourceOmittedItems + compact.memoryOmittedItems;
+  return sanitizeStructuredDurableValue(compact);
+}
+
+function boundedSerializedOutcome(value, maxChars = 480) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const serialized = JSON.stringify(sanitizeStructuredDurableValue(parsed));
+    if (serialized.length <= maxChars) return serialized;
+    const compact = {};
+    for (const key of [
+      "ok", "status", "operation", "errorCode", "mode", "proofLevel", "exitCode",
+      "upToDate", "actionsExecuted", "failedCount", "succeededCount", "summary",
+      "outcomeDisplayState", "canonicalProject", "fileObservationState",
+    ]) {
+      if (parsed[key] !== undefined) compact[key] = typeof parsed[key] === "string"
+        ? clip(parsed[key], 180, { trim: false }) : parsed[key];
+    }
+    const result = JSON.stringify(sanitizeStructuredDurableValue(compact));
+    return Object.keys(compact).length && result.length <= maxChars ? result : null;
+  } catch {
+    return null;
+  }
 }
 
 function emergencyContinuityMemory(candidate, maxPayloadChars) {
@@ -238,6 +385,7 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     activeProject,
   }) => sanitizeStructuredDurableValue({
     schemaVersion: 2,
+    compactionGeneration: candidate.compactionGeneration,
     authority: "factual_memory_only",
     latestUserMessage: clippedOrEmpty(candidate.latestUserMessage, latestLimit),
     latestUserMessageVerbatimRetainedSeparately: true,
@@ -255,6 +403,8 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     activeProject,
     currentWorkStatus: {
       recentToolOutcomes: [],
+      gitObservations: [],
+      historicalEvidence: [],
       modifiedOrObservedFiles: [],
       recentBuildOrTestState: [],
     },
@@ -272,11 +422,14 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     { latestLimit: 240, keepContinuation: true, activeProject: null },
     { latestLimit: 0, keepContinuation: false, activeProject: null },
   ];
+  const factualReserve = candidate.currentWorkStatus?.gitObservations?.length
+    ? Math.min(2400, Math.max(700, Math.floor(payloadLimit * 0.3)))
+    : 0;
   let emergency = null;
   for (const objectiveLimit of objectiveLimits) {
     for (const variant of auxiliaryVariants) {
       const candidateMemory = baseForLimits({ objectiveLimit, ...variant });
-      if (JSON.stringify(candidateMemory).length <= payloadLimit) {
+      if (JSON.stringify(candidateMemory).length <= payloadLimit - factualReserve) {
         emergency = candidateMemory;
         break;
       }
@@ -285,12 +438,15 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
   }
   emergency ||= {
     schemaVersion: 2,
+    compactionGeneration: candidate.compactionGeneration,
     authority: "factual_memory_only",
     latestUserMessageVerbatimRetainedSeparately: true,
     activeObjective: null,
     activeProject: null,
     currentWorkStatus: {
       recentToolOutcomes: [],
+      gitObservations: [],
+      historicalEvidence: [],
       modifiedOrObservedFiles: [],
       recentBuildOrTestState: [],
     },
@@ -308,6 +464,13 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
     else target.pop();
     return false;
   };
+  for (const observation of [...(candidate.currentWorkStatus?.gitObservations || [])].reverse()) {
+    const compact = compactEmergencyGitObservation(observation);
+    if (compact) addBounded(emergency.currentWorkStatus.gitObservations, compact, true);
+  }
+  for (const evidence of [...(candidate.currentWorkStatus?.historicalEvidence || [])].reverse()) {
+    addBounded(emergency.currentWorkStatus.historicalEvidence, evidence, true);
+  }
   const files = candidate.currentWorkStatus?.modifiedOrObservedFiles || [];
   for (const file of [...files].reverse()) {
     addBounded(emergency.currentWorkStatus.modifiedOrObservedFiles, file, true);
@@ -327,8 +490,9 @@ function emergencyContinuityMemory(candidate, maxPayloadChars) {
       text: clipHeadTail(item.text, 160, { trim: false }),
     }, true);
   }
-  for (const outcome of (candidate.currentWorkStatus?.recentToolOutcomes || []).slice(-1)) {
-    addBounded(emergency.currentWorkStatus.recentToolOutcomes, clipHeadTail(outcome, 240, { trim: false }));
+  for (const outcome of [...(candidate.currentWorkStatus?.recentToolOutcomes || [])].reverse()) {
+    const bounded = boundedSerializedOutcome(outcome);
+    if (bounded) addBounded(emergency.currentWorkStatus.recentToolOutcomes, bounded, true);
   }
   const sanitized = sanitizeStructuredDurableValue(emergency);
   return JSON.stringify(sanitized).length <= payloadLimit ? sanitized : { schemaVersion: 2 };
@@ -341,6 +505,14 @@ function renderCheckpoint(memory, maxChars) {
     CONTINUITY_MARKER,
   ].join("\n");
   const candidate = sanitizeStructuredDurableValue(JSON.parse(JSON.stringify(memory)));
+  // The raw latest user message is retained as a separate model-history
+  // message. Keep only a bounded head/tail reminder in durable memory and do
+  // not serialize its exact duplicate under a second field.
+  if (typeof candidate.latestUserMessage === "string") {
+    candidate.latestUserMessage = clipHeadTail(candidate.latestUserMessage, 1200, { trim: false });
+    candidate.latestUserMessageVerbatimRetainedSeparately = true;
+  }
+  delete candidate.currentUserRequestVerbatim;
   if (candidate.currentWorkStatus) {
     // These legacy top-level mirrors remain on the in-process result for
     // compatibility, but serializing them would duplicate the canonical
@@ -366,15 +538,21 @@ function renderCheckpoint(memory, maxChars) {
     );
   }
   if (render().length <= maxChars) return render();
-  delete candidate.priorUserRequestsForContinuation;
   delete candidate.olderContinuationAnchor;
+  if (candidate.previousTurnFinalResponseEvidence?.text) candidate.previousTurnFinalResponseEvidence.text
+    = clipHeadTail(candidate.previousTurnFinalResponseEvidence.text, 1200, { trim: false });
+  if (render(false).length <= maxChars) return render(false);
+  delete candidate.priorUserRequestsForContinuation;
   delete candidate.previousTurnFinalResponseEvidence;
   if (render(false).length <= maxChars) return render(false);
   candidate.recentRawTail = candidate.recentRawTail.slice(-4).map((item) => ({
     role: item.role,
     text: clip(item.text, 300, { trim: false }),
   }));
-  candidate.currentWorkStatus.recentToolOutcomes = [];
+  candidate.currentWorkStatus.recentToolOutcomes = candidate.currentWorkStatus.recentToolOutcomes
+    .slice(-2)
+    .map(outcome => boundedSerializedOutcome(outcome))
+    .filter(Boolean);
   if (render(false).length <= maxChars) return render(false);
   // Never byte-slice JSON: a later hard compaction must be able to inherit it.
   // The original latest user message remains independently retained verbatim.
@@ -385,7 +563,13 @@ function renderCheckpoint(memory, maxChars) {
 
 function buildCheckpoint(messagesInput, options = {}) {
   const messages = messagesInput.map(normalizeMessage);
-  const previousState = extractPriorContinuityState(messages);
+  const previousState = restoreChangeData(mergePriorAssistantEvidence(
+    extractPriorContinuityState(messages),
+    extractPriorAssistantEvidence(messages),
+  ), messages);
+  // Prior memory is merged through previousState. Feeding generated memory
+  // back as conversational evidence recursively grows the next checkpoint.
+  const semanticMessages = messages.filter((message) => !generatedCheckpoint(message));
   const latestUserIndex = [...messages].reverse().find((message) => message.role === "user")?.index ?? -1;
   const latestUser = latestUserIndex >= 0 ? messages[latestUserIndex].text : String(previousState?.latestUserMessage || "");
   const tailStart = tailStartIndex(messages, options.recentCompleteTurns ?? 2);
@@ -398,11 +582,17 @@ function buildCheckpoint(messagesInput, options = {}) {
     && (!boundedCurrentTurn || message.role === "system" || message.role === "user")
   )).map((message) => message.index);
   const retainedIndexes = new Set(messages.filter((message) => (
-    (message.role === "system" && !generatedCheckpoint(message))
-    || (boundedCurrentTurn ? currentTurnIndexes.has(message.index) : message.index >= tailStart)
+    !generatedCheckpoint(message) && (
+      message.role === "system"
+      || (boundedCurrentTurn ? currentTurnIndexes.has(message.index) : message.index >= tailStart)
+    )
   )).map((message) => message.index));
   for (const index of fileIndexes) retainedIndexes.add(index);
   if (latestUserIndex >= 0) retainedIndexes.add(latestUserIndex);
+  // Results still awaiting their first consumer (e.g. returned just before a
+  // user cancel) are mandatory input. Keep each one's whole request batch so
+  // the retained exchange stays complete and unambiguous.
+  for (const index of requiredExchangeIndexes(messages, options.requiredIndexes)) retainedIndexes.add(index);
   const omittedToolMessageIndexes = new Set(messages.filter((message) => (
     message.role === "tool" && !retainedIndexes.has(message.index)
   )).map((message) => message.index));
@@ -414,23 +604,37 @@ function buildCheckpoint(messagesInput, options = {}) {
     ...toolMemoryOptions,
     includeMessageIndexes: omittedToolMessageIndexes,
   });
-  const allRecentOutcomeRecords = toolOutcomeRecords(messages, messages.length, toolMemoryOptions);
+  const allRecentOutcomeRecords = toolOutcomeRecords(messages, messages.length, {
+    ...toolMemoryOptions,
+    aggregateAll: true,
+  });
+  const allOmittedOutcomeRecords = toolOutcomeRecords(messages, messages.length, {
+    ...toolMemoryOptions,
+    includeMessageIndexes: omittedToolMessageIndexes,
+    aggregateAll: true,
+  });
   const outcomes = serializeToolOutcomeRecords(outcomeRecords, toolMemoryOptions);
   const state = stateMemory(allRecentOutcomeRecords);
-  const durableState = stateMemory(outcomeRecords);
-  const openQuestions = unresolvedQuestions(messages, latestUserIndex);
-  const continuity = buildContinuityMemory(messages, {
+  const durableState = stateMemory(allOmittedOutcomeRecords);
+  const openQuestions = unresolvedQuestions(semanticMessages, latestUserIndex);
+  const continuity = buildContinuityMemory(semanticMessages, {
     activeProject: state.activeProject,
     recentOlderToolOutcomes: outcomes,
+    gitObservations: durableState.gitObservations,
+    historicalEvidence: durableState.historicalEvidence,
     modifiedOrObservedFiles: durableState.files,
     recentBuildOrTestState: durableState.builds,
     openQuestionEvidence: openQuestions,
-  }, options);
+  }, { ...options, previousState });
+  // Raw retained results can supersede a prior checkpoint even when they do
+  // not become durable file facts until a later compaction.
+  const changeFiles = (continuity.currentWorkStatus?.modifiedOrObservedFiles || []).filter(file => file.changeEvidence);
+  if (changeFiles.length) invalidateSupersededChanges(changeFiles,
+    stateMemory(allRecentOutcomeRecords, { fileIdentities: new Set(changeFiles.map(fileIdentity)) }).files);
   const latestMessage = latestUserIndex >= 0 ? messages[latestUserIndex] : null;
   const recentRequests = priorUserRequestsForContinuation(messages, latestUserIndex);
   const memory = sanitizeStructuredDurableValue({
     ...continuity,
-    currentUserRequestVerbatim: continuity.latestUserMessage,
     olderContinuationAnchor: olderContinuationAnchor(messages, latestUserIndex, recentRequests)
       || continuity.continuationAntecedent,
     priorUserRequestsForContinuation: recentRequests,
@@ -441,21 +645,68 @@ function buildCheckpoint(messagesInput, options = {}) {
       12,
     ),
     openQuestionEvidence: openQuestions,
-    previousTurnFinalResponseEvidence: previousTurnFinalResponseEvidence(messages, latestUserIndex),
+    previousTurnFinalResponseEvidence: previousTurnFinalResponseEvidence(semanticMessages, latestUserIndex, previousState),
     recentOlderToolOutcomes: continuity.currentWorkStatus?.recentToolOutcomes || [],
     modifiedOrObservedFiles: continuity.currentWorkStatus?.modifiedOrObservedFiles || [],
     recentBuildOrTestState: continuity.currentWorkStatus?.recentBuildOrTestState || [],
   });
-  const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 12000));
-  const checkpoint = renderCheckpoint(memory, maxCheckpointChars);
+  const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 22000));
+  const { systemMemory, assistantEvidence } = splitAssistantEvidence(memory);
+  const changeData = separateChangeData(systemMemory);
+  // The mandatory floor keeps only the prior answer; bounded checkpoints add
+  // other assistant progress after the factual checkpoint's emergency budget.
+  const assistantCheckpoint = options.checkpointPolicy === "mandatory"
+    ? renderAssistantCheckpoint(assistantEvidence, 3400, { previousOnly: true })
+    : renderAssistantCheckpoint(assistantEvidence, Math.min(5600, Math.max(0, maxCheckpointChars - 6000)));
+  const checkpoint = options.checkpointPolicy
+    ? renderBudgetedCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length,
+      options.checkpointPolicy === "mandatory")
+    : renderCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length);
+  // Data competes only for the remaining whole-checkpoint allowance. System
+  // facts and existing assistant judgments are never reduced to admit hunks.
+  let changeDataCheckpoint = "";
+  let serializedState = {};
+  try {
+    const marker = checkpoint.indexOf(CONTINUITY_MARKER);
+    serializedState = JSON.parse(checkpoint.slice(checkpoint.indexOf("{", marker)));
+  } catch {
+    // Keep diagnostics conservative if a future checkpoint format changes.
+  }
+  if (options.checkpointPolicy !== "mandatory") {
+    const admittedKeys = new Set((serializedState.currentWorkStatus?.modifiedOrObservedFiles || []).map(fileKey));
+    const admitted = [];
+    for (const item of changeData) {
+      if (!admittedKeys.has(item.fileKey)) continue;
+      const rendered = renderChangeData([...admitted, item]);
+      if (checkpoint.length + assistantCheckpoint.length + rendered.length <= maxCheckpointChars) {
+        admitted.push(item); changeDataCheckpoint = rendered;
+      }
+    }
+  }
+  const sourceFiles = systemMemory.currentWorkStatus?.modifiedOrObservedFiles || [];
+  const serializedFiles = serializedState.currentWorkStatus?.modifiedOrObservedFiles || [];
+  const serializationDiagnostics = {
+    schemaVersion: serializedState.schemaVersion ?? null,
+    compactionGeneration: serializedState.compactionGeneration ?? null,
+    sourceFileObservationCount: sourceFiles.length,
+    serializedFileObservationCount: serializedFiles.length,
+    serializedObservedRangeCount: serializedFiles.reduce((count, file) => (
+      count + (Array.isArray(file?.observedLineRanges) ? file.observedLineRanges.length : 0)
+    ), 0),
+    omittedFileObservationCount: Math.max(0, sourceFiles.length - serializedFiles.length),
+    omissionReasons: sourceFiles.length > serializedFiles.length ? ["checkpoint_character_budget"] : [],
+  };
   return {
     checkpoint,
+    assistantCheckpoint,
     memory,
+    changeDataCheckpoint,
     tailStart,
     latestUserIndex,
     latestUserVerbatim: latestUser,
     retainedIndexes: [...retainedIndexes].sort((a, b) => a - b),
     omittedMessageCount: messages.length - retainedIndexes.size,
+    serializationDiagnostics,
   };
 }
 
@@ -463,7 +714,7 @@ function shouldCompact(measurement, options = {}) {
   if (options.observeOnly === true) return false;
   const messageCount = Number(measurement.messageCount || 0);
   const remaining = Number(measurement.remainingTokens);
-  const softRemaining = Math.max(0, Number(options.softRemainingTokens || 14000));
+  const softRemaining = Math.max(0, Number(options.softRemainingTokens || 6000));
   const fallbackCount = Math.max(4, Number(options.compactAboveMessageCount || 24));
   if (measurement.exact === false && messageCount >= fallbackCount) return true;
   if (Number.isFinite(remaining)) return remaining <= softRemaining;
@@ -475,6 +726,7 @@ module.exports = {
   INTERNAL_KEYS,
   buildCheckpoint,
   explicitConstraints,
+  invariantSystemText,
   normalizeMessage,
   olderContinuationAnchor,
   parseToolResult,

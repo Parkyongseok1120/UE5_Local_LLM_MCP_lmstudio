@@ -68,7 +68,7 @@ def test_packaged_setup_docs_use_existing_installer_and_doctor_commands() -> Non
         assert source_checkout_only not in combined
 
 
-def test_current_docs_keep_host_compactor_off_by_default_and_use_one_activation_switch() -> None:
+def test_current_docs_enable_host_compactor_during_install_and_use_one_activation_switch() -> None:
     current_docs = (
         "README.md",
         "README.portable.md",
@@ -86,14 +86,15 @@ def test_current_docs_keep_host_compactor_off_by_default_and_use_one_activation_
     combined = "\n".join(documents.values())
 
     for relative, document in documents.items():
-        assert "OFF" in document, relative
+        assert "ON" in document, relative
     assert "Enable transparent compaction" not in combined
     assert "two-switch" not in combined.casefold()
     assert "both switches" not in combined.casefold()
     assert "nested compaction opt-in" not in combined.casefold()
     assert "단일 스위치" in combined
     assert "단일" in documents["README.md"]
-    assert "설치는 사용 가능한 파일을 준비할 뿐 채팅에서 활성화하지 않습니다" in combined
+    assert "설치·업데이트 시" in combined
+    assert "기본 `OFF`" not in combined
     assert "New chats start OFF" not in combined
     assert "New chats start with no chat plugins enabled" not in combined
     assert "새 채팅은 OFF로 시작" not in combined

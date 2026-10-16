@@ -76,3 +76,12 @@ MCP의 `unreal_rag_refresh`도 기본은 `allowEditorLaunch=false`입니다. 실
 | `path_only` | 경로만 확인됩니다 |
 
 갱신 후 `unreal_rag_search`로 에셋을 찾으면 됩니다. 자료를 읽는 것과 실제 노드를 고치는 것은 별개입니다. `.uasset` 수정은 에디터 안에서 처리해야 합니다. [자료별 확인 범위](Blueprint_Metadata.md)도 참고해야 합니다.
+
+
+## 요청 중단과 결과 미확인
+
+MCP가 직접 시작한 headless Editor 프로세스는 RAG 요청의 취소·시간 제한을 공유합니다. 종료를 확인하지 못하면 관련 작업 디렉터리를 보존합니다. 이미 열려 있던 Editor에 제출한 export는 응답 대기를 취소해도 실제 export가 계속될 수 있습니다. 이 경우 응답의 `terminationConfirmed=false`, `terminationScope=external_editor_job`, `preservedScratch`를 확인합니다.
+
+`EDITOR_EXPORT_JOB_UNCONFIRMED` 또는 `EDITOR_EXPORT_PREVIOUS_JOB_UNCONFIRMED`는 이전 작업이 더 쓸 수 있는 상태라는 뜻입니다. 이때 자동으로 두 번째 headless export를 시작하지 않습니다. 해당 export 폴더의 `lmstudio_export_interrupted.json`에는 중단된 `jobId`가 남으며, 같은 `runId`의 완료·실패 marker가 도착하면 다음 시도에서 자동으로 해제됩니다. 다른 run의 marker나 단순 시간 경과로 해제하지 않습니다.
+
+Editor가 종료되어 더 이상 쓰지 않는 것을 직접 확인했는데 marker가 남지 않았다면, 해당 프로젝트의 export 폴더와 기록된 job을 확인한 뒤 **그 폴더의 `lmstudio_export_interrupted.json`만** 제거하고 다시 요청할 수 있습니다. 실행 중인 export의 marker를 먼저 지우면 두 작업이 같은 폴더를 쓸 수 있으므로 종료 확인이 선행되어야 합니다. 완료·실패 marker가 정상 도착한 경우에는 수동 정리가 필요 없습니다.

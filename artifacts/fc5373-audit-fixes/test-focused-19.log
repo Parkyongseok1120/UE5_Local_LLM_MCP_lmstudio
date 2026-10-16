@@ -1,0 +1,27 @@
+✔ H02 final mapping excludes thinking; swapped facts, duplicate reads and length are failures (0.7561ms)
+✔ T03 context/output truncation and unknown completion preserve results but discard planning (2.118ms)
+✔ T04 delivered EOS report cannot certify objective completion (0.3868ms)
+✔ B01 mandatory floor LOW fit does not certify next read liveness (0.2011ms)
+✔ B02 native Unreal maxBytes is clamped and oversize return blocks later dispatch (0.3112ms)
+✔ B03 schema maximum/default applied before reservation; two small reads share capacity (0.1269ms)
+✔ T01 operation read profiles retain reads and cannot grant writes (0.3003ms)
+✔ T02 known raw changed-files intent retains dependent diff/source readers (1.8117ms)
+✔ E01 native Unity runtime read flows into successful recovery evidence (290.3817ms)
+✔ E02 historical rehydration missing in current input is useful without new source coverage (1.5391ms)
+✔ E03 query, nested workspace and source hash cannot collapse (0.2573ms)
+✔ E04 capture and repeated shifted projection share one archive ID; different call IDs retain provenance (150.4268ms)
+✔ E05 sanitized persistent view permits 140 observations under quota without altering live capabilities (15198.8213ms)
+✔ E06 source failure stays failure through capture, archive read, seed and observe (316.1452ms)
+✔ E03 source and projected page use the same identity/query across provider and pagination (74.4196ms)
+✔ E05 candidate omitting unconsumed evidence blocks explicitly before quota exhaustion (75.3911ms)
+✔ E01 duplicate/orphan callbacks cannot become native success observations (0.3908ms)
+✔ O02 distinct assembly stages and schema/reserve cache keys are measured (2.2115ms)
+✔ O03 multilingual, escaped JSON and emoji estimates cannot authorize exact-only execution (0.8619ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16275.2314

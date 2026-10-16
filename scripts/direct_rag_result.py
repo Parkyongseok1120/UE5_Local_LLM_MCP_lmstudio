@@ -45,6 +45,12 @@ _CONTROL_KEYS = frozenset(
 )
 
 
+def render_model_json(payload: Any) -> str:
+    """The single compact rendering used for model text and every fit check."""
+
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def configured_result_limit() -> int:
     raw = str(os.environ.get("MCP_TOOL_RESULT_MAX_CHARS") or "").strip()
     if not raw:
@@ -105,7 +111,7 @@ def _normalize(result: CapabilityResult) -> dict[str, Any]:
 
 
 def _bounded(payload: dict[str, Any], limit: int) -> tuple[dict[str, Any], str]:
-    rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+    rendered = render_model_json(payload)
     if len(rendered) <= limit:
         return payload, rendered
     if payload.get("ok") is not False:
@@ -118,14 +124,14 @@ def _bounded(payload: dict[str, Any], limit: int) -> tuple[dict[str, Any], str]:
             ),
             "retry": {"allowed": True, "mode": "different_arguments"},
         }
-        return compact, json.dumps(compact, ensure_ascii=False, indent=2)
+        return compact, render_model_json(compact)
     compact = {
         "ok": False,
         "errorCode": str(payload.get("errorCode") or "TOOL_FAILED"),
         "message": str(payload.get("message") or "The tool call failed.")[:800],
         "retry": payload.get("retry") or {"allowed": False, "mode": "none"},
     }
-    return compact, json.dumps(compact, ensure_ascii=False, indent=2)
+    return compact, render_model_json(compact)
 
 
 def success(**payload: Any) -> CapabilityResult:
@@ -182,13 +188,14 @@ def to_mcp_tool_result(
 
 
 def serialized_size(payload: dict[str, Any]) -> int:
-    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    return len(render_model_json(payload))
 
 
 __all__ = [
     "CapabilityResult",
     "configured_result_limit",
     "failure",
+    "render_model_json",
     "serialized_size",
     "success",
     "to_mcp_tool_result",

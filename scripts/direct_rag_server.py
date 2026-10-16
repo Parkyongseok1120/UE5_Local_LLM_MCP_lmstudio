@@ -7,6 +7,7 @@ import json
 import sys
 import threading
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -15,12 +16,16 @@ import direct_rag_projects
 import direct_rag_search
 import direct_rag_symbol
 from direct_rag_contract import (
+    DIRECT_RAG_MUTATING_TOOL_NAMES,
     DIRECT_RAG_TOOL_NAMES,
     direct_rag_tool_definitions,
     validate_tool_arguments,
 )
+from direct_rag_dispatch import ReadDispatcher
 from direct_rag_result import CapabilityResult, failure, to_mcp_tool_result
 from direct_rag_runtime import DirectRagRuntime
+from direct_rag_operation import RagOperationStopped, check_operation, operation_scope
+from direct_rag_stdio_requests import RequestInbox, normalize_line
 from mcp_stdio import write_json_line, write_utf8_line
 
 Handler = Callable[[DirectRagRuntime, dict[str, Any]], CapabilityResult]
@@ -49,7 +54,6 @@ def compose_handlers() -> dict[str, Handler]:
 
 class DirectRagServer:
     """Transport only: capabilities own all domain behavior."""
-
     def __init__(
         self,
         index: Path,
@@ -65,6 +69,7 @@ class DirectRagServer:
         self._send_lock = threading.RLock()
         self._tools = direct_rag_tool_definitions()
         self._tool_by_name = {tool["name"]: tool for tool in self._tools}
+        self._concurrent_tools = frozenset(DIRECT_RAG_TOOL_NAMES) - DIRECT_RAG_MUTATING_TOOL_NAMES
         self._handlers = compose_handlers()
         root = (workspace or Path(__file__).resolve().parent.parent).resolve()
         self.runtime = DirectRagRuntime(
@@ -74,30 +79,42 @@ class DirectRagServer:
         )
 
     def run(self) -> None:
-        for raw_line in self._input:
-            line = raw_line.strip()
-            if line.startswith("\ufeff"):
-                line = line[1:].lstrip()
-            if not line:
-                continue
-            request: dict[str, Any] | None = None
-            try:
-                parsed = json.loads(line)
-                if not isinstance(parsed, dict):
-                    raise ValueError("JSON-RPC request must be an object")
-                request = parsed
-                self.handle_message(request)
-            except (json.JSONDecodeError, ValueError) as exc:
-                request_id = request.get("id") if isinstance(request, dict) else None
-                if request_id is not None:
-                    self.send_error(request_id, -32600, str(exc))
-                else:
+        inbox = RequestInbox(self._input, self.send_error,
+                             is_mutating=lambda name: name not in self._tool_by_name or name in DIRECT_RAG_MUTATING_TOOL_NAMES)
+        with ReadDispatcher(self._concurrent_tools) as dispatcher:
+            for raw_line, operation in inbox.iterate(drain=dispatcher.drain):
+                line = normalize_line(raw_line)
+                if not line:
+                    continue
+                try:
+                    request = json.loads(line)
+                    if not isinstance(request, dict):
+                        raise ValueError("JSON-RPC request must be an object")
+                except (json.JSONDecodeError, ValueError) as exc:
                     self.log(f"invalid request: {exc}")
-            except Exception as exc:  # keep the stdio server alive after one bad call
-                request_id = request.get("id") if isinstance(request, dict) else None
-                self.log(f"request failed: {type(exc).__name__}: {exc}")
-                if request_id is not None:
-                    self.send_error(request_id, -32603, "Internal JSON-RPC error")
+                    continue
+                dispatcher.dispatch(request, partial(self._process, inbox, request, operation))
+
+    def _process(self, inbox: RequestInbox, request: dict[str, Any], operation: Any) -> None:
+        try:
+            if operation is not None:
+                with operation_scope(operation):
+                    self.handle_message(request)
+            else:
+                self.handle_message(request)
+        except ValueError as exc:
+            request_id = request.get("id")
+            if request_id is not None:
+                self.send_error(request_id, -32600, str(exc))
+            else:
+                self.log(f"invalid request: {exc}")
+        except Exception as exc:  # keep the stdio server alive after one bad call
+            request_id = request.get("id")
+            self.log(f"request failed: {type(exc).__name__}: {exc}")
+            if request_id is not None:
+                self.send_error(request_id, -32603, "Internal JSON-RPC error")
+        finally:
+            inbox.finish(request.get("id"))
 
     def handle_message(self, request: dict[str, Any]) -> None:
         request_id = request.get("id")
@@ -135,34 +152,22 @@ class DirectRagServer:
         name = str(params.get("name") or "")
         tool = self._tool_by_name.get(name)
         if tool is None:
-            self.send_result(
-                request_id,
-                to_mcp_tool_result(
-                    failure(
-                        "TOOL_NOT_CALLABLE",
-                        f"Tool '{name}' is not part of the Direct RAG catalog.",
-                    ),
-                    tool_name=name,
-                ),
-            )
+            rejected = failure("TOOL_NOT_CALLABLE", f"Tool '{name}' is not part of the Direct RAG catalog.")
+            self.send_result(request_id, to_mcp_tool_result(rejected, tool_name=name))
             return
         arguments = params.get("arguments", {})
         validation_error = validate_tool_arguments(tool, arguments)
         if validation_error:
-            self.send_result(
-                request_id,
-                to_mcp_tool_result(
-                    failure(
-                        "INVALID_TOOL_ARGUMENTS",
-                        validation_error,
-                        retry_allowed=True,
-                    ),
-                    tool_name=name,
-                ),
-            )
+            rejected = failure("INVALID_TOOL_ARGUMENTS", validation_error, retry_allowed=True)
+            self.send_result(request_id, to_mcp_tool_result(rejected, tool_name=name))
             return
         try:
+            check_operation()
             result = self._handlers[name](self.runtime, arguments)
+        except RagOperationStopped as exc:
+            result = failure(exc.code, str(exc), stageCommitted=False,
+                             terminationConfirmed=exc.termination_confirmed,
+                             terminationScope=exc.termination_scope, preservedScratch=exc.preserved_scratch)
         except Exception as exc:
             self.log(f"tool {name} failed: {type(exc).__name__}: {exc}")
             result = failure(
@@ -202,7 +207,8 @@ class DirectRagServer:
             write_json_line(self._output, payload)
 
     def log(self, message: str) -> None:
-        write_utf8_line(self._error, str(message))
+        with self._send_lock:
+            write_utf8_line(self._error, str(message))
 
 
 __all__ = ["DirectRagServer", "compose_handlers"]

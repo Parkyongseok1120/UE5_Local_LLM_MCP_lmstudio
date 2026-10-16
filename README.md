@@ -1,10 +1,12 @@
-# UE5_Local_LLM_MCP_lmstudio 1.3.3
+# UE5_Local_LLM_MCP_lmstudio 1.4.0
 
 LM Studio에서 돌리는 AI가 내 언리얼 프로젝트를 찾아보고, 코드를 읽고, 필요한 부분을 고칠 수 있게 연결하는 도구입니다.
 
 AI에게 프로젝트 전체를 매번 붙여 넣는 대신, 필요한 내용을 로컬 검색 자료에서 찾아서 보여줍니다. 이 검색 방식을 RAG라고 부릅니다. MCP는 AI가 검색·파일 읽기·수정·빌드 같은 기능을 호출할 때 쓰는 연결 방식입니다.
 
 ## 설치 방법
+
+Unity 지원은 v1.4.0 **beta 1**에서 별도 서버와 Editor Bridge로 제공합니다. 특정 프로젝트나 Editor 설치 경로를 고정하지 않으며, 실제 구현 기능과 미구현 capability를 구분합니다. [Unity 설치·지원 범위](docs/Unity_Setup.md), [설계 및 기존 구조 분석](docs/Unity_1_4_Design.md), [검증 기록](docs/Unity_Validation.md)을 참고하세요. 아래의 기존 설치 흐름은 Unreal용입니다.
 
 ```powershell
 git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
@@ -13,6 +15,22 @@ cd UE5_Local_LLM_MCP_lmstudio
 ```
 
 Linux와 macOS에서는 같은 폴더에서 `./install.sh`를 실행하면 됩니다. Python이 없으면 실행에 필요한 버전을 사용자 폴더에 설치합니다. 시스템 전체의 Python 설정이나 PATH는 바꾸지 않습니다.
+
+Intel Mac에서는 LM Studio GUI 대신 Linux x64 VM의 `llmster`를 사용하고, 저장소를 VM 안에서 다음처럼 설치합니다. 이 모드는 MCP와 Unreal 구성을 설치하되 GUI 전용 대화 압축기는 제외합니다.
+
+```sh
+./install.sh --profile standard --yes --headless-lmlink
+```
+
+Intel Mac에서 VM 생성부터 LM Link, 프로젝트 마운트, MCP/RAG 설치와 실제 모델 도구 호출 검증까지 한 번에 수행하려면 호스트 macOS에서 다음 전용 설치기를 사용합니다.
+
+```bash
+./install-intel-mac.sh \
+  --project /absolute/path/MyGame.uproject \
+  --engine-root "/Users/Shared/Epic Games/UE_5.7"
+```
+
+최초 실행에서 LM Studio 계정 로그인이 필요하면 터미널에 페어링 URL이 표시됩니다. 브라우저에서 승인하면 설치가 자동으로 계속됩니다. 완료 후 프로젝트의 `./lmstudio-cli.sh`를 사용합니다. 기본 `lms chat`에는 MCP 통합 옵션이 없기 때문에 이 실행기가 `mcp.json`의 모든 도구를 모델에 전달하고 도구 요청을 자동 실행합니다. GUI 플러그인 대신 같은 deterministic core를 사용하는 헤드리스 Compactor가 채팅 요청 직전에 백그라운드로만 동작하며, 기본 24개 메시지 또는 컨텍스트 여유 14K 이하에서 오래된 기록을 압축합니다. MCP 서버 자체의 안전 제한은 계속 적용됩니다.
 
 설치 화면에서 프로젝트와 엔진을 고르고, 검색 자료를 만들지 선택하면 됩니다. 처음에는 `STANDARD` 구성에 읽기 전용인 `SAFE` 권한으로 시작하면 됩니다. AI에게 파일 수정과 빌드까지 맡기려면 `AGENT` 권한을 따로 선택해야 합니다.
 
@@ -26,14 +44,29 @@ Linux와 macOS에서는 같은 폴더에서 `./install.sh`를 실행하면 됩�
 
 1. 사용할 AI 모델을 불러오고 모델 목록에서 직접 선택합니다.
 2. 설치 후 LM Studio를 재시작하고 `unreal-rag`, `unreal-agent`를 켭니다.
-3. 채팅의 `codex/unreal-context-compactor`는 기본적으로 꺼두어야 합니다(`OFF`). 오래된 채팅에 켜져 있으면 직접 끄면 됩니다.
+3. 설치·업데이트 시 기존 채팅의 `codex/unreal-context-compactor`가 `ON`으로 설정됩니다. 필요 없는 채팅에서는 해당 단일 스위치를 끌 수 있습니다.
 4. 정확한 프로젝트를 지정하고 질문하거나 수정할 내용을 요청합니다.
 
-대화 압축기는 긴 대화의 오래된 내용을 줄여 주는 보조 기능입니다. 설치했다고 채팅에서 켜지는 건 아닙니다. 필요할 때 해당 채팅의 단일 스위치만 켜면 되고, 별도 활성화 설정은 없습니다.
+대화 압축기는 긴 대화의 오래된 내용을 줄여 주는 보조 기능입니다. 설치기는 목록에 고정하고 당시 저장된 기존 채팅의 단일 스위치를 켭니다. `Observe only`를 켜지 않는 한 임계값 아래에서만 실제 압축합니다. 응답이 중간에 끊긴 뒤 "계속해줘", "이어서 진행해"처럼 짧게 지시하면 이전 작업 목표와 직전 답변을 이어받습니다.
 
 언리얼 작업 채팅에서는 LM Studio의 `js-code-sandbox`를 꺼두어야 합니다. 이 도구의 작업 폴더는 언리얼 프로젝트와 다르므로 프로젝트 파일 작업에 쓰면 안 됩니다.
 
 설정 예시와 확인 방법은 [LM Studio 연결](docs/LMStudio_Unreal_Agent_Setup.md), Rider와 Cline을 쓴다면 [Rider·Cline 연결](docs/Cline_Rider_Unreal_Agent_Setup.md)을 보면 됩니다.
+
+### 긴 조사 작업을 사용하는 방법
+
+현재 긴 조사 작업은 완전 자동화와 수동 분할의 중간 단계에 있습니다. 한 번에 `프로젝트 전체를 조사해서 모든 문제를 찾아줘`처럼 범위를 끝없이 넓히기보다, 다음과 같이 중간 경계를 두면 도구 호출과 근거 보존이 더 안정적입니다.
+
+```text
+1. 변경 커밋 목록 조사
+2. 핵심 파일 선정
+3. 파일 3개 분석
+4. 다음 파일 분석
+```
+
+이 방식은 사용자가 조사 단계를 계속 관리해야 한다는 뜻이 아니라, 현재 시스템의 안정적인 사용 경계를 설명합니다. 목표는 큰 조사 요청 하나를 받으면 대화 압축기가 bounded context를 유지하고, 도구를 안정적으로 호출하고, 확인된 evidence를 보관한 뒤, 필요한 다음 조사를 이어서 최종 결과까지 완주하도록 하는 것입니다.
+
+이를 위해 기존 deterministic 압축, evidence archive, 접근 범위(scope), 안전성(safety) 기반은 유지합니다. 전체 시스템을 폐기하거나 새로 시작하는 것이 기본 방향은 아닙니다. 이후 개선은 이미 쓸 수 있는 기반을 재사용하면서, 조사 흐름을 지나치게 복잡하게 만드는 orchestration만 줄이는 방향으로 진행합니다. 따라서 현재 동작이 긴 작업을 항상 자동으로 끝까지 수행한다고 가정하지 말고, 중요한 조사는 단계별 결과와 근거가 실제로 남았는지 함께 확인해야 합니다.
 
 ## 프로젝트 검색 자료 생성
 
@@ -57,6 +90,8 @@ python install.py --profile standard --yes --build-rag --index-tier standard --e
 
 ## 지원 기능과 제한 사항
 
+긴 보고서가 출력 한도에 걸리면 대화 압축기는 기존 본문을 보존하고 한 번 자동으로 이어 씁니다. 중단된 본문은 다음 `이어서` 요청에도 전달됩니다. 일반 이어쓰기에는 이전의 90초 재작성 제한을 적용하지 않습니다. 자세한 조건은 [보고서 출력 한도와 이어쓰기](lmstudio-context-compactor-plugin/README.md#보고서의-출력-한도와-이어쓰기)에 있습니다.
+
 - 코드와 설정 파일을 찾고 읽을 수 있습니다.
 - 쓰기 권한을 켜면 기존 파일 일부를 고치거나 새 파일을 만들 수 있습니다.
 - 빌드 권한을 켜면 선택한 프로젝트의 엔진으로 빌드와 자동화 테스트를 실행할 수 있습니다.
@@ -79,7 +114,7 @@ python install.py --profile standard --yes --build-rag --index-tier standard --e
 | 오류 해결 | [문제 해결](docs/Troubleshooting.md) |
 | 수정·빌드 권한 이해 | [권한 설정](docs/Safe_Agent_Mode.md), [도구 사용 규칙](docs/LMStudio_MCP_Tool_Discipline.md) |
 | 내부 구조 확인 | [구성 설명](docs/ARCHITECTURE.md), [검색 대상 구분](docs/Project_Routing.md), [Build.cs 읽기](docs/Build_Cs_Parser.md) |
-| 이번 버전 변경 확인 | [1.3.3 변경 사항](docs/Release_Notes_1_3_3.md), [버전 관리](docs/VERSIONING.md) |
+| 이번 버전 변경 확인 | [1.4.0 RC3 변경 사항](docs/Release_Notes_1_4_0_RC3.md), [버전 관리](docs/VERSIONING.md) |
 
 실제 프로젝트에서의 동작은 엔진 버전, 플러그인, 개발 환경에 따라 확인이 필요합니다. 자동 검사를 통과한 것과 에디터에서 직접 실행해 본 것은 구분해서 적어야 합니다.
 

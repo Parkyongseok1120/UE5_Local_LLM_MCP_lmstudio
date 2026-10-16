@@ -1,0 +1,59 @@
+
+> lmstudio-unity-mcp@1.4.0-beta.4 test
+> node --test test/file-discovery.test.js test/runtime.test.js test/git.test.js test/symbol-worker.test.js
+
+✔ offline directory listing stays shallow and filters direct children (283.6525ms)
+✔ search combines exact extension choices with path query without reading bodies (172.2944ms)
+✔ dot discovery paths resolve to the Assets root without weakening traversal checks (177.4913ms)
+✔ content search requires a query and remains independently scoped (151.7192ms)
+✔ pages are scoped to the exact query and do not imply a file type is absent (239.3162ms)
+✔ a finished result page does not hide an unfinished scan (80.9278ms)
+✔ parallel path searches validate the search root without re-resolving every descendant (424.2013ms)
+✔ comparison never silently ignores base/head; no implicit diff (1651.8031ms)
+✔ Workspace rollback and project mismatch are enforced before bridge or Git access (1280.2323ms)
+warning: in the working copy of 'SyntheticGame/Assets/A.cs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'SyntheticGame/Assets/Deleted.cs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'SyntheticGame/SyntheticGame/Assets/Nested.cs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'SyntheticGame/Assets/A.cs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'SyntheticGame/SyntheticGame/Assets/Nested.cs', LF will be replaced by CRLF the next time Git touches it
+✔ Workspace observations share the existing Unity receipt owner; rollback cannot replay receipts (1400.7024ms)
+✔ Git read operations reject ignored arguments and directories, preserve raw BOM hashes (1453.2354ms)
+✔ read-only Git suppresses fsmonitor and rejects executable clean filters without running them (2423.5645ms)
+✔ changed files pin commits, preserve rename and page one immutable snapshot (1967.1425ms)
+✔ Git observations expose query, phase, cache and serialization timing without changing paging (1845.3326ms)
+✔ immutable changed-file fixtures deliver all 232 rows after the first 200 (2653.9909ms)
+✔ 650-row Git paging advances by returned pages under the changed-files default budget (9173.7454ms)
+✔ Git cursors distinguish query mismatch, TTL, cache eviction, and server restart (4999.8237ms)
+✔ git log returns author and committer evidence with bounded date and literal author filters (1515.7751ms)
+✔ git log authorQuery is a literal fixed string for regex metacharacters and non-ASCII (1592.3156ms)
+✔ unborn status, root commit, literal paths and result budgets (2261.694ms)
+﹣ status NUL parsing retains newline and trailing spaces on supporting filesystems (0.0766ms) # SKIP
+﹣ Windows short root aliases identify the same Git project (557.7774ms) # Volume does not provide DOS short aliases
+✔ nested workspaces report exact requested and repository query scopes without guessing prefixes (2663.1726ms)
+✔ offline project detection and catalog does not expose Unreal or autonomous tools (189.3861ms)
+✔ runtime observations and uncertain operations carry the adapter's bound scope (255.4868ms)
+✔ receipt conflicts, forgery, cross-project isolation and re-read (873.3077ms)
+✔ file observations carry the bound project and the observed file version (347.3119ms)
+warning: in the working copy of 'Assets/Code.cs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Assets/Code.cs', LF will be replaced by CRLF the next time Git touches it
+✔ read_file reports exact ranges and reads Unity package and project settings files (111.3148ms)
+✔ unity_git returns bounded read-only status, log and diff evidence for the bound project (2392.1252ms)
+✔ permissions, create precondition, exact-match edits, schema validation (107.3982ms)
+✔ symlinks, hardlinks, protected formats and new-file parent checks (51.2715ms)
+✔ JSON patch preserves untouched text and validates explicit schema before apply (90.9758ms)
+✔ CSV preserves BOM, quoting, CRLF, leading zeros and untouched fields (83.8232ms)
+✔ query cursor detects changed state and UTF-8 budget is enforced (63.2213ms)
+✔ read_file fits complete line pages including the final workspace envelope (168.2137ms)
+✔ RPC handshake binds identity and never emits discovery token (63.2843ms)
+✔ real MCP stdio initialize/list/call preserves structured offline evidence (405.3479ms)
+﹣ real semantic regression: enum/local symbols, explicit constructors/operators/indexers and property override without synthetic diagnostics (0.7517ms) # SKIP
+✔ symbol queue reserves before asynchronous manifest export and releases after failure (18.8764ms)
+﹣ real external Roslyn: defines, partial compile error, declarations, binding, inheritance and interface implementations (0.1933ms) # SKIP
+ℹ tests 40
+ℹ suites 0
+ℹ pass 36
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 4
+ℹ todo 0
+ℹ duration_ms 37909.6348

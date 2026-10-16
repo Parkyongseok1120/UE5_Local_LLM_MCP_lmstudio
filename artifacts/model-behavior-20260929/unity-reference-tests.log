@@ -1,0 +1,24 @@
+✔ offline project detection and catalog does not expose Unreal or autonomous tools (104.1797ms)
+✔ runtime observations and uncertain operations carry the adapter's bound scope (109.0119ms)
+✔ receipt conflicts, forgery, cross-project isolation and re-read (594.1356ms)
+✔ file observations carry the bound project and the observed file version (127.1713ms)
+warning: in the working copy of 'Assets/Code.cs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Assets/Code.cs', LF will be replaced by CRLF the next time Git touches it
+✔ read_file reports exact ranges and reads Unity package and project settings files (55.4862ms)
+✔ unity_git returns bounded read-only status, log and diff evidence for the bound project (2057.5764ms)
+✔ permissions, create precondition, exact-match edits, schema validation (106.4ms)
+✔ symlinks, hardlinks, protected formats and new-file parent checks (52.9479ms)
+✔ JSON patch preserves untouched text and validates explicit schema before apply (86.1888ms)
+✔ CSV preserves BOM, quoting, CRLF, leading zeros and untouched fields (75.6481ms)
+✔ query cursor detects changed state and UTF-8 budget is enforced (60.2121ms)
+✔ read_file fits complete line pages including the final workspace envelope (159.2455ms)
+✔ RPC handshake binds identity and never emits discovery token (149.5061ms)
+✔ real MCP stdio initialize/list/call preserves structured offline evidence (440.239ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6885.3997

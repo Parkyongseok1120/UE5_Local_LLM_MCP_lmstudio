@@ -1,0 +1,167 @@
+{
+  "mode": "architecture",
+  "plan": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+  "implementationStatus": "proposed_not_implemented",
+  "invariants": [
+    "Preserve source identity, version, query and units; historical evidence never grants fresh-read or mutation authority.",
+    "Commit each returned pair once; preserve unknown outcomes and existing off/warn/pause choices.",
+    "Exactly measured model input and one batch reservation ledger remain authoritative."
+  ],
+  "existing": [
+    "McpProcess launches and closes owned children; main currently registers after successful start.",
+    "Public path hygiene and existing release tests already exist.",
+    "Python test suite membership has a single owner in scripts/ci/ci_suites.py.",
+    "Existing compactor build/guidance/identity and evaluation tools are available."
+  ],
+  "proposed": [
+    "W5 makes start exception-safe, registers lifetime before initialize and makes close idempotent with reap.",
+    "W5 sanitizes public evidence paths while preserving local raw logs outside release.",
+    "W6 validates old data/settings, CI membership, generated artifacts and loaded build before live comparison."
+  ],
+  "doNotDuplicate": [
+    "No new subprocess manager or cleanup daemon.",
+    "No public-path exclusions to conceal fixture leakage.",
+    "No second manually maintained test inventory or model evaluator."
+  ],
+  "impactedSurfaces": [
+    "scripts/headless_mcp_chat.py",
+    "tests/test_headless_compaction.py",
+    "headless lifecycle regression test if separated",
+    "scripts/ci/ci_suites.py",
+    "docs/evidence/harness-stability-implementation-20261007.json",
+    "tests/test_public_path_hygiene.py",
+    "lmstudio-context-compactor-plugin/package.json",
+    ".github/workflows/ci.yml",
+    "Existing eval and install identity scripts"
+  ],
+  "validationPlan": [
+    "Actual harmless child rejecting initialize/EOF/timeout leaves no owned child; first and second server failures covered.",
+    "Cleanup preserves original exception; repeated close and already-exited process are safe; kill is followed by reap.",
+    "Current public path/encoding/link checks pass for changed documents without widening exclusions.",
+    "Relevant tests then full required suites; baseline Node20/Python3.12; generated artifacts checked.",
+    "Matched live model/context/prompt/fixture, >=3 repetitions per behavioral case, report ranges and median; semantic coverage cannot shrink to improve time."
+  ],
+  "claims": [
+    {
+      "id": "W5",
+      "claim": "Own subprocess lifetime before initialization and sanitize portable evidence rather than relaxing hygiene checks.",
+      "claimType": "wiring",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/headless_mcp_chat.py:45",
+          "observation": "Child starts before initialize."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/headless_mcp_chat.py:472",
+          "observation": "Cleanup registration occurs only after start returns."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/headless_mcp_chat.py:550",
+          "observation": "Finally only visits registered children."
+        },
+        {
+          "kind": "test",
+          "location": "docs/evidence/harness-continuity-plan-20261009-baseline.json",
+          "observation": "Actual owned fixture child remained alive after main failed; audit fixture later closed it."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "expected_missing",
+          "location": "scripts/headless_mcp_chat.py:471",
+          "symbol": "register lifecycle before start"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "scripts/headless_mcp_chat.py:45",
+          "symbol": "launch and initialize"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "expected_missing",
+          "location": "scripts/headless_mcp_chat.py:110",
+          "symbol": "idempotent cleanup and reap on partial start"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/headless_mcp_chat.py:110",
+          "observation": "Successful-start cleanup already exists; improve that owner."
+        },
+        {
+          "kind": "project_source",
+          "location": "tests/test_public_path_hygiene.py:74",
+          "observation": "Current failure is an existing untracked document, not proof of a released defect."
+        }
+      ],
+      "unknowns": [
+        "This does not expand standalone Windows headless transport support or authorize terminating external Editors."
+      ]
+    },
+    {
+      "id": "W6",
+      "claim": "Prove integrated behavior and installed identity with existing CI/evaluation owners before accepting performance changes.",
+      "claimType": "wiring",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/ci/ci_suites.py:1",
+          "observation": "Single owner for Python suite membership."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/package.json",
+          "observation": "Build/identity/evaluation scripts and explicit default test list exist."
+        },
+        {
+          "kind": "test",
+          "location": "docs/evidence/harness-continuity-plan-20261009-baseline.json",
+          "observation": "Prior full audit: 643+277+52+1137 passing tests; one hygiene failure and 24 skips."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/ci/ci_suites.py:1",
+          "symbol": "register changed product tests"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/package.json",
+          "symbol": "existing build/test/evaluation entrypoints"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "expected_missing",
+          "location": "docs/Harness_Continuity_Repair_Plan_20261009.md",
+          "symbol": "record new pass/fail and paired live results"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "CONTRIBUTING.md:1",
+          "observation": "Automated verification and real-device observations must be reported separately."
+        }
+      ],
+      "unknowns": [
+        "Plan validation does not execute or certify the proposed implementation.",
+        "Live Editor and external Roslyn requirements depend on actual changed surfaces."
+      ]
+    }
+  ]
+}

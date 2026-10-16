@@ -1,0 +1,17 @@
+{
+  "mode": "architecture",
+  "claims": [{
+    "claim": "최종 재조립 뒤 LOW 충족은 기록만 하며 compaction 채택과 commit은 입력 감소/하드 한도만 검사합니다.",
+    "claimType": "architecture", "verdict": "Confirmed", "severity": "Info", "proofLevel": "SourceVerified",
+    "evidence": [{"kind":"project_source","location":"3c4375fd:lmstudio-context-compactor-plugin/src/prediction-loop.ts:2280-2880","observation":"candidate 감소 검사 뒤 note/metadata 재조립; remaining>=0 commit; targetMet는 telemetry 필드입니다."}],
+    "behaviorPath": [],
+    "counterEvidence": [{"kind":"project_source","location":"3c4375fd:lmstudio-context-compactor-plugin/src/prediction-loop.ts:826","observation":"soft selector에는 목표 remaining 기반 유한 후보 선택이 이미 존재합니다."}],
+    "unknowns": ["과거 26/34/42K 수치의 로그 필드가 첨부되지 않았습니다."]
+  }],
+  "existing": ["PredictionLoop policy and orchestration", "WorkingContext archive and durable window", "context-budget pure generation budget", "input-availability representation"],
+  "proposed": ["Extract independently testable policy owners", "Canonical execution phase and transaction", "Shared broker and final assembled LOW postcondition", "Generic evidence lifecycle and stable capabilities"],
+  "doNotDuplicate": ["EvidenceArchive", "WorkingContext persistence", "direct-compaction-core", "input-availability", "resolveGenerationBudget"],
+  "invariants": ["No mutation approval bypass", "No raw syntax execution", "Provider unknown remains unknown", "Final exact input <= effective LOW for success", "Returned evidence survives cancellation"],
+  "impactedSurfaces": ["Plugin src/dist", "Plugin tests and status source list", "Runtime telemetry", "Durable restore"],
+  "validationPlan": ["Build and npm test per gate", "Focused collaborator contracts", "Three-cycle and soak tests", "Runtime probe and manifest", "git diff --check"]
+}

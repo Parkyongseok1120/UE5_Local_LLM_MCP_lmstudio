@@ -1,4 +1,5 @@
 "use strict";
+const { committedChange } = require("./direct-change-evidence");
 
 const fs = require("node:fs");
 const fsp = fs.promises;
@@ -7,6 +8,7 @@ const {
   calculateReplacement,
   replaceWithCAS,
   sha256Text,
+  assertMutationActive,
 } = require("./safe-write");
 const {
   saveRuntimeTransaction,
@@ -118,12 +120,20 @@ async function callHook(hooks, name, payload) {
   if (typeof hooks?.[name] === "function") await hooks[name](payload);
 }
 
-async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks = {}) {
+async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks = {}, signal) {
   const writtenAbsolutePaths = [];
   const writtenSet = new Set();
   const postWriteHashes = {};
+  const changeEvidenceByPath = {};
   const patchedPaths = new Set();
   let stageIndex = 0;
+  let publicationStarted = false;
+  const beginPublication = () => {
+    if (!publicationStarted) assertMutationActive(signal);
+    // Once publication starts, finish the existing atomic commit/rollback
+    // contract. A late cancel must not turn applied writes into not_applied.
+    publicationStarted = true;
+  };
 
   journal.status = "committing";
   saveRuntimeTransaction(journal, stateRoot);
@@ -163,6 +173,7 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
     assertTargetIdentityUnchanged(target, relativePath, journal, stateRoot);
 
     const result = await replaceWithCAS({
+      beforeCommit: beginPublication,
       targetPath: target.absolutePath,
       priorContent,
       oldText: item.oldText,
@@ -190,6 +201,11 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
       writeCompleted: true,
     }, stateRoot);
     postWriteHashes[relativePath] = postHash;
+    // This optional calculation never throws into the transaction rollback.
+    if (result.preHash === original.preHash) {
+      const evidence = committedChange(result.priorContent, result.updated, result.preHash, postHash);
+      if (evidence) changeEvidenceByPath[relativePath] = evidence;
+    }
     patchedPaths.add(relativePath);
     if (!writtenSet.has(target.absolutePath)) {
       writtenSet.add(target.absolutePath);
@@ -199,7 +215,7 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
 
   journal.status = "committed";
   saveRuntimeTransaction(journal, stateRoot);
-  return { postWriteHashes, writtenAbsolutePaths };
+  return { postWriteHashes, writtenAbsolutePaths, changeEvidenceByPath };
 }
 
 module.exports = { captureBundleBaseline, commitBundle };

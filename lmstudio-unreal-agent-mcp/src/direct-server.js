@@ -9,6 +9,8 @@
  * project/read/mutation/diagnostic boundaries; this file owns no workflow.
  */
 
+const path = require("node:path");
+const { createWorkspaceCapabilities, workspaceToolDefinitions } = require("../../shared-tool-core/workspace");
 const { Server } = require("@modelcontextprotocol/sdk/server/index.js");
 const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js");
 const { CallToolRequestSchema, ListToolsRequestSchema } = require("@modelcontextprotocol/sdk/types.js");
@@ -27,23 +29,51 @@ const { recoverRuntimeTransactions } = require("./direct-transaction-recovery.js
 
 function createDirectRuntime(options = {}) {
   const context = createDirectRuntimeContext(options);
+  const lifetime = new AbortController();
+  const workspace = createWorkspaceCapabilities({ resolveBinding: async selector => {
+    const project = await context.resolveCallProject(selector);
+    return { root: project ? path.dirname(project) : context.workspaceRoot, engine: "unreal", projectIdentity: project || null };
+  } });
   const handlers = Object.freeze({
+    ...Object.fromEntries(workspaceToolDefinitions().map(t => [t.name, (args, requestContext) => workspace(t.name, args, requestContext)])),
     ...createProjectCapabilities(context),
     ...createReadCapabilities(context),
     ...createLogCapabilities(context),
     ...createMutationCapabilities(context),
     ...createDiagnosticCapabilities(context),
   });
-  const tools = toolDefinitions();
+  const tools = toolDefinitions().filter(t => context.env.WORKSPACE_CAPABILITIES !== "0" || !workspaceToolDefinitions().some(w => w.name === t.name));
   const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
   const missingHandlers = tools.map((tool) => tool.name).filter((name) => typeof handlers[name] !== "function");
   if (missingHandlers.length) throw new Error(`Direct catalog has no handler: ${missingHandlers.join(", ")}`);
 
   async function callTool(name, rawArgs = {}, requestContext = {}) {
     const args = cleanArgs(rawArgs);
+    // Only catalogued envelope contracts may affect transport serialization.
+    const publishedBudget = toolsByName.get(name)?.inputSchema?.properties?.byteBudget;
+    const byteContract = publishedBudget?.$comment === "direct-json-text-utf8" ? publishedBudget : undefined;
+    const responseArgs = byteContract && Number.isInteger(args.byteBudget)
+      && args.byteBudget >= byteContract.minimum && args.byteBudget <= byteContract.maximum
+      ? { byteBudget: args.byteBudget } : {};
+    const controller = new AbortController();
+    const sources = [lifetime.signal, requestContext.signal].filter(Boolean);
+    const abort = () => controller.abort();
+    for (const source of sources) {
+      source.addEventListener("abort", abort, { once: true });
+      if (source.aborted) abort();
+    }
     try {
-      const handler = handlers[name];
+      const signal = controller.signal;
+      if (signal.aborted) return context.directResult(name, failure("REQUEST_CANCELLED", "Request cancelled before dispatch.", {
+        details: { cancelled: true, executionState: "not_started" },
+      }), responseArgs);
+      requestContext = { ...requestContext, signal };
+      const handler = toolsByName.has(name) ? handlers[name] : undefined;
       const definition = toolsByName.get(name);
+      if (byteContract && args.byteBudget !== undefined && responseArgs.byteBudget === undefined)
+        return context.directResult(name, failure("INVALID_ARGUMENT",
+          `byteBudget must be an integer from ${byteContract.minimum} to ${byteContract.maximum}.`,
+          { retryAllowed: true, retryMode: "different_arguments" }));
       const allowed = new Set(Object.keys(definition?.inputSchema?.properties || {}));
       const unsupported = Object.keys(args).filter((key) => !allowed.has(key));
       if (handler && unsupported.length) {
@@ -51,14 +81,16 @@ function createDirectRuntime(options = {}) {
           "INVALID_ARGUMENT",
           `${name} received unsupported argument(s): ${unsupported.join(", ")}`,
           { retryAllowed: true, retryMode: "different_arguments" },
-        ));
+        ), responseArgs);
       }
       const payload = handler
         ? await handler(args, requestContext)
         : failure("UNKNOWN_TOOL", `Unknown tool: ${name}`);
-      return context.directResult(name, payload);
+      return context.directResult(name, payload, responseArgs);
     } catch (error) {
-      return context.directResult(name, errorFromException(error));
+      return context.directResult(name, errorFromException(error), responseArgs);
+    } finally {
+      for (const source of sources) source.removeEventListener("abort", abort);
     }
   }
 
@@ -72,13 +104,14 @@ function createDirectRuntime(options = {}) {
     fileSnapshots: context.fileSnapshots,
     tools,
     callTool,
+    close: (reason = "connection_closed") => lifetime.abort(reason),
     resolveProject: (selector) => context.resolveCallProject(selector),
     recoverTransactions: () => recoverRuntimeTransactions(context.stateRoot, context.runtimeOwner),
     probeSafety: () => ({ semanticGuard: probeMutationSemanticGuard() }),
   };
 }
 
-async function serveRuntime(runtime, serverName) {
+async function serveRuntime(runtime, serverName, transport = new StdioServerTransport()) {
   let version = "unknown";
   try {
     version = String(require("../package.json").version || "unknown");
@@ -93,9 +126,8 @@ async function serveRuntime(runtime, serverName) {
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => runtime.callTool(
     request.params.name,
     request.params.arguments || {},
-    extra?.sessionId ? { sessionId: extra.sessionId } : {},
+    { ...(extra?.sessionId ? { sessionId: extra.sessionId } : {}), signal: extra?.signal },
   ));
-  const transport = new StdioServerTransport();
   const priorClose = transport.onclose;
   transport.onclose = () => {
     try {

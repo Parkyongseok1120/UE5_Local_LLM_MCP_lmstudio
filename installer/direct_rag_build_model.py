@@ -47,11 +47,11 @@ class DirectRagBuildPlan:
     excluded_projects: tuple[Path, ...]
     dry_run: bool = False
 
-    def commit(self) -> None:
+    def commit(self) -> dict | None:
         if self.dry_run:
             return
         rebase_stage_manifest(self.stage_dir, self.index_dir)
-        commit_refresh_stage(
+        return commit_refresh_stage(
             self.stage_dir,
             self.index_dir,
             required_files=self.required_files,

@@ -91,7 +91,7 @@
 
 `unreal_rag_refresh`의 기본 범위는 프로젝트 소스이며 Unreal Editor를 실행하지 않습니다. `scope=editor_metadata` 또는 `all`도 기본은 기존 내보내기 자료만 읽습니다. 사용자가 에디터 실행까지 요청한 경우에만 `allowEditorLaunch=true`를 사용합니다.
 
-`codex/unreal-context-compactor`는 기본적으로 꺼두어야 합니다(`OFF`). 설치하고 목록에 고정하는 것과 채팅에서 켜는 것은 별개입니다. 긴 대화에서 필요할 때 단일 스위치만 켜면 됩니다. `Observe only`는 사용량만 측정합니다.
+`codex/unreal-context-compactor`는 설치·업데이트 시 당시 저장된 기존 채팅에서 기본 `ON`입니다. 필요 없는 채팅에서는 단일 스위치를 끌 수 있습니다. `Observe only`는 사용량만 측정합니다.
 
 압축 결과에는 현재 요청, 목표, 미해결 작업, 읽거나 바꾼 파일, 최근 검사 결과를 남길 수 있습니다. 파일의 임시 수정 표식은 장기 기억으로 남기지 않으며 오래된 파일 관찰은 `fresh_read_required`로 표시합니다. 압축기가 모델·권한·다음 도구·완료 여부를 고르지 않습니다.
 

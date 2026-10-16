@@ -1,0 +1,825 @@
+{
+  "mode": "codegen",
+  "scope": {
+    "date": "2026-10-07",
+    "baselineCommit": "78abd7fee5a1172b7bdb4d5e99c0dc3f51afbef8",
+    "root": ".",
+    "implementation": true,
+    "plan": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+    "implementationSection": 10,
+    "existingDirtyFilesAtStart": 94,
+    "backupDirectory": "local-audit-artifacts/mcp-before-stability-sui8euow",
+    "installedRuntimeModified": false,
+    "gameProjectModified": false,
+    "liveModelEvaluation": false,
+    "proofBoundary": "Local source, builds, deterministic tests, isolated processes, development package and installer dry-run; no live Editor/model verification"
+  },
+  "claimInterpretation": "ByDesign describes the approved implemented contract, not a claim that the original defect was intentional. P2 records implementation review priority; it is not an unresolved-defect list.",
+  "existing": [
+    "BudgetBroker/ContextManager",
+    "WorkingContext/EvidenceArchive",
+    "Existing note snapshot and reference contracts",
+    "Shared Git tool owner",
+    "RagOperation and Editor runId markers",
+    "Markdown guidance generator and existing CI suites"
+  ],
+  "doNotDuplicate": [
+    "No second budget ledger",
+    "No independent process owner",
+    "No semantic model judge or extra agent",
+    "No duplicated guidance source",
+    "No second mutation authority derived from archived evidence"
+  ],
+  "invariants": [
+    "Retain first-consumer raw evidence until actual input delivery or explicit recovery handling.",
+    "Display omission cannot invalidate retained notes; failed snapshots preserve prior notes.",
+    "Scope/lineage/version and source/body/envelope offset units remain distinct.",
+    "All serialized tool responses obey the total response budget; legacy formats remain readable.",
+    "Cancellation before publication prevents effects; after publication outcomes reflect confirmed effects or uncertainty.",
+    "External Editor timeout is not termination proof and must not start a competing writer.",
+    "Lexical observation, build result, provider success and semantic task completion remain distinct.",
+    "No live settings, installed runtime, game project, git branch or release are changed by this turn."
+  ],
+  "impactedSurfaces": [
+    "Compactor round assembly/recovery, memory notes and checkpoint",
+    "Archive storage views/catalog and tool schema",
+    "Shared Git, Unreal file mutation and symbol extraction",
+    "RAG/Editor export process and marker lifetime",
+    "Unity test result reporting",
+    "Guidance generation, CI suite registration, development packaging"
+  ],
+  "validationPlan": [
+    "Run compactor, Unreal MCP and Unity MCP full Node suites.",
+    "Run portable_direct, portable_release, windows_direct, windows_release Python suites.",
+    "Verify architecture/lifecycle/approval tests, generated identity, lint and encoding.",
+    "Build a development package and verify inventory hashes; dry-run installation into temporary locations.",
+    "Keep actual LM Studio and Unity/Unreal Editor behavior unverified until explicit live evaluation."
+  ],
+  "claims": [
+    {
+      "id": "SI01",
+      "claim": "정확히 측정한 입력에 여유가 있으면 원문을 유지하며, pressure가 생긴 정상 입력과 fresh planning 후보에는 동일한 projection 판단을 적용한다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "observation": "prepareRoundInput / assembleRecoveryCandidate"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "observation": "ContextManager.shouldProjectEvidence"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "원문 유지, 압력 후 복원, fresh tool planning 통합 회귀"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "fresh planning은 측정한 retryCandidate.history를 사용"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "원문 유지가 모델의 모든 재독회를 막지는 않는다. 실제 장시간 대화의 입력·출력·요약 토큰 절감률은 아직 측정하지 않았다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "symbol": "prepareRoundInput / assembleRecoveryCandidate"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+          "symbol": "ContextManager.shouldProjectEvidence"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "symbol": "원문 유지, 압력 후 복원, fresh tool planning 통합 회귀"
+        }
+      ],
+      "unknowns": [
+        "원문 유지가 모델의 모든 재독회를 막지는 않는다. 실제 장시간 대화의 입력·출력·요약 토큰 절감률은 아직 측정하지 않았다."
+      ]
+    },
+    {
+      "id": "SI02",
+      "claim": "메모 근거의 유효성·보관과 표시·최초 입력 전달을 분리하고, 잘못된 새 snapshot은 기존 메모를 보존한다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
+          "observation": "resolveNoteUpdate / reconcileStoredNote / renderAssistantNote"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "noteRecordRefs / verifiedNoteRefs; note refs는 보관에만 합산"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/harness-stability.test.cjs",
+          "observation": "8개 초과 참조, rejected/clear, 동일 batch, Windows alias/deleted, first consumer"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-exchange-index.js",
+          "observation": "uniqueLatest는 같은 batch 관측 사이의 임의 최신성을 부여하지 않음"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "메모는 기존 최대 4항목/1,500자 범위의 전체 snapshot이다. 참조가 유효해도 메모의 자연어 결론 자체가 참이라는 증명은 아니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
+          "symbol": "resolveNoteUpdate / reconcileStoredNote / renderAssistantNote"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "symbol": "noteRecordRefs / verifiedNoteRefs; note refs는 보관에만 합산"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/harness-stability.test.cjs",
+          "symbol": "8개 초과 참조, rejected/clear, 동일 batch, Windows alias/deleted, first consumer"
+        }
+      ],
+      "unknowns": [
+        "메모는 기존 최대 4항목/1,500자 범위의 전체 snapshot이다. 참조가 유효해도 메모의 자연어 결론 자체가 참이라는 증명은 아니다."
+      ]
+    },
+    {
+      "id": "SI03",
+      "claim": "기존 envelope와 catalog v1을 유지하면서 scoped body handle과 snapshot 기반 catalog v2 continuation을 추가한다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "archive 도구 schema와 selector 검증"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "observation": "readByHandle / read / catalogPage"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/harness-stability.test.cjs",
+          "observation": "GC 중 continuation, Unicode body paging, 전체 JSON 예산, v1 호환, selector 충돌"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "handle은 권한이 아니며 기존 scope/lineage/version 검사를 통과해야 한다. catalog snapshot은 실행 수명과 TTL에 한정된다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "symbol": "archive 도구 schema와 selector 검증"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "symbol": "readByHandle / read / catalogPage"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/harness-stability.test.cjs",
+          "symbol": "GC 중 continuation, Unicode body paging, 전체 JSON 예산, v1 호환, selector 충돌"
+        }
+      ],
+      "unknowns": [
+        "handle은 권한이 아니며 기존 scope/lineage/version 검사를 통과해야 한다. catalog snapshot은 실행 수명과 TTL에 한정된다."
+      ]
+    },
+    {
+      "id": "SI04",
+      "claim": "본문 선택·canonical identity와 검증 한계를 projection, body 복원, checkpoint까지 보존하며 byte EOF를 원본 전체 검증으로 승격하지 않는다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "observation": "evidenceBodyView / evidenceSemanticFacts / body read"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+          "observation": "historicalEvidenceObservation / parseToolResult"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/harness-stability.test.cjs",
+          "observation": "lexical candidate facts, source byte 범위와 representation의 checkpoint 전달"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "observation": "body/envelope의 coverage 표현 분리"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "보존된 내용은 과거 관측이며 현재 파일 내용 또는 수정 권한이 아니다. UTF-16 archive offset과 원본 source byte/line 범위를 혼용하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "symbol": "evidenceBodyView / evidenceSemanticFacts / body read"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+          "symbol": "historicalEvidenceObservation / parseToolResult"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/harness-stability.test.cjs",
+          "symbol": "lexical candidate facts, source byte 범위와 representation의 checkpoint 전달"
+        }
+      ],
+      "unknowns": [
+        "보존된 내용은 과거 관측이며 현재 파일 내용 또는 수정 권한이 아니다. UTF-16 archive offset과 원본 source byte/line 범위를 혼용하지 않는다."
+      ]
+    },
+    {
+      "id": "SI05",
+      "claim": "긴 연속 식별자를 정제할 때 capability 정규식이 각 문자부터 다시 탐색하던 경로를 토큰 시작 경계로 제한한다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "observation": "redact"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "observation": "capability token 시작 경계와 실제 HMAC 형식"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/harness-stability.test.cjs",
+          "observation": "220,000자 소스 보존 및 실제 토큰 정제, 별도 child 5초 deadline"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "한 재현 입력의 병목을 제거한 결과다. 전체 제품의 속도 배수 또는 모든 정규식의 선형 시간 보장을 뜻하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "symbol": "redact"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "symbol": "capability token 시작 경계와 실제 HMAC 형식"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/harness-stability.test.cjs",
+          "symbol": "220,000자 소스 보존 및 실제 토큰 정제, 별도 child 5초 deadline"
+        }
+      ],
+      "unknowns": [
+        "한 재현 입력의 병목을 제거한 결과다. 전체 제품의 속도 배수 또는 모든 정규식의 선형 시간 보장을 뜻하지 않는다."
+      ]
+    },
+    {
+      "id": "SI06",
+      "claim": "Unreal 파일 변경은 게시 전 취소를 반영하고 bundle은 첫 게시 이후 기존 commit/rollback 절차를 마친다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js",
+          "observation": "create/CAS에 request signal 전달"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/safe-write.js",
+          "observation": "assertMutationActive / CAS / createExclusive 최종 게시 전 검사"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/harness-stability.test.js",
+          "observation": "실제 임시 파일의 게시 전 취소와 bundle 게시 후 취소 결과"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-commit.js",
+          "observation": "게시가 시작된 bundle의 commit/rollback 경계"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-delete-capabilities.js",
+          "observation": "rename 이전 취소 검사"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "파일 게시 성공은 Unreal Editor import/compile 또는 게임의 의미적 성공을 증명하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-file-mutation-capabilities.js",
+          "symbol": "create/CAS에 request signal 전달"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/safe-write.js",
+          "symbol": "assertMutationActive / CAS / createExclusive 최종 게시 전 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/test/harness-stability.test.js",
+          "symbol": "실제 임시 파일의 게시 전 취소와 bundle 게시 후 취소 결과"
+        }
+      ],
+      "unknowns": [
+        "파일 게시 성공은 Unreal Editor import/compile 또는 게임의 의미적 성공을 증명하지 않는다."
+      ]
+    },
+    {
+      "id": "SI07",
+      "claim": "공유 Git 실행을 비동기로 바꾸고 Unreal/Unity 요청 취소와 출력·시간 한도를 기존 Git 소유자에서 처리한다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/workspace.js",
+          "observation": "Git dispatch에 request context 전달"
+        },
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/git.js",
+          "observation": "run: execFile / AbortSignal / deadline / output limit / cache publication 검사"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unity-mcp/test/git.test.js",
+          "observation": "임시 Git 저장소, event loop 응답, 취소 후 후속 요청"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "Git 프로세스 비용 자체가 사라지는 것은 아니다. 캐시 정책과 읽기 전용 명령 계약을 유지하며 취소 후 결과를 성공 캐시에 넣지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "shared-tool-core/workspace.js",
+          "symbol": "Git dispatch에 request context 전달"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "shared-tool-core/git.js",
+          "symbol": "run: execFile / AbortSignal / deadline / output limit / cache publication 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unity-mcp/test/git.test.js",
+          "symbol": "임시 Git 저장소, event loop 응답, 취소 후 후속 요청"
+        }
+      ],
+      "unknowns": [
+        "Git 프로세스 비용 자체가 사라지는 것은 아니다. 캐시 정책과 읽기 전용 명령 계약을 유지하며 취소 후 결과를 성공 캐시에 넣지 않는다."
+      ]
+    },
+    {
+      "id": "SI08",
+      "claim": "RAG/Editor 작업은 소유한 child와 외부 Editor job을 구분하고, 외부 job의 timeout을 종료 증명으로 사용하지 않는다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/editor_export_runner.py",
+          "observation": "CLI export와 RagOperationStopped 결과 변환"
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/editor_export_mode.py",
+          "observation": "외부 job pending marker와 같은 runId 종료 확인; 미확인 시 fallback writer 금지"
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_editor_export_runner.py",
+          "observation": "실제 Python child deadline, marker cancel/recovery, watcher runId, sync/CLI 예외 전파"
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_operation.py",
+          "observation": "run_owned_process와 process_started/termination_scope"
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/editor_export_markers.py",
+          "observation": "ensure_export_available와 interrupted job marker"
+        },
+        {
+          "kind": "project_source",
+          "location": "tools/ue_export/export_request_watcher.py",
+          "observation": "오류 marker에 원래 runId 보존"
+        },
+        {
+          "kind": "project_source",
+          "location": "docs/Editor_Metadata_Export.md",
+          "observation": "요청 중단과 결과 미확인 복구 절차"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "실제 Unreal Editor를 실행하거나 종료하지 않았다. 외부 Editor가 중단 후에도 쓰는지 알 수 없으면 pending을 보존하며 문서의 수동 확인 절차가 필요하다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/editor_export_runner.py",
+          "symbol": "CLI export와 RagOperationStopped 결과 변환"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/editor_export_mode.py",
+          "symbol": "외부 job pending marker와 같은 runId 종료 확인; 미확인 시 fallback writer 금지"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_editor_export_runner.py",
+          "symbol": "실제 Python child deadline, marker cancel/recovery, watcher runId, sync/CLI 예외 전파"
+        }
+      ],
+      "unknowns": [
+        "실제 Unreal Editor를 실행하거나 종료하지 않았다. 외부 Editor가 중단 후에도 쓰는지 알 수 없으면 pending을 보존하며 문서의 수동 확인 절차가 필요하다."
+      ]
+    },
+    {
+      "id": "SI09",
+      "claim": "Unreal API 근거는 필드·매크로 인접 선언·접근 수준·부모 후보와 lexical 불확실성을 구분하며 qualified symbol을 다른 owner로 대체하지 않는다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/engine_header_evidence.py",
+          "observation": "매크로를 고려한 필드 후보와 parent 후보 관측"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-symbol-extraction.js",
+          "observation": "문자열/주석 masking, 균형 구문과 owner 일치"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/harness-stability.test.js",
+          "observation": "호출문, 주석 괄호, fake 함수, qualified owner 반례"
+        },
+        {
+          "kind": "project_source",
+          "location": "tests/test_engine_header_evidence_identity.py",
+          "observation": "field, multiline macro, nested type, alias/forward 반례"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "C++ compiler/binding 증명이 아니며 부모 선언을 재귀적으로 해석하지 않는다. FORCEINLINE·reflection·delegate 설계를 자동으로 판정하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/engine_header_evidence.py",
+          "symbol": "매크로를 고려한 필드 후보와 parent 후보 관측"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-symbol-extraction.js",
+          "symbol": "문자열/주석 masking, 균형 구문과 owner 일치"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/test/harness-stability.test.js",
+          "symbol": "호출문, 주석 괄호, fake 함수, qualified owner 반례"
+        }
+      ],
+      "unknowns": [
+        "C++ compiler/binding 증명이 아니며 부모 선언을 재귀적으로 해석하지 않는다. FORCEINLINE·reflection·delegate 설계를 자동으로 판정하지 않는다."
+      ]
+    },
+    {
+      "id": "SI10",
+      "claim": "Unity 테스트 RunFinished에서 요청한 leaf 결과가 누락되면 성공으로 단정하지 않고 incomplete/outcome_unknown과 누락 수를 전달하도록 소스를 변경했다.",
+      "claimType": "behavior",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "unity-editor-bridge/Adapters/Tests/Editor/FrameworkAdapter.cs",
+          "observation": "RunFinished"
+        },
+        {
+          "kind": "project_source",
+          "location": "unity-editor-bridge/Adapters/Tests/Editor/FrameworkAdapter.cs",
+          "observation": "missingSelectedCount / requestedCoverageComplete"
+        },
+        {
+          "kind": "project_source",
+          "location": "unity-editor-bridge/Adapters/Tests/Editor/FrameworkAdapter.cs",
+          "observation": "결과 page가 active 결과의 새 필드를 보존"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "이번 작업에서 실제 Unity Editor에서 C# compile·callback·domain reload를 실행하지 않았다. 이 변경의 엔진 통합 동작은 별도 확인이 필요하다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "unity-editor-bridge/Adapters/Tests/Editor/FrameworkAdapter.cs",
+          "symbol": "RunFinished"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "unity-editor-bridge/Adapters/Tests/Editor/FrameworkAdapter.cs",
+          "symbol": "missingSelectedCount / requestedCoverageComplete"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "unity-editor-bridge/Adapters/Tests/Editor/FrameworkAdapter.cs",
+          "symbol": "결과 page가 active 결과의 새 필드를 보존"
+        }
+      ],
+      "unknowns": [
+        "이번 작업에서 실제 Unity Editor에서 C# compile·callback·domain reload를 실행하지 않았다. 이 변경의 엔진 통합 동작은 별도 확인이 필요하다."
+      ]
+    },
+    {
+      "id": "SI11",
+      "claim": "공통 지침의 제한을 유지하며 근거 재사용·좁은 읽기·버전 확인·반례와 lifecycle 확인을 보강하고 Unity 설치 회귀를 CI suite에 등록한다.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/model-guidance/core.md",
+          "observation": "짧은 공통 proof 절"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/generated-design-guidance.ts",
+          "observation": "Markdown SSOT로부터 생성된 지침"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-runtime-identity.test.cjs",
+          "observation": "guidance/runtime identity와 평가 corpus 변형 검사"
+        },
+        {
+          "kind": "project_source",
+          "location": "docs/model-guidance/unreal.md",
+          "observation": "Client RPC는 owning connection 대상이라는 계약"
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/ci/ci_suites.py",
+          "observation": "portable_release에 Unity install suite 등록"
+        },
+        {
+          "kind": "project_source",
+          "location": "tests/test_ci_release_readiness.py",
+          "observation": "필수 suite membership 회귀"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Full_Code_Review_Plan_20261007.md",
+          "observation": "모델이 지침을 항상 따르는지는 시험하지 않았다. 14개 수동 평가 사례는 specified_not_executed 상태이며 새로운 judge/agent/static gate를 추가하지 않았다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "docs/model-guidance/core.md",
+          "symbol": "짧은 공통 proof 절"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/generated-design-guidance.ts",
+          "symbol": "Markdown SSOT로부터 생성된 지침"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/behavior-runtime-identity.test.cjs",
+          "symbol": "guidance/runtime identity와 평가 corpus 변형 검사"
+        }
+      ],
+      "unknowns": [
+        "모델이 지침을 항상 따르는지는 시험하지 않았다. 14개 수동 평가 사례는 specified_not_executed 상태이며 새로운 judge/agent/static gate를 추가하지 않았다."
+      ]
+    }
+  ],
+  "validationResults": [
+    {
+      "name": "Compactor full npm test with TypeScript build",
+      "passed": 602,
+      "failed": 0,
+      "skipped": 0,
+      "log": "local-audit-artifacts/mcp-compactor-stability-test.log"
+    },
+    {
+      "name": "Unreal MCP npm test",
+      "passed": 277,
+      "failed": 0,
+      "skipped": 1,
+      "log": "local-audit-artifacts/mcp-unreal-stability-test.log"
+    },
+    {
+      "name": "Unity MCP npm test",
+      "passed": 52,
+      "failed": 0,
+      "skipped": 4,
+      "log": "local-audit-artifacts/mcp-unity-stability-test.log"
+    },
+    {
+      "name": "Four Python primary CI suites",
+      "command": "python scripts/ci/run_ci_suite.py portable_direct portable_release windows_direct windows_release",
+      "passed": 808,
+      "failed": 0,
+      "skipped": 16,
+      "log": "local-audit-artifacts/mcp-python-stability-test.log"
+    },
+    {
+      "name": "Additional architecture/lifecycle/approval suites",
+      "files": [
+        "runtime-policy.test.cjs",
+        "architecture-contract.test.cjs",
+        "tool-round-lifecycle.test.cjs",
+        "tool-approval.test.cjs"
+      ],
+      "exitCode": 0,
+      "observedTestCount": 32,
+      "note": "Reported separately; not added to npm suite totals."
+    },
+    {
+      "name": "Python Ruff E/F/W check",
+      "result": "passed"
+    },
+    {
+      "name": "Python compileall",
+      "result": "passed"
+    },
+    {
+      "name": "Encoding scan",
+      "result": "passed",
+      "scannedFiles": 1224,
+      "note": "Count at the scan before this final evidence document was added."
+    },
+    {
+      "name": "Integrated development package",
+      "result": "all inventory hashes verified",
+      "files": 598,
+      "forbiddenInventoryCount": 0,
+      "sourceTreeClean": false,
+      "path": "local-audit-artifacts/mcp-stability-package-34729dbcf7494ed0b32484c037c583cc",
+      "note": "Dirty source explicitly allowed for a temporary development snapshot; not a release artifact. Final reporting documents may be newer than this snapshot."
+    },
+    {
+      "name": "Packaged context_compactor installation dry-run",
+      "exitCode": 0,
+      "dryRun": true,
+      "knownIntegrationsSafe": true,
+      "note": "Temporary destinations with --skip-runtime-bootstrap. No actual lms/npm install, restart or model call; a read-only /models query was used."
+    }
+  ],
+  "unknowns": [
+    "Live model token savings, false-positive reduction and long-conversation behavior have not been measured.",
+    "Unity Editor compile/callback/reload and Unreal Editor/network gameplay have not been executed.",
+    "Skipped optional/platform cases are not counted as passed.",
+    "Package dry-run and installer fixtures do not prove real installation or GitHub CI on every host.",
+    "Source improvements do not imply the currently loaded LM Studio runtime has been updated."
+  ],
+  "finalChecks": {
+    "evidencePacket": {
+      "ok": true,
+      "claims": 11,
+      "errors": 0,
+      "warnings": 0
+    },
+    "gitDiffCheck": "passed",
+    "guidanceGeneratedConsistency": "passed",
+    "runtimeIdentityConsistency": "passed",
+    "encodingScan": {
+      "result": "passed",
+      "files": 1224
+    }
+  }
+}

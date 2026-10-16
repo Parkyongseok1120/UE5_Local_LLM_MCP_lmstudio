@@ -5,19 +5,66 @@ import hashlib
 import importlib.util
 import json
 import os
+import queue
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import threading
+import time
 import zipfile
 from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
+from conftest import gui_installer_command, plant_compactor_sdk_fixture, plant_compactor_lms_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build_integrated_package.py"
+
+
+def _live_stdio_requests(command: list[str], requests: list[dict], **kwargs) -> subprocess.CompletedProcess:
+    """Keep the connection open until each mutation response is delivered."""
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **kwargs)
+    lines = queue.Queue()
+    errors = []
+    def read_output():
+        for line in process.stdout:
+            lines.put(line)
+        lines.put(None)
+    reader = threading.Thread(target=read_output, daemon=True)
+    error_reader = threading.Thread(target=lambda: errors.append(process.stderr.read()), daemon=True)
+    reader.start()
+    error_reader.start()
+    captured = []
+    deadline = time.monotonic() + 120
+    try:
+        for request in requests:
+            process.stdin.write(json.dumps(request) + "\n")
+            process.stdin.flush()
+            while True:
+                line = lines.get(timeout=max(.01, deadline - time.monotonic()))
+                assert line is not None, "Direct RAG exited before its response"
+                captured.append(line)
+                if json.loads(line).get("id") == request["id"]:
+                    break
+        process.stdin.close()
+        process.wait(timeout=10)
+        reader.join(timeout=2)
+        error_reader.join(timeout=2)
+        while not lines.empty():
+            line = lines.get_nowait()
+            if line is not None:
+                captured.append(line)
+        return subprocess.CompletedProcess(command, process.returncode, "".join(captured), "".join(errors))
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        for pipe in (process.stdin, process.stdout, process.stderr):
+            pipe.close()
 
 
 def _legacy_stdout_env() -> dict[str, str]:
@@ -27,55 +74,7 @@ def _legacy_stdout_env() -> dict[str, str]:
 
 
 def _plant_fake_lms(lmstudio_home: Path) -> None:
-    """Hermetic LMS stub so package smoke installs do not require a real LM Studio app."""
-    bindir = lmstudio_home / "bin"
-    bindir.mkdir(parents=True, exist_ok=True)
-    plugin_dir = (
-        lmstudio_home
-        / "extensions"
-        / "plugins"
-        / "codex"
-        / "unreal-context-compactor"
-    )
-    manifest = plugin_dir / "manifest.json"
-    bundle = plugin_dir / ".lmstudio" / "production.js"
-    current_manifest = json.loads(
-        (ROOT / "lmstudio-context-compactor-plugin" / "manifest.json").read_text(encoding="utf-8")
-    )
-    manifest_json = json.dumps(current_manifest, separators=(",", ":"))
-    if os.name == "nt":
-        script = bindir / "lms.cmd"
-        script.write_text(
-            "\r\n".join(
-                [
-                    "@echo off",
-                    'if /I "%~1"=="--version" (echo lms 0.0.0-test & exit /b 0)',
-                    f'mkdir "{bundle.parent}" >nul 2>nul',
-                    f'echo {manifest_json} > "{manifest}"',
-                    f'echo module.exports = {{}}; > "{bundle}"',
-                    "exit /b 0",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-    else:
-        script = bindir / "lms"
-        script.write_text(
-            "\n".join(
-                [
-                    "#!/bin/sh",
-                    'if [ "$1" = "--version" ]; then echo "lms 0.0.0-test"; exit 0; fi',
-                    f'mkdir -p "{bundle.parent}"',
-                    f"printf '%s\\n' '{manifest_json}' > \"{manifest}\"",
-                    f"printf '%s\\n' 'module.exports = {{}};' > \"{bundle}\"",
-                    "exit 0",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    plant_compactor_lms_fixture(lmstudio_home)
 
 
 def _build(tmp_path: Path, name: str, *, legacy_stdout: bool = False) -> tuple[Path, Path]:
@@ -107,6 +106,44 @@ def _load_builder_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_portable_compactor_installs_dependencies_and_compiles_without_checkout_files(tmp_path):
+    """Use the shipped artifact and real compiler, not the LMS protocol fixture."""
+    npm = shutil.which("npm")
+    assert npm, "npm is required for the portable installation contract"
+    output, _ = _build(tmp_path, "compiled-portable")
+    plugin = output / "lmstudio-context-compactor-plugin"
+    for arguments in (["ci", "--no-audit", "--no-fund"], ["run", "verify:install"]):
+        command = [npm, *arguments]
+        shell = os.name == "nt" and Path(npm).suffix.lower() in {".cmd", ".bat"}
+        result = subprocess.run(subprocess.list2cmdline(command) if shell else command,
+                                cwd=plugin, shell=shell, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=180)
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert (plugin / "dist/prediction-loop.js").is_file()
+    # New runtime files must enter the reviewed allowlist, not rely on the
+    # checkout's node resolution or a wildcard admitting development runners.
+    for source in (ROOT / "lmstudio-context-compactor-plugin/src").glob("*"):
+        if source.suffix in {".js", ".ts"}:
+            assert (plugin / "src" / source.name).is_file(), source.name
+
+
+def test_staged_local_engine_lookup_imports_only_packaged_runtime(tmp_path: Path) -> None:
+    builder = _load_builder_module()
+    for relative in builder.REQUIRED_RUNTIME_FILES:
+        if not relative.startswith("scripts/") or not relative.endswith(".py"):
+            continue
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, destination)
+    result = subprocess.run([sys.executable, "-I", "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); import direct_rag_engine_local; "
+        "import engine_header_evidence; import project_name_resolver; "
+        "assert direct_rag_engine_local.engine_local_symbol; print('staged local lookup imported')",
+        str(tmp_path / "scripts")], cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "staged local lookup imported" in result.stdout
 
 
 def test_builder_supports_package_import_used_by_release_ci() -> None:
@@ -317,10 +354,15 @@ def test_package_builder_requires_the_direct_compactor_runtime_surface() -> None
         "lmstudio-context-compactor-plugin/src/index.ts",
         "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
         "lmstudio-context-compactor-plugin/src/round-loop.ts",
+        "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+        "lmstudio-context-compactor-plugin/src/tool-scope.ts",
+        "lmstudio-context-compactor-plugin/src/attachment-tools.ts",
         "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
         "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+        "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js",
         "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
         "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+        "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
         "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
         "lmstudio-context-compactor-plugin/src/continuity-text.js",
         "lmstudio-context-compactor-plugin/src/durable-memory-sanitizer.js",
@@ -333,6 +375,30 @@ def test_package_builder_requires_the_direct_compactor_runtime_surface() -> None
         "lmstudio-context-compactor-plugin/src/control-protocol-spec.js",
         "lmstudio-context-compactor-plugin/src/control-state-registry.generated.js",
     }.isdisjoint(required)
+
+
+def test_design_guidance_package_contains_rebuild_inputs_without_project_snapshot() -> None:
+    builder = _load_builder_module()
+    catalog = json.loads((ROOT / "docs/model-guidance/catalog.json").read_text(encoding="utf-8"))
+    required = set(builder.REQUIRED_RUNTIME_FILES)
+    expected = {
+        "docs/model-guidance/catalog.json",
+        "docs/model-guidance/sources.md",
+        "lmstudio-context-compactor-plugin/src/design-guidance.ts",
+        "lmstudio-context-compactor-plugin/src/reference-context.ts",
+        "lmstudio-context-compactor-plugin/src/reference-rendering.ts",
+        "lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs",
+        "lmstudio-context-compactor-plugin/test/reference-context.test.cjs",
+        "lmstudio-context-compactor-plugin/src/generated-design-guidance.ts",
+        "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs",
+        "lmstudio-context-compactor-plugin/test/design-guidance.test.cjs",
+        *(f"docs/model-guidance/{entry['file']}" for entry in catalog["documents"]),
+    }
+    assert expected <= required
+    selected = {relative.as_posix() for _, relative in builder._source_files(ROOT, include_index=False)}
+    assert expected <= selected
+    assert not any(path.startswith("docs/model-guidance/examples/") for path in selected)
+    assert "docs/model-guidance/project-template.md" not in selected
 
 
 def test_package_builder_rejects_tracked_source_drift_before_copying(tmp_path: Path) -> None:
@@ -403,11 +469,12 @@ def test_include_index_uses_the_supplied_source_not_another_mcp_workspace(
     assert builder._included_index_relative(source) == Path("data/unreal510/rag.sqlite")
 
 
-def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -> None:
+def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, monkeypatch) -> None:
     output, archive = _build(tmp_path, "portable 한글 one", legacy_stdout=True)
     builder = _load_builder_module()
     expected_files = {
         "INSTALL.bat",
+        "UPDATE.bat",
         "install.sh",
         "install.py",
         "rag.ps1",
@@ -457,9 +524,11 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         assert packaged_readme == (ROOT / source_template).read_text(encoding="utf-8")
         assert "Enable transparent compaction" not in packaged_readme
         assert "단일 스위치" in packaged_readme
-        assert "OFF" in packaged_readme
+        assert "기본 `ON`" in packaged_readme
     portable_install = (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
-    assert "설치기는 플러그인을 설치하고 목록에 고정하지만 채팅에서 켜지는 않습니다" in portable_install
+    assert "기존 채팅의 단일 스위치를 ON으로 설정합니다" in portable_install
+    assert "적용 후 LM Studio를 재시작합니다" in portable_install
+    assert "채팅에서 켜지는 않습니다" not in portable_install
     assert "LM Studio 플러그인 설치·고정, 언리얼 자동 탐색" in portable_install
     assert "installation/pinning with the chat toggle OFF" not in portable_install
     assert _broken_local_markdown_links(output) == []
@@ -764,7 +833,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
             or path.name == "install.sh"
         )
     }
-    assert public_launchers == {"INSTALL.bat", "install.sh"}
+    assert public_launchers == {"INSTALL.bat", "UPDATE.bat", "install.sh"}
     assert {path.name for path in (output / "installer").iterdir()} == {
         "README.md",
         "__init__.py",
@@ -780,13 +849,18 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         "manifest.json",
         "runtime-manifest.json",
         "unreal_engine_binding.py",
+        "unity_install.py",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert packaged_installer_manifest["productVersion"] == "1.3.3"
-    assert packaged_installer_manifest["version"] == "2.1.17"
+    assert packaged_installer_manifest["productVersion"] == "1.4.0"
+    assert packaged_installer_manifest["version"] == "2.1.25"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
-    assert (output / "docs" / "Release_Notes_1_3_3.md").is_file()
+    assert (output / "docs" / "Release_Notes_1_4_0.md").is_file()
+    assert (output / "docs" / "Release_Notes_1_4_0_RC2.md").is_file()
+    assert (output / "docs" / "Release_Notes_1_4_0_RC3.md").is_file()
+    assert "docs/Release_Notes_1_4_0_RC3.md" in (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
+    assert (output / "UPDATE.bat").read_bytes() == (ROOT / "UPDATE.bat").read_bytes()
     source_launcher = (ROOT / "install.sh").read_bytes()
     expected_launcher = source_launcher.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     assert (output / "install.sh").read_bytes() == expected_launcher
@@ -838,10 +912,18 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
     lmstudio_home = tmp_path / "isolated lmstudio"
     lmstudio_home.mkdir(parents=True, exist_ok=True)
     _plant_fake_lms(lmstudio_home)
+    # skip-deps + fake LMS builds no npm dependencies; only the version probe is
+    # required. Preserve real Node for the actual packaged stdio smoke above.
+    if not shutil.which("npm"):
+        bindir = tmp_path / "npm-version-probe"
+        bindir.mkdir()
+        npm = bindir / ("npm.cmd" if os.name == "nt" else "npm")
+        npm.write_text("@echo 10.8.2\r\n" if os.name == "nt" else "#!/bin/sh\necho 10.8.2\n", encoding="utf-8")
+        npm.chmod(0o755)
+        monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ.get("PATH", ""))
     installed = subprocess.run(
         [
-            sys.executable,
-            str(output / "install.py"),
+            *gui_installer_command(output / "install.py"),
             "--profile",
             "safe",
             "--yes",
@@ -861,7 +943,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path) -
         errors="replace",
         timeout=60,
     )
-    assert installed.returncode == 0, installed.stderr or installed.stdout
+    assert installed.returncode == 0, installed.stdout + installed.stderr
     assert json.loads(installed.stdout)["mcpSmoke"]["ok"] is True
 
 
@@ -871,8 +953,7 @@ def test_packaged_unreal_skip_deps_fails_before_writing_mcp_config(tmp_path: Pat
     state_home = tmp_path / "isolated-state"
     result = subprocess.run(
         [
-            sys.executable,
-            str(output / "install.py"),
+            *gui_installer_command(output / "install.py"),
             "--profile",
             "standard",
             "--yes",
@@ -1001,7 +1082,7 @@ void APackagedRefreshProbe::VerifyPackagedDirectRefresh() {}
             },
         },
     ]
-    completed = subprocess.run(
+    completed = _live_stdio_requests(
         [
             sys.executable,
             "-B",
@@ -1009,13 +1090,8 @@ void APackagedRefreshProbe::VerifyPackagedDirectRefresh() {}
             "--index",
             str(index),
         ],
+        requests,
         cwd=output,
-        input="".join(json.dumps(request) + "\n" for request in requests),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=120,
         env={
             **os.environ,
             "DIRECT_RAG_STATE_ROOT": str(tmp_path / "direct-state"),

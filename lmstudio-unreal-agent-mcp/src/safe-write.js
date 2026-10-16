@@ -6,6 +6,14 @@ const path = require("path");
 const crypto = require("crypto");
 const { atomicWriteText, atomicCreateText } = require("./atomic-io");
 
+function assertMutationActive(signal) {
+  if (signal?.aborted) {
+    const error = new Error("Request cancelled before file publication.");
+    error.code = "REQUEST_CANCELLED";
+    throw error;
+  }
+}
+
 function sha256Buffer(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
 }
@@ -96,6 +104,8 @@ async function replaceWithCAS({
   expectedOccurrences,
   readHash,
   normalizeLineEndings = true,
+  signal,
+  beforeCommit,
 }) {
   const resolved = path.resolve(String(targetPath));
   let raw;
@@ -129,16 +139,20 @@ async function replaceWithCAS({
   });
   if (!replacement.ok) return replacement;
 
+  assertMutationActive(signal);
+  if (beforeCommit) beforeCommit();
   atomicWriteText(resolved, replacement.updated);
   return replacement;
 }
 
-async function createExclusive(targetPath, content) {
+async function createExclusive(targetPath, content, signal) {
+  assertMutationActive(signal);
   atomicCreateText(targetPath, String(content ?? ""));
   return { ok: true };
 }
 
 module.exports = {
+  assertMutationActive,
   sha256Buffer,
   sha256Text,
   sha256File,

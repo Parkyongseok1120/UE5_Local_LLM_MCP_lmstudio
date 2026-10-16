@@ -1,0 +1,13 @@
+
+> unreal-context-compactor@0.4.69 prebuild
+> node scripts/patch-lmstudio-sdk.cjs
+
+
+> unreal-context-compactor@0.4.69 build
+> npm run clean && tsc -p tsconfig.json
+
+
+> unreal-context-compactor@0.4.69 clean
+> node scripts/clean-dist.cjs
+
+src/round-input.ts(41,62): error TS2339: Property 'refs' does not exist on type '{ archive: { stats: Record<string, number>; }; cost: Record<string, number>; exposure: Map<string, unknown>; note: unknown; lastSummaryInput: string; lastCommitReason: string | null; ... 8 more ...; summaryEvidence(maxItems?: number | undefined, maxChars?: number | undefined): Record<...>[]; }'.

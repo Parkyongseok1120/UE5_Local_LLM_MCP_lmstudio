@@ -29,6 +29,10 @@ ALLOWED_TOP_LEVEL_DIRS = frozenset(
         "installer",
         "lmstudio-context-compactor-plugin",
         "lmstudio-unreal-agent-mcp",
+        "lmstudio-unity-mcp",
+        "shared-tool-core",
+        "unity-editor-bridge",
+        "unity-symbol-worker",
         "mcp-tools",
         "prompts",
         "RAG_Project_Guidelines",
@@ -44,11 +48,13 @@ ALLOWED_ROOT_FILES = frozenset(
         "CONTRIBUTING.md",
         "EPIC_NOTICE.md",
         "INSTALL.bat",
+        "UPDATE.bat",
         "LICENSE",
         ".clinerules",
         "README.portable.md",
         "SECURITY.md",
         "install.py",
+        "install-intel-mac.sh",
         "install.sh",
         "requirements.txt",
     }
@@ -184,16 +190,128 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 )
 
 REQUIRED_RUNTIME_FILES = (
+    "scripts/direct_rag_engine_local.py",
+    "scripts/engine_header_evidence.py",
+    "scripts/project_name_resolver.py",
+    "lmstudio-unreal-agent-mcp/src/resolve-project-name-cli.js",
+    "installer/unity_install.py",
+    "docs/Unity_Authoring_Tests.md",
+    "scripts/check_unity_install.js",
+    "scripts/update_unity_mcp.py",
+    "scripts/update_unreal_mcp.py",
+    "unity-editor-bridge/Editor/Prefabs.cs",
+    "unity-editor-bridge/Editor/Prefabs.cs.meta",
+    "unity-editor-bridge/Editor/Approvals.cs",
+    "unity-editor-bridge/Editor/Approvals.cs.meta",
+    "unity-editor-bridge/Editor/OwnedProbes.cs",
+    "unity-editor-bridge/Editor/OwnedProbes.cs.meta",
+    "unity-editor-bridge/Editor/TestExecution.cs",
+    "unity-editor-bridge/Editor/TestExecution.cs.meta",
+    "unity-editor-bridge/Adapters/Tests.meta",
+    "unity-editor-bridge/Adapters/Tests/Editor.meta",
+    "unity-editor-bridge/Adapters/Tests/Editor/FrameworkAdapter.cs",
+    "unity-editor-bridge/Adapters/Tests/Editor/FrameworkAdapter.cs.meta",
+    "unity-editor-bridge/Adapters/Tests/Editor/EvidenceFirst.TestFramework.asmdef",
+    "unity-editor-bridge/Adapters/Tests/Editor/EvidenceFirst.TestFramework.asmdef.meta",
+    "unity-symbol-worker/UnitySymbolWorker.csproj",
+    "unity-symbol-worker/Program.cs",
+    "scripts/build_unity_symbol_worker.js",
+    "lmstudio-unity-mcp/src/symbols.js",
+    "docs/Unity_Debug_1_4.md",
+    "unity-editor-bridge/Runtime.meta",
+    "unity-editor-bridge/Runtime/DebugRegistry.cs",
+    "unity-editor-bridge/Runtime/DebugRegistry.cs.meta",
+    "unity-editor-bridge/Runtime/DebugSchemas.cs",
+    "unity-editor-bridge/Runtime/DebugSchemas.cs.meta",
+    "unity-editor-bridge/Runtime/EvidenceFirst.DebugRuntime.asmdef",
+    "unity-editor-bridge/Runtime/EvidenceFirst.DebugRuntime.asmdef.meta",
+    "unity-editor-bridge/Adapters.meta",
+    "unity-editor-bridge/Adapters/Input.meta",
+    "unity-editor-bridge/Adapters/Input/InputAdapter.cs",
+    "unity-editor-bridge/Adapters/Input/InputAdapter.cs.meta",
+    "unity-editor-bridge/Adapters/Input/EvidenceFirst.InputDebug.asmdef",
+    "unity-editor-bridge/Adapters/Input/EvidenceFirst.InputDebug.asmdef.meta",
+    "unity-editor-bridge/Adapters/UI.meta",
+    "unity-editor-bridge/Adapters/UI/UIObservationProbe.cs",
+    "unity-editor-bridge/Adapters/UI/UIObservationProbe.cs.meta",
+    "unity-editor-bridge/Adapters/UI/EvidenceFirst.UIDebugRuntime.asmdef",
+    "unity-editor-bridge/Adapters/UI/EvidenceFirst.UIDebugRuntime.asmdef.meta",
+    "unity-editor-bridge/Adapters/UI/Editor.meta",
+    "unity-editor-bridge/Adapters/UI/Editor/UIAdapter.cs",
+    "unity-editor-bridge/Adapters/UI/Editor/UIAdapter.cs.meta",
+    "unity-editor-bridge/Adapters/UI/Editor/EvidenceFirst.UIDebug.asmdef",
+    "unity-editor-bridge/Adapters/UI/Editor/EvidenceFirst.UIDebug.asmdef.meta",
+    "unity-editor-bridge/Adapters/Physics.meta",
+    "unity-editor-bridge/Adapters/Physics/CollisionObservationProbe.cs",
+    "unity-editor-bridge/Adapters/Physics/CollisionObservationProbe.cs.meta",
+    "unity-editor-bridge/Adapters/Physics/EvidenceFirst.PhysicsDebugRuntime.asmdef",
+    "unity-editor-bridge/Adapters/Physics/EvidenceFirst.PhysicsDebugRuntime.asmdef.meta",
+    "unity-editor-bridge/Adapters/Physics/Editor.meta",
+    "unity-editor-bridge/Adapters/Physics/Editor/PhysicsAdapter.cs",
+    "unity-editor-bridge/Adapters/Physics/Editor/PhysicsAdapter.cs.meta",
+    "unity-editor-bridge/Adapters/Physics/Editor/EvidenceFirst.PhysicsDebug.asmdef",
+    "unity-editor-bridge/Adapters/Physics/Editor/EvidenceFirst.PhysicsDebug.asmdef.meta",
+    "unity-editor-bridge/Editor/CompilationManifest.cs",
+    "unity-editor-bridge/Editor/CompilationManifest.cs.meta",
+    "unity-editor-bridge/Editor/DebugAdapters.cs",
+    "unity-editor-bridge/Editor/DebugAdapters.cs.meta",
+    "unity-editor-bridge/Editor/EvidenceStore.cs",
+    "unity-editor-bridge/Editor/EvidenceStore.cs.meta",
+    "unity-editor-bridge/Editor/ReferenceIndex.cs",
+    "unity-editor-bridge/Editor/ReferenceIndex.cs.meta",
+    "unity-editor-bridge/Editor/Snapshots.cs",
+    "unity-editor-bridge/Editor/Snapshots.cs.meta",
+    "lmstudio-unity-mcp/package.json",
+    "lmstudio-unity-mcp/pnpm-lock.yaml",
+    "lmstudio-unity-mcp/src/server.js",
+    "lmstudio-unity-mcp/src/project.js",
+    "lmstudio-unity-mcp/src/catalog.js",
+    "lmstudio-unity-mcp/src/bridge-client.js",
+    "lmstudio-unity-mcp/src/version-control.js",
+    "shared-tool-core/files.js",
+    "shared-tool-core/git.js",
+    "shared-tool-core/workspace.js",
+    "shared-tool-core/data.js",
+    "unity-editor-bridge/package.json",
+    "unity-editor-bridge/Editor/Bridge.cs",
+    "unity-editor-bridge/Editor/ResponseMetadata.cs",
+    "unity-editor-bridge/Editor/ResponseMetadata.cs.meta",
+    "unity-editor-bridge/Editor/Objects.cs",
+    "unity-editor-bridge/Editor/Operations.cs",
+    "unity-editor-bridge/Editor/Observations.cs",
+    "unity-editor-bridge/Editor/PathSafety.cs",
+    "unity-editor-bridge/Editor/AssemblyInfo.cs",
+    "unity-editor-bridge/Editor/EvidenceFirst.UnityBridge.asmdef",
+    "unity-editor-bridge/Editor.meta",
+    "unity-editor-bridge/package.json.meta",
+    "unity-editor-bridge/Editor/Bridge.cs.meta",
+    "unity-editor-bridge/Editor/Objects.cs.meta",
+    "unity-editor-bridge/Editor/Operations.cs.meta",
+    "unity-editor-bridge/Editor/Observations.cs.meta",
+    "unity-editor-bridge/Editor/PathSafety.cs.meta",
+    "unity-editor-bridge/Editor/AssemblyInfo.cs.meta",
+    "unity-editor-bridge/Editor/EvidenceFirst.UnityBridge.asmdef.meta",
+    "scripts/configure_unity_mcp.js",
+    "docs/Unity_Setup.md",
+    "docs/Unity_1_4_Design.md",
+    "docs/Unity_Validation.md",
     "config/retrieval_profiles.json",
     "config/stable_tool_manifest.json",
     "installer/bootstrap_python.ps1",
     "installer/bootstrap_python.sh",
+    "install-intel-mac.sh",
         "prompts/lmstudio_direct_model_system.md",
         "prompts/cline_unreal_agent_system.md",
+    "scripts/headless_compact.js",
+    "scripts/headless_mcp_chat.py",
+    "scripts/lmstudio-headless-cli.sh",
     "scripts/unreal_rag_direct.py",
     "scripts/direct_rag_status.py",
     "scripts/direct_rag_evidence.py",
     "scripts/direct_rag_freshness.py",
+    "scripts/direct_rag_source_snapshot.py",
+    "scripts/direct_rag_operation.py",
+    "scripts/direct_rag_stdio_requests.py",
     "scripts/direct_rag_freshness_rows.py",
     "scripts/direct_rag_generation_boundary.py",
     "scripts/direct_rag_generation_identity.py",
@@ -235,6 +353,7 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/direct_rag_runtime.py",
     "scripts/direct_rag_search.py",
     "scripts/direct_rag_server.py",
+    "scripts/direct_rag_dispatch.py",
     "scripts/direct_rag_sql.py",
     "scripts/direct_rag_readonly_db.py",
     "scripts/direct_rag_symbol.py",
@@ -373,6 +492,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/direct-runtime-context.js",
     "lmstudio-unreal-agent-mcp/src/direct-static-validation.js",
     "lmstudio-unreal-agent-mcp/src/direct-bundle-capability.js",
+    "lmstudio-unreal-agent-mcp/src/direct-change-evidence.js",
     "lmstudio-unreal-agent-mcp/src/direct-delete-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-edit-bundle.js",
     "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-commit.js",
@@ -385,6 +505,8 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/direct-file-snapshot.js",
     "lmstudio-unreal-agent-mcp/src/direct-project-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+    "lmstudio-unreal-agent-mcp/src/direct-search-capability.js",
+    "lmstudio-unreal-agent-mcp/src/direct-symbol-extraction.js",
     "lmstudio-unreal-agent-mcp/src/direct-log-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-limits.js",
@@ -434,13 +556,84 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/write-locks.js",
     "lmstudio-unreal-agent-mcp/src/write-lock-reclaim-bridge.py",
     "lmstudio-context-compactor-plugin/src/index.ts",
+    "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+    "lmstudio-context-compactor-plugin/src/checkpoint-budget.js",
+    "lmstudio-context-compactor-plugin/src/context-manager.ts",
+    "lmstudio-context-compactor-plugin/src/context-ports.ts",
+    "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-identity.js",
+    "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-ranges.js",
+    "lmstudio-context-compactor-plugin/src/evidence-read-contract.js",
+    "lmstudio-context-compactor-plugin/src/semantic-handoff-policy.js",
+    "lmstudio-context-compactor-plugin/scripts/run-tests.cjs",
+    "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts",
+    "lmstudio-context-compactor-plugin/src/execution-config.ts",
+    "lmstudio-context-compactor-plugin/src/execution-contracts.ts",
+    "lmstudio-context-compactor-plugin/src/execution-instructions.ts",
+    "lmstudio-context-compactor-plugin/src/execution-state.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-ui.ts",
+    "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts",
+    "lmstudio-context-compactor-plugin/src/reasoning-recovery.ts",
+    "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+    "lmstudio-context-compactor-plugin/src/round-input.ts",
+    "lmstudio-context-compactor-plugin/src/runtime-identity.ts",
+    "lmstudio-context-compactor-plugin/src/semantic-handoff.ts",
+    "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+    "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+    "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs",
+    "lmstudio-context-compactor-plugin/src/design-guidance.ts",
+    "lmstudio-context-compactor-plugin/src/guidance-topic-selection.ts",
+    "lmstudio-context-compactor-plugin/test/auto-guidance.test.cjs",
+    "lmstudio-context-compactor-plugin/test/change-evidence.test.cjs",
+    "lmstudio-context-compactor-plugin/src/reference-context.ts",
+    "lmstudio-context-compactor-plugin/src/reference-rendering.ts",
+    "lmstudio-context-compactor-plugin/test/focused-guidance.test.cjs",
+    "lmstudio-context-compactor-plugin/test/reference-context.test.cjs",
+    "lmstudio-context-compactor-plugin/src/generated-design-guidance.ts",
+    "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs",
+    "lmstudio-context-compactor-plugin/scripts/build-runtime-identity.cjs",
+    "lmstudio-context-compactor-plugin/src/generated-runtime-identity.ts",
+    "lmstudio-context-compactor-plugin/src/config-defaults.ts",
+    "lmstudio-context-compactor-plugin/src/tool-result-semantics.js",
+    "lmstudio-context-compactor-plugin/src/interrupted-calls.js",
+    "lmstudio-context-compactor-plugin/src/transcript-canonical.js",
+    "lmstudio-context-compactor-plugin/src/note-persistence.ts",
+    "lmstudio-context-compactor-plugin/src/terminal-persistence.ts",
+    "lmstudio-context-compactor-plugin/src/generated-tool-contract.ts",
+    "lmstudio-context-compactor-plugin/scripts/build-tool-contract.cjs",
+    "lmstudio-context-compactor-plugin/test/design-guidance.test.cjs",
+    "docs/model-guidance/catalog.json",
+    "docs/model-guidance/sources.md",
+    "docs/model-guidance/core.md",
+    "docs/model-guidance/design.md",
+    "docs/model-guidance/debugging.md",
+    "docs/model-guidance/code-style.md",
+    "docs/model-guidance/unreal.md",
+    "docs/model-guidance/unity.md",
+    "docs/model-guidance/multiplayer.md",
+    "docs/model-guidance/unreal-networking.md",
+    "docs/model-guidance/unity-networking.md",
     "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/tool-exchange-index.js",
+    "lmstudio-context-compactor-plugin/src/context-budget.ts",
+    "lmstudio-context-compactor-plugin/src/attachment-boundary.ts",
     "lmstudio-context-compactor-plugin/src/round-loop.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+    "lmstudio-context-compactor-plugin/src/tool-scope.ts",
+    "lmstudio-context-compactor-plugin/src/attachment-tools.ts",
     "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
     "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+    "lmstudio-context-compactor-plugin/src/input-availability.js",
+    "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/src/working-context-boundary.ts",
+    "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js",
     "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
     "lmstudio-context-compactor-plugin/src/continuity-memory.js",
+    "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
     "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
+    "lmstudio-context-compactor-plugin/src/change-evidence-memory.js",
     "lmstudio-context-compactor-plugin/src/continuity-text.js",
     "lmstudio-context-compactor-plugin/src/durable-memory-sanitizer.js",
     "lmstudio-context-compactor-plugin/src/direct-config.ts",
@@ -448,13 +641,17 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/manifest.json",
     "lmstudio-context-compactor-plugin/package-lock.json",
     "lmstudio-context-compactor-plugin/package.json",
+    "lmstudio-context-compactor-plugin/docs/ADR-hybrid-context.md",
     "lmstudio-context-compactor-plugin/scripts/clean-dist.cjs",
     "lmstudio-context-compactor-plugin/test/direct-compaction-core.test.js",
     "lmstudio-context-compactor-plugin/test/durable-memory-sanitizer.test.js",
     "lmstudio-context-compactor-plugin/test/fixtures/qwen-direct-e2e-continuity.json",
     "lmstudio-context-compactor-plugin/test/fixtures/qwen-receipt-path-confusion.json",
     "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+    "lmstudio-context-compactor-plugin/test/architecture-contract.test.cjs",
     "lmstudio-context-compactor-plugin/test/status.test.cjs",
+    "lmstudio-context-compactor-plugin/test/tool-scope.test.cjs",
+    "lmstudio-context-compactor-plugin/test/attachment-tools.test.cjs",
     "lmstudio-context-compactor-plugin/test/validation-repair-memory.test.cjs",
     "lmstudio-context-compactor-plugin/tsconfig.json",
     "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py",
@@ -484,11 +681,16 @@ PORTABLE_CONTENT_FILES = frozenset(
         "docs/Model_Profiles.md",
         "docs/Project_Routing.md",
         "docs/RAG_Setup.md",
-        "docs/Release_Notes_1_3_3.md",
+        "docs/Release_Notes_1_4_0.md",
+        "docs/Release_Notes_1_4_0_beta4.md",
+        "docs/Release_Notes_1_4_0_RC1.md",
+        "docs/Release_Notes_1_4_0_RC2.md",
+        "docs/Release_Notes_1_4_0_RC3.md",
         "docs/Rider_Cline_Smoke_Checklist.md",
         "docs/Safe_Agent_Mode.md",
         "docs/Troubleshooting.md",
         "docs/VERSIONING.md",
+        "docs/Workspace_Capabilities.md",
         "installer/README.md",
         "installer/__init__.py",
         "installer/bootstrap_runtimes.py",
@@ -739,6 +941,7 @@ def _sha256(path: Path) -> str:
 
 def _write_launchers(staging: Path) -> None:
     shutil.copy2(ROOT / "INSTALL.bat", staging / "INSTALL.bat")
+    shutil.copy2(ROOT / "UPDATE.bat", staging / "UPDATE.bat")
     shutil.copy2(ROOT / "scripts" / "portable_rag.ps1", staging / "rag.ps1")
     for source_name, target_name in (
         ("README.portable.md", "README.md"),
@@ -763,6 +966,7 @@ def _write_launchers(staging: Path) -> None:
         '## 설치 환경과 실행 방법\n'
         '\n'
         '- Windows는 `INSTALL.bat`, Ubuntu와 Apple Silicon macOS는 `./install.sh`를 실행합니다.\n'
+        '- Windows에서 설치된 Unity MCP, Unreal Agent/RAG, 대화 압축 플러그인을 함께 갱신할 때는 `UPDATE.bat`를 실행합니다. 설치되지 않은 엔진 구성은 건너뜁니다. MCP 설정이 기본 위치에 없으면 `UPDATE.bat "기존 mcp.json 경로"`를 사용하며, 그 파일의 폴더를 LM Studio 홈으로 사용합니다. 기존 프로젝트·엔진·인덱스·권한 설정은 유지하며, 완료 후 LM Studio를 재시작합니다.\n'
         '- Python 3.10 이상이 없으면 SHA-256으로 확인한 uv를 자동으로 내려받고 선택한 사용자 상태 폴더에 Python 3.12를 설치합니다. `python3 install.py`를 직접 실행하려면 시스템 Python 3.10 이상이 필요합니다.\n'
         '- 언리얼·채팅 압축 구성에 필요한 Node.js 20 이상과 npm도 내려받습니다. 실행 파일 묶음은 SHA-256 확인값을 고정하고 CPU 종류에 맞춰 설치합니다.\n'
         '- SAFE, STANDARD, FULL, CUSTOM 중 필요한 범위를 선택합니다. 수정 기능과 별도 위험 확인을 모두 켜지 않으면 읽기 전용입니다. 명령행 옵션은 `python3 install.py --help`로 확인합니다.\n'
@@ -771,7 +975,7 @@ def _write_launchers(staging: Path) -> None:
         '\n'
         '## 채팅 압축 설정\n'
         '\n'
-        '설치에는 LM Studio의 `lms` 명령이 필요합니다. 설치기는 플러그인을 설치하고 목록에 고정하지만 채팅에서 켜지는 않습니다. 각 채팅의 단일 스위치가 기본 권장값인 OFF인지 확인하고 필요할 때만 켜야 합니다.\n'
+        '설치에는 LM Studio의 `lms` 명령이 필요합니다. 설치기는 플러그인을 설치하고 목록에 고정하며 설치 시점에 저장된 기존 채팅의 단일 스위치를 ON으로 설정합니다. 적용 후 LM Studio를 재시작합니다. 필요 없는 채팅에서는 스위치를 끌 수 있습니다.\n'
         '\n'
         '## 지원 환경과 확인 범위\n'
         '\n'
@@ -780,7 +984,7 @@ def _write_launchers(staging: Path) -> None:
         '- Apple Silicon macOS: 실제 기기에서 FULL 설치, 실행 환경, 채팅 압축, LM Studio 플러그인 설치·고정, 언리얼 자동 탐색, 전체 검색 자료 생성과 MCP 기본 연결을 확인한 기록이 있습니다. 서명·공증 여부는 보장하지 않습니다.\n'
         '- Intel macOS: LM Studio·언리얼·채팅 압축 설치는 초기에 중단됩니다. CUSTOM의 Codex·공통 규칙·Cline만 설치하는 구성은 가능합니다.\n'
         '\n'
-        '확인 범위는 [1.3.3 변경 사항](docs/Release_Notes_1_3_3.md)에 정리합니다.\n'
+        '확인 범위는 [1.4.0 RC3 변경 사항](docs/Release_Notes_1_4_0_RC3.md)에 정리합니다.\n'
         '\n'
         '## 검색 자료 관리\n'
         '\n'
@@ -999,6 +1203,45 @@ def _write_deterministic_zip(staging: Path, target: Path) -> None:
             temporary.unlink()
 
 
+class PackagePublicationError(RuntimeError):
+    """A failed restore must leave both recovery artifacts available."""
+
+    preserve_staging = True
+
+
+def _publish_package_output(staging: Path, output: Path) -> dict[str, object] | None:
+    backup_root: Path | None = None
+    prior: Path | None = None
+    if output.exists():
+        backup_root = Path(tempfile.mkdtemp(prefix=f".{output.name}-backup-", dir=output.parent))
+        prior = backup_root / "previous"
+        try:
+            output.replace(prior)
+        except BaseException:
+            shutil.rmtree(backup_root, ignore_errors=True)
+            raise
+    try:
+        staging.replace(output)
+    except BaseException as publish_error:
+        if prior is not None:
+            try:
+                prior.replace(output)
+            except OSError as restore_error:
+                raise PackagePublicationError(
+                    f"Package publish failed ({publish_error}); restore failed ({restore_error}); "
+                    f"preserved backup: {prior}; staging: {staging}"
+                ) from publish_error
+        if backup_root is not None:
+            shutil.rmtree(backup_root, ignore_errors=True)
+        raise
+    if backup_root is not None:
+        try:
+            shutil.rmtree(backup_root)
+        except OSError as exc:
+            return {"status": "pending", "warning": str(exc), "backup": str(backup_root)}
+    return None
+
+
 def build(
     source: Path,
     output: Path,
@@ -1060,13 +1303,11 @@ def build(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         _scan_private_paths(staging)
-        if output.exists():
-            shutil.rmtree(output) if output.is_dir() else output.unlink()
-        staging.replace(output)
+        cleanup = _publish_package_output(staging, output)
         if zip_path is not None:
             _write_deterministic_zip(output, zip_path)
-    except Exception:
-        if staging.exists():
+    except BaseException as exc:
+        if staging.exists() and not getattr(exc, "preserve_staging", False):
             shutil.rmtree(staging)
         raise
 
@@ -1078,6 +1319,7 @@ def build(
         "indexIncluded": include_index,
         "forbiddenInventoryCount": 0,
         "inventorySample": inventory_paths[:40],
+        **({"cleanup": cleanup} if cleanup else {}),
     }
 
 

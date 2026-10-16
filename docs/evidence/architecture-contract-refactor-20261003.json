@@ -1,0 +1,801 @@
+{
+  "mode": "codegen",
+  "date": "2026-10-03",
+  "source": "HEAD 6893493 plus prior working-tree changes",
+  "existing": [
+    "PredictionLoop는 한 사용자 요청의 생성·도구 round를 조립하고 RoundLoop/DeliveryController가 진행과 출력 종료를 관리한다.",
+    "ContextManager/BudgetBroker는 입력 적합성·출력 reserve·선택적 guidance 예산을 관리한다.",
+    "WorkingContext/EvidenceArchive는 근거 본문·window를, continuity note store는 모델 판단 note를 보관한다.",
+    "tool boundary와 MCP runtime은 실행 계약을 연결하고 capability는 파일·프로젝트·진단 작업을 수행한다.",
+    "Unreal mutation/transaction/version-policy가 쓰기·receipt·복구를, runner가 child process를 관리한다.",
+    "Unity adapter/Bridge/Operations/EvidenceStore가 연결·Editor 실행·operation journal·저장 관찰을 관리한다.",
+    "Python RAG selection/history/freshness/generation이 검색 조건·반복 억제·근거 신선도·게시를 관리한다.",
+    "installer와 portable builder는 각자의 설치·게시 수명을 소유한다. guidance catalogue/Markdown과 생성기는 문서 공급 원본이다."
+  ],
+  "proposed": [
+    "R01 (A01, A02, A03, A04, A05, A07): note 복구 조건·tool pairing·파일 근거·본문 요약·window 보존 정책을 기존 소유자에 통합했다.",
+    "R02 (A06): headless가 현재 turn의 완전한 도구 교환을 줄이고 assistant 판단의 역할을 보존하며 압축 뒤 입력 적합성을 다시 확인한다.",
+    "R03 (A08, A16): Unity에서 실제 실행·저장 관찰의 origin을 응답 delivery와 분리하고 body·journal·recording metadata 실패가 알려진 상태를 덮지 않도록 보정했다.",
+    "R04 (A09, A10): request signal·runtime close를 실행 소유자에게 전달하고 종료 대기와 후속 로그 저장 대기를 제한하며 미확인 종료를 명시한다.",
+    "R05 (A11, A17, A18): Unreal read/search coverage와 실패 경로 identity를 보존하고 postcommit receipt 실패 및 recovery target rebinding을 기존 정책 owner에서 처리한다.",
+    "R06 (A12, A13, A14, A15, A19): RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다.",
+    "R07 (A20): 기본 Off·Auto 선택·기존 채팅 설치 동작 설명을 현재 설정/installer 계약과 맞췄다."
+  ],
+  "doNotDuplicate": [
+    "ContextManager/BudgetBroker",
+    "operation/transaction journal",
+    "EvidenceArchive/window 저장소",
+    "project/path identity resolver",
+    "RAG selection/generation owner",
+    "guidance catalogue/생성기",
+    "새 상위 agent, 무조건 정적 검사 gate, 자동 빌드 재시도"
+  ],
+  "invariants": [
+    "실행 결과, 관찰 가능한 현재 상태, 응답 전달 성공을 서로 덮어쓰지 않는다.",
+    "취소 요청은 전파하되 시작된 변경이 없었다거나 프로세스가 종료됐다고 근거 없이 보고하지 않는다.",
+    "commit 이후 cleanup/receipt/body 생성 실패는 commit 사실을 되돌리지 않는다.",
+    "clear 또는 objective/project 변경으로 무효화된 note는 어느 persistence fallback에서도 부활하지 않는다.",
+    "같은 request/result 기록은 retry, reference, memory에서 같은 pairing과 ambiguity를 갖는다.",
+    "partial/unknown/read failure는 absence/complete/fresh의 근거가 아니다.",
+    "증거의 원래 project/session/domain/generation/time을 delivery identity와 구분한다.",
+    "Auto는 기존 예산 안에서 선택하며 추가 모델·도구 실행이나 작업 허가 판단을 맡지 않는다.",
+    "다른 프로젝트와 기존 저장 형식은 명시적인 version/unknown 처리로 호환한다.",
+    "각 작업 owner는 생성·정상 종료·취소·실패·복구·폐기까지 책임진다."
+  ],
+  "impactedSurfaces": [
+    "compactor prediction/runtime/continuity/reference",
+    "Unreal Direct/Strict MCP와 shared tool core",
+    "Unity Node adapter/Editor Bridge/operation journal",
+    "Python RAG schema/provenance/refresh/recovery",
+    "headless adapter",
+    "installer/package",
+    "기존 테스트·CI manifest·문서·저장 형식"
+  ],
+  "validationPlan": [
+    "A01: clear→seal→restore, footer 교체, objective 변경, project 변경, attachment 폐기, 중단 후 복구에서 이전 판단이 되살아나지 않는지 확인한다.",
+    "A02: 분리 요청, 역순 결과, duplicate/idless/orphan, 취소, assistant 경계별로 세 소비자의 매칭 및 ambiguity 판정이 일치해야 한다.",
+    "A03: 수정→읽기 실패→압축, scope 불명 실패, 다른 프로젝트 동일 경로, 복구 후 성공 읽기를 검증한다.",
+    "A04: 긴 앞 metadata, 본문 위치 변경, code/text/body/items, 부분 읽기와 git observation에서 의미 본문과 출처가 유지되는지 확인한다.",
+    "A05: 여러 turn·branch·scope를 만든 fixture에서 활성 복구 근거 보존, 만료 window 정리, cleanup 실패 후 정상 읽기를 확인한다.",
+    "A06: 긴 단일 turn, 최근 사용자 요청 보존, 완전한 도구 교환, 역할이 분리된 checkpoint, 미적합 입력의 전송 중단을 확인한다.",
+    "A07: root/nested sample/package fixture, 대소문자와 Windows separator, 다른 project를 비교한다.",
+    "A08: applied+oversize, 관찰+oversize, 같은 ID 재조회, transport 실패와 신규 ID 재시도 판단을 확인한다.",
+    "A09: terminate resolve/reject/hang, close 경쟁, spawn throw/error, log 저장 실패를 확인한다. 죽었다는 증거가 없으면 종료 성공으로 반환하지 않는다.",
+    "A10: preabort, 실행 중 abort, disconnect, timeout+abort 경쟁, CAS commit 도중 취소에서 거짓 not_applied가 없는지 확인한다.",
+    "A11: 읽기 거부/중간 삭제/검색 cap/정상 0건을 구분하고 requested scope 밖 결론이 나오지 않는지 검사한다.",
+    "A12: 각 semantic filter 변경, 512자 이후 변경, effective scope, 동일 query 재전송, index generation 변경을 비교한다.",
+    "A13: commit 전 실패·rollback 실패·commit 후 cleanup 실패·다음 시작 recovery별 결과와 디스크 상태를 대조한다.",
+    "A14: A수집→A수정→Brefresh, source/symbol/architecture tier, clone project, 복수 selector, 구형 index와 부분 upgrade를 검증한다.",
+    "A15: rename 실패, restore 실패, backup cleanup 실패, 기존 output 없는 첫 생성, 기존 zip 보존을 확인한다.",
+    "A16: 동일 session 재조회, domain reload, Editor restart, snapshot/reference query, 오래된 원장 호환에서 origin이 바뀌지 않는지 확인한다.",
+    "A17: create/replace/bundle의 commit 후 stat/register 실패, 외부 변경, receipt unavailable 후 재읽기를 검증한다.",
+    "A18: 검증된 임시 루트에서 프로젝트 안/밖 부모 junction 교체와 locksHeld 양쪽 4개 테스트를 수행했다. 실제 파일과 journal을 사용했으며 사용자 프로젝트는 건드리지 않았다.",
+    "A19: 작은 fake collector로 prestart/running/commit 이후 취소, child exit 지연, 중복 refresh를 관찰한 뒤 필요한 범위만 구현한다.",
+    "A20: GUI enum, 기본값, installer 기존 채팅 처리, Off/Auto 설명을 대조한다."
+  ],
+  "scope": {
+    "implementation": true,
+    "modelInvoked": false,
+    "userProjectModified": false,
+    "installedRuntimeUpdated": false,
+    "referenceAudit": "docs/Architecture_Contract_Audit_20261003.md",
+    "record": "docs/Architecture_Contract_Refactor_20261003.md",
+    "cleanupRestriction": {
+      "path": "artifacts/architecture-audit-20261003/pytest-rag-refactor-temp",
+      "removed": false,
+      "reason": "경로 확인 후 native PowerShell 삭제가 자동 승인 검토에 의해 blocked by policy로 거부됨. 우회하지 않고 보존함."
+    }
+  },
+  "claims": [
+    {
+      "id": "R01",
+      "auditIds": [
+        "A01",
+        "A02",
+        "A03",
+        "A04",
+        "A05",
+        "A07"
+      ],
+      "claim": "note 복구 조건·tool pairing·파일 근거·본문 요약·window 보존 정책을 기존 소유자에 통합했다.",
+      "claimType": "codegen",
+      "severity": "P2",
+      "verdict": "ByDesign",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "note 복구 조건·tool pairing·파일 근거·본문 요약·window 보존 정책을 기존 소유자에 통합했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-exchange-index.js",
+          "observation": "note 복구 조건·tool pairing·파일 근거·본문 요약·window 보존 정책을 기존 소유자에 통합했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
+          "observation": "note 복구 조건·tool pairing·파일 근거·본문 요약·window 보존 정책을 기존 소유자에 통합했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/compaction-tool-memory.js",
+          "observation": "note 복구 조건·tool pairing·파일 근거·본문 요약·window 보존 정책을 기존 소유자에 통합했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+          "observation": "note 복구 조건·tool pairing·파일 근거·본문 요약·window 보존 정책을 기존 소유자에 통합했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "observation": "note 복구 조건·tool pairing·파일 근거·본문 요약·window 보존 정책을 기존 소유자에 통합했다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/compactor-tests.log",
+          "observation": "전체 497개 회귀 통과. 후속 보정은 관련30/retention33/실제 handler2/계약8 테스트로 재검증했고 최종 TypeScript build가 성공했다. 실행 범위가 겹쳐 통과 수를 합산하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/compactor-targeted-tests.log",
+          "observation": "전체497 통과 이후 최종 보정: 관련30/retention33/실제 handler2/계약8 회귀 통과. 서로 겹치는 테스트 수는 합산하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/compactor-retention-tests.log",
+          "observation": "전체497 통과 이후 최종 보정: 관련30/retention33/실제 handler2/계약8 회귀 통과. 서로 겹치는 테스트 수는 합산하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/compactor-note-tests.log",
+          "observation": "전체497 통과 이후 최종 보정: 관련30/retention33/실제 handler2/계약8 회귀 통과. 서로 겹치는 테스트 수는 합산하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/compactor-contract-tests.log",
+          "observation": "전체497 통과 이후 최종 보정: 관련30/retention33/실제 handler2/계약8 회귀 통과. 서로 겹치는 테스트 수는 합산하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "symbol": "기존 공개 입력과 저장 복구"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-exchange-index.js",
+          "symbol": "동일 owner의 검증·상태 전이"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/architecture-refactor-20261003/compactor-tests.log",
+          "symbol": "소비 결과·실패 계약·관련 회귀 또는 문서"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Architecture_Contract_Refactor_20261003.md",
+          "observation": "기존 budget/CAS/journal/project binding/Auto 선택 기능을 재사용하며, 구현과 실제 모델·Editor 실행 검증을 구분한다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio 최종 SDK 입력과 모델 판단 품질은 재실행하지 않았다. 보존 정책은 파일시스템 정리 성공을 강제하지 않는다.",
+        "최초 archive 정리는 파일명·stat 순회가 기존 파일 수에 비례한다. 보호된 active/parent 때문에 soft quota를 넘을 수 있다."
+      ]
+    },
+    {
+      "id": "R02",
+      "auditIds": [
+        "A06"
+      ],
+      "claim": "headless가 현재 turn의 완전한 도구 교환을 줄이고 assistant 판단의 역할을 보존하며 압축 뒤 입력 적합성을 다시 확인한다.",
+      "claimType": "codegen",
+      "severity": "P2",
+      "verdict": "ByDesign",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/headless_compact.js",
+          "observation": "headless가 현재 turn의 완전한 도구 교환을 줄이고 assistant 판단의 역할을 보존하며 압축 뒤 입력 적합성을 다시 확인한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/headless_mcp_chat.py",
+          "observation": "headless가 현재 turn의 완전한 도구 교환을 줄이고 assistant 판단의 역할을 보존하며 압축 뒤 입력 적합성을 다시 확인한다."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_headless_compaction.py",
+          "observation": "headless 4개 실제 Node adapter 테스트와 Unity C# 2개를 함께 실행해 6개 통과. 맞지 않는 큰 사용자 입력은 HTTP model 호출 전에 실패한다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/parent-python-final.txt",
+          "observation": "headless 4개 실제 Node adapter 테스트와 Unity C# 2개를 함께 실행해 6개 통과. 맞지 않는 큰 사용자 입력은 HTTP model 호출 전에 실패한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/headless_compact.js",
+          "symbol": "기존 공개 입력과 저장 복구"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/headless_mcp_chat.py",
+          "symbol": "동일 owner의 검증·상태 전이"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_headless_compaction.py",
+          "symbol": "소비 결과·실패 계약·관련 회귀 또는 문서"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Architecture_Contract_Refactor_20261003.md",
+          "observation": "기존 budget/CAS/journal/project binding/Auto 선택 기능을 재사용하며, 구현과 실제 모델·Editor 실행 검증을 구분한다."
+        }
+      ],
+      "unknowns": [
+        "문자 수 기반 token 추정이며 실제 tokenizer의 exact fit 또는 모델 서버 수용을 증명하지 않는다."
+      ]
+    },
+    {
+      "id": "R03",
+      "auditIds": [
+        "A08",
+        "A16"
+      ],
+      "claim": "Unity에서 실제 실행·저장 관찰의 origin을 응답 delivery와 분리하고 body·journal·recording metadata 실패가 알려진 상태를 덮지 않도록 보정했다.",
+      "claimType": "codegen",
+      "severity": "P2",
+      "verdict": "ByDesign",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unity-mcp/src/server.js",
+          "observation": "Unity에서 실제 실행·저장 관찰의 origin을 응답 delivery와 분리하고 body·journal·recording metadata 실패가 알려진 상태를 덮지 않도록 보정했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unity-mcp/src/bridge-client.js",
+          "observation": "Unity에서 실제 실행·저장 관찰의 origin을 응답 delivery와 분리하고 body·journal·recording metadata 실패가 알려진 상태를 덮지 않도록 보정했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "unity-editor-bridge/Editor/ResponseMetadata.cs",
+          "observation": "Unity에서 실제 실행·저장 관찰의 origin을 응답 delivery와 분리하고 body·journal·recording metadata 실패가 알려진 상태를 덮지 않도록 보정했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "unity-editor-bridge/Editor/Bridge.cs",
+          "observation": "Unity에서 실제 실행·저장 관찰의 origin을 응답 delivery와 분리하고 body·journal·recording metadata 실패가 알려진 상태를 덮지 않도록 보정했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "unity-editor-bridge/Editor/Operations.cs",
+          "observation": "Unity에서 실제 실행·저장 관찰의 origin을 응답 delivery와 분리하고 body·journal·recording metadata 실패가 알려진 상태를 덮지 않도록 보정했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "unity-editor-bridge/Editor/Snapshots.cs",
+          "observation": "Unity에서 실제 실행·저장 관찰의 origin을 응답 delivery와 분리하고 body·journal·recording metadata 실패가 알려진 상태를 덮지 않도록 보정했다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/unity-node-final.txt",
+          "observation": "Unity Node 전체 50개 중 46개 통과, 4개 환경 의존 skip. 추가 축약/persistence 경계 1개 통과. 실제 ResponseMetadata/Snapshots 소스를 .NET으로 실행한 2개 계약 테스트 통과. Operations journal 실제 IO 실패의 Editor 경로는 소스 확인 및 컴파일 수준이다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/unity-delivery-journal.txt",
+          "observation": "Unity Node 전체 50개 중 46개 통과, 4개 환경 의존 skip. 추가 축약/persistence 경계 1개 통과. 실제 ResponseMetadata/Snapshots 소스를 .NET으로 실행한 2개 계약 테스트 통과. Operations journal 실제 IO 실패의 Editor 경로는 소스 확인 및 컴파일 수준이다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/unity-csharp-contracts.txt",
+          "observation": "Unity Node 전체 50개 중 46개 통과, 4개 환경 의존 skip. 추가 축약/persistence 경계 1개 통과. 실제 ResponseMetadata/Snapshots 소스를 .NET으로 실행한 2개 계약 테스트 통과. Operations journal 실제 IO 실패의 Editor 경로는 소스 확인 및 컴파일 수준이다."
+        },
+        {
+          "kind": "build",
+          "location": "artifacts/architecture-refactor-20261003/unity-bridge-compile-final.txt",
+          "observation": "Unity6000.3.14f1 DLL149개 참조, 소스18개 SDK 격리 컴파일 성공. 0 warnings, 0 errors. 실제 Editor 실행은 아니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unity-mcp/src/server.js",
+          "symbol": "기존 공개 입력과 저장 복구"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unity-mcp/src/bridge-client.js",
+          "symbol": "동일 owner의 검증·상태 전이"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/architecture-refactor-20261003/unity-node-final.txt",
+          "symbol": "소비 결과·실패 계약·관련 회귀 또는 문서"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Architecture_Contract_Refactor_20261003.md",
+          "observation": "기존 budget/CAS/journal/project binding/Auto 선택 기능을 재사용하며, 구현과 실제 모델·Editor 실행 검증을 구분한다."
+        }
+      ],
+      "unknowns": [
+        "Unity Editor restart/domain reload/PlayMode/TestRunner 통합 실행은 하지 않았다.",
+        "protocol 1 Bridge는 접속 호환만 제공하며 과거 origin 보존을 보증하지 않는다."
+      ]
+    },
+    {
+      "id": "R04",
+      "auditIds": [
+        "A09",
+        "A10"
+      ],
+      "claim": "request signal·runtime close를 실행 소유자에게 전달하고 종료 대기와 후속 로그 저장 대기를 제한하며 미확인 종료를 명시한다.",
+      "claimType": "codegen",
+      "severity": "P2",
+      "verdict": "ByDesign",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-server.js",
+          "observation": "request signal·runtime close를 실행 소유자에게 전달하고 종료 대기와 후속 로그 저장 대기를 제한하며 미확인 종료를 명시한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/strict-server.js",
+          "observation": "request signal·runtime close를 실행 소유자에게 전달하고 종료 대기와 후속 로그 저장 대기를 제한하며 미확인 종료를 명시한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/bounded-process-runner.js",
+          "observation": "request signal·runtime close를 실행 소유자에게 전달하고 종료 대기와 후속 로그 저장 대기를 제한하며 미확인 종료를 명시한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unity-mcp/src/symbols.js",
+          "observation": "request signal·runtime close를 실행 소유자에게 전달하고 종료 대기와 후속 로그 저장 대기를 제한하며 미확인 종료를 명시한다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-audit-20261003/unreal-regression.log",
+          "observation": "Unreal 전체 271개 중 270개 통과, 플랫폼 skip 1개. MCP InMemoryTransport의 취소 전달·Direct/Strict close·preabort·hanging terminator·postspawn error 포함. Unity worker focused 3개 통과/2개 환경 skip."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-refactor-20261003/unity-symbol-final.txt",
+          "observation": "Unreal 전체 271개 중 270개 통과, 플랫폼 skip 1개. MCP InMemoryTransport의 취소 전달·Direct/Strict close·preabort·hanging terminator·postspawn error 포함. Unity worker focused 3개 통과/2개 환경 skip."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-server.js",
+          "symbol": "기존 공개 입력과 저장 복구"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/strict-server.js",
+          "symbol": "동일 owner의 검증·상태 전이"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/architecture-audit-20261003/unreal-regression.log",
+          "symbol": "소비 결과·실패 계약·관련 회귀 또는 문서"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Architecture_Contract_Refactor_20261003.md",
+          "observation": "기존 budget/CAS/journal/project binding/Auto 선택 기능을 재사용하며, 구현과 실제 모델·Editor 실행 검증을 구분한다."
+        }
+      ],
+      "unknowns": [
+        "실제 OS process-tree 종료 실패와 모든 자손의 종료를 인증한 결과는 아니다. 종료 미확인은 결과 필드에 남는다."
+      ]
+    },
+    {
+      "id": "R05",
+      "auditIds": [
+        "A11",
+        "A17",
+        "A18"
+      ],
+      "claim": "Unreal read/search coverage와 실패 경로 identity를 보존하고 postcommit receipt 실패 및 recovery target rebinding을 기존 정책 owner에서 처리한다.",
+      "claimType": "codegen",
+      "severity": "P2",
+      "verdict": "ByDesign",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+          "observation": "Unreal read/search coverage와 실패 경로 identity를 보존하고 postcommit receipt 실패 및 recovery target rebinding을 기존 정책 owner에서 처리한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-snapshot.js",
+          "observation": "Unreal read/search coverage와 실패 경로 identity를 보존하고 postcommit receipt 실패 및 recovery target rebinding을 기존 정책 owner에서 처리한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-file-version-policy.js",
+          "observation": "Unreal read/search coverage와 실패 경로 identity를 보존하고 postcommit receipt 실패 및 recovery target rebinding을 기존 정책 owner에서 처리한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-transaction-recovery.js",
+          "observation": "Unreal read/search coverage와 실패 경로 identity를 보존하고 postcommit receipt 실패 및 recovery target rebinding을 기존 정책 owner에서 처리한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/architecture-contract-regression.test.js",
+          "observation": "임시 파일 실제 commit 뒤 register 오류, EACCES read/search, 실제 Windows junction의 내부/외부 target rebinding 및 locksHeld 양쪽 회귀 통과. 외부 경계는 원래 코드도 차단했고 내부 target identity 변경이 확인된 실제 결함이다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-audit-20261003/unreal-a18-os-results.json",
+          "observation": "임시 파일 실제 commit 뒤 register 오류, EACCES read/search, 실제 Windows junction의 내부/외부 target rebinding 및 locksHeld 양쪽 회귀 통과. 외부 경계는 원래 코드도 차단했고 내부 target identity 변경이 확인된 실제 결함이다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-audit-20261003/unreal-regression.log",
+          "observation": "임시 파일 실제 commit 뒤 register 오류, EACCES read/search, 실제 Windows junction의 내부/외부 target rebinding 및 locksHeld 양쪽 회귀 통과. 외부 경계는 원래 코드도 차단했고 내부 target identity 변경이 확인된 실제 결함이다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+          "symbol": "기존 공개 입력과 저장 복구"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-snapshot.js",
+          "symbol": "동일 owner의 검증·상태 전이"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/test/architecture-contract-regression.test.js",
+          "symbol": "소비 결과·실패 계약·관련 회귀 또는 문서"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Architecture_Contract_Refactor_20261003.md",
+          "observation": "기존 budget/CAS/journal/project binding/Auto 선택 기능을 재사용하며, 구현과 실제 모델·Editor 실행 검증을 구분한다."
+        }
+      ],
+      "unknowns": [
+        "동일 권한 외부 프로세스가 마지막 OS 호출 사이에서 경로를 교체하는 모든 경쟁을 제거했다는 보증은 아니다."
+      ]
+    },
+    {
+      "id": "R06",
+      "auditIds": [
+        "A12",
+        "A13",
+        "A14",
+        "A15",
+        "A19"
+      ],
+      "claim": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다.",
+      "claimType": "codegen",
+      "severity": "P2",
+      "verdict": "ByDesign",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_history.py",
+          "observation": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_generation_swap.py",
+          "observation": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_source_snapshot.py",
+          "observation": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_freshness_rows.py",
+          "observation": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_operation.py",
+          "observation": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_stdio_requests.py",
+          "observation": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_contract.py",
+          "observation": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/build_integrated_package.py",
+          "observation": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "installer/direct_rag_build_model.py",
+          "observation": "RAG 검색 의미·프로젝트별 수집 provenance·게시 outcome과 package 복구·요청 취소 수명을 기존 domain/transaction owner에 연결했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_freshness.py",
+          "observation": "도메인 소유자에서 프로젝트별 수집 proof·직렬 실행·취소와 게시 결과를 처리한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_server.py",
+          "observation": "도메인 소유자에서 프로젝트별 수집 proof·직렬 실행·취소와 게시 결과를 처리한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_project_merge.py",
+          "observation": "도메인 소유자에서 프로젝트별 수집 proof·직렬 실행·취소와 게시 결과를 처리한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_project_refresh.py",
+          "observation": "도메인 소유자에서 프로젝트별 수집 proof·직렬 실행·취소와 게시 결과를 처리한다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-audit-20261003/rag-refactor-final-pytest.log",
+          "observation": "최종 snapshot 범위 보정 전 관련 7개 파일의 237개 회귀 통과, 실패0."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-audit-20261003/rag-refactor-inputs-pytest.log",
+          "observation": "최종 입력 범위 보정 뒤 project isolation·신규 회귀·열린 연결의 packaged refresh/search 58개 통과, 실패0."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-audit-20261003/rag-refactor-contracts-pytest.log",
+          "observation": "최종 변경 이후 응답 예산·import·CI·신규 회귀 45개 통과, 실패0."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/architecture-audit-20261003/rag-refactor-final-results.json",
+          "observation": "서로 겹치는 테스트 수는 합산하지 않는다. collector DEVNULL 및 fixture stderr 병렬 수집 적용 후 같은 live stdio smoke 통과; Windows 내부 blocking 메커니즘은 계측하지 않았다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/direct_rag_server.py",
+          "symbol": "stdio request registration and serial domain dispatch"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/direct_rag_project_refresh.py",
+          "symbol": "collection, cancellation checkpoint and generation publication"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/architecture-audit-20261003/rag-refactor-final-results.json",
+          "symbol": "related regression outcomes and proof boundaries"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Architecture_Contract_Refactor_20261003.md",
+          "observation": "기존 budget/CAS/journal/project binding/Auto 선택 기능을 재사용하며, 구현과 실제 모델·Editor 실행 검증을 구분한다."
+        }
+      ],
+      "unknowns": [
+        "stat-v1 provenance는 전체 content hash가 아니다. mtime/ctime 보존 변경까지 증명하지 않는다.",
+        "대형 corpus 성능과 실제 강제 crash·동시 reader/refresh는 재현하지 않았다.",
+        "취소는 협력적 checkpoint 방식이다. blocking IO/SQLite/publication의 엄격한 실행 시간 상한을 보장하지 않는다.",
+        "종료 확인은 collector process에 한정한다. 모든 OS descendant를 인증한 결과는 아니다.",
+        "출력16MiB 상한은50ms 관찰 간격으로 일시 초과할 수 있으며 raw JSON-RPC 한 줄의 엄격한 byte 상한은 추가하지 않았다."
+      ]
+    },
+    {
+      "id": "R07",
+      "auditIds": [
+        "A20"
+      ],
+      "claim": "기본 Off·Auto 선택·기존 채팅 설치 동작 설명을 현재 설정/installer 계약과 맞췄다.",
+      "claimType": "codegen",
+      "severity": "P2",
+      "verdict": "ByDesign",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/ARCHITECTURE.md",
+          "observation": "기본 Off·Auto 선택·기존 채팅 설치 동작 설명을 현재 설정/installer 계약과 맞췄다."
+        },
+        {
+          "kind": "project_source",
+          "location": "docs/model-guidance/README.md",
+          "observation": "기본 Off·Auto 선택·기존 채팅 설치 동작 설명을 현재 설정/installer 계약과 맞췄다."
+        },
+        {
+          "kind": "project_source",
+          "location": "docs/Unity_1_4_Design.md",
+          "observation": "기본 Off·Auto 선택·기존 채팅 설치 동작 설명을 현재 설정/installer 계약과 맞췄다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/direct-config.ts",
+          "observation": "기본 guidance Off와 설치시 기존 채팅 플러그인 활성화는 독립 계약이다."
+        },
+        {
+          "kind": "project_source",
+          "location": "install.py",
+          "observation": "기본 guidance Off와 설치시 기존 채팅 플러그인 활성화는 독립 계약이다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "docs/ARCHITECTURE.md",
+          "symbol": "기존 공개 입력과 저장 복구"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "docs/model-guidance/README.md",
+          "symbol": "동일 owner의 검증·상태 전이"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "docs/Unity_1_4_Design.md",
+          "symbol": "소비 결과·실패 계약·관련 회귀 또는 문서"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Architecture_Contract_Refactor_20261003.md",
+          "observation": "기존 budget/CAS/journal/project binding/Auto 선택 기능을 재사용하며, 구현과 실제 모델·Editor 실행 검증을 구분한다."
+        }
+      ],
+      "unknowns": []
+    }
+  ],
+  "validationResults": [
+    {
+      "area": "Compactor",
+      "passed": 497,
+      "failed": 0,
+      "log": "artifacts/architecture-refactor-20261003/compactor-tests.log",
+      "followups": [
+        30,
+        33,
+        2,
+        8
+      ],
+      "finalBuild": "npm run build succeeded",
+      "overlap": true
+    },
+    {
+      "area": "Unreal",
+      "passed": 270,
+      "failed": 0,
+      "skipped": 1,
+      "log": "artifacts/architecture-audit-20261003/unreal-regression.log"
+    },
+    {
+      "area": "Unity Node",
+      "passed": 46,
+      "failed": 0,
+      "skipped": 4,
+      "log": "artifacts/architecture-refactor-20261003/unity-node-final.txt",
+      "followups": [
+        {
+          "passed": 1,
+          "log": "artifacts/architecture-refactor-20261003/unity-delivery-journal.txt"
+        },
+        {
+          "passed": 3,
+          "skipped": 2,
+          "log": "artifacts/architecture-refactor-20261003/unity-symbol-final.txt"
+        }
+      ],
+      "overlap": true
+    },
+    {
+      "area": "Headless and production C# isolated contracts",
+      "passed": 6,
+      "failed": 0,
+      "log": "artifacts/architecture-refactor-20261003/parent-python-final.txt"
+    },
+    {
+      "area": "Unity C# isolated compile",
+      "sourceFiles": 18,
+      "unityReferenceDlls": 149,
+      "unityVersion": "6000.3.14f1",
+      "errors": 0,
+      "warnings": 0,
+      "actualEditorRun": false,
+      "log": "artifacts/architecture-refactor-20261003/unity-bridge-compile-final.txt"
+    },
+    {
+      "area": "RAG/package/install",
+      "passed": 237,
+      "failed": 0,
+      "log": "artifacts/architecture-audit-20261003/rag-refactor-final-pytest.log",
+      "followups": [
+        {
+          "passed": 58,
+          "failed": 0,
+          "log": "artifacts/architecture-audit-20261003/rag-refactor-inputs-pytest.log"
+        },
+        {
+          "passed": 45,
+          "failed": 0,
+          "log": "artifacts/architecture-audit-20261003/rag-refactor-contracts-pytest.log"
+        }
+      ],
+      "overlap": true
+    },
+    {
+      "area": "CI membership",
+      "command": "python -B scripts/ci/run_ci_suite.py portable_direct portable_release windows_direct windows_release --validate-only",
+      "distinctTestFiles": 59,
+      "suites": 4,
+      "status": "passed"
+    },
+    {
+      "area": "Proof boundary",
+      "modelInvoked": false,
+      "actualUnityEditorRun": false,
+      "userProjectBuild": false,
+      "productionInstall": false,
+      "observedQualityGainMeasured": false
+    }
+  ]
+}

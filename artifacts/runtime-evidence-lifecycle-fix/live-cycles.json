@@ -1,0 +1,42 @@
+{
+  "sourceRevision": 116,
+  "runtimeContextTokens": 38912,
+  "metric": "exact_templated_model_input",
+  "cycles": [
+    {
+      "modelInputId": "48a24d7e-aab7-4f18-993d-699a80dc43aa:research-recovery-8",
+      "before": 21621,
+      "after": 15471,
+      "low": 16128,
+      "high": 21504,
+      "floor": 13947,
+      "generationReserve": 4096,
+      "postToolReserve": 4096,
+      "resultReservation": 7168
+    },
+    {
+      "modelInputId": "48a24d7e-aab7-4f18-993d-699a80dc43aa:research-recovery-14",
+      "before": 22054,
+      "after": 15497,
+      "low": 16128,
+      "high": 21504,
+      "floor": 13940,
+      "generationReserve": 4096,
+      "postToolReserve": 4096,
+      "resultReservation": 7168
+    },
+    {
+      "modelInputId": "48a24d7e-aab7-4f18-993d-699a80dc43aa:research-recovery-20",
+      "before": 22059,
+      "after": 15480,
+      "low": 16128,
+      "high": 21504,
+      "floor": 13953,
+      "generationReserve": 4096,
+      "postToolReserve": 4096,
+      "resultReservation": 7168
+    }
+  ],
+  "windowCommits": 23,
+  "windowCommitRejections": []
+}

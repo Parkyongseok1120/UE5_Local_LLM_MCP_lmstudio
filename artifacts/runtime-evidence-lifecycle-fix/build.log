@@ -1,0 +1,12 @@
+
+> unreal-context-compactor@0.4.69 prebuild
+> node scripts/patch-lmstudio-sdk.cjs
+
+
+> unreal-context-compactor@0.4.69 build
+> npm run clean && tsc -p tsconfig.json
+
+
+> unreal-context-compactor@0.4.69 clean
+> node scripts/clean-dist.cjs
+

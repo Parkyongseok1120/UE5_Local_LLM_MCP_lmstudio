@@ -1,0 +1,12 @@
+✔ production handler narrows before archive starvation and restores an early fact through the real guard (64.2627ms)
+✔ recovery admission uses the compacted candidate after the original generation headroom failed (9.901ms)
+✔ recovery re-entry never reuses a model input identity after the episode counter resets (30.608ms)
+✔ partial delivery preserves a guard's reported error instead of replacing it with unknown_error (2.9747ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 348.6523

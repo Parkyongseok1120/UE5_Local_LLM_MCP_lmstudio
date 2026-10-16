@@ -1,0 +1,92 @@
+#!/usr/bin/env node
+"use strict";
+// Explicit predetermined integration calls. This test runner is not loaded by product servers.
+const fs = require("node:fs"), path = require("node:path"), assert = require("node:assert/strict"), crypto = require("node:crypto");
+const { createRuntime } = require("../lmstudio-unity-mcp/src/server");
+const root = process.argv[2];
+if (!root || !path.basename(root).startsWith("unity-bridge-test-") || !fs.existsSync(path.join(root, "debug-fixture-ready.json"))) throw Error("Only an isolated UNITY_TEST_DEBUG=1 fixture is accepted");
+const runtime = createRuntime({ ...process.env, UNITY_PROJECT_ROOT: root, ALLOW_WRITE: "1", ALLOW_COMMANDS: "1" });
+const results = [], evidence = {};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function call(name, args = {}) { const r = await runtime.call(name, args); if (r.errorCode) throw Error(`${name}: ${JSON.stringify(r)}`); return r; }
+async function wait(label, check, ms = 120000) { const start = Date.now(); while (Date.now() - start < ms) { const r = await check(); if (r) return r; await sleep(250); } throw Error(`Timeout: ${label}`); }
+const action = (adapter, input = {}) => call("unity_debug_action", { adapter, input, operationId: crypto.randomUUID() });
+const query = (adapter, input = {}) => call("unity_debug_query", { adapter, input });
+const editor = action => call("unity_editor", { action, operationId: crypto.randomUUID() });
+async function find(queryText, type) { const r = await call("unity_find", { kind: "objects", query: queryText, ...(type ? { type } : {}), limit: 20 }); assert.equal(r.total, 1, JSON.stringify(r)); return r.items[0].target; }
+async function main() {
+  if ((await call("unity_status")).playing) { await editor("stop"); await wait("initial Stop", async () => !(await call("unity_status")).playing); }
+  const assemblies = await call("unity_symbols", { action: "assemblies" }); assert(assemblies.assemblies.includes("EvidenceFirst.Fixture"));
+  await call("unity_symbols", { action: "index", assemblies: ["EvidenceFirst.Fixture"] });
+  const indexed = await wait("external Roslyn", async () => { const r = await call("unity_symbols", { action: "status" }); if (r.job?.status === "failed") throw Error(JSON.stringify(r)); return r.job?.status === "indexed" && r; });
+  const version = indexed.indexVersion;
+  let versionOffset = 0, sawSourceHash = false;
+  do { const page = await call("unity_symbols", { action: "versions", indexVersion: version, limit: 25, offset: versionOffset }); sawSourceHash ||= page.items.some(v => v.kind === "source" && v.hash); versionOffset = page.nextOffset; } while (!sawSourceHash && versionOffset !== null);
+  assert(sawSourceHash);
+  const symbols = await call("unity_symbols", { action: "find", indexVersion: version, name: "damageScale" }); assert.equal(symbols.total, 1); assert.equal(symbols.items[0].kind, "Field");
+  const symbol = symbols.items[0]; assert(symbol.declarations[0].sourceHash && symbol.declarations[0].scriptGuid);
+  const uses = await call("unity_symbols", { action: "usages", indexVersion: version, symbolId: symbol.id, direction: "reverse" }); assert(uses.total >= 2);
+  const controllerSymbol = await call("unity_symbols", { action: "find", indexVersion: version, name: "DebugFixtureController" });
+  const relations = await call("unity_symbols", { action: "relations", indexVersion: version, symbolId: controllerSymbol.items[0].id, direction: "forward" }); assert(relations.items.some(r => r.kind === "implements"));
+  evidence.symbol = symbol; evidence.uses = uses; results.push("external compiler-semantic field declarations, hashed source, actual uses and interface relationship");
+  const controller = await find("DebugFSM", "EvidenceFirst.Fixture.DebugFixtureController");
+  const refs = await call("unity_references", { action: "collect", kind: "serialized_reference", targets: [controller] });
+  const refRows = await call("unity_references", { action: "query", indexId: refs.indexId, direction: "forward", endpoint: controller });
+  const config = refRows.items.find(e => e.propertyPath === "config")?.to; assert(config); assert(refRows.items.some(e => e.kind === "compiled_script_link"));
+  const reverse = await call("unity_references", { action: "query", indexId: refs.indexId, direction: "reverse", endpoint: config }); assert.equal(reverse.items[0].propertyPath, "config");
+  const configRefs = await call("unity_references", { action: "collect", kind: "serialized_reference", targets: [config] });
+  const configEdges = await call("unity_references", { action: "query", indexId: configRefs.indexId });
+  assert(configEdges.items.some(e => e.scriptGuid === symbol.declarations[0].scriptGuid));
+  const dep = await call("unity_references", { action: "collect", kind: "asset_dependency", paths: ["Assets/DebugConfig.asset"], recursive: false });
+  const deps = await call("unity_references", { action: "query", indexId: dep.indexId }); assert(deps.items.every(e => e.kind === "asset_dependency" && !e.propertyPath));
+  results.push("code script GUID -> compiled ScriptableObject -> serialized config field; forward/reverse reference distinction");
+  const catalog = await query("catalog"); for (const p of ["input", "ui", "physics"]) assert.equal(catalog.optionalPackages[p].availability, "active");
+  await editor("play"); await wait("Play", async () => (await call("unity_status")).playing);
+  await wait("FSM registration", async () => (await query("catalog")).adapters.some(a => a.id === "fixture.fsm"));
+  const live = await find("DebugFSM", "EvidenceFirst.Fixture.DebugFixtureController");
+  const targetSelection = [{ target: live, propertyPaths: ["health", "state", "config"] }];
+  await action("fixture.reset"); const state = await query("fixture.fsm"); assert.equal(state.data.health, 100);
+  await query("object.state", { target: live });
+  await action("events.start", { kinds: ["fixture.transition", "input.control_event", "ui.pointer_click", "physics.collision_enter"], maxDurationMs: 60000, maxFrames: 3600 });
+  const a = await call("unity_snapshot", { action: "capture", targets: targetSelection }); assert(!a.objects && !a.values);
+  const damage = await action("fixture.damage", { amount: 10 }); assert.equal(damage.data.health, 80);
+  const b = await call("unity_snapshot", { action: "capture", targets: targetSelection });
+  const stored = await call("unity_snapshot", { action: "read", snapshotId: a.snapshotId, targetIndex: 0, propertyPaths: ["health"] }); assert.equal(stored.values.items[0].value, "100");
+  const diff = await call("unity_snapshot", { action: "diff", a: a.snapshotId, b: b.snapshotId }); assert(diff.items.some(d => d.kind === "value_changed" && d.propertyPath === "health" && d.before.value === "100" && d.after.value === "80")); assert.equal(diff.causation, "not_inferred");
+  evidence.diff = diff;
+  const observed = await call("unity_references", { action: "collect", kind: "observed_runtime_reference", targets: [live] });
+  const runtimeRefs = await call("unity_references", { action: "query", indexId: observed.indexId, direction: "forward", endpoint: live }); assert(runtimeRefs.items.some(e => e.evidence.correlationId === damage.operationId));
+  results.push("FSM query -> immutable snapshot A -> explicit damage -> B -> stored read/diff -> observed causal event evidence (no inferred cause)");
+  const button = await find("DebugButton"); const body = await find("DebugBody");
+  const inputPath = JSON.parse(fs.readFileSync(path.join(root, "debug-fixture-ready.json"))).controlPath;
+  await query("input.state", { controlPath: inputPath }); await action("input.observe", { controlPath: inputPath, maxDurationMs: 30000 }); await action("fixture.input");
+  assert.equal((await query("ui.state", { target: button })).data.hasSelectable, true);
+  await action("ui.observe", { target: button, maxDurationMs: 30000 }); await action("fixture.ui_click");
+  assert.equal((await query("physics.state", { target: body })).data.hasRigidbody, true);
+  await action("physics.observe", { target: body, maxDurationMs: 30000 }); await action("fixture.collision");
+  const events = await wait("actual input, UI and physical collision", async () => { const e = await query("events"); return ["input.control_event", "ui.pointer_click", "physics.collision_enter"].every(k => e.items.some(x => x.kind === k)) && e; }, 20000);
+  evidence.events = events; results.push("actual InputSystem queued state event, EventSystem pointer event and simulated physics collision through optional adapters");
+  const group = await find("DebugGroup"); const groupScope = { targets: [{ target: group, propertyPaths: ["m_Name"], descendantDepth: 1 }] };
+  const beforeSpawn = await call("unity_snapshot", { action: "capture", ...groupScope });
+  await action("fixture.spawn_child"); const afterSpawn = await call("unity_snapshot", { action: "capture", ...groupScope });
+  assert((await call("unity_snapshot", { action: "diff", a: beforeSpawn.snapshotId, b: afterSpawn.snapshotId })).items.some(d => d.kind === "object_added_in_scope"));
+  await action("fixture.remove_child"); await sleep(200); const afterRemove = await call("unity_snapshot", { action: "capture", ...groupScope });
+  assert((await call("unity_snapshot", { action: "diff", a: afterSpawn.snapshotId, b: afterRemove.snapshotId })).items.some(d => d.kind === "object_removed_in_scope"));
+  results.push("actual spawned/destroyed child detected only within explicitly selected root/depth and same Play session");
+  const rec = await call("unity_snapshot", { action: "record_start", targets: targetSelection, maxDurationMs: 2000, maxFrames: 3600, maxSamples: 3, maxBytes: 100000, intervalMs: 100 });
+  const recorded = await wait("bounded recording stop", async () => { const r = await call("unity_snapshot", { action: "record_status", recordingId: rec.recordingId }); return r.status === "stopped" && r; }); assert.equal(recorded.sampleCount, 3);
+  const denied = await runtime.call("unity_debug_action", { adapter: "fixture.damage", input: { amount: 10, arbitraryMethod: "Destroy" }, operationId: crypto.randomUUID() }); assert.equal(denied.status, "outcome_unknown"); assert.equal((await query("fixture.fsm")).data.health, 80);
+  results.push("bounded continuous samples stop at caller maximum; closed input schema rejects arbitrary extra methods");
+  await editor("stop"); await wait("Stop", async () => !(await call("unity_status")).playing);
+  const expired = await call("unity_snapshot", { action: "capture", targets: targetSelection }); assert.equal(expired.failures[0].state, "expired_handle");
+  const staleDiff = await call("unity_snapshot", { action: "diff", a: a.snapshotId, b: expired.snapshotId }); assert(staleDiff.items.some(d => d.kind === "incomparable"));
+  const readConfig = await call("unity_object_read", { target: config, propertyPaths: ["damageScale"] });
+  await call("unity_object_patch", { target: config, scope: "asset", receipt: readConfig.receipt, operationId: crypto.randomUUID(), patches: [{ op: "set", propertyPath: "damageScale", value: "1" }] });
+  await editor("play"); await wait("second Play/FSM", async () => (await call("unity_status")).playing && (await query("catalog")).adapters.some(x => x.id === "fixture.fsm"));
+  await action("fixture.reset"); assert.equal((await action("fixture.damage", { amount: 10 })).data.health, 90);
+  await editor("stop"); await wait("final Stop", async () => !(await call("unity_status")).playing);
+  results.push("expired runtime handle is incomparable; explicit Receipt edit of scale followed by separately selected re-test yields 90");
+  await call("unity_snapshot", { action: "release", snapshotId: a.snapshotId }); assert.equal((await runtime.call("unity_snapshot", { action: "read", snapshotId: a.snapshotId })).errorCode, "evidence_not_found");
+  results.push("explicit snapshot release removes retained values");
+}
+main().then(() => { const report = { status: "passed", passed: results.length, results, evidence }; fs.writeFileSync(path.join(root, "debug-result.json"), JSON.stringify(report, null, 2)); console.log(JSON.stringify({ status: report.status, passed: report.passed, results }, null, 2)); }).catch(error => { fs.writeFileSync(path.join(root, "debug-result.json"), JSON.stringify({ status: "failed", results, error: error.stack, evidence }, null, 2)); console.error(error.stack); process.exitCode = 1; });

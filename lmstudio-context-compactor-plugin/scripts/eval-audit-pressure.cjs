@@ -1,0 +1,707 @@
+#!/usr/bin/env node
+"use strict";
+const { classifyExecutionOutcome } = require("../dist/delivery-controller.js");
+
+const crypto = require("node:crypto");
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const { Chat, ChatMessage, LMStudioClient, rawFunctionTool } = require("@lmstudio/sdk");
+const { createPredictionLoopHandler } = require("../dist/prediction-loop.js");
+const evalCore = require("./availability-eval-core.cjs");
+const fixture = require("./audit-pressure-fixture.cjs");
+
+const TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    path: { type: "string" },
+    startLine: { type: "integer", minimum: 1 },
+    endLine: { type: "integer", minimum: 1 },
+  },
+  required: ["path", "startLine", "endLine"],
+  additionalProperties: false,
+};
+
+const PRESSURE_PROFILES = Object.freeze({
+  controlled: Object.freeze({
+    softRemainingTokens: 14000,
+    hardRemainingTokens: 8000,
+    maxOutputReserve: 4096,
+    safetyMarginTokens: 1536,
+    recentCompleteTurns: 2,
+    compactAboveMessageCount: 24,
+    maxCheckpointChars: 22000,
+    maxToolResultChars: 1200,
+  }),
+  forced: Object.freeze({
+    softRemainingTokens: 38000,
+    hardRemainingTokens: 5000,
+    maxOutputReserve: 2200,
+    safetyMarginTokens: 800,
+    recentCompleteTurns: 0,
+    compactAboveMessageCount: 12,
+    maxCheckpointChars: 16000,
+    maxToolResultChars: 1400,
+  }),
+  "access-baseline": Object.freeze({
+    softRemainingTokens: 0,
+    hardRemainingTokens: 0,
+    maxOutputReserve: 4096,
+    safetyMarginTokens: 1536,
+    recentCompleteTurns: 2,
+    compactAboveMessageCount: 10000,
+    maxCheckpointChars: 22000,
+    maxToolResultChars: 1200,
+  }),
+});
+
+function pressureProfileConfig(name = "controlled") {
+  if (!Object.hasOwn(PRESSURE_PROFILES, name)) throw new Error(`Unknown pressure profile: ${name}`);
+  return { ...PRESSURE_PROFILES[name] };
+}
+
+function valueAfter(flag, fallback = "") {
+  const index = process.argv.indexOf(flag);
+  return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
+}
+
+function integerAfter(flag, fallback) {
+  const value = Number(valueAfter(flag, fallback));
+  return Number.isSafeInteger(value) && value >= 0 ? value : fallback;
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function appendToolExchange(history, id, args, payload) {
+  history.append(ChatMessage.from({ role: "assistant", content: [{
+    type: "toolCallRequest",
+    toolCallRequest: { id, type: "function", name: "read_file_range", arguments: args },
+  }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{
+    type: "toolCallResult", toolCallId: id, content: JSON.stringify(payload),
+  }] }));
+}
+
+function buildInitialHistory(contractText = "", historyMode = "pressure") {
+  const history = Chat.empty();
+  const system = contractText
+    ? `${fixture.SYSTEM_PROMPT}\n\nUSER-SELECTED AUDIT TASK CONTRACT:\n${contractText}`
+    : fixture.SYSTEM_PROMPT;
+  history.append("system", system);
+  history.append("user", "Collect exact evidence for the synthetic settlement audit before my follow-up.");
+  const pressureReads = [
+    ["Assets/03.Scripts/Tycoon/GuestManager.cs", 1, 220],
+    ["Assets/03.Scripts/Tycoon/GuestManager.cs", 837, 1056],
+    ["Assets/03.Scripts/Tycoon/DailySales.cs", 1, 180],
+    ["Assets/03.Scripts/Player/PlayerDataSO.cs", 1, 220],
+    ["Assets/03.Scripts/UI/UICashPanel.cs", 1, 200],
+    ["Assets/ProjectLifeScope.prefab", 1, 220],
+    ["Assets/03.Scripts/Tycoon/SettlementFlow.cs", 1, 180],
+    ["Evidence/RuntimeObservation.md", 1, 90],
+  ];
+  const targetedReads = [
+    ["Assets/03.Scripts/Tycoon/GuestManager.cs", 188, 190],
+    ["Assets/03.Scripts/Tycoon/GuestManager.cs", 1034, 1041],
+    ["Assets/03.Scripts/Tycoon/DailySales.cs", 20, 105],
+    ["Assets/03.Scripts/Player/PlayerDataSO.cs", 100, 112],
+    ["Assets/03.Scripts/UI/UICashPanel.cs", 50, 135],
+    ["Assets/ProjectLifeScope.prefab", 40, 125],
+    ["Assets/03.Scripts/Tycoon/SettlementFlow.cs", 25, 105],
+    ["Evidence/RuntimeObservation.md", 1, 25],
+  ];
+  const reads = historyMode === "targeted" ? targetedReads : pressureReads;
+  reads.forEach(([filePath, startLine, endLine], index) => appendToolExchange(
+    history,
+    `prefetch-${index + 1}`,
+    { path: filePath, startLine, endLine },
+    fixture.readPayload(filePath, startLine, endLine),
+  ));
+  if (historyMode !== "targeted") appendToolExchange(history, "prefetch-failed", {
+    path: "Assets/03.Scripts/UI/MissingCashPanel.cs", startLine: 1, endLine: 200,
+  }, fixture.readPayload("Assets/03.Scripts/UI/MissingCashPanel.cs", 1, 200));
+  history.append("user", fixture.AUDIT_QUESTION);
+  appendToolExchange(history, "current-game-event", {
+    path: "Assets/03.Scripts/Event/GameEvent.cs",
+    startLine: historyMode === "targeted" ? 35 : 1,
+    endLine: historyMode === "targeted" ? 95 : 150,
+  }, fixture.readPayload("Assets/03.Scripts/Event/GameEvent.cs",
+    historyMode === "targeted" ? 35 : 1, historyMode === "targeted" ? 95 : 150));
+  return history;
+}
+
+function controller(history, tokenSource, tool, mode, recorder, configOverrides = {}) {
+  const blocks = [];
+  const debugValues = [];
+  const statuses = [];
+  const config = {
+    // The fixture uses an explicit synthetic identity, not a filesystem project.
+    // Match its trusted provider instead of asking auto-detection to prove it.
+    projectEngine: "unreal",
+    projectIdentity: fixture.PROJECT_IDENTITY,
+    observeOnly: false,
+    showDebugInfo: true,
+    ...pressureProfileConfig("controlled"),
+    assumedContextLength: 66816,
+    pastReasoningTokens: 0,
+    toolStagnationAction: "warn",
+    toolStagnationRounds: 5,
+    generationRepetitionAction: "warn",
+    generationRepeatCount: 3,
+    inputAvailabilityMode: mode,
+    auditCompletionMode: "off",
+    auditResearchSeconds: 100,
+    auditResearchRounds: 12,
+    auditFinalSeconds: 70,
+    auditFinalMaxTokens: 4096,
+    reviewProgress: false,
+    separateAttachments: false,
+    ...configOverrides,
+  };
+  const evaluationTimeoutMs = Math.max(1000, Number(configOverrides.evaluationTimeoutMs || 240000));
+  const session = { tools: [tool], [Symbol.dispose]() {} };
+  return {
+    abortSignal: AbortSignal.timeout(evaluationTimeoutMs),
+    guardAbort() { if (this.abortSignal.aborted) throw this.abortSignal.reason; },
+    getPluginConfig() { return { get: key => config[key] }; },
+    getWorkingDirectory() { return ""; },
+    async pullHistory() { return history; },
+    async tokenSource() { return tokenSource; },
+    async startToolUseSession() { return session; },
+    async requestConfirmToolCall() { return { type: "allow" }; },
+    debug(value) {
+      debugValues.push(value);
+      if (value?.event === "direct_context_measurement") recorder.latestMeasurement = value;
+    },
+    createStatus(initial) {
+      const status = { initial, texts: [], states: [], removed: false };
+      statuses.push(status);
+      return {
+        setText(text) { status.texts.push(text); },
+        setState(state) { status.states.push(state); },
+        remove() { status.removed = true; },
+      };
+    },
+    createContentBlock(options) {
+      const block = { options, text: "", requests: [], results: [] };
+      blocks.push(block);
+      return {
+        appendText(text) { block.text += text; },
+        appendToolRequest(value) { block.requests.push(value); },
+        appendToolResult(value) { block.results.push(value); },
+        setStyle(style) { block.options.style = style; },
+      };
+    },
+    blocks,
+    debugValues,
+    statuses,
+  };
+}
+
+function availabilityEvidence(measurements, modelInputs, initialHistory, calls) {
+  const historical = evalCore.oracleObservationsFromMessages(initialHistory).filter(item => item.verified);
+  const comparisons = [];
+  for (const measurement of measurements) {
+    const input = modelInputs.get(measurement.modelInputId);
+    const oracleEntries = input ? evalCore.oracleProjection(input, historical) : [];
+    const comparison = evalCore.projectionMatchesOracle(
+      measurement.inputAvailability?.entries || [], oracleEntries,
+    );
+    comparisons.push({
+      modelInputId: measurement.modelInputId,
+      ...comparison,
+      productEntries: measurement.inputAvailability?.entries || [],
+      oracleEntries,
+      currentFullCount: oracleEntries.filter(entry => entry.rawPresence === "full").length,
+      currentPartialCount: oracleEntries.filter(entry => entry.rawPresence === "partial").length,
+      currentAbsentCount: oracleEntries.filter(entry => entry.rawPresence === "none").length,
+      currentUnknownCount: oracleEntries.filter(entry => entry.rawPresence === "unknown").length,
+    });
+    for (const call of calls.filter(item => item.causalModelInputId === measurement.modelInputId)) {
+      const observation = evalCore.oracleObservation(call.payload);
+      if (call.executionState === "succeeded" && observation?.verified) historical.push(observation);
+    }
+  }
+  return comparisons;
+}
+
+async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractText, runOptions = {}) {
+  const mode = runOptions.inputAvailabilityMode || (group === "B" ? "inject" : "observe");
+  const contractSelected = runOptions.auditContractSelected ?? group === "C";
+  const auditCompletionMode = runOptions.auditCompletionMode === "bounded" ? "bounded" : "off";
+  const historyMode = runOptions.historyMode === "targeted" ? "targeted" : "pressure";
+  const pressureProfile = String(runOptions.pressureProfile || "controlled");
+  const researchMaxTokens = Number(runOptions.researchMaxTokens || 0);
+  const compactorConfig = {
+    ...pressureProfileConfig(pressureProfile),
+    ...(Number.isSafeInteger(researchMaxTokens) && researchMaxTokens > 0
+      ? { maxOutputReserve: researchMaxTokens } : {}),
+    ...(runOptions.compactorConfig || {}),
+  };
+  const history = buildInitialHistory(contractSelected ? contractText : "", historyMode);
+  const recorder = {
+    latestMeasurement: null,
+    activeModelInputId: null,
+    modelInputs: new Map(),
+    calls: [],
+    modelActs: [],
+    modelInputTexts: new Map(),
+  };
+  const tool = rawFunctionTool({
+    name: "read_file_range",
+    description: "Read an exact line range from one of the eight synthetic audit files. Returns at most 220 lines.",
+    parametersJsonSchema: TOOL_SCHEMA,
+    implementation: async args => {
+      const payload = fixture.readPayload(args.path, args.startLine, args.endLine);
+      recorder.calls.push({
+        callKey: `${phase}:${pairIndex}:${group}:${recorder.calls.length + 1}`,
+        causalModelInputId: recorder.activeModelInputId,
+        executionState: payload.ok ? "succeeded" : "failed",
+        args: { path: args.path, startLine: args.startLine, endLine: args.endLine },
+        payload,
+      });
+      return payload;
+    },
+  });
+  // The real MCP supplies this identity. Keep the runtime fixture on the same
+  // read-only tool classification path when bounded completion is selected.
+  tool.pluginIdentifier = "mcp/unreal-agent";
+  const fixedModel = {
+    identifier: model.identifier,
+    getContextLength: () => model.getContextLength(),
+    applyPromptTemplate: (chat, options) => model.applyPromptTemplate(chat, options),
+    countTokens: text => model.countTokens(text),
+    act: (chat, tools, options) => {
+      const modelInputId = recorder.latestMeasurement?.modelInputId || `unmatched:${recorder.modelInputs.size}`;
+      recorder.activeModelInputId = modelInputId;
+      const inputSnapshot = Chat.from(chat);
+      recorder.modelInputs.set(modelInputId, inputSnapshot);
+      if (runOptions.captureModelInputs === true) {
+        recorder.modelInputTexts.set(modelInputId, inputSnapshot.toString());
+      }
+      const maxTokens = Number.isSafeInteger(Number(options.maxTokens))
+        ? Number(options.maxTokens) : null;
+      recorder.modelActs.push({
+        sequence: recorder.modelActs.length + 1,
+        modelInputId,
+        toolCount: tools.length,
+        toolNames: tools.map(item => item.name),
+        maxTokens,
+      });
+      return model.act(chat, tools, {
+        ...options,
+        temperature: 0,
+        seed,
+        ...(maxTokens === null ? {} : { maxTokens }),
+      });
+    },
+  };
+  const auditResearchSeconds = Number(runOptions.auditResearchSeconds ?? 100);
+  const auditFinalSeconds = Number(runOptions.auditFinalSeconds ?? auditResearchSeconds);
+  const evaluationTimeoutSeconds = Number(runOptions.evaluationTimeoutSeconds
+    ?? Math.max(240, auditResearchSeconds + auditFinalSeconds + 30));
+  const completionConfig = {
+    auditCompletionMode,
+    auditResearchSeconds,
+    auditResearchRounds: Number(runOptions.auditResearchRounds || 12),
+    auditFinalSeconds,
+    auditFinalMaxTokens: Number(runOptions.auditFinalMaxTokens || 4096),
+    outputRecoveryMode: runOptions.outputRecoveryMode === "on" ? "on" : "off",
+    contextManagementMode: ["deterministic", "hybrid"].includes(runOptions.contextManagementMode)
+      ? runOptions.contextManagementMode : "legacy",
+    workingInputTargetTokens: Number(runOptions.workingInputTargetTokens || 10000),
+    workingInputTriggerTokens: Number(runOptions.workingInputTriggerTokens || 12048),
+    toolResultProjectionChars: Number(runOptions.toolResultProjectionChars || 512),
+    semanticSummaryMaxTokens: Number(runOptions.semanticSummaryMaxTokens || 1024),
+    semanticSummarySeconds: Number(runOptions.semanticSummarySeconds || 30),
+    evaluationTimeoutMs: evaluationTimeoutSeconds * 1000,
+    ...compactorConfig,
+  };
+  const ctl = controller(history, fixedModel, tool, mode, recorder, completionConfig);
+  const started = Date.now();
+  let error = null;
+  try {
+    await (runOptions.createPredictionLoopHandler || createPredictionLoopHandler)()(ctl);
+  } catch (caught) {
+    error = String(caught?.stack || caught);
+  }
+  const visibleBlocks = ctl.blocks
+    .filter(block => block.options?.style?.type !== "thinking")
+    .map(block => block.text.trim()).filter(Boolean);
+  const finalizations = ctl.debugValues.filter(value => value.event === "bounded_audit_finalization");
+  const outputRecoveries = ctl.debugValues.filter(value => value.event === "output_recovery");
+  const visibleAnswer = selectVisibleAnswer(visibleBlocks, finalizations, outputRecoveries);
+  const measurements = ctl.debugValues.filter(value => value.event === "direct_context_measurement");
+  const rounds = ctl.debugValues.filter(value => value.event === "direct_round_observation");
+  const semanticHandoffs = ctl.debugValues.filter(value => value.event === "semantic_handoff");
+  const runtimeToolCalls = rounds.flatMap(round => round.toolTrace?.runtime || []);
+  const uniqueRuntimeCalls = new Map(runtimeToolCalls.map(call => [call.callKey, call]));
+  const comparisons = availabilityEvidence(measurements, recorder.modelInputs, history, recorder.calls);
+  const causalMetrics = evalCore.evaluateCausalCalls({
+    initialMessages: history, modelInputs: recorder.modelInputs, calls: recorder.calls,
+  });
+  const firstAvailability = comparisons[0] || {};
+  const rubric = evalCore.auditAnswerMatchesOracle(visibleAnswer);
+  const timedOut = ctl.abortSignal.aborted;
+  const run = {
+    phase,
+    pairIndex,
+    group,
+    mode,
+    historyMode,
+    pressureProfile,
+    compactorConfig,
+    auditContractSelected: contractSelected,
+    auditCompletionMode,
+    contextManagementMode: completionConfig.contextManagementMode,
+    auditCompletionConfig: completionConfig,
+    evaluationTimeoutSeconds,
+    seed,
+    modelIdentifier: model.identifier,
+    modelPath: modelInfo.path || null,
+    quantization: modelInfo.quantization?.name || modelInfo.quantization || null,
+    loadedContextLength: modelInfo.contextLength || null,
+    elapsedMs: Date.now() - started,
+    timedOut,
+    predictionRounds: rounds.length,
+    compressedPredictionCount: measurements.filter(value => value.compactionAppliedCount > 0).length,
+    compactionCount: measurements.reduce((sum, value) => sum + Number(value.compactionAppliedCount || 0), 0),
+    fullInput: measurements.map(value => ({ modelInputId: value.modelInputId,
+      before: value.inputTokens, after: value.finalInputTokens,
+      target: value.workingContext?.inputTargetTokens ?? null,
+      mandatoryFloor: value.workingContext?.mandatoryFloorTokens ?? null,
+      mandatoryFloorExceedsTarget: value.workingContext?.mandatoryFloorExceedsTarget ?? null,
+      targetMet: value.workingContext?.targetMet ?? null,
+      schemaTokens: value.finalToolSchemaTokens,
+      projectionApplied: value.workingContext?.projectionApplied ?? false,
+      archive: value.workingContext?.archive || null })),
+    semanticHandoffs,
+    semanticSummaryCalls: semanticHandoffs.filter(value => value.modelCalled === true).length,
+    semanticSummaryAccepted: semanticHandoffs.filter(value => value.accepted).length,
+    totalPromptTokens: rounds.reduce((sum, value) => sum + Number(value.predictionStats?.promptTokensCount || 0), 0)
+      + semanticHandoffs.reduce((sum, value) => sum + Number(value.predictionStats?.promptTokensCount || 0), 0),
+    totalPredictedTokens: rounds.reduce((sum, value) => sum + Number(value.predictionStats?.predictedTokensCount || 0), 0)
+      + semanticHandoffs.reduce((sum, value) => sum + Number(value.predictionStats?.predictedTokensCount || 0), 0),
+    firstInputCurrentFullCount: firstAvailability.currentFullCount ?? null,
+    firstInputCurrentPartialCount: firstAvailability.currentPartialCount ?? null,
+    firstInputCurrentAbsentCount: firstAvailability.currentAbsentCount ?? null,
+    pressureExposure: measurements.some(value => value.compactionAppliedCount > 0)
+      && Number(firstAvailability.currentFullCount || 0) > 0
+      && Number(firstAvailability.currentAbsentCount || 0) > 0,
+    generatedToolCalls: [...uniqueRuntimeCalls.values()].filter(call => (
+      call.generationState === "generated" || call.generationState === "finalized"
+    )).length,
+    dispatchedToolCalls: [...uniqueRuntimeCalls.values()].filter(call => (
+      call.executionState === "dispatched"
+    )).length,
+    implementationEnteredToolCalls: recorder.calls.length,
+    callStatusCounts: causalMetrics.statusCounts,
+    rangeMetricsByUnit: causalMetrics.byUnit,
+    callMetrics: causalMetrics.perCall,
+    excludedMetricCallCount: causalMetrics.excludedCallCount,
+    answerEvaluation: rubric,
+    availabilityProjectionMatchesOracle: comparisons.every(item => item.matches),
+    availabilityComparisons: comparisons,
+    modelInputs: measurements.map(value => ({
+      modelInputId: value.modelInputId,
+      finalInputTokens: value.finalInputTokens,
+      finalRemainingTokens: value.finalRemainingTokens,
+      metadataTokens: value.inputAvailability?.metadataTokens ?? null,
+      compactionAppliedCount: value.compactionAppliedCount,
+      compactionAppliedModes: value.compactionAppliedModes,
+      inputAvailabilityEntries: value.inputAvailability?.entries || [],
+    })),
+    ...(runOptions.captureModelInputs === true ? {
+      modelInputSnapshots: measurements.map(value => {
+        const text = recorder.modelInputTexts.get(value.modelInputId) || "";
+        return {
+          modelInputId: value.modelInputId,
+          chars: text.length,
+          sha256: sha256(text),
+          text,
+        };
+      }),
+    } : {}),
+    visibleAnswer,
+    error,
+    modelActs: recorder.modelActs,
+    terminalOutcome: ctl.debugValues.findLast(value => value.event === "execution_outcome") || null,
+    boundedFinalizations: finalizations,
+    outputRecoveries,
+    boundedFinalModelCalls: recorder.modelActs.filter(act => /:final-report(?:-\d+)?$/u.test(act.modelInputId)).length,
+    outputRecoveryModelCalls: recorder.modelActs.filter(act => act.modelInputId.includes(":output-recovery-")).length,
+    boundedFinalToolCalls: recorder.calls.filter(call => (
+      /:final-report(?:-\d+)?$/u.test(String(call.causalModelInputId || ""))
+    )).length,
+    outputRecoveryToolCalls: recorder.calls.filter(call => (
+      String(call.causalModelInputId || "").includes(":output-recovery-")
+    )).length,
+    trace: {
+      executionId: measurements.at(-1)?.executionId || null,
+      modelInputId: measurements.at(-1)?.modelInputId || null,
+      roundFinishReasons: rounds.map(round => round.finishReason),
+      roundPredictionStats: rounds.map(round => round.predictionStats || null),
+    },
+  };
+  return { ...run, outcome: classifyRunOutcome(run) };
+}
+
+function classifyRunOutcome(run) {
+  // Current runs carry the runtime's authoritative result, including the last
+  // attempt only. Do not promote earlier progress blocks into a final report.
+  if (run?.terminalOutcome) return run.terminalOutcome;
+  const terminalDelivery = run?.outputRecoveries?.at(-1) || run?.boundedFinalizations?.at(-1);
+  return classifyExecutionOutcome({
+    reportText: String(run?.visibleAnswer || ""),
+    finishReason: terminalDelivery?.finishReason || run?.trace?.roundFinishReasons?.at(-1),
+    timedOut: run?.timedOut === true,
+    failure: run?.error || undefined,
+    delivery: terminalDelivery || undefined,
+  });
+}
+
+function selectVisibleAnswer(visibleBlocks, finalizations, outputRecoveries = []) {
+  const selected = finalizations.length || outputRecoveries.length
+    ? (visibleBlocks.at(-1) || "") : visibleBlocks.join("\n");
+  return selected.trim();
+}
+
+function summarize(runs, group) {
+  const selected = runs.filter(run => run.group === group).map(run => ({
+    ...run,
+    outcome: run.outcome || classifyRunOutcome(run),
+  }));
+  const outcomeCounts = Object.fromEntries([
+    "completed", "truncated", "no_answer", "failed", "canceled", "timed_out",
+  ].map(outcome => [outcome, selected.filter(run => run.outcome.executionOutcome === outcome).length]));
+  const successfulRawReturns = selected.reduce((sum, run) => (
+    sum + Number(run.callStatusCounts?.succeeded || 0)
+  ), 0);
+  const measuredLineRuns = selected.filter(run => Number(run.rangeMetricsByUnit?.line?.returnedUnits || 0) > 0);
+  return {
+    n: selected.length,
+    pressureExposureRuns: selected.filter(run => run.pressureExposure).length,
+    outcomeCounts,
+    successfulRuns: outcomeCounts.completed,
+    errors: outcomeCounts.failed,
+    timeouts: outcomeCounts.timed_out,
+    totalCompactions: selected.reduce((sum, run) => sum + run.compactionCount, 0),
+    generatedToolCalls: selected.reduce((sum, run) => sum + run.generatedToolCalls, 0),
+    dispatchedToolCalls: selected.reduce((sum, run) => sum + Number(run.dispatchedToolCalls || 0), 0),
+    implementationEnteredToolCalls: selected.reduce((sum, run) => (
+      sum + Number(run.implementationEnteredToolCalls ?? run.generatedToolCalls ?? 0)
+    ), 0),
+    successfulRawReturns,
+    historicalReacquisitionLines: selected.reduce((sum, run) => (
+      sum + Number(run.rangeMetricsByUnit.line?.historicalReacquisitionUnits || 0)
+    ), 0),
+    historicalReacquisitionEvaluableRuns: measuredLineRuns.length,
+    historicalReacquisitionEvaluation: measuredLineRuns.length
+      ? "measured" : "not_evaluable_no_successful_line_return",
+    groundedAnswers: selected.filter(run => run.answerEvaluation.pass).length,
+    answerScores: selected.map(run => run.answerEvaluation.score),
+    oracleProjectionMatches: selected.filter(run => run.availabilityProjectionMatchesOracle).length,
+    elapsedMs: selected.map(run => run.elapsedMs),
+  };
+}
+
+async function main() {
+  const identifier = valueAfter("--model", "swift-qwen3.8-27b");
+  const mainPairs = integerAfter("--main-pairs", 5);
+  const contractPairs = integerAfter("--contract-pairs", 1);
+  const researchMaxTokens = integerAfter("--research-max-tokens", 1800);
+  const outputRecoveryMode = process.argv.includes("--output-recovery") ? "on" : "off";
+  const acOnly = process.argv.includes("--ac-only");
+  const output = path.resolve(valueAfter("--output", path.join(process.cwd(), "audit-pressure-ab-ac.json")));
+  const contractPath = path.resolve(__dirname, "../eval/AUDIT_TASK_CONTRACT.md");
+  const contractText = fs.readFileSync(contractPath, "utf8");
+  const client = new LMStudioClient();
+  const loaded = await client.llm.listLoaded();
+  const loadedHandle = loaded.find(item => item.identifier === identifier);
+  if (!loadedHandle) throw new Error(`Loaded model not found: ${identifier}`);
+  let processInfo = {};
+  try {
+    const listed = JSON.parse(execFileSync("lms", ["ps", "--json"], {
+      encoding: "utf8", windowsHide: true, timeout: 10000,
+    }));
+    const processes = Array.isArray(listed) ? listed : listed.models || listed.processes || [];
+    processInfo = processes.find(item => item.identifier === identifier) || {};
+  } catch {
+    // The SDK run remains valid; unavailable process metadata is explicitly null below.
+  }
+  const modelInfo = { ...loadedHandle, ...processInfo };
+  const model = await client.llm.model(identifier);
+  const runs = [];
+  if (!acOnly) {
+    for (const group of ["A", "B"]) {
+      const run = await oneRun(model, modelInfo, group, "pilot", 1, 4101, contractText, {
+        researchMaxTokens, outputRecoveryMode,
+      });
+      runs.push(run);
+      process.stdout.write(`${JSON.stringify({ phase: run.phase, group, pressureExposure: run.pressureExposure,
+        compactions: run.compactionCount, calls: run.generatedToolCalls, score: run.answerEvaluation.score,
+        outcome: run.outcome, elapsedMs: run.elapsedMs, error: run.error })}\n`);
+    }
+  }
+  const pilotExposureSatisfied = acOnly ? null : runs
+    .filter(run => run.phase === "pilot")
+    .every(run => run.pressureExposure);
+  const pilotSuccessfulRuns = runs
+    .filter(run => run.phase === "pilot" && run.outcome.executionOutcome === "completed").length;
+  if (!acOnly && pilotExposureSatisfied) {
+    for (let pairIndex = 1; pairIndex <= mainPairs; pairIndex += 1) {
+      const groups = pairIndex % 2 === 0 ? ["B", "A"] : ["A", "B"];
+      for (const group of groups) {
+        const run = await oneRun(model, modelInfo, group, "main-ab", pairIndex, 5000 + pairIndex, contractText, {
+          researchMaxTokens, outputRecoveryMode,
+        });
+        runs.push(run);
+        process.stdout.write(`${JSON.stringify({ phase: run.phase, pairIndex, group,
+          pressureExposure: run.pressureExposure, compactions: run.compactionCount,
+          calls: run.generatedToolCalls, score: run.answerEvaluation.score,
+          outcome: run.outcome, elapsedMs: run.elapsedMs, error: run.error })}\n`);
+      }
+    }
+  }
+  if (acOnly || pilotExposureSatisfied) {
+    for (let pairIndex = 1; pairIndex <= contractPairs; pairIndex += 1) {
+      for (const group of pairIndex % 2 === 0 ? ["C", "A"] : ["A", "C"]) {
+        const run = await oneRun(model, modelInfo, group, "exploratory-ac", pairIndex,
+          6000 + pairIndex, contractText, { researchMaxTokens, outputRecoveryMode });
+        runs.push(run);
+        process.stdout.write(`${JSON.stringify({ phase: run.phase, pairIndex, group,
+          pressureExposure: run.pressureExposure, compactions: run.compactionCount,
+          calls: run.generatedToolCalls, score: run.answerEvaluation.score,
+          outcome: run.outcome, elapsedMs: run.elapsedMs, error: run.error })}\n`);
+      }
+    }
+  }
+
+  const repositoryRoot = path.resolve(__dirname, "../..");
+  const packageMetadata = require("../package.json");
+  const manifestMetadata = require("../manifest.json");
+  const sdkMetadata = JSON.parse(fs.readFileSync(path.resolve(
+    __dirname, "../node_modules/@lmstudio/sdk/package.json"), "utf8"));
+  const sourceHead = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: repositoryRoot, encoding: "utf8", windowsHide: true, timeout: 10000,
+  }).trim();
+  const sourceWorktreeDirty = Boolean(execFileSync("git", ["status", "--porcelain", "--",
+    "lmstudio-context-compactor-plugin"], {
+    cwd: repositoryRoot, encoding: "utf8", windowsHide: true, timeout: 10000,
+  }).trim());
+  const hashedFiles = [
+    path.resolve(__dirname, "../dist/prediction-loop.js"),
+    path.resolve(__dirname, "../dist/input-availability.js"),
+    path.resolve(__dirname, "availability-eval-core.cjs"),
+    path.resolve(__dirname, "audit-pressure-fixture.cjs"),
+    contractPath,
+  ];
+  const sourceBundleSha256 = sha256(hashedFiles.map(file => (
+    `${path.basename(file)}:${sha256(fs.readFileSync(file))}`
+  )).join("\n"));
+  const mainRuns = runs.filter(run => run.phase === "main-ab");
+  const contractRuns = runs.filter(run => run.phase === "exploratory-ac");
+  const report = {
+    experiment: "compressed-audit-metadata-A-B-and-user-contract-A-C",
+    executionMode: acOnly ? "A-C only (explicit CLI selection)" : "pilot, main A-B, exploratory A-C",
+    generatedAt: new Date().toISOString(),
+    sourceScope: "repository dist exercised directly; installed plugin and active chats were not modified",
+    sourceHead,
+    sourceWorktreeDirty,
+    packageVersion: packageMetadata.version,
+    manifestRevision: manifestMetadata.revision,
+    sdkVersion: sdkMetadata.version,
+    sourceBundleSha256,
+    fixture: {
+      fileCount: fixture.files.length,
+      projectIdentity: fixture.PROJECT_IDENTITY,
+      fileVersions: fixture.files.map(file => ({ path: file.path, sha256: file.sha256,
+        totalLines: file.lines.length })),
+      systemPromptSha256: sha256(fixture.SYSTEM_PROMPT),
+      auditQuestionSha256: sha256(fixture.AUDIT_QUESTION),
+      toolSchemaSha256: sha256(JSON.stringify(TOOL_SCHEMA)),
+      deliberatelyFailedInitialRead: "Assets/03.Scripts/UI/MissingCashPanel.cs",
+      retainedCurrentRaw: "Assets/03.Scripts/Event/GameEvent.cs:1-150",
+    },
+    model: {
+      identifier: model.identifier,
+      path: modelInfo.path || null,
+      quantization: modelInfo.quantization || null,
+      loadedContextLength: modelInfo.contextLength || null,
+      maxContextLength: modelInfo.maxContextLength || null,
+      temperature: 0,
+      maxTokens: researchMaxTokens,
+      outputRecoveryMode,
+      seedPolicy: "same seed within each comparison pair",
+    },
+    groups: {
+      A: "Observe metadata mode; base audit prompt",
+      B: "Inject metadata mode; otherwise identical to A",
+      C: "Observe metadata mode; user-selected AUDIT_TASK_CONTRACT appended to system prompt",
+    },
+    comparisons: {
+      metadataAB: {
+        pilotExposureSatisfied,
+        pilotSuccessfulRuns,
+        requestedMainPairs: mainPairs,
+        recordedMainPairs: Math.min(
+          mainRuns.filter(run => run.group === "A").length,
+          mainRuns.filter(run => run.group === "B").length,
+        ),
+        completedReportPairs: Math.min(
+          mainRuns.filter(run => run.group === "A" && run.outcome.executionOutcome === "completed").length,
+          mainRuns.filter(run => run.group === "B" && run.outcome.executionOutcome === "completed").length,
+        ),
+        A: summarize(mainRuns, "A"),
+        B: summarize(mainRuns, "B"),
+      },
+      auditInstructionsAC: {
+        exploratory: true,
+        requestedPairs: contractPairs,
+        recordedPairs: Math.min(
+          contractRuns.filter(run => run.group === "A").length,
+          contractRuns.filter(run => run.group === "C").length,
+        ),
+        completedReportPairs: Math.min(
+          contractRuns.filter(run => run.group === "A" && run.outcome.executionOutcome === "completed").length,
+          contractRuns.filter(run => run.group === "C" && run.outcome.executionOutcome === "completed").length,
+        ),
+        A: summarize(contractRuns, "A"),
+        C: summarize(contractRuns, "C"),
+      },
+    },
+    pilot: { A: summarize(runs.filter(run => run.phase === "pilot"), "A"),
+      B: summarize(runs.filter(run => run.phase === "pilot"), "B") },
+    runs,
+    interpretationBoundary: [
+      "The fixture is synthetic and does not reconstruct missing raw payloads from the original 865-line transcript.",
+      "A successful reread is measured against its causal model input; it is not automatically labeled unnecessary.",
+      "Structural pressure exposure and final-answer behavior are separate outcomes.",
+      "The answer rubric is deterministic but still marked human-review-required.",
+      "The audit contract is selected only for group C by this evaluation script; product code does not inject it.",
+      "Failed calls, timeouts, and no-compaction runs remain in runs and summary counts.",
+    ],
+  };
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ output, pilotExposureSatisfied,
+    comparisons: report.comparisons })}\n`);
+  if (runs.some(run => run.outcome.executionOutcome !== "completed")) process.exitCode = 1;
+}
+
+if (require.main === module) {
+  main().catch(error => {
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  buildInitialHistory,
+  classifyRunOutcome,
+  oneRun,
+  pressureProfileConfig,
+  selectVisibleAnswer,
+  summarize,
+};

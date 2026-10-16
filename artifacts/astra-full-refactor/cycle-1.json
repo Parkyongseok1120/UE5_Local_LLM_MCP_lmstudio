@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 2,
+  "compactionGeneration": 2,
+  "authority": "factual_memory_only",
+  "latestUserMessage": "Continue the same objective",
+  "activeObjective": {
+    "kind": "user_objective",
+    "status": "active",
+    "text": "Continue the same objective",
+    "messageIndex": 25,
+    "source": "current_history"
+  },
+  "continuationAntecedent": null,
+  "activeProject": null,
+  "currentWorkStatus": {
+    "lastAssistantUpdate": {
+      "messageIndex": 26,
+      "text": "old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old …[truncated]",
+      "source": "assistant_history"
+    },
+    "recentToolOutcomes": [],
+    "gitObservations": [],
+    "historicalEvidence": [],
+    "modifiedOrObservedFiles": [],
+    "recentBuildOrTestState": []
+  },
+  "unresolvedItems": [],
+  "completedOrArchivedObjectives": [
+    {
+      "kind": "user_objective",
+      "status": "completed_or_archived",
+      "text": "mandatory current objective",
+      "messageIndex": 1,
+      "archiveReason": "superseded_by_later_user_request",
+      "assistantResponseEvidence": {
+        "present": false
+      }
+    }
+  ],
+  "recentRawTail": [
+    {
+      "role": "user",
+      "text": "Continue the same objective",
+      "source": "prior_checkpoint"
+    },
+    {
+      "role": "assistant",
+      "text": "old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old …[truncated]",
+      "source": "prior_checkpoint"
+    },
+    {
+      "role": "user",
+      "text": "Continue the same objective",
+      "messageIndex": 25,
+      "source": "current_history"
+    },
+    {
+      "role": "assistant",
+      "text": "old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old evidence old ev …[truncated]",
+      "messageIndex": 26,
+      "source": "current_history"
+    }
+  ],
+  "olderContinuationAnchor": {
+    "messageIndex": 17,
+    "text": "Continue the same objective"
+  },
+  "priorUserRequestsForContinuation": [
+    {
+      "messageIndex": 19,
+      "text": "Continue the same objective"
+    },
+    {
+      "messageIndex": 21,
+      "text": "Continue the same objective"
+    },
+    {
+      "messageIndex": 23,
+      "text": "Continue the same objective"
+    }
+  ],
+  "latestUserConstraints": [],
+  "historicalUserConstraintEvidence": [],
+  "openQuestionEvidence": [],
+  "previousTurnFinalResponseEvidence": {
+    "present": true,
+    "messageIndex": 24
+  },
+  "recentOlderToolOutcomes": [],
+  "modifiedOrObservedFiles": [],
+  "recentBuildOrTestState": []
+}

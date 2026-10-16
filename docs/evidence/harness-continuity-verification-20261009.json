@@ -1,0 +1,201 @@
+{
+  "date": "2026-10-09",
+  "status": "implementation_and_automated_regressions_verified_live_acceptance_not_met",
+  "runtimes": {
+    "node": "20.20.2",
+    "python": "3.12.10"
+  },
+  "tests": {
+    "compactor": {
+      "passed": 647,
+      "failed": 0,
+      "skipped": 0
+    },
+    "unreal_mcp": {
+      "passed": 277,
+      "failed": 0,
+      "skipped": 1
+    },
+    "unity_mcp": {
+      "passed": 52,
+      "failed": 0,
+      "skipped": 4
+    },
+    "root_node": {
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0
+    },
+    "python": {
+      "passed": 1144,
+      "failed": 0,
+      "skipped": 19
+    }
+  },
+  "checks": {
+    "typeScript": "passed",
+    "guidance": "passed",
+    "runtimeIdentity": "passed",
+    "sourceLayout": "passed_runtime_activation_unproven",
+    "changedPythonLint": "passed",
+    "encoding": "passed",
+    "compileall": "passed",
+    "packageReproducibility": "passed",
+    "evidencePackets": "3 passed_structure_only",
+    "diffWhitespace": "passed"
+  },
+  "skipReasons": [
+    "POSIX/macOS-specific contracts on Windows",
+    "unconfigured live local Unreal smoke project",
+    "optional external Roslyn / Editor integration requirements"
+  ],
+  "preexistingLint": {
+    "file": "scripts/build_integrated_package.py",
+    "unchangedFindings": [
+      "UP035",
+      "SIM103",
+      "TRY004"
+    ]
+  },
+  "independentReview": {
+    "resolvedFindings": [
+      "legacy line scope complete promotion",
+      "unversioned changing result cycle false positive",
+      "original read-limit request lost before telemetry"
+    ],
+    "remainingConfirmedFindings": 0,
+    "scope": "snapshot-relative source review and isolated deterministic repros"
+  },
+  "identities": {
+    "installedBuildId": "ef-build-v2-1066996bbe3673c4b166e72845ce9738fe43376c65fb82a087aca99e74ddbfe2",
+    "workspaceBuildId": "ef-build-v2-4f16d2122b43602f6f1bbe76cd766a4f82ec6f725130d1c95a12cc3e6c072d3b",
+    "liveCandidateBuildId": "ef-build-v2-467c31b95dfa590b534829f97b2be06acd2e8139e3ec33d28ee7a897d212a712",
+    "liveCandidateLimitation": "Live process loaded code before final independently reviewed fixes for line-scope compatibility, unversioned cycle proof, and original requested budget. Its metrics are exploratory, not proof of the final build."
+  },
+  "liveComparison": {
+    "model": "swift-1.5-qwen3.8-27b",
+    "contextLength": 84224,
+    "temperature": 0,
+    "seeds": [
+      8101,
+      8102,
+      8103
+    ],
+    "perRunTimeoutSeconds": 100,
+    "summaryTimeoutSeconds": 15,
+    "prompt": "existing audit-pressure fixture, pressure history, controlled profile",
+    "order": [
+      "before",
+      "after",
+      "after",
+      "before",
+      "before",
+      "after"
+    ],
+    "results": {
+      "before": {
+        "runs": 3,
+        "timeoutCount": 3,
+        "completedReports": 0,
+        "returnedLines": {
+          "values": [
+            470,
+            1560,
+            1381
+          ],
+          "median": 1381,
+          "min": 470,
+          "max": 1560
+        },
+        "reacquiredHistoricalLines": {
+          "values": [
+            470,
+            1560,
+            1361
+          ],
+          "median": 1361,
+          "min": 470,
+          "max": 1560
+        },
+        "newSourceLines": {
+          "values": [
+            0,
+            0,
+            20
+          ],
+          "median": 0,
+          "min": 0,
+          "max": 20
+        },
+        "summaryCalls": [
+          1,
+          1,
+          1
+        ],
+        "summaryAccepted": [
+          0,
+          0,
+          0
+        ]
+      },
+      "after": {
+        "runs": 3,
+        "timeoutCount": 3,
+        "completedReports": 0,
+        "returnedLines": {
+          "values": [
+            1770,
+            1110,
+            1110
+          ],
+          "median": 1110,
+          "min": 1110,
+          "max": 1770
+        },
+        "reacquiredHistoricalLines": {
+          "values": [
+            1750,
+            1090,
+            1110
+          ],
+          "median": 1110,
+          "min": 1090,
+          "max": 1750
+        },
+        "newSourceLines": {
+          "values": [
+            20,
+            20,
+            0
+          ],
+          "median": 20,
+          "min": 0,
+          "max": 20
+        },
+        "summaryCalls": [
+          1,
+          1,
+          1
+        ],
+        "summaryAccepted": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "acceptance": "not_met",
+    "interpretation": "Six time-censored runs produced no completed report. Do not claim answer quality, convergence, or halved rereads. These exploratory candidate metrics are not proof of the final post-review build.",
+    "invalidPilot": "Excluded initial auto-scope runs that did not expose the synthetic read provider."
+  },
+  "logDigests": {
+    "node20-compactor-final.log": "f51c812934af9d03ce9e050d33f3a5be18cf16b8a049dca2a578e103c161f3f5",
+    "node20-unreal.log": "d8388c2760a2495445749834c13039e9767eac2d35eb46c83fdc2bbfb4b9a511",
+    "node20-unity.log": "afc3831518162f6561a9a92e30bbaf85f19a1f1f297180607fe6e358c68c30a6",
+    "node20-root.log": "ff697f8518183a3020fd6da5806a78f7924a60774c2aafa294124547d4d03ff1",
+    "python-final.log": "c8f860b2d5d9cf0a3392cbf8de01b81a62fe503c042cb66003a5be1200b95f22",
+    "live-compare.json": "e898ea7d55470b82aa2c42b3898b65e454aeeed683757830ea0f06e2f3d51c7a"
+  },
+  "localRawLogs": "local-audit-artifacts/harness-implementation-20261009",
+  "deployment": "Installed plugin not modified; a running chat has not been demonstrated to use the workspace build."
+}

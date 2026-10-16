@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from editor_export_settings import ExportMode
+from direct_rag_operation import check_operation, RagOperationStopped
+from editor_export_markers import preserve_interrupted_export
 
 
 def choose_export_mode(requested: ExportMode, editor_open: bool) -> ExportMode:
@@ -39,6 +41,7 @@ def execute_export_mode(
 
     def resolved_headless() -> dict[str, Any]:
         nonlocal engine_root, engine_resolution
+        check_operation()
         if engine_root is None:
             engine_resolution = resolve_engine(active_project, workspace)
             if not engine_resolution.get("ok"):
@@ -68,18 +71,34 @@ def execute_export_mode(
             timeout_sec=timeout_sec,
         )
 
+    check_operation()
     if chosen_mode == "request":
         submit_request(job)
-        result = wait_for_markers(
-            export_dir,
-            timeout_sec=min(120, timeout_sec),
-            poll_sec=2.0,
-            expected_run_id=str(job["jobId"]),
-        )
-        if not result.get("ok"):
-            fallback = resolved_headless()
-            fallback.setdefault("fallback", "headless")
-            result = fallback
+        external_pending = True
+        try:
+            result = wait_for_markers(
+                export_dir,
+                timeout_sec=min(120, timeout_sec),
+                poll_sec=2.0,
+                expected_run_id=str(job["jobId"]),
+            )
+            # A timeout is not proof that the Editor stopped publishing. Only
+            # a terminal marker for this job permits headless fallback.
+            external_pending = result.get("runId") != str(job["jobId"])
+            if external_pending:
+                raise RagOperationStopped("EDITOR_EXPORT_JOB_UNCONFIRMED", termination_confirmed=False)
+            check_operation()
+            if not result.get("ok"):
+                fallback = resolved_headless()
+                fallback.setdefault("fallback", "headless")
+                result = fallback
+        except RagOperationStopped as exc:
+            if external_pending:
+                preserve_interrupted_export(export_dir, str(job["jobId"]))
+                exc.termination_confirmed = False
+                exc.termination_scope = "external_editor_job"
+                exc.preserved_scratch = [str(export_dir)]
+            raise
     else:
         result = resolved_headless()
     return result, engine_root, engine_resolution

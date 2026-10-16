@@ -16,6 +16,7 @@ from direct_rag_refresh_recovery import (
     recover_interrupted_refresh as _recover_interrupted_refresh,
 )
 from index_inputs import FORBIDDEN_RAW_INPUT_FILES, RAW_INPUT_FILES
+from direct_rag_operation import begin_publication, collector_cleanup_safe
 
 
 COLLECTOR_OUTPUTS = (
@@ -118,7 +119,7 @@ def commit_refresh_stage(
     required_files: tuple[str, ...] | None = None,
     prune_files: tuple[str, ...] = (),
     prune_directories: tuple[str, ...] = (),
-) -> None:
+) -> dict:
     """Promote all validated refresh files with rollback on promotion failure."""
 
     stage = stage.resolve()
@@ -155,7 +156,8 @@ def commit_refresh_stage(
         if (stage / name).exists() or name in prune_names
     )
     previous_names = tuple(name for name in planned_names if (target / name).exists())
-    swap_refresh_generation(
+    begin_publication()
+    return swap_refresh_generation(
         stage,
         target,
         planned_names,
@@ -172,7 +174,7 @@ def recover_interrupted_refresh(index_dir: Path) -> dict:
 
 
 def discard_refresh_stage(stage: Path | None) -> None:
-    if stage is not None:
+    if stage is not None and collector_cleanup_safe(stage):
         shutil.rmtree(stage, ignore_errors=True)
 
 

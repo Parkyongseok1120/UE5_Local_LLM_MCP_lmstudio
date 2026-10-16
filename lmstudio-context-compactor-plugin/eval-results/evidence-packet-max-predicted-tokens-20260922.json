@@ -1,0 +1,161 @@
+{
+  "mode": "codegen",
+  "claims": [
+    {
+      "claim": "검토 SHA e7f4d856의 직접 원인은 일반 라운드에서 measureContext가 output reserve를 예산에 반영하면서도 실제 .act 호출에는 maxTokens를 전달하지 않아 예약량과 생성 상한 계약이 분리된 것이었습니다. 현재 수정은 같은 측정 결과에서 명시적 generation cap을 전달합니다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "git show e7f4d85651a7654c6b247c038463d4e331247a2d:lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+          "observation": "기준 SHA의 일반 라운드는 measureContext에 outputReserve를 사용했지만 runOneToolRound 호출 옵션은 빈 객체였고, finalizing 경로에서만 maxTokens가 전달되었습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1559",
+          "observation": "현재 모든 prediction round가 runOneToolRound에 { maxTokens: roundOutputReserve }를 전달하고, context measurement telemetry에 requested/applied cap과 capSource를 기록합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:1260",
+          "observation": "일반 라운드의 receivedOptions.maxTokens와 direct_context_measurement의 outputReserve/requestedMaxTokens/appliedMaxTokens가 모두 3072로 일치하는 회귀가 통과했습니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1083", "symbol": "measureRoundInput -> measureContext" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/context-budget.ts:14", "symbol": "resolveGenerationBudget" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1559", "symbol": "runOneToolRound explicit maxTokens" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1314", "symbol": "direct_context_measurement cap telemetry" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "C:\\Users\\sster\\.lmstudio\\extensions\\plugins\\codex\\unreal-context-compactor\\.lmstudio\\production.js",
+          "observation": "설치본은 새 source/dist와 fingerprint가 다르고 outputRecoveryMode marker가 없어 이 작업의 수정이 설치본이나 활성 채팅에 아직 적용됐다고 볼 수 없습니다."
+        },
+        {
+          "kind": "runtime",
+          "location": "LM Studio direct audit-pressure pilot A, 2026-09-22",
+          "observation": "실모델 실행은 첫 A pilot에서 240014ms host/channel timeout과 userStopped로 끝나 요청-결과 비교를 완료하지 못했습니다."
+        }
+      ],
+      "unknowns": [
+        "활성 채팅이 어떤 plugin entry/fingerprint를 로드했는지는 host-owned 상태라 source 파일만으로 확인하지 못했습니다.",
+        "실제 모델에서 cap 정합성이 완주율을 얼마나 개선하는지는 아직 측정하지 않았습니다."
+      ]
+    },
+    {
+      "claim": "일반 모드에서 visible report가 실제 maxPredictedTokensReached로 잘린 경우에만 기존 근거를 다시 입력하는 tools=[] 최종 보고 rewrite를 최대 1회 허용하고, reasoning-only·tool-argument 잘림·취소·BOUNDED final에는 적용하지 않습니다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1598-1743",
+          "observation": "predictionUsage와 outputLimitStage를 분리하고 visible_report 조건에서만 output_recovery를 예약하며, recovery는 tools=[]·finalizationAttempts 최대 1회 경계 안에서 처리합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:1293-1424",
+          "observation": "visible output limit -> 한 번의 tool-free rewrite, recovery 자체 재잘림 -> 반복 없음, reasoning-only와 tool-argument limit -> recovery 없음 및 단계 분리 회귀가 통과했습니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/availability-eval.test.cjs:201-292",
+          "observation": "평가기는 output_recovery를 단일 terminal delivery로 선택하고 BOUNDED finalization과 별도로 구조 검증합니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:66-170", "symbol": "predictionUsage fragment/tool-argument accounting" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:851", "symbol": "classifyOutputLimitStage and canRecoverOutputLimit" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1714", "symbol": "output_recovery_scheduled" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1666", "symbol": "output_recovery telemetry" }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "LM Studio direct audit-pressure pilot A, 2026-09-22",
+          "observation": "실모델 A/B/C/D 비교는 host/channel timeout으로 첫 pilot 뒤 중단되어 recovery 후 완주율 개선을 입증하지 못했습니다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델의 reasoning-visible 경계가 SDK fragment telemetry로 모두 분류되는지는 모델별로 확인되지 않았습니다.",
+        "추가 recovery 호출의 실제 token/time 비용 분포와 유효 보고 정확도는 실모델 비교가 필요합니다."
+      ]
+    },
+    {
+      "claim": "평가 wrapper의 researchMaxTokens 기본 1800은 제품 호출 상한을 몰래 대체하지 않도록 명시적인 제품 maxOutputReserve로 연결되고, output recovery terminal block도 평가 대상에 포함됩니다.",
+      "claimType": "data_flow",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:229-307",
+          "observation": "researchMaxTokens가 compactorConfig.maxOutputReserve에 연결되고 fixedModel은 options.maxTokens가 있을 때만 전달하며, 기본 숨은 1800 fallback을 제거했습니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/availability-eval.test.cjs:195-292",
+          "observation": "recovery 선택·완료 분류와 bounded/non-bounded 구조 계약 회귀가 전체 compactor 테스트에서 통과했습니다."
+        }
+      ],
+      "behaviorPath": [
+        { "stage": "entry", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:496", "symbol": "--research-max-tokens" },
+        { "stage": "decision", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:229", "symbol": "researchMaxTokens -> maxOutputReserve" },
+        { "stage": "dispatch", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:277", "symbol": "fixedModel forwards product options.maxTokens" },
+        { "stage": "observer", "stageStatus": "present", "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:447", "symbol": "selectVisibleAnswer includes outputRecoveries" }
+      ],
+      "counterEvidence": [],
+      "unknowns": [
+        "실제 wrapper를 설치본에서 실행한 결과 파일은 host/channel timeout 때문에 생성되지 않았습니다."
+      ]
+    }
+  ],
+  "existing": [
+    "기존 measureContext/selectSoftCompaction/selectMeasuredCandidate와 checkpoint/continuity/stateMemory",
+    "기존 input-availability, tool-scope/isObservationOnlyToolCall, VersionControl page/byteBudget/cursor/lookup",
+    "기존 BOUNDED final 최대 1회와 schema/raw-tool hardening"
+  ],
+  "proposed": [
+    "reserve와 실제 .act maxTokens를 연결하는 작은 generation budget resolver",
+    "prediction fragment·tool argument·visible output 단계별 telemetry",
+    "일반 visible report에 한정한 단일 tools=[] output recovery와 evaluator terminal selection"
+  ],
+  "doNotDuplicate": [
+    "새 InvestigationState, Planner, 강제 evidence-debt 상태머신",
+    "도구 인수 재생성, mutation/build 재실행, raw XML을 실행으로 변환하는 복구",
+    "BOUNDED final 정책 확대와 pageHasMore 자동 task gate"
+  ],
+  "invariants": [
+    "명시적 maxTokens는 같은 호출의 측정된 input/headroom 예산과 일치해야 합니다.",
+    "output recovery는 일반 visible report 잘림에서 최대 1회이며 tools=[]입니다.",
+    "reasoning-only·tool-argument 잘림·취소·BOUNDED 제한은 output recovery로 변환하지 않습니다.",
+    "부분 출력은 GUI에 보존하되 cut-off prose를 recovery 입력에 재주입하지 않습니다.",
+    "실모델 개선율과 활성 채팅 적용 여부는 직접 검증 전까지 UNPROVEN입니다."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/context-budget.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/round-loop.ts",
+    "lmstudio-context-compactor-plugin/src/direct-config.ts",
+    "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs",
+    "lmstudio-context-compactor-plugin/scripts/eval-bounded-completion.cjs",
+    "lmstudio-context-compactor-plugin/scripts/eval-input-availability-ab.cjs",
+    "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+    "lmstudio-context-compactor-plugin/test/availability-eval.test.cjs"
+  ],
+  "validationPlan": [
+    "npm test in lmstudio-context-compactor-plugin",
+    "python -m pytest -q at repository root",
+    "Unity and Unreal package test suites",
+    "lms ps --json and installed source/dist/entry fingerprint comparison",
+    "LM Studio direct model pressure run with output cap recorded; timeout remains an explicit unknown"
+  ]
+}

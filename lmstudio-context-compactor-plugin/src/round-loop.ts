@@ -8,16 +8,68 @@ import {
 } from "@lmstudio/sdk";
 
 type TokenSource = LLM | LLMGeneratorHandle;
+export type RoundToolGuard = (...args: [...Parameters<NonNullable<LLMActionOpts["guardToolCall"]>>, AbortSignal?]) => ReturnType<NonNullable<LLMActionOpts["guardToolCall"]>>;
+
+/** A normal tool handoff completes this prediction and consumes its input.
+ * It does not deliver a final report. Truncation callbacks are not completion. */
+export function isCompletedPredictionReason(reason?: string): boolean {
+  return reason === "eosFound" || reason === "stopStringFound" || reason === "toolCalls";
+}
+
+const RAW_TOOL_INTENT_PATTERN = /<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu;
+const RAW_TOOL_INTENT_CARRY_CHARS = 96;
 
 type RoundCallbacks = {
   onToolCallRequestFinalized: NonNullable<LLMActionOpts["onToolCallRequestFinalized"]>;
-  guardToolCall: NonNullable<LLMActionOpts["guardToolCall"]>;
+  guardToolCall: RoundToolGuard;
+  onPromptProcessingProgress?: NonNullable<LLMActionOpts["onPromptProcessingProgress"]>;
+  onFirstToken?: NonNullable<LLMActionOpts["onFirstToken"]>;
+  onPredictionFragment?: NonNullable<LLMActionOpts["onPredictionFragment"]>;
+  onToolCallRequestStart?: NonNullable<LLMActionOpts["onToolCallRequestStart"]>;
+  onToolCallRequestNameReceived?: NonNullable<LLMActionOpts["onToolCallRequestNameReceived"]>;
+  onToolCallRequestArgumentFragmentGenerated?: NonNullable<LLMActionOpts["onToolCallRequestArgumentFragmentGenerated"]>;
+  onToolCallRequestEnd?: NonNullable<LLMActionOpts["onToolCallRequestEnd"]>;
+  onToolCallRequestFailure?: NonNullable<LLMActionOpts["onToolCallRequestFailure"]>;
+  onMessageCaptured?: (message: ChatMessage) => void;
+  captureUnparsedToolRequest?: boolean;
+  abortAfterPredictionFragment?: (fragment: Parameters<NonNullable<LLMActionOpts["onPredictionFragment"]>>[0]) => Error | undefined;
 };
 
 export type CapturedRound = {
+  predictionCompleted: boolean;
   messages: Array<ChatMessage>;
   continueAfterTools: boolean;
   failure?: unknown;
+  toolRequestFailure?: { kind: "unparsed_request"; rawContentChars: number | null };
+  finishReason?: string;
+  predictionStats?: {
+    stopReason: string;
+    promptTokensCount?: number;
+    predictedTokensCount?: number;
+    totalTokensCount?: number;
+  };
+  timing: {
+    actElapsedMs: number;
+    promptProcessingMs: number | null;
+  };
+  predictionUsage: {
+    fragmentCount: number;
+    reasoningTokensCount: number;
+    visibleTokensCount: number;
+    visibleChars: number;
+    rawToolIntentCandidate: boolean;
+    rawToolIntentFirstFragment: number | null;
+    rawToolIntentFirstVisibleChar: number | null;
+    structuralTokensCount: number;
+    toolArgumentChars: number;
+    toolArgumentTokensCount: number | null;
+    unattributedTokensCount: number | null;
+    sdkToolRequestStartedCount: number;
+    sdkToolRequestNamedCount: number;
+    sdkToolRequestEndedCount: number;
+    sdkToolRequestFinalizedCount: number;
+    sdkToolRequestFailureCount: number;
+  };
 };
 
 export async function runOneToolRound(
@@ -26,7 +78,10 @@ export async function runOneToolRound(
   tools: Array<Tool>,
   parentSignal: AbortSignal,
   callbacks: RoundCallbacks,
+  predictionOptions: Pick<LLMActionOpts, "maxTokens"> = {},
 ): Promise<CapturedRound> {
+  const actStartedAt = Date.now();
+  let firstTokenAt: number | null = null;
   const messages: Array<ChatMessage> = [];
   const roundAbort = new AbortController();
   const boundaryReason = new Error("LM Studio context-compactor round boundary");
@@ -34,6 +89,31 @@ export async function runOneToolRound(
   let hasToolResults = false;
   let boundaryRequested = false;
   let failure: unknown;
+  let unparsedToolRequestError: unknown;
+  let unparsedArgumentChars: number | null = null;
+  let finishReason: string | undefined;
+  let predictionStats: CapturedRound["predictionStats"];
+  let fragmentAbortReason: Error | undefined;
+  let visibleFragmentTail = "";
+  let closed = false;
+  const predictionUsage = {
+    fragmentCount: 0,
+    reasoningTokensCount: 0,
+    visibleTokensCount: 0,
+    visibleChars: 0,
+    rawToolIntentCandidate: false,
+    rawToolIntentFirstFragment: null as number | null,
+    rawToolIntentFirstVisibleChar: null as number | null,
+    structuralTokensCount: 0,
+    toolArgumentChars: 0,
+    toolArgumentTokensCount: null as number | null,
+    unattributedTokensCount: null as number | null,
+    sdkToolRequestStartedCount: 0,
+    sdkToolRequestNamedCount: 0,
+    sdkToolRequestEndedCount: 0,
+    sdkToolRequestFinalizedCount: 0,
+    sdkToolRequestFailureCount: 0,
+  };
 
   const forwardAbort = () => {
     if (!roundAbort.signal.aborted) roundAbort.abort(parentSignal.reason);
@@ -42,28 +122,164 @@ export async function runOneToolRound(
   else parentSignal.addEventListener("abort", forwardAbort, { once: true });
 
   try {
+    const { onMessageCaptured, abortAfterPredictionFragment, onFirstToken, captureUnparsedToolRequest, ...actCallbacks } = callbacks;
+    const handleInvalidToolRequest: LLMActionOpts["handleInvalidToolRequest"] = (error, request) => {
+      if (closed) return undefined;
+      // Preserve the SDK's result for a parsed request rejected by its schema.
+      if (request !== undefined) return error.message;
+      // No request exists to execute or attach a synthetic result to. Let the
+      // prediction end normally so its stop reason survives; stop at our round
+      // boundary after collecting any already-running peers' returned results.
+      unparsedToolRequestError = error;
+      unparsedArgumentChars = typeof error.rawContent === "string" ? error.rawContent.length : null;
+      return undefined;
+    };
     await tokenSource.act(history, tools, {
       signal: roundAbort.signal,
-      ...callbacks,
+      ...predictionOptions,
+      ...actCallbacks,
+      guardToolCall: (...args) => {
+        if (closed || roundAbort.signal.aborted) { args[2].deny("Tool round is closed."); return; }
+        return actCallbacks.guardToolCall(...args, roundAbort.signal);
+      },
+      onPromptProcessingProgress: (...args) => {
+        if (!closed) actCallbacks.onPromptProcessingProgress?.(...args);
+      },
+      ...(captureUnparsedToolRequest ? { handleInvalidToolRequest } : {}),
+      onFirstToken: (...args) => {
+        if (closed) return;
+        firstTokenAt ??= Date.now();
+        onFirstToken?.(...args);
+      },
+      onPredictionFragment: (fragment) => {
+        if (closed) return;
+        firstTokenAt ??= Date.now();
+        const tokensCount = Number(fragment.tokensCount);
+        predictionUsage.fragmentCount += 1;
+        if (Number.isFinite(tokensCount) && tokensCount >= 0) {
+          if (fragment.reasoningType === "reasoning") predictionUsage.reasoningTokensCount += tokensCount;
+          else if (fragment.isStructural || fragment.reasoningType === "reasoningStartTag"
+            || fragment.reasoningType === "reasoningEndTag") predictionUsage.structuralTokensCount += tokensCount;
+          else predictionUsage.visibleTokensCount += tokensCount;
+        }
+        if (fragment.reasoningType !== "reasoning" && !fragment.isStructural
+          && fragment.reasoningType !== "reasoningStartTag" && fragment.reasoningType !== "reasoningEndTag") {
+          const visibleContent = String(fragment.content || "");
+          const visibleCharsBeforeFragment = predictionUsage.visibleChars;
+          predictionUsage.visibleChars += visibleContent.length;
+          const candidate = `${visibleFragmentTail}${visibleContent}`;
+          const rawMatch = RAW_TOOL_INTENT_PATTERN.exec(candidate);
+          if (rawMatch) {
+            predictionUsage.rawToolIntentCandidate = true;
+            predictionUsage.rawToolIntentFirstFragment ??= predictionUsage.fragmentCount;
+            predictionUsage.rawToolIntentFirstVisibleChar ??= Math.max(0,
+              visibleCharsBeforeFragment - visibleFragmentTail.length + rawMatch.index);
+          }
+          visibleFragmentTail = candidate.slice(-RAW_TOOL_INTENT_CARRY_CHARS);
+        }
+        actCallbacks.onPredictionFragment?.(fragment);
+        const reason = abortAfterPredictionFragment?.(fragment);
+        if (reason && !roundAbort.signal.aborted) {
+          fragmentAbortReason = reason;
+          roundAbort.abort(reason);
+        }
+      },
+      onToolCallRequestArgumentFragmentGenerated: (roundIndex, callId, content) => {
+        if (closed) return;
+        predictionUsage.toolArgumentChars += String(content || "").length;
+        actCallbacks.onToolCallRequestArgumentFragmentGenerated?.(roundIndex, callId, content);
+      },
+      onToolCallRequestStart: (...args) => {
+        if (closed) return;
+        predictionUsage.sdkToolRequestStartedCount += 1;
+        actCallbacks.onToolCallRequestStart?.(...args);
+      },
+      onToolCallRequestNameReceived: (...args) => {
+        if (closed) return;
+        predictionUsage.sdkToolRequestNamedCount += 1;
+        actCallbacks.onToolCallRequestNameReceived?.(...args);
+      },
+      onToolCallRequestEnd: (...args) => {
+        if (closed) return;
+        predictionUsage.sdkToolRequestEndedCount += 1;
+        actCallbacks.onToolCallRequestEnd?.(...args);
+      },
+      onToolCallRequestFailure: (...args) => {
+        if (closed) return;
+        predictionUsage.sdkToolRequestFailureCount += 1;
+        actCallbacks.onToolCallRequestFailure?.(...args);
+      },
+      onToolCallRequestFinalized: (...args) => {
+        if (closed) return;
+        predictionUsage.sdkToolRequestFinalizedCount += 1;
+        actCallbacks.onToolCallRequestFinalized?.(...args);
+      },
+      onPredictionCompleted: (result) => {
+        if (closed) return;
+        const stats = (result as { stats?: {
+          stopReason?: unknown;
+          promptTokensCount?: unknown;
+          predictedTokensCount?: unknown;
+          totalTokensCount?: unknown;
+        } }).stats;
+        finishReason = String(stats?.stopReason || "unknown");
+        const finite = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : undefined;
+        predictionStats = {
+          stopReason: finishReason,
+          ...(finite(stats?.promptTokensCount) === undefined ? {} : { promptTokensCount: finite(stats?.promptTokensCount) }),
+          ...(finite(stats?.predictedTokensCount) === undefined ? {} : { predictedTokensCount: finite(stats?.predictedTokensCount) }),
+          ...(finite(stats?.totalTokensCount) === undefined ? {} : { totalTokensCount: finite(stats?.totalTokensCount) }),
+        };
+      },
       onMessage: (message) => {
+        if (closed) return;
         messages.push(message);
+        onMessageCaptured?.(message);
         if (message.getToolCallResults().length > 0) hasToolResults = true;
       },
       onRoundEnd: () => {
+        if (closed) return;
         if (!hasToolResults || roundAbort.signal.aborted) return;
         boundaryRequested = true;
         roundAbort.abort(boundaryReason);
       },
     });
   } catch (error) {
-    if (!(boundaryRequested && error === boundaryReason)) failure = error;
+    if (!(boundaryRequested && error === boundaryReason) && error !== fragmentAbortReason) failure = error;
   } finally {
+    closed = true;
     parentSignal.removeEventListener("abort", forwardAbort);
+    // Release round-owned work on every exit. Closing is not a finish reason.
+    if (!roundAbort.signal.aborted) roundAbort.abort(boundaryReason);
   }
 
+  // A transport error or external cancellation retains precedence over a
+  // parser failure. Never reclassify either as a recoverable generation.
+  if (failure === undefined && unparsedToolRequestError !== undefined) failure = unparsedToolRequestError;
+
   return {
-    messages,
+    predictionCompleted: Boolean(predictionStats && !fragmentAbortReason && !parentSignal.aborted
+      && failure === undefined && isCompletedPredictionReason(predictionStats.stopReason)),
+    messages: [...messages],
     continueAfterTools: boundaryRequested,
+    ...(fragmentAbortReason ? { finishReason: "generation_repetition_paused" }
+      : finishReason === undefined ? {} : { finishReason }),
+    ...(predictionStats ? { predictionStats } : {}),
+    ...(unparsedToolRequestError !== undefined && failure === unparsedToolRequestError
+      ? { toolRequestFailure: { kind: "unparsed_request" as const, rawContentChars: unparsedArgumentChars } } : {}),
+    predictionUsage: {
+      ...predictionUsage,
+      unattributedTokensCount: predictionStats?.predictedTokensCount === undefined
+        ? null
+        : Math.max(0, predictionStats.predictedTokensCount
+          - predictionUsage.reasoningTokensCount
+          - predictionUsage.visibleTokensCount
+          - predictionUsage.structuralTokensCount),
+    },
+    timing: {
+      actElapsedMs: Math.max(0, Date.now() - actStartedAt),
+      promptProcessingMs: firstTokenAt === null ? null : Math.max(0, firstTokenAt - actStartedAt),
+    },
     ...(failure === undefined ? {} : { failure }),
   };
 }

@@ -1,0 +1,8 @@
+{
+  "scope": "isolated runtime modelInputId fix, relative to prior working-tree policy",
+  "patchSha256": "0acadfbf4ec93edf266a18d158249d71d6d128a9d99cf572a70daaa5daf9621f",
+  "files": {
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts": "c5bc6bbd31c3253cd99976ceb8fe661471006e8faa616f5e0abc1b43d808fec2",
+    "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs": "c7468ca4c47e4d7903ab04fffa25028140c7fdf6ce1208de59f274163b85ccab"
+  }
+}

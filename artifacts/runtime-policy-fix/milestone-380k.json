@@ -1,0 +1,26 @@
+{
+  "observedAt": "2026-09-25T16:14:10.061612+09:00",
+  "firstCrossingRound": {
+    "modelInputId": "ea950628-1319-49c3-9cdc-fffb4833c728:prediction-26",
+    "roundIndex": 25,
+    "beforeExactInput": 17425,
+    "finalExactInput": 16398,
+    "compacted": true,
+    "configuredLow": 12672,
+    "effectiveLow": 16398,
+    "high": 16896,
+    "mandatoryFloor": 16398,
+    "generationReserve": 8192,
+    "hardCeiling": 28672,
+    "toolSchemaTokens": 10406,
+    "backendPromptTokens": 16398,
+    "prefillMs": 23076,
+    "finishReason": "toolCalls",
+    "postCompactionCumulative": 393680
+  },
+  "model": "swift-qwen3.8-27b",
+  "contextLength": 38912,
+  "runtimeRevision": 115,
+  "metric": "sum of exact templated inputs of completed actual research/report predictions; after first real compaction",
+  "criterion": "quantity only; correctness and final delivery assessed separately"
+}

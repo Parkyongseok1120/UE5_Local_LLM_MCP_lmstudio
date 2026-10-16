@@ -1,0 +1,494 @@
+{
+  "mode": "architecture",
+  "scope": {
+    "date": "2026-10-07",
+    "baselineCommit": "78abd7fee5a1172b7bdb4d5e99c0dc3f51afbef8",
+    "root": ".",
+    "implementation": true,
+    "installedRuntimeModified": false,
+    "proofBoundary": "repository automated tests; no live model/Editor validation"
+  },
+  "claims": [
+    {
+      "id": "I01",
+      "claim": "참고용 엔진 관측은 Auto의 다음 입력에 반영되지만 실행 도구의 명시 project target을 재결속하지 않는다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "observation": "ingestReferenceObservations"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "observation": "referenceGuidanceScope"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "observation": "참고 후보 구성"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "Auto adopts returned engine guidance: A 조회 후 B 읽기 target 유지"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/tool-scope.test.cjs",
+          "observation": "invalid explicit auto identity: 잘못된 config 출처 혼합 방지"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Responsibility_Lifecycle_Plan_20261007.md",
+          "observation": "선택 설정이나 반환 target은 Editor 연결·버전·변경 권한을 증명하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "symbol": "ingestReferenceObservations"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "symbol": "referenceGuidanceScope"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "symbol": "참고 후보 구성"
+        }
+      ],
+      "unknowns": [
+        "선택 설정이나 반환 target은 Editor 연결·버전·변경 권한을 증명하지 않는다."
+      ]
+    },
+    {
+      "id": "I02",
+      "claim": "종료된 round의 callback과 늦게 완료된 승인은 현재 UI/trace/반환 메시지를 변경하거나 실행을 재개하지 않는다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "observation": "runOneToolRound"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+          "observation": "승인 전후 round signal 검사"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "observation": "finally fence와 반환 snapshot"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/tool-round-lifecycle.test.cjs",
+          "observation": "모든 종료 경로의 late SDK callback 격리"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/tool-approval.test.cjs",
+          "observation": "round 종료 후 승인 응답의 실행 재개 및 상태 갱신 방지"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Responsibility_Lifecycle_Plan_20261007.md",
+          "observation": "미수신 SDK peer 결과 회수와 provider 내부 작업의 협력적 취소는 후속 범위다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "symbol": "runOneToolRound"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+          "symbol": "승인 전후 round signal 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+          "symbol": "finally fence와 반환 snapshot"
+        }
+      ],
+      "unknowns": [
+        "미수신 SDK peer 결과 회수와 provider 내부 작업의 협력적 취소는 후속 범위다."
+      ]
+    },
+    {
+      "id": "I03",
+      "claim": "공유 예약 실패 이유를 구분하고 Unreal Direct 소스 읽기의 JSON UTF-8 envelope를 제한하면서 기존 Git compact JSON byteBudget 계약을 유지한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+          "observation": "reserveReadResult"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-server.js",
+          "observation": "direct-json-text-utf8 계약 구분"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-response.js",
+          "observation": "boundedJson 직렬화"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/direct-server.test.js",
+          "observation": "UTF-8/escaping/CRLF/온전한 줄/긴 오류/Git byteBudget 검증"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/tool-round-lifecycle.test.cjs",
+          "observation": "held 부족/overrun/혼합 허용 거부 구분"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Responsibility_Lifecycle_Plan_20261007.md",
+          "observation": "예약 allowance는 보수적 추정치다. 정확한 모델 토큰 측정은 기존 최종 입력 admission이 담당한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+          "symbol": "reserveReadResult"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-server.js",
+          "symbol": "direct-json-text-utf8 계약 구분"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-response.js",
+          "symbol": "boundedJson 직렬화"
+        }
+      ],
+      "unknowns": [
+        "예약 allowance는 보수적 추정치다. 정확한 모델 토큰 측정은 기존 최종 입력 admission이 담당한다."
+      ]
+    },
+    {
+      "id": "I04",
+      "claim": "현재 프로젝트와 버전의 출처·수명을 구분하고 descriptor/session/root manifest 변화 및 동일 배치 충돌 뒤 적용 가능성을 재평가한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "observation": "ingestReferenceObservations"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "observation": "descriptor/session/manifest 무효화"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "observation": "referenceSnapshot 표시 상한 이전 충돌 계산"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/reference-context.test.cjs",
+          "observation": "버전 충돌, disconnect, descriptor와 engine 관측 순서, root manifest, 과거 project 진단, pre-binding 인자 검증"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Responsibility_Lifecycle_Plan_20261007.md",
+          "observation": "엔진 관측에 descriptor fingerprint가 없으면 새 descriptor 관측은 재확인을 요구한다. 전체 mixed-engine partition은 미구현이다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "symbol": "ingestReferenceObservations"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "symbol": "descriptor/session/manifest 무효화"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts",
+          "symbol": "referenceSnapshot 표시 상한 이전 충돌 계산"
+        }
+      ],
+      "unknowns": [
+        "엔진 관측에 descriptor fingerprint가 없으면 새 descriptor 관측은 재확인을 요구한다. 전체 mixed-engine partition은 미구현이다."
+      ]
+    },
+    {
+      "id": "I05",
+      "claim": "Auto의 API/매크로 요청 인식 및 엔진 지침 선택을 보강하고 설치 엔진 선언의 여러 줄 annotation을 lexical 수준으로 함께 반환한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/guidance-topic-selection.ts",
+          "observation": "selectGuidanceIntent/selectGuidanceTopics"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts",
+          "observation": "autoGuidanceCandidates"
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "observation": "예산 내 선택적 지침 채택"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/auto-guidance.test.cjs",
+          "observation": "API/매크로 intent와 Unreal/Unity pack 선택"
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_engine_header_evidence_identity.py",
+          "observation": "여러 줄 UFUNCTION 및 문자열·주석 괄호의 선언 발췌"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/reference-context.test.cjs",
+          "observation": "현재 실제 본문만 advisory signal로 사용"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Responsibility_Lifecycle_Plan_20261007.md",
+          "observation": "lexical 후보는 의미 분석이 아니다. 누락 매크로 자동 판정, 실제 수명 검증, 모델 준수율 향상은 보장하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/guidance-topic-selection.ts",
+          "symbol": "selectGuidanceIntent/selectGuidanceTopics"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts",
+          "symbol": "autoGuidanceCandidates"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "symbol": "예산 내 선택적 지침 채택"
+        }
+      ],
+      "unknowns": [
+        "lexical 후보는 의미 분석이 아니다. 누락 매크로 자동 판정, 실제 수명 검증, 모델 준수율 향상은 보장하지 않는다."
+      ]
+    },
+    {
+      "id": "I06",
+      "claim": "설치 smoke가 저장소 정본과 대상 evidence 서버의 schema 및 validation policy 불일치를 실패로 보고한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
+          "observation": "대상 MCP 서버 실행과 계약 조회"
+        },
+        {
+          "kind": "project_source",
+          "location": "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
+          "observation": "contract_compatible 비교"
+        },
+        {
+          "kind": "project_source",
+          "location": "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
+          "observation": "contractCompatible 및 기대/관측 version 출력"
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_evidence_first_mcp.py",
+          "observation": "격리된 0.0.0 계약 서버는 smoke 실패"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Responsibility_Lifecycle_Plan_20261007.md",
+          "observation": "이 비교는 실행 중인 LM Studio의 새 plugin 로드 증명이 아니다. 설치본은 변경하지 않았다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
+          "symbol": "대상 MCP 서버 실행과 계약 조회"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
+          "symbol": "contract_compatible 비교"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
+          "symbol": "contractCompatible 및 기대/관측 version 출력"
+        }
+      ],
+      "unknowns": [
+        "이 비교는 실행 중인 LM Studio의 새 plugin 로드 증명이 아니다. 설치본은 변경하지 않았다."
+      ]
+    }
+  ],
+  "existing": [
+    "ToolScope/ToolBoundary 실행 결속과 권한",
+    "EvidenceManager 실행 내 관측",
+    "BudgetBroker 라운드 예약과 ContextManager 정확 입력 fit",
+    "round-loop SDK callback/signal 수명",
+    "provider 읽기/serializer와 mutation receipt",
+    "guidance Markdown 정본/생성 번들",
+    "evidence_packet_contract schema/policy 정본"
+  ],
+  "proposed": [],
+  "doNotDuplicate": [
+    "전역 프로젝트·판단 DB",
+    "추가 판단 모델/자동 subagent 실행기",
+    "새 필수 static 품질 gate",
+    "provider 외부 cursor/파일 버전 소유자",
+    "별도 수동 guidance bundle"
+  ],
+  "invariants": [
+    "참고 관측은 실행 인자와 승인 권한을 바꾸지 않는다.",
+    "종료 후 callback은 확정 결과를 수정하지 않는다.",
+    "byte 계약과 JSON 구문을 함께 지킨다.",
+    "lexical/partial/historical 관측을 semantic/complete/current 증거로 승격하지 않는다.",
+    "OFF 기본값과 최종 정확 입력 admission을 유지한다."
+  ],
+  "impactedSurfaces": [
+    "compactor scope/round/guard/budget/reference/selection/input/tests",
+    "Unreal Direct catalog/read/serializer/tests",
+    "engine-local lexical declaration excerpt/tests",
+    "guidance Markdown/generated bundle/sources",
+    "installer evidence smoke/tests"
+  ],
+  "validationPlan": [
+    "TypeScript build 및 guidance check",
+    "compactor 전체 및 별도 lifecycle/architecture 회귀",
+    "Unreal Direct 전체 테스트",
+    "Python RAG/설치/Unity integration 및 evidence/engine-header contract 검증",
+    "근거 패킷 구조 검사와 git diff --check",
+    "설치와 live 모델 평가는 후속 범위"
+  ],
+  "independentReview": {
+    "mode": "read_only",
+    "reviewers": [
+      "reference_contract_review",
+      "read_lifecycle_review"
+    ],
+    "resolved": [
+      "표시 상한의 버전 충돌 누락",
+      "과거 project 진단과 pre-binding args 출처",
+      "descriptor/manifest 무효화",
+      "Git compact JSON byteBudget 호환",
+      "오류 envelope",
+      "문자열/주석 괄호",
+      "신규 default allowance 적용 범위"
+    ]
+  },
+  "deferred": [
+    "실제 모델 live 평가",
+    "mixed-engine 전체 partition",
+    "provider 내부 협력적 읽기 취소",
+    "미수신 SDK peer 결과 회수",
+    "정식 C++ 의미 분석"
+  ],
+  "validationResults": {
+    "compactor_full": {
+      "passed": 523,
+      "failed": 0,
+      "log": "artifacts/architecture-plan-20261007/compactor-full-final.log"
+    },
+    "boundaries": {
+      "passed": 23,
+      "failed": 0,
+      "log": "artifacts/architecture-plan-20261007/boundaries-final.log"
+    },
+    "unreal_direct": {
+      "passed": 273,
+      "skipped": 1,
+      "failed": 0,
+      "log": "artifacts/architecture-plan-20261007/unreal-full-final.log"
+    },
+    "python_integration": {
+      "passed": 175,
+      "skipped": 3,
+      "failed": 0,
+      "log": "artifacts/architecture-plan-20261007/python-integration.log"
+    },
+    "python_contracts": {
+      "passed": 26,
+      "failed": 0,
+      "log": "artifacts/architecture-plan-20261007/contracts-final.log"
+    },
+    "guidance_bundle": "passed",
+    "diff_check": "passed",
+    "live_model": "not_run",
+    "installed_runtime": "not_modified",
+    "note": "Groups may overlap; counts are not a model-quality metric."
+  }
+}

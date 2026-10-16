@@ -1,6 +1,9 @@
 "use strict";
+const { resultSemantics, retainedEffectFacts } = require("./tool-result-semantics.js");
 
 const path = require("node:path");
+const { normalizedChange, fileIdentity } = require("./change-evidence-memory.js");
+const { exchangeIndex } = require("./tool-exchange-index.js");
 
 const { clip } = require("./continuity-text.js");
 const {
@@ -82,9 +85,14 @@ function retainedDiagnosticList(value, maxItems = 8, maxChars = 320) {
 function exactProjectIdentity(value) {
   const descriptor = String(value || "");
   const pathApi = pathApiFor(descriptor);
-  if (!descriptor.toLowerCase().endsWith(".uproject") || !pathApi.isAbsolute(descriptor)) return "";
+  if (!pathApi.isAbsolute(descriptor)) return "";
   const resolved = pathApi.resolve(descriptor);
   return pathApi === path.win32 ? resolved.toLowerCase() : resolved;
+}
+
+function hasBoundUnityProject(value) {
+  const root = String(value?.canonicalProjectRoot || "");
+  return Boolean(value?.projectIdentity && pathApiFor(root).isAbsolute(root));
 }
 
 function stripControl(value, depth = 0) {
@@ -106,7 +114,10 @@ function retainedFileFact(file, fallbackOperation = "observed") {
     "path", "operation", "observationState", "sha256", "sha256AtObservation",
     "previousSha256", "previousSha256AtObservation", "canonicalProject",
     "canonicalProjectRoot", "canonicalPath", "absolutePath", "projectRelativePath",
-    "workspaceRelativePath", "resolvedRootType", "errorCode",
+    "workspaceRelativePath", "resolvedRootType", "errorCode", "startLine", "endLine",
+    "returnedLineCount", "nextStartLine", "totalLines", "hasMore", "observedLineRanges",
+    "offsetBytes", "nextOffsetBytes", "size", "sourceCoverage", "provider", "sourceQueryKey", "representation",
+    "totalLinesAtObservation", "readCoverageState", "changeEvidence", "changeReadVerified", "changeEvidenceInvalidated",
   ]) {
     if (file[key] !== undefined) fact[key] = file[key];
   }
@@ -130,29 +141,35 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
     scoped.activeProjectCleared = true;
   }
   if (inconsistentProjectScope) {
-    for (const key of ["activeProject", "projectPath", "project", "canonicalProject"]) delete scoped[key];
+    for (const key of ["activeProject", "projectPath", "project", "canonicalProject", "canonicalProjectRoot", "projectIdentity"]) delete scoped[key];
     scoped.projectScopeState = "omitted_inconsistent_project_scope";
   }
   const hasFileIdentity = Boolean(
     scoped.path || scoped.canonicalPath || scoped.projectRelativePath || scoped.workspaceRelativePath,
   );
+  // An unsuccessful read cannot acquire file identity from the prior active
+  // project or request arguments. Only the resolved result can invalidate it.
+  if (scoped.observationState === "unavailable" && !explicitProject) delete scoped.observationState;
   let retainedObservation = null;
   if (descriptor) {
     scoped.canonicalProject = descriptor;
     scoped.canonicalProjectSource = perCallProject
       ? "tool_request_fact"
-      : (explicitProject ? "tool_result_fact" : fallbackSource);
+      : (explicitProject ? (hasBoundUnityProject(scoped) ? "unity_tool_result_fact" : "tool_result_fact") : fallbackSource);
     retainedObservation = fileObservation(scoped, descriptor);
     if (retainedObservation) {
       scoped.canonicalProjectRoot = retainedObservation.canonicalProjectRoot;
       scoped.canonicalPath = retainedObservation.canonicalPath;
-      scoped.mutationSnapshotState = "fresh_read_required";
+      if (scoped.operation || scoped.sha256 || scoped.previousSha256
+        || scoped.errorCode === "FILE_VERSION_CONFLICT") {
+        scoped.mutationSnapshotState = "fresh_read_required";
+      }
     }
   }
   if (hasFileIdentity && !retainedObservation) {
     for (const key of [
       "path", "canonicalProject", "canonicalProjectRoot", "canonicalPath", "projectRelativePath",
-      "workspaceRelativePath", "sha256", "previousSha256", "lastObservedAt", "mutationSnapshotState",
+      "workspaceRelativePath", "sha256", "previousSha256", "lastObservedAt", "mutationSnapshotState", "changeEvidence",
     ]) delete scoped[key];
     scoped.fileObservationState = "omitted_non_project_scope";
   }
@@ -172,26 +189,202 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
   return sanitizeStructuredDurableValue(scoped);
 }
 
+const MAX_TOOL_RESULT_CONTENT_CHARS = 4 * 1024 * 1024;
+
+function decodeToolResultRecord(content) {
+  let value = content;
+  if (typeof content === "string") {
+    const text = content.trim();
+    if (!text) return { error: "empty" };
+    if (text.length > MAX_TOOL_RESULT_CONTENT_CHARS) return { error: "oversized" };
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return { error: "malformed" };
+    }
+  } else if (!isRecord(content) && !Array.isArray(content)) {
+    return { error: content === null || content === undefined ? "empty" : "unsupported_value" };
+  } else if (JSON.stringify(content).length > MAX_TOOL_RESULT_CONTENT_CHARS) {
+    return { error: "oversized" };
+  }
+
+  const envelopeIsError = isRecord(value) && value.isError === true;
+  // LM Studio serializes MCP CallToolResult.content as an array of content
+  // blocks. File facts live in the JSON string of one text block. Accept only
+  // one unambiguous block so facts from separate results or projects can never
+  // be merged by the continuity layer.
+  if (Array.isArray(value)) {
+    if (value.length !== 1 || !isRecord(value[0]) || value[0].type !== "text"
+      || typeof value[0].text !== "string" || value[0].text.length > MAX_TOOL_RESULT_CONTENT_CHARS) {
+      return { error: "unsupported_envelope" };
+    }
+    try {
+      value = JSON.parse(value[0].text);
+    } catch {
+      return { error: "malformed_embedded_json" };
+    }
+  } else if (isRecord(value) && isRecord(value.structuredContent)) {
+    const structured = value.structuredContent;
+    let conflictingEnvelopeFields = [];
+    if (Array.isArray(value.content) && value.content.length === 1 && value.content[0]?.type === "text") {
+      try {
+        const embedded = JSON.parse(value.content[0].text);
+        if (isRecord(embedded)) conflictingEnvelopeFields = ["ok", "status", "errorCode", "operationId", "projectIdentity",
+          "canonicalProject", "canonicalProjectRoot", "path", "sha256", "hash", "changed", "saved", "dirty"]
+          .filter(key => structured[key] !== undefined && embedded[key] !== undefined
+            && structured[key] !== embedded[key]);
+      } catch { /* A human-readable text summary is not a second structured contract. */ }
+    }
+    if (conflictingEnvelopeFields.length) return { error: "conflicting_envelope" };
+    value = structured;
+  } else if (isRecord(value) && Array.isArray(value.content)) {
+    if (value.content.length !== 1 || !isRecord(value.content[0])
+      || value.content[0].type !== "text" || typeof value.content[0].text !== "string"
+      || value.content[0].text.length > MAX_TOOL_RESULT_CONTENT_CHARS) {
+      return { error: "unsupported_envelope" };
+    }
+    try {
+      value = JSON.parse(value.content[0].text);
+    } catch {
+      return { error: "malformed_embedded_json" };
+    }
+  }
+  return isRecord(value) ? { value: envelopeIsError ? { ...value, envelopeIsError: true } : value } : { error: "unsupported_value" };
+}
+
+function historicalEvidenceObservation(source) {
+  if (!isRecord(source)) return null;
+  const archiveRef = isRecord(source.archiveRef) ? source.archiveRef : source;
+  const evidenceId = typeof archiveRef.evidenceId === "string" ? archiveRef.evidenceId : "";
+  const version = typeof archiveRef.version === "string" ? archiveRef.version : "";
+  if (!/^ev_[a-f0-9]{64}$/u.test(evidenceId) || !/^[a-f0-9]{64}$/u.test(version)) return null;
+  const identity = isRecord(source.sourceIdentity) ? source.sourceIdentity : {};
+  return sanitizeStructuredDurableValue({
+    kind: "historical_evidence_index",
+    ref: evidenceId,
+    evidenceId,
+    version,
+    originalCallId: source.originalCallId,
+    toolName: source.toolName,
+    originalEnvelopeChars: source.originalEnvelopeChars,
+    originalEnvelopeBytes: source.originalEnvelopeBytes,
+    sourceIdentity: identity,
+    sourceIdentityDigest: source.sourceIdentityDigest,
+    sourceFacts: source.sourceFacts,
+    sourceRangeUnit: source.sourceRangeUnit,
+    archiveRangeUnit: source.rangeUnit,
+    representation: source.representation,
+    viewVersion: source.viewVersion,
+    sourceVersion: source.sourceVersion,
+    sourceHash: source.sourceHash,
+    resultStatus: source.resultStatus ?? source.status,
+    errorCode: source.errorCode ?? null,
+    sourceAction: source.sourceAction ?? source.action,
+    sourceSince: source.sourceSince ?? source.since,
+    sourceUntil: source.sourceUntil ?? source.until,
+    sourceAuthorQuery: source.sourceAuthorQuery ?? source.authorQuery,
+    sourceAuthorQuerySemantics: source.sourceAuthorQuerySemantics ?? source.authorQuerySemantics,
+    sourcePageStart: source.sourcePageStart ?? source.pageStart,
+    sourcePageEnd: source.sourcePageEnd ?? source.pageEnd,
+    sourcePageHasMore: source.sourcePageHasMore ?? source.pageHasMore,
+    pageHasMore: source.sourcePageHasMore ?? source.pageHasMore,
+    sourceResultComplete: source.sourceCollectionComplete ?? source.sourceResultComplete,
+    sourceReturnedCount: source.sourceReturnedCount ?? source.returnedCount,
+    sourceTotal: source.sourceTotal ?? source.total,
+    returnedRange: source.sourceRange ?? source.returnedRange,
+    archiveReturnedRange: source.kind === "historical_evidence_range" ? source.returnedRange : undefined,
+    archiveNextOffset: source.kind === "historical_evidence_range" ? source.nextOffset : undefined,
+    archiveHasMore: source.kind === "historical_evidence_range"
+      ? source.archiveHasMore ?? source.hasMore : undefined,
+    archiveReachedEnd: source.kind === "historical_evidence_range"
+      ? source.archiveReachedEnd ?? source.reachedEnd : undefined,
+    availableRange: source.availableRange,
+    archivedRange: Array.isArray(source.archivedRanges) ? source.archivedRanges
+      : source.totalChars !== undefined ? [[0, source.totalChars]] : undefined,
+    projectedRange: Array.isArray(source.projectedRawRanges)
+      ? source.projectedRawRanges : source.returnedRange,
+    projectedBodyRanges: Array.isArray(source.projectedBodyRanges) ? source.projectedBodyRanges : undefined,
+    omittedBodyRanges: Array.isArray(source.omittedBodyRanges) ? source.omittedBodyRanges : undefined,
+    bodyField: source.bodyField,
+    bodyRangeUnit: source.bodyRangeUnit,
+    bodyTotalChars: source.bodyTotalChars,
+    bodyOmittedChars: source.bodyOmittedChars,
+    bodyComplete: source.bodyComplete === true,
+    omittedRange: Array.isArray(source.omittedRanges) ? source.omittedRanges : undefined,
+    redacted: source.redacted === true,
+    currentFile: false,
+    grantsMutation: false,
+  });
+}
+
 function parseToolResult(content) {
-  const text = String(content || "").trim();
-  if (!text) return { summary: "empty tool result" };
+  const decoded = decodeToolResultRecord(content);
+  if (decoded.error === "empty") return { summary: "empty tool result" };
+  if (decoded.error) {
+    return { summary: decoded.error === "malformed" || decoded.error === "malformed_embedded_json"
+      ? "malformed tool result omitted"
+      : "unsupported tool result envelope omitted" };
+  }
   try {
-    const source = stripControl(JSON.parse(text));
+    const source = stripControl(decoded.value);
     const out = {};
+    if (source.kind === "archived_tool_result_projection" || source.kind === "historical_evidence_range") {
+      const historicalEvidence = historicalEvidenceObservation(source);
+      return historicalEvidence ? { historicalEvidence } : { summary: "invalid historical evidence reference omitted" };
+    }
+    // Git comparisons are repository observations, never file read/review coverage.
+    if (source.kind === "git_observation" || source.action && source.comparison && source.canonicalProjectRoot) {
+      const git = {};
+      for (const key of ["action", "comparison", "base", "head", "currentHead", "blobOid", "path",
+        "repositoryIdentity", "workspaceIdentity", "snapshotId", "hasMore", "complete", "incomplete",
+        "pageStart", "pageEnd", "pageHasMore", "sourceResultComplete",
+        "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total", "observedAt", "sourceConsistency", "submoduleWorktrees",
+        "since", "until", "authorQuery", "authorQuerySemantics", "identitySemantics",
+        "queryPathBase", "requestedPathsCount", "requestedPathsOmitted", "requestedPathsSha256",
+        "resolvedRepositoryPathsCount", "resolvedRepositoryPathsOmitted", "resolvedRepositoryPathsSha256"]) {
+        if (source[key] !== undefined) git[key] = source[key];
+      }
+      for (const key of ["requestedPaths", "resolvedRepositoryPaths"]) {
+        if (!Array.isArray(source[key])) continue;
+        git[key] = source[key].slice(0, 8).map(value => String(value).slice(0, 400));
+        const omitted = source[key].length - git[key].length;
+        if (omitted > 0) git[`${key}Omitted`] = Number(git[`${key}Omitted`] || 0) + omitted;
+      }
+      if (Array.isArray(source.items)) {
+        git.items = source.items.slice(0, 8).map(item => Object.fromEntries(
+          ["status", "path", "oldPath", "similarity", "commit", "authoredAt", "authorName", "authorEmail",
+            "committedAt", "committerName", "committerEmail", "subject"].filter(k => item?.[k] !== undefined)
+            .map(k => [k, typeof item[k] === "string" ? item[k].slice(0, 400) : item[k]])));
+        git.sourceOmittedItems = Math.max(0, (decoded.value.items?.length || source.items.length) - git.items.length);
+        git.omittedItems = git.sourceOmittedItems;
+      }
+      out.gitObservation = git;
+      // Commit blob lines are not current-worktree coverage or a write receipt.
+      for (const key of ["status", "canonicalProject", "canonicalProjectRoot", "projectIdentity"])
+        if (source[key] !== undefined) out[key] = source[key];
+      return out;
+    }
     for (const key of [
-      "ok", "status", "summary", "message", "errorCode", "path", "operation", "mode",
+      "ok", "status", "summary", "message", "errorCode", "path", "operation", "observationState", "mode", "changeEvidence",
       "sha256", "previousSha256", "size", "truncated", "hasMore",
-      "startLine", "endLine", "totalLines", "filesScanned", "findingCount",
+      "offsetBytes", "nextOffsetBytes", "sourceCoverage", "provider", "sourceQueryKey", "representation",
+      "startLine", "endLine", "returnedLineCount", "nextStartLine", "totalLines", "filesScanned", "findingCount",
+      "coverage", "filesRead", "filesSkipped", "readErrorCount", "skippedByReason", "discoveryErrorCount", "excludedEntries",
       "validationOk", "blocksBuild", "exitCode", "likelyErrors", "fullLogPath",
       "upToDate", "actionsExecuted", "proofLevel", "failedCount", "succeededCount",
       "claimCount", "errorCount", "warningCount", "errorShapeCount", "warningShapeCount",
       "omittedErrorShapeCount", "omittedWarningShapeCount", "schemaVersion",
       "activeProject", "projectPath", "project", "engineAssociation", "resolvedEngineVersion",
       "requestedEngineAssociation", "resolvedRootType", "projectRelativePath", "workspaceRelativePath",
-      "hashSource", "canonicalProject", "canonicalPath",
+      "hashSource", "canonicalProject", "canonicalProjectRoot", "projectIdentity", "canonicalPath",
+      "observation", "attachmentId", "attachmentName", "attachmentType", "parser",
+      "startOffset", "endOffset", "totalChars", "parsedTextSha256", "rangeUnit",
     ]) {
       if (source[key] !== undefined) out[key] = source[key];
     }
+    Object.assign(out, retainedEffectFacts(source));
+    if (["ok", "status", "errorCode", "resultStatus", "envelopeIsError"].some(key => source[key] !== undefined))
+      out.resultSemantics = resultSemantics(source);
     for (const key of ["errors", "warnings"]) {
       const diagnostics = retainedDiagnosticList(source[key]);
       if (diagnostics.length) out[key] = diagnostics;
@@ -201,7 +394,16 @@ function parseToolResult(content) {
     if (source.absolutePath && out.canonicalPath === undefined) {
       out.canonicalPath = pathApiFor(source.absolutePath).resolve(String(source.absolutePath));
     }
-    if (source.snapshotCapturedAt !== undefined) out.lastObservedAt = source.snapshotCapturedAt;
+    if (hasBoundUnityProject(source) && source.hash !== undefined && out.sha256 === undefined) {
+      out.sha256 = source.hash;
+    }
+    if (hasBoundUnityProject(source) && source.previousHash !== undefined && out.previousSha256 === undefined) {
+      out.previousSha256 = source.previousHash;
+    }
+    if (source.lastObservedAt !== undefined || source.snapshotCapturedAt !== undefined
+      || (hasBoundUnityProject(source) && source.observedAt !== undefined)) {
+      out.lastObservedAt = source.lastObservedAt || source.snapshotCapturedAt || source.observedAt;
+    }
     if (out.path && (out.operation || out.sha256 || out.previousSha256 || out.canonicalPath)) {
       out.mutationSnapshotState = "fresh_read_required";
     }
@@ -220,7 +422,65 @@ function parseToolResult(content) {
   }
 }
 
+function searchRequestFact(request) {
+  const name = String(request?.name || "");
+  if (name !== "search_files" && name !== "unity_find") return null;
+  const args = isRecord(request?.arguments) ? request.arguments : {};
+  const fact = {
+    tool: name,
+    query: typeof args.query === "string" ? args.query.slice(0, 500) : "",
+    matchMode: args.regex === true ? "regex" : "literal",
+    requestedRoot: typeof args.path === "string" ? args.path.slice(0, 500) : undefined,
+    requestedKind: typeof args.kind === "string" ? args.kind.slice(0, 80) : undefined,
+    requestedType: typeof args.type === "string" ? args.type.slice(0, 200) : undefined,
+    extensions: Array.isArray(args.extensions)
+      ? args.extensions.slice(0, 16).map(value => String(value).slice(0, 40)) : undefined,
+    contentSearch: args.content === true,
+    matchFileNames: typeof args.matchFileNames === "boolean" ? args.matchFileNames : undefined,
+    caseSensitive: typeof args.caseSensitive === "boolean" ? args.caseSensitive : undefined,
+    maxResults: Number.isSafeInteger(args.maxResults) ? args.maxResults : undefined,
+    maxFiles: Number.isSafeInteger(args.maxFiles) ? args.maxFiles : undefined,
+    pageContinuationRequested: typeof args.cursor === "string" && args.cursor.length > 0,
+  };
+  return sanitizeStructuredDurableValue(fact);
+}
+
+function searchObservation(requestFact, rawValue, parsed) {
+  if (!requestFact || !isRecord(rawValue)) return null;
+  const resultItems = Array.isArray(rawValue.results)
+    ? rawValue.results : Array.isArray(rawValue.items) ? rawValue.items : null;
+  const matchCount = resultItems ? resultItems.length
+    : Number.isSafeInteger(rawValue.findingCount) ? rawValue.findingCount : null;
+  const partial = rawValue.coverage === "partial" || Number(rawValue.readErrorCount) > 0 || Number(rawValue.filesSkipped) > 0
+    || Number(rawValue.discoveryErrorCount) > 0 || Number(rawValue.excludedEntries) > 0
+    || rawValue.incomplete === true || rawValue.maxFilesReached === true
+    || rawValue.truncated === true || rawValue.hasMore === true || Boolean(rawValue.nextCursor);
+  const explicitlyComplete = rawValue.coverage === "complete" || rawValue.incomplete === false
+    || rawValue.maxFilesReached === false || rawValue.truncated === false || rawValue.hasMore === false;
+  const completeness = partial ? "partial" : explicitlyComplete ? "complete_for_requested_scope" : "unknown";
+  return sanitizeStructuredDurableValue({
+    ...requestFact,
+    matchCount: matchCount === null ? undefined : matchCount,
+    reportedTotal: Number.isSafeInteger(rawValue.total) ? rawValue.total : undefined,
+    filesScanned: Number.isSafeInteger(rawValue.filesScanned)
+      ? rawValue.filesScanned : Number.isSafeInteger(rawValue.scanned) ? rawValue.scanned : parsed.filesScanned,
+    coverage: rawValue.coverage, filesRead: rawValue.filesRead, filesSkipped: rawValue.filesSkipped,
+    readErrorCount: rawValue.readErrorCount, skippedByReason: rawValue.skippedByReason,
+    discoveryErrorCount: rawValue.discoveryErrorCount, excludedEntries: rawValue.excludedEntries,
+    incomplete: rawValue.incomplete === true,
+    truncated: rawValue.truncated === true,
+    hasMore: rawValue.hasMore === true || Boolean(rawValue.nextCursor),
+    completeness,
+    zeroMatchMeaning: matchCount === 0
+      ? completeness === "complete_for_requested_scope"
+        ? "no_matches_in_requested_scope"
+        : "zero_reported_not_repository_absence"
+      : undefined,
+  });
+}
+
 function toolOutcomeRecords(messages, beforeIndex, options = {}) {
+  const pairing = exchangeIndex(messages.slice(0, beforeIndex));
   const maxItems = Math.max(1, Number(options.maxItems || 12));
   const includeMessageIndexes = options.includeMessageIndexes instanceof Set
     ? options.includeMessageIndexes
@@ -232,6 +492,8 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
   const pendingRequests = [];
   let ambiguousRequestBatch = false;
   let acceptsIdlessResults = false;
+  let changeBatch = 0;
+  let changeBatchOpen = false, changeBatchHasResults = false;
   const abandonRequestBatch = () => {
     requestsById.clear();
     duplicateRequestIds.clear();
@@ -243,7 +505,10 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     const args = isRecord(request?.arguments) ? request.arguments : {};
     const descriptor = projectDescriptor(args);
     const record = {
+      request,
+      changeBatch,
       descriptor,
+      searchRequest: searchRequestFact(request),
       changesActiveProject: String(request?.name || "") === "set_active_project",
       clearsActiveProject: String(request?.name || "") === "set_active_project" && args.clear === true,
       hasExplicitProject: Object.prototype.hasOwnProperty.call(args, "project")
@@ -263,12 +528,12 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     }
     pendingRequests.push(record);
   };
-  const projectHintFor = (result) => {
+  const projectHintFor = (result, canonicalRequest = null) => {
     const resultId = result?.toolCallId ? String(result.toolCallId) : "";
     if (resultId && duplicateRequestIds.has(resultId)) {
       return { descriptor: "", hasExplicitProject: true, consumed: true };
     }
-    let record = resultId ? requestsById.get(resultId) : null;
+    let record = resultId ? pendingRequests.find(candidate => candidate.request === canonicalRequest) : null;
     if (resultId && !record) {
       ambiguousRequestBatch = true;
       return { descriptor: "", hasExplicitProject: true, consumed: true };
@@ -303,12 +568,37 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
   };
   const retain = (content, requestScope = null, includeOutcome = true) => {
     const parsed = parseToolResult(content);
+    const decoded = decodeToolResultRecord(content);
+    // Only the execution's paired-return observer can provide this origin.
+    // Ignore any provider/origin asserted inside the tool payload itself.
+    const origin = requestScope?.request?.id && typeof options.changeOrigin === "function"
+      ? options.changeOrigin(requestScope.request, content) : undefined;
+    if ((parsed.ok === false || parsed.errorCode) && parsed.path
+      && ["read_file", "read_file_range", "read_symbol"].includes(requestScope?.request?.name)
+      && exactProjectIdentity(projectDescriptor(parsed))) parsed.observationState = "unavailable";
+    const succeeded = resultSemantics(decoded.value, origin?.provider).operationStatus === "completed";
+    const fileRecords = [parsed, ...(Array.isArray(parsed.files) ? parsed.files : [])];
+    for (const file of fileRecords) {
+      const evidence = file.changeEvidence;
+      delete file.changeEvidence;
+      delete file.changeReadVerified;
+      const fileProject = exactProjectIdentity(projectDescriptor(file));
+      const requestProject = exactProjectIdentity(requestScope?.descriptor);
+      const resultProject = exactProjectIdentity(projectDescriptor(parsed));
+      const consistentProject = fileProject && (!requestScope?.hasExplicitProject || !requestProject || fileProject === requestProject)
+        && (!resultProject || fileProject === resultProject);
+      if (succeeded && origin && consistentProject) {
+        const change = normalizedChange({ ...evidence, origin }, file);
+        if (change) file.changeEvidence = change;
+        if (["read_file", "read_file_range", "read_symbol"].includes(origin.tool)) file.changeReadVerified = true;
+      }
+    }
     const explicitProject = projectDescriptor(parsed);
     const activeProjectCleared = requestScope?.clearsActiveProject === true && parsed.ok !== false;
     const requestOwnsScope = requestScope?.hasExplicitProject === true
       && requestScope?.changesActiveProject !== true;
     if (activeProjectCleared) activeProject = "";
-    else if (explicitProject && !requestOwnsScope) activeProject = explicitProject;
+    else if (explicitProject && !requestOwnsScope && !hasBoundUnityProject(parsed)) activeProject = explicitProject;
     const fallbackProject = activeProjectCleared ? "" : (requestOwnsScope ? requestScope.descriptor : activeProject);
     const fallbackSource = requestOwnsScope
       ? (requestScope.descriptor ? "tool_request_fact" : "unresolved_tool_request_project")
@@ -325,21 +615,37 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
       activeProjectCleared,
       inconsistentProjectScope,
     });
-    if (includeOutcome) outcomes.push(scopedOutcome);
+    const search = searchObservation(requestScope?.searchRequest, decoded.value, parsed);
+    if (search) scopedOutcome.searchObservation = search;
+    // Pairing ambiguity belongs to the whole execution batch, including raw
+    // results retained outside this checkpoint's factual projection.
+    scopedOutcome._changeBatch = changeBatch;
+    scopedOutcome._includeOutcome = includeOutcome;
+    outcomes.push(scopedOutcome);
   };
-  for (const message of messages.slice(0, beforeIndex)) {
+  for (const [mi, message] of messages.slice(0, beforeIndex).entries()) {
+    if (!["assistant", "tool"].includes(message.role)) changeBatchOpen = false;
     if ((message.toolRequests || []).length) {
+      // The host may split one request batch across assistant blocks before
+      // any result arrives. Keep its ambiguity boundary across those blocks.
+      const newBatch = !changeBatchOpen || changeBatchHasResults;
+      if (newBatch) changeBatch++;
+      changeBatchOpen = true; changeBatchHasResults = false;
       // Tool results belong to the immediately preceding request batch. An
       // unmatched older request must never scope a later ID-less result.
-      abandonRequestBatch();
+      if (newBatch) abandonRequestBatch();
       for (const request of message.toolRequests) rememberRequest(request);
       acceptsIdlessResults = true;
     }
     if (message.role !== "tool") continue;
+    changeBatchHasResults = true;
     const includeOutcome = includeMessageIndexes === null
       || includeMessageIndexes.has(message.index);
-    for (const result of message.toolResults) {
-      retain(result?.content ?? result, projectHintFor(result), includeOutcome);
+    for (const [ri, result] of message.toolResults.entries()) {
+      const requestScope = projectHintFor(result, pairing.matches.get(`${mi}:${ri}`));
+      // ID-less compatibility remains for general file facts only.
+      retain(result?.content ?? result, result?.toolCallId ? requestScope
+        : requestScope ? { ...requestScope, request: null } : null, includeOutcome);
     }
     if (!message.toolResults.length && message.text) {
       retain(message.text, projectHintFor(null), includeOutcome);
@@ -348,7 +654,21 @@ function toolOutcomeRecords(messages, beforeIndex, options = {}) {
     // ID-less result is accepted only in the immediate result message.
     acceptsIdlessResults = false;
   }
-  return outcomes.slice(-maxItems);
+  const batchFiles = new Map();
+  for (const outcome of outcomes) {
+    for (const file of [outcome, ...(outcome.files || [])]) {
+      if (!file.canonicalProject || !file.canonicalPath) continue;
+      const key = JSON.stringify([outcome._changeBatch, file.canonicalProject, file.canonicalPath]);
+      const group = batchFiles.get(key) || [];
+      group.push(file); batchFiles.set(key, group);
+    }
+  }
+  for (const group of batchFiles.values()) if (group.length > 1) for (const file of group) {
+    delete file.changeEvidence; delete file.changeReadVerified; file.changeEvidenceInvalidated = true;
+  }
+  const included = outcomes.filter(outcome => outcome._includeOutcome);
+  for (const outcome of outcomes) { delete outcome._changeBatch; delete outcome._includeOutcome; }
+  return options.aggregateAll === true ? included : included.slice(-maxItems);
 }
 
 const DERIVED_BUILD_FIELDS = new Set([
@@ -361,6 +681,7 @@ const DERIVED_BUILD_FIELDS = new Set([
 ]);
 
 const DERIVED_FILE_FIELDS = new Set([
+  "changeEvidence", "changeReadVerified", "changeEvidenceInvalidated",
   "path",
   "canonicalPath",
   "canonicalProject",
@@ -369,6 +690,15 @@ const DERIVED_FILE_FIELDS = new Set([
   "sha256",
   "previousSha256",
   "lastObservedAt",
+  "startLine",
+  "endLine",
+  "returnedLineCount",
+  "nextStartLine",
+  "totalLines",
+  "hasMore",
+  "observedLineRanges",
+  "totalLinesAtObservation",
+  "readCoverageState",
   "mutationSnapshotState",
   "files",
 ]);
@@ -413,6 +743,18 @@ function serializeToolOutcome(record, maxChars) {
     bounded.fileFactsExtractedSeparately = true;
   }
   bounded.outcomeDisplayState = "bounded_after_factual_extraction";
+  if (displayRecord.gitObservation) {
+    const { items, ...identity } = displayRecord.gitObservation;
+    bounded.gitObservation = { ...identity, ...(items ? { omittedItems: (identity.omittedItems || 0) + items.length } : {}) };
+    // Preserve comparison identity before optional names, diagnostics or prose.
+    for (const item of items || []) {
+      const candidate = { ...bounded, gitObservation: { ...bounded.gitObservation,
+        items: [...(bounded.gitObservation.items || []), item], omittedItems: bounded.gitObservation.omittedItems - 1 } };
+      if (JSON.stringify(candidate).length > maxChars) break;
+      bounded.gitObservation = candidate.gitObservation;
+    }
+  }
+  if (displayRecord.searchObservation) bounded.searchObservation = displayRecord.searchObservation;
   for (const key of ["errors", "warnings"]) {
     if (!Array.isArray(displayRecord[key])) continue;
     const retained = [];
@@ -454,17 +796,58 @@ function parsedOutcomes(outcomes) {
   return parsed;
 }
 
-function stateMemory(outcomes) {
+function durableGitObservation(value) {
+  if (!isRecord(value)) return null;
+  const retained = {};
+  for (const key of [
+    "action", "comparison", "base", "head", "currentHead", "blobOid", "path",
+    "repositoryIdentity", "workspaceIdentity", "hasMore", "complete", "incomplete",
+    "pageStart", "pageEnd", "pageHasMore", "sourceResultComplete",
+    "sha256", "hashSource", "startLine", "endLine", "totalLines", "returnedCount", "total",
+    "since", "until", "authorQuery", "authorQuerySemantics", "identitySemantics",
+    "sourceConsistency", "submoduleWorktrees", "queryPathBase", "requestedPaths",
+    "requestedPathsCount", "requestedPathsOmitted", "requestedPathsSha256", "resolvedRepositoryPaths",
+    "resolvedRepositoryPathsCount", "resolvedRepositoryPathsOmitted", "resolvedRepositoryPathsSha256",
+    "canonicalProjectRoot", "canonicalProject", "projectIdentity",
+  ]) {
+    if (value[key] !== undefined) retained[key] = value[key];
+  }
+  const sourceOmittedItems = Number(value.sourceOmittedItems ?? value.omittedItems ?? 0);
+  const memoryOmittedItems = Number(value.memoryOmittedItems || 0);
+  retained.sourceOmittedItems = Math.max(0, sourceOmittedItems);
+  if (Array.isArray(value.items)) {
+    retained.items = value.items.slice(0, 4);
+    retained.memoryOmittedItems = Math.max(0, memoryOmittedItems + value.items.length - retained.items.length);
+  } else if (value.omittedItems !== undefined) {
+    retained.memoryOmittedItems = memoryOmittedItems;
+  }
+  retained.omittedItems = retained.sourceOmittedItems + (retained.memoryOmittedItems || 0);
+  return sanitizeStructuredDurableValue(retained);
+}
+
+function stateMemory(outcomes, options = {}) {
   const files = [];
   const builds = [];
+  const gitObservations = [];
+  const historicalEvidence = [];
   let activeProject = null;
   for (const item of parsedOutcomes(outcomes)) {
+    if (isRecord(item.historicalEvidence)) historicalEvidence.push(item.historicalEvidence);
+    if (isRecord(item.gitObservation)) {
+      gitObservations.push(durableGitObservation({
+        ...item.gitObservation,
+        ...(item.canonicalProjectRoot ? { canonicalProjectRoot: item.canonicalProjectRoot } : {}),
+        ...(item.canonicalProject ? { canonicalProject: item.canonicalProject } : {}),
+        ...(item.projectIdentity ? { projectIdentity: item.projectIdentity } : {}),
+      }));
+    }
     if (item.activeProjectCleared === true) {
       activeProject = { cleared: true, source: "tool_result_fact" };
       continue;
     }
     const projectCandidate = projectDescriptor(item);
-    if (projectCandidate && item.canonicalProjectSource !== "tool_request_fact") {
+    if (projectCandidate && item.canonicalProjectSource !== "tool_request_fact"
+      && item.canonicalProjectSource !== "unity_tool_result_fact") {
       activeProject = {
         descriptor: String(projectCandidate),
         root: projectRoot(projectCandidate),
@@ -478,7 +861,8 @@ function stateMemory(outcomes) {
       : (projectCandidate || activeProject?.descriptor || "");
     const observedFileFact = item.ok !== false && (item.operation || item.sha256 || item.previousSha256);
     const conflictFact = item.errorCode === "FILE_VERSION_CONFLICT";
-    if (item.path && (observedFileFact || conflictFact)) {
+    const unavailableFact = item.observationState === "unavailable" && Boolean(projectCandidate);
+    if (item.path && (observedFileFact || conflictFact || unavailableFact)) {
       files.push(fileObservation(item, fallbackProject));
     }
     if (Array.isArray(item.files)) {
@@ -499,8 +883,10 @@ function stateMemory(outcomes) {
     }
   }
   return {
-    files: coalesceFileObservations(files.filter(Boolean), 16),
+    files: coalesceFileObservations(files.filter(file => file && (!options.fileIdentities || options.fileIdentities.has(fileIdentity(file)))), 64),
     builds: builds.slice(-4),
+    gitObservations: gitObservations.slice(-8),
+    historicalEvidence: historicalEvidence.slice(-16),
     activeProject,
   };
 }
@@ -508,7 +894,10 @@ function stateMemory(outcomes) {
 module.exports = {
   CONTROL_DIRECTIVES,
   INTERNAL_KEYS,
+  decodeToolResultRecord,
+  historicalEvidenceObservation,
   parseToolResult,
+  durableGitObservation,
   retainedFileFact,
   scopeToolOutcome,
   stateMemory,

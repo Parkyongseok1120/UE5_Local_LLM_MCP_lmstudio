@@ -11,6 +11,7 @@ const client = new LMStudioClient({
 const host = client.plugins.getSelfRegistrationHost();
 let configRegistered = false;
 let predictionLoopRegistered = false;
+let promptPreprocessorRegistered = false;
 
 const context: PluginContext = {
   withConfigSchematics(configSchematics) {
@@ -26,7 +27,12 @@ const context: PluginContext = {
     return context;
   },
   withGlobalConfigSchematics() { throw new Error("Global config is not used by this plugin"); },
-  withPromptPreprocessor() { throw new Error("Prompt preprocessor is not used by this plugin"); },
+  withPromptPreprocessor(handler) {
+    if (promptPreprocessorRegistered) throw new Error("Prompt preprocessor already registered");
+    promptPreprocessorRegistered = true;
+    host.setPromptPreprocessor(handler);
+    return context;
+  },
   withToolsProvider() { throw new Error("Tools provider is not used by this plugin"); },
   withGenerator() { throw new Error("Generator proxy is not used by the Direct context compactor"); },
 };
@@ -34,7 +40,7 @@ const context: PluginContext = {
 (globalThis as any).__LMS_PLUGIN_CONTEXT = true;
 
 import("./../src/index.ts")
-  .then(async module => module.main(context))
+  .then(async module => module.main(context, client))
   .then(() => host.initCompleted())
   .catch(error => {
     console.error("Failed to execute the Unreal context compactor plugin.");

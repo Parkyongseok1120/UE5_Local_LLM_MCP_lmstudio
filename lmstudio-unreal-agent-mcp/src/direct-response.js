@@ -58,6 +58,14 @@ const LEGACY_DIRECTIVE_FIELDS = new Set([
   "stopCurrentWorkflow",
 ]);
 
+// One model-facing serializer: the transport text and every capability-side
+// fit check must measure the same compact rendering.
+const DEFAULT_MAX_RESPONSE_CHARS = 48_000;
+
+function renderModelJson(value) {
+  return JSON.stringify(value);
+}
+
 function isRecord(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -173,16 +181,17 @@ function failure(errorCode, message, options = {}) {
   return normalizeDirectPayload(payload, { ok: false });
 }
 
-function boundedJson(payload, maxChars) {
+function boundedJson(payload, maxChars, maxBytes) {
   const limit = Math.max(512, Number(maxChars || 32_000));
-  let rendered = JSON.stringify(payload, null, 2);
-  if (rendered.length <= limit) return { payload, rendered, truncated: false };
+  const fits = value => value.length <= limit && (maxBytes === undefined || Buffer.byteLength(value, "utf8") <= maxBytes);
+  let rendered = renderModelJson(payload);
+  if (fits(rendered)) return { payload, rendered, truncated: false };
 
   // Never silently clip a successful payload after a capability has computed
   // byte/line cursors. Doing so would advance the cursor past data the model
   // never received. Capabilities with cursors fit their own payloads; any
   // unexpected oversize result becomes a retryable, data-preserving error.
-  const minimal = payload.ok === false
+  let minimal = payload.ok === false
     ? failure(payload.errorCode, payload.message || payload.error || "The tool call failed.", {
       retryAllowed: payload.retry?.allowed === true,
       retryMode: payload.retry?.mode,
@@ -193,10 +202,15 @@ function boundedJson(payload, maxChars) {
       "The result exceeded the transport limit. Request a smaller byte range, line range, or result count.",
       { retryAllowed: true, retryMode: "different_arguments" },
     );
-  rendered = JSON.stringify(minimal, null, 2);
+  rendered = renderModelJson(minimal);
+  if (!fits(rendered)) {
+    minimal = failure("OUTPUT_LIMIT_EXCEEDED", "Result metadata exceeds the response budget; request a larger budget or narrower scope.",
+      { retryAllowed: true, retryMode: "different_arguments" });
+    rendered = renderModelJson(minimal);
+  }
   return {
     payload: minimal,
-    rendered: rendered.length <= limit ? rendered : clipString(rendered, limit),
+    rendered,
     truncated: true,
   };
 }
@@ -208,8 +222,8 @@ function toMcpResult(payload, options = {}) {
   });
   const limit = normalized.ok === false
     ? Math.min(4096, Number(options.maxChars || 4096))
-    : Number(options.maxChars || 256_000);
-  const bounded = boundedJson(normalized, limit);
+    : Number(options.maxChars || DEFAULT_MAX_RESPONSE_CHARS);
+  const bounded = boundedJson(normalized, limit, options.maxBytes);
   return {
     content: [{ type: "text", text: bounded.rendered }],
     structuredContent: bounded.payload,
@@ -218,11 +232,13 @@ function toMcpResult(payload, options = {}) {
 }
 
 module.exports = {
+  DEFAULT_MAX_RESPONSE_CHARS,
   INTERNAL_FIELDS,
   LEGACY_DIRECTIVE_FIELDS,
   boundedJson,
   failure,
   normalizeDirectPayload,
+  renderModelJson,
   stripInternal,
   success,
   suggestionFrom,

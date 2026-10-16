@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from evidence_packet_contract import SCHEMA_VERSION, VALIDATION_POLICY
 
 
 def smoke(server: Path, python_exe: Path) -> dict[str, Any]:
@@ -74,6 +75,10 @@ def smoke(server: Path, python_exe: Path) -> dict[str, Any]:
     unknown_tool = by_id[6]
     names = [tool["name"] for tool in tools["result"]["tools"]]
     status_payload = status["result"]["structuredContent"]
+    contract = by_id.get(4, {}).get("result", {}).get("structuredContent", {})
+    contract_compatible = (contract.get("schemaVersion") == SCHEMA_VERSION
+                           and contract.get("validationPolicy") == VALIDATION_POLICY
+                           and status_payload.get("serverVersion") == SCHEMA_VERSION)
     annotations_safe = all(
         tool.get("annotations", {}).get("readOnlyHint") is True
         and tool.get("annotations", {}).get("destructiveHint") is False
@@ -90,10 +95,13 @@ def smoke(server: Path, python_exe: Path) -> dict[str, Any]:
         and annotations_safe
         and status_payload.get("ok") is True
         and status_payload.get("readOnly") is True
+        and contract_compatible
         and invalid_packet["result"].get("isError") is True
         and unknown_tool.get("error", {}).get("code") == -32602
     )
-    return {"ok": ok, "tools": names, "status": status_payload, "gracefulExit": True}
+    return {"ok": ok, "tools": names, "status": status_payload, "gracefulExit": True,
+            "expectedSchemaVersion": SCHEMA_VERSION, "observedSchemaVersion": contract.get("schemaVersion"),
+            "contractCompatible": contract_compatible}
 
 
 def main() -> int:

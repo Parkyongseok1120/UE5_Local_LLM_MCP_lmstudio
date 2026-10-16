@@ -1,0 +1,183 @@
+{
+  "mode": "codegen",
+  "claims": [
+    {
+      "claim": "같은 source key의 검증된 본문과 본문 없는 범위를 합칠 때 미검증 범위가 현재 원문으로 승격됐고, Unreal byte-window도 line 범위로 오인됐습니다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/input-availability.js:101",
+          "observation": "현재 구현은 reported ranges와 verifiedRanges를 분리하고 UTF-8 byte-window를 별도 단위로 검증합니다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/input-availability.test.js:198",
+          "observation": "수정 전 targeted 실행은 11개 통과, 4개 실패였고 수정 후 15개가 모두 통과했습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/input-availability.js:90",
+          "symbol": "observationFromPayload"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/input-availability.js:119",
+          "symbol": "UTF-8 byte-window와 본문 길이 검증"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/input-availability.js:301",
+          "symbol": "projectInputAvailability.rawRangesInThisInput"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/input-availability.test.js:166",
+          "observation": "기존 line-range와 worktree/commit-blob 계약 테스트는 통과했으며 결함은 혼합 결과와 Unreal byte-window 경계에 한정됐습니다."
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "claim": "기존 평가기는 returnedLines를 inputOverlapLines로 대입하고 historicalReacquisitionLines를 0으로 고정해 실제 재획득을 측정하지 못했습니다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/availability-eval.test.cjs:17",
+          "observation": "수정 전 독립 평가 RED는 0/3, 수정 후 확장된 평가 테스트는 8/8 통과했습니다."
+        },
+        {
+          "kind": "runtime",
+          "location": "lmstudio-context-compactor-plugin/eval-results/audit-pressure-pilot-20260921.json",
+          "observation": "B 파일럿의 성공 조회 6개는 returned 1,090줄, causal input overlap 0줄, historical reacquisition 1,090줄, new evidence 0줄로 측정됐습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:190",
+          "symbol": "request-producing modelInputId와 실제 도구 결과 기록"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/scripts/availability-eval-core.cjs:322",
+          "symbol": "evaluateCausalCalls"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/scripts/availability-eval-core.cjs:354",
+          "symbol": "current overlap, historical reacquisition, new evidence 출력"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "lmstudio-context-compactor-plugin/eval-results/audit-pressure-pilot-20260921.json",
+          "observation": "A 파일럿은 22개 호출이 모두 실패해 검증된 반환 범위가 없었으므로 모든 실행에서 재획득량이 생기는 것은 아닙니다."
+        }
+      ],
+      "unknowns": [
+        "원래 865줄 세션은 raw tool payload와 각 final SDK Chat이 없어 동일 계산으로 직접 원인을 재구성할 수 없습니다."
+      ]
+    },
+    {
+      "claim": "이 모델과 압축 fixture에서는 Inject 메타데이터나 사용자 선택 감사 계약이 최종 보고서 품질을 개선했다고 입증되지 않았습니다.",
+      "claimType": "behavior",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "lmstudio-context-compactor-plugin/eval-results/audit-pressure-pilot-20260921.json",
+          "observation": "A/B 파일럿은 A 2/10, B 1/10이었고 B는 원문을 재획득한 뒤 잘못 닫힌 도구 JSON으로 종료했습니다."
+        },
+        {
+          "kind": "runtime",
+          "location": "lmstudio-context-compactor-plugin/eval-results/audit-pressure-ac-20260921.json",
+          "observation": "A/C 탐색 1쌍은 A 22회 호출·2/10, C 63회 호출·1/10이었으며 C는 240초 경계에서 가시 답변이 없었습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:328",
+          "symbol": "A/B metadata mode와 A/C user-selected contract 조건"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/scripts/eval-audit-pressure.cjs:209",
+          "symbol": "동일 seed에서 모델이 자유롭게 도구와 완료 시점을 선택"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/scripts/availability-eval-core.cjs:138",
+          "symbol": "독립 답변 rubric과 실행 결과"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "lmstudio-context-compactor-plugin/eval-results/audit-pressure-pilot-20260921.json",
+          "observation": "B는 A와 달리 정확한 경로로 1,090줄을 재획득했으므로 metadata가 탐색 경로에는 영향을 준 반대 근거가 있습니다."
+        }
+      ],
+      "unknowns": [
+        "A/B 5쌍 본 실험은 사용자 요청으로 중단돼 통계적 행동 효과를 판단할 수 없습니다.",
+        "A/C는 한 쌍뿐이므로 다른 seed와 모델에서의 효과는 확인되지 않았습니다."
+      ]
+    }
+  ],
+  "existing": [
+    "기존 prediction loop의 압축, Observe/Inject 가용성 모드, 단일 모델 도구 선택, 단순 목표 연결 로직",
+    "기존 current-input projection과 historical availability ledger"
+  ],
+  "proposed": [
+    "제품 projection에서 verifiedRanges와 보고 범위를 분리하고 Unreal UTF-8 byte-window를 실제 응답 계약대로 검증",
+    "평가 전용 독립 oracle과 causal modelInputId 기반 조회 지표, 압축 fixture, A/B 및 A/C 실행기 추가",
+    "실제로 적용된 압축 횟수와 모드를 기존 측정 이벤트에 추가"
+  ],
+  "doNotDuplicate": [
+    "새 planner, 별도 판단 모델, 자동 재시도, cache 대체, 재조회 차단, 자동 완료 판정",
+    "기존 looksElliptical/buildObjectiveContinuity와 목표 관리 구조"
+  ],
+  "invariants": [
+    "Observe가 기본이고 Inject는 실험 옵션이며 Separate document input은 기본 비활성입니다.",
+    "유효한 재조회와 필요한 반례 검증은 모델이 계속 선택할 수 있습니다.",
+    "감사 계약은 사용자가 평가에서 선택할 뿐 제품이 자동 주입하지 않습니다.",
+    "line, UTF-8 byte, attachment 문자 범위는 서로 섞지 않습니다."
+  ],
+  "impactedSurfaces": [
+    "src/input-availability.js",
+    "src/prediction-loop.ts measurement telemetry",
+    "scripts/eval-input-availability-ab.cjs와 독립 평가 스크립트",
+    "availability 및 prediction-loop 테스트",
+    "README, package version/revision, 패키지 포함 목록"
+  ],
+  "validationPlan": [
+    "결함별 의미 있는 RED를 확인한 뒤 targeted GREEN을 확인합니다.",
+    "8파일 pressure fixture에서 실제 압축, 과거 원문 퇴출, 현재 원문 잔존, causal reread 분류를 확인합니다.",
+    "실제 로드 모델의 A/B와 사용자 선택 A/C를 분리하고 실패·timeout·중단 실행을 보존합니다.",
+    "전체 npm test, status, npm pack --dry-run과 evidence packet validator를 통과시킵니다."
+  ]
+}

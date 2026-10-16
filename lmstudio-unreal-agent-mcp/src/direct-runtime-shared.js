@@ -57,7 +57,15 @@ function relativeSlash(root, target) {
 
 function errorFromException(error) {
   const message = String(error?.message || error || "Unknown tool error");
-  const validationLike = /required|invalid|must|outside|escapes|not a|unsupported|expected/i.test(message);
+  // Capability handlers already classify schema/argument failures with an
+  // explicit error code. Preserve that signal instead of guessing from the
+  // wording (for example, "base/head require comparison=range" does not
+  // contain the word "required"). The message heuristic remains a fallback
+  // for legacy handlers that throw plain Errors.
+  const explicitCode = String(error?.code || "").trim().toLowerCase();
+  const validationLike = explicitCode === "invalid_argument"
+    || explicitCode === "invalid_arguments"
+    || /required|invalid|must|outside|escapes|not a|unsupported|expected/i.test(message);
   return failure(
     validationLike ? "INVALID_ARGUMENT" : "INTERNAL_ERROR",
     message,

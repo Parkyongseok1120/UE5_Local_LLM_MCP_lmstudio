@@ -1,0 +1,135 @@
+{
+  "status": "FAIL_STOPPED_ON_TRUNCATED_RESPONSE",
+  "targetCumulativeExactInputTokens": 380000,
+  "tokenMetric": "sum_of_exact_templated_model_input_tokens_sent_to_each_actual_model_response",
+  "contextLength": 38912,
+  "configuredDefaults": {
+    "workingInputTargetTokens": 18000,
+    "workingInputTriggerTokens": 22000,
+    "maxOutputReserve": 8192,
+    "safetyMarginTokens": 2048
+  },
+  "watermarks": {
+    "effectiveLowWaterTokens": 16500,
+    "effectiveHighWaterTokens": 22000,
+    "hardInputCeiling": 28672,
+    "mandatoryFloorTokens": 11955,
+    "reservedToolResultTokens": 0,
+    "requiredPostToolOverhead": 0
+  },
+  "evidenceChunk": {
+    "records": 268,
+    "exactTokens": 11728
+  },
+  "preservationFacts": "ASTRA-FIXED-EVIDENCE: A=731; B=942; C=513; LOCK=ASTRA-380K-LOCK.",
+  "rounds": [
+    {
+      "cycle": 1,
+      "beforeExactInputTokens": 11955,
+      "afterCompactionExactInputTokens": 11955,
+      "effectiveLowWaterTokens": 16500,
+      "effectiveHighWaterTokens": 22000,
+      "hardInputCeiling": 28672,
+      "compactionRequested": true,
+      "compactionChangedHistory": false,
+      "compactionSucceeded": true,
+      "selectedCandidate": "unchanged",
+      "candidateMeasurements": [],
+      "fixedFactsPresentInAssembledHistory": true,
+      "cumulativeExactInputTokensBefore": 0,
+      "modelResponseMs": 16717,
+      "backendPromptEvalTokens": 11955,
+      "predictedTokens": 96,
+      "stopReason": "maxPredictedTokensReached",
+      "responsePreservedFacts": true,
+      "responseExcerpt": "We need answer user's request. User says: \"Confirm the fixed evidence ASTRA-FIXED-EVIDENCE: A=731; B=942; C=513; LOCK=ASTRA-380K-LOCK.\" Then second message? Actually conversation shows two user messages? First: Confirm... Second: New accumulated read-only evidence batch 1. Keep and report the fixed original source facts exactly. ASTRA-FIXED-E__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__",
+      "exactInputTokens": 11955,
+      "cumulativeExactInputTokensAfter": 11955
+    },
+    {
+      "cycle": 2,
+      "beforeExactInputTokens": 23853,
+      "afterCompactionExactInputTokens": 15300,
+      "effectiveLowWaterTokens": 16500,
+      "effectiveHighWaterTokens": 22000,
+      "hardInputCeiling": 28672,
+      "compactionRequested": true,
+      "compactionChangedHistory": true,
+      "compactionSucceeded": true,
+      "selectedCandidate": "complete_exchange_cap_4",
+      "candidateMeasurements": [
+        {
+          "candidate": "complete_exchange_cap_4",
+          "finalExactInputTokens": 15300,
+          "accepted": true
+        }
+      ],
+      "fixedFactsPresentInAssembledHistory": true,
+      "cumulativeExactInputTokensBefore": 11955,
+      "modelResponseMs": 21071,
+      "backendPromptEvalTokens": 15300,
+      "predictedTokens": 96,
+      "stopReason": "maxPredictedTokensReached",
+      "responsePreservedFacts": true,
+      "responseExcerpt": "We need answer user's request. User says: \"New accumulated read-only evidence batch 2. Keep and report the fixed original source facts exactly. ASTRA-FIXED-EVIDENCE: A=731; B=942; C=513; LOCK=ASTRA-380K-LOCK.\" Then many EvidenceRecord lines. Need likely just acknowledge and report fixed facts exactly. Must maintain verified read-only source facts exactly across every context__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__",
+      "exactInputTokens": 15300,
+      "cumulativeExactInputTokensAfter": 27255
+    },
+    {
+      "cycle": 3,
+      "beforeExactInputTokens": 27198,
+      "afterCompactionExactInputTokens": 16359,
+      "effectiveLowWaterTokens": 16500,
+      "effectiveHighWaterTokens": 22000,
+      "hardInputCeiling": 28672,
+      "compactionRequested": true,
+      "compactionChangedHistory": true,
+      "compactionSucceeded": true,
+      "selectedCandidate": "complete_exchange_cap_4",
+      "candidateMeasurements": [
+        {
+          "candidate": "complete_exchange_cap_4",
+          "finalExactInputTokens": 16359,
+          "accepted": true
+        }
+      ],
+      "fixedFactsPresentInAssembledHistory": true,
+      "cumulativeExactInputTokensBefore": 27255,
+      "modelResponseMs": 22761,
+      "backendPromptEvalTokens": 16359,
+      "predictedTokens": 96,
+      "stopReason": "maxPredictedTokensReached",
+      "responsePreservedFacts": true,
+      "responseExcerpt": "We need answer user's request. User says: \"New accumulated read-only evidence batch 3. Keep and report the fixed original source facts exactly. ASTRA-FIXED-EVIDENCE: A=731; B=942; C=513; LOCK=ASTRA-380K-LOCK.\" Then many EvidenceRecord lines. Need likely just acknowledge and report fixed facts exactly. Must not modify files? read-only evidence batch. We__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__",
+      "exactInputTokens": 16359,
+      "cumulativeExactInputTokensAfter": 43614
+    }
+  ],
+  "cumulativeExactInputTokens": 43614,
+  "cumulativeBackendPromptEvalTokens": 43614,
+  "startedAt": "2026-09-23T07:59:48.571Z",
+  "codeChangesMade": false,
+  "currentExactInputTokens": 16359,
+  "roundCount": 3,
+  "lastResponsePreservedFacts": true,
+  "updatedAt": "2026-09-23T08:00:50.284Z",
+  "failure": {
+    "firstObservedAtCycle": 1,
+    "postCompactionFailureAtCycle": 2,
+    "reason": "The actual model stopped at maxPredictedTokensReached (96 predicted tokens); the returned content ended at the internal reasoning separator and contained no user-facing final answer. The initial harness preservation predicate incorrectly searched the raw response buffer, which included hidden reasoning; cycles 2 and 3 are retained as diagnostics, not accepted preservation passes.",
+    "validCumulativeExactInputAfterFirstCompactionAndBeforeFirstPostCompactionFailure": 15300,
+    "firstPostCompactionCallExactInputTokens": 15300,
+    "postFailureDiagnosticCycleExactInputTokens": 16359,
+    "noProductCodeModified": true
+  },
+  "finishedAt": "2026-09-23T08:01:51.919Z",
+  "summary": {
+    "attemptedRounds": 3,
+    "completedCompactions": 2,
+    "acceptedPostCompactionStressRounds": 0,
+    "firstPostCompactionInputTokens": 15300,
+    "postFailureDiagnosticExcluded": true,
+    "measurementResult": "FAIL; cumulative stress target 380000 not reached"
+  },
+  "validCumulativePostCompactionExactInputBeforeStop": 15300
+}

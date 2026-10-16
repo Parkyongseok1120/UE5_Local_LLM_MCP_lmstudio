@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("node:path");
+const { fileObservation } = require("../../shared-tool-core/workspace");
 
 const {
   getActiveProject,
@@ -9,7 +10,7 @@ const {
 } = require("./unreal-detect.js");
 const { resolveReadPath, isWithin } = require("./read-path-resolver.js");
 const { DirectRepeatCache } = require("./direct-repeat-cache.js");
-const { toMcpResult } = require("./direct-response.js");
+const { DEFAULT_MAX_RESPONSE_CHARS, renderModelJson, toMcpResult } = require("./direct-response.js");
 const { clamp, relativeSlash } = require("./direct-runtime-shared.js");
 const { resolveMutationLimits } = require("./direct-mutation-limits.js");
 const { assertDirectMutationScope } = require("./direct-mutation-scope.js");
@@ -37,8 +38,9 @@ function createDirectRuntimeContext(options = {}) {
     maxReadBytes: clamp(env.MAX_READ_BYTES, 64 * 1024, 4096, 2 * 1024 * 1024),
     maxSourceBytes: clamp(env.DIRECT_MAX_SOURCE_FILE_BYTES, 8 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024),
     commandTimeoutMs: clamp(env.COMMAND_TIMEOUT_MS, 10 * 60 * 1000, 1000, 60 * 60 * 1000),
-    maxResponseChars: clamp(env.DIRECT_MAX_RESPONSE_CHARS, 256_000, 16_000, 1_000_000),
+    maxResponseChars: clamp(env.DIRECT_MAX_RESPONSE_CHARS, DEFAULT_MAX_RESPONSE_CHARS, 16_000, 1_000_000),
     maxCommandOutputBytes: clamp(env.DIRECT_MAX_COMMAND_OUTPUT_BYTES, 1_000_000, 16_384, 8_000_000),
+    searchDeadlineMs: clamp(env.DIRECT_SEARCH_DEADLINE_MS, 10_000, 1, 120_000),
   };
 
   const getActive = () => (options.getActiveProject || getActiveProject)(configPath);
@@ -95,12 +97,15 @@ function createDirectRuntimeContext(options = {}) {
     };
   }
 
-  function directResult(toolName, payload) {
-    return toMcpResult(payload, { currentTool: toolName, maxChars: limits.maxResponseChars });
+  function directResult(toolName, payload, args = {}) {
+    return toMcpResult(fileObservation(payload), { currentTool: toolName, maxChars: limits.maxResponseChars,
+      maxBytes: args.byteBudget });
   }
 
-  function payloadFits(payload, reserveChars = 0) {
-    return JSON.stringify(payload, null, 2).length + reserveChars <= limits.maxResponseChars;
+  function payloadFits(payload, reserveChars = 0, byteBudget) {
+    const rendered = renderModelJson(fileObservation(payload));
+    return rendered.length + reserveChars <= limits.maxResponseChars
+      && (byteBudget === undefined || Buffer.byteLength(rendered, "utf8") + reserveChars <= byteBudget);
   }
 
   function projectScopedSuggestionArgs(args, suggestionArgs) {
@@ -108,14 +113,32 @@ function createDirectRuntimeContext(options = {}) {
     return selector ? { ...suggestionArgs, project: selector } : suggestionArgs;
   }
 
-  function fitUtf8Prefix(buffer, makePayload) {
+  // Largest item count whose payload fits; makePayload must grow with count.
+  function fitCount(maxCount, makePayload, byteBudget, reserveChars = 256) {
+    let low = 0;
+    let high = maxCount;
+    let best = null;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = makePayload(middle);
+      if (payloadFits(candidate, reserveChars, byteBudget)) {
+        best = { payload: candidate, count: middle };
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return best;
+  }
+
+  function fitUtf8Prefix(buffer, makePayload, byteBudget) {
     let low = 0;
     let high = buffer.length;
     let best = null;
     while (low <= high) {
       const middle = Math.floor((low + high) / 2);
       const candidate = makePayload(buffer.subarray(0, middle), middle);
-      if (payloadFits(candidate, 256)) {
+      if (payloadFits(candidate, 256, byteBudget)) {
         best = { payload: candidate, bytes: middle };
         low = middle + 1;
       } else {
@@ -127,7 +150,7 @@ function createDirectRuntimeContext(options = {}) {
       try {
         const content = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytes));
         const payload = makePayload(Buffer.from(content, "utf8"), bytes, content);
-        if (payloadFits(payload, 256)) return { payload, bytes };
+        if (payloadFits(payload, 256, byteBudget)) return { payload, bytes };
       } catch {
         // Back up to the prior complete UTF-8 unit.
       }
@@ -148,6 +171,7 @@ function createDirectRuntimeContext(options = {}) {
     directResult,
     env,
     fileSnapshots,
+    fitCount,
     fitUtf8Prefix,
     getActive,
     limits,

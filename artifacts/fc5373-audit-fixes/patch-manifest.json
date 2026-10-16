@@ -1,0 +1,87 @@
+{
+  "baseSha": "fc5373b0b62c4e07829cea5052f1e1afbacc3104",
+  "files": [
+    {
+      "path": "lmstudio-context-compactor-plugin/package.json",
+      "sha256": "06bb9895725439d2b3dff4fb32b8d09dabdb534d3d625f7e43fb3869937e7766"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/scripts/astra-live-flow.cjs",
+      "sha256": "9f1f28e54a9091bbddd1d9dced25c3c53330944ef521446289246ad35f796a06"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/scripts/astra-ratchet.cjs",
+      "sha256": "eac3013054c0cff66663365ae8f281e58dc7cb22fe7aa9d7b25b91ea4ca85617"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/scripts/measurement-contract.cjs",
+      "sha256": "bfcdf274df74331fce1c5b01b9ab1772aaf4757966f19d2077767b504e7874ae"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/scripts/status.cjs",
+      "sha256": "4f11be39c2b7253fdc2e9b6a97346c376a73cc4dff6955005c7e3887178498e6"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+      "sha256": "743899fec6ded86071cff97fad0a7dd70d2a0fe6a462b4f84a702c946fa693ec"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+      "sha256": "3f01d4009f9bdd3b6f72e689554657e4e6808e2a90c50957f5e21ae7707b9e3f"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/context-ports.ts",
+      "sha256": "ff9b2c413de3ecee2c35c97a37841234dfe80a47b968c7729d03c672a28f5b13"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+      "sha256": "d0d2b18d4b07d3eb1b5ae9cec9b38a4d72df36d6e82595fbf3919b56de5b4bcc"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/evidence-identity.js",
+      "sha256": "3727cb3e2fd13292ffdfc23bfa6c67e5607be57639b99268492e1ba7eea49cca"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+      "sha256": "6d0400500b2b5ca2bed305df855f813dad12583f17d5698818b2175f9c0cd0f3"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/execution-state.ts",
+      "sha256": "e346abfb3e1b6dbf60ed5a7f1b6f3fa0208f565f9fb1267d13118884597ada0b"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+      "sha256": "d8ffe6539c9a5bd2062636f19f711ee402840e74586dd16ced36882261bcd794"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+      "sha256": "a7904d05fd4cd6142c7ba366576106b07ef43c787f9699046ba2714d8c942451"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+      "sha256": "5b247953b924910e449da725afce17e7fcc6dc6dd71560067d754c024b91ddbc"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+      "sha256": "5d215865ff63e3db0684ffd6ade1967a5e9e7ac7e42287aa9bdd728427c2dcfb"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+      "sha256": "5158cb0472eef255f9376d37a7cb6624d7b0d49485285f7acf559284faae446a"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/working-context.js",
+      "sha256": "dc455e7ee4eec8b4b236eac9e4516af5a015db3801722b631ec164c2cbf82d97"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs",
+      "sha256": "dba95a55716ae17df6746720d272c951a9ad666e06a5bca622fb22a41434b253"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+      "sha256": "77b1cd43f4e01fbcdb5bc34b787b4a9b930224a5d0cc1808311983175ddd4eaa"
+    }
+  ],
+  "productPatchSha256": "17f88b8978ebce3694f3bbfaa5814417ea6e3809059b7475954cfbd723301062",
+  "definition": "SHA256 of JSON {baseSha, files:[{path,sha256}]} in the recorded sorted order. Includes untracked product files; excludes reports and generated dist."
+}

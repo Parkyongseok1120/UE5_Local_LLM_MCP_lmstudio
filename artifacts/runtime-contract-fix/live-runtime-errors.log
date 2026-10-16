@@ -1,0 +1,62 @@
+[2026-09-25 15:04:32.759] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 15
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+
+[2026-09-25 15:04:40.508] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 30
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+
+[2026-09-25 15:04:50.248] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 66
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+
+[2026-09-25 15:05:26.631] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 159
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+
+[2026-09-25 15:05:53.643] [error] [ServerPort] 5 communication warnings have been produced. Further warnings will not be printed.
+[2026-09-25 15:05:53.660] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 184
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+
+[2026-09-25 15:16:12.612] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 36
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+
+[2026-09-25 15:17:00.851] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 137
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+
+[2026-09-25 15:17:32.363] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 162
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+
+[2026-09-25 15:17:36.908] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 187
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+
+[2026-09-25 15:18:06.481] [error] [ServerPort] 5 communication warnings have been produced. Further warnings will not be printed.
+[2026-09-25 15:18:06.520] [error] [InternalPluginsProvider][PluginProcess(codex/unreal-context-compactor)] stderr: [LMStudioClient][LLM][ClientPort] Received communication warning from the server: Received channelSend for unknown channel, channelId = 235
+
+This is usually caused by communication protocol incompatibility. Please make sure you are using the up-to-date versions of the SDK and LM Studio.
+
+Note: This warning was received from the server and is printed on the client for convenience.
+

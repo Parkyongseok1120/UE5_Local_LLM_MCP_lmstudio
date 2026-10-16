@@ -1,0 +1,18 @@
+{
+  "baseSha": "868dedf8069c5b6d015794e32e5435ad540db219",
+  "trackedDiffSha256": "f032147f1601d5b806793091e3cb66bd5238e1f7e85596f9954c1e24f21bfc8d",
+  "newFiles": {
+    "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs": "499a1dba815e1428b50f72eaa77eee6168e1742f5fae978b06e9d2b883d2c0a2",
+    "lmstudio-context-compactor-plugin/src/checkpoint-budget.js": "73527e5b30ba347da7fbbb7853fe565c703b2158a67afee987fded771551f91a",
+    "lmstudio-context-compactor-plugin/src/round-input.ts": "84416e4abb74aadcbc6b4b0dfb2861f59b203f1eb15ff70917fb3815802e5098",
+    "lmstudio-context-compactor-plugin/src/semantic-handoff.ts": "2ab1e99d9528470041af02a9bd20451a54bb79d6a86f732d6eb12c56000e0a40",
+    "lmstudio-context-compactor-plugin/test/runtime-policy.test.cjs": "5ad66af9ab943a8fa6815ca990cf4d2d9bc096b90799d959a7c76e667dab1720",
+    "lmstudio-context-compactor-plugin/test/tool-round-lifecycle.test.cjs": "07eef6be34233ee8da7e399c8ca0d582ac12743b448a784e1dc63a9029cf0083"
+  },
+  "implementationDiffHash": "e64b7a8a6170cfd4dcdbd892706415be1b26e6ab1889f23344c803c44d701b19",
+  "definition": "SHA256 of canonical JSON (sorted keys, compact separators) containing baseSha, trackedDiffSha256, newFiles.",
+  "excludes": [
+    "artifacts/**",
+    "unity-symbol-worker/bin/Release/net8.0/**"
+  ]
+}

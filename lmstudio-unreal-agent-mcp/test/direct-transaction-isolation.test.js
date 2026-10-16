@@ -11,6 +11,7 @@ const { createDirectRuntime } = require("../src/direct-server");
 const { createStrictRuntime } = require("../src/strict-server");
 const { applyDirectEditBundle, validateBundleLimits } = require("../src/direct-edit-bundle");
 const { sha256Text } = require("../src/safe-write");
+const { resolveCanonicalAbsolutePath } = require("../src/filesystem-path-identity");
 const { releasePathLock, tryAcquirePathLock } = require("../src/write-locks");
 const {
   createRuntimeTransaction,
@@ -51,7 +52,7 @@ function createInterruptedTransaction(value, owner, fileName, before, after) {
   atomicWriteText(backup, before, "utf8");
   updateRuntimeTransactionEntry(journal, {
     relativePath,
-    canonicalAbsolutePath: target,
+    canonicalAbsolutePath: resolveCanonicalAbsolutePath(target),
     operation: "patch",
     existedBefore: true,
     preHash: sha256Text(before),
@@ -682,6 +683,9 @@ test("Direct deletion still requires exact approval and moves source to recovera
   }));
   assert.equal(deleted.ok, true);
   assert.equal(deleted.operation, "moved_to_trash");
+  assert.equal(deleted.kind, "workspace_mutation_observation");
+  assert.equal(deleted.observationState, "deleted");
+  assert.match(deleted.canonicalProject, /\.uproject$/);
   assert.equal(deleted.recoverable, true);
   assert.equal(fs.existsSync(target), false);
   assert.equal(fs.readFileSync(deleted.restorePath, "utf8"), content);

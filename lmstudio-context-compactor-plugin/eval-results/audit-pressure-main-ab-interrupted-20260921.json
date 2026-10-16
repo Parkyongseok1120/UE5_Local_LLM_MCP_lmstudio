@@ -1,0 +1,73 @@
+{
+  "experiment": "compressed-audit-metadata-A-B",
+  "status": "interrupted_by_user",
+  "recordedAt": "2026-09-21T04:52:05.7569523+09:00",
+  "requestedMainPairs": 5,
+  "completedConsoleSummaries": [
+    {
+      "phase": "pilot",
+      "group": "A",
+      "pressureExposure": true,
+      "compactions": 1,
+      "generatedToolCalls": 22,
+      "answerScoreOutOf10": 2,
+      "elapsedMs": 152390,
+      "error": null
+    },
+    {
+      "phase": "pilot",
+      "group": "B",
+      "pressureExposure": true,
+      "compactions": 3,
+      "generatedToolCalls": 13,
+      "answerScoreOutOf10": 1,
+      "elapsedMs": 199846,
+      "error": null
+    },
+    {
+      "phase": "main-ab",
+      "pairIndex": 1,
+      "group": "A",
+      "pressureExposure": true,
+      "compactions": 1,
+      "generatedToolCalls": 22,
+      "answerScoreOutOf10": 2,
+      "elapsedMs": 156929,
+      "error": null
+    },
+    {
+      "phase": "main-ab",
+      "pairIndex": 1,
+      "group": "B",
+      "pressureExposure": true,
+      "compactions": 3,
+      "generatedToolCalls": 11,
+      "answerScoreOutOf10": 1,
+      "elapsedMs": 158799,
+      "error": null
+    },
+    {
+      "phase": "main-ab",
+      "pairIndex": 2,
+      "group": "B",
+      "pressureExposure": true,
+      "compactions": 2,
+      "generatedToolCalls": 7,
+      "answerScoreOutOf10": 1,
+      "elapsedMs": 102788,
+      "error": null
+    }
+  ],
+  "incompleteRun": {
+    "phase": "main-ab",
+    "pairIndex": 2,
+    "group": "A",
+    "result": "not_available",
+    "reason": "The user requested that the ongoing A/B repetition stop and that A/C run next. The process was interrupted before it emitted this run or wrote its aggregate report."
+  },
+  "evidenceBoundary": [
+    "Only the completed console summaries above survived the interrupted aggregate run.",
+    "They must not be treated as a completed five-pair A/B experiment.",
+    "The full standalone pilot report remains in audit-pressure-pilot-20260921.json."
+  ]
+}

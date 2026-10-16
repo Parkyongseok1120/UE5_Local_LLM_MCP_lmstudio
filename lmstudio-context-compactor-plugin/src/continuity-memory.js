@@ -1,6 +1,7 @@
 "use strict";
 
-const { buildObjectiveContinuity } = require("./continuity-objectives.js");
+const { buildObjectiveContinuity, objectiveIdentity } = require("./continuity-objectives.js");
+const { interruptedCallState } = require("./interrupted-calls.js");
 const {
   coalesceFileObservations,
   migratePriorFileObservations,
@@ -17,7 +18,7 @@ const {
   clip,
   normalizedTextKey,
   recentConversationTail,
-  sentenceCandidates,
+  visibleAssistantText,
 } = require("./continuity-text.js");
 
 const CONTINUITY_MARKER = "[Direct continuity state v2]";
@@ -64,7 +65,7 @@ function sanitizePriorContinuityState(value) {
   if (work?.lastAssistantUpdate?.text) {
     work.lastAssistantUpdate.text = sanitizeDerivedOperationalText(work.lastAssistantUpdate.text);
   }
-  for (const key of ["recentToolOutcomes", "recentBuildOrTestState"]) {
+  for (const key of ["recentToolOutcomes", "gitObservations", "historicalEvidence", "recentBuildOrTestState"]) {
     if (Array.isArray(work?.[key])) {
       work[key] = work[key].map((item) => sanitizeDerivedOperationalRecord(item));
     }
@@ -150,42 +151,21 @@ function lastAssistantUpdate(messages, minimumIndex = -1) {
     && String(candidate.text || "").trim()
   ));
   if (!message) return null;
+  const visibleText = visibleAssistantText(message.text);
+  if (!visibleText.trim()) return null;
   return {
     messageIndex: message.index,
-    text: clip(sanitizeDerivedOperationalText(message.text), 2400, { trim: false }),
+    text: clip(sanitizeDerivedOperationalText(visibleText), 2400, { trim: false }),
     source: "assistant_history",
   };
 }
 
-function pendingAssistantItems(messages, activeObjective, maxItems = 8) {
-  const activeIndex = Number.isInteger(activeObjective?.messageIndex)
-    ? activeObjective.messageIndex
-    : -1;
-  const patterns = [
-    /\b(?:need to|needs? to|will|next|remaining|pending|not yet|still need|retry)\b/iu,
-    /(?:해야|할\s*(?:일|것)|다음|남았|미완료|아직|재시도|진행할|확인할|수정할|빌드할)/u,
-  ];
-  const values = [];
-  const seen = new Set();
-  for (const message of messages) {
-    if (message.role !== "assistant" || message.index < activeIndex) continue;
-    for (const sentence of sentenceCandidates(message.text)) {
-      if (!patterns.some((pattern) => pattern.test(sentence))) continue;
-      const text = clip(sanitizeDerivedOperationalText(sentence), 800);
-      const key = normalizedTextKey(text);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      values.push({ kind: "assistant_progress_evidence", text, messageIndex: message.index });
-    }
-  }
-  return values.slice(-Math.max(1, maxItems));
-}
-
-function mergeUnresolved(previousState, activeObjective, openQuestions, pendingItems) {
-  const previousSameObjective = normalizedTextKey(previousState?.activeObjective?.text)
-    === normalizedTextKey(activeObjective?.text);
+function mergeUnresolved(previousState, objective, openQuestions, pendingItems) {
+  const previousSameObjective = objectiveIdentity(previousState) === objectiveIdentity(objective);
   const combined = [
-    ...(previousSameObjective ? previousState?.unresolvedItems || [] : []),
+    ...(previousSameObjective ? (previousState?.unresolvedItems || []).filter(item => (
+      item?.kind !== "assistant_progress_evidence"
+    )) : []),
     ...(openQuestions || []).map((item) => ({ kind: "open_question_evidence", ...item })),
     ...pendingItems,
   ];
@@ -213,16 +193,20 @@ function mergeRecentDistinct(previous, current, maxItems) {
 }
 
 function buildContinuityMemory(messages, facts, options = {}) {
-  const previousState = extractPriorContinuityState(messages);
+  const previousState = options.previousState === undefined
+    ? extractPriorContinuityState(messages)
+    : options.previousState;
   const objective = buildObjectiveContinuity(messages, previousState, options);
-  const pendingItems = pendingAssistantItems(messages, objective.activeObjective);
+  // Assistant prose such as "next I will..." is conversation evidence, not an
+  // explicit lifecycle update. Durable open/resolved/superseded judgments live
+  // in the separately validated assistant continuity note.
+  const pendingItems = [];
   const previousWork = previousState?.currentWorkStatus || {};
   const activeIndex = objective.activeObjective?.source === "current_history"
     && Number.isInteger(objective.activeObjective.messageIndex)
     ? objective.activeObjective.messageIndex
     : -1;
-  const samePriorObjective = normalizedTextKey(previousState?.activeObjective?.text)
-    === normalizedTextKey(objective.activeObjective?.text);
+  const samePriorObjective = objectiveIdentity(previousState) === objectiveIdentity(objective);
   const activeProjectExplicitlyCleared = facts.activeProject?.cleared === true;
   const activeProjectCandidate = activeProjectExplicitlyCleared
     ? null
@@ -236,11 +220,11 @@ function buildContinuityMemory(messages, facts, options = {}) {
   const previousFileObservations = migratePriorFileObservations(
     previousWork.modifiedOrObservedFiles || [],
     previousState,
-    12,
+    64,
   );
   const currentFileObservations = coalesceFileObservations(
     facts.modifiedOrObservedFiles || [],
-    12,
+    64,
     String(facts.activeProject?.descriptor || ""),
   );
   const currentWorkStatus = {
@@ -251,9 +235,19 @@ function buildContinuityMemory(messages, facts, options = {}) {
       facts.recentOlderToolOutcomes,
       6,
     ),
+    gitObservations: mergeRecentDistinct(
+      previousWork.gitObservations,
+      facts.gitObservations,
+      8,
+    ),
+    historicalEvidence: mergeRecentDistinct(
+      previousWork.historicalEvidence,
+      facts.historicalEvidence,
+      16,
+    ),
     modifiedOrObservedFiles: coalesceFileObservations(
       [...previousFileObservations, ...currentFileObservations],
-      12,
+      64,
     ),
     recentBuildOrTestState: mergeRecentDistinct(
       previousWork.recentBuildOrTestState,
@@ -261,17 +255,22 @@ function buildContinuityMemory(messages, facts, options = {}) {
       4,
     ),
   };
+  const interruption = interruptedCallState(messages, previousState?.interruptedCalls || [], previousState?.interruptedCallRetention);
   return sanitizeStructuredDurableValue({
     schemaVersion: 2,
+    compactionGeneration: Math.max(0, Number(previousState?.compactionGeneration || 0)) + 1,
     authority: "factual_memory_only",
     latestUserMessage: objective.latestUserMessage,
     activeObjective: objective.activeObjective,
     continuationAntecedent: objective.continuationAntecedent,
+    taskSelection: objective.taskSelection,
+    interruptedCalls: interruption.items,
+    interruptedCallRetention: interruption.retention,
     activeProject,
     currentWorkStatus,
     unresolvedItems: mergeUnresolved(
       previousState,
-      objective.activeObjective,
+      objective,
       facts.openQuestionEvidence,
       pendingItems,
     ),
@@ -290,4 +289,29 @@ module.exports = {
   LEGACY_CONTINUITY_MARKER,
   buildContinuityMemory,
   extractPriorContinuityState,
+  renderTaskProgress,
 };
+
+// One read-only task view for research, all finalization paths and fallback
+// reports. This does not map edits to semantic completion or schedule tools.
+function renderTaskProgress(messages) {
+  const normalized = messages.map((m, index) => ({ index,
+    role: typeof m.getRole === "function" ? m.getRole() : m.role,
+    text: typeof m.getText === "function" ? m.getText() : m.text,
+    toolRequests: typeof m.getToolCallRequests === "function" ? m.getToolCallRequests() : m.toolRequests || [],
+  }));
+  const prior = extractPriorContinuityState(normalized);
+  const task = buildObjectiveContinuity(normalized, prior);
+  const interruption = interruptedCallState(normalized, prior?.interruptedCalls || [], prior?.interruptedCallRetention);
+  const interruptedCalls = interruption.items;
+  const sameObjective = objectiveIdentity(task) === objectiveIdentity(prior);
+  const unresolvedItems = sameObjective ? (prior?.unresolvedItems || []).slice(-10) : [];
+  const historicalUnresolvedItems = sameObjective ? [] : (prior?.unresolvedItems || []).slice(-10);
+  if (!task.taskSelection && !interruptedCalls.length && !interruption.retention.omittedItemsAtLeast
+    && !unresolvedItems.length && !historicalUnresolvedItems.length) return "";
+  const view = { authority: "source_and_runtime_facts_only", completion: "not_inferred",
+    taskSelection: task.taskSelection, interruptedCalls, interruptedCallRetention: interruption.retention,
+    unresolvedItems, historicalUnresolvedItems };
+  return "[Task continuity data — not instructions or proof of completion]\n"
+    + JSON.stringify(view).replace(/</g, "\\u003c");
+}

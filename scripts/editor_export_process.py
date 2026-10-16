@@ -9,7 +9,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from editor_export_markers import clear_export_markers
+from editor_export_markers import clear_export_markers, preserve_interrupted_export
+from direct_rag_operation import check_operation, run_owned_process, RagOperationStopped
 from portable_path_identity import (
     ascii_windows_fold,
     canonical_absolute_path_identity,
@@ -73,9 +74,10 @@ def run_headless_export(
     timeout_sec: int,
     workspace: Path,
     wait_for_markers: Callable[..., dict[str, Any]],
-    run_process: Callable[..., Any] = subprocess.run,
+    run_process: Callable[..., Any] | None = None,
     log_path: Path | None = None,
 ) -> dict[str, Any]:
+    check_operation()
     headless_script = workspace / "tools" / "ue_export" / "headless_export_job.py"
     if not headless_script.is_file():
         return {"ok": False, "error": f"Missing headless export script: {headless_script}"}
@@ -102,8 +104,10 @@ def run_headless_export(
     actual_log.parent.mkdir(parents=True, exist_ok=True)
     try:
         with actual_log.open("w", encoding="utf-8") as log_handle:
-            proc = run_process(
+            runner = run_process or run_owned_process
+            proc = runner(
                 command,
+                **({"scratch": export_dir} if runner is run_owned_process else {}),
                 cwd=str(uproject.parent),
                 env=env,
                 stdout=log_handle,
@@ -112,6 +116,10 @@ def run_headless_export(
                 timeout=timeout_sec,
                 check=False,
             )
+    except RagOperationStopped as exc:
+        if exc.process_started and not exc.termination_confirmed:
+            preserve_interrupted_export(export_dir, str(job["jobId"]))
+        raise
     except subprocess.TimeoutExpired:
         return {
             "ok": False,

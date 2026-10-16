@@ -63,6 +63,14 @@ def _string_list(value: Any) -> list[str]:
     return list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
 
 
+def effective_search_filters(arguments: dict[str, Any]) -> dict[str, Any]:
+    """One normalization for both search options and repeat-receipt identity."""
+    return {
+        key: sorted(_string_list(arguments.get(key)))
+        for key in ("source", "layer", "doc_type", "genre", "extension", "required_term")
+    } | {"use_active_project": arguments.get("use_active_project", True) is not False}
+
+
 def exact_project_roots(
     index: Path,
     selectors: list[str],
@@ -121,7 +129,8 @@ def search_options(
     active_path = str(active_project) if active_project is not None else None
     mode = str(arguments.get("mode") or "auto")
     scope = str(arguments.get("scope") or "auto")
-    use_active = arguments.get("use_active_project", True) is not False
+    filters = effective_search_filters(arguments)
+    use_active = filters["use_active_project"]
     projects, resolved_scope = resolve_project_filters(
         query,
         mode,
@@ -148,14 +157,14 @@ def search_options(
     return (
         SearchOptions(
             mode=mode,
-            sources=_string_list(arguments.get("source")),
+            sources=filters["source"],
             projects=query_projects,
             project_roots=roots,
-            layers=_string_list(arguments.get("layer")),
-            doc_types=_string_list(arguments.get("doc_type")),
-            genres=_string_list(arguments.get("genre")),
-            extensions=_string_list(arguments.get("extension")),
-            required_terms=_string_list(arguments.get("required_term")),
+            layers=filters["layer"],
+            doc_types=filters["doc_type"],
+            genres=filters["genre"],
+            extensions=filters["extension"],
+            required_terms=filters["required_term"],
             candidate_limit=max(120, top_k * 20),
             evidence_only=True,
         ),
@@ -167,6 +176,7 @@ def search_options(
 
 
 __all__ = [
+    "effective_search_filters",
     "exact_project_roots",
     "indexed_project_filters",
     "indexed_project_root_filters",

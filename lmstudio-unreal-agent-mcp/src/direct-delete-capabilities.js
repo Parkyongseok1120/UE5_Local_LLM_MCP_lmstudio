@@ -1,4 +1,5 @@
 "use strict";
+const { assertMutationActive } = require("./safe-write");
 
 const fs = require("node:fs");
 const fsp = fs.promises;
@@ -280,17 +281,19 @@ function createDeleteCapabilities(context) {
         if (!pathIsWithinOrEqual(existingTrashAncestor, realProjectRoot)) {
           throw new Error("recoverable trash ancestor escapes the selected project through a symlink/junction");
         }
+        assertMutationActive(requestContext.signal);
         await fsp.mkdir(trashParent, { recursive: true });
         const realTrashParent = await fsp.realpath(trashParent);
         if (!pathIsWithinOrEqual(realTrashParent, realProjectRoot)) {
           throw new Error("recoverable trash parent escapes the selected project through a symlink/junction");
         }
+        assertMutationActive(requestContext.signal);
         await fsp.rename(refreshed.absolutePath, trashPath);
         return { ok: true };
       }, { stateRoot });
     } catch (error) {
       return failure(
-        "DELETE_TARGET_BLOCKED",
+        error.code === "REQUEST_CANCELLED" ? error.code : "DELETE_TARGET_BLOCKED",
         `delete_file locked containment revalidation failed: ${String(error.message || error)}`,
         { retryAllowed: true, retryMode: "after_state_change" },
       );
@@ -308,6 +311,7 @@ function createDeleteCapabilities(context) {
     context.fileSnapshots.invalidatePath(resolution.activeProject, resolution.absolutePath);
     return success({
       operation: "moved_to_trash",
+      canonicalProject: resolution.activeProject,
       path: `project://${resolution.relativePath}`,
       sha256: read.hash,
       hashSource: version.hashSource,

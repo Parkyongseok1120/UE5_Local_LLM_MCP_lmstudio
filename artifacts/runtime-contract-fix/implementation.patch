@@ -1,0 +1,295 @@
+diff --git a/lmstudio-context-compactor-plugin/README.md b/lmstudio-context-compactor-plugin/README.md
+index 0798c0d..3f060c5 100644
+--- a/lmstudio-context-compactor-plugin/README.md
++++ b/lmstudio-context-compactor-plugin/README.md
+@@ -109,4 +109,4 @@ npm run dev
+ 
+ `eval:audit-pressure`는 8개 파일 fixture에서 실제 압축 뒤 과거 원문 퇴출과 현재 원문 잔존을 독립 oracle로 먼저 확인합니다. 파일럿이 이 조건을 충족할 때만 A/B 본 반복을 실행합니다. A/B는 `Observe`와 `Inject`의 메타데이터 효과만 비교하고, A/C는 사용자가 선택한 `eval/AUDIT_TASK_CONTRACT.md`의 감사 지시 효과를 별도의 탐색 실험으로 비교합니다. 계약은 제품 하네스가 자동 주입하지 않으며, 실패·timeout·압축 미발생 실행도 보고서에서 삭제하지 않습니다. 재조회 반환량은 요청을 만든 `modelInputId`의 실제 입력 원문과 과거 원문 ledger를 각각 대조해 현재 입력 중첩·과거 근거 재획득·새 근거로 나눕니다.
+ 
+-설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.66 / revision 113입니다.
++설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.67 / revision 114입니다.
+diff --git a/lmstudio-context-compactor-plugin/manifest.json b/lmstudio-context-compactor-plugin/manifest.json
+index e6bc0d8..f9cad83 100644
+--- a/lmstudio-context-compactor-plugin/manifest.json
++++ b/lmstudio-context-compactor-plugin/manifest.json
+@@ -3,5 +3,5 @@
+   "runner": "node",
+   "owner": "codex",
+   "name": "unreal-context-compactor",
+-  "revision": 113
++  "revision": 114
+ }
+diff --git a/lmstudio-context-compactor-plugin/package-lock.json b/lmstudio-context-compactor-plugin/package-lock.json
+index 0f38de1..3ba467d 100644
+--- a/lmstudio-context-compactor-plugin/package-lock.json
++++ b/lmstudio-context-compactor-plugin/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "unreal-context-compactor",
+-  "version": "0.4.66",
++  "version": "0.4.67",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "unreal-context-compactor",
+-      "version": "0.4.66",
++      "version": "0.4.67",
+       "dependencies": {
+         "@lmstudio/sdk": "^1.5.0"
+       },
+diff --git a/lmstudio-context-compactor-plugin/package.json b/lmstudio-context-compactor-plugin/package.json
+index babee4b..3c75393 100644
+--- a/lmstudio-context-compactor-plugin/package.json
++++ b/lmstudio-context-compactor-plugin/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "unreal-context-compactor",
+-  "version": "0.4.66",
++  "version": "0.4.67",
+   "private": true,
+   "main": "dist/index.js",
+   "scripts": {
+diff --git a/lmstudio-context-compactor-plugin/src/execution-state.ts b/lmstudio-context-compactor-plugin/src/execution-state.ts
+index 16acfe3..ae55815 100644
+--- a/lmstudio-context-compactor-plugin/src/execution-state.ts
++++ b/lmstudio-context-compactor-plugin/src/execution-state.ts
+@@ -1,6 +1,6 @@
+ import { ChatMessage, type Chat } from "@lmstudio/sdk";
+ import type { FinalizationTrigger } from "./execution-contracts";
+-import type { CapturedRound } from "./round-loop";
++import { isCompletedPredictionReason, type CapturedRound } from "./round-loop";
+ 
+ export type ExecutionPhase = "RESEARCH" | "READ_RECOVERY" | "TOOL_REPLAN"
+   | "FINAL_DELIVERY" | "OUTPUT_RECOVERY" | "TERMINATED";
+@@ -51,7 +51,7 @@ export class RoundTransaction {
+   readonly returnedIds: Set<string>;
+   constructor(readonly captured: CapturedRound, aborted: boolean) {
+     this.planningCommitted = captured.predictionCompleted === true && !aborted && captured.failure === undefined
+-      && ["eosFound", "stopStringFound"].includes(captured.finishReason || "");
++      && isCompletedPredictionReason(captured.finishReason);
+     this.returnedIds = new Set(captured.messages.flatMap(m => m.getToolCallResults()).map(r => String(r.toolCallId)));
+   }
+   durable(message: ChatMessage): ChatMessage | null {
+diff --git a/lmstudio-context-compactor-plugin/src/round-loop.ts b/lmstudio-context-compactor-plugin/src/round-loop.ts
+index a0dc905..3525d32 100644
+--- a/lmstudio-context-compactor-plugin/src/round-loop.ts
++++ b/lmstudio-context-compactor-plugin/src/round-loop.ts
+@@ -9,10 +9,10 @@ import {
+ 
+ type TokenSource = LLM | LLMGeneratorHandle;
+ 
+-/** A completion callback is also emitted for truncation; only normal terminal
+- * reasons can commit planning or completed model exposure. */
++/** A normal tool handoff completes this prediction and consumes its input.
++ * It does not deliver a final report. Truncation callbacks are not completion. */
+ export function isCompletedPredictionReason(reason?: string): boolean {
+-  return reason === "eosFound" || reason === "stopStringFound";
++  return reason === "eosFound" || reason === "stopStringFound" || reason === "toolCalls";
+ }
+ 
+ const RAW_TOOL_INTENT_PATTERN = /<(?:tool_call|function=|\|(?:tool_call|python_tag)\|)/iu;
+diff --git a/lmstudio-context-compactor-plugin/src/working-context.js b/lmstudio-context-compactor-plugin/src/working-context.js
+index d6d39d7..1dc88dd 100644
+--- a/lmstudio-context-compactor-plugin/src/working-context.js
++++ b/lmstudio-context-compactor-plugin/src/working-context.js
+@@ -212,7 +212,10 @@ class WorkingContext {
+     if (requirePending && [...this.returnedRefs.keys()].some(id => !live.has(id))) {
+       throw new Error("CONTEXT_PENDING_EVIDENCE_OMITTED");
+     }
+-    if (consumed) for (const id of live.keys()) this.returnedRefs.delete(id);
++    if (consumed) {
++      for (const id of live.keys()) this.returnedRefs.delete(id);
++      for (const [key, [id]] of this.rawRefs) if (live.has(id)) this.consumedRawResults.add(key);
++    }
+     this.refs = new Map([...(this.manifest?.refs || []), ...live, ...this.returnedRefs]);
+     for (const [key, [id]] of this.rawRefs) if (!this.refs.has(id)) {
+       this.rawRefs.delete(key); this.consumedRawResults.delete(key);
+@@ -247,6 +250,8 @@ class WorkingContext {
+         const result = results[ri], request = index.matches.get(`${mi}:${ri}`);
+         if (!request || !isObservation(request)) continue;
+         const envelope = serializedResultContent(result.content);
++        // Duplicate callbacks/replays cannot reopen a completed consumer.
++        if (this.consumedRawResults.has(rawExposureKey(request, result, envelope))) continue;
+         const value = decodeToolResultRecord(envelope).value;
+         if (!value || ["archived_tool_result_projection", "historical_evidence_range"].includes(value.kind)) continue;
+         const saved = this.archiveObservation(request, result, value, metadata);
+diff --git a/lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs b/lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs
+index c7c461e..edaad2a 100644
+--- a/lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs
++++ b/lmstudio-context-compactor-plugin/test/audit-fc5373.test.cjs
+@@ -1,4 +1,5 @@
+ "use strict";
++require('./tool-round-lifecycle.test.cjs');
+ const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+ const {Chat,ChatMessage}=require('@lmstudio/sdk');
+ const {BudgetBroker,BatchReservation,reserveReadResult,minimumReadResultTokens}=require('../dist/budget-broker');
+diff --git a/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs b/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs
+index 37f4db6..197d756 100644
+--- a/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs
++++ b/lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs
+@@ -100,6 +100,35 @@ test("B04/O03 production handler rejects an inexact input before model dispatch
+   assert.equal(ctl.debugValues.some(e => e.event === 'working_context_commit' && e.committed), false);
+ });
+ 
++test("hybrid handler consumes toolCalls inputs across repeated compaction and delivers EOS", async () => {
++  let rounds=0;
++  const model={identifier:'toolCalls-regression',async getContextLength(){return 38912},
++    async applyPromptTemplate(chat){return chat.toString()},
++    async countTokens(text){return 12000+Math.ceil(text.length/4)},
++    async act(chat,tools,opts){
++      if(rounds++===10){
++        opts.onPredictionCompleted({stats:{stopReason:'eosFound'}});
++        opts.onMessage(ChatMessage.create('assistant','Ten sources observed.'));return;
++      }
++      assert.ok(tools.some(t=>t.name==='read_file'));
++      const id='read-'+rounds;
++      opts.onPredictionCompleted({stats:{stopReason:'toolCalls'}});
++      opts.onMessage(ChatMessage.from({role:'assistant',content:[{type:'toolCallRequest',toolCallRequest:{type:'function',id,name:'read_file',arguments:{path:id}}}]}));
++      opts.onMessage(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:id,content:JSON.stringify({ok:true,kind:'workspace_file_observation',path:id,hash:id,text:'source fact '+id+' '+ 'x'.repeat(5000)})}]}));
++      opts.onRoundEnd();throw opts.signal.reason;
++    }};
++  const ctl=fakeController(Chat.from([{role:'user',content:'Read ten independent source pages.'}]),model,
++    {contextManagementMode:'hybrid',maxOutputReserve:8192,safetyMarginTokens:2048,workingInputTargetTokens:18000,
++      workingInputTriggerTokens:22000,softRemainingTokens:6000,hardRemainingTokens:3000,maxCheckpointChars:5000},
++    [{name:'read_file',pluginIdentifier:'mcp/unity-tools',description:'read',parametersJsonSchema:{type:'object',properties:{path:{type:'string'},byteBudget:{type:'integer',minimum:1024,maximum:65536}}}}]);
++  await handlePredictionLoop(ctl);
++  assert.equal(rounds,11);
++  assert.ok(ctl.blocks.some(b=>b.text.includes('Ten sources observed.')));
++  const compacted=ctl.debugValues.filter(e=>e.event==='context_low_water' && e.compactionRequested && e.reclaimRatio>0);
++  assert.ok(compacted.length>=3,JSON.stringify(compacted));
++  assert.ok(compacted.every(e=>e.finalExactInputTokens<=e.effectiveLowWaterTokens));
++});
++
+ test("prediction loop calls the directly selected model with compacted history", async () => {
+   const latest = "Analyze the current Cinematic system only.";
+   const history = Chat.from([
+@@ -2101,7 +2130,7 @@ test("context budget measures a narrowed registered Git catalogue before tools-d
+   assert.equal(rescue.nextToolCount, 4);
+   assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
+   const identity = ctl.debugValues.find(value => value.event === "direct_runtime_identity");
+-  assert.equal(identity.runtimeSourceRevision, 113);
++  assert.equal(identity.runtimeSourceRevision, 114);
+   assert.match(identity.installedSourceFingerprint, /^[a-f0-9]{64}$/u);
+   assert.match(identity.installedDistFingerprint, /^[a-f0-9]{64}$/u);
+   assert.match(identity.toolRegistryFingerprint, /^[a-f0-9]{64}$/u);
+diff --git a/lmstudio-unity-mcp/src/catalog.js b/lmstudio-unity-mcp/src/catalog.js
+index 6a8a290..9e454dc 100644
+--- a/lmstudio-unity-mcp/src/catalog.js
++++ b/lmstudio-unity-mcp/src/catalog.js
+@@ -31,7 +31,7 @@ const tools = [
+     { path: str, query: str, extensions: { type: "array", items: { type: "string", pattern: "^\\.[A-Za-z0-9_-]+$" }, minItems: 1, maxItems: 16 }, content: { type: "boolean" }, ...paging }),
+     anyOf: [{ required: ["query"] }, { required: ["extensions"] }],
+     not: { required: ["content", "extensions"], properties: { content: { const: true } }, not: { required: ["query"] } } },
+-  tool("read_file", "Read a UTF-8 line range under Assets, Packages or ProjectSettings. The result reports the exact returned range, continuation line and a full-file hash/receipt.", { path: str, startLine: integer(1, 10000000), limit: paging.limit, byteBudget: paging.byteBudget }, ["path"]),
++  tool("read_file", "Read a UTF-8 line range under Assets, Packages or ProjectSettings. Whole-line pages fit byteBudget including metadata; follow nextStartLine while hasMore. An oversized single line fails. Reports the exact returned range and a full-file hash/receipt.", { path: str, startLine: integer(1, 10000000), limit: paging.limit, byteBudget: paging.byteBudget }, ["path"]),
+   tool("patch_file", "Explicit exact-once substring replacements, guarded by a file receipt. No import/compile initiated.", { path: str, receipt: str, edits: { ...array(object({ oldText: str, newText: text }, ["oldText", "newText"]), 50), minItems: 1 } }, ["path", "receipt", "edits"]),
+   tool("create_file", "Create an allowed text file under an existing Assets directory; target must be absent.", { path: str, content: text, mustNotExist: { const: true } }, ["path", "content", "mustNotExist"]),
+   tool("structured_data_read", "Read bounded JSON paths or CSV string rows. CSV format is explicit.", { path: str, format: enumeration("json", "csv"), selector, depth: integer(0, 4), schemaPath: str, csv, filter: object({ column: str, equals: text }, ["column", "equals"]), ...paging }, ["path", "format"]),
+diff --git a/lmstudio-unity-mcp/src/server.js b/lmstudio-unity-mcp/src/server.js
+index fdfa5f9..0bd2f90 100644
+--- a/lmstudio-unity-mcp/src/server.js
++++ b/lmstudio-unity-mcp/src/server.js
+@@ -49,7 +49,9 @@ function createRuntime(env = process.env, injectedBridge) {
+       if (workspaceEnabled && (name === "workspace_status" || name.startsWith("git_"))) result = await workspace(name, args);
+       else if (name === "unity_symbols") result = await symbols.call(args);
+       else if (name === "unity_git") result = versionControl.call(args);
+-      else if (name === "read_file") result = await files.read(args);
++      else if (name === "read_file") return await files.read(args, value => fileObservation({
++        ...value, canonicalProjectRoot: policy.root, projectIdentity: policy.projectIdentity,
++      }));
+       else if (name === "list_directory") result = files.list(args);
+       else if (name === "search_files") result = await files.search(args);
+       else if (name === "patch_file") result = await files.patch(args);
+diff --git a/lmstudio-unity-mcp/test/runtime.test.js b/lmstudio-unity-mcp/test/runtime.test.js
+index 4e282a1..52ab9a6 100644
+--- a/lmstudio-unity-mcp/test/runtime.test.js
++++ b/lmstudio-unity-mcp/test/runtime.test.js
+@@ -221,6 +221,28 @@ test("query cursor detects changed state and UTF-8 budget is enforced", async t
+   f.put("Assets/large.txt", "한".repeat(3000));
+   assert.equal((await f.call("read_file", { path: "Assets/large.txt", byteBudget: 1024 })).errorCode, "response_budget_exceeded");
+ });
++
++test("read_file fits complete line pages including the final workspace envelope", async t => {
++  const f = fixture(t);
++  const lines = Array.from({length:80},(_,n)=>`${n}: 한글 😀 "quoted" \\ ${'x'.repeat(65)}`);
++  f.put('Assets/paged.txt',lines.join('\n'));
++  let startLine=1, pages=0, observed=[], digest;
++  do {
++    const value=await f.call('read_file',{path:'Assets/paged.txt',startLine,limit:80,byteBudget:2048});
++    assert.equal(value.errorCode,undefined,JSON.stringify(value));
++    assert.ok(Buffer.byteLength(JSON.stringify(value))<=2048);
++    assert.equal(value.kind,'workspace_file_observation');
++    assert.ok(value.returnedLineCount>0);
++    assert.equal(value.endLine,startLine+value.returnedLineCount-1);
++    assert.deepEqual(value.range,{unit:'line',start:startLine,end:value.endLine,total:80});
++    digest ??=value.hash;assert.equal(value.hash,digest);
++    observed.push(...value.text.split('\n'));pages++;
++    startLine=value.nextStartLine;
++    assert.equal(value.hasMore,startLine!==null);
++  } while(startLine!==null && pages<81);
++  assert.ok(pages>1 && pages<81);
++  assert.deepEqual(observed,lines);
++});
+ test("RPC handshake binds identity and never emits discovery token", async t => {
+   const f = fixture(t); let requests = 0;
+   const secret = "a".repeat(64);
+diff --git a/shared-tool-core/files.js b/shared-tool-core/files.js
+index 5d2493d..2f7b550 100644
+--- a/shared-tool-core/files.js
++++ b/shared-tool-core/files.js
+@@ -62,19 +62,29 @@ class Files {
+     try { new TextDecoder("utf-8", { fatal: true }).decode(read.buffer); } catch { fail("unsupported_encoding", "Only UTF-8 (with optional BOM) is supported"); }
+     return { ...read, target, receipt: this.receipt(relative, read.hash) };
+   }
+-  async read(args) {
++  async read(args, envelope = value => value) {
+     const s = await this.snapshot(args.path);
+     const lines = s.content.split(/\r\n|\n|\r/);
+     const start = args.startLine ?? 1;
+     const limit = args.limit ?? 100;
+     const selected = lines.slice(start - 1, start - 1 + limit);
+-    const returnedLineCount = selected.length;
+-    const endLine = returnedLineCount > 0 ? start + returnedLineCount - 1 : null;
+-    const hasMore = start - 1 + returnedLineCount < lines.length;
+-    return bounded({ status: "observed", path: args.path, receipt: s.receipt, receiptScope: "entire_file_bytes", hash: s.hash,
+-      observedAt: new Date().toISOString(), startLine: start, endLine, returnedLineCount, totalLines: lines.length,
+-      text: selected.join("\n"), hasMore, nextStartLine: hasMore ? start + returnedLineCount : null,
+-      truncated: hasMore }, args.byteBudget);
++    const observedAt = new Date().toISOString();
++    const makePage = count => {
++      const endLine = count > 0 ? start + count - 1 : null;
++      const hasMore = start - 1 + count < lines.length;
++      return envelope({ status: "observed", path: args.path, receipt: s.receipt, receiptScope: "entire_file_bytes", hash: s.hash,
++        observedAt, startLine: start, endLine, returnedLineCount: count, totalLines: lines.length,
++        text: selected.slice(0, count).join("\n"), hasMore, nextStartLine: hasMore ? start + count : null,
++        truncated: hasMore });
++    };
++    const budget = args.byteBudget ?? 32768;
++    // Budget the actual transport envelope. Return whole lines with explicit
++    // continuation; a single oversized line still fails instead of clipping.
++    for (let count = selected.length; count > 0; count--) {
++      const result = makePage(count);
++      if (Buffer.byteLength(JSON.stringify(result)) <= budget) return result;
++    }
++    return bounded(makePage(Math.min(1, selected.length)), budget);
+   }
+   async mutate(args, transform, create = false) {
+     if (!this.allowWrite) fail("edit_disabled", "Edit requires ALLOW_WRITE=1 in the host configuration");
+diff --git a/tests/test_integrated_installer.py b/tests/test_integrated_installer.py
+index 9c5a5e0..57d08cf 100644
+--- a/tests/test_integrated_installer.py
++++ b/tests/test_integrated_installer.py
+@@ -86,9 +86,9 @@ def test_installer_profiles_are_manifest_driven() -> None:
+     assert "contextCompactorRequiredWithLmStudio" not in manifest["safety"]
+     assert node_package["version"] == node_lock["version"] == "0.3.23"
+     assert node_lock["packages"][""]["version"] == "0.3.23"
+-    assert compactor_package["version"] == compactor_lock["version"] == "0.4.66"
+-    assert compactor_lock["packages"][""]["version"] == "0.4.66"
+-    assert compactor_manifest["revision"] == 113
++    assert compactor_package["version"] == compactor_lock["version"] == "0.4.67"
++    assert compactor_lock["packages"][""]["version"] == "0.4.67"
++    assert compactor_manifest["revision"] == 114
+     assert module.PROFILE_DEFAULTS == {
+         name: set(components)
+         for name, components in manifest["profiles"].items()

@@ -11,6 +11,7 @@ MAX_METADATA_LIST_ITEMS = 32
 CHUNK_METADATA_POLICY_VERSION = 1
 
 _ESSENTIAL_KEYS = (
+    "project_source_snapshot",
     "project", "project_root", "project_file", "root", "relative_path",
     "path", "source_path", "extension", "scope", "symbol_name",
     "symbol_kind", "module_name", "error_code", "error_file", "error_kind",
