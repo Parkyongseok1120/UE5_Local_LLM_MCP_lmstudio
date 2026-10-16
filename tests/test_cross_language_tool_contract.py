@@ -94,3 +94,29 @@ def test_node_direct_and_safety_units() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_server_effects_match_manifest_tool_effect_ssot() -> None:
+    from direct_rag_contract import DIRECT_RAG_MUTATING_TOOL_NAMES
+
+    manifest = _manifest()
+    rag_effects = manifest["ragToolEffects"]
+    assert set(rag_effects) == set(manifest["ragEssential"])
+    assert {name for name, effect in rag_effects.items() if effect not in {"read", "ephemeral"}} == set(
+        DIRECT_RAG_MUTATING_TOOL_NAMES
+    )
+    node = shutil.which("node")
+    assert node is not None
+    script = (
+        "const {toolDefinitions,toolEffect}=require('./src/direct-tool-catalog.js');"
+        "process.stdout.write(JSON.stringify(Object.fromEntries(toolDefinitions().map(t=>[t.name,toolEffect(t)]))));"
+    )
+    result = subprocess.run(
+        [node, "-e", script],
+        cwd=ROOT / "lmstudio-unreal-agent-mcp",
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert json.loads(result.stdout) == manifest["agentToolEffects"]

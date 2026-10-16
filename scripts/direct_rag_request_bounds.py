@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from direct_rag_limits import MAX_MAX_CHARS, MIN_MAX_CHARS
 
 MAX_QUERY_CHARS = 4_096
 MAX_PROJECT_SELECTOR_CHARS = 4_096
@@ -48,6 +49,14 @@ def bounded_string_schema(max_chars: int, *, min_length: int = 0) -> dict[str, A
     return schema
 
 
+def max_chars_schema() -> dict[str, Any]:
+    return {
+        "type": "integer",
+        "minimum": MIN_MAX_CHARS,
+        "maximum": MAX_MAX_CHARS,
+    }
+
+
 def project_selector_schema() -> dict[str, Any]:
     item = bounded_string_schema(MAX_PROJECT_SELECTOR_CHARS, min_length=1)
     return {
@@ -60,10 +69,7 @@ def project_selector_schema() -> dict[str, Any]:
                 "maxItems": MAX_PROJECT_SELECTORS,
             },
         ],
-        "description": (
-            "Exact project name/path selector(s); when supplied, the active project is not substituted. "
-            "Combined exact identities must fit the selected detail transport budget and are never clipped."
-        ),
+        "description": "Exact project name/path; overrides active project.",
     }
 
 
@@ -170,6 +176,10 @@ def rag_request_bound_error(
         error = _project_selector_error(arguments["project"])
         if error:
             return error
+    if "maxChars" in arguments:
+        value = arguments["maxChars"]
+        if isinstance(value, bool) or not isinstance(value, int) or not MIN_MAX_CHARS <= value <= MAX_MAX_CHARS:
+            return f"maxChars must be an integer from {MIN_MAX_CHARS} through {MAX_MAX_CHARS}."
     for field, (max_items, max_chars) in list_limits.items():
         if field not in arguments:
             continue
@@ -202,6 +212,7 @@ __all__ = [
     "MIN_RESPONSE_METADATA_RESERVE_CHARS",
     "bounded_filter_schema",
     "bounded_string_schema",
+    "max_chars_schema",
     "project_selector_schema",
     "rag_request_bound_error",
 ]

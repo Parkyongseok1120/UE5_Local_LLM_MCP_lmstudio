@@ -2,9 +2,9 @@ import {
   type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import { directConfigSchematics } from "./direct-config";
-import { GUIDANCE_DEFAULTS, CONTEXT_DEFAULTS } from "./config-defaults";
+import { NUMERIC_FIELDS, type NumericField } from "./config-defaults";
 import { designGuidanceMode, designGuidanceDelivery } from "./design-guidance";
-import { DEFAULT_CONTEXT_MANAGEMENT_MODE, type AuditCompletionMode, type ContextManagementMode, type DirectConfig, type InputAvailabilityMode, type OutputRecoveryMode, type StagnationAction } from "./execution-contracts";
+import { DEFAULT_CONTEXT_MANAGEMENT_MODE, type AuditCompletionMode, type ContextManagementMode, type DirectConfig, type InputAvailabilityMode, type OutputRecoveryMode, type StagnationAction, type WorkingInputScaling } from "./execution-contracts";
 import {
   type ProjectEngineSetting
 } from "./tool-scope";
@@ -37,53 +37,65 @@ export function contextManagementMode(value: unknown): ContextManagementMode {
     ? value : DEFAULT_CONTEXT_MANAGEMENT_MODE;
 }
 
+export function workingInputScaling(value: unknown): WorkingInputScaling {
+  return value === "fixed" ? "fixed" : "auto";
+}
+
 export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
   const config = ctl.getPluginConfig(directConfigSchematics);
+  const read = (key: NumericField) => {
+    if (key === "outputRecoverySeconds") return 0; // Deprecated rewrite-only timer.
+    const spec = NUMERIC_FIELDS[key];
+    return numeric(config.get(key), spec.default, spec.min, spec.max);
+  };
   const configuredEngine = String(config.get("projectEngine") || "auto");
   const projectEngine: ProjectEngineSetting = ["auto", "unity", "unreal", "mixed"].includes(configuredEngine)
     ? configuredEngine as ProjectEngineSetting : "auto";
-  const maxOutputReserve = numeric(config.get("maxOutputReserve"), 8192, 256, 131072);
-  const configuredRecoveryMaxTokens = numeric(config.get("outputRecoveryMaxTokens"), 0, 0, 131072);
-  const workingInputTargetTokens = numeric(config.get("workingInputTargetTokens"), CONTEXT_DEFAULTS.target, 2048, 131072);
+  const maxOutputReserve = read("maxOutputReserve");
+  const configuredRecoveryMaxTokens = read("outputRecoveryMaxTokens");
+  const workingInputTargetTokens = read("workingInputTargetTokens");
   return {
     projectEngine,
     projectIdentity: String(config.get("projectIdentity") || "").trim().slice(0, 4096),
     designGuidanceMode: designGuidanceMode(config.get("designGuidanceMode")),
     designGuidanceDelivery: designGuidanceDelivery(config.get("designGuidanceDelivery")),
-    designGuidanceMaxTokens: numeric(config.get("designGuidanceMaxTokens"), GUIDANCE_DEFAULTS.maxTokens, 0, 8192),
+    designGuidanceMaxTokens: read("designGuidanceMaxTokens"),
     observeOnly: config.get("observeOnly") === true,
     contextManagementMode: contextManagementMode(config.get("contextManagementMode")),
     workingInputTargetTokens,
     workingInputTriggerTokens: Math.max(workingInputTargetTokens,
-      numeric(config.get("workingInputTriggerTokens"), CONTEXT_DEFAULTS.trigger, 2048, 262144)),
-    toolResultProjectionChars: numeric(config.get("toolResultProjectionChars"), CONTEXT_DEFAULTS.projectionChars, 128, 8192),
-    semanticSummaryMaxTokens: numeric(config.get("semanticSummaryMaxTokens"), CONTEXT_DEFAULTS.summaryTokens, 128, 8192),
-    semanticSummarySeconds: numeric(config.get("semanticSummarySeconds"), CONTEXT_DEFAULTS.summarySeconds, 1, 300),
+      read("workingInputTriggerTokens")),
+    workingInputScaling: workingInputScaling(config.get("workingInputScaling")),
+    toolResultProjectionChars: read("toolResultProjectionChars"),
+    semanticHandoff: config.get("semanticHandoff") === true,
+    semanticSummaryMaxTokens: read("semanticSummaryMaxTokens"),
+    semanticSummarySeconds: read("semanticSummarySeconds"),
     showDebugInfo: config.get("showDebugInfo") !== false,
     reviewProgress: config.get("reviewProgress") === true,
-    pastReasoningTokens: numeric(config.get("pastReasoningTokens"), 0, 0, 16384),
-    softRemainingTokens: numeric(config.get("softRemainingTokens"), 6000, 0, 1_000_000),
-    hardRemainingTokens: numeric(config.get("hardRemainingTokens"), 3000, 0, 1_000_000),
+    pastReasoningTokens: read("pastReasoningTokens"),
+    softRemainingTokens: read("softRemainingTokens"),
+    hardRemainingTokens: read("hardRemainingTokens"),
     maxOutputReserve,
     outputRecoveryMode: outputRecoveryMode(config.get("outputRecoveryMode")),
     reasoningRecoveryMode: outputRecoveryMode(config.get("reasoningRecoveryMode")),
     outputRecoveryMaxTokens: configuredRecoveryMaxTokens > 0 ? configuredRecoveryMaxTokens : maxOutputReserve,
-    outputRecoverySeconds: numeric(config.get("outputRecoverySeconds"), 90, 1, 600),
-    safetyMarginTokens: numeric(config.get("safetyMarginTokens"), 2048, 0, 131072),
-    assumedContextLength: numeric(config.get("assumedContextLength"), 38912, 2048, 4_000_000),
-    recentCompleteTurns: numeric(config.get("recentCompleteTurns"), 2, 0, 20),
-    compactAboveMessageCount: numeric(config.get("compactAboveMessageCount"), 24, 4, 10000),
-    maxCheckpointChars: numeric(config.get("maxCheckpointChars"), 22000, 2000, 100000),
-    maxToolResultChars: numeric(config.get("maxToolResultChars"), 1200, 200, 10000),
+    outputRecoverySeconds: read("outputRecoverySeconds"),
+    safetyMarginTokens: read("safetyMarginTokens"),
+    assumedContextLength: read("assumedContextLength"),
+    recentCompleteTurns: read("recentCompleteTurns"),
+    compactAboveMessageCount: read("compactAboveMessageCount"),
+    maxCheckpointChars: read("maxCheckpointChars"),
+    maxToolResultChars: read("maxToolResultChars"),
     toolStagnationAction: stagnationAction(config.get("toolStagnationAction")),
-    toolStagnationRounds: numeric(config.get("toolStagnationRounds"), 3, 2, 20),
+    toolStagnationRounds: read("toolStagnationRounds"),
+    maxResearchRounds: read("maxResearchRounds"),
     generationRepetitionAction: stagnationAction(config.get("generationRepetitionAction")),
-    generationRepeatCount: numeric(config.get("generationRepeatCount"), 3, 2, 10),
+    generationRepeatCount: read("generationRepeatCount"),
     inputAvailabilityMode: inputAvailabilityMode(config.get("inputAvailabilityMode")),
     auditCompletionMode: auditCompletionMode(config.get("auditCompletionMode")),
-    auditResearchSeconds: numeric(config.get("auditResearchSeconds"), 100, 1, 3600),
-    auditResearchRounds: numeric(config.get("auditResearchRounds"), 12, 1, 100),
-    auditFinalSeconds: numeric(config.get("auditFinalSeconds"), 70, 1, 600),
-    auditFinalMaxTokens: numeric(config.get("auditFinalMaxTokens"), 4096, 256, 32768),
+    auditResearchSeconds: read("auditResearchSeconds"),
+    auditResearchRounds: read("auditResearchRounds"),
+    auditFinalSeconds: read("auditFinalSeconds"),
+    auditFinalMaxTokens: read("auditFinalMaxTokens"),
   };
 }

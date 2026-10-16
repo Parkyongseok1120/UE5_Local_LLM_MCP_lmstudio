@@ -98,7 +98,7 @@ test("one observation result feeds research and recovery; cycles differ from pro
 });
 
 test("summary retries only a new event after cooldown, preserves note, and caps model calls", async () => {
-  const config = readConfig({ getPluginConfig: () => ({ get: () => undefined }) });
+  const config = readConfig({ getPluginConfig: () => ({ get: key => key === "semanticHandoff" ? true : undefined }) });
   let calls = 0;
   const tokenSource = { async getContextLength() { return 38912; }, async applyPromptTemplate() { return "summary"; },
     async countTokens() { return 100; }, async act(_chat, _tools, options) {
@@ -173,14 +173,14 @@ test("broker reports effective limit and separates body size without weakening r
   const broker = new BudgetBroker({ workingInputTargetTokens: 40000, workingInputTriggerTokens: 56000, safetyMarginTokens: 2048 });
   const archive = { name: "evidence_first_read_context", parametersJsonSchema: { properties: { maxChars: { minimum: 1, maximum: 8192 } } } };
   localObservationTools.add(archive);
-  const batch = broker.beginBatch({ contextLength: 84224, inputTokens: 44763, outputReserve: 8192 }, true);
+  const batch = broker.beginBatch({ contextLength: 84224, inputTokens: 64000, outputReserve: 8192 }, true);
   const first = reserveReadResult(batch, "1", archive, { maxChars: 8192 });
   const peer = reserveReadResult(batch, "2", archive, { maxChars: 8192 });
-  assert.deepEqual(first.limit, { field: "maxChars", requested: 8192, effective: 6668, unit: "utf16_code_units" });
+  assert.deepEqual(first.limit, { field: "maxChars", requested: 8192, effective: 5529, unit: "utf16_code_units" });
   assert.equal(peer.denialReason, "held_reservations_insufficient");
   const sizes = readResultSize(JSON.stringify({ content: "한글" }));
   assert.equal(sizes.bodyChars, 2); assert.equal(sizes.bodyBytes, 6);
-  assert.match(readBudgetFeedback([{ readResultLimit: first.limit, readResultSize: sizes }]), /6668/);
+  assert.match(readBudgetFeedback([{ readResultLimit: first.limit, readResultSize: sizes }]), /5529/);
   batch.settle("1", "returned"); batch.close(); assert.equal(batch.snapshot().held, 0);
   for (const requested of [128, 12000]) {
     const roomy = broker.beginBatch({ contextLength: 84224, inputTokens: 100, outputReserve: 8192 }, true);

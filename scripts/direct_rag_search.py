@@ -14,7 +14,7 @@ from direct_rag_evidence import (
     evidence_metadata_fits,
     fit_evidence_payload,
 )
-from direct_rag_limits import detail_limits, next_detail
+from direct_rag_limits import detail_limits, next_detail, response_char_limit
 from direct_rag_request_bounds import rag_request_bound_error
 from direct_rag_index_registry import resolve_request_index
 from direct_rag_retrieval import retrieve
@@ -73,9 +73,9 @@ def rag_search(
     runtime: SearchRuntime,
     arguments: dict[str, Any],
 ) -> CapabilityResult:
-    request_limits = detail_limits(str(arguments.get("detailLevel") or "compact"))
-    request_limit = min(
-        int(request_limits["max_tool_chars"]),
+    request_limit = response_char_limit(
+        str(arguments.get("detailLevel") or "compact"),
+        arguments.get("maxChars"),
         configured_result_limit(),
     )
     bound_error = rag_request_bound_error(
@@ -217,7 +217,7 @@ def rag_search(
             projectRoots=page.selected_projects,
         )
     limits = detail_limits(page.detail_level)
-    limit = min(int(limits["max_tool_chars"]), configured_result_limit())
+    limit = response_char_limit(page.detail_level, arguments.get("maxChars"), configured_result_limit())
     match_refs = compact_match_refs(
         page.rows,
         max_chars=min(int(limits["match_chars"]), max(512, limit // 3)),

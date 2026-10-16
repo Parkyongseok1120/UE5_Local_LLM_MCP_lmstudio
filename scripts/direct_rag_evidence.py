@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from direct_rag_result import render_model_json
 
 _NON_FACTUAL_SOURCES = frozenset({"rag_sidecar", "unreal_failure_memory"})
 _TRUNCATED_SUFFIX = "\n...[truncated]"
@@ -124,7 +125,7 @@ def evidence_metadata_fits(
 
     projected = dict(payload)
     projected["evidence"] = ""
-    rendered = json.dumps(projected, ensure_ascii=False, indent=2)
+    rendered = render_model_json(projected)
     return len(rendered) + max(0, reserve_chars) <= max_chars
 
 
@@ -133,12 +134,12 @@ def fit_evidence_payload(
     *,
     max_chars: int,
 ) -> tuple[dict[str, Any], bool]:
-    """Trim only evidence until the pretty-serialized payload fits its transport cap."""
+    """Trim only evidence until the model-serialized payload fits its transport cap."""
 
     fitted = dict(payload)
 
     def rendered_chars() -> int:
-        return len(json.dumps(fitted, ensure_ascii=False, indent=2))
+        return len(render_model_json(fitted))
 
     if rendered_chars() <= max_chars:
         return fitted, False

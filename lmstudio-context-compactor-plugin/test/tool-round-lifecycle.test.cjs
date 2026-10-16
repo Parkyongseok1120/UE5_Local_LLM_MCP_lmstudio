@@ -96,7 +96,7 @@ test('shared reservations distinguish pending peers from returned-result overrun
   assert.equal(batch.exceeded,false);
   assert.equal(reserveReadResult(batch,'d',tool,{}).allowed,true);
   assert.equal(reserveReadResult(batch,'d',tool,{}).denialReason,'duplicate_reservation');
-  batch.receive('d',9000);
+  batch.receive('d',12000);
   assert.equal(reserveReadResult(batch,'e',tool,{}).denialReason,'returned_result_overrun');
   batch.close(); batch.close();
   assert.equal(reserveReadResult(batch,'e',tool,{}).denialReason,'batch_closed');

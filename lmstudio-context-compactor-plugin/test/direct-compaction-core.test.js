@@ -1671,7 +1671,9 @@ test("previous final response is recorded as evidence without claiming objective
     message("assistant", "complete answer"),
     message("user", "second"),
   ], { recentCompleteTurns: 0 });
-  assert.deepEqual(result.memory.previousTurnFinalResponseEvidence, { present: true, messageIndex: 1 });
+  const evidence = result.memory.previousTurnFinalResponseEvidence;
+  assert.equal(evidence.present, true); assert.equal(evidence.messageIndex, 1);
+  assert.equal(evidence.final, true); assert.equal(evidence.text, "complete answer");
   assert.doesNotMatch(result.checkpoint, /commit|ack|route|planner|synthesis/i);
 });
 

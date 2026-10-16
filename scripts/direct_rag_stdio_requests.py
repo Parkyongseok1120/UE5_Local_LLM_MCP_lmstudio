@@ -73,9 +73,19 @@ class RequestInbox:
             self.operations.pop(request_id, None)
 
     def __iter__(self):
+        return self.iterate()
+
+    def iterate(self, drain=None):
+        """Yield queued lines; at EOF, let ``drain`` finish dispatched reads
+        before remaining operations are cancelled."""
         self.reader.start()
         try:
-            while not self.closed.is_set() or not self.queue.empty():
+            while True:
+                if self.closed.is_set() and self.queue.empty():
+                    # The reader has exited, so the queue can no longer grow.
+                    if drain is not None:
+                        drain()
+                    break
                 try:
                     yield self.queue.get(timeout=0.05)
                 except queue.Empty:

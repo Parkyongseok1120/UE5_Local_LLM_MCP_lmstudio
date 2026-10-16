@@ -86,8 +86,8 @@ test('delivery limits are owned by the selected mode, not the automatic recovery
     assert.deepEqual(controller.limits(config,false,trigger),{maxTokens:8192,timeoutMs:null});
     assert.deepEqual(controller.limits(config,true,trigger),{maxTokens:4096,timeoutMs:70000});
   }
-  for(const bounded of [false,true]) assert.deepEqual(controller.limits(config,bounded,'output_recovery'),
-    {maxTokens:2048,timeoutMs:30000});
+  assert.deepEqual(controller.limits(config,false,'output_recovery'), {maxTokens:2048,timeoutMs:null});
+  assert.deepEqual(controller.limits(config,true,'output_recovery'), {maxTokens:2048,timeoutMs:70000});
 });
 
 test('fallback keeps byte ranges, excludes failed file bodies, deduplicates and bounds excerpts', () => {
@@ -173,13 +173,14 @@ function contextFixture(overrides={}) {
     getRoundOutputReserve:()=>config.maxOutputReserve,modelInputId:'ratchet',noteEnabled:false,getNote:()=>null,historicalAvailabilityLedger:[]});
   return {config,source,assemble,manager:new ContextManager(config,new BudgetBroker(config))};
 }
-test('broker derives watermarks from loaded context and counts post-tool reserve once', () => {
+test('broker derives watermarks from loaded context and counts the post-tool request once', () => {
   const broker=new BudgetBroker({workingInputTargetTokens:26000,workingInputTriggerTokens:40000,safetyMarginTokens:2048});
   const water=broker.watermarks({contextLength:38912,outputReserve:8192,inputTokens:18000},1000,true);
   assert.equal(water.hardInputCeiling,28672);
   assert.ok(water.effectiveHighWaterTokens<38912);
   assert.ok(water.configuredLowWaterTokens<water.effectiveHighWaterTokens);
-  assert.equal(water.projectedNextInput,18000+water.reservedToolResultTokens+8192);
+  assert.equal(water.projectedNextInput,18000+water.reservedToolResultTokens+2048);
+  assert.equal(water.requiredPostToolOverhead,2048);
   const floor=broker.watermarks({contextLength:8192,outputReserve:2048,inputTokens:5000},5000,false);
   assert.equal(floor.effectiveLowWaterTokens,5000); assert.equal(floor.targetUnreachable,true);
 });
@@ -199,7 +200,7 @@ test('read envelope reservation reduces a published bound before dispatch', () =
   const batch=new BatchReservation(5000);
   const tool={parametersJsonSchema:{properties:{byteBudget:{minimum:1024,maximum:65536}}}};
   const a=reserveReadResult(batch,'A',tool,{byteBudget:24000});
-  assert.equal(a.allowed,true); assert.equal(a.arguments.byteBudget,3976);
+  assert.equal(a.allowed,true); assert.equal(a.arguments.byteBudget,9940);
   assert.equal(reserveReadResult(batch,'B',tool,{byteBudget:1024}).allowed,false);
 });
 test('three equivalent growth/compaction cycles verify final reassembled LOW without drift', async () => {
@@ -217,7 +218,7 @@ test('three equivalent growth/compaction cycles verify final reassembled LOW wit
   assert.ok(Math.max(...baselines)-Math.min(...baselines)<128,JSON.stringify(baselines));
 });
 test('unreachable LOW preserves mandatory request and reports its measured floor', async () => {
-  const f=contextFixture({workingInputTargetTokens:2048,workingInputTriggerTokens:2048});
+  const f=contextFixture({workingInputTargetTokens:2048,workingInputTriggerTokens:2048,workingInputScaling:'fixed'});
   const history=Chat.from([{role:'user',content:'mandatory '+ 'x'.repeat(16000)}]);
   const result=await f.manager.enforceLowWater(history,f.assemble,{hasReadTools:false});
   assert.equal(result.telemetry.targetUnreachable,true);

@@ -1,5 +1,5 @@
 import { createConfigSchematics } from "@lmstudio/sdk";
-import { GUIDANCE_DEFAULTS, CONTEXT_DEFAULTS } from "./config-defaults";
+import { GUIDANCE_DEFAULTS, CONTEXT_DEFAULTS, NUMERIC_FIELDS } from "./config-defaults";
 
 export const directConfigSchematics = createConfigSchematics()
   .field(
@@ -58,40 +58,48 @@ export const directConfigSchematics = createConfigSchematics()
   .field("designGuidanceMaxTokens", "numeric", {
     displayName: "Design reference token allowance",
     subtitle: "Maximum measured increase in the final input (default 2048). Existing working-context and tool-result budgets also apply. 0 disables references.",
-  }, GUIDANCE_DEFAULTS.maxTokens)
+  }, NUMERIC_FIELDS.designGuidanceMaxTokens.default)
   .field("contextManagementMode", "select", {
     displayName: "Working context",
-    subtitle: "Hybrid is the installed default: deterministic scoped evidence archive, bounded result views, measured working window, and at most one tool-free local semantic handoff per accepted compaction. Legacy remains available for an explicit compatibility choice.",
+    subtitle: "Hybrid is the installed default: deterministic scoped evidence archive, bounded result views and a measured working window. The optional semantic handoff below is separate and Off by default. Legacy remains available for an explicit compatibility choice.",
     options: [
       { value: "hybrid", displayName: "Hybrid (default)" },
       { value: "deterministic", displayName: "Deterministic archive/window" },
       { value: "legacy", displayName: "Legacy (compatibility)" },
     ],
   }, CONTEXT_DEFAULTS.mode)
-  .field("workingInputTargetTokens", "numeric", { displayName: "Working input target", subtitle: "Full templated input target after compaction, including system and tool definitions. Mandatory input is never removed merely to meet it." }, CONTEXT_DEFAULTS.target)
-  .field("workingInputTriggerTokens", "numeric", { displayName: "Working input trigger", subtitle: "Start target-based compaction above this full templated input size; kept separate from the post-compaction target." }, CONTEXT_DEFAULTS.trigger)
-  .field("toolResultProjectionChars", "numeric", { displayName: "Archived result excerpt", subtitle: "Maximum archived observation excerpt exposed in a model-facing tool-result projection." }, CONTEXT_DEFAULTS.projectionChars)
-  .field("semanticSummaryMaxTokens", "numeric", { displayName: "Semantic handoff output", subtitle: "Maximum output tokens for the single tool-free local summary call per accepted compaction." }, CONTEXT_DEFAULTS.summaryTokens)
-  .field("semanticSummarySeconds", "numeric", { displayName: "Semantic handoff seconds", subtitle: "Timeout for the optional local summary call. Invalid or interrupted summaries are discarded." }, CONTEXT_DEFAULTS.summarySeconds)
+  .field("workingInputTargetTokens", "numeric", { displayName: "Working input target", subtitle: "Full templated input target after compaction, including system and tool definitions. Mandatory input is never removed merely to meet it." }, NUMERIC_FIELDS.workingInputTargetTokens.default)
+  .field("workingInputTriggerTokens", "numeric", { displayName: "Working input trigger", subtitle: "Start target-based compaction above this full templated input size; kept separate from the post-compaction target." }, NUMERIC_FIELDS.workingInputTriggerTokens.default)
+  .field("workingInputScaling", "select", {
+    displayName: "Working input scaling",
+    subtitle: "Auto treats the trigger and target as minimums and raises them with the loaded context (60%/45% of the usable input), keeping working space above the mandatory floor. Fixed uses the configured absolute values.",
+    options: [
+      { value: "auto", displayName: "Auto (scale with context)" },
+      { value: "fixed", displayName: "Fixed (absolute values)" },
+    ],
+  }, CONTEXT_DEFAULTS.scaling)
+  .field("toolResultProjectionChars", "numeric", { displayName: "Archived result excerpt", subtitle: "Maximum archived observation excerpt exposed in a model-facing tool-result projection." }, NUMERIC_FIELDS.toolResultProjectionChars.default)
+  .field("semanticHandoff", "boolean", { displayName: "Semantic handoff (experimental)", subtitle: "Hybrid only. After an accepted compaction, make one tool-free local summary call. Off by default: recorded runs never accepted a summary and each attempt blocked until its timeout. Deterministic checkpoints keep the prior answer and decisions without it." }, CONTEXT_DEFAULTS.semanticHandoff)
+  .field("semanticSummaryMaxTokens", "numeric", { displayName: "Semantic handoff output", subtitle: "Maximum output tokens for the single tool-free local summary call per accepted compaction." }, NUMERIC_FIELDS.semanticSummaryMaxTokens.default)
+  .field("semanticSummarySeconds", "numeric", { displayName: "Semantic handoff seconds", subtitle: "Timeout for the optional local summary call. Invalid or interrupted summaries are discarded." }, NUMERIC_FIELDS.semanticSummarySeconds.default)
   .field(
     "showDebugInfo",
     "boolean",
     { displayName: "Show debug info", subtitle: "Show per-round context measurements in the chat." },
     true,
   )
-  .field("softRemainingTokens", "numeric", { displayName: "Soft threshold", subtitle: "Compact when remaining context after the applied output cap and safety margin falls below this value." }, 6000)
-  .field("hardRemainingTokens", "numeric", { displayName: "Hard threshold", subtitle: "At this remaining-context threshold, retain the current request, newest unread tool exchange, and factual memory." }, 3000)
-  .field("maxOutputReserve", "numeric", { displayName: "Output reserve", subtitle: "Tokens reserved for the selected model's next response and used as its explicit generation cap." }, 8192)
+  .field("softRemainingTokens", "numeric", { displayName: "Soft threshold", subtitle: "Compact when remaining context after the applied output cap and safety margin falls below this value." }, NUMERIC_FIELDS.softRemainingTokens.default)
+  .field("hardRemainingTokens", "numeric", { displayName: "Hard threshold", subtitle: "At this remaining-context threshold, retain the current request, newest unread tool exchange, and factual memory." }, NUMERIC_FIELDS.hardRemainingTokens.default)
+  .field("maxOutputReserve", "numeric", { displayName: "Output reserve", subtitle: "Tokens reserved for the selected model's next response and used as its explicit generation cap." }, NUMERIC_FIELDS.maxOutputReserve.default)
   .field("outputRecoveryMode", "select", {
     displayName: "Output-limit recovery",
-    subtitle: "After a normal visible report hits its explicit output cap, allow at most one concise tool-free rewrite from the evidence already collected.",
+    subtitle: "Continue a cut-off visible report once, preserving its existing text. Uses the normal cancellation and output limits without a separate rewrite timer.",
     options: [
-      { value: "on", displayName: "On (one rewrite)" },
+      { value: "on", displayName: "On (one continuation)" },
       { value: "off", displayName: "Off" },
     ],
   }, "on")
-  .field("outputRecoveryMaxTokens", "numeric", { displayName: "Recovery output limit", subtitle: "Maximum predicted tokens for the single normal-mode tool-free rewrite; 0 uses the general output reserve." }, 0)
-  .field("outputRecoverySeconds", "numeric", { displayName: "Recovery seconds", subtitle: "Maximum time for the single normal-mode tool-free rewrite." }, 90)
+  .field("outputRecoveryMaxTokens", "numeric", { displayName: "Continuation output limit", subtitle: "Maximum predicted tokens for one tool-free report continuation; 0 uses the general output reserve." }, NUMERIC_FIELDS.outputRecoveryMaxTokens.default)
   .field("reasoningRecoveryMode", "select", {
     displayName: "Reasoning-limit recovery",
     subtitle: "If a normal generation uses its output cap entirely before an answer or tool request, retry once with the same permitted tools and output cap. No report-rewrite timeout is applied. Missing saved values default to On; bounded audit and observe-only are excluded.",
@@ -100,13 +108,13 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "off", displayName: "Off" },
     ],
   }, "on")
-  .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra allowance for prompt-template and token-estimation variance." }, 2048)
-  .field("assumedContextLength", "numeric", { displayName: "Fallback context length", subtitle: "38,912-token trial fallback used only when the selected token source cannot report its loaded context length; it never overrides a reported value." }, 38912)
-  .field("recentCompleteTurns", "numeric", { displayName: "Recent complete turns", subtitle: "Prior completed user turns retained verbatim after soft compaction." }, 2)
-  .field("compactAboveMessageCount", "numeric", { displayName: "Fallback message threshold", subtitle: "Used only when exact token measurement is unavailable." }, 24)
-  .field("maxCheckpointChars", "numeric", { displayName: "Memory size", subtitle: "Maximum deterministic factual-memory characters." }, 22000)
-  .field("maxToolResultChars", "numeric", { displayName: "Tool summary size", subtitle: "Maximum characters retained for each older tool outcome." }, 1200)
-  .field("pastReasoningTokens", "numeric", { displayName: "Past reasoning budget (experimental)", subtitle: "0 keeps current behavior. Under context pressure, retain older SDK-delimited reasoning up to this token budget; preserve the latest exchange." }, 0)
+  .field("safetyMarginTokens", "numeric", { displayName: "Safety margin", subtitle: "Extra allowance for prompt-template and token-estimation variance." }, NUMERIC_FIELDS.safetyMarginTokens.default)
+  .field("assumedContextLength", "numeric", { displayName: "Fallback context length", subtitle: "38,912-token trial fallback used only when the selected token source cannot report its loaded context length; it never overrides a reported value." }, NUMERIC_FIELDS.assumedContextLength.default)
+  .field("recentCompleteTurns", "numeric", { displayName: "Recent complete turns", subtitle: "Prior completed user turns retained verbatim after soft compaction." }, NUMERIC_FIELDS.recentCompleteTurns.default)
+  .field("compactAboveMessageCount", "numeric", { displayName: "Fallback message threshold", subtitle: "Used only when exact token measurement is unavailable." }, NUMERIC_FIELDS.compactAboveMessageCount.default)
+  .field("maxCheckpointChars", "numeric", { displayName: "Memory size", subtitle: "Maximum deterministic factual-memory characters." }, NUMERIC_FIELDS.maxCheckpointChars.default)
+  .field("maxToolResultChars", "numeric", { displayName: "Tool summary size", subtitle: "Maximum characters retained for each older tool outcome." }, NUMERIC_FIELDS.maxToolResultChars.default)
+  .field("pastReasoningTokens", "numeric", { displayName: "Past reasoning budget (experimental)", subtitle: "0 keeps current behavior. Under context pressure, retain older SDK-delimited reasoning up to this token budget; preserve the latest exchange." }, NUMERIC_FIELDS.pastReasoningTokens.default)
   .field("toolStagnationAction", "select", {
     displayName: "Repeated tool rounds",
     subtitle: "Warn or pause after equivalent tool-call/result rounds. Pagination cursors and changed evidence reset the count.",
@@ -116,7 +124,8 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "off", displayName: "Off" },
     ],
   }, "warn")
-  .field("toolStagnationRounds", "numeric", { displayName: "Tool repetition threshold", subtitle: "Equivalent consecutive tool rounds before warning or pausing." }, 3)
+  .field("maxResearchRounds", "numeric", { displayName: "Maximum tool rounds", subtitle: "Tool rounds in one response before a tool-free report from the evidence collected. 0 removes the limit." }, NUMERIC_FIELDS.maxResearchRounds.default)
+  .field("toolStagnationRounds", "numeric", { displayName: "Tool repetition threshold", subtitle: "Equivalent consecutive tool rounds before warning or pausing." }, NUMERIC_FIELDS.toolStagnationRounds.default)
   .field("generationRepetitionAction", "select", {
     displayName: "Within-generation repetition",
     subtitle: "Warn or pause when a substantial generated text block repeats consecutively.",
@@ -126,7 +135,7 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "off", displayName: "Off" },
     ],
   }, "warn")
-  .field("generationRepeatCount", "numeric", { displayName: "Text repetition threshold", subtitle: "Consecutive copies required; each repeated block must be at least 80 characters." }, 3)
+  .field("generationRepeatCount", "numeric", { displayName: "Text repetition threshold", subtitle: "Consecutive copies required; each repeated block must be at least 80 characters." }, NUMERIC_FIELDS.generationRepeatCount.default)
   .field("inputAvailabilityMode", "select", {
     displayName: "Current input availability",
     subtitle: "Observe records final SDK input facts without changing the prompt. Inject adds the same bounded facts for an A/B experiment; it never blocks or selects tools.",
@@ -144,10 +153,10 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "bounded", displayName: "Bounded read-only audit (experimental)" },
     ],
   }, "off")
-  .field("auditResearchSeconds", "numeric", { displayName: "Audit research seconds", subtitle: "Maximum research time before the optional tool-free report opportunity." }, 100)
-  .field("auditResearchRounds", "numeric", { displayName: "Audit research rounds", subtitle: "Maximum completed research prediction rounds before the optional report opportunity." }, 12)
-  .field("auditFinalSeconds", "numeric", { displayName: "Audit report seconds", subtitle: "Maximum time for the single tool-free report opportunity." }, 70)
-  .field("auditFinalMaxTokens", "numeric", { displayName: "Audit report output limit", subtitle: "Predicted-token limit for the single tool-free report opportunity." }, 4096)
+  .field("auditResearchSeconds", "numeric", { displayName: "Audit research seconds", subtitle: "Maximum research time before the optional tool-free report opportunity." }, NUMERIC_FIELDS.auditResearchSeconds.default)
+  .field("auditResearchRounds", "numeric", { displayName: "Audit research rounds", subtitle: "Maximum completed research prediction rounds before the optional report opportunity." }, NUMERIC_FIELDS.auditResearchRounds.default)
+  .field("auditFinalSeconds", "numeric", { displayName: "Audit report seconds", subtitle: "Maximum time for the single tool-free report opportunity." }, NUMERIC_FIELDS.auditFinalSeconds.default)
+  .field("auditFinalMaxTokens", "numeric", { displayName: "Audit report output limit", subtitle: "Predicted-token limit for the single tool-free report opportunity." }, NUMERIC_FIELDS.auditFinalMaxTokens.default)
   .field("separateAttachments", "boolean", { displayName: "Separate document input (experimental)", subtitle: "Requires this preprocessor before document RAG. Preserve typed document references instead of injecting the full document." }, false)
   .field("reviewProgress", "boolean", { displayName: "Review continuity notes (experimental)", subtitle: "Allow bounded assistant review claims tied to observed file versions. Claims are not verified completion." }, false)
   .build();

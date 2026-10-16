@@ -64,12 +64,13 @@ def test_rag_search_schema_keeps_discovery_optional_and_explains_mode_and_scope(
     )
     properties = search["inputSchema"]["properties"]
 
+    # Descriptions are compressed to bound the per-round schema cost; the enum
+    # (not prose) now carries the closed set of mode names.
     assert "not a preflight" in search["description"]
-    assert "direct source reads are authoritative" in search["description"]
-    assert "review for architecture/code review" in properties["mode"]["description"]
+    assert "direct read is authoritative" in search["description"]
+    assert "review for code review" in properties["mode"]["description"]
     assert "auto when unsure" in properties["mode"]["description"]
-    assert "do not invent mode names" in properties["mode"]["description"]
-    assert "API-looking queries to engine evidence" in properties["scope"]["description"]
+    assert properties["mode"]["enum"]
     assert "exact project selector" in properties["scope"]["description"]
 
 
@@ -85,7 +86,7 @@ def test_retrieval_input_bounds_are_public_and_transport_validated() -> None:
     assert project[0]["maxLength"] == MAX_PROJECT_SELECTOR_CHARS
     assert project[1]["maxItems"] == MAX_PROJECT_SELECTORS
     assert project[1]["items"]["maxLength"] == MAX_PROJECT_SELECTOR_CHARS
-    assert "never clipped" in search_properties["project"]["description"]
+    assert "overrides active project" in search_properties["project"]["description"]
     assert search_properties["source"]["maxItems"] == MAX_FILTER_ITEMS
     assert search_properties["source"]["items"]["maxLength"] == MAX_FILTER_VALUE_CHARS
     assert search_properties["repeatReceipt"]["maxLength"] == MAX_REPEAT_RECEIPT_CHARS

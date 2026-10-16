@@ -367,12 +367,11 @@ function renderAssistantNote(note, messages = []) {
 function historyKey(messages, workingDirectory) {
   if (!workingDirectory || messages.some((message) => message.hasFiles())) return "";
   try {
-    const history = messages.map((message) => ({
-      role: message.getRole(), text: message.getText(),
-      requests: message.getToolCallRequests(), results: message.getToolCallResults(),
-    }));
+    // Same layout-independent transcript identity as the durable window, so
+    // the key written at the end of a turn matches the host's stored history.
+    const history = require("./transcript-canonical.js").canonicalTranscript(messages).entries;
     return crypto.createHash("sha256")
-      .update(JSON.stringify([path.resolve(workingDirectory), history]))
+      .update(JSON.stringify(["canonical-v1", path.resolve(workingDirectory), history]))
       .digest("hex");
   } catch {
     return "";

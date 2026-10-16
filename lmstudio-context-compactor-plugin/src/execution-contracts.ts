@@ -74,7 +74,9 @@ export type DirectConfig = {
   contextManagementMode: ContextManagementMode;
   workingInputTargetTokens: number;
   workingInputTriggerTokens: number;
+  workingInputScaling: WorkingInputScaling;
   toolResultProjectionChars: number;
+  semanticHandoff: boolean;
   semanticSummaryMaxTokens: number;
   semanticSummarySeconds: number;
   showDebugInfo: boolean;
@@ -95,6 +97,7 @@ export type DirectConfig = {
   maxToolResultChars: number;
   toolStagnationAction: StagnationAction;
   toolStagnationRounds: number;
+  maxResearchRounds: number;
   generationRepetitionAction: StagnationAction;
   generationRepeatCount: number;
   inputAvailabilityMode: InputAvailabilityMode;
@@ -116,6 +119,24 @@ export type OutputRecoveryMode = "off" | "on";
 export type ContextManagementMode = "legacy" | "deterministic" | "hybrid";
 
 export const DEFAULT_CONTEXT_MANAGEMENT_MODE: ContextManagementMode = CONTEXT_DEFAULTS.mode;
+
+/** "auto" scales the configured trigger/target up with the loaded context;
+ * "fixed" keeps the configured absolute values (pre-1.4.0-RC4 behavior). */
+export type WorkingInputScaling = "auto" | "fixed";
+
+// Budget estimates. Every value below is an admission allowance only; the next
+// fully templated exact measurement remains the sole authority for dispatch.
+/** Conservative UTF-8 bytes per model token for returned JSON/code/CJK text. */
+export const UTF8_BYTES_PER_TOKEN_ESTIMATE = 2.5;
+/** Room for the structured tool request a research round generates before its
+ * results return. The next round's full output reserve is subtracted by that
+ * round's own hard ceiling, so it is not reserved twice. */
+export const POST_TOOL_REQUEST_TOKENS = 2048;
+/** Working space kept above the mandatory floor when compaction can afford it. */
+export const MIN_WORKING_SPACE_TOKENS = 6000;
+/** Context-proportional watermarks used by workingInputScaling="auto". */
+export const SCALED_TRIGGER_RATIO = 0.6;
+export const SCALED_TARGET_RATIO = 0.45;
 
 export type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
   | "output_recovery"

@@ -14,6 +14,8 @@ function mandatoryContinuity(memory) {
     latestUserMessageVerbatimRetainedSeparately: true,
     activeObjective: m.activeObjective || null,
     continuationAntecedent: m.continuationAntecedent || null,
+    // The prior answer is mandatory context for a "continue" turn.
+    previousTurnFinalResponseEvidence: m.previousTurnFinalResponseEvidence?.present ? m.previousTurnFinalResponseEvidence : null,
     taskSelection: m.taskSelection || null,
     interruptedCalls: m.interruptedCalls || [],
     interruptedCallRetention: m.interruptedCallRetention || null,
@@ -26,7 +28,7 @@ function mandatoryContinuity(memory) {
         ...(file.changeEvidence ? { changeEvidence: changeMetadata(file.changeEvidence) } : {}) })),
       recentToolOutcomes: [], gitObservations: [], historicalEvidence: [], recentBuildOrTestState: [],
     },
-    archiveDiscovery: "Use evidence_first_read_context with action=catalog to find prior observations by path; then read exact evidenceId and version. Catalog entries are historical, not current source observations.",
+    archiveDiscovery: "Use evidence_first_read_context with action=catalog to find prior observations by path; then read exact evidenceId and version. Catalog entries are historical, not current source observations. Conversation text removed by compaction is archived under path conversation://user and conversation://assistant.",
   };
 }
 

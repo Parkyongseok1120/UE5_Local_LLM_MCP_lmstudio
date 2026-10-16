@@ -21,6 +21,7 @@ type ContentController = Pick<PredictionLoopHandlerController, "createContentBlo
  * owns which completed planning/evidence is safe to carry to the next turn. */
 export class VisibleHistoryRecorder {
   private readonly blocks: Array<{ role: ChatMessageRoleData; text: string; parts: ChatMessagePartData[] }> = [];
+  private lastAnswer: { block: ReturnType<ContentController["createContentBlock"]>; entry: { text: string } } | null = null;
   private readonly initial: Chat;
   readonly controller: ContentController;
 
@@ -31,11 +32,15 @@ export class VisibleHistoryRecorder {
       if (options?.includeInContext === false) return block;
       const entry = { role: options?.roleOverride || "assistant", text: "", parts: [] as ChatMessagePartData[] };
       this.blocks.push(entry);
-      return new Proxy(block, { get(target, key) {
+      const recorder = this;
+      const recorded = new Proxy(block, { get(target, key) {
         if (key === "appendText") return (...args: Parameters<typeof block.appendText>) => {
-          const result = target.appendText(...args); entry.text += args[0]; return result;
+          const result = target.appendText(...args); entry.text += args[0];
+          if (entry.role === "assistant" && entry.parts.length === 0) recorder.lastAnswer = { block: recorded, entry };
+          return result;
         };
         if (key === "appendToolRequest") return (...args: Parameters<typeof block.appendToolRequest>) => {
+          recorder.lastAnswer = null;
           const result = target.appendToolRequest(...args), request = args[0];
           // Same shape as LM Studio's rehydrated function requests.
           entry.parts.push({ type: "toolCallRequest", toolCallRequest: {
@@ -52,6 +57,7 @@ export class VisibleHistoryRecorder {
           return result;
         };
         if (key === "appendToolResult") return (...args: Parameters<typeof block.appendToolResult>) => {
+          recorder.lastAnswer = null;
           const result = target.appendToolResult(...args), value = args[0];
           entry.parts.push({ type: "toolCallResult", toolCallId: value.toolCallRequestId, content: value.content });
           return result;
@@ -59,7 +65,17 @@ export class VisibleHistoryRecorder {
         const value = Reflect.get(target, key, target);
         return typeof value === "function" ? value.bind(target) : value;
       } });
+      return recorded;
     } };
+  }
+
+  get lastAnswerText(): string { return this.lastAnswer?.entry.text || ""; }
+
+  /** Only a tool-free continuation may reuse the existing answer block. */
+  continuationController(): ContentController {
+    return { createContentBlock: options => options?.includeInContext !== false
+      && (!options?.roleOverride || options.roleOverride === "assistant") && this.lastAnswer
+      ? this.lastAnswer.block : this.controller.createContentBlock(options) };
   }
 
   snapshot(): Chat {

@@ -1,6 +1,10 @@
-import type { ContextMeasurement, DirectConfig } from "./execution-contracts";
+import {
+  MIN_WORKING_SPACE_TOKENS, POST_TOOL_REQUEST_TOKENS, SCALED_TARGET_RATIO, SCALED_TRIGGER_RATIO,
+  UTF8_BYTES_PER_TOKEN_ESTIMATE, type ContextMeasurement, type DirectConfig
+} from "./execution-contracts";
 import type { RemoteToolLike } from "./tool-capability-registry";
 import { localObservationTools } from "./tool-capability-registry";
+import { READ_RESULT_CONTRACTS } from "./generated-tool-contract";
 const { ARCHIVE_READ_CONTRACT } = require("./evidence-read-contract.js");
 
 export type Watermarks = {
@@ -11,6 +15,7 @@ export type Watermarks = {
   projectedNextInput: number; preDispatchCompaction: boolean; targetUnreachable: boolean;
   blockingComponent: string | null;
   nextActionFit: boolean; minimumReadResultTokens: number;
+  workingInputScaling: "auto" | "fixed";
 };
 const tokens = (n: number) => Math.max(0, Math.trunc(Number.isFinite(n) ? n : 0));
 
@@ -18,22 +23,35 @@ const tokens = (n: number) => Math.max(0, Math.trunc(Number.isFinite(n) ? n : 0)
  * Byte-derived result reservations are estimates; only the next fully templated
  * exact measurement authorizes generation. */
 export class BudgetBroker {
-  constructor(readonly config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens" | "safetyMarginTokens">) { }
+  constructor(readonly config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens" | "safetyMarginTokens">
+    & Partial<Pick<DirectConfig, "workingInputScaling">>) { }
   watermarks(measured: ContextMeasurement, mandatoryFloorTokens = 0, hasReadTools = true, minimumReadTokens = 2048): Watermarks {
     const contextLength = tokens(measured.contextLength);
     const requiredGenerationReserve = tokens(measured.outputReserve);
     const safetyMarginTokens = tokens(this.config.safetyMarginTokens);
     const hardInputCeiling = Math.max(0, contextLength - safetyMarginTokens - requiredGenerationReserve);
     // One shared expected envelope budget, and room for this round's generated
-    // request/prose. Post-tool overhead appears in projection exactly once.
+    // tool request. The next round's own output reserve is already excluded by
+    // that round's hard ceiling, so it is not subtracted here a second time.
     const minimumReadResultTokens = hasReadTools ? tokens(minimumReadTokens) : 0;
     const reservedToolResultTokens = hasReadTools
       ? Math.max(minimumReadResultTokens, Math.min(4096, Math.floor(hardInputCeiling / 8))) : 0;
-    const requiredPostToolOverhead = hasReadTools ? requiredGenerationReserve : 0;
+    const requiredPostToolOverhead = hasReadTools ? Math.min(requiredGenerationReserve, POST_TOOL_REQUEST_TOKENS) : 0;
     const safeTrigger = Math.max(0, hardInputCeiling - reservedToolResultTokens - requiredPostToolOverhead);
-    const effectiveHighWaterTokens = Math.min(tokens(this.config.workingInputTriggerTokens), safeTrigger);
-    const configuredLowWaterTokens = Math.min(tokens(this.config.workingInputTargetTokens), Math.floor(effectiveHighWaterTokens * 0.75));
-    const effectiveLowWaterTokens = Math.max(configuredLowWaterTokens, tokens(mandatoryFloorTokens));
+    // Configured trigger/target are floors in "auto" mode, so a larger loaded
+    // context keeps proportionally more conversation before compaction.
+    const scaled = this.config.workingInputScaling !== "fixed";
+    const trigger = scaled ? Math.max(tokens(this.config.workingInputTriggerTokens), Math.floor(hardInputCeiling * SCALED_TRIGGER_RATIO))
+      : tokens(this.config.workingInputTriggerTokens);
+    const target = scaled ? Math.max(tokens(this.config.workingInputTargetTokens), Math.floor(hardInputCeiling * SCALED_TARGET_RATIO))
+      : tokens(this.config.workingInputTargetTokens);
+    const effectiveHighWaterTokens = Math.min(trigger, safeTrigger);
+    const configuredLowWaterTokens = Math.min(target, Math.floor(effectiveHighWaterTokens * 0.75));
+    // Compacting to the bare mandatory floor leaves no room for the next result
+    // and causes immediate re-compaction. Keep working space when it fits.
+    const workingSpaceLowWater = scaled && mandatoryFloorTokens > 0
+      ? Math.min(effectiveHighWaterTokens, tokens(mandatoryFloorTokens) + MIN_WORKING_SPACE_TOKENS) : 0;
+    const effectiveLowWaterTokens = Math.max(configuredLowWaterTokens, tokens(mandatoryFloorTokens), workingSpaceLowWater);
     const projectedNextInput = measured.inputTokens + reservedToolResultTokens + requiredPostToolOverhead;
     return {
       contextLength, configuredTargetTokens: this.config.workingInputTargetTokens,
@@ -41,7 +59,7 @@ export class BudgetBroker {
       mandatoryFloorTokens: tokens(mandatoryFloorTokens), configuredLowWaterTokens, effectiveLowWaterTokens,
       effectiveHighWaterTokens, hardInputCeiling, reservedToolResultTokens, requiredPostToolOverhead,
       projectedNextInput, preDispatchCompaction: hasReadTools && projectedNextInput > hardInputCeiling,
-      minimumReadResultTokens,
+      minimumReadResultTokens, workingInputScaling: scaled ? "auto" : "fixed",
       nextActionFit: measured.inputTokens + requiredPostToolOverhead + minimumReadResultTokens <= hardInputCeiling,
       targetUnreachable: mandatoryFloorTokens > configuredLowWaterTokens,
       blockingComponent: mandatoryFloorTokens > configuredLowWaterTokens ? "mandatory_objective_evidence_and_template" : null
@@ -89,7 +107,7 @@ export class BatchReservation {
     if (!entry || entry.state !== "held") return false;
     // Account received bytes using the reservation allowance, without claiming
     // they are exact model tokens. The next model input is measured separately.
-    entry.tokens = tokens(actualEnvelopeBytes) + 128;
+    entry.tokens = Math.ceil(tokens(actualEnvelopeBytes) / UTF8_BYTES_PER_TOKEN_ESTIMATE) + 128;
     entry.actualEnvelopeBytes = tokens(actualEnvelopeBytes);
     entry.overrun = entry.tokens > entry.reservedTokens;
     entry.state = "consumed";
@@ -111,8 +129,7 @@ export class BatchReservation {
 
 export function readResultContract(tool: RemoteToolLike) {
   const properties = (tool.parametersJsonSchema as { properties?: Record<string, { minimum?: number; maximum?: number; default?: number; $comment?: string }> })?.properties || {};
-  const nativeBytes = ["mcp/unreal-agent", "mcp/unreal-rag"].includes(tool.pluginIdentifier || "")
-    && ["read_file", "read_file_range"].includes(tool.name);
+  const nativeBytes = (READ_RESULT_CONTRACTS.nativeByteTools[tool.pluginIdentifier || ""] || []).includes(tool.name);
   const field = properties.byteBudget ? "byteBudget" : properties.maxChars ? "maxChars"
     : nativeBytes && properties.maxBytes ? "maxBytes" : null;
   const contract = field ? properties[field] : {};
@@ -120,12 +137,17 @@ export function readResultContract(tool: RemoteToolLike) {
   // A provider's source-file ceiling is not a useful default batch allocation.
   // Bound an omitted native window to 4 KiB; explicit requests can still ask
   // for more. Bytes already account for UTF-8, unlike character limits.
-  const defaultValue = field === "byteBudget" && tool.pluginIdentifier === "mcp/unreal-agent"
-    && contract.$comment === "direct-json-text-utf8" ? contract.default ?? 8192
-    : field === "maxBytes" ? Math.min(contract.default ?? 4096, 4096)
+  const byteBudgetDefault = READ_RESULT_CONTRACTS.byteBudgetDefaults[tool.pluginIdentifier || ""];
+  const defaultValue = field === "byteBudget" && byteBudgetDefault !== undefined
+    && contract.$comment === "direct-json-text-utf8" ? contract.default ?? byteBudgetDefault
+    : field === "maxBytes" ? Math.min(contract.default ?? READ_RESULT_CONTRACTS.maxBytesCeiling, READ_RESULT_CONTRACTS.maxBytesCeiling)
     : contract.default ?? (field === "maxChars" ? 4096
-    : tool.name === "git_changed_files" ? 4096 : 32768);
-  return { field, defaultValue, multiplier: field === "byteBudget" ? 1 : field === "maxBytes" ? 2 : archiveEnvelope ? 3 : 6,
+    : READ_RESULT_CONTRACTS.toolDefaults[tool.name] ?? READ_RESULT_CONTRACTS.fieldDefault);
+  // Token allowance per requested unit. UTF-8 bytes use the shared estimate;
+  // raw file bytes may expand under JSON escaping; UTF-16 characters are
+  // bounded for CJK text (about one token per character) plus escaping.
+  return { field, defaultValue, multiplier: field === "byteBudget" ? 1 / UTF8_BYTES_PER_TOKEN_ESTIMATE
+    : field === "maxBytes" ? 1.25 / UTF8_BYTES_PER_TOKEN_ESTIMATE : 1.25,
     // The archive's schema accepts maxChars=1 for range validation, but its
     // identity envelope needs usable headroom before any body can be returned.
     minimum: archiveEnvelope ? Math.max(ARCHIVE_READ_CONTRACT.minimumEnvelopeChars, tokens(contract.minimum ?? 1))
@@ -141,7 +163,7 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
   const actionable = sources.length ? sources : tools;
   const minimumFor = (tool: RemoteToolLike) => {
     const c = readResultContract(tool);
-    return c.field ? c.minimum * c.multiplier + 1024 : 4096;
+    return c.field ? Math.ceil(c.minimum * c.multiplier) + 1024 : 4096;
   };
   const sourceMinimum = actionable.length ? Math.min(...actionable.map(minimumFor)) : 0;
   // Once returned evidence is archived, acquisition and rehydration are both
@@ -164,10 +186,11 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const requested = field ? tokens(args[field] === undefined ? contract.defaultValue : Number(args[field])) : 3072;
   const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
-  const reserved = batch.reserve(id, allocation * multiplier + envelopeTokens, minimum * multiplier + envelopeTokens);
+  const minimumTokens = Math.ceil(minimum * multiplier) + envelopeTokens;
+  const reserved = batch.reserve(id, Math.ceil(allocation * multiplier) + envelopeTokens, minimumTokens);
   if (!reserved) return { allowed: false, arguments: args, reservedTokens: 0, bounded: field !== null,
     limit: { field, requested, effective: 0, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" },
-    denialReason: batch.denialReason(id, minimum * multiplier + envelopeTokens) || "invalid_reservation" };
+    denialReason: batch.denialReason(id, minimumTokens) || "invalid_reservation" };
   const boundedValue = Math.min(allocation, Math.floor((reserved - envelopeTokens) / multiplier));
   return {
 allowed: true, arguments: field ? { ...args, [field]: boundedValue } : args,

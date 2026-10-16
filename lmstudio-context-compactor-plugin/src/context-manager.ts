@@ -219,15 +219,18 @@ export function composeModelHistory(
   systemInstructions: Array<string> = [],
   enableNoteProtocol = Boolean(note),
   referenceData?: string,
+  runtimeFacts: Array<string> = [],
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
   const taskData = config.observeOnly ? "" : renderTaskProgress(messages);
+  const facts = runtimeFacts.map(value => String(value || "").trim()).filter(Boolean);
   const systemIndexes = messages.map((message, index) => message.isSystemPrompt() ? index : -1)
     .filter((index) => index >= 0);
   const systemLayoutIsCompatible = systemIndexes.length === 0
     || (systemIndexes.length === 1 && systemIndexes[0] === 0);
-  if (!enableNoteProtocol && instructions.length === 0 && !referenceData && !taskData && systemLayoutIsCompatible) {
+  if (!enableNoteProtocol && instructions.length === 0 && !referenceData && !taskData && !facts.length
+    && systemLayoutIsCompatible) {
     return { history, overhead: 0 };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
@@ -247,12 +250,18 @@ export function composeModelHistory(
     ...(canIncludeInstruction ? [instruction] : []),
   ].join("\n\n");
   if (combinedSystemText) composed.append("system", combinedSystemText);
-  if (canIncludeNote && noteText) composed.append("assistant", noteText);
-  if (referenceData) composed.append("assistant", referenceData);
-  if (taskData) composed.append("assistant", taskData);
-  for (const message of messages) {
+  // Data that changes between rounds stays in assistant data slots (never in a
+  // user or system message), placed immediately before the latest user
+  // message: a note or task-progress update then leaves the cached prefix of
+  // earlier turns intact. Model input only; never persisted.
+  const runtimeParts = [...(canIncludeNote && noteText ? [noteText] : []), ...(referenceData ? [referenceData] : []),
+    ...(taskData ? [taskData] : []), ...facts];
+  const latestUser = messages.reduce((found, message, index) => message.isUserMessage() ? index : found, -1);
+  if (latestUser < 0) for (const part of runtimeParts) composed.append("assistant", part);
+  messages.forEach((message, index) => {
+    if (index === latestUser) for (const part of runtimeParts) composed.append("assistant", part);
     if (!message.isSystemPrompt()) composed.append(message);
-  }
+  });
   return { history: composed, overhead };
 }
 
@@ -272,14 +281,18 @@ export type InputAssemblyOptions = {
   roundScopeInstructions: Array<string>; getRoundOutputReserve: () => number;
   modelInputId: string; noteEnabled: boolean; getNote: () => ContinuityNote | null;
   historicalAvailabilityLedger: Array<Record<string, unknown>>;
+  getRuntimeFacts?: () => Array<string>;
+  /** Execution-scoped exact-measurement cache owned by ContextManager. */
+  measurementCache?: Map<string, ContextMeasurement>;
   preProjectionHistory?: Chat; postProjectionHistory?: Chat;
 };
 export function createInputAssembler(options: InputAssemblyOptions) {
   const { tokenSource, config, roundTools, roundScopeInstructions, getRoundOutputReserve,
     modelInputId, noteEnabled, getNote, historicalAvailabilityLedger } = options;
-  // Cache only within this round/model handle, keyed by the entire SDK message
-  // and schema surface. Typed files bypass serialization and therefore caching.
-  const cache = new Map<string, ContextMeasurement>();
+  // Cache within one execution/model handle (or this round when no owner
+  // cache is supplied), keyed by the entire SDK message and schema surface.
+  // Typed files bypass serialization and therefore caching.
+  const cache = options.measurementCache || new Map<string, ContextMeasurement>();
   const cost: MeasurementCost = { measurementCalls: 0, measurementMs: 0,
     templateCalls: 0, tokenCountCalls: 0, contextLengthCalls: 0, cacheHits: 0 };
   const measure = async (history: Chat, tools: Array<RemoteToolLike>, reserve: number) => {
@@ -307,17 +320,20 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const profileOutputReserve = profile.outputReserve ?? getRoundOutputReserve();
     const profileModelInputId = profile.modelInputId || modelInputId;
     const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
+    const runtimeFacts = options.getRuntimeFacts?.() || [];
     const baseComposition = composeModelHistory(
-      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData,
+      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts,
     );
     const baseMeasurement = await measureProfileInput(baseComposition.history);
-    const historyMeasurement = config.contextManagementMode !== "legacy" && options.preProjectionHistory
-      ? await measure(options.preProjectionHistory, [], profileOutputReserve) : null;
-    const projectionMeasurement = config.contextManagementMode !== "legacy" && options.postProjectionHistory
-      ? await measure(options.postProjectionHistory, [], profileOutputReserve) : null;
-    const compactionMeasurement = config.contextManagementMode === "legacy" ? null
-      : await measure(sourceHistory, [], profileOutputReserve);
+    // Per-stage measurements are telemetry only. They are taken lazily for the
+    // selected input instead of for every candidate a search assembles.
     const stages = async (input: Chat, measured: ContextMeasurement) => {
+      const historyMeasurement = config.contextManagementMode !== "legacy" && options.preProjectionHistory
+        ? await measure(options.preProjectionHistory, [], profileOutputReserve) : null;
+      const projectionMeasurement = config.contextManagementMode !== "legacy" && options.postProjectionHistory
+        ? await measure(options.postProjectionHistory, [], profileOutputReserve) : null;
+      const compactionMeasurement = config.contextManagementMode === "legacy" ? null
+        : await measure(sourceHistory, [], profileOutputReserve);
       const metadataMeasurement = config.contextManagementMode === "legacy" ? null
         : await measure(input, [], profileOutputReserve);
       return {
@@ -332,16 +348,23 @@ export function createInputAssembler(options: InputAssemblyOptions) {
           compaction: compactionMeasurement?.templatedInputFingerprint ?? null,
           metadata: metadataMeasurement?.templatedInputFingerprint ?? null,
           final: measured.templatedInputFingerprint },
-        measurementCost: { ...cost, scope: "round_input_assembler", cacheScope: "same_round_model_handle" }
+        measurementCost: { ...cost, scope: "round_input_assembler", cacheScope: options.measurementCache ? "execution_model_handle" : "same_round_model_handle" }
 };
     };
+    const basicStages = (measured: ContextMeasurement) => ({
+      postToolSchemaTokens: measured.exact ? measured.inputTokens : null,
+      finalExactInputTokens: measured.exact ? measured.inputTokens : null,
+      stageFingerprints: { final: measured.templatedInputFingerprint },
+      measurementCost: { ...cost, scope: "round_input_assembler", cacheScope: options.measurementCache ? "execution_model_handle" : "same_round_model_handle" },
+    });
     let projection = config.inputAvailabilityMode === "off" ? null
       : inputAvailability.projectInputAvailability(
         normalizeHistory(baseComposition.history), historicalAvailabilityLedger, { modelInputId: profileModelInputId },
       );
     if (config.inputAvailabilityMode !== "inject" || !projection || projection.entries.length === 0) {
       return {
-        stages: await stages(baseComposition.history, baseMeasurement),
+        stages: basicStages(baseMeasurement),
+        measureStages: () => stages(baseComposition.history, baseMeasurement),
         composition: baseComposition,
         history: baseComposition.history,
         measurement: baseMeasurement,
@@ -353,7 +376,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
     let composition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config,
-      [...profileInstructions, metadata], noteEnabled, profile.referenceData,
+      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts,
     );
     let measurement = await measureProfileInput(composition.history);
     const finalProjection = inputAvailability.projectInputAvailability(
@@ -366,7 +389,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       metadata = finalMetadata;
       composition = composeModelHistory(
         sourceHistory, noteEnabled ? getNote() : null, config,
-        [...profileInstructions, metadata], noteEnabled, profile.referenceData,
+        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts,
       );
       measurement = await measureProfileInput(composition.history);
     }
@@ -374,7 +397,8 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       normalizeHistory(composition.history), historicalAvailabilityLedger, { modelInputId: profileModelInputId },
     );
     return {
-      stages: await stages(composition.history, measurement),
+      stages: basicStages(measurement),
+      measureStages: () => stages(composition.history, measurement),
       composition,
       history: composition.history,
       measurement,
@@ -392,7 +416,11 @@ type AssembledInput = Awaited<ReturnType<ReturnType<typeof createInputAssembler>
  * continuity/availability metadata and the exact exposed schema are attached. */
 export class ContextManager {
   constructor(readonly config: DirectConfig, readonly broker: BudgetBroker,
-    readonly checkpointOptions: Record<string, unknown> = {}) { }
+    readonly checkpointOptions: Record<string, unknown> = {},
+    /** Indexes that every compaction candidate must retain (pending results). */
+    readonly requiredIndexes: (history: Chat) => number[] = () => []) { }
+  /** Exact measurements are deterministic per execution/model handle. */
+  readonly measurementCache = new Map<string, ContextMeasurement>();
   shouldProjectEvidence(measurement: ContextMeasurement, hasReadTools: boolean, minimumReadTokens: number) {
     if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !measurement.exact) return false;
     const water = this.broker.watermarks(measurement, 0, hasReadTools, minimumReadTokens);
@@ -487,8 +515,9 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
           : before.measurement.contextLengthSource !== "model" ? "runtime_context_length_unavailable" : "compatibility_mode"
 };
     }
+    const requiredIndexes = this.requiredIndexes(history);
     const floorCandidate = buildCompactedHistory(history, 0, this.config,
-      { ...this.checkpointOptions, maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" });
+      { ...this.checkpointOptions, requiredIndexes, maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" });
     const floorInput = floorCandidate.history === history ? before : await assemble(floorCandidate.history);
     // A checkpoint that expands an already minimal input is not its mandatory floor.
     const floor = floorInput.measurement.exact && floorInput.measurement.inputTokens < before.measurement.inputTokens ? floorInput : before;
@@ -499,7 +528,11 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
       || water.preDispatchCompaction;
     if (pressured && before.measurement.inputTokens > water.effectiveLowWaterTokens) {
       const caps = [...new Set([128, 64, 32, 16, 8, 4, 2].filter(cap => cap <= history.length))];
-      const candidates = [
+      // Most-retaining first: keep the last one or two complete user turns
+      // verbatim before collapsing every earlier turn into the checkpoint.
+      const candidates: Array<{ name: string; recentTurns?: number; options: Record<string, unknown> }> = [
+        ...[2, 1].map(recentTurns => ({ name: `recent_turns_${recentTurns}`, recentTurns, options: {
+          checkpointPolicy: "bounded", maxCheckpointChars: this.config.maxCheckpointChars } })),
         ...caps.map(cap => ({ name: `complete_exchange_cap_${cap}`, options: {
           maxCurrentTurnMessages: cap, checkpointPolicy: "bounded", maxCheckpointChars: this.config.maxCheckpointChars } })),
         ...[1, 0.5, 0.25, 0.125].map(ratio => ({ name: `checkpoint_budget_${ratio}`, options: {
@@ -510,7 +543,7 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
       // Complete exchanges are indivisible. Never assume token sizes are monotone.
       for (const choice of candidates) {
         const candidate = choice.name === "mandatory_floor" ? floorCandidate
-          : buildCompactedHistory(history, 0, this.config, { ...this.checkpointOptions, ...choice.options });
+          : buildCompactedHistory(history, choice.recentTurns ?? 0, this.config, { ...this.checkpointOptions, requiredIndexes, ...choice.options });
         const input = candidate.history === history ? before
           : choice.name === "mandatory_floor" ? floorInput : await assemble(candidate.history);
         const accepted = input.measurement.exact && input.measurement.inputTokens <= water.effectiveLowWaterTokens
@@ -541,7 +574,8 @@ history: candidate.history, assembled: input, checkpoint: candidate.checkpoint,
       telemetry: {
 ...water, tokenMetric: "exact_templated_model_input", beforeExactInputTokens: before.measurement.inputTokens,
         candidateMeasurements: measurements, selectedCandidate: selected.name,
-        ...selected.assembled.stages, finalExactInputTokens: final.inputTokens, targetDelta: final.inputTokens - water.effectiveLowWaterTokens,
+        ...(this.config.showDebugInfo && selected.assembled.measureStages
+          ? await selected.assembled.measureStages() : selected.assembled.stages), finalExactInputTokens: final.inputTokens, targetDelta: final.inputTokens - water.effectiveLowWaterTokens,
         compactionSucceeded: success, compactionRequested: Boolean(pressured),
         lowTargetMet: success, mandatoryFloorException: water.targetUnreachable, hardFit,
         nextActionFit: finalWater.nextActionFit, disposition, canRun,

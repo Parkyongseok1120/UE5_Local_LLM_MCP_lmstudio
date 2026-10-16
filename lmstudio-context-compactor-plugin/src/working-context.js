@@ -12,6 +12,10 @@ const { isEphemeralCapabilityKey } = require("./durable-memory-sanitizer.js");
 const evidenceIdentity = require("./evidence-identity.js");
 const { exchangeIndex } = require("./tool-exchange-index.js");
 const { retainInterruptedCalls } = require("./interrupted-calls.js");
+const { canonicalTranscript } = require("./transcript-canonical.js");
+const { retainVisibleResponse } = require("./continuity-assistant-evidence.js");
+
+const CANONICAL_MESSAGE_HASH_LIMIT = 512;
 
 function serialize(history) {
   return history.getMessagesArray().map(m => {
@@ -150,6 +154,8 @@ class WorkingContext {
     this.lastSummaryInput = "";
     this.summaryAttempts = [];
     this.consumedRawResults = new Set();
+    this.archivedProse = new Set();
+    this.archivedEvidenceKnown = undefined;
     this.cost = { summaryCalls: 0, summaryPromptTokens: 0, summaryPredictedTokens: 0, summaryMs: 0, unknownUsageCalls: 0 };
   }
 
@@ -159,8 +165,12 @@ class WorkingContext {
     if (this.refs.size || this.returnedRefs.size || this.archive.stats.captured) return true;
     // A restored window may no longer mention the earliest consumed pages.
     // Discovery still needs a usable result budget for those scoped records.
-    try { return this.archive.entries().some(entry => this.archive.load(entry.key).ok); }
-    catch { return false; }
+    // Scanning every record is costly and this getter runs several times per
+    // round, so the answer is memoized until a restore can change it.
+    if (this.archivedEvidenceKnown !== undefined) return this.archivedEvidenceKnown;
+    try { this.archivedEvidenceKnown = this.archive.entries().some(entry => this.archive.load(entry.key).ok); }
+    catch { this.archivedEvidenceKnown = false; }
+    return this.archivedEvidenceKnown;
   }
 
   archiveObservation(request, result, value, metadata = {}) {
@@ -241,6 +251,64 @@ class WorkingContext {
     for (const [key, [id]] of this.rawRefs) if (!this.refs.has(id)) {
       this.rawRefs.delete(key); this.consumedRawResults.delete(key);
     }
+  }
+
+  /** Archive user/assistant prose that an accepted compaction removed from
+   * the input, so it stays rehydratable through evidence_first_read_context
+   * instead of surviving only as clipped checkpoint excerpts. */
+  archiveConversationProse(history, retainedIndexes = []) {
+    const retained = new Set(retainedIndexes);
+    let archived = 0;
+    history.getMessagesArray().forEach((message, index) => {
+      const role = message.getRole();
+      if (retained.has(index) || (role !== "user" && role !== "assistant") || message.hasFiles()) return;
+      const text = role === "assistant" ? visibleAssistantText(message.getText()) : message.getText();
+      // Generated checkpoints, notes and runtime records start with a marker.
+      if (!text.trim() || /^\[[A-Z][^\]\n]{0,80}\]/u.test(text)) return;
+      const key = hash([role, text]);
+      if (this.archivedProse.has(key)) return;
+      const saved = this.archive.put(JSON.stringify({ kind: "conversation_message", role, text }), {
+        callKey: key, toolName: "conversation", sourceKind: "conversation_message",
+        sourceIdentity: { path: `conversation://${role}` }, resultStatus: true,
+        semanticFacts: { kind: "conversation_message", role, chars: text.length },
+      });
+      if (!saved.ok) return;
+      this.archivedProse.add(key);
+      archived++;
+    });
+    return archived;
+  }
+
+  /** Message indexes of results that must reach their first consumer. The
+   * compaction candidate selector retains these instead of discovering the
+   * omission only at the post-selection exposure check. */
+  pendingResultIndexes(history) {
+    if (!this.returnedRefs.size && !this.pendingHistoricalResults.size) return [];
+    const index = exchangeIndex(history), output = new Set();
+    history.getMessagesArray().forEach((message, mi) => message.getToolCallResults().forEach((result, ri) => {
+      const request = index.matches.get(`${mi}:${ri}`);
+      if (!request) return;
+      const key = rawExposureKey(request, result, serializedResultContent(result.content));
+      const ref = this.rawRefs.get(key);
+      if (this.pendingHistoricalResults.has(key) || (ref && this.returnedRefs.has(ref[0]))) output.add(mi);
+    }));
+    return [...output];
+  }
+
+  /** Degrade path for an input that still omits pending results: release
+   * them from first-consumer tracking (they stay pinned and rehydratable
+   * through the archive) instead of failing the whole execution. */
+  releaseOmittedPending(history) {
+    const live = this.inputRefs(history), keys = inputResultKeys(history), released = [];
+    for (const [id, version] of [...this.returnedRefs]) {
+      if (live.has(id)) continue;
+      this.returnedRefs.delete(id); this.refs.set(id, version); released.push(id);
+    }
+    for (const key of [...this.pendingHistoricalResults]) {
+      if (keys.has(key)) continue;
+      this.pendingHistoricalResults.delete(key); released.push(key);
+    }
+    return released;
   }
 
   persistable(history) {
@@ -500,8 +568,8 @@ class WorkingContext {
       } });
   }
 
-  refsValid(refs = [...this.refs]) { return refs.every(([id, version]) => {
-    const record = this.archive.load(id); return record.ok && record.record.archivedBodyHash === version;
+  refsValid(refs = [...this.refs], allowExpired = false) { return refs.every(([id, version]) => {
+    const record = this.archive.load(id, { allowExpired }); return record.ok && record.record.archivedBodyHash === version;
   }); }
 
   captureExposure(history, modelInputId, completed = false) {
@@ -577,7 +645,8 @@ class WorkingContext {
       if (this.manifest && hash(prefix.slice(0, this.manifest.sourceLength)) !== this.manifest.sourcePrefixHash) {
         this.lastCommitReason = "source_prefix_changed"; return false;
       }
-      const saved = this.#writeWindow(source, candidate, null, hash(prefix), this.manifest?.modelFingerprint || "terminal_observation_only");
+      const delivered = deserialize(retainVisibleResponse(prefix, serialize(candidate)));
+      const saved = this.#writeWindow(source, delivered, null, hash(prefix), this.manifest?.modelFingerprint || "terminal_observation_only");
       if (saved) { this.closed = true; try { this.archive.close(); } catch { /* Window remains pinned; diagnostics retain the lease. */ } }
       return saved;
     } catch (error) { this.lastCommitReason = error.message || "window_write_failed"; return false; }
@@ -630,10 +699,17 @@ class WorkingContext {
       const returned = new Map(persistedMessages.flatMap(m => m.getToolCallResults()).map(r => [r.toolCallId, hash(r.content)]));
       const referenceObservations = this.referenceObservations.map(o => ({ ...o,
         fingerprint: returned.get(o.id) || o.fingerprint }));
+      // The next execution matches this prefix against the host's own stored
+      // transcript, so persist a layout-independent identity alongside the
+      // exact in-process one, plus per-entry hashes to locate a divergence.
+      const canonical = canonicalTranscript(source.getMessagesArray()).entries;
       const body = { schemaVersion: 2, scope: this.scope, windowId: hash([this.scope, expectedPrefix, replacement]),
         generation: this.generation + 1, parentWindowId: this.manifest?.windowId || null,
         lineage: this.lineage, parentLineage: this.parentLineage,
         sourcePrefixHash: expectedPrefix, sourceLength: prefix.length,
+        prefixCanonicalization: "v1", sourceCanonicalLength: canonical.length, sourceCanonicalHash: hash(canonical),
+        sourceCanonicalMessageHashes: canonical.length <= CANONICAL_MESSAGE_HASH_LIMIT
+          ? canonical.map(entry => hash(entry).slice(0, 16)) : null,
         replacement, refs: [...candidateRefs], membership: this.archive.exportMembership(), rawBindings, consumedBindings,
         pendingRefs: [...this.returnedRefs], pendingHistoricalResults, note: this.note, referenceObservations,
         createdAt: this.archive.now(),
@@ -660,50 +736,87 @@ class WorkingContext {
     } catch (error) { this.lastCommitReason = error.message || "window_write_failed"; return false; }
   }
 
+  /** Locate where the sealed prefix ends in the host's current transcript. */
+  matchSourcePrefix(body, source, messages) {
+    if (body.prefixCanonicalization !== "v1") {
+      if (!Number.isSafeInteger(body.sourceLength) || body.sourceLength < 0 || body.sourceLength > messages.length)
+        return { rejection: "source_length_mismatch" };
+      return hash(messages.slice(0, body.sourceLength)) === body.sourcePrefixHash
+        ? { rawStart: body.sourceLength } : { rejection: "source_prefix_mismatch" };
+    }
+    const { entries, rawEnds } = canonicalTranscript(source.getMessagesArray());
+    const length = body.sourceCanonicalLength;
+    if (!Number.isSafeInteger(length) || length < 0 || length > entries.length)
+      return { rejection: "source_length_mismatch", detail: { sealedEntries: length, currentEntries: entries.length } };
+    if (hash(entries.slice(0, length)) !== body.sourceCanonicalHash) {
+      const sealed = Array.isArray(body.sourceCanonicalMessageHashes) ? body.sourceCanonicalMessageHashes : null;
+      const firstDifferentIndex = sealed ? sealed.findIndex((value, index) => hash(entries[index]).slice(0, 16) !== value) : null;
+      return { rejection: "source_prefix_mismatch", detail: { sealedEntries: length, firstDifferentIndex,
+        currentRole: firstDifferentIndex >= 0 ? entries[firstDifferentIndex]?.role ?? null : null } };
+    }
+    return { rawStart: length ? rawEnds[length - 1] + 1 : 0 };
+  }
+
   restore(source) {
     if (this.archive.directory && !this.archive.lockDepth) {
       try { return this.archive.withStorageLock(() => this.restore(source)); }
       catch { return { history: source, reason: "archive_lock_unavailable" }; }
     }
-    try {
-      let manifest = this.manifest;
-      if (this.archive.directory) {
+    // Each early exit names its cause; "unavailable" is reserved for an
+    // unexpected failure after the window was read and verified.
+    let manifest = this.manifest;
+    if (this.archive.directory) {
+      let text;
+      try {
         this.archive.ensureDirectory();
-        manifest = JSON.parse(readFile(path.join(this.archive.directory, this.windowFile(this.parentLineage)), this.archive.options.maxBytes));
+        text = readFile(path.join(this.archive.directory, this.windowFile(this.parentLineage)), this.archive.options.maxBytes);
+      } catch (error) {
+        return { history: source, reason: error?.code === "ENOENT" ? "no_window_file" : "window_read_failed" };
       }
-      if (!manifest) return { history: source, reason: "no_manifest" };
+      try { manifest = JSON.parse(text); } catch { return { history: source, reason: "window_parse_failed" }; }
+    }
+    if (!manifest) return { history: source, reason: "no_manifest" };
+    let messages;
+    try { messages = serialize(source); }
+    catch (error) { return { history: source, reason: error?.message === "typed_files_not_serializable" ? "typed_files_not_serializable" : "source_unserializable" }; }
+    try {
       const { digest, ...body } = manifest;
-      const messages = serialize(source);
-      const rejection = digest !== hash(body) ? "manifest_integrity_failed"
+      const header = digest !== hash(body) ? "manifest_integrity_failed"
         : ![1, 2].includes(body.schemaVersion) ? "manifest_schema_mismatch"
           : body.scope !== this.scope ? "scope_mismatch"
-            : this.parentLineage && body.lineage !== this.parentLineage ? "lineage_mismatch"
-              : !Number.isSafeInteger(body.sourceLength) || body.sourceLength < 0
-                || body.sourceLength > messages.length ? "source_length_mismatch"
-                : hash(messages.slice(0, body.sourceLength)) !== body.sourcePrefixHash ? "source_prefix_mismatch"
-                  : null;
-      if (rejection) return { history: source, reason: rejection };
+            : this.parentLineage && body.lineage !== this.parentLineage ? "lineage_mismatch" : null;
+      if (header) return { history: source, reason: header };
+      const prefix = this.matchSourcePrefix(body, source, messages);
+      if (prefix.rejection) return { history: source, reason: prefix.rejection, detail: prefix.detail };
+      const rawStart = prefix.rawStart;
       // Only a verified ancestor window can grant inherited membership. Raw
       // refs in SDK messages are pin candidates, never access authorization.
       const oldMembership = [...this.archive.membership];
       let restored, refs, rawRefs, returnedRefs, pendingHistoricalResults, consumedRawResults;
       try {
-        restored = deserialize([...body.replacement, ...messages.slice(body.sourceLength)]);
+        // The scope, integrity and host prefix have already been verified. This
+        // also repairs older windows that omitted the last displayed report.
+        const replacement = retainVisibleResponse(messages.slice(0, rawStart), body.replacement);
+        restored = deserialize([...replacement, ...messages.slice(rawStart)]);
         refs = new Map(body.refs); rawRefs = new Map(body.rawBindings || []);
         returnedRefs = new Map(body.pendingRefs || []);
         pendingHistoricalResults = new Set(body.pendingHistoricalResults || []);
         consumedRawResults = new Set(body.consumedBindings || []);
         this.archive.setAccess(this.archive.lineage, body.schemaVersion === 2 ? body.membership || [] : body.refs || []);
-        if (!this.refsValid(body.refs)) {
+        // The sealed window is what protects its refs; an idle conversation
+        // must still resume after the records' own TTL has elapsed.
+        if (!this.refsValid(body.refs, true)) {
           this.archive.setAccess(this.archive.lineage, oldMembership);
           return { history: source, reason: "archive_refs_unavailable" };
         }
+        this.archive.protectRecords(refs.keys());
         this.archive.setPins(refs.keys());
       } catch (error) {
         this.archive.setAccess(this.archive.lineage, oldMembership);
         throw error;
       }
       if (body.lineage === this.lineage) this.windowDigest = manifest.digest;
+      this.archivedEvidenceKnown = undefined;
       this.manifest = manifest; this.generation = body.generation; this.refs = refs; this.note = body.note;
       this.referenceObservations = Array.isArray(body.referenceObservations) ? body.referenceObservations : [];
       this.rawRefs = rawRefs; this.returnedRefs = returnedRefs;

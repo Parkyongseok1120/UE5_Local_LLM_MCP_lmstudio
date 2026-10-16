@@ -254,10 +254,11 @@ test("Direct catalog is static capability surface without task/control schemas",
   }
   const workspaceInfo = tools.find((tool) => tool.name === "get_workspace_info");
   const search = tools.find((tool) => tool.name === "search_files");
-  assert.match(workspaceInfo.description, /useful early authority check when the current flags are unknown/u);
-  assert.match(workspaceInfo.description, /does not own tool order/u);
-  assert.match(search.description, /directly reusable uri/u);
-  assert.match(search.description, /exact activeProject/u);
+  // Descriptions are compressed (fixed per-round prompt cost) but keep the
+  // advisory authority check and the project:// URI reuse contract.
+  assert.match(workspaceInfo.description, /Early authority check when flags are unknown; advisory only/u);
+  assert.match(search.description, /reusable uri/u);
+  assert.match(search.description, /activeProject as project/u);
 });
 
 test("mutation schemas expose focused per-round edit bounds", () => {
@@ -275,7 +276,7 @@ test("mutation schemas expose focused per-round edit bounds", () => {
 
   assert.strictEqual(write.inputSchema.properties.path.minLength, 1);
   assert.strictEqual(write.inputSchema.properties.content.maxLength, 12_000);
-  assert.match(write.description, /apply_edit_bundle never creates files/u);
+  assert.match(write.description, /never overwrites/u);
 
   const replaceProperties = replace.inputSchema.properties;
   assert.deepStrictEqual(
@@ -299,10 +300,10 @@ test("mutation schemas expose focused per-round edit bounds", () => {
     { required: ["fileVersionReceipt"] },
     { required: ["expectedHash"] },
   ]);
-  assert.match(replace.description, /Emit this tool call immediately/u);
-  assert.match(replace.description, /4000 combined characters/u);
-  assert.match(replace.description, /next prediction round/u);
-  assert.match(replace.description, /no same-session evidence is selected automatically/u);
+  assert.match(replace.description, /Emit the call immediately/u);
+  assert.match(replace.description, /4000 combined chars/u);
+  assert.match(replace.description, /next round with the returned receipt/u);
+  assert.match(replace.description, /never auto-selected/u);
   assert.match(replace.description, /Requires ALLOW_WRITE=1/u);
 
   const patches = bundle.inputSchema.properties.patches;
@@ -317,12 +318,10 @@ test("mutation schemas expose focused per-round edit bounds", () => {
     { required: ["fileVersionReceipt"] },
     { required: ["expectedHash"] },
   ]);
-  assert.match(patches.description, /server-enforced because JSON Schema cannot express them/u);
   assert.match(bundle.description, /at most 2 distinct existing files/u);
-  assert.match(bundle.description, /server additionally enforces unique normalized paths/u);
-  assert.match(bundle.description, /at most 64 aggregate changed lines/u);
-  assert.match(bundle.description, /next prediction round/u);
-  assert.match(bundle.description, /New files are created only with standalone write_file/u);
+  assert.match(bundle.description, /unique paths, max 64 changed lines/u);
+  assert.match(bundle.description, /Same-file regions: replace_in_file/u);
+  assert.match(bundle.description, /Never creates files/u);
   assert.match(bundle.description, /Requires ALLOW_WRITE=1/u);
 
   const deletionFiles = proposeDelete.inputSchema.properties.files;

@@ -86,8 +86,33 @@ function atomicWrite(directory, name, value) {
   }
 }
 
+// Locks are held only for synchronous, millisecond-scale sections. A lock file
+// older than this belongs to a process that died mid-section; its PID may have
+// been reused (common on Windows), so liveness alone cannot clear it.
+const LOCK_STALE_MS = 30 * 1000;
+const LOCK_RETRY_DELAYS_MS = Object.freeze([10, 20, 40, 80, 80]);
+const LEASE_STALE_MS = 6 * 3600 * 1000;
+
+function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
 function withDirectoryLock(directory, action) {
   safeDirectory(directory, true);
+  // Brief contention is normal between executions sharing a scope; retry a
+  // few times before reporting the archive as unavailable.
+  for (let attempt = 0; ; attempt += 1) {
+    try { return tryDirectoryLock(directory, action); }
+    catch (error) {
+      if (!(error instanceof LockContention) || attempt >= LOCK_RETRY_DELAYS_MS.length) {
+        throw error instanceof LockContention ? new Error("archive_lock_unavailable") : error;
+      }
+      sleepSync(LOCK_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
+class LockContention extends Error {}
+
+function tryDirectoryLock(directory, action) {
   // A bounded bakery lock has no shared stale-reclamation lock. Each
   // contender owns a unique file; dead contenders can be ignored without
   // unlinking a file another writer might have replaced.
@@ -99,17 +124,20 @@ function withDirectoryLock(directory, action) {
     if (names.length > 256) throw new Error("archive_lock_capacity");
     const live = [];
     for (const entry of names) {
-      let value;
-      try { value = JSON.parse(readFile(path.join(directory, entry), 1024)); }
-      catch (error) { if (error.code === "ENOENT") continue; throw error; }
-      if (!Number.isSafeInteger(value.pid) || value.pid < 1 || !Number.isSafeInteger(value.ticket)
-        || value.ticket < 0 || typeof value.nonce !== "string") throw new Error("archive_lock_unavailable");
-      let dead = false;
-      try { process.kill(value.pid, 0); } catch (error) { dead = error.code === "ESRCH"; }
+      const target = path.join(directory, entry);
+      let value, stale = false;
+      try {
+        stale = entry !== name && Date.now() - fs.lstatSync(target).mtimeMs > LOCK_STALE_MS;
+        if (!stale) value = JSON.parse(readFile(target, 1024));
+      } catch (error) { if (error.code === "ENOENT") continue; throw error; }
+      if (!stale && (!Number.isSafeInteger(value.pid) || value.pid < 1 || !Number.isSafeInteger(value.ticket)
+        || value.ticket < 0 || typeof value.nonce !== "string")) throw new Error("archive_lock_unavailable");
+      let dead = stale;
+      if (!dead) { try { process.kill(value.pid, 0); } catch (error) { dead = error.code === "ESRCH"; } }
       if (dead) {
         // Unique owner paths are never reused. Cleanup failure does not
-        // make a dead process a live contender.
-        try { fs.unlinkSync(path.join(directory, entry)); } catch { /* optional */ }
+        // make a dead or stale process a live contender.
+        try { fs.unlinkSync(target); } catch { /* optional */ }
       } else live.push(value);
     }
     return live;
@@ -122,7 +150,7 @@ function withDirectoryLock(directory, action) {
     for (const other of contenders()) {
       if (other.nonce === nonce) continue;
       if (other.choosing || other.ticket < ticket || other.ticket === ticket && other.nonce < nonce)
-        throw new Error("archive_lock_unavailable");
+        throw new LockContention("archive_lock_contended");
     }
     return action();
   } finally {
@@ -135,7 +163,9 @@ class EvidenceArchive {
     if (!scope || !scope.conversation || !scope.workspace || !scope.repository || !scope.lineage)
       throw new Error("incomplete_archive_scope");
     this.scope = hash(scope);
-    this.options = { maxBytes: 8 * 1024 * 1024, maxRecords: 128, ttlMs: 24 * 3600 * 1000,
+    // Seven days lets a conversation resume on a later day; quotas below still
+    // bound each scope, and idle scopes are reclaimed after the same period.
+    this.options = { maxBytes: 8 * 1024 * 1024, maxRecords: 128, ttlMs: 7 * 24 * 3600 * 1000,
       maxWindows: 128, maxWindowBytes: 8 * 1024 * 1024, ...options };
     this.now = options.now || Date.now;
     this.records = new Map();
@@ -157,6 +187,7 @@ class EvidenceArchive {
     this.membership = new Map();
     this.ownerId = crypto.randomUUID();
     this.pins = new Set();
+    this.protectedRecords = new Set();
     this.lockDepth = 0;
     if (this.root) this.cleanupScopes();
   }
@@ -197,8 +228,10 @@ class EvidenceArchive {
       try { lease = JSON.parse(readFile(file, 256 * 1024)); }
       catch (error) { if (error.code === "ENOENT") continue; throw error; }
       if (!Number.isSafeInteger(lease.pid) || lease.pid < 1) throw new Error("lease_liveness_unknown");
-      let dead = false;
-      try { process.kill(lease.pid, 0); } catch (error) { dead = error.code === "ESRCH"; }
+      // Live executions refresh their lease on every pin update; one untouched
+      // for hours belongs to a dead process even if its PID was reused.
+      let dead = Number.isFinite(lease.updatedAt) && this.now() - lease.updatedAt > LEASE_STALE_MS;
+      if (!dead) { try { process.kill(lease.pid, 0); } catch (error) { dead = error.code === "ESRCH"; } }
       if (dead) {
         if (reclaim) try { fs.unlinkSync(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
         continue;
@@ -385,7 +418,11 @@ class EvidenceArchive {
     return true;
   }
 
-  load(id) {
+  /** Records referenced by a restored sealed window stay readable beyond
+   * their TTL for this execution, matching put()'s retention rule. */
+  protectRecords(ids) { for (const id of ids) if (ID.test(id)) this.protectedRecords.add(id); }
+
+  load(id, { allowExpired = false } = {}) {
     if (!ID.test(id)) return { ok: false, errorCode: "invalid_evidence_id" };
     try {
       let record = this.records.get(id);
@@ -401,7 +438,8 @@ class EvidenceArchive {
         return { ok: false, errorCode: "integrity_failed" };
       if (record.lineage !== this.lineage && this.membership.get(id) !== record.archivedBodyHash)
         return { ok: false, errorCode: "lineage_access_denied" };
-      if (this.now() - record.createdAt >= this.options.ttlMs) return { ok: false, errorCode: "expired" };
+      if (this.now() - record.createdAt >= this.options.ttlMs && !allowExpired && !this.protectedRecords.has(id))
+        return { ok: false, errorCode: "expired" };
       return { ok: true, record };
     } catch { return { ok: false, errorCode: "unavailable" }; }
   }
@@ -452,7 +490,7 @@ class EvidenceArchive {
   // Bounded execution-local snapshots make continuation insensitive to GC and
   // new records. Access and version are still revalidated for every page.
   catalogPage({ path: sourcePath, continuation, maxChars = 4096 } = {}) {
-    if (!Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > 8192)
+    if (!Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > ARCHIVE_READ_CONTRACT.maximumEnvelopeChars)
       return { ok: false, errorCode: "invalid_range" };
     const now = this.now();
     for (const [key, value] of this.catalogSnapshots) if (now >= value.expires) this.catalogSnapshots.delete(key);
@@ -525,7 +563,8 @@ class EvidenceArchive {
         && Number.isFinite(entry.record?.createdAt)
         && this.now() - entry.record.createdAt >= this.options.ttlMs);
       for (const entry of expiredDead) this.removeEntry(entry.key);
-      entries = this.entries();
+      const removed = new Set(expiredDead.map(entry => entry.key));
+      entries = entries.filter(entry => !removed.has(entry.key));
       const overQuota = () => entries.length >= this.options.maxRecords
         || entries.reduce((n, entry) => n + entry.bytes, 0) + bytes > this.options.maxBytes;
       // Deterministically reclaim only dead records. A manifest-referenced
@@ -552,7 +591,7 @@ class EvidenceArchive {
 
   read(id, version, start = 0, maxChars = 4096, view = "envelope") {
     this.stats.reads++;
-    if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > 8192)
+    if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > ARCHIVE_READ_CONTRACT.maximumEnvelopeChars)
       return { ok: false, errorCode: "invalid_range" };
     const loaded = this.load(id);
     if (!loaded.ok) { this.stats.unavailable++; return loaded; }

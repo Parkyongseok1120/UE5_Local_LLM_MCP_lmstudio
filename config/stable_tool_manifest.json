@@ -54,5 +54,65 @@
     "static_validate_project",
     "build_unreal_project",
     "run_unreal_automation_tests"
-  ]
+  ],
+  "toolEffectsDescription": "Single source for each tool's effect. read/ephemeral tools need no confirmation and are observation-only for the context compactor; mutation/long_running tools use host approval. Servers and the compactor's generated contract are checked against this map.",
+  "agentToolEffects": {
+    "get_workspace_info": "read",
+    "list_unreal_projects": "read",
+    "get_active_project": "read",
+    "set_active_project": "mutation",
+    "detect_unreal_project": "read",
+    "list_directory": "read",
+    "search_files": "read",
+    "read_file": "read",
+    "read_file_range": "read",
+    "read_symbol": "read",
+    "read_unreal_logs": "read",
+    "write_file": "mutation",
+    "replace_in_file": "mutation",
+    "apply_edit_bundle": "mutation",
+    "propose_file_deletions": "ephemeral",
+    "delete_file": "mutation",
+    "static_validate_project": "long_running",
+    "build_unreal_project": "long_running",
+    "run_unreal_automation_tests": "long_running",
+    "run_command": "long_running",
+    "workspace_status": "read",
+    "git_status": "read",
+    "git_log": "read",
+    "git_changed_files": "read",
+    "git_diff_file": "read",
+    "git_read_file": "read"
+  },
+  "ragToolEffects": {
+    "unreal_get_active_project": "read",
+    "unreal_set_active_project": "mutation",
+    "unreal_rag_search": "read",
+    "unreal_symbol_lookup": "read",
+    "unreal_rag_health": "read",
+    "unreal_rag_rebuild_status": "read",
+    "unreal_rag_refresh": "long_running",
+    "unreal_rag_capabilities": "read"
+  },
+  "readResultContracts": {
+    "description": "Compactor read-result reservation defaults for providers whose schema does not publish a default.",
+    "nativeByteTools": {
+      "mcp/unreal-agent": [
+        "read_file",
+        "read_file_range"
+      ],
+      "mcp/unreal-rag": [
+        "read_file",
+        "read_file_range"
+      ]
+    },
+    "byteBudgetDefaults": {
+      "mcp/unreal-agent": 8192
+    },
+    "toolDefaults": {
+      "git_changed_files": 4096
+    },
+    "fieldDefault": 32768,
+    "maxBytesCeiling": 4096
+  }
 }

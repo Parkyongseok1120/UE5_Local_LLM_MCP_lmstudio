@@ -10,7 +10,7 @@ const {
 } = require("./unreal-detect.js");
 const { resolveReadPath, isWithin } = require("./read-path-resolver.js");
 const { DirectRepeatCache } = require("./direct-repeat-cache.js");
-const { toMcpResult } = require("./direct-response.js");
+const { DEFAULT_MAX_RESPONSE_CHARS, renderModelJson, toMcpResult } = require("./direct-response.js");
 const { clamp, relativeSlash } = require("./direct-runtime-shared.js");
 const { resolveMutationLimits } = require("./direct-mutation-limits.js");
 const { assertDirectMutationScope } = require("./direct-mutation-scope.js");
@@ -38,8 +38,9 @@ function createDirectRuntimeContext(options = {}) {
     maxReadBytes: clamp(env.MAX_READ_BYTES, 64 * 1024, 4096, 2 * 1024 * 1024),
     maxSourceBytes: clamp(env.DIRECT_MAX_SOURCE_FILE_BYTES, 8 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024),
     commandTimeoutMs: clamp(env.COMMAND_TIMEOUT_MS, 10 * 60 * 1000, 1000, 60 * 60 * 1000),
-    maxResponseChars: clamp(env.DIRECT_MAX_RESPONSE_CHARS, 256_000, 16_000, 1_000_000),
+    maxResponseChars: clamp(env.DIRECT_MAX_RESPONSE_CHARS, DEFAULT_MAX_RESPONSE_CHARS, 16_000, 1_000_000),
     maxCommandOutputBytes: clamp(env.DIRECT_MAX_COMMAND_OUTPUT_BYTES, 1_000_000, 16_384, 8_000_000),
+    searchDeadlineMs: clamp(env.DIRECT_SEARCH_DEADLINE_MS, 10_000, 1, 120_000),
   };
 
   const getActive = () => (options.getActiveProject || getActiveProject)(configPath);
@@ -102,7 +103,7 @@ function createDirectRuntimeContext(options = {}) {
   }
 
   function payloadFits(payload, reserveChars = 0, byteBudget) {
-    const rendered = JSON.stringify(fileObservation(payload), null, 2);
+    const rendered = renderModelJson(fileObservation(payload));
     return rendered.length + reserveChars <= limits.maxResponseChars
       && (byteBudget === undefined || Buffer.byteLength(rendered, "utf8") + reserveChars <= byteBudget);
   }
@@ -110,6 +111,24 @@ function createDirectRuntimeContext(options = {}) {
   function projectScopedSuggestionArgs(args, suggestionArgs) {
     const selector = String(args?.project || "").trim();
     return selector ? { ...suggestionArgs, project: selector } : suggestionArgs;
+  }
+
+  // Largest item count whose payload fits; makePayload must grow with count.
+  function fitCount(maxCount, makePayload, byteBudget, reserveChars = 256) {
+    let low = 0;
+    let high = maxCount;
+    let best = null;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = makePayload(middle);
+      if (payloadFits(candidate, reserveChars, byteBudget)) {
+        best = { payload: candidate, count: middle };
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return best;
   }
 
   function fitUtf8Prefix(buffer, makePayload, byteBudget) {
@@ -152,6 +171,7 @@ function createDirectRuntimeContext(options = {}) {
     directResult,
     env,
     fileSnapshots,
+    fitCount,
     fitUtf8Prefix,
     getActive,
     limits,

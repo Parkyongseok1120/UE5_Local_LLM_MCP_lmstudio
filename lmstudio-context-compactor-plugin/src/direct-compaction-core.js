@@ -25,6 +25,7 @@ const {
 const {
   extractPriorAssistantEvidence,
   generatedAssistantCheckpoint,
+  isDeliveredPartialResponse,
   mergePriorAssistantEvidence,
   renderAssistantCheckpoint,
   splitAssistantEvidence,
@@ -38,10 +39,13 @@ const {
   visibleAssistantText,
 } = require("./continuity-text.js");
 const {
+  sanitizeDerivedOperationalText,
   sanitizeStructuredDurableValue,
   sanitizeUserAuthoredText,
 } = require("./durable-memory-sanitizer.js");
 const { renderBudgetedCheckpoint } = require("./checkpoint-budget.js");
+const { exchangeIndex } = require("./tool-exchange-index.js");
+const { createHash } = require("node:crypto");
 const { CHANGE_DATA_MARKER, separateChangeData, renderChangeData, restoreChangeData, fileKey, fileIdentity, invalidateSupersededChanges } = require("./change-evidence-memory.js");
 
 function retainedUserText(value, maxChars) {
@@ -124,15 +128,32 @@ function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
   }).slice(-maxItems);
 }
 
-function previousTurnFinalResponseEvidence(messages, latestUserIndex) {
-  if (latestUserIndex <= 0) return { present: false, reason: "no_previous_turn" };
+const PREVIOUS_RESPONSE_MAX_CHARS = 3000;
+const userTurnKey = text => createHash("sha256").update(normalizedTextKey(text)).digest("hex");
+
+// The prior answer (or the last visible progress of an interrupted turn) is
+// the most important context for "continue". Retain a bounded head/tail of
+// its text, and carry it across re-compaction within the same user turn.
+function previousTurnFinalResponseEvidence(messages, latestUserIndex, previousState = null) {
+  const latestUser = latestUserIndex >= 0 ? messages.find(message => message.index === latestUserIndex) : null;
+  const forUserTurn = latestUser ? userTurnKey(latestUser.text) : "";
+  const carried = previousState?.previousTurnFinalResponseEvidence;
+  const carry = reason => carried?.present === true && typeof carried.text === "string" && carried.text
+    && carried.forUserTurn === forUserTurn ? { ...carried, source: "prior_checkpoint" } : { present: false, reason };
+  if (latestUserIndex <= 0) return carry("no_previous_turn");
   const prior = messages.filter((message) => message.index < latestUserIndex).at(-1);
-  if (!prior) return { present: false, reason: "no_previous_message" };
+  if (!prior) return carry("no_previous_message");
+  const record = (message, final) => ({ present: true, messageIndex: message.index, final, forUserTurn,
+    text: clipHeadTail(sanitizeDerivedOperationalText(visibleAssistantText(message.text)), PREVIOUS_RESPONSE_MAX_CHARS, { trim: false }) });
   if (prior.role === "assistant" && prior.toolRequests.length === 0
     && visibleAssistantText(prior.text).trim()) {
-    return { present: true, messageIndex: prior.index };
+    return record(prior, !isDeliveredPartialResponse(prior.text));
   }
-  return { present: false, reason: "previous_turn_ended_with_tool_activity" };
+  const previousUserIndex = messages.filter(m => m.role === "user" && m.index < latestUserIndex).at(-1)?.index ?? -1;
+  const progress = messages.filter(m => m.role === "assistant" && m.index > previousUserIndex && m.index < latestUserIndex
+    && !generatedCheckpoint(m) && visibleAssistantText(m.text).trim()).at(-1);
+  if (progress) return { ...record(progress, false), reason: "previous_turn_ended_with_tool_activity" };
+  return carry("previous_turn_ended_with_tool_activity");
 }
 
 function priorUserRequestsForContinuation(messages, latestUserIndex, limit = 3) {
@@ -219,6 +240,24 @@ function boundedCurrentTurnIndexes(messages, latestUserIndex, maxMessages) {
     retainedCount += groupSize;
   }
   return retained;
+}
+
+function requiredExchangeIndexes(messages, requiredIndexes) {
+  const required = new Set((Array.isArray(requiredIndexes) ? requiredIndexes : [])
+    .filter(index => Number.isSafeInteger(index) && index >= 0 && index < messages.length));
+  if (!required.size) return [];
+  const { batches } = exchangeIndex(messages);
+  const batchStarts = new Set();
+  for (const [key, start] of batches) if (required.has(Number(key.split(":")[0]))) batchStarts.add(start);
+  const output = new Set(required);
+  for (const start of batchStarts) {
+    for (const [key, batch] of batches) {
+      if (batch !== start) continue;
+      const end = Number(key.split(":")[0]);
+      for (let index = start; index <= end; index += 1) output.add(index);
+    }
+  }
+  return [...output];
 }
 
 function mergeEvidence(previous, current, maxItems) {
@@ -499,8 +538,11 @@ function renderCheckpoint(memory, maxChars) {
     );
   }
   if (render().length <= maxChars) return render();
-  delete candidate.priorUserRequestsForContinuation;
   delete candidate.olderContinuationAnchor;
+  if (candidate.previousTurnFinalResponseEvidence?.text) candidate.previousTurnFinalResponseEvidence.text
+    = clipHeadTail(candidate.previousTurnFinalResponseEvidence.text, 1200, { trim: false });
+  if (render(false).length <= maxChars) return render(false);
+  delete candidate.priorUserRequestsForContinuation;
   delete candidate.previousTurnFinalResponseEvidence;
   if (render(false).length <= maxChars) return render(false);
   candidate.recentRawTail = candidate.recentRawTail.slice(-4).map((item) => ({
@@ -547,6 +589,10 @@ function buildCheckpoint(messagesInput, options = {}) {
   )).map((message) => message.index));
   for (const index of fileIndexes) retainedIndexes.add(index);
   if (latestUserIndex >= 0) retainedIndexes.add(latestUserIndex);
+  // Results still awaiting their first consumer (e.g. returned just before a
+  // user cancel) are mandatory input. Keep each one's whole request batch so
+  // the retained exchange stays complete and unambiguous.
+  for (const index of requiredExchangeIndexes(messages, options.requiredIndexes)) retainedIndexes.add(index);
   const omittedToolMessageIndexes = new Set(messages.filter((message) => (
     message.role === "tool" && !retainedIndexes.has(message.index)
   )).map((message) => message.index));
@@ -599,7 +645,7 @@ function buildCheckpoint(messagesInput, options = {}) {
       12,
     ),
     openQuestionEvidence: openQuestions,
-    previousTurnFinalResponseEvidence: previousTurnFinalResponseEvidence(semanticMessages, latestUserIndex),
+    previousTurnFinalResponseEvidence: previousTurnFinalResponseEvidence(semanticMessages, latestUserIndex, previousState),
     recentOlderToolOutcomes: continuity.currentWorkStatus?.recentToolOutcomes || [],
     modifiedOrObservedFiles: continuity.currentWorkStatus?.modifiedOrObservedFiles || [],
     recentBuildOrTestState: continuity.currentWorkStatus?.recentBuildOrTestState || [],
@@ -607,11 +653,11 @@ function buildCheckpoint(messagesInput, options = {}) {
   const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 22000));
   const { systemMemory, assistantEvidence } = splitAssistantEvidence(memory);
   const changeData = separateChangeData(systemMemory);
-  const assistantCheckpoint = options.checkpointPolicy === "mandatory" ? "" : renderAssistantCheckpoint(
-    assistantEvidence,
-    // Preserve the factual checkpoint's emergency file/evidence budget first.
-    Math.min(2600, Math.max(0, maxCheckpointChars - 6000)),
-  );
+  // The mandatory floor keeps only the prior answer; bounded checkpoints add
+  // other assistant progress after the factual checkpoint's emergency budget.
+  const assistantCheckpoint = options.checkpointPolicy === "mandatory"
+    ? renderAssistantCheckpoint(assistantEvidence, 3400, { previousOnly: true })
+    : renderAssistantCheckpoint(assistantEvidence, Math.min(5600, Math.max(0, maxCheckpointChars - 6000)));
   const checkpoint = options.checkpointPolicy
     ? renderBudgetedCheckpoint(systemMemory, maxCheckpointChars - assistantCheckpoint.length,
       options.checkpointPolicy === "mandatory")

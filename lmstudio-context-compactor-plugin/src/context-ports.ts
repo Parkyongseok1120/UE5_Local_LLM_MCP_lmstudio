@@ -60,12 +60,15 @@ export const workingContextModule = require("./working-context.js") as {
         history: Chat; changed: boolean; archiveFailed?: boolean; reason: string;
       };
     tool(): Tool;
-    restore(history: Chat): { history: Chat; reason: string };
+    restore(history: Chat): { history: Chat; reason: string; detail?: Record<string, unknown> };
     commit(source: Chat, candidate: Chat, measurement: ContextMeasurement,
       expectedPrefix: string, modelFingerprint: string): boolean;
     seal(source: Chat, candidate: Chat): boolean;
     close(): boolean;
     captureExposure(history: Chat, modelInputId: string, completed?: boolean): void;
+    pendingResultIndexes(history: Chat): number[];
+    archiveConversationProse(history: Chat, retainedIndexes?: number[]): number;
+    releaseOmittedPending(history: Chat): string[];
     captureReturned(history: Chat, observation: (request: ToolCallRequest) => boolean, metadata?: Record<string, unknown>): number;
     summaryRefs(): Set<string>;
     verifiedNoteRefs(note: unknown): Set<string>;

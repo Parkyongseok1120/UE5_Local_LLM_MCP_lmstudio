@@ -36,6 +36,12 @@ CODE_DETAIL_LIMITS = {
 }
 
 
+# Caller-supplied response caps (maxChars) are clamped into this range and
+# never exceed the selected detail level's own transport budget.
+MIN_MAX_CHARS = 2_000
+MAX_MAX_CHARS = max(limits["max_tool_chars"] for limits in CODE_DETAIL_LIMITS.values())
+
+
 def resolve_detail(value: str | None) -> str:
     normalized = str(value or "compact").strip().casefold()
     return normalized if normalized in CODE_DETAIL_LIMITS else "compact"
@@ -52,4 +58,22 @@ def next_detail(value: str | None) -> str | None:
     return CODE_DETAIL_ORDER[index + 1] if index + 1 < len(CODE_DETAIL_ORDER) else None
 
 
-__all__ = ["detail_limits", "next_detail", "resolve_detail"]
+def response_char_limit(detail: str | None, max_chars: object = None, transport_limit: int | None = None) -> int:
+    """Effective response cap: detail budget, then transport, then maxChars."""
+
+    limit = int(detail_limits(detail)["max_tool_chars"])
+    if transport_limit is not None:
+        limit = min(limit, int(transport_limit))
+    if isinstance(max_chars, int) and not isinstance(max_chars, bool):
+        limit = min(limit, max(MIN_MAX_CHARS, min(max_chars, MAX_MAX_CHARS)))
+    return limit
+
+
+__all__ = [
+    "MAX_MAX_CHARS",
+    "MIN_MAX_CHARS",
+    "detail_limits",
+    "next_detail",
+    "resolve_detail",
+    "response_char_limit",
+]

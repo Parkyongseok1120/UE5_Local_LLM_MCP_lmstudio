@@ -2,32 +2,23 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
 
 const { assertReadChildContained, displayPath, pathMetadata } = require("./read-path-resolver.js");
+const { createSearchCapability } = require("./direct-search-capability.js");
 const { readStableFileWindow, readStableTextFile } = require("./direct-file-snapshot.js");
 const { success, failure } = require("./direct-response.js");
 const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
-const { clamp, isBinary, relativeSlash, statOrNull, statSignature } = require("./direct-runtime-shared.js");
+const { clamp, isBinary, statOrNull, statSignature } = require("./direct-runtime-shared.js");
 
 const { lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
 
 const fsp = fs.promises;
-const DEFAULT_IGNORED_DIRS = new Set([
-  ".git", ".vs", ".idea", "Binaries", "DerivedDataCache", "Intermediate",
-  "node_modules", ".gradle", ".cache", ".pytest_cache",
-]);
-const TEXT_EXTENSIONS = new Set([
-  ".h", ".hpp", ".inl", ".cpp", ".c", ".cc", ".cxx", ".cs",
-  ".ini", ".json", ".uproject", ".uplugin", ".md", ".txt", ".py",
-  ".js", ".ts", ".tsx", ".jsx", ".ps1", ".sh", ".bat", ".cmd",
-  ".xml", ".yaml", ".yml", ".toml", ".cmake", ".build", ".target",
-]);
 
 function createReadCapabilities(context) {
   const {
     dedupe,
     fileSnapshots,
+    fitCount,
     fitUtf8Prefix,
     limits,
     payloadFits,
@@ -49,8 +40,9 @@ function createReadCapabilities(context) {
     if (!stat.isDirectory()) return failure("NOT_A_DIRECTORY", `Not a directory: ${args.path}`);
     const maxEntries = clamp(args.maxEntries, 200, 1, 2000);
     const rawEntries = await fsp.readdir(resolution.absolutePath, { withFileTypes: true });
+    const offset = clamp(args.offset, 0, 0, rawEntries.length);
     const entries = [];
-    for (const entry of rawEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of rawEntries.sort((a, b) => a.name.localeCompare(b.name)).slice(offset, offset + maxEntries)) {
       const candidate = path.join(resolution.absolutePath, entry.name);
       await assertReadChildContained(candidate, resolution);
       const childStat = await statOrNull(candidate);
@@ -60,119 +52,25 @@ function createReadCapabilities(context) {
         size: childStat?.isFile() ? childStat.size : undefined,
         modifiedAt: childStat ? childStat.mtime.toISOString() : undefined,
       });
-      if (entries.length >= maxEntries) break;
     }
-    const payload = success({
-      path: displayPath(resolution),
-      ...pathMetadata(resolution),
-      entries,
-      totalEntries: rawEntries.length,
-      truncated: entries.length < rawEntries.length,
-    });
-    return dedupe("list_directory", args, `${resolution.activeProject || ""}|${statSignature(stat)}`, payload);
-  }
-
-  async function collectSearchFiles(rootResolution, maxFiles) {
-    const files = [];
-    let discoveryErrors = 0, excludedEntries = 0;
-    async function walk(target) {
-      if (files.length >= maxFiles) return;
-      let stat;
-      try { stat = await statOrNull(target); } catch { discoveryErrors++; return; }
-      if (!stat) { discoveryErrors++; return; }
-      if (stat.isFile()) {
-        files.push({ target, stat });
-        return;
-      }
-      if (!stat.isDirectory()) return;
-      let entries;
-      try { entries = await fsp.readdir(target, { withFileTypes: true }); } catch { discoveryErrors++; return; }
-      for (const entry of entries) {
-        if (files.length >= maxFiles) break;
-        if (entry.isDirectory() && DEFAULT_IGNORED_DIRS.has(entry.name)) { excludedEntries++; continue; }
-        const child = path.join(target, entry.name);
-        await assertReadChildContained(child, rootResolution);
-        if (entry.isDirectory() || entry.isFile()) await walk(child);
-        else excludedEntries++;
-      }
+    const makePayload = (count) => {
+      const nextOffset = offset + count < rawEntries.length ? offset + count : null;
+      return success({
+        path: displayPath(resolution),
+        ...pathMetadata(resolution),
+        entries: entries.slice(0, count),
+        offset,
+        nextOffset,
+        totalEntries: rawEntries.length,
+        truncated: nextOffset !== null,
+        ...(count < entries.length ? { omissionReason: "response_budget" } : {}),
+      });
+    };
+    const fitted = fitCount(entries.length, makePayload, args.byteBudget);
+    if (!fitted || (entries.length && fitted.count === 0)) {
+      return failure("OUTPUT_LIMIT_EXCEEDED", "Directory metadata or the first entry exceeds the response budget; increase byteBudget.", { retryAllowed: true, retryMode: "different_arguments" });
     }
-    await walk(rootResolution.absolutePath);
-    return { files, discoveryErrors, excludedEntries };
-  }
-
-  async function searchFiles(args) {
-    const query = String(args.query || "");
-    if (!query) return failure("INVALID_ARGUMENT", "query is required", { retryAllowed: true });
-    const resolution = await resolveToolPath(args.path || "workspace://", args.project);
-    const rootStat = await statOrNull(resolution.absolutePath);
-    if (!rootStat) return failure("NOT_FOUND", `Search path not found: ${args.path || "."}`);
-    const maxResults = clamp(args.maxResults, 100, 1, 1000);
-    const maxFiles = clamp(args.maxFiles, 5000, 1, 50000);
-    const caseSensitive = args.caseSensitive === true;
-    let matcher;
-    try {
-      matcher = args.regex === true ? new RegExp(query, caseSensitive ? "" : "i") : null;
-    } catch (error) {
-      return failure("INVALID_REGEX", String(error.message || error), { retryAllowed: true, retryMode: "different_arguments" });
-    }
-    const inferredFileName = /\\\.[A-Za-z0-9]+\$$/.test(query) || /^\*\./.test(query);
-    const matchFileNames = args.matchFileNames !== undefined ? args.matchFileNames === true : inferredFileName;
-    const needle = caseSensitive ? query : query.toLowerCase();
-    const matchesText = (value) => matcher ? matcher.test(value) : (caseSensitive ? value : value.toLowerCase()).includes(needle);
-    const rootUri = displayPath(resolution);
-    const resultUri = (rel) => rel === "." ? rootUri : `${rootUri}${rootUri.endsWith("/") ? "" : "/"}${rel}`;
-    const { files, discoveryErrors, excludedEntries } = await collectSearchFiles(resolution, maxFiles);
-    const skippedByReason = { size: 0, unsupported_extension: 0, binary: 0, read_error: 0 };
-    let filesRead = 0;
-    const results = [];
-    for (const item of files) {
-      const rel = relativeSlash(resolution.absolutePath, item.target);
-      if (matchFileNames && matchesText(path.basename(item.target))) {
-        results.push({ path: rel, uri: resultUri(rel), kind: "file_name" });
-        if (results.length >= maxResults) break;
-      }
-      if (item.stat.size > 2 * 1024 * 1024) { skippedByReason.size++; continue; }
-      const ext = path.extname(item.target).toLowerCase();
-      if (ext && !TEXT_EXTENSIONS.has(ext)) { skippedByReason.unsupported_extension++; continue; }
-      let buffer;
-      try {
-        buffer = await fsp.readFile(item.target);
-      } catch {
-        skippedByReason.read_error++; continue;
-      }
-      if (isBinary(buffer)) { skippedByReason.binary++; continue; }
-      filesRead++;
-      const lines = buffer.toString("utf8").split(/\r?\n/);
-      for (let index = 0; index < lines.length; index += 1) {
-        if (!matchesText(lines[index])) continue;
-        results.push({ path: rel, uri: resultUri(rel), line: index + 1, text: lines[index].slice(0, 1200) });
-        if (results.length >= maxResults) break;
-      }
-      if (results.length >= maxResults) break;
-    }
-    const treeState = crypto.createHash("sha256")
-      .update(files.map(({ target, stat }) => `${relativeSlash(resolution.absolutePath, target)}:${statSignature(stat)}`).join("\n"))
-      .digest("hex");
-    const payload = success({
-      path: rootUri,
-      ...pathMetadata(resolution),
-      query,
-      results,
-      filesScanned: files.length, // Legacy candidate count; filesRead is actual content coverage.
-      filesRead, filesSkipped: Object.values(skippedByReason).reduce((a, b) => a + b, 0),
-      readErrorCount: skippedByReason.read_error, discoveryErrorCount: discoveryErrors, excludedEntries, skippedByReason,
-      coverage: filesRead === files.length && !discoveryErrors && !excludedEntries && files.length < maxFiles && results.length < maxResults ? "complete" : "partial",
-      maxFilesReached: files.length >= maxFiles,
-      truncated: results.length >= maxResults,
-    });
-    const foundCount = results.length;
-    while (payload.results.length && !payloadFits(payload, 256, args.byteBudget)) {
-      payload.results.pop(); payload.truncated = true; payload.coverage = "partial";
-      payload.omissionReason = "response_budget";
-    }
-    if (!payloadFits(payload, 256, args.byteBudget) || !payload.results.length && foundCount && payload.omissionReason)
-      return failure("OUTPUT_LIMIT_EXCEEDED", "Search metadata or first match exceeds the response budget; increase byteBudget or narrow the search.", { retryAllowed: true });
-    return dedupe("search_files", args, `${resolution.activeProject || ""}|${treeState}|${payload.coverage}|${filesRead}|${JSON.stringify(skippedByReason)}|${discoveryErrors}|${excludedEntries}`, payload);
+    return dedupe("list_directory", args, `${resolution.activeProject || ""}|${statSignature(stat)}`, fitted.payload);
   }
 
   async function readFile(args, requestContext = {}) {
@@ -333,7 +231,7 @@ function createReadCapabilities(context) {
     read_file: readFile,
     read_file_range: readFileRange,
     read_symbol: readSymbol,
-    search_files: searchFiles,
+    ...createSearchCapability(context),
   };
 }
 

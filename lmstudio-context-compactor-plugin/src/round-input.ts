@@ -29,10 +29,12 @@ type RoundInputOptions = {
   semanticSummaryCooldownUntilRound: number; objectiveFingerprint: string;
   finalizing: boolean; boundedAudit: boolean; researchRecoveryEpisodeStarted: boolean; allowReadRecovery: boolean;
   reasoningRecovery?: boolean;
+  reportContinuation?: string;
   guidanceDocuments?: readonly GuidanceDocument[];
   guidanceIntent?: GuidanceIntent;
   guidanceScope?: ToolScope;
   referenceRecovery?: boolean;
+  getRuntimeFacts?: () => string[];
   finalizationTrigger: string | null;
   projectionApplied: boolean; executionId: string; modelInputId: string; roundIndex: number;
 };
@@ -61,7 +63,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   workingHistory = modelHistory;
   const assembleModelInput = createInputAssembler({ tokenSource, config, roundTools,
     roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
-    noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory });
+    noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory,
+    getRuntimeFacts: options.getRuntimeFacts, measurementCache: contextManager.measurementCache });
   const assembleRecoveryCandidate = async (sourceHistory: Chat, tools: RemoteToolLike[], instruction: string,
     candidateModelInputId: string) => {
     const desiredMaxTokens = Math.min(config.maxOutputReserve, RESEARCH_RECOVERY_MAX_TOKENS);
@@ -116,6 +119,16 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       fit: finalBudget.fit && assembled.measurement.remainingTokens >= 0 && low.canRun };
   };
   let assembledInput = await assembleModelInput(workingHistory);
+  if (options.reasoningRecovery && !config.observeOnly && roundOutputReserve > config.maxOutputReserve) {
+    const measured = assembledInput.measurement;
+    const budget = resolveGenerationBudget({ desiredMaxTokens: roundOutputReserve, contextLength: measured.contextLength,
+      inputTokens: measured.inputTokens, safetyMarginTokens: config.safetyMarginTokens, minimumTokens: MIN_FINAL_OUTPUT_TOKENS });
+    const reserve = Math.max(config.maxOutputReserve, Math.min(roundOutputReserve, budget.appliedMaxTokens));
+    if (reserve !== roundOutputReserve) {
+      roundOutputReserve = reserve; outputCapSource = "headroom_clamp";
+      assembledInput = await assembleModelInput(workingHistory);
+    }
+  }
   // Exposure does not prove review completion. Keep returned bodies while the
   // measured shared budget permits; pressure is owned by ContextManager.
   if (workingContext && !finalizing && contextManager.shouldProjectEvidence(assembledInput.measurement,
@@ -209,6 +222,11 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     minimumReadTokens: minimumReadBudget(roundTools) });
   const acceptLow = () => {
     if (!lowWater.changed) return;
+    if (workingContext && lowWater.checkpoint && !config.observeOnly) {
+      const archivedProse = workingContext.archiveConversationProse(workingHistory, lowWater.checkpoint.retainedIndexes);
+      if (config.showDebugInfo && archivedProse) ctl.debug({ event: "conversation_prose_archived", executionId,
+        modelInputId, roundIndex, archivedMessages: archivedProse });
+    }
     workingHistory = lowWater.history; assembledInput = lowWater.assembled;
     compactionCheckpoint = lowWater.checkpoint; compacted = lowWater.success;
     compactionAppliedCount++; compactionAppliedModes.push("final_exact_low_water");
@@ -278,6 +296,14 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     addedTokens: 0, attempts: 0, selectedIds: [], selectedDataIds: [],
     finalInputTokens: assembledInput.measurement.inputTokens });
   const finalMeasurement = assembledInput.measurement;
+  if (options.reportContinuation && (!lowWater.canRun || finalMeasurement.remainingTokens < 0
+    || !assembledInput.history.getMessagesArray().some(message => message.isAssistantMessage()
+      && message.getText().includes(options.reportContinuation!)))) {
+    if (config.showDebugInfo) ctl.debug({ event: "report_continuation_blocked", executionId, modelInputId,
+      reason: "continuation_context_budget", prefixPreserved: assembledInput.history.getMessagesArray()
+        .some(message => message.getText().includes(options.reportContinuation!)), modelCallSkipped: true });
+    return { kind: "continuation_blocked" as const, activeNote, semanticSummaryCooldownUntilRound };
+  }
   if (!lowWater.canRun || (!config.observeOnly && finalMeasurement.remainingTokens < 0)) {
     if (!finalizing && !config.observeOnly) return measurePressure();
     ctl.debug({ event: "context_execution_blocked", executionId, modelInputId,

@@ -7,6 +7,7 @@ const path = require("node:path");
 const DIRECT_SOURCE_FILES = Object.freeze([
   "src/config-defaults.ts",
   "src/generated-runtime-identity.ts",
+  "src/generated-tool-contract.ts",
   "src/tool-result-semantics.js",
   "src/interrupted-calls.js",
   "src/budget-broker.ts",
@@ -52,7 +53,10 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/evidence-archive.js",
   "src/evidence-identity.js",
   "src/working-context.js",
+  "src/note-persistence.ts",
+  "src/terminal-persistence.ts",
   "src/tool-exchange-index.js",
+  "src/transcript-canonical.js",
   "src/working-context-boundary.ts",
   "src/continuity-assistant-evidence.js",
   "src/continuity-file-observations.js",

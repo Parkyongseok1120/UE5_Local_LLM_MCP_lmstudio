@@ -16,7 +16,7 @@ from direct_rag_evidence import (
     format_evidence_rows,
 )
 from direct_rag_freshness import cached_project_row_current, project_freshness
-from direct_rag_limits import detail_limits, next_detail, resolve_detail
+from direct_rag_limits import detail_limits, next_detail, resolve_detail, response_char_limit
 from direct_rag_request_bounds import rag_request_bound_error
 from direct_rag_index_registry import resolve_request_index
 from direct_rag_selection import (
@@ -87,9 +87,9 @@ def symbol_lookup_capability(
     runtime: SymbolRuntime,
     arguments: dict[str, Any],
 ) -> CapabilityResult:
-    request_limits = detail_limits(str(arguments.get("detailLevel") or "compact"))
-    request_limit = min(
-        int(request_limits["max_tool_chars"]),
+    request_limit = response_char_limit(
+        str(arguments.get("detailLevel") or "compact"),
+        arguments.get("maxChars"),
         configured_result_limit(),
     )
     bound_error = rag_request_bound_error(
@@ -235,7 +235,7 @@ def symbol_lookup_capability(
         max_chars=int(limits["assembly_chars"]),
         max_chars_per_row=int(limits["row_chars"]),
     )
-    limit = min(int(limits["max_tool_chars"]), configured_result_limit())
+    limit = response_char_limit(detail, arguments.get("maxChars"), configured_result_limit())
     match_refs = compact_match_refs(
         rows,
         max_chars=min(int(limits["match_chars"]), max(512, limit // 3)),

@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -22,6 +23,8 @@ _entries: dict[str, dict[str, Any]] = {}
 _receipts: dict[str, dict[str, Any]] = {}
 _order: list[str] = []
 _receipt_order: list[str] = []
+# Read-only RAG calls run on a small thread pool; receipt state is shared.
+_LOCK = threading.RLock()
 
 
 def _state_path() -> Path | None:
@@ -156,11 +159,12 @@ def receipt_matches(receipt: str, variant: str) -> bool:
 
     if not str(receipt or "").strip():
         return False
-    _load()
-    _prune()
-    value = _receipts.get(str(receipt))
-    matched = bool(value and str(value.get("variant") or "") == str(variant))
-    _save()
+    with _LOCK:
+        _load()
+        _prune()
+        value = _receipts.get(str(receipt))
+        matched = bool(value and str(value.get("variant") or "") == str(variant))
+        _save()
     return matched
 
 
@@ -172,6 +176,11 @@ def record(
 ) -> str:
     """Record one full delivery and issue its state-bound repeat receipt."""
 
+    with _LOCK:
+        return _record_locked(semantic, variant, detail, match_count)
+
+
+def _record_locked(semantic: str, variant: str, detail: str, match_count: int) -> str:
     _load()
     _prune()
     _entries[variant] = {
@@ -199,6 +208,11 @@ def record(
 
 
 def forget(variant: str, *, save: bool = True) -> bool:
+    with _LOCK:
+        return _forget_locked(variant, save=save)
+
+
+def _forget_locked(variant: str, *, save: bool) -> bool:
     entry = _entries.pop(str(variant or ""), None)
     if entry is None:
         return False

@@ -143,7 +143,7 @@ export async function updateSemanticContext(options: {
   const remainingMs = Math.max(0, SUMMARY_POLICY.maxElapsedMs - Number(workingContext?.cost.summaryMs || 0));
   const summaryBudgetExhausted = Number(workingContext?.cost.summaryCalls || 0) >= SUMMARY_POLICY.maxCalls || remainingMs <= 0;
   const semanticSummaryCoolingDown = roundIndex < semanticSummaryCooldownUntilRound;
-  if (workingContext && config.contextManagementMode === "hybrid" && (compacted || projectionApplied)
+  if (workingContext && config.contextManagementMode === "hybrid" && config.semanticHandoff && (compacted || projectionApplied)
     && semanticCheckpoint && !repeatedSemanticEvent && !semanticSummaryCoolingDown
     && !summaryBudgetExhausted && !boundedAudit && !finalizing) {
     // Mark before dispatch: length, timeout, cancellation and invalid output

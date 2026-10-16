@@ -7,6 +7,18 @@ const { execFile } = require("node:child_process");
 const { bounded, fail, hash } = require("./files");
 const { resolveCanonicalAbsolutePath: canonical, canonicalAbsolutePathIdentity: identity } = require("../lmstudio-unreal-agent-mcp/src/filesystem-path-identity");
 const TTL = 300000, CACHE_BYTES = 16 * 1024 * 1024;
+const MIB = 1024 * 1024;
+function envInteger(name, fallback, min, max) {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.trunc(parsed))) : fallback;
+}
+// Large UE repositories may need more; read per call so operators can tune it.
+function gitLimits() {
+  return {
+    timeoutMs: envInteger("WORKSPACE_GIT_TIMEOUT_MS", 10000, 1000, 120000),
+    maxBuffer: envInteger("WORKSPACE_GIT_MAX_BUFFER_BYTES", 4 * MIB, MIB, 64 * MIB),
+  };
+}
 function recordPhase(timing, phase, elapsedMs, outputBytes = 0, subprocess = true) {
   if (!timing) return;
   if (subprocess) timing.subprocessMs += elapsedMs;
@@ -31,11 +43,12 @@ async function run(cwd, args, options = {}) {
   if (options.signal?.aborted) fail("request_cancelled", "Git request cancelled before dispatch");
   const timing = options.timing, phase = options.phase || "git";
   const startedAt = Date.now();
+  const limits = gitLimits();
   try {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")));
     const output = await new Promise((resolve, reject) => {
       const child = execFile("git", ["--literal-pathspecs", "--no-pager", "-c", "color.ui=false", "-c", "core.fsmonitor=false", ...args], {
-        cwd, signal: options.signal, timeout: 10000, maxBuffer: 4 * 1024 * 1024,
+        cwd, signal: options.signal, timeout: limits.timeoutMs, maxBuffer: limits.maxBuffer,
         windowsHide: true, encoding: "buffer",
         env: { ...env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
       }, (error, stdout, stderr) => {
@@ -52,8 +65,10 @@ async function run(cwd, args, options = {}) {
     if (options.signal?.aborted || e.code === "ABORT_ERR") fail("request_cancelled", "Git request cancelled");
     if (options.optional && e.code === 1) return null;
     if (e.code === "ENOENT") fail("git_unavailable", "Git executable was not found");
-    if (["ENOBUFS", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"].includes(e.code)) fail("git_output_too_large", "Evidence exceeds 4 MiB; narrow paths or request one file");
-    if (e.killed) fail("git_timeout", "Git subprocess exceeded its deadline");
+    if (["ENOBUFS", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"].includes(e.code)) fail("git_output_too_large",
+      `Evidence exceeds ${Math.round(limits.maxBuffer / MIB)} MiB; narrow paths, request one file, or page with a smaller limit and nextCursor (operators may raise WORKSPACE_GIT_MAX_BUFFER_BYTES)`);
+    if (e.killed) fail("git_timeout",
+      `Git subprocess exceeded its ${limits.timeoutMs} ms deadline; narrow paths or the revision range, or page with a smaller limit (operators may raise WORKSPACE_GIT_TIMEOUT_MS)`);
     fail("git_command_failed", String(e.stderr || e.message).trim().slice(0, 1000));
   }
 }
@@ -349,4 +364,4 @@ class VersionControl {
     return this.page(item, a, Math.min(offset, rows.length), timing);
   }
 }
-module.exports = { VersionControl, validRevision };
+module.exports = { VersionControl, gitLimits, validRevision };

@@ -11,6 +11,24 @@ const { parseToolResult, stateMemory } = require("../src/compaction-tool-memory.
 const { buildCheckpoint } = require("../src/direct-compaction-core.js");
 const scope = { conversation: "chat-1", lineage: "fork-1", workspace: "workspace-1", repository: "worktree-1" };
 
+test("verified older windows recover omitted displayed prose without duplicating it or importing tool requests", () => {
+  const context = new WorkingContext(scope);
+  const candidate = Chat.from([{ role: "user", content: "Write a report" }]);
+  const visible = Chat.from(candidate); visible.append("assistant", "OLD_VISIBLE_REPORT");
+  // Model the old writer: matching host prefix, but no report in replacement.
+  assert.equal(context.commit(visible, candidate, { exact: true, remainingTokens: 5000 }, hash(serialize(visible)), "m"), true);
+  const current = Chat.from(visible); current.append("user", "이어서");
+  const restored = context.restore(current);
+  assert.equal(restored.reason, "restored_remeasure_required");
+  assert.equal(restored.history.toString().split("OLD_VISIBLE_REPORT").length - 1, 1);
+  assert.equal(context.restore(current).history.toString(), restored.history.toString());
+  const altered = Chat.from(current); altered.getMessagesArray()[0].replaceText("Other request");
+  assert.equal(context.restore(altered).reason, "source_prefix_mismatch");
+  const { retainVisibleResponse } = require("../src/continuity-assistant-evidence.js");
+  const unsafe = Chat.from(candidate); unsafe.append("assistant", '<tool_call><function=write_file>unfinished');
+  assert.deepEqual(retainVisibleResponse(serialize(unsafe), serialize(candidate)), serialize(candidate));
+});
+
 test("terminal seal is a remeasured handoff, cannot reopen an execution, and fails atomically", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sealed-window-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -43,7 +61,8 @@ test("terminal seal is a remeasured handoff, cannot reopen an execution, and fai
   visible.append("user", "report now");
   const restored = next.restore(visible);
   assert.equal(restored.reason, "restored_remeasure_required");
-  assert.doesNotMatch(restored.history.toString(), /incomplete user-visible answer/);
+  assert.match(restored.history.toString(), /incomplete user-visible answer/);
+  assert.match(restored.history.toString(), /Delivered partial assistant response; unverified/);
   assert.match(restored.history.toString(), /report now/);
   assert.equal(next.returnedRefs.size, 1, "shutdown is not a completed consumer");
   assert.equal(next.seal(visible, restored.history), false, "restoration alone never authorizes a new seal");
@@ -68,10 +87,14 @@ test("restore distinguishes corrupt windows, edited prefixes, scopes, lineage an
   context.parentLineage = "other";
   assert.equal(context.restore(history).reason, "lineage_mismatch");
   context.parentLineage = null;
-  change({ sourceLength: history.length + 1 }, "source_length_mismatch");
-  change({ sourcePrefixHash: "different" }, "source_prefix_mismatch");
+  change({ sourceCanonicalLength: history.length + 1 }, "source_length_mismatch");
+  change({ sourceCanonicalHash: "different" }, "source_prefix_mismatch");
+  // Windows sealed before canonical prefixes keep the exact legacy check.
+  change({ prefixCanonicalization: undefined, sourceLength: history.length + 1 }, "source_length_mismatch");
+  change({ prefixCanonicalization: undefined, sourcePrefixHash: "different" }, "source_prefix_mismatch");
+  // A sealed window keeps its referenced evidence readable past the TTL.
   now = 151;
-  assert.equal(context.restore(history).reason, "archive_refs_unavailable");
+  assert.equal(context.restore(history).reason, "restored_remeasure_required");
   now = 100;
   const record = context.archive.records.values().next().value; record.body += "corruption";
   assert.equal(context.restore(history).reason, "archive_refs_unavailable");
@@ -648,4 +671,42 @@ test("S3 a semantic event attempt survives window restore and cannot be implicit
   assert.equal(next.lastSummaryInput, "event-fingerprint-1");
   assert.deepEqual(next.summaryAttempts, first.summaryAttempts);
   assert.equal(next.cost.summaryCalls, 0);
+});
+
+test("restore matches a host transcript that merges the recorded blocks and reports divergence", () => {
+  const context = new WorkingContext(scope);
+  const recorded = Chat.from([{ role: "user", content: "inspect" }]);
+  recorded.append(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: "Reading. " }] }));
+  recorded.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest:
+    { type: "function", id: "r1", name: "read_file", arguments: { path: "a.cpp" } } }] }));
+  recorded.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "r1", content: "{\"ok\":true}" }] }));
+  assert.equal(context.commit(recorded, recorded, { exact: true, remainingTokens: 5000 }, hash(serialize(recorded)), "m"), true);
+  // The host stores the streamed text and the request as one assistant message.
+  const host = Chat.from([{ role: "user", content: "inspect" }]);
+  host.append(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: "Reading." },
+    { type: "toolCallRequest", toolCallRequest: { type: "function", id: "r1", name: "read_file", arguments: { path: "a.cpp" } } }] }));
+  host.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "r1", content: "{\"ok\":true}" }] }));
+  host.append("user", "계속해줘");
+  const restored = context.restore(host);
+  assert.equal(restored.reason, "restored_remeasure_required");
+  assert.equal(restored.history.getMessagesArray().at(-1).getText(), "계속해줘");
+  const edited = Chat.from(host); edited.getMessagesArray()[0].replaceText("different");
+  const rejected = context.restore(edited);
+  assert.equal(rejected.reason, "source_prefix_mismatch");
+  assert.equal(rejected.detail.firstDifferentIndex, 0);
+});
+
+test("an orphaned lock file from a reused live PID is reclaimed after it goes stale", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "archive-lock-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const archive = new EvidenceArchive(scope, { root, durable: true });
+  assert.equal(archive.put("before", { callKey: "before" }).ok, true);
+  // A crashed process left a "choosing" lock; this live PID now belongs to us.
+  const orphan = path.join(archive.directory, "lock-00000000-0000-4000-8000-000000000000.json");
+  fs.writeFileSync(orphan, JSON.stringify({ pid: process.pid, nonce: "00000000-0000-4000-8000-000000000000", choosing: true, ticket: 0 }));
+  assert.equal(archive.put("blocked", { callKey: "blocked" }).errorCode, "archive_lock_unavailable");
+  const old = new Date(Date.now() - 60 * 1000); fs.utimesSync(orphan, old, old);
+  assert.equal(archive.put("after", { callKey: "after" }).ok, true);
+  assert.equal(fs.existsSync(orphan), false);
+  archive.close();
 });

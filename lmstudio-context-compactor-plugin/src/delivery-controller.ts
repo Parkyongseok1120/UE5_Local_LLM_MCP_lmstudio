@@ -14,10 +14,17 @@ export class DeliveryController {
   attempts = 0;
   private observation: ExecutionObservation = { reportText: "" };
   private outcome: ExecutionOutcome | null = null;
+  private priorReportPresent = false;
   constructor(private readonly tools: Array<RemoteToolLike> = []) { }
   // Only this attempt's answer can become a final report. Prior progress text
   // and an interrupted earlier generation must never count as delivered work.
   beginRound() { this.observation = { reportText: "" }; }
+  retainReportPrefix(text: string) { this.priorReportPresent ||= Boolean(text.trim()); }
+  private includePriorReport(outcome: ExecutionOutcome): ExecutionOutcome {
+    return this.priorReportPresent ? { ...outcome, reportPresent: true,
+      deliveryState: outcome.deliveryState === "no_answer" ? "partial" : outcome.deliveryState,
+      reportState: outcome.reportState === "no_answer" ? "partial_report" : outcome.reportState } : outcome;
+  }
   observe(captured: { messages: Array<ChatMessage>; finishReason?: string; failure?: unknown }, timedOut = false) {
     this.observation = { reportText: visibleTextFromMessages(captured.messages).trim(),
       messages: captured.messages, finishReason: captured.finishReason, failure: captured.failure, timedOut };
@@ -32,10 +39,10 @@ export class DeliveryController {
   }
   finish(overrides: Pick<ExecutionObservation, "canceled" | "failure" | "timedOut"> = {}): ExecutionOutcome {
     // Cleanup calls can ask again, but cannot overwrite an accepted outcome.
-    return this.outcome ??= Object.freeze(classifyExecutionOutcome({ ...this.observation,
+    return this.outcome ??= Object.freeze(this.includePriorReport(classifyExecutionOutcome({ ...this.observation,
       ...(overrides.canceled ? { canceled: true } : {}),
       ...(overrides.timedOut !== undefined ? { timedOut: overrides.timedOut } : {}),
-      ...(overrides.failure !== undefined ? { failure: overrides.failure } : {}) }));
+      ...(overrides.failure !== undefined ? { failure: overrides.failure } : {}) })));
   }
   // Terminal parse failure never repairs or retries an operation. Deliver only
   // returned observations; unfinished model claims are not report evidence.
@@ -49,7 +56,7 @@ export class DeliveryController {
     // its report under the ordinary token cap and user cancellation signal.
     if (trigger === "output_recovery") return {
       maxTokens: Math.min(config.maxOutputReserve, config.outputRecoveryMaxTokens),
-      timeoutMs: Math.max(1, config.outputRecoverySeconds * 1000),
+      timeoutMs: bounded ? Math.max(1, config.auditFinalSeconds * 1000) : null,
     };
     return {
       maxTokens: bounded ? Math.min(config.maxOutputReserve, config.auditFinalMaxTokens) : config.maxOutputReserve,
@@ -67,6 +74,10 @@ export class DeliveryController {
     objectiveSatisfied: boolean | null = null) {
     const text = visibleTextFromMessages(captured.messages).trim();
     const classified = classifyFinalDelivery(text, captured, timedOut, captured.messages);
+    if (this.priorReportPresent && classified.deliveryState === "no_answer") {
+      classified.deliveryState = "partial";
+      classified.reportState = "partial_report";
+    }
     const forced = trigger === "research_recovery_exhausted" && noProgressRounds > 0;
     const delivery = forced && classified.deliveryState === "complete"
       ? { ...classified, deliveryState: "partial" as const, reportState: "partial_report" as const, rejectionReason: "research_no_progress" }

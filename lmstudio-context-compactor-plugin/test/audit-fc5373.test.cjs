@@ -46,9 +46,9 @@ test('T04 delivered EOS report cannot certify objective completion',()=>{
 });
 test('B01 mandatory floor LOW fit does not certify next read liveness',()=>{
   const b=new BudgetBroker({workingInputTargetTokens:18000,workingInputTriggerTokens:22000,safetyMarginTokens:2048});
-  const m={contextLength:38912,outputReserve:8192,inputTokens:22000};
-  const w=b.watermarks(m,22000,true);
-  assert.equal(w.effectiveHighWaterTokens,16896);assert.equal(w.effectiveLowWaterTokens,22000);
+  const m={contextLength:38912,outputReserve:8192,inputTokens:27000};
+  const w=b.watermarks(m,27000,true);
+  assert.equal(w.effectiveHighWaterTokens,22000);assert.equal(w.effectiveLowWaterTokens,27000);
   assert.equal(w.nextActionFit,false);assert.equal(b.beginBatch(m).capacity,0);
 });
 test('B02 native Unreal maxBytes is clamped and oversize return blocks later dispatch',()=>{
@@ -63,7 +63,7 @@ test('B02 native Unreal maxBytes is clamped and oversize return blocks later dis
 test('B03 schema maximum/default applied before reservation; two small reads share capacity',()=>{
   const b=new BatchReservation(12000),t={parametersJsonSchema:{properties:{byteBudget:{minimum:1024,maximum:1024}}}};
   const a=reserveReadResult(b,'a',t,{}),c=reserveReadResult(b,'b',t,{});
-  assert.equal(a.arguments.byteBudget,1024);assert.equal(a.reservedTokens,2048);assert.equal(c.allowed,true);
+  assert.equal(a.arguments.byteBudget,1024);assert.equal(a.reservedTokens,1434);assert.equal(c.allowed,true);
   const d=reserveReadResult(new BatchReservation(12000),'c',{name:'git_changed_files',parametersJsonSchema:{properties:{byteBudget:{minimum:1024,maximum:65536}}}},{});
   assert.equal(d.arguments.byteBudget,4096);
 });
@@ -71,25 +71,25 @@ test('B03 schema maximum/default applied before reservation; two small reads sha
 test('B01 a cheap auxiliary archive reader cannot hide native read starvation',()=>{
   const tools=[{name:'read_file',pluginIdentifier:'mcp/unreal-agent',parametersJsonSchema:{properties:{maxBytes:{type:'integer'}}}},
     {name:'evidence_first_read_context',parametersJsonSchema:{properties:{maxChars:{minimum:1,maximum:8192}}}}];
-  const min=minimumReadResultTokens(tools);assert.equal(min,3072);
+  const min=minimumReadResultTokens(tools);assert.equal(min,1536);
   const broker=new BudgetBroker({workingInputTargetTokens:18000,workingInputTriggerTokens:22000,safetyMarginTokens:2048});
   assert.equal(broker.watermarks({contextLength:38912,outputReserve:8192,inputTokens:17000},17000,true,min).nextActionFit,true);
-  assert.equal(broker.watermarks({contextLength:38912,outputReserve:8192,inputTokens:21000},21000,true,min).nextActionFit,false);
+  assert.equal(broker.watermarks({contextLength:38912,outputReserve:8192,inputTokens:26000},26000,true,min).nextActionFit,false);
 });
 
 test('omitted native source windows share a batch while explicit byte limits remain bounded',()=>{
   const native={name:'read_file',pluginIdentifier:'mcp/unreal-agent',parametersJsonSchema:{properties:{
     maxBytes:{type:'integer',minimum:1024,maximum:2*1024*1024,default:65536}}}};
-  const batch=new BatchReservation(50419);
+  const batch=new BatchReservation(17160);
   const peers=Array.from({length:5},(_,index)=>reserveReadResult(batch,String(index),native,{}));
   assert.equal(peers.every(r=>r.allowed),true);
-  for(const r of peers){assert.equal(r.arguments.maxBytes,4096);assert.equal(r.reservedTokens,9216);}
+  for(const r of peers){assert.equal(r.arguments.maxBytes,4096);assert.equal(r.reservedTokens,3072);}
   const sixth=reserveReadResult(batch,'sixth',native,{});
   assert.equal(sixth.allowed,true);assert.ok(sixth.arguments.maxBytes>=1024 && sixth.arguments.maxBytes<4096);
   assert.ok(batch.used<=batch.capacity);
   const explicit=reserveReadResult(new BatchReservation(70000),'large',native,{maxBytes:32768});
   assert.equal(explicit.arguments.maxBytes,32768);
-  assert.equal(explicit.reservedTokens,66560);
+  assert.equal(explicit.reservedTokens,17408);
 });
 test('T01 operation read profiles retain reads and cannot grant writes',()=>{
   for(const [name,action] of [['unity_prefab','read'],['unity_scene','list'],['unity_tests','status']]) {
@@ -226,10 +226,10 @@ test('O02 distinct assembly stages and schema/reserve cache keys are measured',a
   const before=Chat.from([{role:'user',content:'before long projection'}]),after=Chat.from([{role:'user',content:'short'}]);
   const assemble=createInputAssembler({tokenSource:source,config,roundTools:[],roundScopeInstructions:[],getRoundOutputReserve:()=>8192,
     modelInputId:'cost',noteEnabled:false,getNote:()=>null,historicalAvailabilityLedger:[],preProjectionHistory:before,postProjectionHistory:after});
-  const a=await assemble(after),n=tokenCalls,b=await assemble(after);
-  assert.ok(a.stages.postHistoryTokens>a.stages.postProjectionTokens);
-  assert.notEqual(a.stages.stageFingerprints.history,a.stages.stageFingerprints.projection);
-  assert.equal(tokenCalls,n);assert.ok(b.stages.measurementCost.cacheHits>0);
+  const a=await assemble(after),aStages=await a.measureStages(),n=tokenCalls,b=await assemble(after),bStages=await b.measureStages();
+  assert.ok(aStages.postHistoryTokens>aStages.postProjectionTokens);
+  assert.notEqual(aStages.stageFingerprints.history,aStages.stageFingerprints.projection);
+  assert.equal(tokenCalls,n);assert.ok(bStages.measurementCost.cacheHits>0);
   await assemble(after,{tools:[{...tool,description:'native',parametersJsonSchema:{type:'object'}}]});
   assert.ok(tokenCalls>n);
   const c=await assemble(after,{outputReserve:4096});assert.equal(c.measurement.outputReserve,4096);

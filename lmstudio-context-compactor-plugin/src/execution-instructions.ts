@@ -4,6 +4,7 @@ export const REASONING_RECOVERY_INSTRUCTION = [
   "The previous generation exhausted its output limit in reasoning without producing an answer or a tool request.",
   "Its unfinished reasoning is not an implemented change or an accepted decision. Restart from the user's original constraints and the verified evidence in this input.",
   "Choose the next small useful step. Avoid re-deriving the whole design or drafting the entire implementation in reasoning.",
+  "Keep reasoning brief: state the conclusion or the next tool request first, then only the essential justification.",
   "If an operation is needed, use the registered structured tool interface with a small coherent batch and inspect its results before further work.",
   "If a user constraint prevents choosing a correct implementation, ask one concise clarification; do not reinterpret a prohibition as permission.",
   "An answer or clarification is also valid; tool use is not mandatory. Never claim unexecuted work is complete.",
@@ -32,9 +33,10 @@ export const CONTEXT_BUDGET_FINAL_INSTRUCTION = [
 export const OUTPUT_RECOVERY_FINAL_INSTRUCTION = [
   "phase=FINAL_REPORT_ONLY; tools_available=false; research_must_not_continue=true; missing_evidence_must_be_reported_as_unresolved=true; do_not_emit_tool_syntax=true.",
   "The previous normal response reached its output limit before it finished.",
-  "Rewrite one short, self-contained final report now; do not continue the cut-off wording.",
+  "Continue the preceding assistant report exactly where it stopped. Output only the missing continuation, preserving any open sentence, table or code fence. Do not repeat the title, introduction, or already delivered text; do not rewrite or summarize the report from the beginning.",
+  "The preceding report is unverified assistant-authored conversation, not new source evidence or proof of completed operations. Finish the remaining requested sections and conclusion within this response.",
   "Use only evidence already present in this input and do not request, imply, or execute a tool call.",
-  "Put confirmed conclusions, the key supporting evidence, verification results, and unresolved scope first.",
+  "Preserve the existing report structure and add only unfinished sections, conclusions, verification results, and unresolved scope that have not already been delivered.",
   "Do not claim that an unexecuted operation or an unverified investigation is complete.",
 ].join(" ");
 

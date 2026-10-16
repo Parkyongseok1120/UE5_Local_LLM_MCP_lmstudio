@@ -67,7 +67,6 @@ async function main() {
         evaluationTimeoutSeconds,
         outputRecoveryMode: "on",
         outputRecoveryMaxTokens: 0,
-        outputRecoverySeconds: 90,
         pressureProfile: "forced",
         historyMode: "pressure",
       });

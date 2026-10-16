@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Chat, ChatMessage, type PromptPreprocessor } from "@lmstudio/sdk";
 import { directConfigSchematics } from "./direct-config";
+import { contextManagementMode } from "./execution-config";
 
 const MARKER = "\n<!-- hybrid-context-v1:";
 const END = " -->";
@@ -19,9 +20,18 @@ const normalizedFingerprint = (messages: Array<ChatMessage>) => digest(JSON.stri
 }))));
 
 export class WorkingContextBoundary {
+  private cachedKey: Buffer | null = null;
   constructor(private readonly directory = path.join(os.homedir(), ".lmstudio", "unreal-context-compactor", "hybrid-boundary-v1")) {}
 
+  // The key is created once and never rotated by this process; avoid four
+  // synchronous filesystem calls per signed user message on every prediction.
   private key(): Buffer {
+    if (this.cachedKey) return this.cachedKey;
+    this.cachedKey = this.loadKey();
+    return this.cachedKey;
+  }
+
+  private loadKey(): Buffer {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     if (fs.lstatSync(this.directory).isSymbolicLink()) throw new Error("Hybrid boundary directory must not be a symlink");
     const target = path.join(this.directory, "reference-key");
@@ -32,10 +42,16 @@ export class WorkingContextBoundary {
     return fs.readFileSync(target);
   }
 
+  /** Scope comes from the most recent contiguous chain of valid markers. One
+   * edited or stale older turn breaks the chain at that point only; a later
+   * marker whose prefix covers the current history starts a valid chain again.
+   * Invalid markers (forged, unknown key, malformed) fail closed by granting no
+   * scope, but never make the conversation itself unusable. */
   restore(history: Chat): { modelHistory: Chat; scope: Scope | null; reason: string } {
     const input = history.getMessagesArray(), output = Chat.empty();
     let scope: Scope | null = null;
-    let fallbackReason = "";
+    let breakReason = "";
+    let recovered = false;
     for (let index = 0; index < input.length; index += 1) {
       const source = input[index], copy = ChatMessage.from(source), raw = copy.getText();
       const normalizedRaw = raw.replace(ATTACHMENT, "");
@@ -47,37 +63,43 @@ export class WorkingContextBoundary {
           output.append(copy);
           continue;
         }
-        const expected = crypto.createHmac("sha256", this.key()).update(match[1]).digest("hex");
-        if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(match[2]))) {
-          throw new Error("Hybrid context signature_invalid");
-        }
-        let value: Record<string, unknown>;
-        try { value = JSON.parse(Buffer.from(match[1], "base64url").toString("utf8")); }
-        catch { throw new Error("Hybrid context scope_mismatch"); }
         const visible = normalizedRaw.slice(0, start);
-        const shapeValid = value?.version === 1
-          && typeof value.conversation === "string" && /^[a-f0-9-]{36}$/u.test(value.conversation)
-          && typeof value.lineage === "string" && /^[a-f0-9-]{36}$/u.test(value.lineage)
-          && (value.parentLineage === null || typeof value.parentLineage === "string"
-            && /^[a-f0-9-]{36}$/u.test(value.parentLineage));
-        if (!shapeValid) throw new Error("Hybrid context scope_mismatch");
+        // A well-formed envelope is runtime metadata, never model input.
         copy.replaceText(visible);
-        if (scope && value.conversation !== scope.conversation) {
-          throw new Error("Hybrid context scope_mismatch");
-        }
-        if (value.request !== digest(visible)) fallbackReason ||= "edited_history";
-        else if (value.prefix !== normalizedFingerprint(input.slice(0, index))) fallbackReason ||= "stale_prefix";
-        else if (scope && value.parentLineage !== scope.lineage) fallbackReason ||= "new_fork";
-        if (!fallbackReason) {
+        const value = this.verifiedEnvelope(match[1], match[2]);
+        const failure = typeof value === "string" ? value
+          : value.request !== digest(visible) ? "edited_history"
+            : value.prefix !== normalizedFingerprint(input.slice(0, index)) ? "stale_prefix"
+              : scope && value.conversation !== scope.conversation ? "conversation_changed"
+                : scope && value.parentLineage !== scope.lineage ? "new_fork" : "";
+        if (failure) {
+          scope = null; breakReason = failure;
+        } else if (typeof value !== "string") {
+          if (breakReason) recovered = true;
           scope = { conversation: String(value.conversation), lineage: String(value.lineage),
             parentLineage: value.parentLineage === null ? null : String(value.parentLineage) };
-        } else {
-          scope = null;
         }
       }
       output.append(copy);
     }
-    return { modelHistory: output, scope, reason: fallbackReason || (scope ? "verified" : "no_marker") };
+    const reason = scope ? recovered ? `verified_after_${breakReason}` : "verified" : breakReason || "no_marker";
+    return { modelHistory: output, scope, reason };
+  }
+
+  private verifiedEnvelope(body: string, signature: string): Record<string, unknown> | string {
+    let expected: string;
+    try { expected = crypto.createHmac("sha256", this.key()).update(body).digest("hex"); }
+    catch { return "boundary_key_unavailable"; }
+    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) return "signature_invalid";
+    let value: Record<string, unknown>;
+    try { value = JSON.parse(Buffer.from(body, "base64url").toString("utf8")); }
+    catch { return "scope_mismatch"; }
+    const shapeValid = value?.version === 1
+      && typeof value.conversation === "string" && /^[a-f0-9-]{36}$/u.test(value.conversation)
+      && typeof value.lineage === "string" && /^[a-f0-9-]{36}$/u.test(value.lineage)
+      && (value.parentLineage === null || typeof value.parentLineage === "string"
+        && /^[a-f0-9-]{36}$/u.test(value.parentLineage));
+    return shapeValid ? value : "scope_mismatch";
   }
 
   capture(message: ChatMessage, previous: Chat): ChatMessage {
@@ -103,7 +125,9 @@ export class WorkingContextBoundary {
 export const workingContextBoundary = new WorkingContextBoundary();
 
 export const preprocessWorkingContext: PromptPreprocessor = async (ctl, message) => {
-  const mode = String(ctl.getPluginConfig(directConfigSchematics).get("contextManagementMode") || "legacy");
+  // Same mode resolution as the prediction handler: a missing value must not
+  // disable boundary capture while the handler runs hybrid.
+  const mode = contextManagementMode(ctl.getPluginConfig(directConfigSchematics).get("contextManagementMode"));
   if (mode === "legacy" || ctl.getPluginConfig(directConfigSchematics).get("observeOnly") === true) return message;
   ctl.guardAbort();
   const output = workingContextBoundary.capture(message, await ctl.pullHistory());

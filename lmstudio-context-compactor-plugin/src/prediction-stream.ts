@@ -70,6 +70,7 @@ export class PredictionStreamRenderer {
     private readonly ctl: Pick<PredictionLoopHandlerController, "createContentBlock">,
     private readonly splitVisibleAnswer: SplitVisibleAnswer,
     private readonly protectContinuityFooter: boolean,
+    private readonly suppressReasoning = false,
   ) {}
 
   private state(roundIndex: number): StreamState {
@@ -133,6 +134,7 @@ export class PredictionStreamRenderer {
     const state = this.state(fragment.roundIndex);
     state.sawFragment = true;
     if (fragment.reasoningType === "reasoning") {
+      if (this.suppressReasoning) return;
       this.thinkingBlock(state).appendText(fragment.content, {
         tokensCount: fragment.tokensCount,
         fromDraftModel: fragment.containsDrafted,
@@ -157,6 +159,8 @@ export class PredictionStreamRenderer {
       state.thinkingBlock.setStyle({ type: "thinking", ended: true, title: "생각" });
     }
   }
+
+  finishAll(): void { for (const roundIndex of this.states.keys()) this.finish(roundIndex); }
 
   consumeAssistant(rawText: string): StreamedAssistant {
     const entry = [...this.states.entries()]

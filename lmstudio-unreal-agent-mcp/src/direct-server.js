@@ -71,7 +71,9 @@ function createDirectRuntime(options = {}) {
       const handler = toolsByName.has(name) ? handlers[name] : undefined;
       const definition = toolsByName.get(name);
       if (byteContract && args.byteBudget !== undefined && responseArgs.byteBudget === undefined)
-        return context.directResult(name, failure("INVALID_ARGUMENT", "byteBudget must be an integer from 2048 to 65536."));
+        return context.directResult(name, failure("INVALID_ARGUMENT",
+          `byteBudget must be an integer from ${byteContract.minimum} to ${byteContract.maximum}.`,
+          { retryAllowed: true, retryMode: "different_arguments" }));
       const allowed = new Set(Object.keys(definition?.inputSchema?.properties || {}));
       const unsupported = Object.keys(args).filter((key) => !allowed.has(key));
       if (handler && unsupported.length) {

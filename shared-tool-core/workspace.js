@@ -6,15 +6,15 @@ const { hash, fail } = require("./files");
 const { canonicalAbsolutePathIdentity } = require("../lmstudio-unreal-agent-mcp/src/filesystem-path-identity");
 const string = { type: "string", minLength: 1, maxLength: 4096 };
 const workspacePath = { ...string,
-  description: "Literal slash path relative to the bound workspace root. Do not repeat the repository-side project directory prefix." };
+  description: "Path relative to the workspace root." };
 const paging = { limit: { type: "integer", minimum: 1, maximum: 200 }, cursor: string,
   byteBudget: { type: "integer", minimum: 1024, maximum: 65536 } };
 const paths = { type: "array", items: workspacePath, maxItems: 16,
-  description: "Optional literal paths relative to the bound workspace root; an omitted list scopes the whole workspace." };
+  description: "Paths from the workspace root; omit for all." };
 const gitDate = { type: "string", minLength: 10, maxLength: 64,
-  description: "YYYY-MM-DD or RFC 3339 timestamp with timezone." };
+  description: "YYYY-MM-DD or RFC 3339." };
 const authorQuery = { type: "string", minLength: 1, maxLength: 320,
-  description: "Literal Git author name or email fragment. This does not infer account aliases, code ownership, or work responsibility." };
+  description: "Literal author name/email fragment." };
 const comparison = { comparison: { type: "string", enum: ["range", "worktree", "staged"] }, base: string, head: string };
 const rangeComparison = {
   type: "object",
@@ -37,13 +37,13 @@ const spec = (name, description, properties, required = [], extra = {}) => ({ na
 const GIT_ACTIONS = Object.freeze({ git_status: "status", git_log: "log", git_changed_files: "changed_files", git_diff_file: "diff_file", git_read_file: "read_file" });
 function workspaceToolDefinitions() {
   return [
-    spec("workspace_status", "Observe the actual bound project root, engine and generic capability ownership. Does not change projects or plan work.", {}),
-    spec("git_status", "Read scoped index/worktree status. Path filters are literal and relative to the bound workspace root, even when that workspace is nested inside a repository. Does not modify the index. Continue with nextCursor from the same snapshot.", { paths, ...paging }),
-    spec("git_log", "Read commit metadata, including distinct author and committer identities, at a revision (default HEAD). Optional date and literal author filters are evidence filters, not code-ownership or responsibility inference. Path filters are literal and relative to the bound workspace root; do not include the repository-side project prefix. Returns full commit IDs; bounded immutable pages.",
+    spec("workspace_status", "Bound project root, engine and capability ownership.", {}),
+    spec("git_status", "Index/worktree status; workspace-relative paths. Page via nextCursor.", { paths, ...paging }),
+    spec("git_log", "Commits (author, committer, full IDs) at revision (default HEAD), filterable by date, author, workspace-relative paths. Page with nextCursor.",
       { revision: string, since: gitDate, until: gitDate, authorQuery, paths, ...paging }),
-    spec("git_changed_files", "List changed paths without a full diff. Explicit comparison required: range requires base/head; worktree/staged forbid both. Paths are workspace-relative literals. Continue with nextCursor.", { ...comparison, paths, ...paging }, ["comparison"], { oneOf: [rangeComparison, nonRangeComparison] }),
-    spec("git_diff_file", "Read the diff of one exact regular file at a literal workspace-relative path. range requires base/head; worktree/staged forbid both. Continue with cursor OR startLine. Never accepts directories.", { ...comparison, path: workspacePath, startLine: { type: "integer", minimum: 1 }, ...paging }, ["comparison", "path"], { oneOf: [rangeComparison, nonRangeComparison] }),
-    spec("git_read_file", "Read source at one literal workspace-relative path from a pinned commit rather than the current worktree. Raw blob hash is evidence, not a mutation receipt. Only regular UTF-8 blobs. Continue with cursor OR startLine.", { revision: string, path: workspacePath, startLine: { type: "integer", minimum: 1 }, ...paging }, ["revision", "path"]),
+    spec("git_changed_files", "Changed paths, no diffs. range needs base/head; worktree/staged forbid both. Workspace-relative paths; page via nextCursor.", { ...comparison, paths, ...paging }, ["comparison"], { oneOf: [rangeComparison, nonRangeComparison] }),
+    spec("git_diff_file", "Diff one regular file (workspace-relative path). range needs base/head; worktree/staged forbid both. Page via cursor or startLine.", { ...comparison, path: workspacePath, startLine: { type: "integer", minimum: 1 }, ...paging }, ["comparison", "path"], { oneOf: [rangeComparison, nonRangeComparison] }),
+    spec("git_read_file", "Read a workspace-relative file at a pinned commit (UTF-8 only); blob hash is no mutation receipt. Page via cursor or startLine.", { revision: string, path: workspacePath, startLine: { type: "integer", minimum: 1 }, ...paging }, ["revision", "path"]),
   ];
 }
 function createWorkspaceCapabilities({ resolveBinding }) {

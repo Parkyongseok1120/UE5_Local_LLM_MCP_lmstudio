@@ -145,7 +145,7 @@ test("production handler narrows before archive starvation and restores an early
   const history = Chat.from([{ role: "user", content: "Read a.txt, then rediscover it and report EARLY_FACT_729 from the archive." }]);
   const model = { identifier: "archive-lifecycle", async getContextLength() { return 38912; },
     applyPromptTemplate: measuredCataloguePrompt,
-    async countTokens(text) { if (text.startsWith("[")) return 100; return text.includes('write_file') ? 16250 : 10000; },
+    async countTokens(text) { if (text.startsWith("[")) return 100; return text.includes('write_file') ? 19200 : 10000; },
     async act(chat, tools, opts) {
       const n = rounds++;
       if (n === 3) {
@@ -176,7 +176,9 @@ test("production handler narrows before archive starvation and restores an early
   const read = { name: "read_file", pluginIdentifier: "mcp/unity-tools", description: "read",
     parametersJsonSchema: { type: "object", properties: { path: { type: "string" }, byteBudget: { type: "integer", minimum: 1024 } } } };
   const write = { name: "write_file", pluginIdentifier: "mcp/unity-tools", description: "write", parametersJsonSchema: { type: "object", properties: {} } };
-  const ctl = fakeController(history, model, { contextManagementMode: "hybrid", maxOutputReserve: 8192,
+  // A 12K output reserve makes the archive's required read envelope, not the
+  // ordinary source read, the component that no longer fits after round 0.
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid", maxOutputReserve: 12288,
     safetyMarginTokens: 2048, workingInputTargetTokens: 18000, workingInputTriggerTokens: 22000 }, [read, write]);
   await handlePredictionLoop(ctl);
   assert.equal(rounds, 4); assert.match(content, /EARLY_FACT_729/);
@@ -192,7 +194,7 @@ for (const mixed of [true, false]) test(`read recovery ${mixed ? "consumes two s
   const write={name:"write_file",pluginIdentifier:"mcp/unity-tools",description:"write",parametersJsonSchema:{type:"object"}};
   let calls=0,denials=0;
   const model={identifier:"mixed-batch-fixture",async getContextLength(){return 86272;},applyPromptTemplate:measuredCataloguePrompt,
-    async countTokens(text){if(text.startsWith("["))return 100;return JSON.parse(text).tools.includes("write_file")?90000:21019;},
+    async countTokens(text){if(text.startsWith("["))return 100;return JSON.parse(text).tools.includes("write_file")?90000:49000;},
     async act(chat,tools,opts){
       const n=calls++;
       if(n===1){
@@ -248,11 +250,11 @@ test("recovery admission uses the compacted candidate after the original generat
       if (text.startsWith("[")) return 100;
       const parsed = JSON.parse(text);
       if (parsed.tools.includes("write_file")) return 40000;
-      return parsed.text.includes("OLDER_BODY OLDER_BODY") ? 38000 : 10000;
+      return parsed.text.includes("OLDER_BODY ".repeat(1000)) ? 38000 : 10000;
     },
     async act(chat, tools, opts) {
       calls++; assert.ok(tools.length > 0); assert.ok(!tools.some(t => t.name === "write_file"));
-      assert.doesNotMatch(chat.toString(), /OLDER_BODY OLDER_BODY/);
+      assert.doesNotMatch(chat.toString(), /(?:OLDER_BODY ){1000}/);
       opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
       opts.onMessage(ChatMessage.create("assistant", "Measured compacted recovery candidate delivered."));
     } };
@@ -379,7 +381,8 @@ test("prediction loop calls the directly selected model with compacted history",
   assert.ok(receivedHistory instanceof Chat);
   assert.match(receivedHistory.toString(), /Context memory/);
   assert.match(receivedHistory.toString(), new RegExp(latest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.doesNotMatch(receivedHistory.toString(), /old old old old old/);
+  // The prior answer keeps a bounded head/tail excerpt; its full body is gone.
+  assert.doesNotMatch(receivedHistory.toString(), /(?:old ){1000}/);
   assert.equal(ctl.blocks.at(-1).text, "direct answer");
   assert.equal(ctl.session.disposed, true);
   const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
@@ -729,6 +732,45 @@ test("read-only Unity calls finish without asking the hidden confirmation UI", a
 
   assert.equal(allowed, true);
   assert.equal(ctl.blocks.at(-1).text, "status checked");
+});
+
+test("a canceled execution still persists the accepted continuity note for the next turn", async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "compactor-notes-abort-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const writes = [];
+  const store = { read() { return null; }, write(key, note) { writes.push({ key, note }); return true; } };
+  const abort = new AbortController();
+  const footer = "\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n"
+    + JSON.stringify({ decisions: [{ statement: "Audit compactor before MCP", rationale: "User priority" }] })
+    + "\n</continuity-note>";
+  let rounds = 0;
+  const model = { identifier: "abort-note-model", async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 100; },
+    async act(_chat, _tools, opts) {
+      if (rounds++ === 0) {
+        opts.onPredictionCompleted({ stats: { stopReason: "toolCalls" } });
+        opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: `Reading first.${footer}` },
+          { type: "toolCallRequest", toolCallRequest: { type: "function", id: "r0", name: "read_file", arguments: { path: "a.cpp" } } }] }));
+        opts.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "r0",
+          content: JSON.stringify({ ok: true, path: "a.cpp", text: "int a;" }) }] }));
+        opts.onRoundEnd(); throw opts.signal.reason;
+      }
+      abort.abort(new Error("user stopped generation"));
+      throw abort.signal.reason;
+    } };
+  const read = { name: "read_file", pluginIdentifier: "mcp/unity-tools", description: "read",
+    parametersJsonSchema: { type: "object", properties: { path: { type: "string" } } } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Audit the compactor lifecycle." }]), model, {}, [read]);
+  ctl.abortSignal = abort.signal;
+  ctl.guardAbort = () => { if (abort.signal.aborted) throw abort.signal.reason; };
+  ctl.getWorkingDirectory = () => directory;
+  await assert.rejects(productionHandler(store, undefined, undefined, undefined, () => ({}))(ctl), /user stopped generation/);
+  assert.equal(rounds, 2);
+  assert.equal(writes.length, 1);
+  assert.match(JSON.stringify(writes[0].note), /Audit compactor before MCP/);
+  const event = ctl.debugValues.find(e => e.event === "assistant_note_persistence");
+  assert.equal(event.status, "stored");
+  assert.equal(event.terminal, "canceled");
 });
 
 test("hidden model notes survive a new user turn as assistant judgment and leave visible answers clean", async (t) => {
@@ -1701,14 +1743,14 @@ test("new compactor configuration defaults to hybrid and preserves every explici
   assert.equal(fresh.maxOutputReserve, 8192);
   assert.equal(fresh.safetyMarginTokens, 2048);
   assert.equal(fresh.assumedContextLength, 38912);
-  assert.equal(fresh.outputRecoverySeconds, 90);
+  assert.equal(fresh.outputRecoverySeconds, 0);
   for (const mode of ["legacy", "deterministic", "hybrid"]) {
     const explicit = __test.readConfig(fakeController(Chat.empty(), {}, { contextManagementMode: mode }));
     assert.equal(explicit.contextManagementMode, mode);
   }
 });
 
-test("normal visible output limit gets one concise tool-free rewrite without feeding the cut-off prose back", async () => {
+test("normal visible output limit continues once with the delivered prefix in context", async () => {
   const history = Chat.from([{ role: "user", content: "Inspect the evidence and report." }]);
   let actCount = 0;
   let recoveryHistory;
@@ -1732,7 +1774,7 @@ test("normal visible output limit gets one concise tool-free rewrite without fee
       recoveryHistory = Chat.from(chat);
       assert.deepEqual(tools, []);
       assert.equal(options.maxTokens, 2048);
-      assert.doesNotMatch(recoveryHistory.toString(), /PARTIAL-REPORT-MUST-NOT-BE-REPEATED/u);
+      assert.match(recoveryHistory.toString(), /PARTIAL-REPORT-MUST-NOT-BE-REPEATED/u);
       options.onPredictionCompleted({ stats: {
         stopReason: "eosFound", promptTokensCount: 100, predictedTokensCount: 120,
         totalTokensCount: 220,
@@ -1750,7 +1792,7 @@ test("normal visible output limit gets one concise tool-free rewrite without fee
 
   assert.equal(actCount, 2);
   assert.ok(recoveryHistory);
-  assert.equal(ctl.blocks.at(-1).text, "COMPLETE-FINAL-REPORT");
+  assert.equal(ctl.blocks.at(-1).text, "PARTIAL-REPORT-MUST-NOT-BE-REPEATEDCOMPLETE-FINAL-REPORT");
   assert.equal(ctl.blocks.some(block => block.text.includes("PARTIAL-REPORT-MUST-NOT-BE-REPEATED")), true);
   const scheduled = ctl.debugValues.find(value => value.event === "output_recovery_scheduled");
   assert.equal(scheduled.outputLimitStage, "visible_report");
@@ -3549,7 +3591,7 @@ test("hybrid context makes one tool-free semantic handoff and keeps it out of vi
   const tools = [{ name: "git_changed_files", pluginIdentifier: "mcp/unity-tools",
     description: "read git page", parametersJsonSchema: { type: "object" } }];
   const ctl = fakeController(history, model, {
-    contextManagementMode: "hybrid", workingInputTargetTokens: 3000,
+    contextManagementMode: "hybrid", semanticHandoff: true, workingInputTargetTokens: 3000, workingInputScaling: "fixed",
     workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
     semanticSummaryMaxTokens: 700, softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, tools);
@@ -3585,7 +3627,7 @@ test("invalid hybrid summary is discarded without retry or report recovery", asy
   const tools = [{ name: "git_changed_files", pluginIdentifier: "mcp/unity-tools",
     description: "read git page", parametersJsonSchema: { type: "object" } }];
   const ctl = fakeController(history, model, {
-    contextManagementMode: "hybrid", workingInputTargetTokens: 3000,
+    contextManagementMode: "hybrid", semanticHandoff: true, workingInputTargetTokens: 3000, workingInputScaling: "fixed",
     workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
     semanticSummaryMaxTokens: 700, softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, tools);
@@ -3635,7 +3677,7 @@ test("a failed hybrid summary stays in execution cooldown while deterministic fa
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 30 } });
   });
   const ctl = fakeController(history, model, {
-    contextManagementMode: "hybrid", workingInputTargetTokens: 3000,
+    contextManagementMode: "hybrid", semanticHandoff: true, workingInputTargetTokens: 3000, workingInputScaling: "fixed",
     workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
     semanticSummaryMaxTokens: 700, softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, [tool]);
@@ -3660,7 +3702,7 @@ test("BOUNDED keeps its original call budget and does not start a hybrid summary
     description: "read", parametersJsonSchema: { type: "object" } };
   const ctl = fakeController(history, model, {
     contextManagementMode: "hybrid", auditCompletionMode: "bounded",
-    workingInputTargetTokens: 3000, workingInputTriggerTokens: 3500,
+    workingInputTargetTokens: 3000, workingInputScaling: "fixed", workingInputTriggerTokens: 3500,
     toolResultProjectionChars: 512, softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, [tool]);
   await createPredictionLoopHandler()(ctl);
@@ -3680,7 +3722,7 @@ test("cancellation during the hybrid summary prevents the normal model call", as
   const tool = { name: "git_changed_files", pluginIdentifier: "mcp/unity-tools",
     description: "read", parametersJsonSchema: { type: "object" } };
   const ctl = fakeController(history, model, {
-    contextManagementMode: "hybrid", workingInputTargetTokens: 3000,
+    contextManagementMode: "hybrid", semanticHandoff: true, workingInputTargetTokens: 3000, workingInputScaling: "fixed",
     workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
     softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, [tool]);
@@ -3705,7 +3747,7 @@ test("a signed next user turn restores the compacted prefix and appends only the
     content: JSON.stringify({ ok: true, kind: "git_observation", body: "raw-evidence-".repeat(2500) }) }] }));
   const tool = { name: "git_changed_files", pluginIdentifier: "mcp/unity-tools",
     description: "read", parametersJsonSchema: { type: "object" } };
-  const config = { contextManagementMode: "deterministic", workingInputTargetTokens: 3000,
+  const config = { contextManagementMode: "deterministic", workingInputTargetTokens: 3000, workingInputScaling: "fixed",
     workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
     softRemainingTokens: 1000, hardRemainingTokens: 500 };
   const firstModel = exactCountingModel(async (_chat, _tools, options) => {
@@ -3746,7 +3788,7 @@ test("split host blocks survive canceled multi-tool research and a report-only n
   const separator = require("../dist/continuity-text.js").REASONING_SEPARATOR;
   const tool = { name: "read_file", pluginIdentifier: "mcp/unity-tools",
     description: "read", parametersJsonSchema: { type: "object" } };
-  const config = { contextManagementMode: "deterministic", workingInputTargetTokens: 5000,
+  const config = { contextManagementMode: "deterministic", workingInputTargetTokens: 5000, workingInputScaling: "fixed",
     workingInputTriggerTokens: 6000, toolResultProjectionChars: 512,
     softRemainingTokens: 1000, hardRemainingTokens: 500 };
   let calls = 0;
@@ -3823,7 +3865,7 @@ test("semantic timeout leaves a durable historical archive usable by the next ex
   const original = history.getMessagesArray(), signed = Chat.empty();
   for (const message of original) signed.append(message.isUserMessage()
     ? boundary.capture(message, signed) : message);
-  const config = { contextManagementMode: "hybrid", workingInputTargetTokens: 3000,
+  const config = { contextManagementMode: "hybrid", semanticHandoff: true, workingInputTargetTokens: 3000, workingInputScaling: "fixed",
     workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
     semanticSummarySeconds: 1, softRemainingTokens: 1000, hardRemainingTokens: 500 };
   const tools = [{ name: "git_changed_files", pluginIdentifier: "mcp/unity-tools",
@@ -3853,8 +3895,12 @@ test("semantic timeout leaves a durable historical archive usable by the next ex
     const archive = offered.find(tool => tool.name === "evidence_first_read_context");
     const environment = { signal: opts.signal, status() {}, warn() {}, callId: 1 };
     const index = await archive.implementation({ action: "catalog", maxChars: 8192 }, environment);
-    assert.equal(index.entries.length, 1);
-    const entry = index.entries[0];
+    // Compaction also archived the omitted prior-turn prose for rehydration.
+    const prose = index.entries.filter(e => String(e.path || "").startsWith("conversation://"));
+    assert.deepEqual(prose.map(e => e.path).sort(), ["conversation://assistant", "conversation://user"]);
+    const evidence = index.entries.filter(e => !prose.includes(e));
+    assert.equal(evidence.length, 1);
+    const entry = evidence[0];
     const page = await archive.implementation({ action: "read", evidenceId: entry.evidenceId,
       version: entry.version, startOffset: 0, maxChars: 8192 }, environment);
     assert.equal(page.currentFile, false);
@@ -4482,7 +4528,8 @@ test('reasoning recovery keeps constraints and evidence, allows clarification, a
   history.append(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: 'prior-read', content: 'VERIFIED-SOURCE-123' }] }));
   const model = reasoningModel(async (chat, tools, options) => {
     calls++;
-    assert.equal(options.maxTokens, 8192);
+    // The single retry gets twice the exhausted reasoning cap when it fits.
+    assert.equal(options.maxTokens, calls === 1 ? 8192 : 16384);
     if (calls === 1) { emitReasoningLimit(options); return; }
     assert.equal(calls, 2);
     assert.match(chat.toString(), /Input Action binding forbidden/);
@@ -4651,7 +4698,8 @@ test('reasoning recovery in hybrid remeasures its exact input without invoking s
   assert.equal(calls, 2);
   const measurements = ctl.debugValues.filter(e => e.event === 'direct_context_measurement');
   assert.equal(measurements.length, 2);
-  assert.ok(measurements.every(e => e.finalExactMeasurement && e.toolSurfaceMatchesMeasured && e.outputReserve === 8192));
+  assert.ok(measurements.every(e => e.finalExactMeasurement && e.toolSurfaceMatchesMeasured));
+  assert.deepEqual(measurements.map(e => e.outputReserve), [8192, 16384]);
   assert.ok(measurements[1].modelInputId.includes(':reasoning-recovery-'));
   assert.deepEqual(projections, [], 'no evidence or pressure means no projection work on either measured input');
   assert.deepEqual(exposures, [
@@ -5367,4 +5415,32 @@ test('reasoning exhaustion delivers returned source evidence without unfinished 
   assert.match(partials[0].text, /lines 1–1/);
   assert.doesNotMatch(partials[0].text, /UNVERIFIED_ROOT_CAUSE/);
   assert.equal(ctl.debugValues.find(e => e.event === 'partial_report_delivery').evidenceCount, 1);
+});
+
+test("an unbounded tool loop stops at maxResearchRounds and reports from collected evidence", async () => {
+  const toolCounts = [];
+  const model = { identifier: "loop-cap", async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(_chat, tools, opts) {
+      toolCounts.push(tools.length);
+      if (!tools.length) {
+        opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+        opts.onMessage(ChatMessage.create("assistant", "Report from three rounds of evidence.")); return;
+      }
+      const id = `loop-${toolCounts.length}`;
+      opts.onPredictionCompleted({ stats: { stopReason: "toolCalls" } });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+        type: "function", id, name: "read_file", arguments: { path: `f${toolCounts.length}.cpp` } } }] }));
+      opts.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: id,
+        content: JSON.stringify({ ok: true, path: `f${toolCounts.length}.cpp`, text: `content ${toolCounts.length}` }) }] }));
+      opts.onRoundEnd(); throw opts.signal.reason;
+    } };
+  const read = { name: "read_file", pluginIdentifier: "mcp/unity-tools", description: "read",
+    parametersJsonSchema: { type: "object", properties: { path: { type: "string" } } } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Read everything." }]), model,
+    { maxResearchRounds: 3, toolStagnationAction: "off" }, [read]);
+  await handlePredictionLoop(ctl);
+  assert.deepEqual(toolCounts, [1, 1, 1, 0]);
+  assert.ok(ctl.debugValues.some(e => e.event === "research_round_limit" && e.rounds === 3));
+  assert.match(ctl.blocks.at(-1).text, /Report from three rounds/);
 });

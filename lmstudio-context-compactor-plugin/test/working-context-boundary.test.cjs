@@ -41,7 +41,12 @@ test("S2 signed boundaries fall back to current edited history while invalid sig
   const forged = ChatMessage.from(signed);
   forged.replaceText(raw.replace(/([a-f0-9])(?=[a-f0-9]{63} -->$)/u,
     character => character === "0" ? "1" : "0"));
-  assert.throws(() => boundary.restore(chatOf(forged)), /signature/u);
+  // Fail closed: no scope is granted and the envelope never reaches the model,
+  // but a changed or forged key cannot make the whole conversation unusable.
+  const forgedRestore = boundary.restore(chatOf(forged));
+  assert.equal(forgedRestore.scope, null);
+  assert.equal(forgedRestore.reason, "signature_invalid");
+  assert.equal(forgedRestore.modelHistory.getMessagesArray()[0].getText(), "original");
   const literal = ChatMessage.create("user", "example\n<!-- hybrid-context-v1:not-issued.deadbeef -->");
   const restored = boundary.restore(chatOf(literal));
   assert.equal(restored.scope, null);
@@ -60,4 +65,36 @@ test("S2 lineage survives an attachment marker that is validated by its own boun
   const normalizedPrevious = chatOf(first);
   const restored = boundary.restore(chatOf(first, next));
   assert.equal(restored.scope.parentLineage, boundary.restore(normalizedPrevious).scope.lineage);
+});
+
+test("one edited older turn does not permanently disable the conversation scope", t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hybrid-boundary-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const boundary = new WorkingContextBoundary(directory);
+  const first = boundary.capture(ChatMessage.create("user", "original"), Chat.empty());
+  const raw = first.getText(), marker = raw.indexOf(__test.MARKER);
+  const edited = ChatMessage.from(first); edited.replaceText(`edited${raw.slice(marker)}`);
+  const afterEdit = chatOf(edited, ChatMessage.create("assistant", "answer"));
+  assert.equal(boundary.restore(afterEdit).scope, null);
+  const next = boundary.capture(ChatMessage.create("user", "계속해줘"), afterEdit);
+  const restored = boundary.restore(chatOf(edited, ChatMessage.create("assistant", "answer"), next));
+  assert.ok(restored.scope);
+  assert.equal(restored.reason, "verified_after_edited_history");
+  const later = boundary.capture(ChatMessage.create("user", "다음"), chatOf(edited, ChatMessage.create("assistant", "answer"), next,
+    ChatMessage.create("assistant", "more")));
+  const chained = boundary.restore(chatOf(edited, ChatMessage.create("assistant", "answer"), next,
+    ChatMessage.create("assistant", "more"), later));
+  assert.equal(chained.scope.parentLineage, restored.scope.lineage);
+  assert.equal(chained.scope.conversation, restored.scope.conversation);
+});
+
+test("a replaced boundary key degrades to no scope instead of failing every prediction", t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hybrid-boundary-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const signed = new WorkingContextBoundary(directory).capture(ChatMessage.create("user", "start"), Chat.empty());
+  fs.rmSync(path.join(directory, "reference-key"));
+  const restored = new WorkingContextBoundary(directory).restore(chatOf(signed));
+  assert.equal(restored.scope, null);
+  assert.equal(restored.reason, "signature_invalid");
+  assert.equal(restored.modelHistory.getMessagesArray()[0].getText(), "start");
 });

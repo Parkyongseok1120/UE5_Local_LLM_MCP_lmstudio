@@ -72,15 +72,15 @@ test("a cheap source page cannot hide required archive rehydration starvation", 
   const archive = store.tool(); localObservationTools.add(archive);
   const source = { name: "read_file", pluginIdentifier: "mcp/unity-tools",
     parametersJsonSchema: { properties: { byteBudget: { minimum: 1024, maximum: 65536 } } } };
-  assert.equal(minimumReadResultTokens([source, archive]), 2048, "empty archive is not a requirement");
+  assert.equal(minimumReadResultTokens([source, archive]), 1434, "empty archive is not a requirement");
   const required = minimumReadResultTokens([source, archive], true);
-  assert.equal(required, 7168);
+  assert.equal(required, 3584);
   const broker = new BudgetBroker({ workingInputTargetTokens: 18000, workingInputTriggerTokens: 22000,
     safetyMarginTokens: 2048 });
-  const observed = { contextLength: 38912, outputReserve: 8192, inputTokens: 16250 };
-  assert.equal(broker.watermarks(observed, 16250, true, 2048).nextActionFit, true);
+  const observed = { contextLength: 38912, outputReserve: 8192, inputTokens: 24000 };
+  assert.equal(broker.watermarks(observed, 24000, true, 2048).nextActionFit, true);
   assert.equal(reserveReadResult(broker.beginBatch(observed), "catalog", archive, { action: "catalog" }).allowed, false);
-  assert.equal(broker.watermarks(observed, 16250, true, required).nextActionFit, false);
+  assert.equal(broker.watermarks(observed, 24000, true, required).nextActionFit, false);
   const recovery = { contextLength: 38912, outputReserve: 4096, inputTokens: 10000 };
   assert.equal(broker.watermarks(recovery, 10000, true, required).nextActionFit, true);
   assert.equal(reserveReadResult(broker.beginBatch(recovery), "catalog", archive, { action: "catalog" }).allowed, true);
@@ -103,7 +103,7 @@ test("normal progressing recovery outlives twelve pages; bounded and no-progress
 test("same source page growth repeats compaction below a fixed derived LOW without inflating floor", async () => {
   const config = readConfig({ getPluginConfig: () => ({ get: key => ({
     contextManagementMode: "hybrid", workingInputTargetTokens: 18000, workingInputTriggerTokens: 22000,
-    maxOutputReserve: 4096, safetyMarginTokens: 2048, maxCheckpointChars: 22000,
+    workingInputScaling: "fixed", maxOutputReserve: 4096, safetyMarginTokens: 2048, maxCheckpointChars: 22000,
   })[key] }) });
   const source = { async getContextLength() { return 38912; },
     async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return 9000 + Math.ceil(text.length / 4); } };
@@ -178,7 +178,7 @@ test("summary deadline is classified as timeout when SDK returns userStopped nor
 
 test("failed handoffs permit only one later material event within the execution budget", async () => {
   let calls = 0;
-  const config = readConfig({ getPluginConfig: () => ({ get: key => key === "contextManagementMode" ? "hybrid" : undefined }) });
+  const config = readConfig({ getPluginConfig: () => ({ get: key => ({ contextManagementMode: "hybrid", semanticHandoff: true })[key] }) });
   const source = { async getContextLength() { return 38912; }, async applyPromptTemplate() { return "summary"; },
     async countTokens() { return 100; }, async act(_chat, _tools, options) {
       calls++; options.onPredictionCompleted({ stats: { stopReason: "maxPredictedTokensReached" } });

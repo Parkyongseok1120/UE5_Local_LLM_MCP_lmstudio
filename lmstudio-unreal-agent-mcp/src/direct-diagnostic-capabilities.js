@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("node:fs");
 const path = require("node:path");
 const cp = require("node:child_process");
 
@@ -7,7 +8,12 @@ const { resolveBuildPlan, resolveProjectSelection } = require("./unreal-detect.j
 const { runStaticValidation } = require("./direct-static-validation.js");
 const { runUnrealBuildFromPlan, killProcessTree } = require("./build-executor.js");
 const { runAutomationTests } = require("./automation-executor.js");
-const { buildDirectResponse } = require("./direct-build-response.js");
+const {
+  VERBOSE_STREAM_CHARS,
+  boundLongRunningPayload,
+  buildDirectResponse,
+  tailText,
+} = require("./direct-build-response.js");
 const { parseAllowedCommand } = require("./command-policy.js");
 const { runBoundedProcess } = require("./bounded-process-runner.js");
 const { success, failure } = require("./direct-response.js");
@@ -34,6 +40,7 @@ function createDiagnosticCapabilities(context) {
   const resolveBuild = options.resolveBuildPlan || resolveBuildPlan;
   const spawnCommand = options.spawnCommand || cp.spawn;
   const terminateProcessTree = options.killProcessTree || killProcessTree;
+  const logFile = (suffix) => path.join(workspaceRoot, ".agent", "logs", `${nowStamp()}-${suffix}.log`);
 
   async function resolvePlan(args) {
     const requestedProject = String(args.project || "").trim();
@@ -91,7 +98,8 @@ function createDiagnosticCapabilities(context) {
       timeoutMs: clamp(args.timeoutMs, 120000, 1000, 30 * 60 * 1000),
       scopeTargets: Array.isArray(args.scopeTargets) ? args.scopeTargets.slice(0, 64) : [],
     });
-    return success({
+    const allFindings = Array.isArray(result.findings) ? result.findings : [];
+    const payload = boundLongRunningPayload(success({
       advisory: true,
       blocksBuild: false,
       validationOk: result.ok === true,
@@ -102,11 +110,24 @@ function createDiagnosticCapabilities(context) {
       projectRoot,
       scanMode: result.scanMode,
       scopeKind: result.scopeKind,
-      findingCount: result.findingCount ?? result.findings?.length ?? 0,
-      findings: Array.isArray(result.findings) ? result.findings.slice(0, 100) : [],
+      findingCount: result.findingCount ?? allFindings.length,
+      findings: allFindings.slice(0, 100),
       skipped: result.skipped === true,
       reason: result.reason || result.note || "",
-    });
+    }));
+    if (payload.responseTrimmed?.findings) {
+      // Static validation has no process log; persist the complete findings
+      // so trimmed entries stay readable through read_unreal_logs.
+      const logPath = logFile(`${path.basename(projectRoot)}-static-validation`);
+      try {
+        await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
+        await fs.promises.writeFile(logPath, allFindings.map((item) => JSON.stringify(item)).join("\n"), "utf8");
+        payload.fullLogPath = logPath;
+      } catch (error) {
+        payload.logPersistenceError = String(error?.message || error);
+      }
+    }
+    return payload;
   }
 
   async function buildProject(args, requestContext = {}) {
@@ -119,7 +140,7 @@ function createDiagnosticCapabilities(context) {
         retryMode: "different_arguments",
       });
     }
-    const logPath = path.join(workspaceRoot, ".agent", "logs", `${nowStamp()}-${plan.build.projectName}-build.log`);
+    const logPath = logFile(`${plan.build.projectName}-build`);
     const result = await runUnrealBuildFromPlan({
       workspaceRoot,
       build: plan.build,
@@ -132,7 +153,7 @@ function createDiagnosticCapabilities(context) {
       terminate: terminateProcessTree,
     });
     const command = [result.executable || plan.build.buildTool || "UnrealBuildTool", ...(result.args || [])].join(" ");
-    const payload = buildDirectResponse({
+    const payload = boundLongRunningPayload(buildDirectResponse({
       result,
       build: plan.build,
       planResult: plan,
@@ -141,7 +162,7 @@ function createDiagnosticCapabilities(context) {
       logPath,
       verbose: args.verboseOutput === true,
       executionMode: runtimeOwner,
-    });
+    }));
     payload.executionMode = runtimeOwner;
     return payload.ok ? success(payload) : { ...payload, ok: false, retry: { allowed: false, mode: "none" } };
   }
@@ -150,7 +171,7 @@ function createDiagnosticCapabilities(context) {
     if (!envFlag(env, "ALLOW_UNREAL_BUILD", false)) return failure("AUTOMATION_DISABLED", "Unreal automation execution is disabled. Start the MCP with ALLOW_UNREAL_BUILD=1.");
     const plan = await resolvePlan(args);
     if (!plan.ok) return failure(plan.errorCode || "AUTOMATION_PLAN_FAILED", plan.error || "Could not resolve project/engine", { retryAllowed: true });
-    const logPath = path.join(workspaceRoot, ".agent", "logs", `${nowStamp()}-${plan.build.projectName}-automation.log`);
+    const logPath = logFile(`${plan.build.projectName}-automation`);
     const result = await runAutomationTests({
       engineRoot: plan.build.engineRoot,
       projectPath: plan.build.projectPath,
@@ -164,11 +185,11 @@ function createDiagnosticCapabilities(context) {
     });
     const payload = {
       ...result,
-      stdout: args.verboseOutput === true ? String(result.stdout || "").slice(-100000) : undefined,
-      stderr: args.verboseOutput === true ? String(result.stderr || "").slice(-100000) : undefined,
+      stdout: args.verboseOutput === true ? tailText(result.stdout, VERBOSE_STREAM_CHARS) : undefined,
+      stderr: args.verboseOutput === true ? tailText(result.stderr, VERBOSE_STREAM_CHARS) : undefined,
       fullLogPath: logPath,
     };
-    return result.ok ? success(payload) : failure(result.errorCode || "AUTOMATION_FAILED", result.error || "Automation tests failed", {
+    return boundLongRunningPayload(result.ok ? success(payload) : failure(result.errorCode || "AUTOMATION_FAILED", result.error || "Automation tests failed", {
       details: {
         exitCode: result.exitCode,
         cancelled: result.cancelled,
@@ -180,7 +201,7 @@ function createDiagnosticCapabilities(context) {
         missingTests: result.missingTests,
         fullLogPath: logPath,
       },
-    });
+    }));
   }
 
   async function runCommand(args, requestContext = {}) {
@@ -191,7 +212,9 @@ function createDiagnosticCapabilities(context) {
     const cwdStat = await statOrNull(cwdResolution.absolutePath);
     if (!cwdStat?.isDirectory()) return failure("INVALID_CWD", "cwd must resolve to an existing contained directory", { retryAllowed: true });
     const timeoutMs = clamp(args.timeoutMs, limits.commandTimeoutMs, 1000, 60 * 60 * 1000);
+    const logPath = logFile(`${parsed.file.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 40) || "command"}-command`);
     const result = await runBoundedProcess({
+      logPath,
       start: () => spawnCommand(parsed.file, parsed.args, {
         cwd: cwdResolution.absolutePath, shell: false, windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
@@ -208,9 +231,7 @@ function createDiagnosticCapabilities(context) {
         : result.outputLimited ? `Command output exceeded ${limits.maxCommandOutputBytes} bytes`
           : result.spawnError || result.outputDecodeError || "";
     const commandOk = result.exitCode === 0 && !result.error;
-    const outputChars = commandOk
-      ? Math.max(1024, Math.floor((limits.maxResponseChars - 4096) / 16))
-      : 768;
+    const outputChars = commandOk ? VERBOSE_STREAM_CHARS : 768;
     const payload = {
       ok: commandOk,
       exitCode: result.exitCode,
@@ -220,15 +241,17 @@ function createDiagnosticCapabilities(context) {
       processExited: result.processExited,
       terminationStatus: result.terminationStatus,
       outputLimited: result.outputLimited,
-      stdout: result.stdout.slice(-outputChars),
-      stderr: result.stderr.slice(-outputChars),
+      stdout: tailText(result.stdout, outputChars),
+      stderr: tailText(result.stderr, outputChars),
+      fullLogPath: result.fullLogPath,
+      ...(result.logPersistenceError ? { logPersistenceError: result.logPersistenceError } : {}),
       error: result.error,
     };
-    return payload.ok ? success(payload) : failure(
+    return boundLongRunningPayload(payload.ok ? success(payload) : failure(
       result.cancelled ? "COMMAND_CANCELLED" : result.timedOut ? "COMMAND_TIMEOUT" : result.outputLimited ? "COMMAND_OUTPUT_LIMIT" : "COMMAND_FAILED",
       result.error || `Command exited ${result.exitCode}`,
       { details: payload },
-    );
+    ));
   }
 
   return {

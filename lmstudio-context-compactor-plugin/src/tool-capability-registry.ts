@@ -2,6 +2,7 @@ import {
   type Tool,
   type ToolCallRequest
 } from "@lmstudio/sdk";
+import { UNREAL_AGENT_OBSERVATION_TOOL_NAMES, UNREAL_RAG_OBSERVATION_TOOL_NAMES } from "./generated-tool-contract";
 
 export function isUnregisteredGitReadIntent(name: string): boolean {
   const normalized = String(name || "").trim();
@@ -25,12 +26,9 @@ const readOperations: Readonly<Record<string, readonly string[]>> = {
   unity_approval: ["status"], unity_operation: ["get"], unity_tests: ["status", "results"],
 };
 export const readOnlyOperationProfiles = new WeakSet<object>();
-// Reviewed against scripts/direct_rag_contract.py; parity is tested locally,
+// Generated from config/stable_tool_manifest.json (the servers' effect SSOT);
 // never inferred from an arbitrary remote server's readOnlyHint.
-export const UNREAL_RAG_OBSERVATION_TOOLS = new Set([
-  "unreal_get_active_project", "unreal_rag_search", "unreal_symbol_lookup",
-  "unreal_rag_health", "unreal_rag_rebuild_status", "unreal_rag_capabilities",
-]);
+export const UNREAL_RAG_OBSERVATION_TOOLS = new Set(UNREAL_RAG_OBSERVATION_TOOL_NAMES);
 
 export function hasReadCapability(tool: RemoteToolLike): boolean {
   return isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} })
@@ -54,20 +52,7 @@ export const UNITY_OBSERVATION_TOOLS = new Set([
   "unity_logs",
 ]);
 
-export const UNREAL_OBSERVATION_TOOLS = new Set([
-  "workspace_status", "git_status", "git_log", "git_changed_files", "git_diff_file", "git_read_file",
-  "get_workspace_info",
-  "list_unreal_projects",
-  "get_active_project",
-  "detect_unreal_project",
-  "list_directory",
-  "search_files",
-  "read_file",
-  "read_file_range",
-  "read_symbol",
-  "read_unreal_logs",
-  "propose_file_deletions",
-]);
+export const UNREAL_OBSERVATION_TOOLS = new Set(UNREAL_AGENT_OBSERVATION_TOOL_NAMES);
 
 /**
  * Known observations do not require confirmation. Mutations and long-running

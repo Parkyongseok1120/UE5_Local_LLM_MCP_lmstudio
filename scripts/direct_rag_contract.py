@@ -11,7 +11,7 @@ from typing import Any
 
 from direct_rag_request_bounds import (
     MAX_QUERY_CHARS, MAX_REPEAT_RECEIPT_CHARS, MAX_SYMBOL_HINT_CHARS,
-    bounded_filter_schema, bounded_string_schema, project_selector_schema,
+    bounded_filter_schema, bounded_string_schema, max_chars_schema, project_selector_schema,
 )
 from rag_modes import MODE_ENUM
 
@@ -34,12 +34,11 @@ def _schema(
     properties: dict[str, Any],
     required: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": list(required),
-        "additionalProperties": False,
-    }
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = list(required)
+    schema["additionalProperties"] = False
+    return schema
 
 
 def direct_rag_tool_definitions() -> list[dict[str, Any]]:
@@ -50,41 +49,27 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         "type": "string",
         "enum": ["compact", "medium", "large", "full"],
         "default": "compact",
-        "description": "Compact is the portable default; request nextDetailLevel only after reported truncation.",
+        "description": "Raise only after truncation.",
     }
     definitions = [
         {
             "name": "unreal_get_active_project",
-            "title": "Get Active Unreal Project",
-            "description": "Return the shared active .uproject identity and resolved project paths.",
+            "description": "Shared active .uproject and its paths.",
             "inputSchema": _schema({}),
         },
         {
             "name": "unreal_set_active_project",
-            "title": "Set Active Unreal Project",
-            "description": "Set one exact existing .uproject path, or clear the shared selection.",
+            "description": "Set or clear the shared active .uproject.",
             "inputSchema": _schema(
                 {
-                    "projectPath": {
-                        "type": "string",
-                        "description": "Absolute path to an existing .uproject file.",
-                    },
-                    "clear": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Clear the shared active project.",
-                    },
+                    "projectPath": {"type": "string"},
+                    "clear": {"type": "boolean", "default": False},
                 }
             ),
         },
         {
             "name": "unreal_rag_search",
-            "title": "Search Unreal RAG",
-            "description": (
-                "Optionally search when indexed discovery or cross-source evidence helps. If the exact current file "
-                "is known, direct source reads are authoritative and RAG is not a preflight. "
-                "Returns ranked evidence, project scope, freshness metadata, and duplicate status."
-            ),
+            "description": "Ranked index evidence; not a preflight: a known file's direct read is authoritative.",
             "inputSchema": _schema(
                 {
                     "query": bounded_string_schema(MAX_QUERY_CHARS, min_length=1),
@@ -93,17 +78,12 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
                         "minimum": 1,
                         "maximum": 16,
                         "default": 6,
-                        "description": "Requested maximum matches. Start small; compact caps results at 6.",
                     },
                     "mode": {
                         "type": "string",
                         "enum": list(MODE_ENUM),
                         "default": "auto",
-                        "description": (
-                            "Retrieval-ranking hint only; it grants no authority or workflow. Use review for architecture/code "
-                            "review and auto when unsure. "
-                            "Use only one of the listed values; do not invent mode names."
-                        ),
+                        "description": "review for code review; auto when unsure.",
                     },
                     "hybrid": {"type": "boolean", "default": False},
                     "source": bounded_filter_schema(),
@@ -117,20 +97,14 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
                         "type": "string",
                         "enum": ["auto", "engine", "project", "mixed"],
                         "default": "auto",
-                        "description": (
-                            "auto may route API-looking queries to engine evidence. For current project source, use "
-                            "scope=project with an exact project selector; "
-                            "use mixed only when both project and engine evidence are useful."
-                        ),
+                        "description": "project needs an exact project selector.",
                     },
                     "use_active_project": {"type": "boolean", "default": True},
                     "detailLevel": detail_level,
+                    "maxChars": max_chars_schema(),
                     "repeatReceipt": {
                         **bounded_string_schema(MAX_REPEAT_RECEIPT_CHARS),
-                        "description": (
-                            "Opaque receipt returned by a prior identical full result. "
-                            "Echo it only when a concise repeat acknowledgement is desired."
-                        ),
+                        "description": "Echo for a short unchanged reply.",
                     },
                 },
                 ("query",),
@@ -138,12 +112,9 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "unreal_symbol_lookup",
-            "title": "Lookup Unreal Symbol Or API",
             "description": (
-                "Return indexed declarations and source evidence for an Unreal class, "
-                "struct, interface, enum, function, or module symbol."
-                " Explicit sourceMode=engine_local reads bounded installed-engine declarations without an index; "
-                "use Symbol or Owner::Symbol and one exact project. Coverage limits never prove API absence."
+                "Unreal symbol declarations; sourceMode=engine_local reads engine headers without an index. "
+                "Gaps never prove absence."
             ),
             "inputSchema": _schema(
                 {
@@ -161,30 +132,26 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
                     "owner": bounded_string_schema(128),
                     "directoryDomain": bounded_string_schema(MAX_SYMBOL_HINT_CHARS),
                     "detailLevel": detail_level,
+                    "maxChars": max_chars_schema(),
                 },
                 ("query",),
             ),
         },
         {
             "name": "unreal_rag_health",
-            "title": "Unreal RAG Index Health",
-            "description": "Return index readability, chunk counts, embedding status, and project binding.",
+            "description": "Index readability and counts.",
             "inputSchema": _schema({}),
         },
         {
             "name": "unreal_rag_rebuild_status",
-            "title": "Unreal RAG Rebuild Status",
-            "description": "Compare raw-input and index timestamps and report whether a rebuild is useful.",
+            "description": "Whether inputs postdate the index.",
             "inputSchema": _schema({}),
         },
         {
             "name": "unreal_rag_refresh",
-            "title": "Refresh Active Project RAG Inputs",
             "description": (
-                "Synchronously collect selected active-project inputs, rebuild stale index data, "
-                "and invalidate project-scoped caches. The default project_source scope never "
-                "launches Unreal Editor. editor_metadata/all may launch Unreal Editor only when "
-                "allowEditorLaunch=true is explicitly supplied."
+                "Rebuild stale active-project index. Editor launches only for "
+                "editor_metadata/all with allowEditorLaunch=true."
             ),
             "inputSchema": _schema(
                 {
@@ -197,18 +164,14 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
                     "allowEditorLaunch": {
                         "type": "boolean",
                         "default": False,
-                        "description": (
-                            "Explicitly authorize starting an Unreal Editor subprocess for "
-                            "editor_metadata/all. False only ingests existing exports."
-                        ),
+                        "description": "Allow an Unreal Editor subprocess.",
                     },
                 }
             ),
         },
         {
             "name": "unreal_rag_capabilities",
-            "title": "Unreal RAG Capability Summary",
-            "description": "Return the Direct RAG server boundary, catalog, and current index availability.",
+            "description": "Server boundary and index status.",
             "inputSchema": _schema({}),
         },
     ]

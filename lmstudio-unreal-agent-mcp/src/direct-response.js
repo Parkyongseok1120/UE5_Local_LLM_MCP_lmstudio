@@ -58,6 +58,14 @@ const LEGACY_DIRECTIVE_FIELDS = new Set([
   "stopCurrentWorkflow",
 ]);
 
+// One model-facing serializer: the transport text and every capability-side
+// fit check must measure the same compact rendering.
+const DEFAULT_MAX_RESPONSE_CHARS = 48_000;
+
+function renderModelJson(value) {
+  return JSON.stringify(value);
+}
+
 function isRecord(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -176,7 +184,7 @@ function failure(errorCode, message, options = {}) {
 function boundedJson(payload, maxChars, maxBytes) {
   const limit = Math.max(512, Number(maxChars || 32_000));
   const fits = value => value.length <= limit && (maxBytes === undefined || Buffer.byteLength(value, "utf8") <= maxBytes);
-  let rendered = JSON.stringify(payload, null, 2);
+  let rendered = renderModelJson(payload);
   if (fits(rendered)) return { payload, rendered, truncated: false };
 
   // Never silently clip a successful payload after a capability has computed
@@ -194,11 +202,11 @@ function boundedJson(payload, maxChars, maxBytes) {
       "The result exceeded the transport limit. Request a smaller byte range, line range, or result count.",
       { retryAllowed: true, retryMode: "different_arguments" },
     );
-  rendered = JSON.stringify(minimal, null, 2);
+  rendered = renderModelJson(minimal);
   if (!fits(rendered)) {
     minimal = failure("OUTPUT_LIMIT_EXCEEDED", "Result metadata exceeds the response budget; request a larger budget or narrower scope.",
       { retryAllowed: true, retryMode: "different_arguments" });
-    rendered = JSON.stringify(minimal, null, 2);
+    rendered = renderModelJson(minimal);
   }
   return {
     payload: minimal,
@@ -214,7 +222,7 @@ function toMcpResult(payload, options = {}) {
   });
   const limit = normalized.ok === false
     ? Math.min(4096, Number(options.maxChars || 4096))
-    : Number(options.maxChars || 256_000);
+    : Number(options.maxChars || DEFAULT_MAX_RESPONSE_CHARS);
   const bounded = boundedJson(normalized, limit, options.maxBytes);
   return {
     content: [{ type: "text", text: bounded.rendered }],
@@ -224,11 +232,13 @@ function toMcpResult(payload, options = {}) {
 }
 
 module.exports = {
+  DEFAULT_MAX_RESPONSE_CHARS,
   INTERNAL_FIELDS,
   LEGACY_DIRECTIVE_FIELDS,
   boundedJson,
   failure,
   normalizeDirectPayload,
+  renderModelJson,
   stripInternal,
   success,
   suggestionFrom,

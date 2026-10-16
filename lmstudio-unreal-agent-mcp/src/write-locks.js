@@ -87,6 +87,27 @@ function currentProcessIdentity() {
   return processIdentityCache;
 }
 
+// Other-PID probes spawn a process synchronously (PowerShell on Windows), so
+// contention on one lock must not re-probe on every attempt. Only successful
+// probes are cached; a PID reused inside the TTL can only delay a reclaim.
+function createProcessIdentityCache({ probe = probeProcessStartIdentity, ttlMs = 5_000, maxEntries = 64, now = Date.now } = {}) {
+  const entries = new Map();
+  return function cachedIdentity(pid) {
+    const at = now();
+    const cached = entries.get(pid);
+    if (cached && cached.expiresAt > at) return cached.identity;
+    entries.delete(pid);
+    const identity = probe(pid);
+    if (identity) {
+      entries.set(pid, { identity, expiresAt: at + ttlMs });
+      while (entries.size > maxEntries) entries.delete(entries.keys().next().value);
+    }
+    return identity;
+  };
+}
+
+const otherProcessIdentity = createProcessIdentityCache();
+
 function lockPayload(label) {
   return `${OWNER}\n${label}\n${new Date().toISOString()}\nprocessIdentity:${currentProcessIdentity()}\n`;
 }
@@ -167,7 +188,9 @@ function isStaleLock(lockPath) {
     return true;
   }
   const recordedIdentity = readLockProcessIdentity(lockPath);
-  const currentIdentity = recordedIdentity ? probeProcessStartIdentity(pid) : "";
+  const currentIdentity = recordedIdentity
+    ? (pid === process.pid ? currentProcessIdentity() : otherProcessIdentity(pid))
+    : "";
   if (recordedIdentity && currentIdentity && recordedIdentity !== currentIdentity) {
     return true;
   }
@@ -317,6 +340,7 @@ async function withPathLock(absPath, label, fn, options = {}) {
 
 module.exports = {
   canonicalLockKey,
+  createProcessIdentityCache,
   lockFilePath,
   tryAcquirePathLock,
   releasePathLock,
