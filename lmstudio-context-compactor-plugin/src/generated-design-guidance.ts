@@ -458,7 +458,13 @@ export const bundledGuidanceSections = [
       ]
     },
     "text": "## 엔진 수명 계약\n\n- 수명 훅 override는 부모 체인 전체에서 확인한다. 직접 부모에 선언이 없다는 이유로 잘못된 override라고 단정하지 않는다.\n- 객체 생존(GC), 게임플레이 활성(BeginPlay~EndPlay), 스레드 접근 가능성은 각각 따로 판단한다.\n\n엔진 계약 unreal_contracts@1 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):\n- `ue.uobject.lifecycle` (엔진 사실) PostInitProperties, PostLoad and BeginDestroy are UObject virtuals, so they are valid overrides on every UObject-derived type, including actors, components and subsystems. BeginDestroy runs as part of garbage-collection teardown; it is not a gameplay end-of-play hook. 근거: Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h:226 외 2\n- `ue.actor.lifecycle` (엔진 사실) AActor gameplay lifetime runs PostInitializeComponents, then BeginPlay, and ends with EndPlay. AActor::Destroyed calls RouteEndPlay(EEndPlayReason::Destroyed) first, so cleanup that must run on every end of play belongs in EndPlay. 근거: Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2125 외 4\n- `ue.component.lifecycle` (엔진 사실) UActorComponent registration (OnRegister/OnUnregister) is separate from initialization (InitializeComponent/UninitializeComponent) and from play (BeginPlay/EndPlay). TickComponent is the component tick override; Tick is an actor hook. 근거: Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h:830 외 5\n- `ue.timer.game-thread` (엔진 사실) FTimerManager setting and lookup check IsInGameThread; timers must be set and cleared on the game thread, and a timer bound to an object must be cleared when that object ends play. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:596 외 1",
-    "revision": "bfe5fcb7dae7524f88d37d484421ce55a85b6328cbdbafeb0dd327f70276472c"
+    "contractIds": [
+      "ue.uobject.lifecycle",
+      "ue.actor.lifecycle",
+      "ue.component.lifecycle",
+      "ue.timer.game-thread"
+    ],
+    "revision": "5766ec48b47c7f3c6748b6d9bfaef5bd9752d3b8336c95b1fced8c126fb64d7d"
   },
   {
     "id": "unreal/subsystems",
@@ -480,7 +486,11 @@ export const bundledGuidanceSections = [
       ]
     },
     "text": "## 서브시스템\n\n- 서브시스템 종류(Engine/GameInstance/World/LocalPlayer)가 수명과 공유 범위를 정한다. 종류를 바꾸면 수명도 바뀐다.\n- Initialize에서 다른 서브시스템을 바로 호출하기 전에 같은 컬렉션인지 확인한다. 참조만 저장하는 것은 초기화 순서에 의존하지 않는다.\n- Initialize·OnWorldBeginPlay에서 등록한 delegate·ticker·타이머는 Deinitialize·OnWorldEndPlay에서 해제한다.\n\n엔진 계약 unreal_contracts@1 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):\n- `ue.subsystem.lifecycle` (엔진 사실) A subsystem lives as long as its outer: Engine, GameInstance, World or LocalPlayer. ShouldCreateSubsystem gates creation, Initialize(FSubsystemCollectionBase&) and Deinitialize bracket its life. World subsystems also receive PostInitialize, OnWorldBeginPlay, OnWorldEndPlay and PreDeinitialize, and DoesSupportWorldType filters world types. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h:56 외 5\n- `ue.subsystem.initialize-dependency` (엔진 사실) FSubsystemCollectionBase::InitializeDependency forces another subsystem of the same collection to initialize first. It only orders subsystems within one collection. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/SubsystemCollection.h:35",
-    "revision": "2866e228d9e160e78b5148dec462d080a938121a6e8b1139ebf0337f9f5726e4"
+    "contractIds": [
+      "ue.subsystem.lifecycle",
+      "ue.subsystem.initialize-dependency"
+    ],
+    "revision": "a6341a58bf5a45e99b387bd0f609ca9190aaab9ad09643769a7024d5a5dba277"
   },
   {
     "id": "unreal/threads",
@@ -498,7 +508,11 @@ export const bundledGuidanceSections = [
     ],
     "applicability": {},
     "text": "## 스레드와 비동기\n\n- 람다가 실행되는 스레드를 먼저 확인한다. 실행 문맥을 확인하지 못하면 미확인으로 남긴다.\n- 비동기 콜백은 대상 Actor 종료, 맵 전환, 취소 뒤에도 도착할 수 있다. 결과를 적용하기 전에 대상과 World가 현재 것인지 확인한다.\n- 동기 대기(ParallelFor 등)는 호출 스레드가 끝날 때까지 기다리지만, 본문은 워커에서 실행될 수 있다.\n- 자세한 패턴은 RAG 문서 34_Threading_And_Async_Contract.md에 있다.\n\n엔진 계약 unreal_contracts@1 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):\n- `ue.thread.uobject-game-thread` (프로젝트 정책) Create, destroy, spawn and mutate UObjects, actors, components, worlds and timers on the game thread. Work on another thread uses copied plain data, and returns results with AsyncTask(ENamedThreads::GameThread, ...) after checking a TWeakObjectPtr is still valid. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:660\n- `policy.render.game-objects` (프로젝트 정책) A render command runs later on the rendering thread. Pass copied values or a render proxy into it; do not capture this or other gameplay UObjects and read or mutate them there.",
-    "revision": "b668f1f9a34a30d064c399f1b1243c968663e92d5649c2f48d2cc1e20f78ca0b"
+    "contractIds": [
+      "ue.thread.uobject-game-thread",
+      "policy.render.game-objects"
+    ],
+    "revision": "0931544f4b88b3d54186a3829da61e34f502debec22ecf85671c696e0e81bbaf"
   },
   {
     "id": "unreal/verification",
@@ -506,6 +520,7 @@ export const bundledGuidanceSections = [
     "engine": "unreal",
     "source": "docs/model-guidance/unreal.md#verification",
     "topics": [
+      "core",
       "debugging",
       "multiplayer"
     ],
@@ -519,7 +534,12 @@ export const bundledGuidanceSections = [
     ],
     "applicability": {},
     "text": "## 판단과 보고\n\n- 실제로 읽은 범위를 보고한다. 일부만 읽은 파일을 전량 확인했다고 쓰지 않고, 전량 확인했다고 쓴 파일을 미확인으로 다시 분류하지 않는다.\n- 확인한 사실, 추론, 미확인을 구분해 적는다.\n\n엔진 계약 unreal_contracts@1 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):\n- `policy.claims.build-evidence` (프로젝트 정책) A compile, link or UHT outcome is a claim about the build. Report it as confirmed only with build_unreal_project or static_validate_project evidence; otherwise state it as an unverified risk and name the evidence that would confirm it.\n- `policy.claims.engine-default-vs-project` (프로젝트 정책) Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text).\n- `policy.claims.severity` (프로젝트 정책) Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error.",
-    "revision": "1c8edbd0441a248f10ec6f40412efc8380020165a1a441b82508571bfe4ddf4b"
+    "contractIds": [
+      "policy.claims.build-evidence",
+      "policy.claims.engine-default-vs-project",
+      "policy.claims.severity"
+    ],
+    "revision": "bb258287b7d1f494a53d0aa29395952a4128f4e9d5cebc1db207c4901f6ff7dc"
   },
   {
     "id": "unreal/preference",
@@ -681,7 +701,13 @@ export const bundledGuidanceSections = [
       ]
     },
     "text": "## 엔진 기본 동작\n\n엔진이 이미 제공하는 동작을 프로젝트에 없는 기능으로 보고하지 않는다. 프로젝트가 같은 동작을 다시 구현했는지, 엔진 동작에 의존하는지 구분한다.\n\n엔진 계약 unreal_contracts@1 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):\n- `ue.net.cmc-prediction` (엔진 사실) UCharacterMovementComponent already performs owning-client movement prediction: the client moves locally and sends moves with ReplicateMoveToServer, and the server corrects significant errors with ClientAdjustPosition. A project without its own prediction layer still has engine movement prediction. 근거: Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h:2394 외 1\n- `ue.render.owner-visibility` (엔진 사실) bOnlyOwnerSee and bOwnerNoSee are rendering visibility flags on UPrimitiveComponent. They do not control replication, relevancy or whether the component exists on a machine. 근거: Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h:497 외 1\n- `ue.net.netmode` (엔진 사실) ENetMode is NM_Standalone, NM_DedicatedServer, NM_ListenServer or NM_Client; every value below NM_Client is some kind of server. A NetMode != NM_DedicatedServer branch runs on standalone, listen servers and clients, not only on remote clients. 근거: Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h:981 외 2\n- `ue.net.replication-conditions` (엔진 사실) Replication conditions choose which connections receive a replicated property: COND_InitialOnly sends only in the initial bunch, COND_OwnerOnly only to the owning connection, COND_SkipOwner to every connection except the owner. 근거: Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h:19 외 2",
-    "revision": "de5cfd21e45bd30d3ff709af295e786a27f84b72580397f8f8ae7d7ff4a89546"
+    "contractIds": [
+      "ue.net.cmc-prediction",
+      "ue.render.owner-visibility",
+      "ue.net.netmode",
+      "ue.net.replication-conditions"
+    ],
+    "revision": "7a56cda6304ba88a3a5ac7d1a1c48ff3b49626172ee435db753e2013f3fa8c0d"
   },
   {
     "id": "unreal-networking/authority",

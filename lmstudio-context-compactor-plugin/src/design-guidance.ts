@@ -19,6 +19,8 @@ export type DesignGuidanceDelivery = "documents" | "focused";
 export type GuidanceSection = GuidanceDocument & {
   readonly documentId: string; readonly topics: readonly string[]; readonly signals: readonly string[];
   readonly priority: number; readonly requires: readonly string[];
+  /** Ids of config/unreal_contracts.json entries rendered into this section. */
+  readonly contractIds?: readonly string[];
   readonly applicability: { readonly engineVersions?: readonly string[];
     readonly packages?: readonly { readonly id: string; readonly versions: readonly string[] }[] };
 };
@@ -99,12 +101,14 @@ function composeFocusedGuidance(mode: GuidanceTopic, supplement: GuidanceSupplem
   sections: readonly GuidanceSection[], automatic: boolean): GuidanceCandidate[] {
   const engines = scope.source === "available_tools" || scope.source === "ambiguous" ? []
     : scope.engine === "mixed" ? [] : [scope.engine];
+  const facts = snapshot.applicability;
+  const inScope = (s: GuidanceSection) => (s.engine === "common" || engines.includes(s.engine))
+    && (s.topics.includes(mode) || Boolean(supplement && s.topics.includes(supplement))
+      || (s.documentId === "core" && s.topics.includes("core")));
+  const versionGated = (s: GuidanceSection) => Boolean(s.applicability.engineVersions
+    && !versionMatches(facts.engineVersion, s.applicability.engineVersions));
   const applicable = (s: GuidanceSection) => {
-    if (s.engine !== "common" && !engines.includes(s.engine)) return false;
-    if (!s.topics.includes(mode) && !(supplement && s.topics.includes(supplement))
-      && !(s.documentId === "core" && s.topics.includes("core"))) return false;
-    const facts = snapshot.applicability;
-    if (s.applicability.engineVersions && !versionMatches(facts.engineVersion, s.applicability.engineVersions)) return false;
+    if (!inScope(s) || versionGated(s)) return false;
     return !s.applicability.packages || (!facts.networkPackagesAmbiguous
       && s.applicability.packages.every(p => versionMatches(facts.packages[p.id], p.versions)));
   };
@@ -127,8 +131,10 @@ function composeFocusedGuidance(mode: GuidanceTopic, supplement: GuidanceSupplem
     return visit(section) ? [...selected.values()] : [];
   };
   const rankSignals = automatic ? (snapshot.autoSignals || []).filter(s => s.order === "last_observation").map(s => s.signal) : snapshot.signals;
+  // An engine section tagged "core" is engine material for core requests, not
+  // a topic match that outranks the common core sections.
   const rank = (s: GuidanceSection) => s.signals.some(signal => rankSignals.includes(signal as ReferenceSignal)) ? 0
-    : s.documentId !== "core" && s.topics.includes(mode) ? 1 : 2;
+    : mode !== "core" && s.documentId !== "core" && s.topics.includes(mode) ? 1 : 2;
   const primaryRank = (s: GuidanceSection) => automatic
     ? mode === "core" ? (s.id === "core/proof" ? 0 : 2)
       : s.documentId !== "core" && s.topics.includes(mode) ? 0 : 1 : 0;
@@ -154,6 +160,19 @@ function composeFocusedGuidance(mode: GuidanceTopic, supplement: GuidanceSupplem
     enginePack.forEach(s => { minimum.set(s.id, s); combined.set(s.id, s); });
   } else if (automatic && engines.some(e => e === "unity" || e === "unreal")) {
     omissionReasons.push(enginePack ? "engine_pack_omitted_section_limit" : "engine_pack_unavailable");
+  }
+  // Contract sections carry engine facts verified for the observed engine
+  // version. They join the engine pack instead of competing with it, so a
+  // higher-priority engine section cannot crowd them out.
+  const contractPack = automatic ? packs.find(p => p.some(s => s.contractIds?.length && s.applicability.engineVersions)
+    && p.some(s => !minimum.has(s.id))) : undefined;
+  if (contractPack && new Set([...minimum.keys(), ...contractPack.map(s => s.id)]).size <= REFERENCE_LIMITS.sections) {
+    contractPack.forEach(s => { minimum.set(s.id, s); combined.set(s.id, s); });
+  } else if (contractPack) omissionReasons.push("contract_pack_omitted_section_limit");
+  // Name the gap when contract facts matched the request but the engine
+  // version that would make them applicable was not established.
+  if (sections.some(s => s.contractIds?.length && inScope(s) && versionGated(s))) {
+    omissionReasons.push(facts.engineVersion ? "contract_sections_engine_version_unvalidated" : "contract_sections_version_unverified");
   }
   if (new Set([...minimum.keys(), ...secondary.map(s => s.id)]).size <= REFERENCE_LIMITS.sections) {
     secondary.forEach(s => { minimum.set(s.id, s); combined.set(s.id, s); });

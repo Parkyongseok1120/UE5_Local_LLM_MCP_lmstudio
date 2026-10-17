@@ -139,3 +139,45 @@ test("a build diagnostic brings the claim policies into the model input", async 
   const quiet = autoGuidanceCandidates("debugging", undefined, scope, snapshotFor("5.7.4"));
   assert.ok(!quiet[0].ids.includes("unreal/verification"));
 });
+
+test("bundled sections list the contract ids their generated block delivers", () => {
+  for (const section of bundledGuidanceSections.filter(s => s.contractIds)) {
+    for (const id of section.contractIds) assert.ok(section.text.includes(`\x60${id}\x60`), section.id + " " + id);
+  }
+  assert.deepEqual(sectionOf("unreal-networking/engine-defaults").contractIds,
+    contracts.contracts.filter(c => c.guidanceRefs.includes("unreal-networking.md#engine-defaults")).map(c => c.id));
+  assert.equal(sectionOf("unreal/ownership").contractIds, undefined);
+});
+
+test("auto mode admits the verified contract pack beside the engine pack, without displacing it", () => {
+  const ids = (mode, version, signals, supplement) => autoGuidanceCandidates(mode, supplement, scope, snapshotFor(version, signals))[0].ids;
+  const multiplayer = ids("multiplayer", "5.8.2");
+  assert.ok(multiplayer.includes("unreal-networking/authority") && multiplayer.includes("unreal-networking/engine-defaults"));
+  assert.ok(ids("lifecycle", "5.8.0").includes("unreal/lifetime"));
+  const debugging = ids("debugging", "5.8.2");
+  assert.ok(debugging.includes("unreal/api"));
+  const designCompile = ids("design", "5.8.2", ["compilation_pending"], "debugging");
+  assert.ok(designCompile.includes("debugging/verification"));
+  for (const mode of ["multiplayer", "lifecycle", "design", "debugging"]) {
+    assert.ok(ids(mode, "5.8.2").length <= 6);
+    assert.ok(!ids(mode, "5.7.4").some(id => sectionOf(id).applicability.engineVersions?.includes("5.8")), mode);
+  }
+});
+
+test("core requests receive the claim policies as their engine pack", () => {
+  for (const version of ["5.8.2", "5.7.4", undefined]) {
+    const [first] = autoGuidanceCandidates("core", undefined, scope, snapshotFor(version));
+    assert.deepEqual(first.ids, ["core/proof", "unreal/verification"], String(version));
+    assert.ok(!first.omissionReasons?.includes("engine_pack_unavailable"));
+  }
+  assert.equal(autoGuidanceCandidates("core", undefined, { engine: "unity", source: "config" }, snapshotFor())[0]
+    .ids.includes("unreal/verification"), false);
+});
+
+test("a closed version gate is named in the omission reasons", () => {
+  const reasons = (mode, version) => autoGuidanceCandidates(mode, undefined, scope, snapshotFor(version))[0].omissionReasons || [];
+  assert.ok(reasons("multiplayer", undefined).includes("contract_sections_version_unverified"));
+  assert.ok(reasons("lifecycle", "5.7.4").includes("contract_sections_engine_version_unvalidated"));
+  assert.ok(!reasons("multiplayer", "5.8.2").some(r => r.startsWith("contract_sections_")));
+  assert.ok(!reasons("debugging", undefined).some(r => r.startsWith("contract_sections_")));
+});

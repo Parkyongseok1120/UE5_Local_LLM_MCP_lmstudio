@@ -16,8 +16,8 @@ const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 // Markers are metadata, never part of the legacy document body. Fenced examples
 // remain literal text; malformed markers outside a fence fail at build time.
 function splitSections(source) {
-  const body = [], sections = new Map();
-  let active = null, lines = [], fence = null;
+  const body = [], sections = new Map(), contractIds = new Map();
+  let active = null, lines = [], fence = null, inContract = false;
   for (const line of source.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n")) {
     const fenceMatch = /^ {0,3}(\x60{3,}|~{3,})/.exec(line);
     if (fenceMatch) {
@@ -40,13 +40,17 @@ function splitSections(source) {
     }
     if (!fence && /^\s*<!--\s*\/?guidance-section\b/.test(line)) throw new Error("Malformed guidance marker");
     // Contract summary markers locate generated text; the text stays, the markers do not.
-    if (!fence && CONTRACT_MARKER.test(line)) continue;
+    const contractMarker = !fence && CONTRACT_MARKER.exec(line);
+    if (contractMarker) { inContract = !contractMarker[1]; continue; }
     if (!fence && /^\s*<!--\s*\/?contract-summary\b/.test(line)) throw new Error("Malformed contract summary marker");
     body.push(line);
     if (active) lines.push(line);
+    // Generated summary lines name the contract ids this section delivers.
+    const contractLine = inContract && active && /^- \x60([a-z][a-z0-9.-]*)\x60 /.exec(line);
+    if (contractLine) contractIds.set(active, [...(contractIds.get(active) || []), contractLine[1]]);
   }
   if (active) throw new Error("Unterminated guidance section: " + active);
-  return { text: body.join("\n").trim(), sections };
+  return { text: body.join("\n").trim(), sections, contractIds };
 }
 
 function validateApplicability(value = {}) {
@@ -74,7 +78,7 @@ function renderBundle(root) {
       throw new Error("Invalid or duplicate design guidance entry");
     }
     seen.add(entry.id);
-    const { text, sections } = splitSections(fs.readFileSync(path.join(root, entry.file), "utf8"));
+    const { text, sections, contractIds } = splitSections(fs.readFileSync(path.join(root, entry.file), "utf8"));
     if (!text || text.length > 16000) throw new Error(`Invalid guidance size: ${entry.id}`);
     if (catalog.schemaVersion === 2) {
       if (!Array.isArray(entry.sections) || !entry.sections.length) throw new Error("Missing section catalogue: " + entry.id);
@@ -94,7 +98,8 @@ function renderBundle(root) {
           source: "docs/model-guidance/" + entry.file + "#" + section.id,
           topics: [...new Set(section.topics)], signals: [...new Set(section.signals)],
           priority: section.priority, requires: [...new Set(section.requires)],
-          applicability: validateApplicability(section.applicability), text: sections.get(section.id) };
+          applicability: validateApplicability(section.applicability), text: sections.get(section.id),
+          ...(contractIds.has(section.id) ? { contractIds: contractIds.get(section.id) } : {}) };
         sectionBundle.push({ ...data, revision: hash(JSON.stringify(data)) });
       }
       if (used.size !== sections.size) throw new Error("Uncatalogued guidance section: " + entry.id);

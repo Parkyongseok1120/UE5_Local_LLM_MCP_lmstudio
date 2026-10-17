@@ -82,6 +82,30 @@ def test_scorer_rewards_correct_answer_and_rejects_recorded_mistake(case_id):
         assert {p.penalty_id for p in bad_score.penalties} & {f["id"] for f in case["forbidden_patterns"]}, case_id
 
 
+# Wording recorded in the S5 pilot (artifacts/ue-correctness-20261017).
+PILOT_LINK_ASSERTIONS = [
+    "Game·Editor 두 타깃 모두 **링크 단계에서 LNK2019(unresolved external symbol)로 실패**할 것입니다.",
+    "대부분의 UE 버전에서는 타겟 링크 단계에서 모듈 인터페이스 심볼 미해결로 **빌드 실패**합니다.",
+    "The game target will fail at the link stage with LNK2019.",
+]
+PILOT_LINK_HEDGED = ("실패 모드의 정확한 형태: 위 문제의 결과가 UE 5.8에서 링크 에러인지, 아니면 링크는 통과하고 "
+                     "런타임 모듈 로드 실패인지는 실제 빌드로만 확인 가능합니다.")
+
+
+@pytest.mark.parametrize("sentence", PILOT_LINK_ASSERTIONS)
+def test_future_tense_link_failure_assertions_are_penalised(sentence):
+    case = CASES["link_claim_requires_build_evidence"]
+    answer = ANSWERS["link_claim_requires_build_evidence"][0] + "\n" + sentence
+    penalties = scorer.score_case(case, CASE_SET["defaults"], answer).penalties
+    assert [p.penalty_id for p in penalties] == ["asserted_link_failure"], sentence
+
+
+def test_hedged_link_outcome_is_not_penalised():
+    case = CASES["link_claim_requires_build_evidence"]
+    answer = ANSWERS["link_claim_requires_build_evidence"][0] + "\n" + PILOT_LINK_HEDGED
+    assert scorer.score_case(case, CASE_SET["defaults"], answer).penalties == []
+
+
 def test_cli_accepts_the_case_set(tmp_path):
     answers = tmp_path / "answers.jsonl"
     answers.write_text("\n".join(json.dumps({"case_id": cid, "answer": good}, ensure_ascii=False)
