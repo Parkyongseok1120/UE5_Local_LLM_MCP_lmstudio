@@ -11,6 +11,7 @@ const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("
 const { clamp, isBinary, statOrNull, statSignature } = require("./direct-runtime-shared.js");
 
 const { lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
+const { LINE_NUMBER_FORMAT, numberLines } = require("../../shared-tool-core/line-numbering.js");
 
 const fsp = fs.promises;
 
@@ -40,9 +41,24 @@ function createReadCapabilities(context) {
     if (!stat.isDirectory()) return failure("NOT_A_DIRECTORY", `Not a directory: ${args.path}`);
     const maxEntries = clamp(args.maxEntries, 200, 1, 2000);
     const rawEntries = await fsp.readdir(resolution.absolutePath, { withFileTypes: true });
-    const offset = clamp(args.offset, 0, 0, rawEntries.length);
+    let omittedByPathPolicy = 0;
+    const readableEntries = [];
+    for (const entry of rawEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+      try {
+        if (resolution.resolvedRootType === "installed_engine") {
+          await assertReadChildContained(path.join(resolution.absolutePath, entry.name), resolution);
+        }
+      }
+      catch (error) {
+        if (error.code !== "ENGINE_SOURCE_PATH_DENIED") throw error;
+        omittedByPathPolicy++;
+        continue;
+      }
+      readableEntries.push(entry);
+    }
+    const offset = clamp(args.offset, 0, 0, readableEntries.length);
     const entries = [];
-    for (const entry of rawEntries.sort((a, b) => a.name.localeCompare(b.name)).slice(offset, offset + maxEntries)) {
+    for (const entry of readableEntries.slice(offset, offset + maxEntries)) {
       const candidate = path.join(resolution.absolutePath, entry.name);
       await assertReadChildContained(candidate, resolution);
       const childStat = await statOrNull(candidate);
@@ -54,14 +70,15 @@ function createReadCapabilities(context) {
       });
     }
     const makePayload = (count) => {
-      const nextOffset = offset + count < rawEntries.length ? offset + count : null;
+      const nextOffset = offset + count < readableEntries.length ? offset + count : null;
       return success({
         path: displayPath(resolution),
         ...pathMetadata(resolution),
         entries: entries.slice(0, count),
         offset,
         nextOffset,
-        totalEntries: rawEntries.length,
+        totalEntries: readableEntries.length,
+        ...(resolution.resolvedRootType === "installed_engine" ? { omittedByPathPolicy } : {}),
         truncated: nextOffset !== null,
         ...(count < entries.length ? { omissionReason: "response_budget" } : {}),
       });
@@ -141,10 +158,12 @@ function createReadCapabilities(context) {
     const requestedEnd = clamp(args.endLine, start, start, Math.max(start, lines.length));
     const maximumEnd = Math.min(requestedEnd, start + 3999, lines.length);
     const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const numbered = args.lineNumbers !== false;
     const makePayload = (end) => success({
       path: displayPath(resolution),
       ...pathMetadata(resolution),
-      content: lines.slice(start - 1, end).join("\n"),
+      content: (numbered ? numberLines(lines.slice(start - 1, end), start) : lines.slice(start - 1, end)).join("\n"),
+      ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
       startLine: start,
       endLine: end,
       totalLines: lines.length,
@@ -195,11 +214,13 @@ function createReadCapabilities(context) {
     if (!window.ok) return window;
     const { symbol, allLines, start, end, candidateCount } = window;
     const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const numbered = args.lineNumbers !== false;
     const makePayload = returnedEnd => success({
       path: displayPath(resolution),
       symbol,
       ...pathMetadata(resolution),
-      content: allLines.slice(start - 1, returnedEnd).join("\n"),
+      content: (numbered ? numberLines(allLines.slice(start - 1, returnedEnd), start) : allLines.slice(start - 1, returnedEnd)).join("\n"),
+      ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
       startLine: start,
       endLine: returnedEnd,
       requestedEndLine: end,

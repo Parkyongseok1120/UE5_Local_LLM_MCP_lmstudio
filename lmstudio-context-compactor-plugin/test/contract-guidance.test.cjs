@@ -58,7 +58,7 @@ function fixture(t, markdown) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "contract-guidance-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, "unreal.md"), markdown);
-  const data = { schemaVersion: 1, revision: 7, validatedEngineVersions: ["5.8"], contracts: [
+  const data = { schemaVersion: 1, engine: "unreal", revision: 7, validatedEngineVersions: ["5.8"], contracts: [
     { id: "ue.sample", kind: "engine_fact", statement: "Sample fact.", guidanceRefs: ["unreal.md#a", "34_Rag.md"],
       evidenceRefs: [{ path: "Engine/Source/A.h", symbol: "A", line: 3 }, { path: "Engine/Source/B.h", symbol: "B", line: 4 }] }] };
   return { root, data, sync: () => syncContractSummaries(root, data).get("unreal.md") };
@@ -110,9 +110,9 @@ test("a validated engine puts the contract facts into the final model input", as
   assert.match(lifecycle.assembled.history.toString(), /ue\.actor\.lifecycle/);
 });
 
-test("other or unknown engine versions, Off and an exhausted budget leave the facts out", async () => {
+test("other-major or unknown engine versions, Off and an exhausted budget leave the facts out", async () => {
   const f = budgetFixture(body => Math.ceil(body.length / 20));
-  for (const version of ["5.7.4", "5.4", undefined]) {
+  for (const version of ["4.27.2", "6.0.0", undefined]) {
     const candidates = focusedGuidanceCandidates("multiplayer", scope, snapshotFor(version));
     assert.ok(candidates.every(c => !c.ids.includes("unreal-networking/engine-defaults")), String(version));
     const result = await f.admit(candidates);
@@ -160,7 +160,7 @@ test("auto mode admits the verified contract pack beside the engine pack, withou
   assert.ok(designCompile.includes("debugging/verification"));
   for (const mode of ["multiplayer", "lifecycle", "design", "debugging"]) {
     assert.ok(ids(mode, "5.8.2").length <= 6);
-    assert.ok(!ids(mode, "5.7.4").some(id => sectionOf(id).applicability.engineVersions?.includes("5.8")), mode);
+    assert.ok(!ids(mode, "4.27.2").some(id => sectionOf(id).applicability.engineVersions?.includes("5.8")), mode);
   }
 });
 
@@ -177,7 +177,55 @@ test("core requests receive the claim policies as their engine pack", () => {
 test("a closed version gate is named in the omission reasons", () => {
   const reasons = (mode, version) => autoGuidanceCandidates(mode, undefined, scope, snapshotFor(version))[0].omissionReasons || [];
   assert.ok(reasons("multiplayer", undefined).includes("contract_sections_version_unverified"));
-  assert.ok(reasons("lifecycle", "5.7.4").includes("contract_sections_engine_version_unvalidated"));
+  assert.ok(reasons("lifecycle", "4.27.2").includes("contract_sections_engine_version_unvalidated"));
+  assert.ok(!reasons("lifecycle", "4.27.2").includes("contract_sections_engine_version_unvalidated_annotated"));
   assert.ok(!reasons("multiplayer", "5.8.2").some(r => r.startsWith("contract_sections_")));
   assert.ok(!reasons("debugging", undefined).some(r => r.startsWith("contract_sections_")));
+});
+
+test("a same-major unvalidated engine gets the contract facts annotated, not omitted", async () => {
+  const f = budgetFixture(body => Math.ceil(body.length / 20));
+  for (const version of ["5.3.2", "5.7.4", "5.9"]) {
+    const [first] = autoGuidanceCandidates("lifecycle", undefined, scope, snapshotFor(version));
+    assert.ok(first.ids.includes("unreal/lifetime"), version);
+    assert.ok(first.omissionReasons.includes("contract_sections_engine_version_unvalidated_annotated"), version);
+    assert.ok(!first.omissionReasons.includes("contract_sections_engine_version_unvalidated"), version);
+    const result = await f.admit([first]);
+    const input = result.assembled.history.toString();
+    assert.ok(input.includes(`[unvalidated for unreal ${version}; validated on ${contracts.validatedEngineVersions.join(", ")}]`), version);
+    assert.ok(input.includes("ue.actor.lifecycle"), version);
+  }
+  const validated = autoGuidanceCandidates("lifecycle", undefined, scope, snapshotFor("5.8.1"))[0];
+  assert.ok(!(validated.omissionReasons || []).includes("contract_sections_engine_version_unvalidated_annotated"));
+  const lifetime = validated.instruction.split("[reference id=unreal/lifetime ")[1].split("[reference id=")[0];
+  assert.doesNotMatch(lifetime, /\[unvalidated for/);
+});
+
+test("policy-only summary blocks carry no engine version label; engine-fact blocks do", () => {
+  const sourceOf = id => sectionOf(id).text;
+  assert.doesNotMatch(sourceOf("unreal/verification"), /소스 기준/);
+  assert.match(sourceOf("unreal/verification"), /프로젝트 정책 unreal_contracts@/);
+  assert.match(sourceOf("unreal/lifetime"), /엔진 계약 unreal_contracts@\d+ \(UE 5\.8 소스 기준/);
+});
+
+test("catalogue engineVersions must equal the contract file's validatedEngineVersions", () => {
+  const { renderBundle, loadContractSets } = require("../scripts/build-design-guidance.cjs");
+  const sets = loadContractSets(path.join(repo, "config"));
+  assert.ok(sets.length >= 1 && sets.every(set => typeof set.engine === "string"));
+  assert.doesNotThrow(() => renderBundle(docRoot, sets));
+  const drifted = JSON.parse(JSON.stringify(sets));
+  drifted.find(set => set.engine === "unreal").validatedEngineVersions = ["5.9"];
+  assert.throws(() => renderBundle(docRoot, drifted), /differ from unreal contract validatedEngineVersions/);
+  assert.doesNotThrow(() => renderBundle(docRoot, []));
+});
+
+test("the contract loader accepts any number of <engine>_contracts.json files and rejects mislabelled ones", t => {
+  const { loadContractSets } = require("../scripts/build-design-guidance.cjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "contract-sets-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.deepEqual(loadContractSets(dir), []);
+  fs.writeFileSync(path.join(dir, "unity_contracts.json"), JSON.stringify({ engine: "unity" }));
+  assert.equal(loadContractSets(dir).length, 1);
+  fs.writeFileSync(path.join(dir, "unreal_contracts.json"), JSON.stringify({ engine: "unity" }));
+  assert.throws(() => loadContractSets(dir), /must declare its own engine/);
 });

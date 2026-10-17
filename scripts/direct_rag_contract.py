@@ -13,6 +13,7 @@ from direct_rag_request_bounds import (
     MAX_QUERY_CHARS, MAX_REPEAT_RECEIPT_CHARS, MAX_SYMBOL_HINT_CHARS,
     bounded_filter_schema, bounded_string_schema, max_chars_schema, project_selector_schema,
 )
+from direct_rag_chunk_read import MAX_CHUNK_ID_CHARS
 from rag_modes import MODE_ENUM
 
 DIRECT_RAG_TOOL_NAMES: tuple[str, ...] = (
@@ -49,12 +50,12 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         "type": "string",
         "enum": ["compact", "medium", "large", "full"],
         "default": "compact",
-        "description": "Raise only after truncation.",
+        "description": "Raise after truncation.",
     }
     definitions = [
         {
             "name": "unreal_get_active_project",
-            "description": "Shared active .uproject and its paths.",
+            "description": "Shared active .uproject, paths.",
             "inputSchema": _schema({}),
         },
         {
@@ -69,10 +70,12 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "unreal_rag_search",
-            "description": "Ranked index evidence; not a preflight: a known file's direct read is authoritative.",
+            "description": "Ranked index evidence; not a preflight: a known file's direct read is authoritative. chunkId pages a match.",
             "inputSchema": _schema(
                 {
                     "query": bounded_string_schema(MAX_QUERY_CHARS, min_length=1),
+                    "chunkId": bounded_string_schema(MAX_CHUNK_ID_CHARS),
+                    "offset": {"type": "integer"},
                     "top_k": {
                         "type": "integer",
                         "minimum": 1,
@@ -104,10 +107,9 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
                     "maxChars": max_chars_schema(),
                     "repeatReceipt": {
                         **bounded_string_schema(MAX_REPEAT_RECEIPT_CHARS),
-                        "description": "Echo for a short unchanged reply.",
+                        "description": "Echo for unchanged reply.",
                     },
                 },
-                ("query",),
             ),
         },
         {
@@ -150,8 +152,7 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "unreal_rag_refresh",
             "description": (
-                "Rebuild stale active-project index. Editor launches only for "
-                "editor_metadata/all with allowEditorLaunch=true."
+                "Rebuild stale active-project index; Editor needs allowEditorLaunch."
             ),
             "inputSchema": _schema(
                 {
@@ -171,7 +172,7 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "unreal_rag_capabilities",
-            "description": "Server boundary and index status.",
+            "description": "Server and index status.",
             "inputSchema": _schema({}),
         },
     ]

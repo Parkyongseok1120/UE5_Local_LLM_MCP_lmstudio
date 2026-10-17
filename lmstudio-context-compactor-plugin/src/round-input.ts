@@ -11,7 +11,7 @@ import { FIRST_CONSUMER_RAW_GIT_MAX_CHARS, MIN_FINAL_OUTPUT_TOKENS, RESEARCH_REC
 import { READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION } from "./execution-instructions";
 import { readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
-import { autoGuidanceCandidates, designGuidanceCandidates, focusedGuidanceCandidates, type GuidanceCandidate, type GuidanceDocument } from "./design-guidance";
+import { autoGuidanceCandidates, designGuidanceCandidates, focusedGuidanceCandidates, selectDesignGuidance, type GuidanceCandidate, type GuidanceDocument } from "./design-guidance";
 import { selectGuidanceTopics, type GuidanceIntent } from "./guidance-topic-selection";
 import type { ToolScope } from "./tool-scope";
 import { referenceGuidanceScope } from "./reference-context";
@@ -271,7 +271,13 @@ export async function prepareRoundInput(options: RoundInputOptions) {
           selection = selectGuidanceTopics(options.guidanceIntent || { primary: "core", reason: "objective_completeness_unknown" }, snapshot);
           candidates = selection.omitted ? [] : autoGuidanceCandidates(selection.primary, selection.supplement, guidanceScope, snapshot);
         } else candidates = focusedGuidanceCandidates(config.designGuidanceMode, guidanceScope, snapshot);
-      } else if (!focused) candidates = designGuidanceCandidates(options.guidanceDocuments || []);
+      } else if (!focused) {
+        const snapshot = evidenceManager.referenceSnapshot(workingHistory);
+        candidates = designGuidanceCandidates(options.guidanceScope
+          ? selectDesignGuidance(config.designGuidanceMode, referenceGuidanceScope(options.guidanceScope, snapshot),
+            undefined, snapshot.applicability)
+          : options.guidanceDocuments || []);
+      }
     } catch { ctl.guardAbort(); }
     const guidance = await contextManager.addOptionalReferences(assembledInput,
       candidates,
@@ -283,6 +289,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       mode: config.designGuidanceMode, delivery: config.designGuidanceDelivery,
       configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
       effectiveDelivery: focused ? "focused" : "documents", objectiveFingerprint,
+      omissionReasons: candidates[0]?.omissionReasons || [],
       outcome: guidance.telemetry.reason === "included" ? "included" : "omitted",
       ...(selection ? { primaryTopic: selection.primary, supplementTopic: selection.supplement,
         selectionReasonCodes: [...selection.reasons, ...(candidates[0]?.omissionReasons || [])],

@@ -56,6 +56,10 @@ ANSWERS = {
 }
 
 
+# Engine-source-backed regressions; these exercise the rubric, not a model benchmark.
+ANSWERS.update({'actor_damage_returns_processed_amount': ('AActor는 ActualDamage = DamageAmount로 시작하고 InternalTakePointDamage 기본 구현은 전달된 Damage를 반환한다. APawn은 ShouldTakeDamage 검사를 하고 Super는 피해 이벤트 통지도 수행한다. 무조건 0이라는 전제는 틀리므로 Super를 없애지 않는다.', 'Super::TakeDamage는 항상 0을 반환한다. 헬스 컴포넌트가 없어서 전투가 불가능하니 Actual = Damage로 교체한다.'), 'spawned_controller_initializes_player_state': ('서버/Standalone의 PostInitializeComponents에서 InitPlayerState를 호출해 GameMode의 PlayerStateClass로 생성한다. 수동 스폰도 이 경로를 거치며 생성 실패에 대한 널 가드는 별도로 검토한다.', '로그인이 없으므로 PlayerState는 반드시 null이다. 모든 테스트가 크래시한다.'), 'standalone_game_instance_creates_world': ('InitializeStandalone은 WorldContext를 생성하고 CreateWorld로 임시 월드를 만든 뒤 SetCurrentWorld로 연결한다. 이후 추가 초기화 성공 여부는 별도 확인 대상이다.', 'InitializeStandalone은 월드를 생성하지 않는다. GetWorld가 null이라 반드시 크래시한다.'), 'timer_fixture_frame_counter_has_purpose': ('HasBeenTickedThisFrame은 LastTickedFrame과 GFrameCounter를 비교해 한 프레임의 중복 타이머 Tick을 막는다. 이 동기 fixture에서는 증가 이유가 있으므로 무조건 삭제하지 않는다. 전역 상태의 테스트 격리와 대체 구동 방법을 검증해야 한다.', 'GFrameCounter 증가는 불필요하니 즉시 삭제한다. World::Tick만 반복하면 타이머는 동일하게 동작한다.'), 'set_player_state_does_not_set_owner': ('SetPlayerState는 PlayerState 참조 대입을 담당한다. InitPlayerState는 별도로 SpawnInfo.Owner = this를 설정하므로 수동 생성은 이 소유권을 누락한다. 엔진 초기화 경로를 재사용하거나 동등한 Owner 설정을 확인한다.', 'SetPlayerState는 Owner를 자동으로 설정하므로 동일하다.'), 'server_client_rpc_targets_owner': ('GetFunctionCallspace는 원격 소유 연결이면 Client RPC를 해당 소유 클라이언트로 전송하고 로컬 소유자는 로컬 실행 경로를 사용한다. NetMulticast와 다르며 연결/복제 조건도 확인해야 한다.', 'Client RPC는 모든 클라이언트에 전송된다. 소유자 전용으로 만들려면 별도 원격 이벤트 코드를 작성해야 한다.'), 'repeated_die_checks_idempotence': ('마지막 DeathCount == 1 assertion과 Dead 가드를 보면 중복 호출에도 한 번만 집계되는 멱등성을 검증하는 목적을 읽을 수 있다. TakeDamage 경로의 동작은 별도 실행 근거로 확인한다.', '이 테스트는 의도적으로 은폐하는 코드다. Die 수동 호출을 삭제해야 한다.')})
+
+
 def test_case_set_is_well_formed_and_linked_to_contracts():
     contracts = unreal_contracts.load_contracts()
     assert CASE_SET["contractRevision"] == unreal_contracts.contract_revision(contracts)
@@ -114,3 +118,11 @@ def test_cli_accepts_the_case_set(tmp_path):
                                           answers=str(answers), answers_dir="", case_id=[], threshold=0.75,
                                           print_prompts=False, verbose=False))
     assert code == 0
+
+
+def test_engine_regressions_record_version_and_source_locations():
+    regressions = [c for c in CASES.values() if "harness_regression" in c["category"]]
+    assert len(regressions) == 7
+    for case in regressions:
+        assert case["engineVersion"] == "5.7"
+        assert re.search(r"\.(?:cpp|h):\d+", case["origin"])

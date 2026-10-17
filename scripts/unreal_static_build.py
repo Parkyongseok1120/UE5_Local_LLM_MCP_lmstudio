@@ -131,12 +131,20 @@ def validate_enhanced_input(path: Path, text: str, root: Path, build_text: str) 
     for match in re.finditer(r"\b(?:PlayerInputComponent|InputComponent)\s*->\s*BindAction\s*\(", text):
         findings.append(
             Finding(
-                "error",
+                "warning",
                 rel,
                 line_number(text, match.start()),
                 "DIRECT_BIND_ACTION",
-                "Do not call InputComponent->BindAction. For legacy input use InputComponent->BindKey / "
-                "BindAxis; for Enhanced Input cast to UEnhancedInputComponent and BindAction with ETriggerEvent.",
+                "InputComponent->BindAction(FName, ...) is the legacy action-mapping API and is valid in UE 5.x. "
+                "If this project uses Enhanced Input, cast to UEnhancedInputComponent and bind a UInputAction with "
+                "ETriggerEvent instead; review which input system the project actually uses.",
+                metadata={
+                    "ruleId": "DIRECT_BIND_ACTION",
+                    "analysisKind": "lexical",
+                    "confidence": "low",
+                    "limitations": ["the project's active input system is not known to this check",
+                                    "legacy BindAction remains a valid engine API"],
+                },
             )
         )
     uses_enhanced = any(

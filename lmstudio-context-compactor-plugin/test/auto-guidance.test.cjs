@@ -117,3 +117,22 @@ test("all activated contract packs carry the short common API, lifetime and comp
     for (const c of autoGuidanceCandidates(topic, undefined, scope, emptyReferenceSnapshot()))
       assert.ok(c.instruction.includes(proof.text));
 });
+
+test("auto mode annotates same-major unvalidated engines and omits other majors or unknown versions", () => {
+  const snapshot = version => { const s = emptyReferenceSnapshot(); s.applicability.engineVersion = version; return s; };
+  const first = (version, mode = "lifecycle") => autoGuidanceCandidates(mode, undefined, scope, snapshot(version))[0];
+  const annotated = first("5.3.0");
+  assert.ok(annotated.ids.includes("unreal/lifetime"));
+  assert.match(annotated.instruction, /\[unvalidated for unreal 5\.3\.0; validated on 5\.8\]/);
+  assert.ok(annotated.omissionReasons.includes("contract_sections_engine_version_unvalidated_annotated"));
+  for (const version of ["4.27.2", undefined]) {
+    const omitted = first(version);
+    assert.ok(!omitted.ids.includes("unreal/lifetime"), String(version));
+    assert.ok(omitted.omissionReasons.some(r => /^contract_sections_(engine_version_unvalidated|version_unverified)$/.test(r)), String(version));
+  }
+  const unity = { engine: "unity", source: "config" };
+  const unitySnapshot = version => { const s = emptyReferenceSnapshot(); s.applicability.engineVersion = version; return s; };
+  const unityFirst = autoGuidanceCandidates("lifecycle", undefined, unity, unitySnapshot("6000.3.1f1"))[0];
+  assert.ok(unityFirst.ids.includes("unity/lifetime"));
+  assert.match(unityFirst.instruction, /\[unvalidated for unity 6000\.3\.1f1; validated on 6000\.0\]/);
+});

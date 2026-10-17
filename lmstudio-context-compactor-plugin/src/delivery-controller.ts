@@ -1,10 +1,11 @@
+import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import {
   Chat,
   ChatMessage
 } from "@lmstudio/sdk";
 import type { DirectConfig, ExecutionOutcome, FinalizationTrigger } from "./execution-contracts";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
-import { containsUnresolvedToolIntent, hasUnexecutedRawToolSyntax, visibleTextFromMessages } from "./raw-tool-intent";
+import { hasRawToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { coverageRange, observationRecords, sourceObservationFailed } from "./evidence-manager";
 import type { RemoteToolLike } from "./tool-capability-registry";
 import { renderTaskProgress } from "./continuity-memory.js";
@@ -168,7 +169,7 @@ export function classifyOutputLimitStage(
 ): OutputLimitStage | undefined {
   if (captured.finishReason !== "maxPredictedTokensReached") return undefined;
   if (captured.toolRequestFailure) return "tool_arguments";
-  const finalRawToolIntent = containsUnresolvedToolIntent(visibleTextFromMessages(captured.messages), captured.messages);
+  const finalRawToolIntent = hasRawToolIntent(visibleTextFromMessages(captured.messages), captured.messages);
   if ((captured.predictionUsage?.rawToolIntentCandidate === true || finalRawToolIntent)
     && !captured.messages.some(message => message.getToolCallRequests().length > 0)) {
     return "tool_arguments";
@@ -207,7 +208,7 @@ export function canRecoverOutputLimit(
   return classifyOutputLimitStage(captured, false, toolGeneration) === "visible_report"
     && (Boolean(reportText) || Number(captured.predictionUsage?.visibleChars || 0) > 0)
     && captured.predictionUsage?.rawToolIntentCandidate !== true
-    && !containsUnresolvedToolIntent(reportText, captured.messages);
+    && !hasRawToolIntent(reportText, captured.messages);
 }
 
 export function classifyFinalDelivery(
@@ -221,7 +222,7 @@ export function classifyFinalDelivery(
     rejectionReason: phaseTimedOut ? "final_timeout"
       : captured.failure !== undefined ? "generation_failure"
         : captured.finishReason === "maxPredictedTokensReached" ? "max_predicted_tokens" : "empty_visible_output" };
-  const unresolvedToolIntent = containsUnresolvedToolIntent(text, messages) || hasUnexecutedRawToolSyntax(text);
+  const unresolvedToolIntent = hasRawToolIntent(text, messages);
   let deliveryState: FinalDeliveryState;
   let rejectionReason: string | undefined;
   if (captured.finishReason === "maxPredictedTokensReached") {
@@ -278,8 +279,8 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
     }
     const kind = String(value.kind || "");
     let fact = "";
-    const nativeFile = record.trustedRead && value.provider === "mcp/unreal-agent"
-      && ["read_file", "read_file_range"].includes(String(value.toolName))
+    const nativeFile = record.trustedRead && value.provider === ENGINE_PROFILES.unreal.fileProvider
+      && ENGINE_PROFILES.unreal.reportReadTools.includes(String(value.toolName))
       && typeof value.path === "string" && typeof value.content === "string";
     if (kind === "workspace_file_observation" || nativeFile) {
       const status = String(value.resultStatus || value.status || "");

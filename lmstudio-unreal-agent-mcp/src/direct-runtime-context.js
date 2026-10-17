@@ -9,6 +9,7 @@ const {
   resolveProjectSelection,
 } = require("./unreal-detect.js");
 const { resolveReadPath, isWithin } = require("./read-path-resolver.js");
+const { createEngineSourceResolver } = require("./engine-source-access.js");
 const { DirectRepeatCache } = require("./direct-repeat-cache.js");
 const { DEFAULT_MAX_RESPONSE_CHARS, renderModelJson, toMcpResult } = require("./direct-response.js");
 const { clamp, relativeSlash } = require("./direct-runtime-shared.js");
@@ -67,8 +68,22 @@ function createDirectRuntimeContext(options = {}) {
     return path.resolve(selection.selected.projectPath);
   }
 
-  async function resolveToolPath(input, projectSelector = "") {
+  // Read-only engine source access; mutationResolution never receives it.
+  const resolveEngine = options.resolveEngineSource || createEngineSourceResolver({
+    workspaceRoot, configPath, env, hostPlatform: options.hostPlatform,
+  });
+
+  // Paths that may be executed in or written near never include engine source.
+  async function resolveWorkingPath(input, projectSelector = "") {
     return resolveReadPath(input, { workspaceRoot, activeProject: await resolveCallProject(projectSelector) });
+  }
+
+  async function resolveToolPath(input, projectSelector = "") {
+    return resolveReadPath(input, {
+      workspaceRoot,
+      activeProject: await resolveCallProject(projectSelector),
+      resolveEngine,
+    });
   }
 
   async function mutationResolution(input, projectSelector = "") {
@@ -182,6 +197,7 @@ function createDirectRuntimeContext(options = {}) {
     repeatCache,
     resolveCallProject,
     resolveToolPath,
+    resolveWorkingPath,
     runtimeOwner,
     stateRoot,
     workspaceRoot,

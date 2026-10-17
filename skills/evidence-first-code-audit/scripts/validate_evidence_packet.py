@@ -27,6 +27,7 @@ from evidence_packet_contract import (
     SEVERITIES,
     VERDICTS,
     VERIFIED_PROOF_LEVELS,
+    validation_result_summary,
     validation_scope_metadata,
 )
 
@@ -115,7 +116,7 @@ def validate_packet(packet: Any) -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
     if not isinstance(packet, dict):
-        return {"ok": False, **validation_scope_metadata(), "errors": ["packet must be a JSON object"], "warnings": []}
+        return {"ok": False, "summary": validation_result_summary(False), **validation_scope_metadata(), "errors": ["packet must be a JSON object"], "warnings": []}
 
     mode = str(packet.get("mode") or "")
     if mode not in MODES:
@@ -251,6 +252,7 @@ def validate_packet(packet: Any) -> dict[str, Any]:
 
     return {
         "ok": not errors,
+        "summary": validation_result_summary(not errors),
         **validation_scope_metadata(),
         "mode": mode,
         "claimCount": len(claims),

@@ -77,3 +77,19 @@ test("real external Roslyn: defines, partial compile error, declarations, bindin
   assert(index.uses.some(u => u.to === field.id)); assert(index.relations.some(r => r.kind === "implements_member")); assert(index.relations.some(r => r.kind === "inherits" && r.to.includes("Game.Base"))); assert(!index.symbols.some(s => s.name === "WrongBranch"));
   fs.rmSync(root, { recursive: true }); // Exact mkdtemp-owned fixture only.
 });
+test("symbol queries never claim absence and name the assemblies that were searched", async () => {
+  const { Symbols } = require("../src/symbols");
+  const client = new Symbols({}, { call: async () => ({}) }, { UNITY_DOTNET: "configured", UNITY_SYMBOL_WORKER: "configured" });
+  client.index = { indexVersion: "v1", manifestId: "m", compilationId: "c", editorSessionId: "s", domainGeneration: 1, observedAt: "t",
+    scope: ["Game", "Game.Tests"], completeWithinScope: true, compilerVersion: "x", omissions: [], diagnostics: [], versions: [],
+    symbols: [{ name: "Known", id: "Game|T:Known" }], uses: [], relations: [], referenceCoverage: {} };
+  const miss = await client.call({ action: "find", indexVersion: "v1", name: "UnityEngine.Rigidbody" });
+  assert.equal(miss.total, 0);
+  assert.equal(miss.absenceVerified, false);
+  assert.deepEqual(miss.searchedAssemblies, ["Game", "Game.Tests"]);
+  assert.ok(miss.limitations.some(text => /unselected assemblies and engine\/package DLL symbols are not find targets/.test(text)));
+  const hit = await client.call({ action: "find", indexVersion: "v1", name: "Known" });
+  assert.equal(hit.total, 1); assert.equal(hit.absenceVerified, false);
+  const diagnostics = await client.call({ action: "diagnostics", indexVersion: "v1" });
+  assert.equal(diagnostics.absenceVerified, false); assert.equal(diagnostics.limitations, undefined);
+});

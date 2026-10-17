@@ -20,6 +20,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
+from engine_definition_evidence import DefinitionBudget, attach_definition_candidates
 from workspace_paths import (
     ascii_windows_fold,
     canonical_absolute_path_identity,
@@ -921,14 +922,14 @@ def _type_candidates(index: dict[str, list[Path]], type_name: str) -> list[Path]
     return [p for _, name in ranked[:_CANDIDATES_PER_TYPE] for p in sorted(index[name], key=str)]
 
 
-def _read_bounded_header(header: Path, root: Path, budget: int) -> tuple[bytes, bool] | str:
-    """Read a header prefix with identity/stability checks; a reason on failure."""
+def _read_bounded_header(header: Path, root: Path, budget: int, limit: int = 262144) -> tuple[bytes, bool] | str:
+    """Read a source prefix with identity/stability checks; a reason on failure."""
     if not _contained(header, root):
         return "containment"
     try:
         with header.open("rb") as stream:
             before = os.fstat(stream.fileno())
-            raw = stream.read(min(262144, budget))
+            raw = stream.read(min(limit, budget))
             after = os.fstat(stream.fileno())
         current = header.stat()
     except OSError:
@@ -1028,6 +1029,15 @@ def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str,
         for parent in parents:
             edges.append([type_name, parent])
             queue.append((parent, chain + [parent]))
+    # Declaration -> implementation: share the same deadline, file and byte budget.
+    if results:
+        budget = DefinitionBudget(deadline=deadline, max_files=_INHERITANCE_MAX_FILES, max_bytes=_READ_LIMIT_BYTES,
+                                  inspected=inspected, read_bytes=read_bytes)
+        attach_definition_candidates(results, root, budget, read_source=_read_bounded_header, lexical=_lexical_source)
+        inspected, read_bytes = budget.inspected, budget.read_bytes
+        reasons |= budget.reasons
+        for row in results:
+            reasons.update(row.get("definitionSearch", {}).get("reasons", []))
     declaring = sorted({row["declaredIn"] for row in results})
     limited = reasons & {"deadline", "type_limit", "file_limit", "depth_limit", "read_limit"}
     searched = "not_applicable" if not owner else (

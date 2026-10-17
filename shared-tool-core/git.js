@@ -4,8 +4,8 @@ const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
-const { bounded, fail, hash } = require("./files");
-const { resolveCanonicalAbsolutePath: canonical, canonicalAbsolutePathIdentity: identity } = require("../lmstudio-unreal-agent-mcp/src/filesystem-path-identity");
+const { DEFAULT_BYTE_BUDGET, bounded, fail, hash } = require("./files");
+const { resolveCanonicalAbsolutePath: canonical, canonicalAbsolutePathIdentity: identity } = require("./filesystem-path-identity");
 const TTL = 300000, CACHE_BYTES = 16 * 1024 * 1024;
 const MIB = 1024 * 1024;
 function envInteger(name, fallback, min, max) {
@@ -183,7 +183,7 @@ class VersionControl {
     // Large immutable changed-file lists already expose signed cursors and
     // pageHasMore. Keep those results small enough for a following model
     // input without changing the default budget for source text or diffs.
-    const budget = a.byteBudget ?? (item.facts.action === "changed_files" ? 4096 : 32768);
+    const budget = a.byteBudget ?? (item.facts.action === "changed_files" ? 4096 : DEFAULT_BYTE_BUDGET);
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) fail("invalid_arguments", "limit must be 1..200");
     let count = Math.min(limit, item.rows.length - offset);
     let includeTiming = true;

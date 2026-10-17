@@ -36,7 +36,22 @@ test('version provenance and conflicts survive display omission and disconnect',
   assert.equal(s.applicability.versions.saved_project,'6000.1.0f1');
   f.ingest('unity_status',u({connection:'disconnected'})); s=f.snapshot();
   assert.equal(s.applicability.versions.runtime,undefined);
-  assert.equal(s.applicability.versions.saved_project,'6000.1.0f1'); assert.equal(s.applicability.engineVersion,undefined);
+  // Editor closed: the saved ProjectVersion.txt is still an observation, reported as the project file.
+  assert.equal(s.applicability.versions.saved_project,'6000.1.0f1');
+  assert.equal(s.applicability.engineVersion,'6000.1.0f1'); assert.equal(s.applicability.engineVersionSource,'project_file');
+  assert.equal(s.applicability.engineVersionNote,'project_file_editor_not_observed'); assert.equal(s.applicability.versionConflict,false);
+});
+
+test('an offline Editor still lets the saved project version select Unity guidance; a live Editor that disagrees is a conflict',()=>{
+  const f=fixture(unity);
+  f.ingest('unity_status',u({connection:'disconnected'}));
+  f.ingest('read_file',read('ProjectSettings/ProjectVersion.txt','m_EditorVersion: 6000.0.44f1'));
+  let s=f.snapshot();
+  assert.equal(s.applicability.engineVersion,'6000.0.44f1'); assert.equal(s.applicability.engineVersionSource,'project_file');
+  f.ingest('unity_status',u({connection:'connected',editorSessionId:'s',domainGeneration:1,editorVersion:'6000.3.1f1'}));
+  s=f.snapshot();
+  assert.equal(s.applicability.versionConflict,true); assert.equal(s.applicability.engineVersion,undefined);
+  assert.equal(s.applicability.versions.runtime,'6000.3.1f1'); assert.equal(s.applicability.versions.saved_project,'6000.0.44f1');
 });
 
 test('descriptor observation invalidates engine applicability and same-batch order cannot restore it',()=>{
@@ -433,4 +448,40 @@ test("Unreal rollback incomplete removes old file facts until a later real read"
   assert.equal(f.snapshot().items.length, 0);
   f.ingest("read_file", observed);
   assert.ok(f.snapshot().items[0].data.formatting);
+});
+
+test("static validation engine identity supplies Unreal applicability only when Build.version was observed", () => {
+  const f = fixture();
+  const target = { ok: true, skipped: false, projectRoot: "C:/Projects/Game" };
+  const identity = (extra = {}) => ({ status: "observed", engine: "unreal", source: "build_version_file", engineRoot: "C:/UE_5.3",
+    version: "5.3.2", hashScope: "file", sha256: "c".repeat(64), ...extra });
+  const validate = (engineIdentity, id) => f.ingest("static_validate_project", { ...target, analysis: { engineIdentity } }, {}, id);
+  validate({ status: "unknown", reason: "no engine" }, "s1");
+  assert.equal(f.snapshot().applicability.engineVersion, undefined);
+  validate(identity({ source: "folder_name_inferred" }), "s2");
+  assert.equal(f.snapshot().applicability.engineVersion, undefined);
+  validate(identity(), "s3");
+  const applicability = f.snapshot().applicability;
+  assert.equal(applicability.engineVersion, "5.3.2");
+  assert.equal(applicability.engineVersionSource, "installed_engine_source");
+});
+
+test("the newest engine-source observation, lookup or static validation, defines Unreal applicability", () => {
+  const f = fixture();
+  f.ingest("unreal_symbol_lookup", { ok: true, canonicalProject: unreal.projectIdentity, sourceMode: "engine_local",
+    observedEngineIdentity: { status: "observed", engineRoot: "C:/UE_5.8", version: "5.8.0", hashScope: "file", sha256: "b".repeat(64) } }, {}, "l1", "mcp/unreal-rag");
+  f.ingest("static_validate_project", { ok: true, skipped: false, projectRoot: "C:/Projects/Game", analysis: { engineIdentity: {
+    status: "observed", source: "build_version_file", engineRoot: "C:/UE_5.3", version: "5.3.2", hashScope: "file", sha256: "c".repeat(64) } } }, {}, "s1");
+  assert.equal(f.snapshot().applicability.engineVersion, "5.3.2");
+});
+
+test("numbered reads still yield version and package metadata from the plain file text", () => {
+  const f = fixture(unity);
+  f.ingest("read_file", read("ProjectSettings/ProjectVersion.txt", "1\tm_EditorVersion: 6000.0.44f1\n2\tm_Other: 1",
+    { lineNumbers: true, text: "1\tm_EditorVersion: 6000.0.44f1\n2\tm_Other: 1" }));
+  assert.equal(f.snapshot().applicability.engineVersion, "6000.0.44f1");
+  const packages = JSON.stringify({ dependencies: { "com.unity.netcode.gameobjects": { version: "2.7.1" } } }, null, 1);
+  const numberedLock = packages.split("\n").map((line, index) => `${index + 1}\t${line}`).join("\n");
+  f.ingest("read_file", read("Packages/packages-lock.json", numberedLock, { lineNumbers: true, text: numberedLock }));
+  assert.equal(f.snapshot().applicability.packages["com.unity.netcode.gameobjects"], "2.7.1");
 });

@@ -1,3 +1,4 @@
+import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import {
   Chat,
   ChatMessage,
@@ -72,7 +73,7 @@ export class EvidenceManager {
     const observations = saved.filter(o => o && typeof o.id === "string" && typeof o.fingerprint === "string"
       && Number.isSafeInteger(o.batch) && Array.isArray(o.items) && o.items.length <= 16
       && o.items.every((i: any) => i && typeof i.project === "string" && i.origin?.executionId && i.origin?.toolCallId
-        && ["mcp/unreal-agent", "mcp/unreal-rag", "mcp/unity-tools"].includes(i.origin?.provider)));
+        && ENGINE_PROVIDERS.includes(i.origin?.provider)));
     this.referenceState.observations = observations.map(o => ({ ...o, historical: true }));
     this.referenceState.batch = Math.max(0, ...observations.map(o => o.batch));
     this.referenceState.seen = new Set(observations.map(o => o.id));
@@ -132,10 +133,10 @@ export class EvidenceManager {
       for (const [ri, result] of message.getToolCallResults().entries()) {
         const request = pairs.matches.get(`${mi}:${ri}`);
         const tools = this.tools.filter(t => t.name === request?.name);
-        if (!request?.id || tools.length !== 1 || !(tools[0].pluginIdentifier === "mcp/unreal-agent"
-          && ["write_file", "replace_in_file", "apply_edit_bundle", "read_file", "read_file_range", "read_symbol"].includes(request.name)
-          || tools[0].pluginIdentifier === "mcp/unity-tools"
-          && ["patch_file", "create_file", "structured_data_patch", "read_file"].includes(request.name))) continue;
+        if (!request?.id || tools.length !== 1 || !(tools[0].pluginIdentifier === ENGINE_PROFILES.unreal.fileProvider
+          && ENGINE_PROFILES.unreal.changeEvidenceTools.includes(request.name)
+          || tools[0].pluginIdentifier === ENGINE_PROFILES.unity.fileProvider
+          && ENGINE_PROFILES.unity.changeEvidenceTools.includes(request.name))) continue;
         if (this.changeOrigins.size >= 2048) { this.changeOrigins.clear(); this.changesDisabled = true; break; }
         const key = changePairKey(request, result.content);
         this.changeOrigins.set(key, this.changeOrigins.has(key)

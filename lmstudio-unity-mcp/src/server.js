@@ -5,13 +5,13 @@ const jsonc = require("jsonc-parser");
 const { Server } = require("@modelcontextprotocol/sdk/server/index.js");
 const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js");
 const { ListToolsRequestSchema, CallToolRequestSchema } = require("@modelcontextprotocol/sdk/types.js");
-const { Files, bounded, fail } = require("../../shared-tool-core/files");
+const { DEFAULT_BYTE_BUDGET, Files, bounded, fail } = require("../../shared-tool-core/files");
 const { dataTools } = require("../../shared-tool-core/data");
 const { projectPolicy } = require("./project");
 const { BridgeClient } = require("./bridge-client");
 const { tools: legacyTools } = require("./catalog");
 const { workspaceToolDefinitions, createWorkspaceCapabilities, fileObservation } = require("../../shared-tool-core/workspace");
-const { canonicalAbsolutePathIdentity } = require("../../lmstudio-unreal-agent-mcp/src/filesystem-path-identity");
+const { canonicalAbsolutePathIdentity } = require("../../shared-tool-core/filesystem-path-identity");
 const { Symbols } = require("./symbols");
 const { VersionControl } = require("./version-control");
 const PROJECT_FILE_TOOLS = new Set([
@@ -88,7 +88,7 @@ function createRuntime(env = process.env, injectedBridge) {
         ...(args.operationId ? { operationId: args.operationId } : {}) };
       // Reserve the outcome envelope before any operation is dispatched.
       bounded({ ...responseScope, status: "outcome_unknown",
-        delivery: { status: "truncated", reason: "response_budget_exceeded", bodyOmitted: true } }, (args.byteBudget ?? 65536) - 128);
+        delivery: { status: "truncated", reason: "response_budget_exceeded", bodyOmitted: true } }, (args.byteBudget ?? DEFAULT_BYTE_BUDGET) - 128);
       let result;
       if (workspaceEnabled && (name === "workspace_status" || name.startsWith("git_"))) result = await workspace(name, args, { signal });
       else if (name === "unity_symbols") result = await symbols.call(args, { signal });
@@ -117,7 +117,7 @@ function createRuntime(env = process.env, injectedBridge) {
       if (PROJECT_FILE_TOOLS.has(name) && result && !result.errorCode) {
         result = { ...result, canonicalProjectRoot: policy.root, projectIdentity: policy.projectIdentity };
       }
-      return deliverResult(fileObservation(result), args.byteBudget ?? 65536, responseScope);
+      return deliverResult(fileObservation(result), args.byteBudget ?? DEFAULT_BYTE_BUDGET, responseScope);
     } catch (error) {
       if (name === "unity_status" && !["invalid_arguments", "project_scope_mismatch", "request_cancelled"].includes(error.code)) return { status: "observed", connection: "disconnected", projectIdentity: policy.projectIdentity, canonicalProjectRoot: policy.root,
         fileTools: "available", unityObjects: "unavailable", lastKnownSession: bridge.lastSession, reason: error.code || "bridge_unavailable" };

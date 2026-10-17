@@ -58,9 +58,59 @@ test("engine and package specific rules require comparable verified versions", (
   snapshot.applicability.packages["com.unity.netcode.gameobjects"] = "2.7.0-preview";
   assert.ok(!ids().includes("unity-networking/ngo"));
   snapshot = emptyReferenceSnapshot(); snapshot.applicability.engineVersion = "5.7.1";
-  assert.ok(select("lifecycle", snapshot)[0].ids.includes("unreal/timer"));
-  snapshot.applicability.engineVersion = "5.8.0";
+  const timer = select("lifecycle", snapshot)[0];
+  assert.ok(timer.ids.includes("unreal/timer"));
+  assert.doesNotMatch(textOf(timer, "unreal/timer"), /\[unvalidated for/);
+  snapshot.applicability.engineVersion = "6.0.0";
   assert.ok(!select("lifecycle", snapshot)[0].ids.includes("unreal/timer"));
+});
+
+function textOf(candidate, id) {
+  return candidate.instruction.split(`[reference id=${id} `)[1]?.split("[reference id=")[0] || "";
+}
+
+test("same-major unvalidated engine versions are delivered with an unvalidated annotation, other majors are omitted", () => {
+  const snapshot = emptyReferenceSnapshot();
+  snapshot.applicability.engineVersion = "5.8.0";
+  const [candidate] = select("lifecycle", snapshot);
+  assert.ok(candidate.ids.includes("unreal/timer"));
+  assert.match(textOf(candidate, "unreal/timer"), /\n\[unvalidated for unreal 5\.8\.0; validated on 5\.7\]\n/);
+  assert.doesNotMatch(textOf(candidate, "unreal/lifetime"), /\[unvalidated for/);
+  snapshot.applicability.engineVersion = "5.3.2";
+  const older = select("lifecycle", snapshot)[0];
+  assert.match(textOf(older, "unreal/timer"), /\[unvalidated for unreal 5\.3\.2; validated on 5\.7\]/);
+  for (const version of ["4.27.2", undefined]) {
+    snapshot.applicability.engineVersion = version;
+    const ids = select("lifecycle", snapshot)[0].ids;
+    assert.ok(!ids.includes("unreal/timer") && !ids.includes("unreal/lifetime"), String(version));
+  }
+});
+
+test("Unity 6000.x versions other than the validated one are annotated; other majors are omitted", () => {
+  const snapshot = emptyReferenceSnapshot();
+  for (const [version, included, annotated] of [["6000.0.44f1", true, false], ["6000.3.1f1", true, true],
+    ["2022.3.10f1", false, false], [undefined, false, false]]) {
+    snapshot.applicability.engineVersion = version;
+    const [candidate] = select("lifecycle", snapshot, "unity");
+    assert.equal(candidate.ids.includes("unity/lifetime"), included, String(version));
+    if (included) assert.equal(/\[unvalidated for unity/.test(textOf(candidate, "unity/lifetime")), annotated, String(version));
+  }
+  snapshot.applicability.engineVersion = "6000.3.1f1";
+  assert.match(textOf(select("lifecycle", snapshot, "unity")[0], "unity/lifetime"),
+    /\[unvalidated for unity 6000\.3\.1f1; validated on 6000\.0\]/);
+});
+
+test("package versions of the same major.minor family are annotated, other families omitted", () => {
+  const snapshot = emptyReferenceSnapshot();
+  const ngo = "com.unity.netcode.gameobjects";
+  for (const [version, included, annotated] of [["2.7.0", true, false], ["2.7.1", true, true], ["2.8.0", false, false], ["1.7.0", false, false]]) {
+    snapshot.applicability.packages = { [ngo]: version };
+    const [candidate] = select("multiplayer", snapshot, "unity");
+    assert.equal(candidate.ids.includes("unity-networking/ngo"), included, version);
+    if (included) {
+      assert.equal(textOf(candidate, "unity-networking/ngo").includes(`[unvalidated for ${ngo} ${version}; validated on 2.7.0]`), annotated, version);
+    }
+  }
 });
 
 test("ambiguous/tool-only engine scope uses common material and never arbitrary project paths", () => {

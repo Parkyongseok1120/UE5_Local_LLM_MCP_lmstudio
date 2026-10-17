@@ -34,6 +34,7 @@ export const modelNotes = require("./continuity-model-notes.js") as {
     { kind: "accepted_update"; note: ContinuityNote } | { kind: "explicit_clear"; note: null }
     | { kind: "rejected"; reason: string };
   historyKey(messages: Array<ChatMessage>, workingDirectory: string): string;
+  renderAvailableRefs(messages: Array<ChatMessage>, limit?: number, maxChars?: number): string;
   objectiveFingerprint(messages: Array<ChatMessage>): string;
   reconcileStoredNote(note: ContinuityNote, messages: Array<ChatMessage>,
     additionalVerifiedRefs?: Set<string>, options?: { objectiveFingerprint?: string; projectDescriptor?: string;

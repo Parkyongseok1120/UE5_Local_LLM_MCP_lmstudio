@@ -167,7 +167,7 @@ def test_builder_supports_package_import_used_by_release_ci() -> None:
 
 
 def _node_relative_require_closure(*entries: Path) -> set[str]:
-    pattern = re.compile(r'''require\(["'](\./[^"']+)["']\)''')
+    pattern = re.compile(r'''require\(["'](\.{1,2}/[^"']+)["']\)''')
     pending = [entry.resolve() for entry in entries]
     seen: set[Path] = set()
     while pending:

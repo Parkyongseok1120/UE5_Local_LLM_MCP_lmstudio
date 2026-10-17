@@ -258,7 +258,8 @@ function createFileMutationCapabilities(context) {
     });
     if (!prospective.ok) {
       return failure(
-        /occurrence mismatch/iu.test(prospective.error) ? "OCCURRENCE_MISMATCH" : "OLD_TEXT_NOT_FOUND",
+        prospective.errorCode
+          || (/occurrence mismatch/iu.test(prospective.error) ? "OCCURRENCE_MISMATCH" : "OLD_TEXT_NOT_FOUND"),
         prospective.error,
         {
           retryAllowed: true,

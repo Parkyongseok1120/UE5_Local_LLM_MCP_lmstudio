@@ -4,17 +4,20 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { readStableTextFile } = require("../lmstudio-unreal-agent-mcp/src/direct-file-snapshot");
-const { withPathLock } = require("../lmstudio-unreal-agent-mcp/src/write-locks");
-const { atomicWriteText, uniqueTempPath } = require("../lmstudio-unreal-agent-mcp/src/atomic-io");
-const { committedChange } = require("../lmstudio-unreal-agent-mcp/src/direct-change-evidence");
+const { readStableTextFile } = require("./direct-file-snapshot");
+const { withPathLock } = require("./write-locks");
+const { atomicWriteText, uniqueTempPath } = require("./atomic-io");
+const { committedChange } = require("./direct-change-evidence");
+const { LINE_NUMBER_FORMAT, LINE_NUMBER_PATCH_ERROR, LINE_NUMBER_PATCH_MESSAGE, isLineNumberPrefixedPatch,
+  numberLines } = require("./line-numbering");
 
 function fail(code, message) { throw Object.assign(new Error(message), { code, status: "not_applied" }); }
 function hash(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function discoveryPath(value, fallback = "Assets") {
   return value === "." || value === "./" || value === undefined ? fallback : value;
 }
-function bounded(payload, budget = 32768) {
+const DEFAULT_BYTE_BUDGET = 65536;
+function bounded(payload, budget = DEFAULT_BYTE_BUDGET) {
   if (Buffer.byteLength(JSON.stringify(payload)) > budget) fail("response_budget_exceeded", "Narrow the query or request a smaller page; values were not silently clipped.");
   return payload;
 }
@@ -70,15 +73,19 @@ class Files {
     const limit = args.limit ?? 100;
     const selected = lines.slice(start - 1, start - 1 + limit);
     const observedAt = new Date().toISOString();
+    // Numbers are display only; hash, receipt and edit matching use the raw file text.
+    const numbered = args.lineNumbers !== false;
     const makePage = count => {
       const endLine = count > 0 ? start + count - 1 : null;
       const hasMore = start - 1 + count < lines.length;
+      const shown = selected.slice(0, count);
       return envelope({ status: "observed", path: args.path, receipt: s.receipt, receiptScope: "entire_file_bytes", hash: s.hash,
         observedAt, startLine: start, endLine, returnedLineCount: count, totalLines: lines.length,
-        text: selected.slice(0, count).join("\n"), hasMore, nextStartLine: hasMore ? start + count : null,
-        truncated: hasMore });
+        text: (numbered ? numberLines(shown, start) : shown).join("\n"),
+        ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
+        hasMore, nextStartLine: hasMore ? start + count : null, truncated: hasMore });
     };
-    const budget = args.byteBudget ?? 32768;
+    const budget = args.byteBudget ?? DEFAULT_BYTE_BUDGET;
     // Budget the actual transport envelope. Return whole lines with explicit
     // continuation; a single oversized line still fails instead of clipping.
     for (let count = selected.length; count > 0; count--) {
@@ -145,6 +152,7 @@ class Files {
       let result = text;
       for (const edit of args.edits) {
         const index = result.indexOf(edit.oldText);
+        if (index < 0 && isLineNumberPrefixedPatch(edit.oldText, result)) fail(LINE_NUMBER_PATCH_ERROR, LINE_NUMBER_PATCH_MESSAGE);
         if (index < 0 || result.indexOf(edit.oldText, index + 1) >= 0) fail("ambiguous_edit", "oldText must match exactly once");
         result = result.slice(0, index) + edit.newText + result.slice(index + edit.oldText.length);
       }
@@ -158,15 +166,18 @@ class Files {
     const entries = fs.readdirSync(target, { withFileTypes: true });
     if (entries.length > 10000) fail("query_budget_exceeded", "Narrow the directory scope; direct entries exceed the limit");
     const kind = args.kind ?? "all";
+    let policyOmitted = 0;
     const items = entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).flatMap(entry => {
       const entryKind = entry.isDirectory() ? "directory" : entry.isFile() ? "file" : null;
       if (!entryKind || kind !== "all" && kind !== (entryKind === "directory" ? "directories" : "files")) return [];
       const entryPath = `${relative}/${entry.name}`;
-      try { this.policy.resolve(entryPath, false); } catch { return []; }
+      try { this.policy.resolve(entryPath, false); } catch { policyOmitted++; return []; }
       return [{ path: entryPath, kind: entryKind }];
     });
     const revision = hash(JSON.stringify([this.session, this.policy.projectIdentity, "list_directory", relative, kind, items]));
-    return bounded({ status: "observed", path: relative, ...page(items, args, revision), consistency: "per_file_observations" }, args.byteBudget);
+    // Entries the path policy hides (links, hidden names) are counted, never silently dropped.
+    return bounded({ status: "observed", path: relative, ...page(items, args, revision), consistency: "per_file_observations",
+      absenceVerified: false, omittedByPathPolicy: policyOmitted }, args.byteBudget);
   }
   async search(args) {
     const extensions = args.extensions?.map(extension => extension.toLowerCase());
@@ -179,6 +190,8 @@ class Files {
     let scanned = 0;
     let incomplete = false;
     let nodes = 0, matchBytes = 0;
+    // Content search can only read UTF-8 text of bounded size; the rest is counted, not hidden.
+    const skippedByReason = { tooLarge: 0, unreadableOrNonText: 0 };
     const append = row => {
       matchBytes += Buffer.byteLength(JSON.stringify(row));
       if (matchBytes > 2 * 1024 * 1024 || matches.length >= 5000) fail("query_budget_exceeded", "Narrow the search; accumulated matches exceed the scan budget");
@@ -214,19 +227,26 @@ class Files {
         scanned++;
         if (selectedExtensions && !selectedExtensions.has(path.extname(relative).toLowerCase())) return;
         if (!args.query || relative.includes(args.query)) append({ path: relative, kind: "path" });
+        if (args.content === true && stat.size > this.maxBytes) skippedByReason.tooLarge++;
         if (args.content === true && stat.size <= this.maxBytes) {
           try {
             const s = await this.snapshot(relative);
             const lines = s.content.split(/\r\n|\n|\r/);
             for (let i = 0; i < lines.length; i++) if (lines[i].includes(args.query)) append({ path: relative, line: i + 1, text: lines[i], hash: s.hash });
-          } catch (error) { if (error.code === "query_budget_exceeded") throw error; /* Non-text/unstable files are skipped. */ }
+          } catch (error) { if (error.code === "query_budget_exceeded") throw error; skippedByReason.unreadableOrNonText++; }
         }
       }
     };
     await walk(searchPath, searchRoot, rootStat);
     const revision = hash(JSON.stringify([this.session, this.policy.projectIdentity, "search_files", searchPath, args.query ?? null,
       args.content === true, extensions ? [...new Set(extensions)].sort() : null, matches]));
-    return bounded({ status: "observed", ...page(matches, args, revision), scanned, incomplete, consistency: "per_file_observations" }, args.byteBudget);
+    const skippedFiles = skippedByReason.tooLarge + skippedByReason.unreadableOrNonText;
+    return bounded({ status: "observed", ...page(matches, args, revision), scanned, incomplete, consistency: "per_file_observations",
+      skippedFiles, skippedByReason,
+      // No match means "not found in what was searched" - never "absent".
+      absenceVerified: false,
+      searchScope: { path: searchPath, mode: args.content === true ? "path_and_utf8_content" : "path_only",
+        extensions: extensions ? [...new Set(extensions)].sort() : null, filesScanned: scanned, complete: !incomplete } }, args.byteBudget);
   }
 }
-module.exports = { Files, fail, hash, page, bounded, discoveryPath };
+module.exports = { DEFAULT_BYTE_BUDGET, Files, fail, hash, page, bounded, discoveryPath };

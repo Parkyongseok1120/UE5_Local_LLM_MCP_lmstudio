@@ -2,6 +2,13 @@ import type { DirectConfig, OutputLimitStage } from "./execution-contracts";
 import type { ExecutionPhase } from "./execution-state";
 import type { CapturedRound } from "./round-loop";
 
+/** The retry asks for twice the cap that reasoning exhausted; input preparation then clamps it to the
+ * measured headroom, never below the configured cap. One owner so request and telemetry agree. */
+export const REASONING_RECOVERY_TOKEN_CEILING = 131072;
+export function reasoningRecoveryOutputCap(maxOutputReserve: number): number {
+  return Math.min(REASONING_RECOVERY_TOKEN_CEILING, maxOutputReserve * 2);
+}
+
 /** Admission only. The execution owns attempts; input preparation owns fit;
  * the existing guard still owns every tool authorization. */
 export function decideReasoningRecovery(options: {

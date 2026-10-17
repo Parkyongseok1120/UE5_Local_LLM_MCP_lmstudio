@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -13,35 +12,11 @@ from direct_rag_project_engine import project_engine_version
 from direct_rag_project_selectors import classify_project_selectors, exact_project_descriptor
 from direct_rag_result import CapabilityResult, failure
 from engine_header_evidence import lookup_engine_header_evidence
+from engine_identity import read_unreal_build_identity as _build_identity
 from project_name_resolver import resolve_project_name
 from target_resolver import resolve_symbol_target
 from unreal_contracts import contract_revision, engine_version_validated, load_contracts_or_none, related_contracts
 from workspace_paths import resolve_engine_root_for_association
-
-
-def _build_identity(root: Path) -> dict[str, Any]:
-    path = root / "Engine/Build/Build.version"
-    try:
-        with path.open("rb") as stream:
-            before = os.fstat(stream.fileno())
-            if before.st_size > 16384:
-                raise ValueError("Build.version exceeds the identity observation limit")
-            raw = stream.read(16384)
-            after = os.fstat(stream.fileno())
-        current = path.stat()
-        if any((s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) !=
-               (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) for s in (after, current)):
-            raise ValueError("Build.version changed during observation")
-        value = json.loads(raw.decode("utf-8-sig"))
-        fields = {k: value[k] for k in ("MajorVersion", "MinorVersion", "PatchVersion", "Changelist")
-                  if isinstance(value, dict) and type(value.get(k)) is int and value[k] >= 0}
-        if len(fields) < 2 or not {"MajorVersion", "MinorVersion"} <= fields.keys():
-            raise ValueError("Build.version lacks a verified major/minor")
-        version = ".".join(str(fields[k]) for k in ("MajorVersion", "MinorVersion", "PatchVersion") if k in fields)
-        return {"status": "observed", "engineRoot": str(root), "version": version, **fields,
-                "source": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "hashScope": "file"}
-    except (OSError, ValueError, TypeError) as exc:
-        return {"status": "unknown", "engineRoot": str(root), "source": str(path), "reason": str(exc)[:180]}
 
 
 def _related_contracts(symbol: str, owner: str, rows: list[dict[str, Any]], version: str) -> dict[str, Any] | None:
@@ -119,7 +94,15 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
                    "filePath": r["source"], "line": r["line"]} for r in rows]
     target = resolve_symbol_target(query, candidates, access="read")
     evidence = "\n\n".join(f"{r['source']}:{r['line']}\n{r['excerpt']}" for r in rows)
-    matches = [{k: v for k, v in r.items() if k != "excerpt"} for r in rows]
+    # Implementation bodies are evidence text; only their locators and
+    # fingerprints are response metadata.
+    definitions = [{k: v for k, v in c.items() if k != "excerpt"}
+                   for r in rows for c in r.get("definitionCandidates", [])]
+    definition_text = "\n\n".join(f"[definition candidate] {c['source']}:{c['line']}\n{c['excerpt']}"
+                                  for r in rows for c in r.get("definitionCandidates", []))
+    if definition_text:
+        evidence = f"{evidence}\n\n{definition_text}" if evidence else definition_text
+    matches = [{k: v for k, v in r.items() if k not in ("excerpt", "definitionCandidates")} for r in rows]
     payload: dict[str, Any] = {"ok": True, "query": query, "requestedOwner": owner,
         "canonicalProject": str(descriptor), "canonicalProjectRoot": str(descriptor.parent),
         "sourceMode": "engine_local", "evidenceSource": "installed_engine_source",
@@ -128,16 +111,21 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
         "status": source["status"], "matchCount": len(rows), "matches": matches,
         "targetResolution": target, "evidence": evidence, "readBytes": source.get("readBytes", 0),
         "sourceIdentity": {"canonicalProject": str(descriptor), "sourceMode": "engine_local", "engineRoot": str(root)},
-        "sourceVersion": "observed:" + hashlib.sha256(json.dumps([identity, matches], sort_keys=True).encode()).hexdigest(),
+        "sourceVersion": "observed:" + hashlib.sha256(json.dumps([identity, matches, definitions], sort_keys=True).encode()).hexdigest(),
         "declarationProof": "bounded_lexical_evidence; targetResolution_only_identifies_candidates",
         # Finding a declaration on a parent is not proof that it is accessible
         # or callable from the requested owner (access, hiding, overloads).
         "callabilityVerification": "not_verified_access_overload_and_macro_expansion"}
+    if definitions:
+        payload["definitionCandidates"] = definitions
     related = _related_contracts(symbol, owner, rows, identity["version"])
     if related:
         payload["relatedContracts"] = related
     # Remove whole candidate metadata before fitting excerpt text. Exact source
     # identities and partial fingerprints are never clipped into false hashes.
+    while payload.get("definitionCandidates") and not evidence_metadata_fits(payload, max_chars=limit):
+        payload["definitionCandidates"] = payload["definitionCandidates"][:-1]
+        payload["definitionCandidatesOmitted"] = len(definitions) - len(payload["definitionCandidates"])
     while payload["matches"] and not evidence_metadata_fits(payload, max_chars=limit):
         payload["matches"] = payload["matches"][:-1]
         payload["matchMetadataOmitted"] = len(rows) - len(payload["matches"])

@@ -17,6 +17,8 @@ from typing import Any
 
 CONTRACTS_PATH = Path(__file__).resolve().parents[1] / "config" / "unreal_contracts.json"
 SCHEMA_VERSION = 1
+ENGINE = "unreal"
+_TOP_KEYS = {"schemaVersion", "engine", "revision", "description", "validatedEngineVersions", "lifecycle", "contracts"}
 KINDS = frozenset({"engine_fact", "project_policy"})
 TOPICS = frozenset({"lifecycle", "subsystem", "threading", "networking", "verification"})
 _CONTRACT_KEYS = {"id", "revision", "kind", "topic", "applicability", "statement", "preconditions",
@@ -99,6 +101,8 @@ def _validate_contract(value: Any, versions: list[str]) -> None:
 def validate_contracts(data: Any) -> dict[str, Any]:
     _require(isinstance(data, dict), "contract file must be a JSON object")
     _require(data.get("schemaVersion") == SCHEMA_VERSION, "unsupported contract schemaVersion")
+    _require(set(data) == _TOP_KEYS, "contract file has unexpected top-level keys")
+    _require(data["engine"] == ENGINE, f"contract file engine must be {ENGINE!r}")
     _require(type(data.get("revision")) is int and data["revision"] >= 1, "revision must be a positive int")
     versions = _string_list(data.get("validatedEngineVersions"), "validatedEngineVersions")
     _validate_lifecycle(data.get("lifecycle"))
@@ -142,6 +146,11 @@ def contract_revision(data: dict[str, Any]) -> str:
     return f"unreal_contracts@{data['revision']}"
 
 
+def render_contract_text(data: dict[str, Any], text: str) -> str:
+    """Fill version placeholders so messages never hardcode a validated version."""
+    return text.replace("{validatedEngineVersions}", ", ".join(data["validatedEngineVersions"]))
+
+
 def contract_by_id(data: dict[str, Any], contract_id: str) -> dict[str, Any] | None:
     return next((c for c in data["contracts"] if c["id"] == contract_id), None)
 
@@ -175,7 +184,22 @@ def engine_version_validated(data: dict[str, Any], version: str) -> bool:
     return ".".join(str(version or "").split(".")[:2]) in data["validatedEngineVersions"]
 
 
+def engine_version_tier(data: dict[str, Any], version: str | None) -> str:
+    """``validated`` | ``same_major_unvalidated`` | ``unknown`` | ``other_major``.
+
+    The major is computed from the validated list, never hardcoded, so the
+    policy follows the file when it is revalidated against another engine.
+    """
+    parts = str(version or "").strip().split(".")
+    if len(parts) < 2 or not all(p.isdigit() for p in parts[:2]):
+        return "unknown"
+    if ".".join(parts[:2]) in data["validatedEngineVersions"]:
+        return "validated"
+    majors = {v.split(".")[0] for v in data["validatedEngineVersions"]}
+    return "same_major_unvalidated" if parts[0] in majors else "other_major"
+
+
 __all__ = [
     "CONTRACTS_PATH", "ContractError", "contract_by_id", "contract_revision", "contracts_for_topic",
-    "engine_version_validated", "load_contracts", "load_contracts_or_none", "related_contracts", "validate_contracts",
+    "engine_version_tier", "engine_version_validated", "load_contracts", "load_contracts_or_none", "related_contracts", "render_contract_text", "validate_contracts",
 ]

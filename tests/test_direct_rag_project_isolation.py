@@ -1322,6 +1322,31 @@ def test_custom_engine_association_requires_matching_manifest_provenance(
     assert matched["index"] == str(base.resolve())
 
 
+def test_matching_index_cannot_turn_unknown_folder_version_into_a_verified_binding(monkeypatch, tmp_path):
+    import direct_rag_index_registry as registry
+    import workspace_paths
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    project = _versioned_project(tmp_path / "Owner", "")
+    engine = tmp_path / "UE_6.2"
+    engine.mkdir()
+    monkeypatch.setattr(workspace_paths, "resolve_engine_root_for_association",
+                        lambda *args, **kwargs: {"ok": True, "engineRoot": str(engine)})
+    base = _build_versioned_index(tmp_path / "data", "unreal62", "6.2", workspace,
+                                  [_document("project", "unreal_project_text", "KnownNeedle", project)])
+    unknown = registry.resolve_request_index(base, workspace, project_selector=str(project), use_active=False)
+    assert unknown["ok"] is False
+    assert unknown["errorCode"] == "PROJECT_ENGINE_VERSION_UNRESOLVED"
+    assert unknown["engineVersionSource"] == "folder_name_inferred"
+    assert "projectEngineVersion" not in unknown
+    # An explicit descriptor declaration remains a supported index binding;
+    # it is distinct from guessing the version from an installation folder.
+    project.write_text(json.dumps({"EngineAssociation": "6.2"}), encoding="utf-8")
+    declared = registry.resolve_request_index(base, workspace, project_selector=str(project), use_active=False)
+    assert declared["ok"] is True and declared["projectEngineVersion"] == "6.2"
+
+
 def test_fresh_configured_custom_index_can_be_created_without_guessing_a_sibling(
     monkeypatch,
     tmp_path: Path,

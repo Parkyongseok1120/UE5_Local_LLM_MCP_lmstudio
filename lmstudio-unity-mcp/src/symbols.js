@@ -125,6 +125,12 @@ class Symbols {
       completeWithinScope: index.completeWithinScope, freshness: "immutable_index_current_sources_not_rechecked", compilerVersion: index.compilerVersion,
       omissionCount: index.omissions.length, diagnosticCount: index.diagnostics.length,
       referenceCoverage: index.referenceCoverage,
+      // An empty or partial answer describes only this index; it never proves a symbol is absent.
+      absenceVerified: false, searchedAssemblies: Array.isArray(index.scope) ? index.scope : [],
+      ...(args.action === "find" ? { limitations: [
+        "Only the assemblies selected for this index are searched; unselected assemblies and engine/package DLL symbols are not find targets.",
+        "A name not found here is not proven absent from the project.",
+      ] } : {}),
       items: rows.slice(offset, offset + limit), total: rows.length, nextOffset: offset + limit < rows.length ? offset + limit : null, unusedConclusion: "not_inferred" };
   }
 }

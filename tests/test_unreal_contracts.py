@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -32,7 +33,11 @@ def test_lifecycle_and_denylist_tables_come_from_the_contract_source():
     data = contracts.load_contracts()["lifecycle"]
     assert lifecycle.UNREAL_ENGINE_LIFECYCLE_PARENTS == data["parents"]
     assert lifecycle.UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST == {k: set(v) for k, v in data["overrides"].items()}
-    assert unreal_api_denylist.INVALID_LIFECYCLE_OVERRIDES == data["invalidOverrideNames"]
+    full = contracts.load_contracts()
+    assert unreal_api_denylist.INVALID_LIFECYCLE_OVERRIDES == {
+        name: contracts.render_contract_text(full, message) for name, message in data["invalidOverrideNames"].items()}
+    assert "{validatedEngineVersions}" not in " ".join(unreal_api_denylist.INVALID_LIFECYCLE_OVERRIDES.values())
+    assert ", ".join(full["validatedEngineVersions"]) in unreal_api_denylist.INVALID_LIFECYCLE_OVERRIDES["onworlddestroyed"]
     assert lifecycle.LIFECYCLE_CONTRACT_STATUS == "available"
 
 
@@ -45,6 +50,9 @@ def test_lifecycle_and_denylist_tables_come_from_the_contract_source():
     (lambda d: d["contracts"][0].update(kind="guess"), "unknown kind"),
     (lambda d: d["contracts"][0].update(code="exec()"), "unexpected keys"),
     (lambda d: d.update(schemaVersion=2), "schemaVersion"),
+    (lambda d: d.update(engine="unity"), "engine must be"),
+    (lambda d: d.pop("engine"), "unexpected top-level keys"),
+    (lambda d: d.update(extra=1), "unexpected top-level keys"),
 ])
 def test_malformed_contract_data_is_rejected(mutate, message):
     data = copy.deepcopy(SHIPPED)
@@ -75,18 +83,51 @@ def _project_with_invalid_override(tmp_path: Path) -> Path:
     return project
 
 
-def test_cli_json_keeps_finding_metadata_and_analysis_coverage(tmp_path):
-    project = _project_with_invalid_override(tmp_path)
+def _fake_engine(tmp_path: Path, build_version: dict | None, name: str = "FakeEngine") -> Path:
+    engine = tmp_path / name
+    (engine / "Engine" / "Source").mkdir(parents=True)
+    if build_version is not None:
+        (engine / "Engine" / "Build").mkdir(parents=True)
+        (engine / "Engine" / "Build" / "Build.version").write_text(json.dumps(build_version), encoding="utf-8")
+    return engine
+
+
+def _run_cli(project: Path, engine: Path) -> dict:
+    (project / "Demo.uproject").write_text(json.dumps({"FileVersion": 3, "EngineAssociation": ""}), encoding="utf-8")
+    env = {**os.environ, "UNREAL_ENGINE_ROOT": str(engine)}
     result = subprocess.run([sys.executable, str(SCRIPTS / "validate_project_sources.py"), "--project-root",
                              str(project), "--json"], cwd=str(ROOT), capture_output=True, text=True,
-                            encoding="utf-8", check=False)
-    payload = json.loads(result.stdout)
+                            encoding="utf-8", check=False, env=env)
+    return json.loads(result.stdout)
+
+
+def test_unverifiable_engine_identity_is_reported_and_lowers_version_dependent_findings(tmp_path):
+    project = _project_with_invalid_override(tmp_path)
+    payload = _run_cli(project, _fake_engine(tmp_path, None))
+    identity = payload["analysis"]["engineIdentity"]
+    assert identity["status"] == "unknown" and identity["reason"]
+    finding = next(f for f in payload["findings"] if f["code"] == "INVALID_UNREAL_LIFECYCLE_OVERRIDE")
+    assert finding["severity"] == "warning" and not finding["blocking"]
+    assert finding["metadata"]["confidence"] == "medium"
+    assert any("override table validated on" in item for item in finding["metadata"]["limitations"])
+
+
+def test_cli_json_keeps_finding_metadata_and_analysis_coverage(tmp_path):
+    project = _project_with_invalid_override(tmp_path)
+    validated = contracts.load_contracts()["validatedEngineVersions"][0].split(".")
+    engine = _fake_engine(tmp_path, {"MajorVersion": int(validated[0]), "MinorVersion": int(validated[1]),
+                                     "PatchVersion": 0})
+    payload = _run_cli(project, engine)
     revision = contracts.contract_revision(contracts.load_contracts())
     assert payload["analysis"]["contractRevision"] == revision
     assert payload["analysis"]["analysisCoverage"]["contracts"] == "available"
     assert payload["analysis"]["analysisCoverage"]["engineSource"] == "not_used"
+    identity = payload["analysis"]["engineIdentity"]
+    assert identity["status"] == "observed" and identity["source"] == "build_version_file"
+    assert identity["version"] == f"{validated[0]}.{validated[1]}.0"
     lifecycle_findings = [f for f in payload["findings"] if f["code"] == "INVALID_UNREAL_LIFECYCLE_OVERRIDE"]
     assert len(lifecycle_findings) == 1 and "OnWorldDestroyed" in lifecycle_findings[0]["message"]
+    assert lifecycle_findings[0]["severity"] == "error"
     metadata = lifecycle_findings[0]["metadata"]
     assert metadata["contractRevision"] == revision
     assert metadata["contractIds"] == ["ue.subsystem.lifecycle"]

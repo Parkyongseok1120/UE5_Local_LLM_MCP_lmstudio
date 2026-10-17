@@ -26,10 +26,10 @@ import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTP
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
 import { createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
-import { classifyRawToolIntent, containsUnresolvedToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
+import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, planReadRecovery, readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
-import { decideReasoningRecovery } from "./reasoning-recovery";
+import { decideReasoningRecovery, reasoningRecoveryOutputCap } from "./reasoning-recovery";
 import { runtimeInstallationIdentity } from "./runtime-identity";
 import { classifyToolCallBoundary, createToolGuard, readHostToolApprovalPolicy } from "./tool-boundary";
 import { hasReadCapability, isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
@@ -324,7 +324,7 @@ export function createPredictionLoopHandler(
         let roundOutputReserve = finalizing
           ? finalLimits.maxTokens
           : researchRecoveryRound ? recoveryCoordinator.outputReserve
-            : reasoningRecoveryRound ? Math.min(131072, config.maxOutputReserve * 2) : config.maxOutputReserve;
+            : reasoningRecoveryRound ? reasoningRecoveryOutputCap(config.maxOutputReserve) : config.maxOutputReserve;
         const requestedOutputCap = roundOutputReserve;
         let outputCapSource: "configured" | "headroom_clamp" = "configured";
         const roundScopeInstructions = finalizing
@@ -356,7 +356,7 @@ export function createPredictionLoopHandler(
           reasoningRecovery: reasoningRecoveryRound,
           guidanceDocuments,
           guidanceIntent,
-          guidanceScope: focusedReferences ? scope : undefined,
+          guidanceScope: config.designGuidanceMode !== "off" ? scope : undefined,
           referenceRecovery: researchRecoveryRound || reasoningRecoveryRound,
           getRuntimeFacts: () => [...runtimeFacts.values()],
           finalizationTrigger: execution.finalizationTrigger,
@@ -768,12 +768,13 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         if (budgetFeedback && budgetFeedback !== lastBudgetFeedback && !config.observeOnly) {
           runtimeFacts.set("budget", budgetFeedback); lastBudgetFeedback = budgetFeedback;
         }
-        evidenceManager.observeRoundReferences(workingHistory, captured.messages, scope, executionId, focusedReferences);
+        evidenceManager.observeRoundReferences(workingHistory, captured.messages, scope, executionId,
+          !config.observeOnly && config.designGuidanceMode !== "off" && config.designGuidanceMaxTokens > 0);
         const outputLimitStage = classifyOutputLimitStage(captured, finalizing, generationAtRoundEnd);
         if (toolPlanningRetryRound) execution.finishReplan();
         const outputEvidence = messageEvidenceTelemetry(captured.messages);
         const rawIntentText = visibleTextFromMessages(captured.messages);
-        const finalRawToolIntent = containsUnresolvedToolIntent(rawIntentText, captured.messages);
+        const finalRawToolIntent = hasRawToolIntent(rawIntentText, captured.messages);
         const rawIntent = classifyRawToolIntent(rawIntentText, allModelTools, registeredModelTools);
         const { catalogueCorrectionAllowed, archiveOnlyRecoveryAllowed, retryTools, retryInstruction }
           = planReadRecovery(historyBeforeRound, workingHistory, rawIntent, modelTools);
@@ -1078,7 +1079,11 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             execution.finalizationTrigger, recoveryCoordinator.noProgressRounds);
           const finalDelivery = evaluated.delivery;
           const { deliveryState } = finalDelivery;
-          const safePartialReport = evaluated.partial;
+          // A fresh planning retry replaces this round's text; delivering a thin partial report first
+          // would show the user a final-looking answer that the retry then contradicts.
+          const retryPending = finalDelivery.deliveryState !== "complete"
+            && finalDelivery.reportState === "unresolved_tool_intent" && freshToolPlanningRetryEligible;
+          const safePartialReport = retryPending ? undefined : evaluated.partial;
           if (safePartialReport) {
             const block = visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" });
             block.appendText(safePartialReport.text);
@@ -1200,7 +1205,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             sourceModelInputId: modelInputId,
             recoveryModelInputId: `${executionId}:reasoning-recovery-${execution.reasoningRecoveryAttempts}`,
             attempt: execution.reasoningRecoveryAttempts, toolCount: roundTools.length,
-            requestedMaxTokens: config.maxOutputReserve, partialReasoningPreservedInGui: true });
+            requestedMaxTokens: reasoningRecoveryOutputCap(config.maxOutputReserve), partialReasoningPreservedInGui: true });
           roundIndex += 1;
           continue;
         }
@@ -1288,6 +1293,14 @@ event: decision.trigger === "research_recovery_exhausted"
             status: "canceled",
             text: "읽기 전용 도구 계획 재시도에서도 structured 도구 요청이 생성되지 않아 중단했습니다.",
           });
+        }
+        if (hasUnexecutedRawToolSyntax(rawIntentText) && structuredToolRequestCount === 0
+          && !captured.continueAfterTools && !boundedAudit && !config.observeOnly) {
+          // The research path ends with only unexecuted tool text and no retry left or allowed:
+          // hand the user the evidence already gathered instead of the raw text alone.
+          if (!toolPlanningRetryRound) ctl.createStatus({ status: "canceled",
+            text: "실행되지 않은 도구 호출 텍스트만 남았고 재시도 조건을 충족하지 못해 확인된 근거로 부분 보고를 전달합니다." });
+          deliverPartial(toolPlanningRetryRound ? "raw_tool_intent_retry_failed" : "raw_tool_intent_not_retried");
         }
         if (!captured.continueAfterTools) break;
         if (boundedAudit && (

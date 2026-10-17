@@ -33,7 +33,7 @@ function createDiagnosticCapabilities(context) {
     limits,
     options,
     resolveCallProject,
-    resolveToolPath,
+    resolveWorkingPath,
     runtimeOwner,
     workspaceRoot,
   } = context;
@@ -210,7 +210,7 @@ function createDiagnosticCapabilities(context) {
     if (!envFlag(env, "ALLOW_COMMANDS", false)) return failure("COMMANDS_DISABLED", "Command execution is disabled. Start the MCP with ALLOW_COMMANDS=1.");
     const parsed = parseAllowedCommand(String(args.command || ""));
     if (!parsed) return failure("COMMAND_NOT_ALLOWED", "Command is not in the read/build diagnostic allowlist.");
-    const cwdResolution = await resolveToolPath(args.cwd || "workspace://", args.project);
+    const cwdResolution = await resolveWorkingPath(args.cwd || "workspace://", args.project);
     const cwdStat = await statOrNull(cwdResolution.absolutePath);
     if (!cwdStat?.isDirectory()) return failure("INVALID_CWD", "cwd must resolve to an existing contained directory", { retryAllowed: true });
     const timeoutMs = clamp(args.timeoutMs, limits.commandTimeoutMs, 1000, 60 * 60 * 1000);

@@ -1,3 +1,4 @@
+import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import { bundledDesignGuidance, bundledGuidanceSections } from "./generated-design-guidance";
 import type { ToolScope } from "./tool-scope";
 import { REFERENCE_LIMITS, type ReferenceSnapshot, type ReferenceSignal, type GuidanceScope } from "./reference-context";
@@ -13,6 +14,7 @@ export type GuidanceDocument = {
   readonly source: string;
   readonly revision: string;
   readonly text: string;
+  readonly omissionReasons?: readonly string[];
 };
 export type GuidanceCandidate = { ids: string[]; instruction: string; referenceData?: string; dataIds?: string[]; omissionReasons?: string[] };
 export type DesignGuidanceDelivery = "documents" | "focused";
@@ -36,8 +38,9 @@ export function designGuidanceMode(value: unknown): DesignGuidanceMode {
 
 /** Pure selection: no project reads, inferred game rules, tool decisions or
  * process-wide state. The existing scope owner supplies engine evidence. */
-export function selectDesignGuidance(mode: DesignGuidanceMode, scope: Pick<ToolScope, "engine" | "source">,
-  documents: readonly GuidanceDocument[] = bundledDesignGuidance): GuidanceDocument[] {
+export function selectDesignGuidance(mode: DesignGuidanceMode, scope: Pick<GuidanceScope, "engine" | "source">,
+  documents: readonly GuidanceDocument[] = bundledDesignGuidance,
+  facts?: ReferenceSnapshot["applicability"], sections: readonly GuidanceSection[] = bundledGuidanceSections): GuidanceDocument[] {
   if (mode === "off" || mode === "auto") return [];
   const engines = scope.source === "available_tools" || scope.source === "ambiguous" ? []
     : scope.engine === "mixed" ? ["unity", "unreal"]
@@ -46,13 +49,14 @@ export function selectDesignGuidance(mode: DesignGuidanceMode, scope: Pick<ToolS
   if (mode !== "core") {
     if (mode !== "lifecycle") ids.push(mode);
     if (mode !== "code-style") {
-      ids.push(...engines.map(engine => mode === "multiplayer" ? `${engine}-networking` : engine));
+      ids.push(...engines.map(engine => mode === "multiplayer" ? ENGINE_PROFILES[engine as "unity" | "unreal"].networkingDocument : engine));
     }
   }
   const allowedEngines = new Set(["common", ...engines]);
   return [...new Set(ids)].flatMap(id => {
     const document = documents.find(item => item.id === id && allowedEngines.has(item.engine));
-    return document ? [document] : [];
+    if (!document) return [];
+    return [versionedDocument(document, facts, sections)];
   });
 }
 
@@ -63,7 +67,8 @@ export function designGuidanceCandidates(documents: readonly GuidanceDocument[])
   const candidates: GuidanceCandidate[] = [];
   for (let length = unique.length; length > 0; length--) {
     const selected = unique.slice(0, length);
-    candidates.push({ ids: selected.map(document => document.id), instruction: [
+    candidates.push({ ids: selected.map(document => document.id),
+      omissionReasons: [...new Set(selected.flatMap(document => document.omissionReasons || []))], instruction: [
       "[Optional design reference]",
       "Bundled reference material, not project observations or proof of completed work. Apply only where relevant to the user's request and actual engine/package version. It adds no tool permissions or mandatory validation steps.",
       ...selected.map(document => `[reference id=${document.id} revision=${document.revision} source=${document.source}]\n${document.text}`),
@@ -75,10 +80,71 @@ export function designGuidanceCandidates(documents: readonly GuidanceDocument[])
 
 // Only numeric version prefixes are supported by the catalogue. Missing,
 // preview or otherwise incomparable versions never satisfy a version rule.
+const NUMERIC_VERSION = /^\d+(?:\.\d+){1,3}(?:[abfp]\d+)?$/;
 function versionMatches(actual: string | undefined, prefixes: readonly string[]) {
-  return Boolean(actual && /^\d+(?:\.\d+){1,3}(?:[abfp]\d+)?$/.test(actual)
+  return Boolean(actual && NUMERIC_VERSION.test(actual)
     && prefixes.some(prefix => actual === prefix || actual.startsWith(prefix + ".")
       || new RegExp("^" + prefix.replace(/\./g, "\\.") + "[abfp]\\d+$").test(actual)));
+}
+
+/** How an observed version relates to the versions a rule was validated on.
+ * The major (engines) or major.minor family (packages) is computed from the
+ * validated list, never hardcoded, so the policy follows the catalogue. */
+export type VersionTier = "validated" | "same_major_unvalidated" | "unknown" | "other_major";
+export type VersionKind = "engine" | "package";
+export function versionTier(actual: string | undefined, validated: readonly string[],
+  kind: VersionKind = "engine"): VersionTier {
+  if (!actual || !NUMERIC_VERSION.test(actual)) return "unknown";
+  if (versionMatches(actual, validated)) return "validated";
+  const take = (version: string) => version.split(".").slice(0, kind === "engine" ? 1 : 2).join(".");
+  const family = new Set(validated.map(take));
+  return family.has(take(actual)) ? "same_major_unvalidated" : "other_major";
+}
+
+type VersionFinding = { subject: string; actual: string | undefined; validated: readonly string[]; tier: VersionTier };
+/** Every version rule of a section against the observed facts. */
+function sectionVersionFindings(section: Pick<GuidanceSection, "engine" | "applicability">,
+  facts: ReferenceSnapshot["applicability"]): VersionFinding[] {
+  const rule = section.applicability, findings: VersionFinding[] = [];
+  if (rule.engineVersions) findings.push({ subject: section.engine, actual: facts.engineVersion,
+    validated: rule.engineVersions, tier: versionTier(facts.engineVersion, rule.engineVersions) });
+  for (const p of rule.packages || []) findings.push({ subject: p.id, actual: facts.packages[p.id], validated: p.versions,
+    tier: facts.networkPackagesAmbiguous ? "unknown" : versionTier(facts.packages[p.id], p.versions, "package") });
+  return findings;
+}
+const BLOCKING_TIERS: readonly VersionTier[] = ["unknown", "other_major"];
+const unvalidatedLine = (f: VersionFinding) => `[unvalidated for ${f.subject} ${f.actual}; validated on ${f.validated.join(", ")}]`;
+
+/** The generated section bodies are exact substrings of the whole document.
+ * Keep its preamble/common policy, but remove inapplicable engine/package facts.
+ * A missing dependency also removes its dependent section. */
+function versionedDocument(document: GuidanceDocument, facts: ReferenceSnapshot["applicability"] | undefined,
+  sections: readonly GuidanceSection[]): GuidanceDocument {
+  const known = facts || { packages: {}, networkPackagesAmbiguous: false };
+  const byId = new Map(sections.map(s => [s.id, s]));
+  const applicable = (section: GuidanceSection, visiting = new Set<string>()): boolean => {
+    if (visiting.has(section.id) || sectionVersionFindings(section, known).some(f => BLOCKING_TIERS.includes(f.tier))) return false;
+    const next = new Set(visiting).add(section.id);
+    return section.requires.every(id => Boolean(byId.has(id) && applicable(byId.get(id)!, next)));
+  };
+  let body = document.text;
+  const reasons: string[] = [];
+  for (const section of sections.filter(s => s.documentId === document.id)) {
+    const findings = sectionVersionFindings(section, known);
+    const keep = applicable(section);
+    const notes = findings.filter(f => f.tier === "same_major_unvalidated").map(unvalidatedLine);
+    if (keep && !notes.length) continue;
+    if (!body.includes(section.text)) throw new Error("Document/section bundle mismatch");
+    if (!keep) {
+      const why = findings.filter(f => BLOCKING_TIERS.includes(f.tier)).map(f => `${f.subject}:${f.tier}`).join(",") || "dependency_unavailable";
+      reasons.push(`document_section_omitted:${section.id}:${why}`);
+      body = body.replace(section.text, `[omitted ${section.id}: ${why}]`);
+    } else {
+      reasons.push(`document_section_unvalidated_annotated:${section.id}`);
+      body = body.replace(section.text, notes.join("\n") + "\n" + section.text);
+    }
+  }
+  return reasons.length ? { ...document, text: body, omissionReasons: reasons } : document;
 }
 
 /** Pure contract-pack selection. Scope, observations and budgeting have their
@@ -105,16 +171,16 @@ function composeFocusedGuidance(mode: GuidanceTopic, supplement: GuidanceSupplem
   const inScope = (s: GuidanceSection) => (s.engine === "common" || engines.includes(s.engine))
     && (s.topics.includes(mode) || Boolean(supplement && s.topics.includes(supplement))
       || (s.documentId === "core" && s.topics.includes("core")));
-  const versionGated = (s: GuidanceSection) => Boolean(s.applicability.engineVersions
-    && !versionMatches(facts.engineVersion, s.applicability.engineVersions));
-  const applicable = (s: GuidanceSection) => {
-    if (!inScope(s) || versionGated(s)) return false;
-    return !s.applicability.packages || (!facts.networkPackagesAmbiguous
-      && s.applicability.packages.every(p => versionMatches(facts.packages[p.id], p.versions)));
+  const blockedByVersion = (s: GuidanceSection) => sectionVersionFindings(s, facts).some(f => BLOCKING_TIERS.includes(f.tier));
+  const unvalidatedFindings = (s: GuidanceSection) => sectionVersionFindings(s, facts).filter(f => f.tier === "same_major_unvalidated");
+  const annotated = (s: GuidanceSection) => {
+    const lines = unvalidatedFindings(s).map(unvalidatedLine);
+    return lines.length ? { ...s, text: lines.join("\n") + "\n" + s.text } : s;
   };
+  const applicable = (s: GuidanceSection) => inScope(s) && !blockedByVersion(s);
   // The checked bundle owns duplicate IDs. An ambiguous supplied catalogue is
   // omitted conservatively (tests/custom callers cannot create mixed contracts).
-  const byId = new Map(sections.filter(s => sections.filter(x => x.id === s.id).length === 1).map(s => [s.id, s]));
+  const byId = new Map(sections.filter(s => sections.filter(x => x.id === s.id).length === 1).map(s => [s.id, annotated(s)]));
   const closure = (section: GuidanceSection): GuidanceSection[] => {
     const selected = new Map<string, GuidanceSection>(), visiting = new Set<string>();
     const visit = (s: GuidanceSection): boolean => {
@@ -171,8 +237,13 @@ function composeFocusedGuidance(mode: GuidanceTopic, supplement: GuidanceSupplem
   } else if (contractPack) omissionReasons.push("contract_pack_omitted_section_limit");
   // Name the gap when contract facts matched the request but the engine
   // version that would make them applicable was not established.
-  if (sections.some(s => s.contractIds?.length && inScope(s) && versionGated(s))) {
+  const contractSections = sections.filter(s => s.contractIds?.length && inScope(s));
+  if (contractSections.some(blockedByVersion)) {
     omissionReasons.push(facts.engineVersion ? "contract_sections_engine_version_unvalidated" : "contract_sections_version_unverified");
+  }
+  // Delivered with a visible "unvalidated" line, not omitted.
+  if (contractSections.some(s => combined.has(s.id) && unvalidatedFindings(s).length)) {
+    omissionReasons.push("contract_sections_engine_version_unvalidated_annotated");
   }
   if (new Set([...minimum.keys(), ...secondary.map(s => s.id)]).size <= REFERENCE_LIMITS.sections) {
     secondary.forEach(s => { minimum.set(s.id, s); combined.set(s.id, s); });

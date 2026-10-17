@@ -1,6 +1,6 @@
 {
   "description": "UE correctness evaluation (contracts, lifetime, subsystems, threading, claims). Scored by scripts/evaluate_unreal_review_answers.py --case-set config/unreal_correctness_eval_cases.json. Build success, runtime behaviour and answer quality are recorded separately.",
-  "contractRevision": "unreal_contracts@1",
+  "contractRevision": "unreal_contracts@2",
   "protocol": {
     "conditions": {
       "baseline": "main v1.4.0 (f48b958) without contract guidance or S3 rules",
@@ -20,7 +20,7 @@
       "tasks": 12,
       "runsPerTask": 3,
       "totalRuns": 72,
-      "status": "8 of 12 tasks defined; add 4 build/PIE tasks before the expanded run"
+      "status": "15 review cases defined; build/PIE tasks and model comparison runs remain separate, not executed by scorer self-tests"
     },
     "fixedSettings": [
       "model",
@@ -386,6 +386,289 @@
           "penalty": 2.0,
           "patterns": [
             "BeginDestroy[^.\\n]{0,40}(존재하지\\s*않|override\\s*(할\\s*수\\s*없|불가)|is\\s+not\\s+(a\\s+)?(valid|virtual)|cannot\\s+be\\s+overridden|잘못된\\s*override)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "actor_damage_returns_processed_amount",
+      "origin": "Engine/Source/Runtime/Engine/Private/Actor.cpp:3390-3453,3484; Pawn.cpp:556-575",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "이 코드에서 Super::TakeDamage가 항상 0을 반환해 전투가 불가능한지 확인하고 수정 필요 여부를 판단하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "float ACombatCharacter::TakeDamage(float Damage, const FDamageEvent& Event, AController* Instigator, AActor* Causer) {\n  const float Actual = Super::TakeDamage(Damage, Event, Instigator, Causer);\n  if (Actual <= 0.f) return 0.f;\n  State->ApplyDamage(Actual, Instigator);\n  return Actual;\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "actor_damage_returns_processed_amount",
+          "points": 3.0,
+          "diagnosis": [
+            "ActualDamage\\s*=\\s*DamageAmount",
+            "InternalTakePointDamage",
+            "ShouldTakeDamage",
+            "(이벤트|event|통지)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "actor_damage_returns_processed_amount_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:TakeDamage|기본\\s*구현)[^.\\n]{0,90}(?:항상|always)\\s*0(?:\\.0)?(?:f)?\\s*(?:을\\s*)?(?:반환|returns?)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "spawned_controller_initializes_player_state",
+      "origin": "Engine/Source/Runtime/Engine/Private/PlayerController.cpp:1073-1081; Controller.cpp:623-654",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "Standalone 초기화된 월드에 올바른 GameMode와 PlayerStateClass가 있다. PC를 수동 SpawnActor했으니 PlayerState가 반드시 null인가?",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "auto* PC = World->SpawnActor<ACombatPlayerController>();\nauto* PS = PC->GetPlayerState<ACombatPlayerState>();\nPS->SetTeam(Team);\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "spawned_controller_initializes_player_state",
+          "points": 3.0,
+          "diagnosis": [
+            "PostInitializeComponents",
+            "InitPlayerState",
+            "(GameMode|PlayerStateClass)",
+            "(널\\s*가드|null\\s*guard|생성\\s*실패)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "spawned_controller_initializes_player_state_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:로그인|login)[^.\\n]{0,80}(?:없|안|without)[^.\\n]{0,80}(?:반드시|항상)\\s*(?:null|nullptr|널)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "standalone_game_instance_creates_world",
+      "origin": "Engine/Source/Runtime/Engine/Private/GameInstance.cpp:189-200",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "InitializeStandalone 직후 GetWorld를 사용하면 월드를 따로 안 만들었으므로 반드시 크래시하는가?",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "auto* Instance = NewObject<UGameInstance>(GEngine);\nInstance->InitializeStandalone();\nUWorld* World = Instance->GetWorld();\nWorld->SetGameMode(URL);\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "standalone_game_instance_creates_world",
+          "points": 3.0,
+          "diagnosis": [
+            "InitializeStandalone",
+            "(CreateWorld|임시\\s*월드|dummy\\s*world)",
+            "(컨텍스트|WorldContext)",
+            "(SetCurrentWorld|연결)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "standalone_game_instance_creates_world_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "InitializeStandalone[^.\\n]{0,65}(?:월드를?\\s*(?:생성|만들)하지\\s*않|does\\s+not\\s+create)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "timer_fixture_frame_counter_has_purpose",
+      "origin": "Engine/Source/Runtime/Engine/Private/TimerManager.cpp:959-962,1148; Engine/Source/Runtime/Engine/Public/TimerManager.h:391-394",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "동기 자동화 테스트가 엔진 Tick 없이 World::Tick을 여러 번 호출한다. ++GFrameCounter를 무조건 삭제하라는 제안이 타당한가?",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "for (float Elapsed = 0; Elapsed < Seconds; Elapsed += 0.05f) {\n  ++GFrameCounter;\n  World->Tick(LEVELTICK_All, 0.05f);\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "timer_fixture_frame_counter_has_purpose",
+          "points": 3.0,
+          "diagnosis": [
+            "HasBeenTickedThisFrame",
+            "GFrameCounter",
+            "(중복|한\\s*프레임|once|same\\s*frame)",
+            "(격리|isolation|전역|global)",
+            "(무조건\\s*삭제하지|삭제\\s*전|유지|대체.*검증)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "timer_fixture_frame_counter_has_purpose_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "GFrameCounter[^.\\n]{0,60}(?:필요\\s*없|불필요)[^.\\n]{0,40}(?:삭제|제거)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "set_player_state_does_not_set_owner",
+      "origin": "Engine/Source/Runtime/Engine/Private/Controller.cpp:572-581,639-654",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "PlayerState를 직접 스폰하고 SetPlayerState만 호출하면 엔진의 InitPlayerState와 동일한 소유권 설정인가?",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "auto* PS = World->SpawnActor<ACombatPlayerState>();\nPC->SetPlayerState(PS);\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "set_player_state_does_not_set_owner",
+          "points": 3.0,
+          "diagnosis": [
+            "SetPlayerState",
+            "(포인터|참조|대입|assign)",
+            "(SpawnInfo\\.Owner|SpawnParameters\\.Owner|SetOwner)",
+            "InitPlayerState"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "set_player_state_does_not_set_owner_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "SetPlayerState[^.\\n]{0,60}(?:Owner|소유자)[^.\\n]{0,30}(?:자동|automatically)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "server_client_rpc_targets_owner",
+      "origin": "Engine/Source/Runtime/Engine/Private/Actor.cpp:5412-5621 (GetFunctionCallspace)",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "서버에서 Client RPC 래퍼를 호출하면 전송되는가? 로컬 소유자와 원격 소유자, NetMulticast를 구분하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "UFUNCTION(Client, Unreliable)\nvoid ClientConfirmHit();\n// On the authoritative replicated actor owned by the shooting controller:\nClientConfirmHit();\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "server_client_rpc_targets_owner",
+          "points": 3.0,
+          "diagnosis": [
+            "(소유|own)",
+            "(원격|remote)",
+            "(로컬|local)",
+            "NetMulticast",
+            "GetFunctionCallspace"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "server_client_rpc_targets_owner_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "Client\\s*RPC[^.\\n]{0,70}(?:모든\\s*클라이언트|all\\s*clients)[^.\\n]{0,25}(?:전송|전달|broadcast)",
+            "서버에서[^.\\n]{0,35}ClientConfirmHit[^.\\n]{0,45}(?:아무\\s*일도|전송되지)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repeated_die_checks_idempotence",
+      "origin": "Latency_MultiCombat Source/Latency_MultiCombat/Private/Tests/FPSBaselineTests.cpp:135-146; Private/LatencyMultiCombatCharacter.cpp:300 (Die guard)",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "다음 테스트의 두 번째 Die 호출을 전투 버그 은폐로 단정할 수 있는지, 마지막 assertion까지 읽고 평가하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "Red->TakeDamage(1000.f, FDamageEvent(), nullptr, nullptr);\nBlue->TakeDamage(1000.f, FDamageEvent(), nullptr, nullptr);\nRed->Die(nullptr);\nFixture.Advance(0.2f);\nTestTrue(TEXT(\"Both respawn\"), RedPC->GetPawn() != Red && BluePC->GetPawn() != Blue);\nTestEqual(TEXT(\"Repeated death counted once\"), RedPS->DeathCount, 1);\n// Die starts with: if (!HasAuthority() || CombatState == ECombatState::Dead) return;\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "repeated_die_checks_idempotence",
+          "points": 3.0,
+          "diagnosis": [
+            "(멱등|idempoten|중복\\s*호출)",
+            "DeathCount",
+            "(한\\s*번|1)",
+            "(의도|목적|검증|assert)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "repeated_die_checks_idempotence_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:테스트|Die)[^.\\n]{0,60}(?:의도적으로\\s*(?:감추|은폐)|버그를\\s*(?:감추|은폐))"
           ]
         }
       ]

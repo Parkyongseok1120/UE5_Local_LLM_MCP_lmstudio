@@ -206,6 +206,7 @@ function toolDefinitions() {
         project: projectArgument(),
         startLine: { type: "number" },
         endLine: { type: "number" },
+        lineNumbers: { type: "boolean" },
         byteBudget: readByteBudget(),
       }), ["path", "startLine", "endLine"]),
     },
@@ -217,12 +218,13 @@ function toolDefinitions() {
         project: projectArgument(),
         symbol: { type: "string" },
         contextLines: { type: "number" },
+        lineNumbers: { type: "boolean" },
         byteBudget: readByteBudget(),
       }), ["path", "symbol"]),
     },
     {
       name: "read_unreal_logs",
-      description: "Read Unreal/MCP logs: tail, first_error, or range at cursorByte. fileName = exact basename (e.g. of fullLogPath).",
+      description: "Read Unreal/MCP logs: tail, first_error, or range at cursorByte. fileName = exact basename.",
       inputSchema: schema(repeatable({
         mode: { type: "string", enum: ["tail", "first_error", "range"] },
         project: projectArgument(),

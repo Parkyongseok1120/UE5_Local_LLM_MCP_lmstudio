@@ -42,6 +42,7 @@ from unreal_static_model import (
     ValidationReport,
 )
 from unreal_contracts import contract_revision, load_contracts_or_none
+from unreal_static_engine import apply_engine_version_policy, resolve_static_engine_identity
 from unreal_static_network import (
     validate_replicated_uproperty_without_doreplifetime,
     validate_replication_setup,
@@ -71,6 +72,21 @@ from workspace_paths import filesystem_path_identity
 
 
 def validate_unreal_readiness(
+    root: Path,
+    module_graph_path: Path | None = None,
+    *,
+    lightweight: bool = False,
+    skip_include_path_checks: bool = False,
+    scope_paths: list[Path] | None = None,
+    engine_identity: dict | None = None,
+) -> list[Finding]:
+    findings = _collect_unreal_readiness(root, module_graph_path, lightweight=lightweight,
+        skip_include_path_checks=skip_include_path_checks, scope_paths=scope_paths)
+    identity = engine_identity if engine_identity is not None else resolve_static_engine_identity(root)
+    return apply_engine_version_policy(findings, identity, load_contracts_or_none())
+
+
+def _collect_unreal_readiness(
     root: Path,
     module_graph_path: Path | None = None,
     *,
@@ -373,7 +389,12 @@ def can_run_autofix_ubt(findings: list[Finding], *, autofix_written: bool = Fals
         return True
     return False
 
-def validate_unreal_readiness_report(root: Path, *, scope_paths: list[Path] | None = None) -> ValidationReport:
+def validate_unreal_readiness_report(
+    root: Path,
+    *,
+    scope_paths: list[Path] | None = None,
+    engine_identity: dict | None = None,
+) -> ValidationReport:
     """Findings plus the analysis coverage a caller must not mistake for a full check.
 
     ``validate_unreal_readiness`` keeps returning the plain list for existing
@@ -381,8 +402,9 @@ def validate_unreal_readiness_report(root: Path, *, scope_paths: list[Path] | No
     they used. A missing or invalid contract file makes the contract-based
     analyses ``unavailable`` instead of silently reporting no findings.
     """
-    findings = validate_unreal_readiness(root, scope_paths=scope_paths) if scope_paths is not None         else validate_unreal_readiness(root)
     contracts = load_contracts_or_none()
+    identity = engine_identity if engine_identity is not None else resolve_static_engine_identity(root)
+    findings = validate_unreal_readiness(root, scope_paths=scope_paths, engine_identity=identity)
     return ValidationReport(
         findings=findings,
         analysisCoverage={
@@ -393,7 +415,7 @@ def validate_unreal_readiness_report(root: Path, *, scope_paths: list[Path] | No
             "limitations": ["regex/lexical analysis: macros, templates and conditional compilation are not expanded",
                             "absence of a finding is not proof of correctness"],
         },
-        engineIdentity=None,
+        engineIdentity=identity,
         contractRevision=contract_revision(contracts) if contracts else None,
     )
 

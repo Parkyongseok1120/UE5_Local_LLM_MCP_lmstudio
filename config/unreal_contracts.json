@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
-  "revision": 1,
+  "engine": "unreal",
+  "revision": 2,
   "description": "Single source for Unreal engine facts and project policies used by the static validators, the engine_local symbol lookup and the generated model guidance. Data only: analysis logic stays in the Python validators. Evidence paths are relative to the installed engine root.",
   "validatedEngineVersions": [
     "5.8"
@@ -112,7 +113,7 @@
       "WorldDestroyed"
     ],
     "invalidOverrideNames": {
-      "onworlddestroyed": "UWorldSubsystem does not expose OnWorldDestroyed in UE 5.8; use OnWorldEndPlay(UWorld&) or PreDeinitialize().",
+      "onworlddestroyed": "UWorldSubsystem does not expose OnWorldDestroyed in UE {validatedEngineVersions}; use OnWorldEndPlay(UWorld&) or PreDeinitialize().",
       "worlddestroyed": "WorldDestroyed is not a standard UE subsystem lifecycle override; verify the direct base API before planning edits."
     },
     "contractRefs": [
@@ -634,7 +635,7 @@
     },
     {
       "id": "policy.claims.engine-default-vs-project",
-      "revision": 1,
+      "revision": 2,
       "kind": "project_policy",
       "topic": "verification",
       "applicability": {
@@ -642,7 +643,7 @@
           "*"
         ]
       },
-      "statement": "Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text).",
+      "statement": "Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text). Before stating what an engine function returns or does, read its implementation: sourceMode=engine_local lists .cpp definition candidates, and read_file_range reads engine://Engine/Source/... with line numbers.",
       "preconditions": [
         "A finding says an engine capability is absent or a configuration cannot be checked."
       ],

@@ -9,7 +9,7 @@
 - ProjectVersion.txt, manifest.json과 실제 해결된 packages-lock.json, 관련 asmdef 참조를 확인한다.
 - API 도입·변경 전에 실행 Editor 버전, 저장된 ProjectVersion, 해결된 패키지 버전·asmdef를 구분해 선언과 호출 조건을 확인한다. 같은 근거를 재사용하되 버전/의존성이 바뀌면 재확인한다.
 - SerializeField는 필드 직렬화 목적과 지원 타입을 확인한다. 일반 C# property/event와 UnityEvent를 동일하게 취급하지 않는다. 선언뿐 아니라 에셋·Inspector 연결과 실제 콜백을 확인한다.
-- CS0246·CS1061에서는 수신 타입, 확장 메서드, 접근 범위, 패키지 소스·메타데이터와 적용 버전을 찾는다.
+- CS0246·CS1061에서는 수신 타입, 확장 메서드, 접근 범위, 패키지 소스(read_file path=package://<패키지명>/<경로>, 읽기 전용·packages-lock.json에 있는 패키지)·메타데이터와 적용 버전을 찾는다.
 - 새 외부 API를 사용할 때도 같은 선언 확인을 적용한다. 검색 후보·다른 패키지 버전의 예제를 실제 해결 버전의 계약으로 쓰지 않는다. 컴파일을 통과하려고 callback·async·네트워크 호출의 의미를 바꾼 경우 별도 동작 근거가 필요하다.
 - 인스펙터 필드·ScriptableObject·이벤트 선언 → 초기화·등록 → 실제 호출·변경의 연결을 확인한다.
 - 비기본 Inspector/ScriptableObject 값이 실제 소비자에 전달되는지 확인한다. 필드·UnityEvent 이름이나 시그니처를 바꾸기 전에 Scene/Prefab·직렬화 참조와 migration을 확인한다. C# 검색만으로 에셋 사용처 부재를 증명하지 않는다.

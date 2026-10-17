@@ -8,7 +8,10 @@ import os
 from pathlib import Path
 
 DEFAULT_LMSTUDIO_ROOT = Path.home() / ".lmstudio"
-DEFAULT_ENGINE_VERSION = "5.8"
+# Names the default RAG index shard only. It is NOT an engine version claim:
+# engine identity comes from engine_identity.py and is "unknown" when unread.
+DEFAULT_INDEX_ENGINE_VERSION = "5.8"
+DEFAULT_ENGINE_VERSION = DEFAULT_INDEX_ENGINE_VERSION  # historical alias; index naming only
 DEFAULT_INDEX_NAMESPACE = "unreal58"
 FALLBACK_INDEX_REL = Path("data/unreal58/rag.sqlite")
 RUNTIME_INDEX_PATH_ENV = "UNREAL_RAG_INDEX_PATH"

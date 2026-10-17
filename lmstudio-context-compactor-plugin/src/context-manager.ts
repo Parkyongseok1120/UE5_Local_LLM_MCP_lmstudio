@@ -234,6 +234,8 @@ export function composeModelHistory(
     return { history, overhead: 0 };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
+  // Real ids of recent completed calls; kept in the per-round data slot so the cached system prefix stays stable.
+  const refsText = enableNoteProtocol ? modelNotes.renderAvailableRefs(messages) : "";
   const instruction = config.reviewProgress ? modelNotes.NOTE_INSTRUCTION.replace(
     "No other keys. refs may contain",
     "The optional reviewClaims array uses [{path, sha256, reviewScope, statement, refs}]; reviewClaims require an observed file hash and tool-call refs and are assistant claims, never verified completion. No other keys. refs may contain") : modelNotes.NOTE_INSTRUCTION;
@@ -241,7 +243,10 @@ export function composeModelHistory(
     && config.maxCheckpointChars >= 2000 + instruction.length;
   const canIncludeNote = canIncludeInstruction
     && config.maxCheckpointChars >= 2000 + instruction.length + noteText.length;
-  const overhead = (canIncludeInstruction ? instruction.length + (canIncludeNote ? noteText.length : 0) : 0) + taskData.length;
+  const canIncludeRefs = canIncludeInstruction && Boolean(refsText)
+    && config.maxCheckpointChars >= 2000 + instruction.length + (canIncludeNote ? noteText.length : 0) + refsText.length;
+  const overhead = (canIncludeInstruction ? instruction.length + (canIncludeNote ? noteText.length : 0) : 0)
+    + (canIncludeRefs ? refsText.length : 0) + taskData.length;
   const composed = Chat.empty();
   const combinedSystemText = [
     ...messages.filter((message) => message.isSystemPrompt())
@@ -254,7 +259,8 @@ export function composeModelHistory(
   // user or system message), placed immediately before the latest user
   // message: a note or task-progress update then leaves the cached prefix of
   // earlier turns intact. Model input only; never persisted.
-  const runtimeParts = [...(canIncludeNote && noteText ? [noteText] : []), ...(referenceData ? [referenceData] : []),
+  const runtimeParts = [...(canIncludeNote && noteText ? [noteText] : []), ...(canIncludeRefs ? [refsText] : []),
+    ...(referenceData ? [referenceData] : []),
     ...(taskData ? [taskData] : []), ...facts];
   const latestUser = messages.reduce((found, message, index) => message.isUserMessage() ? index : found, -1);
   if (latestUser < 0) for (const part of runtimeParts) composed.append("assistant", part);

@@ -144,3 +144,46 @@ test("disabled allowance performs no additional measurement", async () => {
   assert.equal(result.telemetry.reason, "disabled");
   assert.equal(result.telemetry.attempts, 0);
 });
+
+test("documents delivery omits unknown/other-major sections and annotates same-major facts", () => {
+  const { bundledGuidanceSections } = require("../dist/generated-design-guidance");
+  const facts = version => ({ engineVersion: version, packages: {}, networkPackagesAmbiguous: false });
+  const unreal = version => selectDesignGuidance("lifecycle", scope("unreal"), undefined, facts(version)).find(d => d.id === "unreal");
+  const lifetime = bundledGuidanceSections.find(s => s.id === "unreal/lifetime");
+  const timer = bundledGuidanceSections.find(s => s.id === "unreal/timer");
+  const same = unreal("5.3.1");
+  assert.ok(same.text.includes(lifetime.text));
+  assert.ok(same.text.includes(timer.text));
+  assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.8]"));
+  assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.7]"));
+  for (const version of [undefined, "4.27.2"]) {
+    const doc = unreal(version);
+    assert.ok(!doc.text.includes(lifetime.text));
+    assert.ok(!doc.text.includes(timer.text));
+    assert.ok(doc.text.includes("[omitted unreal/lifetime:"));
+    assert.ok(designGuidanceCandidates([doc])[0].omissionReasons.length > 0);
+  }
+  const unityFacts = { engineVersion: "6000.3.1f1", packages: { "com.unity.netcode.gameobjects": "2.7.1" }, networkPackagesAmbiguous: false };
+  const doc = selectDesignGuidance("multiplayer", scope("unity"), undefined, unityFacts).find(d => d.id === "unity-networking");
+  const ngo = bundledGuidanceSections.find(s => s.id === "unity-networking/ngo");
+  const entities = bundledGuidanceSections.find(s => s.id === "unity-networking/entities");
+  assert.ok(doc.text.includes(ngo.text));
+  assert.ok(!doc.text.includes(entities.text));
+  assert.ok(doc.text.includes("[unvalidated for com.unity.netcode.gameobjects 2.7.1; validated on 2.7.0]"));
+  assert.equal(same.revision, bundledDesignGuidance.find(d => d.id === "unreal").revision);
+});
+
+test("versionTier derives the major or package family from the validated list", () => {
+  const { versionTier } = require("../dist/design-guidance");
+  assert.equal(versionTier("5.8.2", ["5.8"]), "validated");
+  assert.equal(versionTier("5.3", ["5.8"]), "same_major_unvalidated");
+  assert.equal(versionTier("4.27.2", ["5.8"]), "other_major");
+  assert.equal(versionTier("6000.3.1f1", ["6000.0"]), "same_major_unvalidated");
+  assert.equal(versionTier("6000.0.44f1", ["6000.0"]), "validated");
+  assert.equal(versionTier("2022.3.1f1", ["6000.0"]), "other_major");
+  assert.equal(versionTier(undefined, ["5.8"]), "unknown");
+  assert.equal(versionTier("2.7.0-preview", ["2.7.0"], "package"), "unknown");
+  assert.equal(versionTier("2.7.1", ["2.7.0"], "package"), "same_major_unvalidated");
+  assert.equal(versionTier("2.8.0", ["2.7.0"], "package"), "other_major");
+  assert.equal(versionTier("1.14.2", ["1.14"], "package"), "validated");
+});

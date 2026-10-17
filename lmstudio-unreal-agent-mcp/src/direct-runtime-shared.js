@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const { failure } = require("./direct-response.js");
 
-const fsp = fs.promises;
+const { stableStatIdentity, statOrNull, isBinary } = require("../../shared-tool-core/direct-file-snapshot");
 
 function envFlag(env, name, fallback = false) {
   const value = env[name];
@@ -31,25 +31,11 @@ function statSignature(stat, prefix = "") {
   return stat ? `${prefix}${stat.dev || 0}:${stat.ino || 0}:${stat.size}:${Math.trunc(stat.mtimeMs)}` : `${prefix}missing`;
 }
 
-function stableStatIdentity(stat) {
-  return stat
-    ? `${stat.dev || 0}:${stat.ino || 0}:${stat.size}:${Math.trunc(stat.mtimeMs)}:${Math.trunc(stat.ctimeMs)}`
-    : "missing";
-}
 
-async function statOrNull(target) {
-  try {
-    return await fsp.stat(target);
-  } catch (error) {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  }
-}
 
-function isBinary(buffer) {
-  const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
-  return sample.includes(0);
-}
+
+
+
 
 function relativeSlash(root, target) {
   return path.relative(root, target).replace(/\\/g, "/") || ".";

@@ -38,6 +38,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/runtime-identity.ts",
   "src/tool-boundary.ts",
   "src/tool-capability-registry.ts",
+  "src/engine-profiles.js",
 
   "src/index.ts",
   "src/prediction-loop.ts",

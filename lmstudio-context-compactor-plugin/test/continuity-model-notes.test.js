@@ -158,3 +158,81 @@ test("project scope and refs require unambiguous tool observations", () => {
   assert.deepEqual(notes.reconcileStoredNote(archived, historyA, new Set([archiveRef])), archived);
   assert.equal(notes.reconcileStoredNote(archived, historyA).decisions.length, 0);
 });
+
+function exchange(id, name, args, result) {
+  return [
+    { role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: { id, type: "function", name, arguments: args } }] },
+    { role: "tool", content: [{ type: "toolCallResult", toolCallId: id, content: JSON.stringify(result) }] },
+  ];
+}
+function chatOf(...items) {
+  const chat = Chat.empty();
+  for (const item of items) chat.append(ChatMessage.from(item));
+  return chat.getMessagesArray();
+}
+
+test("the model sees the real ids of recent completed calls, bounded to 16, and only unambiguous ones", () => {
+  const items = [{ role: "user", content: "Audit the project." }];
+  for (let i = 0; i < 20; i += 1) items.push(...exchange(`call_${i}`, i % 2 ? "read_file" : "search_files",
+    { path: `Source/File${i}.cpp` }, { ok: true }));
+  items.push(...exchange("dup", "read_file", { path: "A.cpp" }, { ok: true }), ...exchange("dup", "read_file", { path: "B.cpp" }, { ok: true }));
+  items.push({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: { id: "pending", type: "function", name: "read_file", arguments: { path: "C.cpp" } } }] });
+  const text = notes.renderAvailableRefs(chatOf(...items));
+  assert.match(text, /^\[Available tool-call refs\]/u);
+  const rows = text.split("\n").slice(1);
+  assert.ok(rows.length <= 16, String(rows.length));
+  assert.ok(rows.every(row => /^- tool-call:[A-Za-z0-9_-]+ \S+/u.test(row)));
+  assert.ok(rows.at(-1).includes("tool-call:call_19 read_file path=Source/File19.cpp"), rows.at(-1));
+  assert.ok(!text.includes("tool-call:dup"), "ids used twice are ambiguous and never offered");
+  assert.ok(!text.includes("tool-call:pending"), "calls without a result are not citable");
+  assert.ok(!text.includes("call_0 "), "only the most recent calls are listed");
+  assert.equal(notes.renderAvailableRefs(chatOf({ role: "user", content: "hi" })), "");
+  assert.ok(notes.renderAvailableRefs(chatOf(...items), 16, 400).length <= 400);
+  assert.match(notes.NOTE_INSTRUCTION, /copied exactly from the \[Available tool-call refs\] list/u);
+});
+
+test("refs outside the conversation are still rejected, listed ones are accepted", () => {
+  const history = chatOf({ role: "user", content: "Audit." }, ...exchange("call_1", "read_file", { path: "A.cpp" }, { ok: true, path: "A.cpp" }));
+  const fingerprint = notes.objectiveFingerprint(history);
+  const note = notes.attachScope({ decisions: [{ statement: "A", rationale: "B", refs: ["tool-call:call_1", "tool-call:1", "tool-call:9"] }] }, fingerprint, history);
+  assert.deepEqual(note.decisions[0].refs, ["tool-call:call_1"]);
+});
+
+test("a decision grounded only in a structure validation is rendered as structure_only, not as factual evidence", () => {
+  const history = chatOf({ role: "user", content: "Audit." },
+    ...exchange("val_1", "evidence_first_validate", { packet: {} }, { ok: true, summary: "structure_valid; facts_not_verified",
+      validationScope: "packet_structure_and_record_consistency", factualEvidenceVerified: false, wholeTaskVerified: false }),
+    ...exchange("read_1", "read_file", { path: "Source/A.cpp" }, { ok: true, kind: "workspace_file_observation", path: "Source/A.cpp", sha256: "d".repeat(64) }));
+  const fingerprint = notes.objectiveFingerprint(history);
+  const note = notes.attachScope({ decisions: [
+    { statement: "Only validated", rationale: "packet passed", refs: ["tool-call:val_1"] },
+    { statement: "Read it", rationale: "source seen", refs: ["tool-call:read_1"] }] }, fingerprint, history);
+  const rendered = notes.renderAssistantNote(note, history);
+  const payload = JSON.parse(rendered.slice(rendered.indexOf('{"modelNotes"')));
+  const states = Object.fromEntries(payload.sourceApplicability.map(entry => [entry.ref, entry.state]));
+  assert.equal(states["tool-call:val_1"], "structure_only");
+  assert.notEqual(states["tool-call:read_1"], "structure_only");
+  assert.match(rendered, /구조 검증만 있음, 사실 근거 아님/u);
+  // Flags stripped by an older compaction: the tool name still identifies a structure-only check.
+  const stripped = chatOf({ role: "user", content: "Audit." }, ...exchange("val_2", "evidence_first_validate", { packet: {} }, { ok: true }));
+  const note2 = notes.attachScope({ decisions: [{ statement: "S", rationale: "R", refs: ["tool-call:val_2"] }] }, notes.objectiveFingerprint(stripped), stripped);
+  assert.match(notes.renderAssistantNote(note2, stripped), /"state":"structure_only"/u);
+});
+
+test("composeModelHistory offers the real ids in the per-round data slot, not in the cached system prefix", () => {
+  const { composeModelHistory } = require("../dist/context-manager");
+  const { readConfig } = require("../dist/execution-config");
+  const config = readConfig({ getPluginConfig: () => ({ get: () => undefined }) });
+  const messages = chatOf({ role: "user", content: "Audit." }, ...exchange("call_77", "read_file", { path: "Source/Z.cpp" }, { ok: true }),
+    { role: "user", content: "Continue." });
+  const history = Chat.empty();
+  messages.forEach(message => history.append(message));
+  const composed = composeModelHistory(history, null, config, [], true).history.getMessagesArray();
+  const system = composed.filter(message => message.isSystemPrompt()).map(message => message.getText()).join("\n");
+  const assistantTexts = composed.filter(message => message.isAssistantMessage()).map(message => message.getText());
+  assert.doesNotMatch(system, /tool-call:call_77/u);
+  assert.match(system, /\[Available tool-call refs\] list/u);
+  assert.ok(assistantTexts.some(text => text.includes("tool-call:call_77 read_file path=Source/Z.cpp")), assistantTexts.join("|"));
+  const off = composeModelHistory(history, null, config, [], false).history.getMessagesArray().map(message => message.getText()).join("\n");
+  assert.doesNotMatch(off, /Available tool-call refs/u);
+});

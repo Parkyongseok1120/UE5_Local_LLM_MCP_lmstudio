@@ -271,6 +271,9 @@ function historicalEvidenceObservation(source) {
     sourceIdentity: identity,
     sourceIdentityDigest: source.sourceIdentityDigest,
     sourceFacts: source.sourceFacts,
+    sourceCoverageAtRead: source.sourceCoverageAtRead,
+    projectionCoverage: source.projectionCoverage,
+    notice: typeof source.notice === "string" ? source.notice.slice(0, 400) : undefined,
     sourceRangeUnit: source.sourceRangeUnit,
     archiveRangeUnit: source.rangeUnit,
     representation: source.representation,
@@ -371,6 +374,8 @@ function parseToolResult(content) {
       "startLine", "endLine", "returnedLineCount", "nextStartLine", "totalLines", "filesScanned", "findingCount",
       "coverage", "filesRead", "filesSkipped", "readErrorCount", "skippedByReason", "discoveryErrorCount", "excludedEntries",
       "validationOk", "blocksBuild", "exitCode", "likelyErrors", "fullLogPath",
+      // A structure-only validation must stay structure-only after compaction.
+      "validationScope", "factualEvidenceVerified", "wholeTaskVerified",
       "upToDate", "actionsExecuted", "proofLevel", "failedCount", "succeededCount",
       "claimCount", "errorCount", "warningCount", "errorShapeCount", "warningShapeCount",
       "omittedErrorShapeCount", "omittedWarningShapeCount", "schemaVersion",

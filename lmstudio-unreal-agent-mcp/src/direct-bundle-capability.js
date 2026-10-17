@@ -98,7 +98,7 @@ function createBundleCapability(context) {
         newText: patch.newText,
         expectedOccurrences: patch.expectedOccurrences,
       });
-      if (!next.ok) throw new Error(`${patch.path}: ${next.error}`);
+      if (!next.ok) throw validationError(next.errorCode || "BUNDLE_VALIDATION_FAILED", `${patch.path}: ${next.error}`);
       prospective.set(patch.path, { content: next.updated, initialHash: read.hash, version });
     }
     const semanticAdvisories = [];

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from direct_rag_delivery import deliver
+from direct_rag_chunk_read import CHUNK_NEXT_ACTION, read_chunk_page
 from direct_rag_generation_boundary import generation_transition_boundary
 from direct_rag_result import CapabilityResult, configured_result_limit, failure
 from direct_rag_evidence import (
@@ -89,6 +90,8 @@ def rag_search(
             bound_error,
             retry_allowed=True,
         )
+    if "chunkId" in arguments or "offset" in arguments:
+        return read_chunk_page(runtime, arguments)
     query = str(arguments.get("query") or "").strip()
     if not query:
         return failure(
@@ -243,6 +246,8 @@ def rag_search(
         payload["matchMetadataTruncated"] = True
     if page.truncated or match_metadata_truncated:
         payload["nextDetailLevel"] = next_detail(page.detail_level)
+        if match_refs:
+            payload["nextAction"] = CHUNK_NEXT_ACTION
     advisory = _freshness_advisory(page)
     if advisory:
         payload["freshnessAdvisory"] = advisory
@@ -274,6 +279,8 @@ def rag_search(
     payload, envelope_truncated = fit_evidence_payload(payload, max_chars=limit)
     if envelope_truncated:
         payload["evidenceEnvelopeTruncated"] = True
+        if payload.get("matches"):
+            payload["nextAction"] = CHUNK_NEXT_ACTION
         next_level = next_detail(page.detail_level)
         if next_level:
             payload["nextDetailLevel"] = next_level

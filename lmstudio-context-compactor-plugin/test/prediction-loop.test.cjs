@@ -4577,6 +4577,13 @@ test('reasoning recovery is used once across a successful guarded mutation and l
   await handlePredictionLoop(ctl);
   assert.equal(calls, 3); assert.equal(writes, 1); assert.equal(approvals, 1);
   assert.equal(ctl.debugValues.filter(e => e.event === 'reasoning_recovery_scheduled').length, 1);
+  // Telemetry reports the cap actually requested for the retry (twice the configured reserve, capped).
+  const { reasoningRecoveryOutputCap } = require('../dist/reasoning-recovery');
+  const scheduled = ctl.debugValues.find(e => e.event === 'reasoning_recovery_scheduled');
+  assert.equal(scheduled.requestedMaxTokens, 8192); // fixture reserve 4096, doubled
+  assert.equal(scheduled.requestedMaxTokens, reasoningRecoveryOutputCap(4096));
+  assert.equal(reasoningRecoveryOutputCap(8192), 16384);
+  assert.equal(reasoningRecoveryOutputCap(100000), 131072);
   const transitions = ctl.debugValues.find(e => e.event === 'execution_transitions').transitions;
   assert.ok(transitions.some(t => t.from === 'REASONING_RECOVERY' && t.to === 'RESEARCH'));
   assert.ok(ctl.blocks.some(b => b.results.length === 1));
@@ -4880,6 +4887,41 @@ test('unparsed tool handling preserves SDK validation feedback for a parsed requ
   });
   const ctl = fakeController(Chat.from([{ role: 'user', content: 'Observe only.' }]), observeModel, { observeOnly: true });
   await assert.rejects(handlePredictionLoop(ctl), error => error === schemaError);
+});
+
+test('documents guidance uses the returned engine identity on the next prediction', async () => {
+  let calls = 0;
+  const project = 'C:/Projects/DocumentVersion/DocumentVersion.uproject';
+  const tool = { name: 'static_validate_project', description: 'Validate', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { project: { type: 'string' } } } };
+  const model = { async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      calls++;
+      const text = chat.toString();
+      if (calls === 2) {
+        assert.match(text, /\[unvalidated for unreal 5\.3\.2; validated on 5\.8\]/);
+        assert.doesNotMatch(text, /\[omitted unreal\/lifetime:/);
+        completeRecoveryReply(options, 'The version was observed; these engine rules remain unvalidated for it.'); return;
+      }
+      assert.match(text, /\[omitted unreal\/lifetime: unreal:unknown\]/);
+      const request = { type: 'function', id: 'document-version', name: tool.name, arguments: { project } };
+      await options.guardToolCall(0, 7100, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, projectRoot: 'C:/Projects/DocumentVersion', analysis: {
+          engineIdentity: { status: 'observed', engine: 'unreal', version: '5.3.2', source: 'build_version_file',
+            engineRoot: 'C:/Engines/Fixture', hashScope: 'file', sha256: 'a'.repeat(64) } } }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Review lifecycle rules using the project engine version.' }]), model,
+    { projectEngine: 'unreal', projectIdentity: project, designGuidanceMode: 'lifecycle', designGuidanceDelivery: 'documents',
+      designGuidanceMaxTokens: 16000, contextManagementMode: 'hybrid' }, [tool]);
+  ctl.requestConfirmToolCall = async () => ({ type: 'allow' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
 });
 
 test('design references reach each measured prediction once and preserve ordinary tool approval', async () => {
@@ -5443,4 +5485,66 @@ test("an unbounded tool loop stops at maxResearchRounds and reports from collect
   assert.deepEqual(toolCounts, [1, 1, 1, 0]);
   assert.ok(ctl.debugValues.some(e => e.event === "research_round_limit" && e.rounds === 3));
   assert.match(ctl.blocks.at(-1).text, /Report from three rounds/);
+});
+
+test("an unclosed raw tool_call is retried with the tool's schema, and no thin partial report precedes the retry", async () => {
+  const tools = gitRecoveryTestTools();
+  const unclosed = "계획을 정리했습니다.\n<tool_call>\n<function=git_diff_file>\n<parameter=path>\nSource/A.cpp";
+  let calls = 0;
+  const model = { identifier: "unclosed-raw-model", async getContextLength() { return 38912; },
+    applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(prompt) { return String(prompt).startsWith("[") ? 100 : 5000; },
+    async act(chat, roundTools, opts) {
+      calls++;
+      if (calls === 1) {
+        opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+        opts.onMessage(ChatMessage.create("assistant", unclosed));
+        return;
+      }
+      assert.match(chat.toString(), /Schema reminder/u);
+      assert.match(chat.toString(), /git_diff_file: required \[[^\]]*comparison[^\]]*path[^\]]*\]/u);
+      assert.ok(roundTools.some(tool => tool.name === "git_diff_file"));
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", "재시도 뒤 근거 기반 보고입니다."));
+    } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Inspect Source/A.cpp changes and report." }]), model,
+    { contextManagementMode: "hybrid", maxOutputReserve: 8192, safetyMarginTokens: 2048 }, tools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  const retry = ctl.debugValues.find(event => event.event === "fresh_tool_planning_retry_scheduled");
+  assert.ok(retry, JSON.stringify(ctl.debugValues.map(event => event.event)));
+  assert.deepEqual(retry.rawToolIntentNames, ["git_diff_file"]);
+  assert.ok(ctl.debugValues.every(event => event.event !== "partial_report_delivery"),
+    "a retry replaces the round; no partial report may be shown first");
+});
+
+test("raw tool names come from unclosed opening tags, never from quoted examples", () => {
+  const rawToolIntentNames = text => __test.classifyRawToolIntent(text, [], []).names;
+  assert.deepEqual(rawToolIntentNames("먼저\n<tool_call>\n<function=read_file>\n<parameter=path>"), ["read_file"]);
+  assert.deepEqual(rawToolIntentNames("<function=read_file>"), ["read_file"]);
+  assert.deepEqual(rawToolIntentNames("```xml\n<tool_call>\n<function=read_file>\n```"), []);
+  assert.deepEqual(rawToolIntentNames("예시: `<tool_call><function=read_file>`"), []);
+  assert.deepEqual(rawToolIntentNames("ordinary prose without tool syntax"), []);
+});
+
+test("the research path that ends on unexecuted tool text delivers an evidence-based partial report", async () => {
+  const unsafeTools = gitRecoveryTestTools([{ name: "write_file", pluginIdentifier: "mcp/unity-tools",
+    description: "write", parametersJsonSchema: { type: "object" } }]);
+  let calls = 0;
+  const model = { identifier: "no-retry-model", async getContextLength() { return 38912; },
+    applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(prompt) { return String(prompt).startsWith("[") ? 100 : 5000; },
+    async act(_chat, _roundTools, opts) {
+      calls++;
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", "<tool_call><function=write_file><parameter=path>A.cpp</parameter></function></tool_call>"));
+    } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Fix A.cpp." }]), model,
+    { contextManagementMode: "hybrid", maxOutputReserve: 8192, safetyMarginTokens: 2048 }, unsafeTools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  const delivered = ctl.debugValues.find(event => event.event === "partial_report_delivery");
+  assert.ok(delivered, JSON.stringify(ctl.debugValues.map(event => event.event)));
+  assert.equal(delivered.reason, "raw_tool_intent_not_retried");
+  assert.ok(ctl.blocks.some(block => /부분 조사 보고/u.test(block.text)));
 });

@@ -23,7 +23,7 @@ namespace EvidenceFirst.UnityBridge
             foreach (var file in Directory.GetFiles(Journal, "*.json").Take(1001))
             {
                 PathSafety.CheckInternal(file);
-                var record = JObject.Parse(File.ReadAllText(file));
+                var record = ReadRecord(file);
                 if ((string)record["status"] == "running")
                 { record["status"] = "outcome_unknown"; record["result"] = new JObject { ["status"] = "outcome_unknown", ["operationId"] = record["operationId"], ["origin"] = ResponseMetadata.Origin(record), ["message"] = "Editor/domain ended before result was recorded; request will not be replayed" }; PathSafety.WritePrivate(file, record.ToString(Formatting.None)); }
             }
@@ -44,6 +44,15 @@ namespace EvidenceFirst.UnityBridge
                 : new JObject { ["status"] = "outcome_unknown", ["operationId"] = record["operationId"] };
             result["origin"] = record["origin"]?.DeepClone() ?? ResponseMetadata.Origin(result);
             return result;
+        }
+        static JObject ReadRecord(string file)
+        {
+            // Journal JSON stores timestamps and user strings as strings.
+            // Json.NET's default date inference changes their JToken types on
+            // replay, so the retained result no longer equals the first one.
+            using (var stream = File.OpenText(file))
+            using (var reader = new JsonTextReader(stream) { DateParseHandling = DateParseHandling.None })
+                return JObject.Load(reader);
         }
         internal static JObject Dispatch(string method, JObject args)
         {
@@ -67,7 +76,7 @@ namespace EvidenceFirst.UnityBridge
             {
                 var file = OperationPath(Required(args, "operationId"));
                 if (!File.Exists(file)) return new JObject { ["status"] = "unknown", ["operationId"] = args["operationId"], ["message"] = "No retained execution record; do not infer non-execution after journal loss" };
-                var record = JObject.Parse(File.ReadAllText(file));
+                var record = ReadRecord(file);
                 if ((string)record["method"] == "unity_tests") {
                     if ((string)args["action"] == "cancel" && !Bridge.ExecuteAllowed) throw new BridgeException("permission_denied", "Editor Execute permission required");
                     return TestExecution.Call(new JObject { ["action"] = (string)args["action"] == "cancel" ? "cancel" : "status", ["operationId"] = args["operationId"] });
@@ -84,7 +93,7 @@ namespace EvidenceFirst.UnityBridge
             string digest = Bridge.Digest(Bridge.ProjectId + Bridge.Session + method + Canonical(args));
             if (File.Exists(filePath))
             {
-                var previous = JObject.Parse(File.ReadAllText(filePath));
+                var previous = ReadRecord(filePath);
                 if ((string)previous["digest"] != digest) throw new BridgeException("operation_conflict", "operationId was already bound to different content or Editor session");
                 return StoredResult(previous);
             }
@@ -204,6 +213,15 @@ namespace EvidenceFirst.UnityBridge
                 }
                 page["consistency"] = "index_page_then_main_asset_observations";
             }
+            // A find that returns nothing (or one page) is a statement about this query only.
+            page["absenceVerified"] = false;
+            page["searchScope"] = kind == "types" ? "typecache_unityengine_object_derived"
+                : kind == "assets" ? "assetdatabase_filter" : "loaded_scene_objects";
+            page["limitations"] = kind == "types"
+                ? new JArray("Only UnityEngine.Object-derived types are searched; plain C# classes, structs, interfaces and enums are not find targets.", "A type not listed here is not proven absent.")
+                : kind == "assets"
+                    ? new JArray("Only the AssetDatabase filter result is listed; assets outside Assets/Packages or excluded by the filter are not searched.", "An asset not listed here is not proven absent.")
+                    : new JArray("Only objects in loaded scenes are searched; unloaded scenes and prefab assets are not.", "An object not listed here is not proven absent.");
             return page;
         }
         static JObject Scenes(JObject args)

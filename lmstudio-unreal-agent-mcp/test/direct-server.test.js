@@ -89,7 +89,7 @@ test("read envelope byte budgets preserve UTF-8, escaped text and contiguous who
   fs.writeFileSync(f.sourceFile,lines.join('\r\n'));
   const delivered=[]; let start=1;
   while(start <= lines.length) {
-    const response=await f.runtime.callTool('read_file_range',{path:f.sourceFile,startLine:start,endLine:lines.length,byteBudget:4096});
+    const response=await f.runtime.callTool('read_file_range',{path:f.sourceFile,startLine:start,endLine:lines.length,byteBudget:4096,lineNumbers:false});
     assert.ok(Buffer.byteLength(response.content[0].text,'utf8') <= 4096);
     const p=payloadOf(response); assert.equal(p.ok,true,JSON.stringify(p));
     assert.equal(p.startLine,start); assert.equal(p.content,lines.slice(start-1,p.endLine).join('\n'));
@@ -680,7 +680,10 @@ test("read_file_range reports the last line actually delivered and a lossless co
     });
     const payload = payloadOf(result);
     assert.strictEqual(result.isError, false);
-    const delivered = payload.content.split("\n");
+    assert.strictEqual(payload.lineNumbers, true);
+    const numbered = payload.content.split("\n");
+    numbered.forEach((line, index) => assert.ok(line.startsWith(`${startLine + index}\t`), line));
+    const delivered = numbered.map((line) => line.replace(/^\d+\t/, ""));
     assert.strictEqual(payload.startLine, startLine);
     assert.strictEqual(payload.endLine, startLine + delivered.length - 1);
     assert.ok(result.content[0].text.length <= 16000);
@@ -813,4 +816,48 @@ test("run_command bounds captured output and invokes process-tree termination", 
   assert.strictEqual(payload.outputLimited, true);
   assert.ok(payload.stdout.length <= 768);
   assert.deepStrictEqual(killed, [{ pid: 424242, platform: process.platform }]);
+});
+
+test("numbered reads are the default, keep the raw hash, and numbered oldText is rejected with a clear code", async (t) => {
+  const { runtime, projectRoot } = fixture(t, { ALLOW_WRITE: "1" });
+  const target = path.join(projectRoot, "Config", "Numbered.ini");
+  const body = ["[A]", "Value=1", "Name=Alpha", "Value=2"].join("\n");
+  fs.writeFileSync(target, body, "utf8");
+  const sha = require("node:crypto").createHash("sha256").update(body).digest("hex");
+  const numbered = payloadOf(await runtime.callTool("read_file_range", { path: "project://Config/Numbered.ini", startLine: 2, endLine: 4 }));
+  assert.strictEqual(numbered.content, "2\tValue=1\n3\tName=Alpha\n4\tValue=2");
+  assert.strictEqual(numbered.lineNumbers, true);
+  assert.strictEqual(numbered.lineNumbersAreDisplayOnly, true);
+  assert.strictEqual(numbered.sha256, sha);
+  const raw = payloadOf(await runtime.callTool("read_file_range", { path: "project://Config/Numbered.ini", startLine: 2, endLine: 4, lineNumbers: false }));
+  assert.strictEqual(raw.content, "Value=1\nName=Alpha\nValue=2");
+  assert.strictEqual(raw.lineNumbers, false);
+  assert.strictEqual(raw.sha256, sha);
+  const symbol = payloadOf(await runtime.callTool("read_symbol", { path: "project://Config/Numbered.ini", symbol: "Name" }));
+  if (symbol.ok) assert.match(symbol.content, /^\d+\t/);
+
+  const rejected = payloadOf(await runtime.callTool("replace_in_file", { path: "project://Config/Numbered.ini",
+    oldText: "3\tName=Alpha", newText: "Name=Beta", expectedOccurrences: 1, fileVersionReceipt: numbered.fileVersionReceipt }));
+  assert.strictEqual(rejected.ok, false);
+  assert.strictEqual(rejected.errorCode, "LINE_NUMBER_PREFIX_IN_PATCH");
+  assert.match(rejected.message, /remove the numeric prefix/);
+  assert.strictEqual(fs.readFileSync(target, "utf8"), body);
+  const bundle = payloadOf(await runtime.callTool("apply_edit_bundle", { patches: [{ path: "project://Config/Numbered.ini",
+    oldText: "3\tName=Alpha", newText: "Name=Beta", expectedOccurrences: 1, fileVersionReceipt: numbered.fileVersionReceipt }] }));
+  assert.strictEqual(bundle.errorCode, "LINE_NUMBER_PREFIX_IN_PATCH");
+  const applied = payloadOf(await runtime.callTool("replace_in_file", { path: "project://Config/Numbered.ini",
+    oldText: "Name=Alpha", newText: "Name=Beta", expectedOccurrences: 1, fileVersionReceipt: numbered.fileVersionReceipt }));
+  assert.strictEqual(applied.ok, true, JSON.stringify(applied));
+  assert.match(fs.readFileSync(target, "utf8"), /Name=Beta/);
+});
+
+test("a file that really contains digits-tab lines is still patchable as written", async (t) => {
+  const { runtime, projectRoot } = fixture(t, { ALLOW_WRITE: "1" });
+  const target = path.join(projectRoot, "Config", "Table.ini");
+  fs.writeFileSync(target, "7\talpha\n8\tbeta\n", "utf8");
+  const read = payloadOf(await runtime.callTool("read_file", { path: "project://Config/Table.ini" }));
+  const applied = payloadOf(await runtime.callTool("replace_in_file", { path: "project://Config/Table.ini",
+    oldText: "7\talpha", newText: "7\tgamma", expectedOccurrences: 1, fileVersionReceipt: read.fileVersionReceipt }));
+  assert.strictEqual(applied.ok, true, JSON.stringify(applied));
+  assert.strictEqual(fs.readFileSync(target, "utf8"), "7\tgamma\n8\tbeta\n");
 });

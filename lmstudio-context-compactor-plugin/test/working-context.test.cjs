@@ -710,3 +710,61 @@ test("an orphaned lock file from a reused live PID is reclaimed after it goes st
   assert.equal(fs.existsSync(orphan), false);
   archive.close();
 });
+
+test("a partial projection says so in words and separates the coverage at read time from the projection's coverage", () => {
+  const history = Chat.from([{ role: "user", content: "Read the returned source." }]);
+  const request = { type: "function", id: "partial-read", name: "read_file", arguments: { path: "A.cpp" } };
+  const content = JSON.stringify({ ok: true, kind: "workspace_file_observation", status: "observed", path: "A.cpp",
+    startLine: 1, endLine: 300, coverage: "complete", text: "x".repeat(10000) + "SOURCE_TAIL" });
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: request.id, content }] }));
+  const projected = new WorkingContext(scope).project(history, () => true, {}, 512);
+  const value = JSON.parse(projected.history.getMessagesArray().at(-1).getToolCallResults()[0].content);
+  assert.equal(value.kind, "archived_tool_result_projection");
+  assert.equal(value.bodyComplete, false);
+  assert.equal(value.projectionCoverage, "partial");
+  assert.equal(value.sourceCoverageAtRead, "complete");
+  assert.equal(value.sourceFacts.coverage, undefined);
+  assert.match(value.notice, /^PARTIAL BODY: chars 0-\d+ of \d+; page with evidence_first_read_context readHandle=\S+/);
+  const [, shown, total] = /chars 0-(\d+) of (\d+)/.exec(value.notice).map(Number);
+  assert.ok(shown < total && total > 10000);
+  assert.ok(value.notice.includes(value.archiveRef.readHandle));
+  const { historicalEvidenceObservation } = require("../src/compaction-tool-memory.js");
+  const index = historicalEvidenceObservation(value);
+  assert.equal(index.sourceCoverageAtRead, "complete");
+  assert.equal(index.projectionCoverage, "partial");
+  assert.match(index.notice, /^PARTIAL BODY/);
+});
+
+test("a structure-only validation keeps its scope flags through compaction, so it cannot be promoted to factual evidence", () => {
+  const parsed = parseToolResult(JSON.stringify({ ok: true, summary: "structure_valid; facts_not_verified",
+    validationScope: "packet_structure_and_record_consistency", factualEvidenceVerified: false, wholeTaskVerified: false,
+    claimCount: 1, errors: [], warnings: [] }));
+  assert.equal(parsed.validationScope, "packet_structure_and_record_consistency");
+  assert.equal(parsed.factualEvidenceVerified, false);
+  assert.equal(parsed.wholeTaskVerified, false);
+  assert.equal(parsed.summary, "structure_valid; facts_not_verified");
+  assert.match(JSON.stringify(parsed), /"factualEvidenceVerified":false/u);
+});
+
+test("structure validation flags survive an archived projection and its durable historical index", () => {
+  const history = Chat.from([{ role: "user", content: "Audit the packet." }]);
+  const request = { type: "function", id: "validation-projection", name: "evidence_first_validate", arguments: { packet: {} } };
+  const content = JSON.stringify({ ok: true, summary: "structure_valid; facts_not_verified",
+    validationScope: "packet_structure_and_record_consistency", factualEvidenceVerified: false, wholeTaskVerified: false,
+    warnings: Array.from({ length: 100 }, (_, index) => `Schema warning ${index}: ${"x".repeat(60)}`) });
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: request.id, content }] }));
+  const context = new WorkingContext(scope);
+  const projected = context.project(history, () => true, {}, 512).history.getMessagesArray().at(-1).getToolCallResults()[0].content;
+  const projection = JSON.parse(projected);
+  assert.equal(projection.kind, "archived_tool_result_projection");
+  assert.equal(projection.projectionCoverage, "partial");
+  const durable = parseToolResult(projected).historicalEvidence;
+  for (const facts of [projection.sourceFacts, durable.sourceFacts]) {
+    assert.equal(facts.validationScope, "packet_structure_and_record_consistency");
+    assert.equal(facts.factualEvidenceVerified, false);
+    assert.equal(facts.wholeTaskVerified, false);
+  }
+  assert.equal(durable.toolName, "evidence_first_validate");
+});

@@ -29,7 +29,10 @@ function evidenceSemanticFacts(payload) {
     "totalLines", "returnedCount", "total", "sourceMode", "evidenceSource", "coverage", "declarationProof",
     "matchCount", "matchMetadataOmitted", "readBytes", "offsetBytes", "nextOffsetBytes", "size",
     "rangeUnit", "truncated", "requestedEndLine", "nextStartLine", "representation", "symbol",
-    "candidateCount", "candidateLines", "selection", "ambiguity", "signatureVerification", "absenceProof"]) {
+    "candidateCount", "candidateLines", "selection", "ambiguity", "signatureVerification", "absenceProof",
+    // Projection and later historical indexes must retain the validator's
+    // proof boundary even after its raw excerpt has been discarded.
+    "validationScope", "factualEvidenceVerified", "wholeTaskVerified"]) {
     if (payload[key] !== undefined) facts[key] = payload[key];
   }
   if (facts.pageHasMore === undefined && payload.hasMore !== undefined) facts.pageHasMore = payload.hasMore;

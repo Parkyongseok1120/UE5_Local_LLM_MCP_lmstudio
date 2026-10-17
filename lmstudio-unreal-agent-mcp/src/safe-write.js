@@ -3,8 +3,13 @@
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
-const crypto = require("crypto");
+const { sha256Buffer, sha256Text } = require("../../shared-tool-core/direct-file-snapshot");
 const { atomicWriteText, atomicCreateText } = require("./atomic-io");
+const {
+  LINE_NUMBER_PATCH_ERROR,
+  LINE_NUMBER_PATCH_MESSAGE,
+  isLineNumberPrefixedPatch,
+} = require("../../shared-tool-core/line-numbering.js");
 
 function assertMutationActive(signal) {
   if (signal?.aborted) {
@@ -14,13 +19,9 @@ function assertMutationActive(signal) {
   }
 }
 
-function sha256Buffer(buffer) {
-  return crypto.createHash("sha256").update(buffer).digest("hex");
-}
 
-function sha256Text(text) {
-  return sha256Buffer(Buffer.from(String(text ?? ""), "utf8"));
-}
+
+
 
 async function sha256File(absPath) {
   return sha256Buffer(await fsp.readFile(absPath));
@@ -78,6 +79,10 @@ function calculateReplacement({
   const contentNorm = normalizeLineEndings ? content.replace(/\r\n/g, "\n") : content;
   const oldTextNorm = normalizeLineEndings ? String(oldText).replace(/\r\n/g, "\n") : String(oldText);
   const occurrences = oldTextNorm ? contentNorm.split(oldTextNorm).length - 1 : 0;
+  // Text copied from a numbered read ("<n>\t<text>") is a display artifact, not file content.
+  if (occurrences === 0 && isLineNumberPrefixedPatch(oldTextNorm, contentNorm)) {
+    return { ok: false, errorCode: LINE_NUMBER_PATCH_ERROR, error: LINE_NUMBER_PATCH_MESSAGE };
+  }
   if (expectedOccurrences !== undefined && occurrences !== expectedOccurrences) {
     return {
       ok: false,

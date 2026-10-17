@@ -1,3 +1,4 @@
+import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import { uniqueLatest } from "./tool-exchange-index.js";
 import { createHash } from "node:crypto";
 import type { Chat, ChatMessage, ToolCallRequest } from "@lmstudio/sdk";
@@ -37,7 +38,9 @@ export type ReferenceState = { observations: Observation[]; seen: Set<string>; d
 export type ReferenceSnapshot = {
   items: ReferenceItem[]; omittedItems: number; signals: ReferenceSignal[];
   autoSignals?: Array<{ signal: ReferenceSignal; observationIds: string[]; order: "last_observation" | "order_unknown" }>;
-  applicability: { engineVersion?: string; engineVersionSource?: ObservedItem["versionSource"];
+  applicability: { engineVersion?: string; engineVersionSource?: ObservedItem["versionSource"] | "project_file";
+    /** Set when the version comes from the saved project file and no live Editor was observed. */
+    engineVersionNote?: "project_file_editor_not_observed";
     versions?: Partial<Record<NonNullable<ObservedItem["versionSource"]>, string>>;
     versionConflict?: boolean; packages: Record<string, string>; networkPackagesAmbiguous: boolean };
   projectObservation?: { engine: "unity" | "unreal"; project: string; usable: boolean; reason: string };
@@ -80,7 +83,7 @@ function provenProject(value: Record<string, any>, scope: ToolScope): string {
   if (!expected) return descriptor;
   // A .uproject descriptor cannot silently match a different descriptor in the
   // same directory. Directory-vs-descriptor matching uses the existing root rule.
-  const bothDescriptors = scope.projectIdentity.toLowerCase().endsWith(".uproject") && descriptor.toLowerCase().endsWith(".uproject");
+  const bothDescriptors = scope.projectIdentity.toLowerCase().endsWith(ENGINE_PROFILES.unreal.descriptorExtension) && descriptor.toLowerCase().endsWith(ENGINE_PROFILES.unreal.descriptorExtension);
   return (bothDescriptors ? expected === observed
     : pathIdentity(projectRoot(scope.projectIdentity)) === pathIdentity(projectRoot(descriptor))) ? descriptor : "";
 }
@@ -162,6 +165,21 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       coverage: record(value.coverage) ? { completeness: text(value.coverage.completeness), scope: text(value.coverage.scope) } : { completeness: "unknown" } },
       { engineVersion: verified ? observed.version : undefined, engineIdentity: identity, versionSource: "installed_engine_source",
         groupKey: JSON.stringify([pathIdentity(project), "unreal_engine_source"]) });
+  } else if (engine === "unreal" && tool === "static_validate_project") {
+    // Only a strict Build.version observation is an engine identity. An unknown
+    // identity, a folder-name guess or a skipped run adds no version fact.
+    const observed = record(record(value.analysis)?.engineIdentity);
+    const verified = value.skipped !== true && observed?.status === "observed" && observed.source === "build_version_file"
+      && typeof observed.engineRoot === "string" && pathIdentity(observed.engineRoot) && observed.hashScope === "file"
+      && /^[a-f0-9]{64}$/.test(observed.sha256 || "") && /^\d+\.\d+(?:\.\d+)?$/.test(observed.version || "");
+    if (verified) {
+      const identity = JSON.stringify([pathIdentity(observed.engineRoot), observed.version, observed.sha256]);
+      add("project", { sourceMode: "static_validation", evidenceSource: "installed_engine_source", engineIdentityStatus: "observed",
+        requestedEngineAssociation: text(observed.engineAssociation), observedEngineRoot: text(observed.engineRoot),
+        observedEngineVersion: observed.version, coverage: { completeness: "unknown" } },
+        { engineVersion: observed.version, engineIdentity: identity, versionSource: "installed_engine_source",
+          groupKey: JSON.stringify([pathIdentity(project), "unreal_engine_source"]) });
+    }
   } else if (engine === "unreal" && tool === "build_unreal_project" && record(value.project)) {
     const p = value.project;
     const raw = Array.isArray(value.diagnostics) ? value.diagnostics : [];
@@ -225,8 +243,7 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       originalOrigin: record(value.origin) || undefined,
       requestFingerprint: digest(JSON.stringify([tool, args])) });
   }
-  const fileTools = engine === "unreal" ? ["read_file", "read_file_range", "read_symbol", "write_file", "replace_in_file", "apply_edit_bundle", "delete_file"]
-    : ["read_file", "patch_file", "create_file", "structured_data_patch"];
+  const fileTools = ENGINE_PROFILES[engine].fileTools;
   if (fileTools.includes(tool)) {
     const files = Array.isArray(value.files) ? value.files : [value];
     // Oversized/partial mutation results cannot leave earlier configuration
@@ -246,7 +263,9 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       } else if (["failed", "outcome_unknown", "canceled", "pending", "accepted"].includes(status.operationStatus)
         && file.observationState !== "conflict_observed") continue;
       const fileKey = pathIdentity(String(file.canonicalPath));
-      const body = typeof raw.content === "string" ? raw.content : typeof raw.text === "string" ? raw.text : undefined;
+      const shownBody = typeof raw.content === "string" ? raw.content : typeof raw.text === "string" ? raw.text : undefined;
+      // Reads number their lines for display ("<n>\t<text>"); metadata parsers need the file text itself.
+      const body = raw.lineNumbers === true && shownBody !== undefined ? shownBody.replace(/^\d+\t/gm, "") : shownBody;
       const read = ["read_file", "read_file_range", "read_symbol"].includes(tool) && file.observationState === "observed";
       const completeBytes = integer(raw.offsetBytes) === 0 && integer(raw.size) !== undefined
         && integer(raw.nextOffsetBytes) === raw.size;
@@ -324,7 +343,9 @@ export function ingestReferenceObservations(state: ReferenceState, messages: rea
       state.observations = state.observations.slice(-REFERENCE_LIMITS.observations);
       continue;
     }
-    const project = resultProject(value, scope);
+    // static_validate_project names its target by project root only.
+    const project = resultProject(request.name === "static_validate_project" && !projectDescriptor(value) && typeof value.projectRoot === "string"
+      ? { ...value, canonicalProject: value.projectRoot } : value, scope);
     if (!project) {
       const returnedTarget = projectDescriptor(value) || record(value.project)?.projectPath;
       if (scope.projectIdentity && typeof returnedTarget === "string" && pathIdentity(returnedTarget))
@@ -447,10 +468,11 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
       ? "returned_project_target" : `shared_selection_${currentProject.data.bindingStatus}` };
   if (state.projectConflict && state.projectConflict.batch >= (projectBatch || 0)) snapshot.projectObservation = {
     engine: state.projectConflict.engine, project: "", usable: false, reason: "returned_target_mismatch" };
-  const localEngineObservations = ordered.filter(o => o.items.some(i => i.data.sourceMode === "engine_local"));
+  const engineSourceItem = (i: ObservedItem) => i.data.sourceMode === "engine_local" || i.data.sourceMode === "static_validation";
+  const localEngineObservations = ordered.filter(o => o.items.some(engineSourceItem));
   const engineBatch = localEngineObservations[0]?.batch;
   const currentEngineIdentities = localEngineObservations.filter(o => o.batch === engineBatch)
-    .flatMap(o => o.items.filter(i => i.data.sourceMode === "engine_local").map(i => i.engineIdentity));
+    .flatMap(o => o.items.filter(engineSourceItem).map(i => i.engineIdentity));
   const ambiguousEngine = currentEngineIdentities.some(i => !i) || new Set(currentEngineIdentities).size > 1;
   const autoSignals: NonNullable<ReferenceSnapshot["autoSignals"]> = [];
   const versions: NonNullable<ReferenceSnapshot["applicability"]["versions"]> = {};
@@ -528,11 +550,14 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
   const packages = snapshot.applicability.packages;
   snapshot.applicability.versions = versions;
   snapshot.applicability.versionConflict = Boolean(versions.runtime && versions.saved_project && versions.runtime !== versions.saved_project);
+  // The saved project file is a real observation even with the Editor closed. It is reported as
+  // "project_file" and only a live Editor that disagrees turns it into a conflict.
   const versionSource = versions.installed_engine_source ? "installed_engine_source" : versions.runtime ? "runtime"
-    : !runtimeUnavailable && versions.saved_project ? "saved_project" : undefined;
+    : versions.saved_project ? "saved_project" : undefined;
   if (versionSource && !snapshot.applicability.versionConflict) {
     snapshot.applicability.engineVersion = versions[versionSource];
-    snapshot.applicability.engineVersionSource = versionSource;
+    snapshot.applicability.engineVersionSource = versionSource === "saved_project" ? "project_file" : versionSource;
+    if (versionSource === "saved_project" && runtimeUnavailable) snapshot.applicability.engineVersionNote = "project_file_editor_not_observed";
   }
   snapshot.applicability.networkPackagesAmbiguous = Boolean(packages["com.unity.netcode.gameobjects"] && packages["com.unity.netcode"]);
   snapshot.signals = [...signals];

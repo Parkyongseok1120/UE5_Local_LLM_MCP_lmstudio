@@ -34,6 +34,12 @@ const identityFields = ["repositoryIdentity", "workspaceIdentity", "projectIdent
   "canonicalProject", "path", "action", "comparison", "base", "head", "currentHead", "blobOid",
   "sourceMode", "sourceIdentity", "observedEngineIdentity", "evidenceSource"];
 
+function factsWithoutCoverage(facts) {
+  if (!facts || typeof facts !== "object" || facts.coverage === undefined) return facts;
+  const { coverage: _coverageAtRead, ...rest } = facts;
+  return rest;
+}
+
 function sourceIdentity(payload) {
   const identity = {};
   for (const key of identityFields) if (payload[key] !== undefined) identity[key] = payload[key];
@@ -461,7 +467,11 @@ class WorkingContext {
           sourceIdentity: identity, sourceIdentityDigest: record.metadata.sourceIdentityDigest,
           sourceVersion: record.metadata.sourceVersion, sourceQueryKey: record.metadata.sourceQueryKey,
           provider: record.metadata.provider, semanticQueryDigest: record.metadata.semanticQueryDigest,
-          sourceFacts: facts, sourceRangeUnit: record.metadata.originRangeUnit,
+          // The coverage inside sourceFacts described the source at the time it was read; it
+          // says nothing about how much of the body this projection still carries.
+          sourceFacts: factsWithoutCoverage(facts),
+          ...(facts.coverage !== undefined ? { sourceCoverageAtRead: facts.coverage } : {}),
+          projectionCoverage: "partial", sourceRangeUnit: record.metadata.originRangeUnit,
           sourceRange: record.metadata.originRanges
             || (parsed.pageStart !== undefined || parsed.pageEnd !== undefined ? [parsed.pageStart, parsed.pageEnd] : null),
           sourceCollectionComplete: parsed.sourceResultComplete ?? "unknown",
@@ -509,6 +519,15 @@ class WorkingContext {
           projection.bodyComplete = projection.bodyOmittedChars === 0;
           projection.excerpt = boundedBody.slice(0, projectedEnd);
         }
+        const announcePartialBody = () => {
+          const total = bodyFirst ? boundedBody.length : semanticBody.length;
+          const shown = Math.min(projectedEnd, total);
+          projection.projectionCoverage = shown < total ? "partial" : "complete";
+          if (shown < total) {
+            projection.notice = `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`;
+          } else delete projection.notice;
+        };
+        announcePartialBody();
         let projectedContent = JSON.stringify(projection);
         while (projectedContent.length >= originalEnvelope.length && projectedEnd > 0) {
           projectedEnd = Math.max(0, projectedEnd
@@ -525,6 +544,7 @@ class WorkingContext {
             projection.bodyComplete = projection.bodyOmittedChars === 0;
             projection.excerpt = boundedBody.slice(0, projectedEnd);
           }
+          announcePartialBody();
           projectedContent = JSON.stringify(projection);
         }
         if (projectedContent.length >= originalEnvelope.length) return result;

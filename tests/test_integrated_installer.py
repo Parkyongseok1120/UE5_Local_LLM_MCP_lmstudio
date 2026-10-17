@@ -1967,6 +1967,9 @@ def test_direct_rag_plan_owns_tier_pruning_and_collector_order(
 
 def _write_tiny_unreal_fixture(tmp_path: Path) -> tuple[Path, Path]:
     engine = tmp_path / "UE_5.8"
+    build_version = engine / "Engine" / "Build" / "Build.version"
+    build_version.parent.mkdir(parents=True)
+    build_version.write_text(json.dumps({"MajorVersion": 5, "MinorVersion": 8, "PatchVersion": 0}), encoding="utf-8")
     engine_header = engine / "Engine" / "Source" / "Runtime" / "Core" / "Public" / "TinyEngineType.h"
     engine_header.parent.mkdir(parents=True)
     engine_header.write_text(
@@ -2060,7 +2063,7 @@ def test_direct_rag_plan_preserves_custom_engine_provenance_in_fresh_index(
     monkeypatch.setattr(
         direct_build,
         "project_engine_version",
-        lambda project, _workspace: {
+        lambda project, _workspace, **_kwargs: {
             "ok": True,
             "project": str(project),
             "engineVersion": "5.8",

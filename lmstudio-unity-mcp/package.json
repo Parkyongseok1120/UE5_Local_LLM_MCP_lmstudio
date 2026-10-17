@@ -6,7 +6,7 @@
   "description": "Explicit Unity observation and editing tools; no internal agent or model runtime.",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/behavior-contracts.test.js test/file-discovery.test.js test/runtime.test.js test/git.test.js test/symbol-worker.test.js"
+    "test": "node --test test/behavior-contracts.test.js test/file-discovery.test.js test/runtime.test.js test/git.test.js test/symbol-worker.test.js test/package-source.test.js"
   },
   "engines": {
     "node": ">=20"

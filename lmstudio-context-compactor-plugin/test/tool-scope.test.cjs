@@ -136,3 +136,22 @@ test("Unreal project-capable calls are bound while Unity and common calls remain
   assert.equal(bindProjectArguments(unityTool, request, project), null);
   assert.equal(bindProjectArguments(commonTool, request, project), null);
 });
+
+test("unity_references, unity_snapshot and unity_symbols are read only per action", () => {
+  const { ToolCapabilityRegistry, isObservationOnlyToolCall } = require("../dist/tool-capability-registry");
+  const expectations = {
+    unity_references: { read: ["query"], write: ["collect", "release"] },
+    unity_snapshot: { read: ["read", "diff", "record_status"], write: ["capture", "record_start", "record_stop", "release"] },
+    unity_symbols: { read: ["assemblies", "status", "find", "usages", "relations", "diagnostics", "omissions", "versions"], write: ["index"] },
+  };
+  for (const [name, { read, write }] of Object.entries(expectations)) {
+    const original = { name, pluginIdentifier: "mcp/unity-tools", description: name,
+      parametersJsonSchema: { type: "object", properties: { action: { type: "string" } }, required: [] } };
+    assert.equal(isObservationOnlyToolCall(original, { name, arguments: {} }), false, `${name} without an action is not a read`);
+    const [profile] = new ToolCapabilityRegistry([original]).readProfile();
+    assert.ok(profile, name);
+    assert.deepEqual([...profile.parametersJsonSchema.properties.action.enum].sort(), [...read].sort());
+    for (const action of read) assert.equal(isObservationOnlyToolCall(profile, { name, arguments: { action } }), true, `${name}.${action}`);
+    for (const action of write) assert.equal(isObservationOnlyToolCall(profile, { name, arguments: { action } }), false, `${name}.${action}`);
+  }
+});

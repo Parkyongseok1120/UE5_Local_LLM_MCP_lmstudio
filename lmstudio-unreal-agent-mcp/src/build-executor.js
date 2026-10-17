@@ -25,19 +25,26 @@ function parseEngineVersionFromRoot(engineRoot) {
   return normalizeVersion(String(engineRoot || ""));
 }
 
-async function detectEngineVersion(engineRoot) {
+/** `{ version, source }`; source is "build_version_file" (observed) or
+ * "folder_name_inferred" (a guess that must not be treated as verified). */
+async function detectEngineVersionWithSource(engineRoot) {
   const buildVersionPath = path.join(engineRoot, "Engine", "Build", "Build.version");
   try {
     const parsed = JSON.parse(await fsp.readFile(buildVersionPath, "utf8"));
     const major = Number(parsed.MajorVersion);
     const minor = Number(parsed.MinorVersion);
     if (Number.isInteger(major) && Number.isInteger(minor)) {
-      return `${major}.${minor}`;
+      return { version: `${major}.${minor}`, source: "build_version_file" };
     }
   } catch {
     // Installed/source builds can omit Build.version. The root name is a useful fallback.
   }
-  return parseEngineVersionFromRoot(engineRoot);
+  const guessed = parseEngineVersionFromRoot(engineRoot);
+  return { version: guessed, source: guessed ? "folder_name_inferred" : "" };
+}
+
+async function detectEngineVersion(engineRoot) {
+  return (await detectEngineVersionWithSource(engineRoot)).version;
 }
 
 function resolveUbtPaths(engineRoot, hostPlatform = process.platform) {
@@ -255,6 +262,7 @@ module.exports = {
   normalizeVersion,
   parseEngineVersionFromRoot,
   detectEngineVersion,
+  detectEngineVersionWithSource,
   assertEngineContainment,
   resolveUbtPaths,
   resolveUbtPath,

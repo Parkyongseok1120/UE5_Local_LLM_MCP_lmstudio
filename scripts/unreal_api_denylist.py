@@ -19,14 +19,16 @@ from typing import Any
 
 from cpp_parse_utils import mask_comments_and_strings, offset_in_regions, preprocessor_editor_safe_regions
 
-from unreal_contracts import load_contracts_or_none
+from unreal_contracts import load_contracts_or_none, render_contract_text
 
 # Wrong subsystem/actor lifecycle overrides. Key is a lowercase token searched with
 # word boundaries; value explains the correct API to verify against. The names
 # live in config/unreal_contracts.json (lifecycle.invalidOverrideNames); an
 # unavailable contract file disables only this table, never the other checks.
 _CONTRACTS = load_contracts_or_none()
-INVALID_LIFECYCLE_OVERRIDES: dict[str, str] = dict(_CONTRACTS["lifecycle"]["invalidOverrideNames"]) if _CONTRACTS else {}
+INVALID_LIFECYCLE_OVERRIDES: dict[str, str] = {
+    name: render_contract_text(_CONTRACTS, message)
+    for name, message in _CONTRACTS["lifecycle"]["invalidOverrideNames"].items()} if _CONTRACTS else {}
 
 # Commonly invented API names / members. Key is a lowercase token searched with
 # word boundaries; value explains the reality and the correct thing to verify.

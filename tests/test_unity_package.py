@@ -12,6 +12,7 @@ def test_unity_portable_runtime_is_complete_and_has_no_editor_state(tmp_path):
     required = [
         *ROOT.glob("lmstudio-unity-mcp/src/*.js"),
         *ROOT.glob("shared-tool-core/*.js"),
+        *ROOT.glob("shared-tool-core/*.py"),
         *ROOT.glob("unity-editor-bridge/Editor/*.cs"),
         *ROOT.glob("unity-editor-bridge/Editor/*.asmdef"),
         *ROOT.glob("unity-editor-bridge/Runtime/**/*.*"),
@@ -20,7 +21,7 @@ def test_unity_portable_runtime_is_complete_and_has_no_editor_state(tmp_path):
         *ROOT.glob("unity-symbol-worker/*.csproj"),
     ]
     for source in required:
-        if source.suffix not in {".js", ".cs", ".asmdef", ".meta", ".csproj"} or source.name.startswith("."):
+        if source.suffix not in {".js", ".py", ".cs", ".asmdef", ".meta", ".csproj"} or source.name.startswith("."):
             continue
         packaged = output / source.relative_to(ROOT)
         assert packaged.is_file(), source.relative_to(ROOT)

@@ -60,7 +60,12 @@ function createSearchCapability(context) {
         if (files.length >= maxFiles || guard.reason()) break;
         if (entry.isDirectory() && DEFAULT_IGNORED_DIRS.has(entry.name)) { excludedEntries++; continue; }
         const child = path.join(target, entry.name);
-        await assertReadChildContained(child, rootResolution);
+        try { await assertReadChildContained(child, rootResolution); }
+        catch (error) {
+          if (error.code !== "ENGINE_SOURCE_PATH_DENIED") throw error;
+          excludedEntries++;
+          continue;
+        }
         if (entry.isDirectory() || entry.isFile()) await walk(child);
         else excludedEntries++;
       }
