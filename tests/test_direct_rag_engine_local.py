@@ -136,3 +136,20 @@ def test_lookup_started_before_clear_cannot_repopulate_later_module_catalogs(sou
     monkeypatch.setattr(headers, "_local_catalog", clear_during_lookup)
     assert query(source)["ok"]
     assert cleared and not headers._LOCAL_CATALOGS
+
+
+def test_related_contracts_are_ids_and_summaries_marked_unvalidated_for_other_engines(source):
+    runtime, root, project, _ = source
+    classes = root / "Engine/Source/Runtime/Engine/Classes/GameFramework"
+    classes.mkdir(parents=True)
+    (classes / "Actor.h").write_text("class ENGINE_API AActor : public UObject\n{\npublic:\n virtual void Destroyed();\n};\n")
+    (classes / "Pawn.h").write_text("class ENGINE_API APawn : public AActor\n{\npublic:\n void Restart();\n};\n")
+    result = symbol.symbol_lookup_capability(runtime, {"query": "APawn::Destroyed", "project": str(project),
+                                                      "sourceMode": "engine_local"}).payload
+    assert result["ok"] and result["matches"][0]["declaredIn"] == "AActor"
+    related = result["relatedContracts"]
+    assert related["revision"].startswith("unreal_contracts@")
+    assert related["engineVersionValidated"] is False  # fixture engine is 5.7; contracts are validated on 5.8
+    assert [item["id"] for item in related["items"]] == ["ue.actor.lifecycle"]
+    assert related["items"][0]["summary"].endswith(".") and "statement" not in related["items"][0]
+    assert "relatedContracts" not in query(source)

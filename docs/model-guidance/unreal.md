@@ -44,6 +44,78 @@
 - Editor 빌드 성공과 Server/Shipping 대상, standalone 역할 분기와 실제 연결된 클라이언트 검증을 구별한다. 서버 상태 결정·예측·복제·표시는 각 책임 경로에서 확인한다.
 <!-- /guidance-section: api -->
 
+<!-- guidance-section: responsibility -->
+## 책임 배치 확인
+
+기능이나 수정 위치를 정하기 전에 아래 항목을 코드에서 확인한다. 확인하지 못한 항목은 미확인으로 남기고 추측으로 채우지 않는다.
+- 상태 소유자: 이 상태를 지금 보관하는 클래스와 객체.
+- 변경 주체: 값을 바꾸는 쪽(서버, 소유 클라이언트, 로컬 표시)과 시점.
+- 수명 범위: 소유자의 생성·종료 시점, World 전환·리스폰·PIE 재시작의 영향.
+- 실행 문맥: 게임 스레드, 워커, 렌더 스레드 중 실행 위치.
+- 종료 책임: 등록한 delegate·타이머·ticker·비동기 작업을 해제하는 쪽.
+- 기존 기능 재사용: 엔진 기본 동작이나 기존 프로젝트 클래스가 이미 맡고 있는지.
+
+이 항목은 새 Manager나 Subsystem을 만들 근거가 아니다. 기존 소유자가 있으면 그곳에 둔다.
+<!-- /guidance-section: responsibility -->
+
+<!-- guidance-section: lifetime -->
+## 엔진 수명 계약
+
+- 수명 훅 override는 부모 체인 전체에서 확인한다. 직접 부모에 선언이 없다는 이유로 잘못된 override라고 단정하지 않는다.
+- 객체 생존(GC), 게임플레이 활성(BeginPlay~EndPlay), 스레드 접근 가능성은 각각 따로 판단한다.
+
+<!-- contract-summary: lifetime -->
+엔진 계약 unreal_contracts@1 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+- `ue.uobject.lifecycle` (엔진 사실) PostInitProperties, PostLoad and BeginDestroy are UObject virtuals, so they are valid overrides on every UObject-derived type, including actors, components and subsystems. BeginDestroy runs as part of garbage-collection teardown; it is not a gameplay end-of-play hook. 근거: Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h:226 외 2
+- `ue.actor.lifecycle` (엔진 사실) AActor gameplay lifetime runs PostInitializeComponents, then BeginPlay, and ends with EndPlay. AActor::Destroyed calls RouteEndPlay(EEndPlayReason::Destroyed) first, so cleanup that must run on every end of play belongs in EndPlay. 근거: Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2125 외 4
+- `ue.component.lifecycle` (엔진 사실) UActorComponent registration (OnRegister/OnUnregister) is separate from initialization (InitializeComponent/UninitializeComponent) and from play (BeginPlay/EndPlay). TickComponent is the component tick override; Tick is an actor hook. 근거: Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h:830 외 5
+- `ue.timer.game-thread` (엔진 사실) FTimerManager setting and lookup check IsInGameThread; timers must be set and cleared on the game thread, and a timer bound to an object must be cleared when that object ends play. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:596 외 1
+<!-- /contract-summary: lifetime -->
+<!-- /guidance-section: lifetime -->
+
+<!-- guidance-section: subsystems -->
+## 서브시스템
+
+- 서브시스템 종류(Engine/GameInstance/World/LocalPlayer)가 수명과 공유 범위를 정한다. 종류를 바꾸면 수명도 바뀐다.
+- Initialize에서 다른 서브시스템을 바로 호출하기 전에 같은 컬렉션인지 확인한다. 참조만 저장하는 것은 초기화 순서에 의존하지 않는다.
+- Initialize·OnWorldBeginPlay에서 등록한 delegate·ticker·타이머는 Deinitialize·OnWorldEndPlay에서 해제한다.
+
+<!-- contract-summary: subsystems -->
+엔진 계약 unreal_contracts@1 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+- `ue.subsystem.lifecycle` (엔진 사실) A subsystem lives as long as its outer: Engine, GameInstance, World or LocalPlayer. ShouldCreateSubsystem gates creation, Initialize(FSubsystemCollectionBase&) and Deinitialize bracket its life. World subsystems also receive PostInitialize, OnWorldBeginPlay, OnWorldEndPlay and PreDeinitialize, and DoesSupportWorldType filters world types. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h:56 외 5
+- `ue.subsystem.initialize-dependency` (엔진 사실) FSubsystemCollectionBase::InitializeDependency forces another subsystem of the same collection to initialize first. It only orders subsystems within one collection. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/SubsystemCollection.h:35
+<!-- /contract-summary: subsystems -->
+<!-- /guidance-section: subsystems -->
+
+<!-- guidance-section: threads -->
+## 스레드와 비동기
+
+- 람다가 실행되는 스레드를 먼저 확인한다. 실행 문맥을 확인하지 못하면 미확인으로 남긴다.
+- 비동기 콜백은 대상 Actor 종료, 맵 전환, 취소 뒤에도 도착할 수 있다. 결과를 적용하기 전에 대상과 World가 현재 것인지 확인한다.
+- 동기 대기(ParallelFor 등)는 호출 스레드가 끝날 때까지 기다리지만, 본문은 워커에서 실행될 수 있다.
+- 자세한 패턴은 RAG 문서 34_Threading_And_Async_Contract.md에 있다.
+
+<!-- contract-summary: threads -->
+엔진 계약 unreal_contracts@1 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+- `ue.thread.uobject-game-thread` (프로젝트 정책) Create, destroy, spawn and mutate UObjects, actors, components, worlds and timers on the game thread. Work on another thread uses copied plain data, and returns results with AsyncTask(ENamedThreads::GameThread, ...) after checking a TWeakObjectPtr is still valid. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:660
+- `policy.render.game-objects` (프로젝트 정책) A render command runs later on the rendering thread. Pass copied values or a render proxy into it; do not capture this or other gameplay UObjects and read or mutate them there.
+<!-- /contract-summary: threads -->
+<!-- /guidance-section: threads -->
+
+<!-- guidance-section: verification -->
+## 판단과 보고
+
+- 실제로 읽은 범위를 보고한다. 일부만 읽은 파일을 전량 확인했다고 쓰지 않고, 전량 확인했다고 쓴 파일을 미확인으로 다시 분류하지 않는다.
+- 확인한 사실, 추론, 미확인을 구분해 적는다.
+
+<!-- contract-summary: verification -->
+엔진 계약 unreal_contracts@1 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+- `policy.claims.build-evidence` (프로젝트 정책) A compile, link or UHT outcome is a claim about the build. Report it as confirmed only with build_unreal_project or static_validate_project evidence; otherwise state it as an unverified risk and name the evidence that would confirm it.
+- `policy.claims.engine-default-vs-project` (프로젝트 정책) Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text).
+- `policy.claims.severity` (프로젝트 정책) Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error.
+<!-- /contract-summary: verification -->
+<!-- /guidance-section: verification -->
+
 <!-- guidance-section: preference -->
 ## 이 작업의 선호
 

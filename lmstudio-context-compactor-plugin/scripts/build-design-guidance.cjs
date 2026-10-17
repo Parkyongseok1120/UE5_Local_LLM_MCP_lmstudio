@@ -10,6 +10,7 @@ const TOPICS = ["core", "design", "debugging", "code-style", "lifecycle", "multi
 const SIGNALS = ["diagnostic_present", "diagnostic_recurred", "observed_source_changed",
   "source_body_unavailable", "compilation_pending", "operation_outcome_unknown"];
 const ID = /^[a-z][a-z0-9-]*$/;
+const CONTRACT_MARKER = /^<!-- (\/?)contract-summary: ([a-z][a-z0-9-]*) -->$/;
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 
 // Markers are metadata, never part of the legacy document body. Fenced examples
@@ -38,6 +39,9 @@ function splitSections(source) {
       continue;
     }
     if (!fence && /^\s*<!--\s*\/?guidance-section\b/.test(line)) throw new Error("Malformed guidance marker");
+    // Contract summary markers locate generated text; the text stays, the markers do not.
+    if (!fence && CONTRACT_MARKER.test(line)) continue;
+    if (!fence && /^\s*<!--\s*\/?contract-summary\b/.test(line)) throw new Error("Malformed contract summary marker");
     body.push(line);
     if (active) lines.push(line);
   }
@@ -120,11 +124,82 @@ function renderBundle(root) {
     + "export const bundledGuidanceSections = " + JSON.stringify(sectionBundle, null, 2) + " as const;\n";
 }
 
+// config/unreal_contracts.json is the SSOT for engine facts and project
+// policies (strictly validated by scripts/unreal_contracts.py). Guidance
+// Markdown carries a generated copy between contract-summary markers so the
+// same statement is never edited by hand in two places.
+function contractSummaryLines(label, versions, entries) {
+  const lines = [`엔진 계약 ${label} (UE ${versions.join(", ")} 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):`];
+  for (const contract of entries) {
+    const [first, ...rest] = contract.evidenceRefs;
+    const evidence = first ? ` 근거: ${first.path}:${first.line}${rest.length ? ` 외 ${rest.length}` : ""}` : "";
+    const kind = contract.kind === "engine_fact" ? "엔진 사실" : "프로젝트 정책";
+    lines.push(`- \x60${contract.id}\x60 (${kind}) ${contract.statement}${evidence}`);
+  }
+  return lines;
+}
+
+function syncContractSummaries(docRoot, data) {
+  if (data?.schemaVersion !== 1 || !Number.isSafeInteger(data.revision) || !Array.isArray(data.contracts)
+    || !Array.isArray(data.validatedEngineVersions)) throw new Error("Unsupported Unreal contract data");
+  const label = `unreal_contracts@${data.revision}`;
+  const targets = new Map();
+  for (const contract of data.contracts) {
+    if (typeof contract.id !== "string" || typeof contract.statement !== "string"
+      || !Array.isArray(contract.guidanceRefs) || !Array.isArray(contract.evidenceRefs)) throw new Error("Invalid contract: " + contract.id);
+    for (const ref of contract.guidanceRefs) {
+      const match = /^([a-z][a-z0-9-]*\.md)#([a-z][a-z0-9-]*)$/.exec(ref);
+      if (!match || !fs.existsSync(path.join(docRoot, match[1]))) continue; // RAG documents live elsewhere
+      const key = match[1] + "#" + match[2];
+      targets.set(key, [...(targets.get(key) || []), contract]);
+    }
+  }
+  const updated = new Map(), placed = new Set();
+  for (const file of new Set([...targets.keys()].map(key => key.split("#")[0]))) {
+    const source = fs.readFileSync(path.join(docRoot, file), "utf8");
+    const eol = source.includes("\r\n") ? "\r\n" : "\n";
+    const out = [];
+    let active = null, fence = null;
+    for (const line of source.replace(/\r\n/g, "\n").split("\n")) {
+      const fenceMatch = !active && /^ {0,3}(\x60{3,}|~{3,})/.exec(line);
+      if (fenceMatch) {
+        const token = fenceMatch[1];
+        if (!fence) fence = { char: token[0], length: token.length };
+        else if (token[0] === fence.char && token.length >= fence.length) fence = null;
+      }
+      const marker = !fence && CONTRACT_MARKER.exec(line);
+      if (marker && !marker[1]) {
+        const key = file + "#" + marker[2];
+        if (active || placed.has(key) || !targets.has(key)) throw new Error("Unexpected contract summary block: " + key);
+        active = key; placed.add(key);
+        out.push(line, ...contractSummaryLines(label, data.validatedEngineVersions, targets.get(key)));
+      } else if (marker) {
+        if (active !== file + "#" + marker[2]) throw new Error("Invalid contract summary end: " + marker[2]);
+        active = null; out.push(line);
+      } else if (!active) out.push(line);
+    }
+    if (active) throw new Error("Unterminated contract summary block: " + active);
+    updated.set(file, out.join(eol));
+  }
+  const missing = [...targets.keys()].filter(key => !placed.has(key));
+  if (missing.length) throw new Error("Contract guidance block missing: " + missing.join(", "));
+  return updated;
+}
+
 function main() {
   const pluginRoot = path.resolve(__dirname, "..");
   const output = path.join(pluginRoot, "src/generated-design-guidance.ts");
-  const content = renderBundle(path.resolve(pluginRoot, "../docs/model-guidance"));
-  if (process.argv.includes("--check")) {
+  const docRoot = path.resolve(pluginRoot, "../docs/model-guidance");
+  const check = process.argv.includes("--check");
+  const contracts = JSON.parse(fs.readFileSync(path.resolve(pluginRoot, "../config/unreal_contracts.json"), "utf8"));
+  for (const [file, text] of syncContractSummaries(docRoot, contracts)) {
+    const target = path.join(docRoot, file);
+    if (fs.readFileSync(target, "utf8") === text) continue;
+    if (check) throw new Error(`Contract summary in ${file} is stale; run npm run guidance:build`);
+    fs.writeFileSync(target, text, "utf8");
+  }
+  const content = renderBundle(docRoot);
+  if (check) {
     if (!fs.existsSync(output) || fs.readFileSync(output, "utf8").replace(/\r\n/g, "\n") !== content) {
       throw new Error("Design guidance bundle is stale; run npm run guidance:build");
     }
@@ -134,4 +209,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { renderBundle, splitSections };
+module.exports = { renderBundle, splitSections, syncContractSummaries };

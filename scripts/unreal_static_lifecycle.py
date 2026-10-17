@@ -9,6 +9,7 @@ from pathlib import Path
 from cpp_parse_utils import (
     find_balanced_parens,
 )
+from unreal_contracts import contract_revision, load_contracts_or_none
 from unreal_static_model import (
     CPP_IMPLEMENTATION_SUFFIXES,
     CPP_SOURCE_SUFFIXES,
@@ -23,88 +24,58 @@ from unreal_static_scan import (
     normalize_timer_handle,
 )
 
-UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST = {
-    "AActor": {
-        "BeginDestroy",
-        "BeginPlay",
-        "Destroyed",
-        "EndPlay",
-        "OnConstruction",
-        "PostActorCreated",
-        "PostInitializeComponents",
-        "PostLoad",
-        "ShouldTickIfViewportsOnly",
-        "Tick",
-    },
-    "UActorComponent": {
-        "Activate",
-        "BeginDestroy",
-        "BeginPlay",
-        "Deactivate",
-        "EndPlay",
-        "InitializeComponent",
-        "OnComponentCreated",
-        "OnComponentDestroyed",
-        "OnRegister",
-        "OnUnregister",
-        "TickComponent",
-        "UninitializeComponent",
-    },
-    "UWorldSubsystem": {
-        "Deinitialize",
-        "DoesSupportWorldType",
-        "Initialize",
-        "OnWorldBeginPlay",
-        "OnWorldComponentsUpdated",
-        "OnWorldEndPlay",
-        "PostInitialize",
-        "PreDeinitialize",
-        "ShouldCreateSubsystem",
-    },
-    "UGameInstanceSubsystem": {
-        "Deinitialize",
-        "Initialize",
-        "ShouldCreateSubsystem",
-    },
-    "UEngineSubsystem": {
-        "Deinitialize",
-        "Initialize",
-        "ShouldCreateSubsystem",
-    },
-    "ULocalPlayerSubsystem": {
-        "Deinitialize",
-        "Initialize",
-        "PlayerControllerChanged",
-        "ShouldCreateSubsystem",
-    },
-    "UObject": {
-        "BeginDestroy",
-        "PostInitProperties",
-        "PostLoad",
-    },
-}
-
+# Lifecycle data (engine parents, hooks per class, alternatives) comes from the
+# single contract source config/unreal_contracts.json. An override is valid if
+# any class on the inheritance chain declares it, so UObject hooks such as
+# BeginDestroy and PostLoad remain valid on every subsystem.
+_CONTRACTS = load_contracts_or_none()
+LIFECYCLE_CONTRACT_STATUS = "available" if _CONTRACTS else "unavailable"
+_LIFECYCLE = _CONTRACTS["lifecycle"] if _CONTRACTS else {}
+UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST: dict[str, set[str]] = {
+    name: set(hooks) for name, hooks in _LIFECYCLE.get("overrides", {}).items()}
 UNREAL_LIFECYCLE_OVERRIDE_CANDIDATES = (
-    set().union(*UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST.values())
-    | {
-        "OnLevelRemovedFromWorld",
-        "OnWorldCleanup",
-        "OnWorldDestroyed",
-        "WorldDestroyed",
-    }
+    set().union(set(), *UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST.values())
+    | set(_LIFECYCLE.get("extraOverrideCandidates", []))
 )
+UNREAL_ENGINE_LIFECYCLE_PARENTS: dict[str, str] = dict(_LIFECYCLE.get("parents", {}))
+LIFECYCLE_CONTRACT_REVISION = contract_revision(_CONTRACTS) if _CONTRACTS else None
+LIFECYCLE_CHAIN_MAX_DEPTH = 8
 
-UNREAL_LIFECYCLE_ALTERNATIVES = {
-    "AActor": "EndPlay(...) or Destroyed()",
-    "UActorComponent": "EndPlay(...) or OnComponentDestroyed(...)",
-    "UWorldSubsystem": "OnWorldEndPlay(UWorld&) or PreDeinitialize()",
-    "UGameInstanceSubsystem": "Deinitialize()",
-    "UEngineSubsystem": "Deinitialize()",
-    "ULocalPlayerSubsystem": "Deinitialize() or PlayerControllerChanged(...)",
-    "UObject": "BeginDestroy()",
-}
 
-def validate_unreal_lifecycle_overrides(path: Path, text: str, root: Path) -> list[Finding]:
+def _lifecycle_contract_id(lifecycle_base: str) -> str:
+    if lifecycle_base == "AActor":
+        return "ue.actor.lifecycle"
+    if lifecycle_base == "UActorComponent":
+        return "ue.component.lifecycle"
+    if lifecycle_base.endswith("Subsystem"):
+        return "ue.subsystem.lifecycle"
+    return "ue.uobject.lifecycle"
+
+
+def lifecycle_inheritance_chain(base: str, project_bases: dict[str, str] | None = None) -> list[str] | None:
+    """Follow project then engine parents from ``base``.
+
+    Returns the chain when every link is known, or None when an unknown parent
+    is reached first: an unresolved chain is unknown, never a finding.
+    """
+    chain = [base]
+    project_bases = project_bases or {}
+    while len(chain) <= LIFECYCLE_CHAIN_MAX_DEPTH:
+        current = chain[-1]
+        if current == "UObject":
+            return chain
+        # Engine names win: a project class cannot redefine an engine parent.
+        parent = UNREAL_ENGINE_LIFECYCLE_PARENTS.get(current) or project_bases.get(current)
+        if not parent or parent in chain:
+            return None
+        chain.append(parent)
+    return None
+
+
+UNREAL_LIFECYCLE_ALTERNATIVES: dict[str, str] = dict(_LIFECYCLE.get("alternatives", {}))
+
+def validate_unreal_lifecycle_overrides(path: Path, text: str, root: Path,
+                                        bases: dict[str, str] | None = None) -> list[Finding]:
     findings: list[Finding] = []
     rel = str(path.relative_to(root))
     class_re = re.compile(
@@ -117,9 +88,11 @@ def validate_unreal_lifecycle_overrides(path: Path, text: str, root: Path) -> li
     )
     for class_match in class_re.finditer(text):
         base_name = class_match.group("base")
-        allowed = UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST.get(base_name)
-        if not allowed:
+        chain = lifecycle_inheritance_chain(base_name, bases)
+        if chain is None:
             continue
+        allowed = set().union(*(UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST.get(name, set()) for name in chain))
+        lifecycle_base = next(name for name in chain if name in UNREAL_LIFECYCLE_OVERRIDE_ALLOWLIST)
         open_index = text.find("{", class_match.end() - 1)
         if open_index < 0:
             continue
@@ -135,16 +108,31 @@ def validate_unreal_lifecycle_overrides(path: Path, text: str, root: Path) -> li
                 continue
             class_name = class_match.group("class")
             alternative = UNREAL_LIFECYCLE_ALTERNATIVES.get(
-                base_name,
+                lifecycle_base,
                 "the lifecycle hook declared by the direct base class",
             )
+            via = f" (via {' -> '.join(chain)})" if len(chain) > 1 else ""
             findings.append(
                 Finding(
                     "error",
                     rel,
                     line_number(text, open_index + 1 + override_match.start()),
                     "INVALID_UNREAL_LIFECYCLE_OVERRIDE",
-                    f"{class_name} derives from {base_name}; {function_name} is not a valid lifecycle override for that base. Use {alternative} or verify the exact UE API before editing.",
+                    f"{class_name} derives from {base_name}{via}; {function_name} is not a valid lifecycle override for that base. Use {alternative} or verify the exact UE API before editing.",
+                    metadata={
+                        "ruleId": "INVALID_UNREAL_LIFECYCLE_OVERRIDE",
+                        "contractRevision": LIFECYCLE_CONTRACT_REVISION,
+                        "contractIds": [_lifecycle_contract_id(lifecycle_base)],
+                        "analysisKind": "lexical",
+                        # Every link on the chain came from the contract or a
+                        # project header, and the name is a known lifecycle hook.
+                        "confidence": "high",
+                        "evidenceRefs": [{"inheritancePath": chain}],
+                        "assumptions": ["first public base names the C++ parent",
+                                        "project base names come from scanned headers"],
+                        "limitations": ["macros and conditional compilation are not expanded",
+                                        "a project intermediate base may declare its own virtual with this name"],
+                    },
                 )
             )
     return findings

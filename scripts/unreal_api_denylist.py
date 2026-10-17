@@ -19,18 +19,14 @@ from typing import Any
 
 from cpp_parse_utils import mask_comments_and_strings, offset_in_regions, preprocessor_editor_safe_regions
 
+from unreal_contracts import load_contracts_or_none
+
 # Wrong subsystem/actor lifecycle overrides. Key is a lowercase token searched with
-# word boundaries; value explains the correct API to verify against.
-INVALID_LIFECYCLE_OVERRIDES: dict[str, str] = {
-    "onworlddestroyed": (
-        "UWorldSubsystem does not expose OnWorldDestroyed in UE 5.8; "
-        "use OnWorldEndPlay(UWorld&) or PreDeinitialize()."
-    ),
-    "worlddestroyed": (
-        "WorldDestroyed is not a standard UE subsystem lifecycle override; "
-        "verify the direct base API before planning edits."
-    ),
-}
+# word boundaries; value explains the correct API to verify against. The names
+# live in config/unreal_contracts.json (lifecycle.invalidOverrideNames); an
+# unavailable contract file disables only this table, never the other checks.
+_CONTRACTS = load_contracts_or_none()
+INVALID_LIFECYCLE_OVERRIDES: dict[str, str] = dict(_CONTRACTS["lifecycle"]["invalidOverrideNames"]) if _CONTRACTS else {}
 
 # Commonly invented API names / members. Key is a lowercase token searched with
 # word boundaries; value explains the reality and the correct thing to verify.

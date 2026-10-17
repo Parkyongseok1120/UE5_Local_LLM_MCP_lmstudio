@@ -111,6 +111,8 @@ function createDiagnosticCapabilities(context) {
       scanMode: result.scanMode,
       scopeKind: result.scopeKind,
       findingCount: result.findingCount ?? allFindings.length,
+      analysis: result.analysis || { analysisCoverage: { status: result.skipped ? "unavailable" : "unknown" },
+        contractRevision: null },
       findings: allFindings.slice(0, 100),
       skipped: result.skipped === true,
       reason: result.reason || result.note || "",

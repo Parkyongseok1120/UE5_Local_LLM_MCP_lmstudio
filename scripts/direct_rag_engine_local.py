@@ -15,6 +15,7 @@ from direct_rag_result import CapabilityResult, failure
 from engine_header_evidence import lookup_engine_header_evidence
 from project_name_resolver import resolve_project_name
 from target_resolver import resolve_symbol_target
+from unreal_contracts import contract_revision, engine_version_validated, load_contracts_or_none, related_contracts
 from workspace_paths import resolve_engine_root_for_association
 
 
@@ -41,6 +42,20 @@ def _build_identity(root: Path) -> dict[str, Any]:
                 "source": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "hashScope": "file"}
     except (OSError, ValueError, TypeError) as exc:
         return {"status": "unknown", "engineRoot": str(root), "source": str(path), "reason": str(exc)[:180]}
+
+
+def _related_contracts(symbol: str, owner: str, rows: list[dict[str, Any]], version: str) -> dict[str, Any] | None:
+    """Ids and one-sentence summaries only; the contract file stays the source."""
+    data = load_contracts_or_none()
+    if data is None:
+        return {"status": "unavailable"}
+    types = [t for t in dict.fromkeys([owner, *(t for r in rows for t in [r.get("declaredIn"), *(r.get("inheritancePath") or [])])]) if t]
+    items = related_contracts(data, symbol, types)[:3]
+    if not items:
+        return None
+    return {"revision": contract_revision(data), "engineVersionValidated": engine_version_validated(data, version),
+            "items": [{"id": c["id"], "kind": c["kind"], "summary": c["statement"].split(". ")[0].rstrip(".") + "."}
+                      for c in items]}
 
 
 def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> CapabilityResult:
@@ -97,8 +112,11 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
     if _build_identity(root) != identity:
         return scoped_failure("ENGINE_SOURCE_CHANGED", "Engine identity changed during the source observation.")
     rows = list(source.get("results") or [])
-    candidates = [{"symbol_name": symbol, "qualified_name": r["qualified_name"], "filePath": r["source"],
-                   "line": r["line"]} for r in rows]
+    # An inherited member is reached through the requested owner; resolve the
+    # requested name while each row keeps its declaring type in declaredIn.
+    candidates = [{"symbol_name": symbol,
+                   "qualified_name": f"{owner}::{symbol}" if owner else r["qualified_name"],
+                   "filePath": r["source"], "line": r["line"]} for r in rows]
     target = resolve_symbol_target(query, candidates, access="read")
     evidence = "\n\n".join(f"{r['source']}:{r['line']}\n{r['excerpt']}" for r in rows)
     matches = [{k: v for k, v in r.items() if k != "excerpt"} for r in rows]
@@ -111,7 +129,13 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
         "targetResolution": target, "evidence": evidence, "readBytes": source.get("readBytes", 0),
         "sourceIdentity": {"canonicalProject": str(descriptor), "sourceMode": "engine_local", "engineRoot": str(root)},
         "sourceVersion": "observed:" + hashlib.sha256(json.dumps([identity, matches], sort_keys=True).encode()).hexdigest(),
-        "declarationProof": "bounded_lexical_evidence; targetResolution_only_identifies_candidates"}
+        "declarationProof": "bounded_lexical_evidence; targetResolution_only_identifies_candidates",
+        # Finding a declaration on a parent is not proof that it is accessible
+        # or callable from the requested owner (access, hiding, overloads).
+        "callabilityVerification": "not_verified_access_overload_and_macro_expansion"}
+    related = _related_contracts(symbol, owner, rows, identity["version"])
+    if related:
+        payload["relatedContracts"] = related
     # Remove whole candidate metadata before fitting excerpt text. Exact source
     # identities and partial fingerprints are never clipped into false hashes.
     while payload["matches"] and not evidence_metadata_fits(payload, max_chars=limit):

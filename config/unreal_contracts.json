@@ -1,0 +1,676 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "description": "Single source for Unreal engine facts and project policies used by the static validators, the engine_local symbol lookup and the generated model guidance. Data only: analysis logic stays in the Python validators. Evidence paths are relative to the installed engine root.",
+  "validatedEngineVersions": [
+    "5.8"
+  ],
+  "lifecycle": {
+    "description": "Direct C++ parents on the lifecycle-relevant chain and the lifecycle hooks each class declares. An override is valid when any class on the chain declares it.",
+    "parents": {
+      "AActor": "UObject",
+      "UActorComponent": "UObject",
+      "USubsystem": "UObject",
+      "UDynamicSubsystem": "USubsystem",
+      "UWorldSubsystem": "USubsystem",
+      "UTickableWorldSubsystem": "UWorldSubsystem",
+      "UGameInstanceSubsystem": "USubsystem",
+      "UEngineSubsystem": "UDynamicSubsystem",
+      "ULocalPlayerSubsystem": "USubsystem",
+      "APawn": "AActor",
+      "ACharacter": "APawn",
+      "AController": "AActor",
+      "APlayerController": "AController",
+      "AInfo": "AActor",
+      "AGameModeBase": "AInfo",
+      "AGameMode": "AGameModeBase",
+      "AGameStateBase": "AInfo",
+      "AGameState": "AGameStateBase",
+      "APlayerState": "AInfo",
+      "USceneComponent": "UActorComponent",
+      "UPrimitiveComponent": "USceneComponent"
+    },
+    "overrides": {
+      "AActor": [
+        "BeginDestroy",
+        "BeginPlay",
+        "Destroyed",
+        "EndPlay",
+        "OnConstruction",
+        "PostActorCreated",
+        "PostInitializeComponents",
+        "PostLoad",
+        "ShouldTickIfViewportsOnly",
+        "Tick"
+      ],
+      "UActorComponent": [
+        "Activate",
+        "BeginDestroy",
+        "BeginPlay",
+        "Deactivate",
+        "EndPlay",
+        "InitializeComponent",
+        "OnComponentCreated",
+        "OnComponentDestroyed",
+        "OnRegister",
+        "OnUnregister",
+        "TickComponent",
+        "UninitializeComponent"
+      ],
+      "USubsystem": [
+        "Deinitialize",
+        "Initialize",
+        "ShouldCreateSubsystem"
+      ],
+      "UWorldSubsystem": [
+        "Deinitialize",
+        "DoesSupportWorldType",
+        "Initialize",
+        "OnWorldBeginPlay",
+        "OnWorldComponentsUpdated",
+        "OnWorldEndPlay",
+        "PostInitialize",
+        "PreDeinitialize",
+        "ShouldCreateSubsystem"
+      ],
+      "UGameInstanceSubsystem": [
+        "Deinitialize",
+        "Initialize",
+        "ShouldCreateSubsystem"
+      ],
+      "UEngineSubsystem": [
+        "Deinitialize",
+        "Initialize",
+        "ShouldCreateSubsystem"
+      ],
+      "ULocalPlayerSubsystem": [
+        "Deinitialize",
+        "Initialize",
+        "PlayerControllerChanged",
+        "ShouldCreateSubsystem"
+      ],
+      "UObject": [
+        "BeginDestroy",
+        "PostInitProperties",
+        "PostLoad"
+      ]
+    },
+    "alternatives": {
+      "AActor": "EndPlay(...) or Destroyed()",
+      "UActorComponent": "EndPlay(...) or OnComponentDestroyed(...)",
+      "USubsystem": "Deinitialize()",
+      "UWorldSubsystem": "OnWorldEndPlay(UWorld&) or PreDeinitialize()",
+      "UGameInstanceSubsystem": "Deinitialize()",
+      "UEngineSubsystem": "Deinitialize()",
+      "ULocalPlayerSubsystem": "Deinitialize() or PlayerControllerChanged(...)",
+      "UObject": "BeginDestroy()"
+    },
+    "extraOverrideCandidates": [
+      "OnLevelRemovedFromWorld",
+      "OnWorldCleanup",
+      "OnWorldDestroyed",
+      "WorldDestroyed"
+    ],
+    "invalidOverrideNames": {
+      "onworlddestroyed": "UWorldSubsystem does not expose OnWorldDestroyed in UE 5.8; use OnWorldEndPlay(UWorld&) or PreDeinitialize().",
+      "worlddestroyed": "WorldDestroyed is not a standard UE subsystem lifecycle override; verify the direct base API before planning edits."
+    },
+    "contractRefs": [
+      "ue.uobject.lifecycle",
+      "ue.actor.lifecycle",
+      "ue.component.lifecycle",
+      "ue.subsystem.lifecycle"
+    ]
+  },
+  "contracts": [
+    {
+      "id": "ue.uobject.lifecycle",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "lifecycle",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "UObject"
+        ]
+      },
+      "statement": "PostInitProperties, PostLoad and BeginDestroy are UObject virtuals, so they are valid overrides on every UObject-derived type, including actors, components and subsystems. BeginDestroy runs as part of garbage-collection teardown; it is not a gameplay end-of-play hook.",
+      "preconditions": [
+        "The type derives from UObject."
+      ],
+      "exceptions": [
+        "A valid BeginDestroy override is not a recommendation to put gameplay cleanup there; use EndPlay or Deinitialize for that."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h",
+          "symbol": "UObject::PostInitProperties",
+          "line": 226
+        },
+        {
+          "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h",
+          "symbol": "UObject::PostLoad",
+          "line": 346
+        },
+        {
+          "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h",
+          "symbol": "UObject::BeginDestroy",
+          "line": 361
+        }
+      ],
+      "guidanceRefs": [
+        "unreal.md#lifetime"
+      ]
+    },
+    {
+      "id": "ue.actor.lifecycle",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "lifecycle",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "AActor"
+        ]
+      },
+      "statement": "AActor gameplay lifetime runs PostInitializeComponents, then BeginPlay, and ends with EndPlay. AActor::Destroyed calls RouteEndPlay(EEndPlayReason::Destroyed) first, so cleanup that must run on every end of play belongs in EndPlay.",
+      "preconditions": [
+        "The type derives from AActor."
+      ],
+      "exceptions": [
+        "Level unload, PIE end and world teardown also call EndPlay with a different reason; Destroyed is not called for those."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h",
+          "symbol": "AActor::BeginPlay",
+          "line": 2125
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h",
+          "symbol": "AActor::EndPlay",
+          "line": 2132
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h",
+          "symbol": "AActor::PostInitializeComponents",
+          "line": 3127
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h",
+          "symbol": "AActor::Destroyed",
+          "line": 3569
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
+          "symbol": "AActor::Destroyed -> RouteEndPlay(EEndPlayReason::Destroyed)",
+          "line": 3313
+        }
+      ],
+      "guidanceRefs": [
+        "unreal.md#lifetime"
+      ]
+    },
+    {
+      "id": "ue.component.lifecycle",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "lifecycle",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "UActorComponent"
+        ]
+      },
+      "statement": "UActorComponent registration (OnRegister/OnUnregister) is separate from initialization (InitializeComponent/UninitializeComponent) and from play (BeginPlay/EndPlay). TickComponent is the component tick override; Tick is an actor hook.",
+      "preconditions": [
+        "The type derives from UActorComponent."
+      ],
+      "exceptions": [
+        "InitializeComponent runs only when bWantsInitializeComponent is set."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
+          "symbol": "UActorComponent::OnRegister",
+          "line": 830
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
+          "symbol": "UActorComponent::OnUnregister",
+          "line": 835
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
+          "symbol": "UActorComponent::InitializeComponent",
+          "line": 919
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
+          "symbol": "UActorComponent::BeginPlay",
+          "line": 936
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
+          "symbol": "UActorComponent::EndPlay",
+          "line": 949
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
+          "symbol": "UActorComponent::UninitializeComponent",
+          "line": 955
+        }
+      ],
+      "guidanceRefs": [
+        "unreal.md#lifetime"
+      ]
+    },
+    {
+      "id": "ue.subsystem.lifecycle",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "subsystem",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "USubsystem",
+          "UWorldSubsystem",
+          "UGameInstanceSubsystem",
+          "UEngineSubsystem",
+          "ULocalPlayerSubsystem"
+        ]
+      },
+      "statement": "A subsystem lives as long as its outer: Engine, GameInstance, World or LocalPlayer. ShouldCreateSubsystem gates creation, Initialize(FSubsystemCollectionBase&) and Deinitialize bracket its life. World subsystems also receive PostInitialize, OnWorldBeginPlay, OnWorldEndPlay and PreDeinitialize, and DoesSupportWorldType filters world types.",
+      "preconditions": [
+        "The type derives from USubsystem."
+      ],
+      "exceptions": [
+        "A world subsystem is created per world, including editor and PIE worlds unless DoesSupportWorldType filters them."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h",
+          "symbol": "USubsystem::ShouldCreateSubsystem",
+          "line": 56
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h",
+          "symbol": "USubsystem::Initialize",
+          "line": 59
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h",
+          "symbol": "USubsystem::Deinitialize",
+          "line": 62
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Public/Subsystems/WorldSubsystem.h",
+          "symbol": "UWorldSubsystem::OnWorldBeginPlay",
+          "line": 43
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Public/Subsystems/WorldSubsystem.h",
+          "symbol": "UWorldSubsystem::OnWorldEndPlay",
+          "line": 46
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Public/Subsystems/WorldSubsystem.h",
+          "symbol": "UWorldSubsystem::DoesSupportWorldType",
+          "line": 66
+        }
+      ],
+      "guidanceRefs": [
+        "unreal.md#subsystems"
+      ]
+    },
+    {
+      "id": "ue.subsystem.initialize-dependency",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "subsystem",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "USubsystem"
+        ]
+      },
+      "statement": "FSubsystemCollectionBase::InitializeDependency forces another subsystem of the same collection to initialize first. It only orders subsystems within one collection.",
+      "preconditions": [
+        "Initialize uses another subsystem of the same collection (for example two world subsystems of one world)."
+      ],
+      "exceptions": [
+        "A subsystem of a different collection (a world subsystem using a game-instance subsystem) is outside InitializeDependency.",
+        "Storing a reference for later use does not depend on initialization order."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Public/Subsystems/SubsystemCollection.h",
+          "symbol": "FSubsystemCollectionBase::InitializeDependency",
+          "line": 35
+        }
+      ],
+      "guidanceRefs": [
+        "unreal.md#subsystems"
+      ]
+    },
+    {
+      "id": "ue.timer.game-thread",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "threading",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "FTimerManager"
+        ]
+      },
+      "statement": "FTimerManager setting and lookup check IsInGameThread; timers must be set and cleared on the game thread, and a timer bound to an object must be cleared when that object ends play.",
+      "preconditions": [
+        "Code calls SetTimer, ClearTimer or timer queries."
+      ],
+      "exceptions": [
+        "A timer callback hopping back to the game thread before touching timers is valid."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/TimerManager.cpp",
+          "symbol": "FTimerManager::FindTimer check(IsInGameThread())",
+          "line": 596
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/TimerManager.cpp",
+          "symbol": "FTimerManager::InternalSetTimer check(IsInGameThread())",
+          "line": 660
+        }
+      ],
+      "guidanceRefs": [
+        "unreal.md#lifetime"
+      ]
+    },
+    {
+      "id": "ue.thread.uobject-game-thread",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "threading",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "contexts": [
+          "AsyncTask",
+          "ParallelFor",
+          "Async",
+          "FRunnable",
+          "UE::Tasks::Launch"
+        ]
+      },
+      "statement": "Create, destroy, spawn and mutate UObjects, actors, components, worlds and timers on the game thread. Work on another thread uses copied plain data, and returns results with AsyncTask(ENamedThreads::GameThread, ...) after checking a TWeakObjectPtr is still valid.",
+      "preconditions": [
+        "A lambda or task runs on a worker thread."
+      ],
+      "exceptions": [
+        "A nested AsyncTask(ENamedThreads::GameThread, ...) body runs on the game thread.",
+        "Thread-safe engine APIs documented as such."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/TimerManager.cpp",
+          "symbol": "FTimerManager::InternalSetTimer check(IsInGameThread())",
+          "line": 660
+        }
+      ],
+      "guidanceRefs": [
+        "unreal.md#threads",
+        "34_Threading_And_Async_Contract.md"
+      ]
+    },
+    {
+      "id": "policy.render.game-objects",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "threading",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ],
+        "contexts": [
+          "ENQUEUE_RENDER_COMMAND"
+        ]
+      },
+      "statement": "A render command runs later on the rendering thread. Pass copied values or a render proxy into it; do not capture this or other gameplay UObjects and read or mutate them there.",
+      "preconditions": [
+        "Code enqueues a render command from gameplay code."
+      ],
+      "exceptions": [
+        "Scene proxies and render-thread resources owned by the render thread.",
+        "Values copied into the lambda capture before enqueueing."
+      ],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#threads",
+        "34_Threading_And_Async_Contract.md"
+      ]
+    },
+    {
+      "id": "ue.net.cmc-prediction",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "networking",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "UCharacterMovementComponent",
+          "ACharacter"
+        ]
+      },
+      "statement": "UCharacterMovementComponent already performs owning-client movement prediction: the client moves locally and sends moves with ReplicateMoveToServer, and the server corrects significant errors with ClientAdjustPosition. A project without its own prediction layer still has engine movement prediction.",
+      "preconditions": [
+        "The pawn uses UCharacterMovementComponent."
+      ],
+      "exceptions": [
+        "Custom movement state outside the saved-move system is not predicted unless the project extends FSavedMove."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h",
+          "symbol": "ClientAdjustPosition (correction description)",
+          "line": 2394
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h",
+          "symbol": "UCharacterMovementComponent::ReplicateMoveToServer",
+          "line": 2405
+        }
+      ],
+      "guidanceRefs": [
+        "unreal-networking.md#engine-defaults"
+      ]
+    },
+    {
+      "id": "ue.render.owner-visibility",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "networking",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "UPrimitiveComponent"
+        ]
+      },
+      "statement": "bOnlyOwnerSee and bOwnerNoSee are rendering visibility flags on UPrimitiveComponent. They do not control replication, relevancy or whether the component exists on a machine.",
+      "preconditions": [
+        "A claim about who receives or owns a component is based on these flags."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h",
+          "symbol": "UPrimitiveComponent::bOwnerNoSee",
+          "line": 497
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h",
+          "symbol": "UPrimitiveComponent::bOnlyOwnerSee",
+          "line": 501
+        }
+      ],
+      "guidanceRefs": [
+        "unreal-networking.md#engine-defaults"
+      ]
+    },
+    {
+      "id": "ue.net.netmode",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "networking",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "ENetMode"
+        ]
+      },
+      "statement": "ENetMode is NM_Standalone, NM_DedicatedServer, NM_ListenServer or NM_Client; every value below NM_Client is some kind of server. A NetMode != NM_DedicatedServer branch runs on standalone, listen servers and clients, not only on remote clients.",
+      "preconditions": [
+        "Code branches on GetNetMode()."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h",
+          "symbol": "ENetMode::NM_Standalone",
+          "line": 981
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h",
+          "symbol": "ENetMode::NM_ListenServer",
+          "line": 987
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h",
+          "symbol": "ENetMode::NM_Client",
+          "line": 993
+        }
+      ],
+      "guidanceRefs": [
+        "unreal-networking.md#engine-defaults"
+      ]
+    },
+    {
+      "id": "ue.net.replication-conditions",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "networking",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "ELifetimeCondition"
+        ]
+      },
+      "statement": "Replication conditions choose which connections receive a replicated property: COND_InitialOnly sends only in the initial bunch, COND_OwnerOnly only to the owning connection, COND_SkipOwner to every connection except the owner.",
+      "preconditions": [
+        "A property is registered with DOREPLIFETIME_CONDITION."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h",
+          "symbol": "ELifetimeCondition::COND_InitialOnly",
+          "line": 19
+        },
+        {
+          "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h",
+          "symbol": "ELifetimeCondition::COND_OwnerOnly",
+          "line": 20
+        },
+        {
+          "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h",
+          "symbol": "ELifetimeCondition::COND_SkipOwner",
+          "line": 21
+        }
+      ],
+      "guidanceRefs": [
+        "unreal-networking.md#engine-defaults"
+      ]
+    },
+    {
+      "id": "policy.claims.build-evidence",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ]
+      },
+      "statement": "A compile, link or UHT outcome is a claim about the build. Report it as confirmed only with build_unreal_project or static_validate_project evidence; otherwise state it as an unverified risk and name the evidence that would confirm it.",
+      "preconditions": [
+        "A report says code does not compile, link or generate."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#verification"
+      ]
+    },
+    {
+      "id": "policy.claims.engine-default-vs-project",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ]
+      },
+      "statement": "Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text).",
+      "preconditions": [
+        "A finding says an engine capability is absent or a configuration cannot be checked."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#verification"
+      ]
+    },
+    {
+      "id": "policy.claims.severity",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ]
+      },
+      "statement": "Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error.",
+      "preconditions": [
+        "A report assigns P0-P3 or error/warning severity."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#verification"
+      ]
+    }
+  ]
+}

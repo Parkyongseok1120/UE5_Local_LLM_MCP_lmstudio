@@ -53,6 +53,9 @@ function validationPayload(payload, projectRoot, writeTarget, scopeTargets) {
     findingCount: payload.findingCount,
     deferredCount: payload.deferredCount || 0,
     preExistingCount: payload.preExistingCount || 0,
+    // Analysis coverage and contract revision from the Python report; an older
+    // validator without it is reported as unknown, never as a complete check.
+    analysis: payload.analysis || { analysisCoverage: { status: "unknown" }, contractRevision: null },
     findings: payload.findings || [],
   };
 }

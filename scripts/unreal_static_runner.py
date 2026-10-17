@@ -39,7 +39,9 @@ from unreal_static_model import (
     CPP_SOURCE_SUFFIXES,
     SOURCE_ONLY_SUFFIXES,
     Finding,
+    ValidationReport,
 )
+from unreal_contracts import contract_revision, load_contracts_or_none
 from unreal_static_network import (
     validate_replicated_uproperty_without_doreplifetime,
     validate_replication_setup,
@@ -249,6 +251,7 @@ def validate_unreal_readiness(
 def validate_unreal_readiness_lightweight(root: Path) -> list[Finding]:
     findings: list[Finding] = []
     headers = class_headers(root)
+    bases = class_bases(root)
     for path in iter_source_files(root):
         if path.suffix.lower() not in SOURCE_ONLY_SUFFIXES:
             continue
@@ -258,7 +261,7 @@ def validate_unreal_readiness_lightweight(root: Path) -> list[Finding]:
             findings.extend(validate_uproperty_category_without_exposure(path, text, root))
             findings.extend(validate_generated_h(path, text, root))
             findings.extend(validate_reflected_namespace(path, text, root))
-            findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
+            findings.extend(validate_unreal_lifecycle_overrides(path, text, root, bases))
             findings.extend(validate_blueprint_native_event_declarations(path, text, root))
             findings.extend(validate_uobject_container_without_uproperty(path, text, root))
             findings.extend(validate_tobjectptr_without_uproperty(path, text, root))
@@ -370,8 +373,34 @@ def can_run_autofix_ubt(findings: list[Finding], *, autofix_written: bool = Fals
         return True
     return False
 
+def validate_unreal_readiness_report(root: Path, *, scope_paths: list[Path] | None = None) -> ValidationReport:
+    """Findings plus the analysis coverage a caller must not mistake for a full check.
+
+    ``validate_unreal_readiness`` keeps returning the plain list for existing
+    callers; this report adds which analyses ran and which contract revision
+    they used. A missing or invalid contract file makes the contract-based
+    analyses ``unavailable`` instead of silently reporting no findings.
+    """
+    findings = validate_unreal_readiness(root, scope_paths=scope_paths) if scope_paths is not None         else validate_unreal_readiness(root)
+    contracts = load_contracts_or_none()
+    return ValidationReport(
+        findings=findings,
+        analysisCoverage={
+            "analysisKind": "lexical",
+            "contracts": "available" if contracts else "unavailable",
+            "engineSource": "not_used",
+            "scope": "scoped" if scope_paths is not None else "project",
+            "limitations": ["regex/lexical analysis: macros, templates and conditional compilation are not expanded",
+                            "absence of a finding is not proof of correctness"],
+        },
+        engineIdentity=None,
+        contractRevision=contract_revision(contracts) if contracts else None,
+    )
+
+
 __all__ = [
     'validate_unreal_readiness',
+    'validate_unreal_readiness_report',
     'validate_unreal_readiness_lightweight',
     'format_findings',
     'has_static_errors',
