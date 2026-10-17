@@ -253,6 +253,10 @@ jobs:
         run: npm ci --no-fund --no-audit
         working-directory: lmstudio-unity-mcp
 
+      - name: Install Unreal MCP dependencies used by recovery integration tests
+        run: npm ci --no-fund --no-audit
+        working-directory: lmstudio-unreal-agent-mcp
+
       - name: Context Compactor build and full semantic test suite
         run: npm test
         working-directory: lmstudio-context-compactor-plugin

@@ -32,7 +32,7 @@ function fixture(t) {
   fs.mkdirSync(path.join(projectRoot, "Source", "Game"), { recursive: true });
   const buildCs = "using UnrealBuildTool;\r\npublic class Game : ModuleRules\r\n{\r\n\tpublic Game(ReadOnlyTargetRules Target) : base(Target)\r\n\t{\r\n"
     + "\t\tPublicDependencyModuleNames.AddRange(new string[] { \"Core\", \"CoreUObject\", \"Engine\", \"InputCore\", \"EnhancedInput\" });\r\n"
-    + "\t\tPrivateDependencyModuleNames.AddRange(new string[] { });\r\n\t}\r\n}\r\n".repeat(4);
+    + "\t\tPrivateDependencyModuleNames.AddRange(new string[] { });\r\n\t}\r\n}\r\n".repeat(64);
   fs.writeFileSync(path.join(projectRoot, "Source", "Game", "Game.Build.cs"), buildCs, "utf8");
   fs.writeFileSync(path.join(projectRoot, "Source", "Game", "Lines.h"),
     Array.from({ length: 30 }, (_, i) => `// line ${i + 1}`).join("\n"), "utf8");
@@ -102,6 +102,9 @@ test("engine:// NOT_FOUND suggests a search in the existing owning module, not t
 
 test("byteBudget is reported as a whole-response limit when it stops the body", async (t) => {
   const { runtime, buildCs } = fixture(t);
+  // The body alone exceeds the budget on every OS, independent of the
+  // serialized temporary path length in the response metadata.
+  assert.ok(Buffer.byteLength(buildCs) > 2048);
   const payload = await call(runtime, "read_file", { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048 });
   assert.equal(payload.ok, true);
   assert.ok(payload.nextOffsetBytes < Buffer.byteLength(buildCs));

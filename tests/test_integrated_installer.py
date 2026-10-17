@@ -2294,6 +2294,11 @@ def test_failed_direct_rag_stage_leaves_prior_inputs_and_index_byte_stable(tmp_p
     from installer.direct_rag_build import create_direct_rag_build_plan
 
     _engine, descriptor = _write_tiny_unreal_fixture(tmp_path)
+    # Lite indexing needs a declared project version, not a host UE install.
+    descriptor.write_text(
+        json.dumps({**json.loads(descriptor.read_text(encoding="utf-8")), "EngineAssociation": "5.8"}),
+        encoding="utf-8",
+    )
     index_dir = tmp_path / "index"
     index_dir.mkdir()
     old_raw = b'{"id":"prior"}\n'

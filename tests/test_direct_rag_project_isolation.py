@@ -31,7 +31,7 @@ from workspace_paths import filesystem_path_identity  # noqa: E402
 def _project(owner: Path) -> Path:
     descriptor = owner / "Game" / "Game.uproject"
     descriptor.parent.mkdir(parents=True)
-    descriptor.write_text("{}", encoding="utf-8")
+    descriptor.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
     return descriptor
 
 
@@ -84,6 +84,7 @@ def _build_index(tmp_path: Path, documents: list[dict]) -> Path:
             input=[str(raw)],
             out_dir=str(out),
             workspace_root=str(tmp_path),
+            engine_version="5.8",
             chunk_tokens=900,
             overlap_tokens=120,
         )
@@ -801,6 +802,7 @@ def test_real_project_refresh_preserves_other_clone_and_replaces_selected_rows(
             ],
             out_dir=str(index_dir),
             workspace_root=str(ROOT),
+            engine_version="5.8",
             chunk_tokens=900,
             overlap_tokens=120,
         )
