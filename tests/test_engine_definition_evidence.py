@@ -155,3 +155,136 @@ def test_find_definitions_rejects_calls_and_requires_a_body():
     found = definitions.find_definitions(text, "Y", "Run", lexical)
     assert [item["line"] for item in found] == [2]
     assert definitions.find_definitions("void A::B(){}", "Y", "Run", lexical) == []
+
+
+GAMEMODE_H = """#pragma once
+class ENGINE_API AGameModeBase : public AActor
+{
+public:
+\tUFUNCTION(BlueprintNativeEvent, Category=Game)
+\tAActor* ChoosePlayerStart(AController* Player);
+};
+"""
+GAMEMODE_CPP = """#include "GameFramework/GameModeBase.h"
+
+AActor* AGameModeBase::ChoosePlayerStart_Implementation(AController* Player)
+{
+\treturn FindPlayerStartFor(Player);
+}
+"""
+
+
+def _with_game_mode(engine):
+    module = engine[3]
+    (module / "Classes/GameFramework/GameModeBase.h").write_text(GAMEMODE_H)
+    (module / "Private/GameModeBase.cpp").write_text(GAMEMODE_CPP)
+    headers.clear_engine_header_catalog_cache()
+
+
+def test_implementation_suffix_resolves_the_reflected_declaration_and_its_thunk_body(engine):
+    _with_game_mode(engine)
+    result = lookup(engine, "AGameModeBase::ChoosePlayerStart_Implementation")
+    assert result["ok"] and result["matchCount"] == 1
+    assert result["matches"][0]["symbol_name"] == "ChoosePlayerStart"
+    assert result["reflectionThunk"] == {"requestedSymbol": "ChoosePlayerStart_Implementation",
+                                         "declaredSymbol": "ChoosePlayerStart", "suffix": "_Implementation",
+                                         "reflectionSpecifierObserved": True}
+    [candidate] = result["definitionCandidates"]
+    assert candidate["symbol_name"] == "ChoosePlayerStart_Implementation"
+    assert "return FindPlayerStartFor(Player);" in result["evidence"]
+
+
+def test_plain_reflected_query_also_finds_the_thunk_definition(engine):
+    _with_game_mode(engine)
+    result = lookup(engine, "AGameModeBase::ChoosePlayerStart")
+    assert "reflectionThunk" not in result
+    assert [c["symbol_name"] for c in result["definitionCandidates"]] == ["ChoosePlayerStart_Implementation"]
+    assert result["matches"][0]["definitionSearch"]["definitionNames"] == [
+        "ChoosePlayerStart", "ChoosePlayerStart_Implementation"]
+
+
+def test_zero_matches_offer_an_engine_text_search_not_an_absence(engine):
+    result = lookup(engine, "AActor::NoSuchThing")
+    assert result["ok"] and result["matchCount"] == 0
+    assert result["coverage"]["apiAbsenceVerified"] is False
+    assert result["suggestion"] == {"tool": "search_files", "args": {
+        "path": "engine://Engine/Source/Runtime", "query": "AActor::NoSuchThing", "maxFiles": 50000}}
+
+
+def test_space_separated_query_names_the_owner_symbol_form(engine):
+    result = lookup(engine, "AGameModeBase RestartPlayer")
+    assert result["ok"] is False and result["errorCode"] == "INVALID_TOOL_ARGUMENTS"
+    assert "Did you mean AGameModeBase::RestartPlayer?" in result["message"]
+    assert result["suggestion"]["args"]["query"] == "AGameModeBase::RestartPlayer"
+
+
+def test_explicit_derived_implementation_wins_over_reflected_parent(engine):
+    _with_game_mode(engine)
+    module = engine[3]
+    (module / "Classes/GameFramework/GameMode.h").write_text("""#pragma once
+class ENGINE_API AGameMode : public AGameModeBase
+{
+public:
+    virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
+};
+""")
+    (module / "Private/GameMode.cpp").write_text("""AActor* AGameMode::ChoosePlayerStart_Implementation(AController* Player)
+{
+    return DerivedStart;
+}
+""")
+    headers.clear_engine_header_catalog_cache()
+    result = lookup(engine, "AGameMode::ChoosePlayerStart_Implementation")
+    assert result["matchCount"] == 1
+    assert result["matches"][0]["declaredIn"] == "AGameMode"
+    assert result["matches"][0]["symbol_name"] == "ChoosePlayerStart_Implementation"
+    assert "reflectionThunk" not in result
+    assert [candidate["declaredIn"] for candidate in result["definitionCandidates"]] == ["AGameMode"]
+    assert "return DerivedStart;" in result["evidence"]
+    assert "return FindPlayerStartFor(Player);" not in result["evidence"]
+
+
+@pytest.mark.parametrize("suffix", ["Implementation", "Validate"])
+def test_suffix_does_not_match_an_ordinary_method(engine, suffix):
+    result = lookup(engine, f"AActor::TakeDamage_{suffix}")
+    assert result["matchCount"] == 0
+    assert result["status"] == "coverage_limited"
+    assert "definitionCandidates" not in result
+    assert "reflectionThunk" not in result
+    assert result["coverage"]["apiAbsenceVerified"] is False
+
+
+@pytest.mark.parametrize("specifiers,expected", [("Server, Reliable", 0), ("Server, Reliable, WithValidation", 1),
+                                                ("BlueprintNativeEvent", 0)])
+def test_validate_fallback_requires_observed_validation_specifier(engine, specifiers, expected):
+    module = engine[3]
+    (module / "Classes/GameFramework/Actor.h").write_text(ACTOR_H.replace(
+        "void Unrelated();", f"UFUNCTION({specifiers})\n\tvoid Submit();"))
+    (module / "Private/Actor.cpp").write_text("""void AActor::Submit_Implementation() { DoWork(); }
+bool AActor::Submit_Validate() { return true; }
+""")
+    headers.clear_engine_header_catalog_cache()
+    result = lookup(engine, "AActor::Submit_Validate")
+    assert result["matchCount"] == expected
+    if expected:
+        assert result["reflectionThunk"]["reflectionSpecifierObserved"] is True
+        assert [c["symbol_name"] for c in result["definitionCandidates"]] == ["Submit_Validate"]
+        assert "DoWork" not in result["evidence"]
+
+
+@pytest.mark.parametrize("specifiers,suffix", [
+    ('BlueprintCallable, Category="Server"', "Implementation"),
+    ('BlueprintCallable, meta=(DisplayName="BlueprintNativeEvent")', "Implementation"),
+    ('BlueprintCallable, meta=(Server, WithValidation)', "Implementation"),
+    ('BlueprintCallable, meta=(Server, WithValidation)', "Validate"),
+    ('Server=CustomImpl, Reliable', "Implementation"),
+    ('Server, WithValidation=CustomValidation', "Validate"),
+])
+def test_metadata_and_custom_names_do_not_imply_default_thunk_names(engine, specifiers, suffix):
+    module = engine[3]
+    (module / "Classes/GameFramework/Actor.h").write_text(ACTOR_H.replace(
+        "void Unrelated();", f"UFUNCTION({specifiers})\n\tvoid Ordinary();"))
+    headers.clear_engine_header_catalog_cache()
+    result = lookup(engine, f"AActor::Ordinary_{suffix}")
+    assert result["matchCount"] == 0
+    assert "reflectionThunk" not in result

@@ -84,6 +84,39 @@ function chooseRelativeRoot(input, workspaceRoot, projectDir) {
   return { rootType: "workspace", root: workspaceRoot, relative: normalized };
 }
 
+const READ_URI_SCHEMES = Object.freeze(["project://", "workspace://", "engine://"]);
+
+/** A path-policy rejection with a stable model-facing code and details. */
+function pathPolicyError(code, message, details = {}) {
+  const error = new Error(message);
+  error.directErrorCode = code;
+  error.details = details;
+  return error;
+}
+
+/** For an absolute path under the selected installed engine, the equivalent
+ * engine:// URI when that path exists and engine:// policy allows reading it.
+ * Never guesses: an unresolvable engine, a missing file or a denied path all
+ * return only what was observed. */
+async function engineUriForAbsolute(absolute, activeProject, resolveEngine) {
+  if (typeof resolveEngine !== "function") return {};
+  let engine;
+  try {
+    engine = await resolveEngine(activeProject || null);
+  } catch {
+    return {};
+  }
+  const engineRoot = path.resolve(engine.engineRoot);
+  if (!isWithin(absolute, engineRoot)) return {};
+  const relative = path.relative(engineRoot, absolute).replace(/\\/g, "/");
+  const stat = await fsp.stat(absolute).catch(() => null);
+  if (stat && isAllowedEngineRelative(relative, { isFile: stat.isFile() })) {
+    return { engineUri: `${ENGINE_URI_PREFIX}${relative}` };
+  }
+  return { underInstalledEngine: true, engineUriForm: `${ENGINE_URI_PREFIX}Engine/Source/...`,
+    engineRelativePathExists: Boolean(stat) };
+}
+
 /** `resolveEngine(activeProject)` is supplied only by read-only callers. Without
  * it (mutation paths) `engine://` is rejected, so engine source stays read-only. */
 async function resolveReadPath(input, { workspaceRoot, activeProject, resolveEngine } = {}) {
@@ -128,7 +161,10 @@ async function resolveReadPath(input, { workspaceRoot, activeProject, resolveEng
     } else if (isWithin(absolute, workspace)) {
       selection = { rootType: "workspace", root: workspace, relative: path.relative(workspace, absolute) };
     } else {
-      throw new Error(`read path is outside WORKSPACE_ROOT and activeProject: ${input}`);
+      const engineHint = await engineUriForAbsolute(absolute, activeProject, resolveEngine);
+      throw pathPolicyError("PATH_OUTSIDE_ALLOWED_ROOTS",
+        `read path is outside WORKSPACE_ROOT and activeProject: ${input}`,
+        { allowedSchemes: [...(resolveEngine ? READ_URI_SCHEMES : READ_URI_SCHEMES.slice(0, 2))], ...engineHint });
     }
   } else {
     requested = stripProjectNamePrefix(requested, projectDir);
@@ -224,8 +260,10 @@ function pathMetadata(resolution) {
 
 module.exports = {
   PROJECT_PREFIXES,
+  READ_URI_SCHEMES,
   WORKSPACE_PREFIXES,
   isWithin,
+  pathPolicyError,
   stripProjectNamePrefix,
   resolveReadPath,
   assertReadChildContained,

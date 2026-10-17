@@ -83,7 +83,8 @@ class Files {
         observedAt, startLine: start, endLine, returnedLineCount: count, totalLines: lines.length,
         text: (numbered ? numberLines(shown, start) : shown).join("\n"),
         ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
-        hasMore, nextStartLine: hasMore ? start + count : null, truncated: hasMore });
+        hasMore, nextStartLine: hasMore ? start + count : null, truncated: hasMore,
+        requestedRangeComplete: count === selected.length });
     };
     const budget = args.byteBudget ?? DEFAULT_BYTE_BUDGET;
     // Budget the actual transport envelope. Return whole lines with explicit

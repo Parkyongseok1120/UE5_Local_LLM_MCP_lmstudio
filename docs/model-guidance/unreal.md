@@ -107,6 +107,11 @@
 
 - 실제로 읽은 범위를 보고한다. 일부만 읽은 파일을 전량 확인했다고 쓰지 않고, 전량 확인했다고 쓴 파일을 미확인으로 다시 분류하지 않는다.
 - 확인한 사실, 추론, 미확인을 구분해 적는다.
+- NOT_FOUND는 그 경로에 파일이 없다는 뜻일 뿐이다. 엔진 소스 설치 여부로 확대하지 않고, 응답의 suggestion이나 상위 `engine://` 디렉터리 검색으로 실제 위치를 찾는다.
+- 엔진 절대 경로가 거부되면 `engine://Engine/Source/...`로 다시 읽는다. 작업 루트나 접근 범위를 넓히려 하지 않는다.
+- BlueprintNativeEvent와 RPC는 헤더에 `X`로 선언되고 .cpp에는 `Owner::X_Implementation`(검증 함수는 `X_Validate`)으로 정의된다.
+- engine_local의 `coverage_limited`·`matchCount 0`은 부재 증명이 아니다. 정의 후보나 엔진 텍스트 검색으로 확인하고, 확인하지 못하면 미확인으로 남긴다.
+- `hasMore`이거나 `omissionReason:"byte_budget"`이면 `nextOffsetBytes`·`nextStartLine`부터 이어 읽는다. byteBudget은 메타데이터를 포함한 응답 전체 크기다.
 
 <!-- contract-summary: verification -->
 프로젝트 정책 unreal_contracts@2:

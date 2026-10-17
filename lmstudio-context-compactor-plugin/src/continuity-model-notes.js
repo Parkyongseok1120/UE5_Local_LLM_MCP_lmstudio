@@ -378,7 +378,32 @@ function renderAssistantNote(note, messages = []) {
   const structureOnly = [...new Set(applicability.filter(entry => entry.state === "structure_only").map(entry => entry.id))];
   const structureNote = structureOnly.length
     ? ` 구조 검증만 있음, 사실 근거 아님: ${structureOnly.join(", ")} (evidence_first_validate는 packet 형식만 확인한다).` : "";
-  return `${NOTE_MARKER}${structureNote ? "\n" + structureNote.trim() : ""}\nPrior assistant judgments, not verified facts. reviewClaims are assistant-claimed reviews, never verified semantic completion; file coverage only proves delivered evidence. Current user instructions and newer tool observations take precedence. ${note.scope.projectIdentity ? "Project identity was bound to a tool observation." : "No single project identity was proven; do not attribute these notes to the active project."}\n${JSON.stringify({ modelNotes: note, sourceApplicability: applicability })}`;
+  const view = withdrawnView(note);
+  const withdrawnNote = view.withdrawn?.length
+    ? "\nWithdrawn items are listed only so they are not re-asserted; they are not current judgments." : "";
+  return `${NOTE_MARKER}${structureNote ? "\n" + structureNote.trim() : ""}${withdrawnNote}\nPrior assistant judgments, not verified facts. reviewClaims are assistant-claimed reviews, never verified semantic completion; file coverage only proves delivered evidence. Current user instructions and newer tool observations take precedence. ${note.scope.projectIdentity ? "Project identity was bound to a tool observation." : "No single project identity was proven; do not attribute these notes to the active project."}\n${JSON.stringify({ modelNotes: view, sourceApplicability: applicability })}`;
+}
+
+/** A superseded judgment (its own status, or named by another
+ * item's `supersedes`) is moved out of the current lists into `withdrawn`, so a
+ * withdrawn hypothesis cannot be re-read as a standing decision. */
+function withdrawnView(note) {
+  const supersededBy = new Map();
+  for (const item of [...note.decisions, ...note.rejectedHypotheses, ...note.openQuestions]) {
+    for (const id of item.supersedes || []) if (!supersededBy.has(id)) supersededBy.set(id, item.id || null);
+  }
+  const isWithdrawn = item => item.status === "superseded" || (item.id && supersededBy.has(item.id));
+  const withdrawn = [];
+  const keep = (items, kind, text) => items.filter(item => {
+    if (!isWithdrawn(item)) return true;
+    withdrawn.push({ ...(item.id ? { id: item.id } : {}), kind, text: String(text(item) || "").slice(0, 240),
+      ...(item.id && supersededBy.get(item.id) ? { supersededBy: supersededBy.get(item.id) } : {}) });
+    return false;
+  });
+  const decisions = keep(note.decisions, "decision", item => item.statement);
+  const rejectedHypotheses = keep(note.rejectedHypotheses, "rejectedHypothesis", item => item.hypothesis);
+  const openQuestions = keep(note.openQuestions, "openQuestion", item => item.question);
+  return withdrawn.length ? { ...note, decisions, rejectedHypotheses, openQuestions, withdrawn } : note;
 }
 
 const REF_TARGET_KEYS = ["path", "symbol", "query", "project", "projectPath", "fileName", "action"];

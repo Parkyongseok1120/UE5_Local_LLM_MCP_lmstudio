@@ -131,6 +131,30 @@ def check(label: str, ok: bool, detail: str = "") -> dict:
     return entry
 
 
+def _workspace_root_checks(mcp_config: Path, shared_config: Path) -> list[dict]:
+    """The installed unreal-agent WORKSPACE_ROOT, judged by the installer's own guard."""
+    from workspace_root_guard import workspace_root_findings
+
+    try:
+        mcp = json.loads(mcp_config.read_text(encoding="utf-8-sig"))
+        env = ((mcp.get("mcpServers") or {}).get("unreal-agent") or {}).get("env") or {}
+    except (OSError, json.JSONDecodeError):
+        return []
+    workspace = str(env.get("WORKSPACE_ROOT") or "").strip()
+    if not workspace:
+        return []
+    active = None
+    try:
+        active = str(json.loads(shared_config.read_text(encoding="utf-8-sig")).get("activeProject") or "").strip() or None
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    findings = workspace_root_findings(Path(workspace), Path(active) if active else None,
+                                       Path(__file__).resolve().parents[1])
+    if not findings:
+        return [check("workspace_root", True, workspace)]
+    return [warn(f"workspace_root_{f['code']}", f["message"]) for f in findings]
+
+
 def warn(label: str, detail: str = "") -> dict:
     entry = {"label": label, "status": "WARN", "detail": detail}
     line = f"[WARN] {label}"
@@ -401,6 +425,7 @@ def main() -> int:
         checks.append(warn("mcp_unreal_agent", agent_detail))
     else:
         checks.append(check("mcp_unreal_agent", agent_ok, agent_detail))
+    checks.extend(_workspace_root_checks(mcp_config, shared_config))
 
     cline_ok = False
     cline_detail = "not configured"

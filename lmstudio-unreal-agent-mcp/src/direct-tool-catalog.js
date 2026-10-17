@@ -163,7 +163,7 @@ function toolDefinitions() {
     },
     {
       name: "list_directory",
-      description: "List a workspace:// or project:// directory; page with offset=nextOffset.",
+      description: "List a workspace://, project:// or engine:// directory; page with offset=nextOffset.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
@@ -174,7 +174,7 @@ function toolDefinitions() {
     },
     {
       name: "search_files",
-      description: "Search contents or basenames under a workspace:// or project:// path (default workspace://). Results carry a reusable uri; with project:// URIs pass the response's activeProject as project. Partial on deadline.",
+      description: "Search contents or basenames under workspace://, project:// or engine:// (default workspace://). Results carry a reusable uri; with project:// URIs pass the response's activeProject as project. Partial on deadline.",
       inputSchema: schema(repeatable({
         query: { type: "string" },
         path: { type: "string" },
@@ -189,7 +189,7 @@ function toolDefinitions() {
     },
     {
       name: "read_file",
-      description: "Read a UTF-8 byte window (maxBytes default 64 KiB, max 2 MiB; continue at nextOffsetBytes) with sha256 and fileVersionReceipt.",
+      description: "Read a UTF-8 byte window (maxBytes default 64 KiB; byteBudget caps the whole JSON reply); continue at nextOffsetBytes.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),

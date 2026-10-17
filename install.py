@@ -1946,6 +1946,24 @@ def _live_server_status(url: str) -> dict[str, Any]:
         return {"reachable": False, "error": str(exc)}
 
 
+def _check_workspace_root(args: argparse.Namespace) -> None:
+    """WORKSPACE_ROOT is the first --workspace-root. Refuse another harness
+    checkout there unless confirmed; report a project outside it as a notice."""
+    from workspace_root_guard import workspace_root_findings
+
+    first = args.workspace_root[0] if args.workspace_root else None
+    findings = workspace_root_findings(first, args.active_project, ROOT)
+    args._workspace_root_findings = findings
+    for finding in findings:
+        print(f"WARNING: {finding['message']}", file=sys.stderr)
+    blocking = [f for f in findings if f["severity"] == "block"]
+    if not blocking or getattr(args, "allow_foreign_workspace_root", False):
+        return
+    if not args.yes and sys.stdin.isatty() and _prompt_yes_no("Keep this WORKSPACE_ROOT anyway?", False):
+        return
+    raise ValueError(f"{blocking[0]['message']} Pass --allow-foreign-workspace-root to keep it.")
+
+
 def install(
     args: argparse.Namespace,
     *,
@@ -1980,6 +1998,7 @@ def install(
             raise ValueError(f"active project must be an existing .uproject file: {args.active_project}")
         if args.active_project.parent not in args.workspace_root:
             args.workspace_root.append(args.active_project.parent)
+    _check_workspace_root(args)
     if args.engine_root:
         args.engine_root = args.engine_root.expanduser().resolve()
         if not _engine_root_is_valid(args.engine_root):
@@ -2436,6 +2455,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lmstudio-home", type=Path, default=Path(os.environ.get("LMSTUDIO_HOME", Path.home() / ".lmstudio")))
     parser.add_argument("--state-home", type=Path, default=Path.home() / ".evidence-first")
     parser.add_argument("--workspace-root", type=Path, action="append", default=[])
+    parser.add_argument("--allow-foreign-workspace-root", action="store_true",
+                        help="keep a first --workspace-root that is another copy of this harness")
     parser.add_argument("--active-project", type=Path)
     parser.add_argument(
         "--engine-root",

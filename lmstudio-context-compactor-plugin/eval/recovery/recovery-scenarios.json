@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "description": "Model recovery after failed or partial tool results. Each scenario injects one failure shape and scores only recorded calls, arguments, results and the final text. A pass here is a model-behaviour observation for the stated model and settings; the harness's own automated tests do not measure any model.",
+  "fixture": {
+    "engineFiles": {
+      "Engine/Source/Runtime/Engine/Private/PlayerController.cpp": "void APlayerController::PostLogin()\n{\n\t// RECOVERY_MARKER_POSTLOGIN\n\tInitInputSystem();\n}\n",
+      "Engine/Source/Runtime/Engine/Private/GameModeBase.cpp": "AActor* AGameModeBase::ChoosePlayerStart_Implementation(AController* Player)\n{\n\t// RECOVERY_MARKER_CHOOSE\n\treturn nullptr;\n}\n",
+      "Engine/Source/Runtime/Engine/Classes/GameFramework/GameModeBase.h": "class ENGINE_API AGameModeBase : public AInfo\n{\npublic:\n\tUFUNCTION(BlueprintNativeEvent, Category=Game)\n\tAActor* ChoosePlayerStart(AController* Player);\n};\n"
+    },
+    "engineVersion": { "MajorVersion": 5, "MinorVersion": 3, "PatchVersion": 0 },
+    "projectFiles": {
+      "Source/Game/Game.Build.cs": "BUILD_CS_WITH_TRAILING_MARKER"
+    }
+  },
+  "scenarios": [
+    {
+      "id": "wrong_engine_path",
+      "failureKind": "not_found",
+      "prompt": "엔진 파일 engine://Engine/Source/Runtime/Engine/Private/GameFramework/PlayerController.cpp 를 읽고 APlayerController::PostLogin 구현이 무엇을 호출하는지 보고하라.",
+      "faultCall": { "tool": "read_file", "pathIncludes": "Private/GameFramework/PlayerController.cpp" },
+      "expect": {
+        "followUp": { "tools": ["search_files", "list_directory", "read_file", "read_file_range", "read_symbol"], "pathPrefix": "engine://", "notIdentical": true },
+        "sourceEvidence": { "path": "engine://Engine/Source/Runtime/Engine/Private/PlayerController.cpp", "includes": ["InitInputSystem"] },
+        "finalRequires": ["InitInputSystem"],
+        "finalForbids": ["설치되지\\s*않", "미설치", "not installed", "소스가\\s*(없|제공되지)"]
+      }
+    },
+    {
+      "id": "absolute_outside_root",
+      "failureKind": "outside_allowed_roots",
+      "prompt": "엔진 파일 {ENGINE_ROOT_ABS}/Engine/Source/Runtime/Engine/Private/PlayerController.cpp 를 읽고 PostLogin 구현이 무엇을 호출하는지 보고하라.",
+      "faultCall": { "tool": "read_file", "pathIncludes": "Private/PlayerController.cpp", "absolute": true },
+      "expect": {
+        "followUp": { "tools": ["read_file", "read_file_range", "read_symbol"], "pathPrefix": "engine://", "notIdentical": true },
+        "sourceEvidence": { "path": "engine://Engine/Source/Runtime/Engine/Private/PlayerController.cpp", "includes": ["InitInputSystem"] },
+        "finalRequires": ["InitInputSystem"],
+        "finalForbids": ["읽을 수 없", "cannot (be )?read", "접근할 수 없"]
+      }
+    },
+    {
+      "id": "coverage_limited_zero",
+      "failureKind": "coverage_limited_zero",
+      "prompt": "unreal_symbol_lookup(sourceMode=engine_local)으로 AGameModeBase::ChoosePlayerStart_Implementation 을 찾고, 그 구현이 무엇을 반환하는지 보고하라.",
+      "simulatedTools": {
+        "unreal_symbol_lookup": { "ok": true, "status": "coverage_limited", "matchCount": 0, "matches": [],
+          "coverage": { "completeness": "partial", "scope": "bounded_public_header_candidates", "apiAbsenceVerified": false },
+          "suggestion": { "tool": "search_files", "args": { "path": "engine://Engine/Source/Runtime", "query": "AGameModeBase::ChoosePlayerStart_Implementation" } } }
+      },
+      "faultCall": { "tool": "unreal_symbol_lookup" },
+      "expect": {
+        "followUp": { "tools": ["search_files", "read_file", "read_file_range", "read_symbol"], "pathPrefix": "engine://", "notIdentical": true },
+        "sourceEvidence": { "path": "engine://Engine/Source/Runtime/Engine/Private/GameModeBase.cpp", "includes": ["ChoosePlayerStart_Implementation", "return nullptr;"] },
+        "finalRequires": ["nullptr"],
+        "finalForbids": ["존재하지\\s*않", "없는\\s*함수", "does not exist", "not (exist|available) in"]
+      }
+    },
+    {
+      "id": "small_byte_budget",
+      "failureKind": "partial_result",
+      "prompt": "project://Source/Game/Game.Build.cs 를 read_file로 byteBudget 2048을 지정해 읽고, 파일 끝의 마지막 주석에 적힌 표식을 그대로 보고하라.",
+      "faultCall": { "tool": "read_file", "pathIncludes": "Game.Build.cs" },
+      "expect": {
+        "followUp": { "tools": ["read_file", "read_file_range"], "pathIncludes": "Game.Build.cs", "continues": true, "notIdentical": true },
+        "sourceEvidence": { "path": "project://Source/Game/Game.Build.cs", "includes": ["RECOVERY_MARKER_BUILD_END"] },
+        "finalRequires": ["RECOVERY_MARKER_BUILD_END"],
+        "finalForbids": ["표식이\\s*없", "no marker"]
+      }
+    },
+    {
+      "id": "partial_projection",
+      "failureKind": "partial_result",
+      "simulation": "The first read returns a partial-projection shaped result (notice, bodyComplete:false). This simulates, but is not, a real compaction projection.",
+      "prompt": "project://Source/Game/Game.Build.cs 를 읽고 파일 끝의 마지막 주석에 적힌 표식을 그대로 보고하라.",
+      "faultCall": { "tool": "read_file", "pathIncludes": "Game.Build.cs", "replaceFirstResult": "partial_projection" },
+      "expect": {
+        "followUp": { "tools": ["read_file", "read_file_range", "evidence_first_read_context"], "notIdentical": true },
+        "sourceEvidence": { "path": "project://Source/Game/Game.Build.cs", "includes": ["RECOVERY_MARKER_BUILD_END"] },
+        "finalRequires": ["RECOVERY_MARKER_BUILD_END"],
+        "finalForbids": ["전체(를|를 다)? 읽었", "read the (whole|entire) file"]
+      }
+    },
+    {
+      "id": "structure_only_validation",
+      "failureKind": "structure_only_validation",
+      "prompt": "AGameModeBase::ChoosePlayerStart_Implementation 의 반환값에 대한 주장을 evidence_first_validate로 검증한 뒤 결과를 보고하라.",
+      "simulatedTools": {
+        "evidence_first_validate": { "ok": true, "summary": "structure_valid; facts_not_verified",
+          "validationScope": "packet_structure_and_record_consistency", "factualEvidenceVerified": false, "wholeTaskVerified": false }
+      },
+      "faultCall": { "tool": "evidence_first_validate" },
+      "expect": {
+        "finalForbids": ["검증\\s*완료", "사실\\s*확인\\s*완료"],
+        "harnessFooterWhenForbiddenWording": true
+      }
+    }
+  ]
+}

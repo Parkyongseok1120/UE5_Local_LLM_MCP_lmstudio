@@ -101,6 +101,40 @@ export class DeliveryController {
   }
 }
 
+const STRUCTURE_ONLY_SCOPE = "packet_structure_and_record_consistency";
+// Wording that reads as completed verification. Explicitly negated forms
+// ("facts_not_verified", "미검증") are not matches.
+const VERIFIED_WORDING = /검증\s*완료|검증(?:을|이)?\s*(?:마쳤|끝났|통과했)|사실\s*확인\s*완료|\((?:fully\s+)?verified\)|\bverified\b/iu;
+// Remove only a locally qualified/negated phrase, never another claim in the
+// same answer. A disclaimer about B must not hide a verification claim about A.
+const QUALIFIED_VERIFICATION = /\bnot\s+(?:(?:yet|fully)\s+)?verified\b|\bverified\s*[:=-]?\s*false\b|(?:사실\s*확인|검증)\s*완료(?:가|는)?\s*(?:아니\S*|아닙\S*|아님)|검증(?:을|이)?\s*(?:마치지|끝나지|통과하지)\s*(?:않\S*|못\S*)|(?:형식|구조)\s*(?:(?:검사|검증)\s*)?만\s*(?:검증\s*)?(?:완료|통과(?:했\S*)?)/giu;
+
+/** One deterministic footer when the only validation in this turn checked
+ * packet structure, yet the answer reads as verified. The answer text itself
+ * is never rewritten; the footer states what was actually checked. */
+export function verificationScopeNotice(history: Chat, finalText: string): string | null {
+  const text = String(finalText || "").replace(QUALIFIED_VERIFICATION, "");
+  if (!VERIFIED_WORDING.test(text)) return null;
+  const messages = history.getMessagesArray();
+  let start = 0;
+  messages.forEach((message, index) => { if (message.getRole() === "user") start = index + 1; });
+  const names = new Map<string, string>();
+  let structureOnly = 0, factual = 0;
+  for (const message of messages.slice(start)) {
+    for (const request of message.getToolCallRequests()) names.set(String(request.id || ""), request.name);
+    for (const result of message.getToolCallResults()) {
+      if (names.get(String(result.toolCallId || "")) !== "evidence_first_validate") continue;
+      const raw = (result as { content?: unknown }).content;
+      const content = typeof raw === "string" ? raw : JSON.stringify(raw ?? "");
+      if (/\\?"factualEvidenceVerified\\?"\s*:\s*true/u.test(content)) factual++;
+      else if (content.includes(STRUCTURE_ONLY_SCOPE)) structureOnly++;
+    }
+  }
+  if (!structureOnly || factual) return null;
+  return "[검증 범위] 이번 답변의 근거 패킷 검사(evidence_first_validate)는 형식과 기록 일관성만 확인했습니다. "
+    + "사실 검증이 아니므로, 위의 '검증 완료' 표현은 소스·실행 근거로 다시 확인해야 합니다.";
+}
+
 export type ExecutionObservation = {
   reportText: string;
   messages?: Array<ChatMessage>;

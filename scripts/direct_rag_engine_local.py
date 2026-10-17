@@ -12,6 +12,7 @@ from direct_rag_project_engine import project_engine_version
 from direct_rag_project_selectors import classify_project_selectors, exact_project_descriptor
 from direct_rag_result import CapabilityResult, failure
 from engine_header_evidence import lookup_engine_header_evidence
+from engine_definition_evidence import reflection_thunk_names
 from engine_identity import read_unreal_build_identity as _build_identity
 from project_name_resolver import resolve_project_name
 from target_resolver import resolve_symbol_target
@@ -37,7 +38,13 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
     query = str(arguments.get("query") or "").strip()
     owner = str(arguments.get("owner") or "").strip()
     if not re.fullmatch(r"[A-Za-z_]\w{0,127}(?:::[A-Za-z_]\w{0,127})?", query, re.ASCII):
-        return failure("INVALID_TOOL_ARGUMENTS", "engine_local query must be Symbol or Owner::Symbol.")
+        spaced = re.fullmatch(r"([A-Za-z_]\w{0,127})\s+([A-Za-z_]\w{0,127})", query, re.ASCII)
+        corrected = f"{spaced.group(1)}::{spaced.group(2)}" if spaced else None
+        return failure("INVALID_TOOL_ARGUMENTS",
+                       "engine_local query must be Symbol or Owner::Symbol (for example AActor::TakeDamage)."
+                       + (f" Did you mean {corrected}?" if corrected else ""),
+                       **({"suggestion": {"tool": "unreal_symbol_lookup",
+                                          "args": {"query": corrected, "sourceMode": "engine_local"}}} if corrected else {}))
     if owner and not re.fullmatch(r"[A-Za-z_]\w{0,127}", owner, re.ASCII):
         return failure("INVALID_TOOL_ARGUMENTS", "owner must be one exact type name.")
     if "::" in query:
@@ -82,17 +89,32 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
     if re.fullmatch(r"\d+\.\d+(?:\.\d+)?", expected) and identity["version"].split(".")[:2] != expected.split(".")[:2]:
         return scoped_failure("ENGINE_SOURCE_VERSION_MISMATCH", "Selected engine source differs from the project association.",
                        requestedEngineAssociation=expected, observedEngineIdentity=identity)
+    # An override can explicitly declare the suffixed name in a derived class.
+    # Prefer that exact declaration before considering a generated UHT thunk.
+    thunk = re.fullmatch(r"(\w+?)_(Implementation|Validate)", symbol, re.ASCII)
+    declared_symbol = symbol
     source = lookup_engine_header_evidence(root, [{"symbol": symbol, "receiverType": owner}],
                                           local_source_identity=identity["sha256"])
+    rows = list(source.get("results") or [])
+    if thunk and not rows:
+        fallback = lookup_engine_header_evidence(root, [{"symbol": thunk.group(1), "receiverType": owner}],
+                                                local_source_identity=identity["sha256"])
+        read_bytes = source.get("readBytes", 0) + fallback.get("readBytes", 0)
+        rows = [{**row, "definitionCandidates": [candidate for candidate in row.get("definitionCandidates", [])
+                                                 if candidate.get("symbol_name") == symbol]}
+                for row in fallback.get("results") or [] if symbol in reflection_thunk_names(row)]
+        if rows:
+            declared_symbol = thunk.group(1)
+            source = fallback
+        source = {**source, "readBytes": read_bytes}
     if _build_identity(root) != identity:
         return scoped_failure("ENGINE_SOURCE_CHANGED", "Engine identity changed during the source observation.")
-    rows = list(source.get("results") or [])
     # An inherited member is reached through the requested owner; resolve the
     # requested name while each row keeps its declaring type in declaredIn.
-    candidates = [{"symbol_name": symbol,
-                   "qualified_name": f"{owner}::{symbol}" if owner else r["qualified_name"],
+    candidates = [{"symbol_name": declared_symbol,
+                   "qualified_name": f"{owner}::{declared_symbol}" if owner else r["qualified_name"],
                    "filePath": r["source"], "line": r["line"]} for r in rows]
-    target = resolve_symbol_target(query, candidates, access="read")
+    target = resolve_symbol_target(f"{owner}::{declared_symbol}" if owner else declared_symbol, candidates, access="read")
     evidence = "\n\n".join(f"{r['source']}:{r['line']}\n{r['excerpt']}" for r in rows)
     # Implementation bodies are evidence text; only their locators and
     # fingerprints are response metadata.
@@ -118,6 +140,17 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
         "callabilityVerification": "not_verified_access_overload_and_macro_expansion"}
     if definitions:
         payload["definitionCandidates"] = definitions
+    if thunk and declared_symbol != symbol:
+        payload["reflectionThunk"] = {
+            "requestedSymbol": symbol, "declaredSymbol": declared_symbol, "suffix": f"_{thunk.group(2)}",
+            "reflectionSpecifierObserved": True,
+        }
+    if not rows:
+        # A bounded zero is not absence. Offer the one search that reads
+        # engine text directly (the agent server's search_files over engine://).
+        payload["suggestion"] = {"tool": "search_files", "args": {
+            "path": "engine://Engine/Source/Runtime", "query": f"{owner}::{symbol}" if owner else f"{symbol}(",
+            "maxFiles": 50000}}
     related = _related_contracts(symbol, owner, rows, identity["version"])
     if related:
         payload["relatedContracts"] = related

@@ -13,7 +13,8 @@ import { buildCompactedHistory, ContextManager, measureContext, modelHistoryMess
 import { resolveGenerationBudget } from "./context-budget";
 import { prepareRoundInput } from "./round-input";
 import { core, inputAvailability, modelNotes, workingContextModule, objectiveContinuity, continuityState } from "./context-ports";
-import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController } from "./delivery-controller";
+import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
+  verificationScopeNotice } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
 import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
@@ -229,7 +230,7 @@ export function createPredictionLoopHandler(
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
-    const runtimeFacts = new Map<"budget" | "stagnation", string>();
+    const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure", string>();
     const persistTerminalNote = () => {
       const result = notes.persist(activeNote, visibleTranscript.snapshot().getMessagesArray());
       if (result.status !== "skipped" && config.showDebugInfo) ctl.debug({ event: "assistant_note_persistence", ...result,
@@ -425,6 +426,18 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         const retainedIndexes = compactionCheckpoint?.retainedIndexes || [];
         const retainedIndexLimit = 64;
         const inputEvidence = messageEvidenceTelemetry(modelInput.getMessagesArray());
+        if (config.showDebugInfo) {
+          // What the model input actually carries per tool result (no body text):
+          // which results are partial projections, and whether each still has its
+          // partial notice and a read handle to page the archived original.
+          const projections = inputEvidence.results.filter(result => result.kind === "archived_tool_result_projection");
+          ctl.debug({ event: "model_input_evidence_summary", executionId, modelInputId, roundIndex,
+            toolResults: inputEvidence.results.length, projections: projections.length,
+            partialProjections: projections.filter(result => result.bodyComplete === false).slice(0, 32).map(result => ({
+              toolCallId: result.toolCallId, bodyTotalChars: result.bodyTotalChars, bodyOmittedChars: result.bodyOmittedChars,
+              noticePresent: result.noticePresent === true,
+              readHandlePresent: Boolean((result.archiveRef as { readHandle?: unknown } | undefined)?.readHandle) })) });
+        }
         const serializedCounts = compactionCheckpoint
           ? serializedCheckpointCounts(compactionCheckpoint.checkpoint)
           : serializedCheckpointCounts("");
@@ -1020,6 +1033,16 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         }
         if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
           const stagnation = toolStagnation.observe(captured.messages, recoveryProgress);
+          const failure = stagnation.repeatedFailure;
+          if (failure?.firstNotice) {
+            // Advisory only: no pause, no added permissions. The model learns the
+            // identical request already failed, and what would change the outcome.
+            runtimeFacts.set("repeated_failure", `Runtime evidence observation: ${failure.toolName} failed with `
+              + `${failure.errorCode} ${failure.count} times for identical arguments. Repeating it yields no new information; `
+              + "change the path, scope or budget the error names, or report the item as unverified.");
+            if (config.showDebugInfo) ctl.debug({ event: "tool_repeated_failure", roundIndex, toolName: failure.toolName,
+              errorCode: failure.errorCode, count: failure.count });
+          }
           if ((stagnation.count >= config.toolStagnationRounds || stagnation.cycleDetected) && stagnation.firstWarning) {
             toolStagnation.acknowledge(stagnation.warningKey);
             stagnationWarnings += 1;
@@ -1314,6 +1337,13 @@ event: decision.trigger === "research_recovery_exhausted"
           execution.finishResearch("research_round_limit");
         }
         roundIndex += 1;
+      }
+      // The visible recorder owns both the delivered prefix and its automatic
+      // continuation, plus validation exchanges that working compaction may omit.
+      const scopeNotice = verificationScopeNotice(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText);
+      if (scopeNotice) {
+        visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(scopeNotice);
+        if (config.showDebugInfo) ctl.debug({ event: "verification_scope_notice", executionId });
       }
     } catch (error) {
       executionFailure = error;

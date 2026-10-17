@@ -12,7 +12,7 @@ const { resolveReadPath, isWithin } = require("./read-path-resolver.js");
 const { createEngineSourceResolver } = require("./engine-source-access.js");
 const { DirectRepeatCache } = require("./direct-repeat-cache.js");
 const { DEFAULT_MAX_RESPONSE_CHARS, renderModelJson, toMcpResult } = require("./direct-response.js");
-const { clamp, relativeSlash } = require("./direct-runtime-shared.js");
+const { clamp, errorFromException, relativeSlash } = require("./direct-runtime-shared.js");
 const { resolveMutationLimits } = require("./direct-mutation-limits.js");
 const { assertDirectMutationScope } = require("./direct-mutation-scope.js");
 const { resolveAgentStateRoot } = require("./runtime-state-root.js");
@@ -173,6 +173,22 @@ function createDirectRuntimeContext(options = {}) {
     return best;
   }
 
+  // A path-policy rejection depends only on the arguments and the configured
+  // roots, so an identical retry is answered from the repeat cache. When the
+  // rejected absolute path is a readable installed-engine file, the same tool
+  // with the observed engine:// URI is offered as the one advisory suggestion.
+  function pathPolicyFailure(toolName, args, error) {
+    if (error?.directErrorCode !== "PATH_OUTSIDE_ALLOWED_ROOTS") return null;
+    const state = `path_policy|${workspaceRoot}`;
+    const duplicate = repeatCache.lookup(toolName, args, state);
+    if (duplicate) return duplicate;
+    const engineUri = error.details?.engineUri;
+    if (engineUri) error.suggestion = { tool: toolName, args: { ...args, path: engineUri } };
+    const payload = errorFromException(error);
+    repeatCache.remember(toolName, args, state, payload);
+    return payload;
+  }
+
   function dedupe(toolName, args, state, payload) {
     const duplicate = repeatCache.lookup(toolName, args, state);
     if (duplicate) return duplicate;
@@ -192,10 +208,12 @@ function createDirectRuntimeContext(options = {}) {
     limits,
     mutationResolution,
     options,
+    pathPolicyFailure,
     payloadFits,
     projectScopedSuggestionArgs,
     repeatCache,
     resolveCallProject,
+    resolveEngine,
     resolveToolPath,
     resolveWorkingPath,
     runtimeOwner,

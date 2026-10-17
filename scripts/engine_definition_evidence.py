@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from cpp_parse_utils import mask_comments_and_strings
+
 DEFINITION_FILE_LIMIT_BYTES = 786432
 DEFINITION_EXCERPT_LINES = 40
 DEFINITION_EXCERPT_CHARS = 3200
@@ -149,6 +151,41 @@ def private_sources(module_root: Path, header: Path, owner: str, deadline: float
     return sorted(paths, key=rank), reasons
 
 
+def reflection_thunk_names(row: dict[str, Any]) -> list[str]:
+    """Definition names for a declaration: the symbol itself plus the
+    generated-thunk bodies a reflected function is implemented as.
+
+    UHT declares ``X_Implementation``/``X_Validate`` only in the generated
+    header, so the hand-written .cpp body of a BlueprintNativeEvent or RPC is
+    ``Owner::X_Implementation``. The names come from the observed UFUNCTION
+    specifiers, never from a guess about the symbol.
+    """
+    symbol = str(row.get("symbol_name") or "")
+    names = [symbol]
+    reflection = (row.get("specifiers") or {}).get("reflection") or {}
+    if reflection.get("macro") != "UFUNCTION":
+        return names
+    # Category="Server" and meta=(WithValidation, ...) are metadata, not
+    # function flags. Values such as Server=CustomImpl also do not establish
+    # the default suffixed name. Keep only bare, top-level specifier tokens.
+    arguments = mask_comments_and_strings(str(reflection.get("arguments") or ""))
+    specifiers: set[str] = set()
+    depth = start = 0
+    for index, char in enumerate(arguments + ","):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            specifiers.add(arguments[start:index].strip())
+            start = index + 1
+    if specifiers & {"BlueprintNativeEvent", "Server", "Client", "NetMulticast"}:
+        names.append(f"{symbol}_Implementation")
+    if "WithValidation" in specifiers:
+        names.append(f"{symbol}_Validate")
+    return names
+
+
 def attach_definition_candidates(rows: list[dict[str, Any]], root: Path, budget: DefinitionBudget, *,
                                  read_source: ReadSource, lexical: Lexical) -> None:
     """Add ``definitionCandidates`` and ``definitionSearch`` to each method row."""
@@ -157,7 +194,8 @@ def attach_definition_candidates(rows: list[dict[str, Any]], root: Path, budget:
             continue
         owner, symbol = str(row.get("declaredIn") or ""), str(row.get("symbol_name") or "")
         module = str(row.get("moduleRoot") or "")
-        search: dict[str, Any] = {"scope": "declaring_module_private_cpp", "absenceVerified": False, "filesRead": 0}
+        search: dict[str, Any] = {"scope": "declaring_module_private_cpp", "absenceVerified": False, "filesRead": 0,
+                                  "definitionNames": reflection_thunk_names(row)}
         row["definitionSearch"] = search
         row["definitionCandidates"] = []
         if not owner or not symbol or not module:
@@ -181,9 +219,11 @@ def attach_definition_candidates(rows: list[dict[str, Any]], root: Path, budget:
             search["filesRead"] += 1
             if not complete:
                 reasons.add("definition_file_partial")
-            for definition in find_definitions(raw.decode("utf-8-sig", errors="replace"), owner, symbol, lexical):
+            text = raw.decode("utf-8-sig", errors="replace")
+            for name, definition in ((name, d) for name in reflection_thunk_names(row)
+                                     for d in find_definitions(text, owner, name, lexical)):
                 row["definitionCandidates"].append({
-                    "source": str(source.resolve()), "declaredIn": owner, "symbol_name": symbol, **definition,
+                    "source": str(source.resolve()), "declaredIn": owner, "symbol_name": name, **definition,
                     "definitionStatus": "lexical_definition_candidate",
                     "fingerprint": {"sha256": hashlib.sha256(raw).hexdigest(),
                                     "hashScope": "file" if complete else "byte_range",

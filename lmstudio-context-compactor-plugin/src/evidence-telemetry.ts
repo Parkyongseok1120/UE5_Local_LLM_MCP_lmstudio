@@ -122,6 +122,8 @@ export function messageEvidenceTelemetry(messages: Array<ChatMessage>) {
         projectedBodyRanges: value.projectedBodyRanges,
         omittedBodyRanges: value.omittedBodyRanges,
         archiveRef: value.archiveRef,
+        bodyComplete: value.bodyComplete,
+        noticePresent: typeof value.notice === "string" && value.notice.length > 0,
       } : {}),
     };
   });
@@ -195,7 +197,30 @@ export class ToolRoundStagnationDetector {
   private count = 0;
   private recent: Array<{ fingerprint: string; novel: boolean; restored: boolean }> = [];
   private announced = new Set<string>();
+  // Failed requests by tool + argument fingerprint + error code, across rounds.
+  // The cycle check below requires error-free rounds, so a model that keeps
+  // re-sending the same failing call is otherwise never told it is repeating.
+  private failures = new Map<string, number>();
+  private failureAnnounced = new Set<string>();
   acknowledge(key: string) { this.announced.add(key); }
+
+  private repeatedFailure(evidence: ReturnType<typeof messageEvidenceTelemetry>) {
+    let found: { key: string; toolName: string; errorCode: string; count: number; firstNotice: boolean } | null = null;
+    for (const call of evidence.calls) {
+      const result = evidence.results.find(item => item.toolCallId === call.toolCallId);
+      if (!result || (result.resultOk !== false && !result.errorCode)) continue;
+      const errorCode = String(result.errorCode || "TOOL_FAILED");
+      const key = `${call.toolName}|${call.argumentsFingerprint}|${errorCode}`;
+      const count = (this.failures.get(key) || 0) + 1;
+      this.failures.set(key, count);
+      if (count >= 2 && !found) {
+        found = { key, toolName: call.toolName, errorCode, count, firstNotice: !this.failureAnnounced.has(key) };
+        this.failureAnnounced.add(key);
+      }
+    }
+    while (this.failures.size > 64) this.failures.delete(this.failures.keys().next().value!);
+    return found;
+  }
 
   observe(messages: Array<ChatMessage>, progress?: RecoveryProgress) {
     const evidence = messageEvidenceTelemetry(messages);
@@ -203,8 +228,10 @@ export class ToolRoundStagnationDetector {
       this.previous = "";
       this.count = 0;
       this.recent = []; this.announced.clear();
-      return { repeated: false, count: 0, fingerprint: "", warningKey: "", cycleLength: 0, cycleDetected: false, firstWarning: false, reacquisition: false };
+      return { repeated: false, count: 0, fingerprint: "", warningKey: "", cycleLength: 0, cycleDetected: false, firstWarning: false,
+        reacquisition: false, repeatedFailure: null };
     }
+    const repeatedFailure = this.repeatedFailure(evidence);
     const fingerprint = telemetryFingerprint({
       calls: evidence.calls.map(call => ({ toolName: call.toolName, argumentsFingerprint: call.argumentsFingerprint })),
       results: evidence.results.map(result => result.semanticResultFingerprint),
@@ -238,6 +265,6 @@ export class ToolRoundStagnationDetector {
     if (cycleLength) this.announced.add(key);
     while (this.announced.size > 8) this.announced.delete(this.announced.values().next().value!);
     return { repeated: this.count > 1 || cycleLength > 0, count: this.count, fingerprint, warningKey: key,
-      cycleLength, cycleDetected: cycleLength > 0, firstWarning, reacquisition };
+      cycleLength, cycleDetected: cycleLength > 0, firstWarning, reacquisition, repeatedFailure };
   }
 }

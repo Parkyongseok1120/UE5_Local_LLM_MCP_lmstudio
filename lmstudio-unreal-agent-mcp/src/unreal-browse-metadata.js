@@ -73,11 +73,15 @@ function buildProjectBrowsePaths(
     exportDir,
     workspaceRoot: workspace,
     browseAvailable,
+    activeProjectInsideWorkspace: browseAvailable,
     sourceBrowsePath: browseAvailable ? relativeToWorkspace(sourceRoot) : "",
     contentBrowsePath: browseAvailable ? relativeToWorkspace(contentRoot) : "",
+    projectBrowseUri: "project://Source",
+    // project:// resolves against the active project regardless of the
+    // workspace root; only workspace-relative paths cannot reach it.
     browseNote: browseAvailable
       ? ""
-      : "Project is outside WORKSPACE_ROOT; search_files/list_directory may be unavailable.",
+      : "Project is outside WORKSPACE_ROOT; browse and search it with project:// URIs (workspace-relative paths do not reach it).",
   };
 }
 

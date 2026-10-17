@@ -43,6 +43,15 @@ function relativeSlash(root, target) {
 
 function errorFromException(error) {
   const message = String(error?.message || error || "Unknown tool error");
+  // Path-policy errors carry their own stable code and observed details.
+  if (typeof error?.directErrorCode === "string" && error.directErrorCode) {
+    return failure(error.directErrorCode, message, {
+      retryAllowed: true,
+      retryMode: "different_arguments",
+      details: error.details && typeof error.details === "object" ? error.details : {},
+      ...(error.suggestion ? { suggestion: error.suggestion } : {}),
+    });
+  }
   // Capability handlers already classify schema/argument failures with an
   // explicit error code. Preserve that signal instead of guessing from the
   // wording (for example, "base/head require comparison=range" does not

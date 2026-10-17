@@ -489,6 +489,8 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/mutation_semantic_guard.py",
     "scripts/unreal_api_denylist.py",
     "scripts/unreal_contracts.py",
+    "scripts/workspace_root_guard.py",
+    "scripts/trace_lmstudio_run.py",
     "scripts/unreal_source_extensions.py",
     "installer/direct_rag_build.py",
     "installer/direct_rag_build_model.py",
