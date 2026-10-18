@@ -17,6 +17,9 @@ namespace EvidenceFirst.Adapters
         const string ActiveKey = "EvidenceFirst.ActiveTestOperation";
         static TestRunnerApi api; static readonly FrameworkAdapter Callbacks = new FrameworkAdapter();
         static JObject active; static bool initialized;
+        // Discovered test lists per mode and compiled state; discovery is asynchronous.
+        static readonly Dictionary<string, List<JObject>> TestLists = new Dictionary<string, List<JObject>>();
+        static readonly HashSet<string> Discovering = new HashSet<string>();
         // Fixed framework status methods only, never user-selected reflection/getters.
         static readonly MethodInfo IsActive = typeof(TestRunnerApi).GetMethod("IsRunActive", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
         static readonly MethodInfo IsRunning = typeof(TestRunnerApi).GetMethod("IsRunning", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(string) }, null);
@@ -40,6 +43,7 @@ namespace EvidenceFirst.Adapters
             string action = (string)args["action"], id = (string)args["operationId"];
             if (action == "status" && id == null) return new JObject { ["status"] = "observed", ["availability"] = IsActive != null && IsRunning != null ? "active" : "package_api_unsupported", ["implemented"] = true, ["busy"] = Pending || OwnRunning() || FrameworkBusy(), ["activeOperationId"] = Pending ? active["operationId"] : null, ["modes"] = new JArray("EditMode", "PlayMode") };
             if (action == "status" || action == "results") return TestExecution.Page(TestExecution.Load(id), args);
+            if (action == "list") return List(args);
             if (action == "release") { if ((Pending || OwnRunning()) && id == (string)active["operationId"]) throw new InvalidOperationException("Cannot release active test run"); return TestExecution.Release(id); }
             if (action == "cancel") {
                 if (!Pending || id != (string)active["operationId"]) return new JObject { ["status"] = "not_cancelled", ["operationId"] = id, ["reason"] = "No active owned run" };
@@ -74,6 +78,36 @@ namespace EvidenceFirst.Adapters
                 } catch (Exception e) { Finish("execution_failed", e.Message); }
             });
             return TestExecution.Page(active, args);
+        }
+        // Read-only discovery of runnable test names: no run, no scene change.
+        static readonly HashSet<string> IncompleteLists = new HashSet<string>();
+        static JObject List(JObject args) {
+            string modeName = (string)args["mode"]; if (modeName != "EditMode" && modeName != "PlayMode") throw new InvalidOperationException("Exact EditMode or PlayMode required");
+            string key = modeName + ":" + TestExecution.CompilationId;
+            if (TestLists.TryGetValue(key, out var rows)) {
+                var page = TestExecution.PageRows(rows, args, TestExecution.Revision(key + rows.Count));
+                page["mode"] = modeName; page["compilationId"] = TestExecution.CompilationId; page["discovery"] = IncompleteLists.Contains(key) ? "partial" : "complete";
+                page["absenceVerified"] = false;
+                if (IncompleteLists.Contains(key)) page["omissionReason"] = "discovery_node_limit";
+                page["selection"] = "pass exact names as testNames, or categories, to unity_tests run";
+                return page;
+            }
+            if (EditorApplication.isCompiling) return new JObject { ["status"] = "pending", ["mode"] = modeName, ["retryAfterSeconds"] = 2, ["reason"] = "compiling" };
+            if (Discovering.Add(key)) {
+                var mode = modeName == "EditMode" ? TestMode.EditMode : TestMode.PlayMode;
+                api.RetrieveTestList(mode, root => {
+                    Discovering.Remove(key);
+                    var found = new List<JObject>(); var queue = new Queue<ITestAdaptor>(); queue.Enqueue(root); int visited = 0;
+                    while (queue.Count > 0 && visited++ < 20000) {
+                        var t = queue.Dequeue();
+                        if (t.HasChildren) foreach (var child in t.Children) { if (queue.Count + visited >= 20000) { IncompleteLists.Add(key); break; } queue.Enqueue(child); }
+                        if (!t.IsSuite) found.Add(new JObject { ["name"] = t.FullName, ["categories"] = new JArray(t.Categories ?? Array.Empty<string>()) });
+                    }
+                    if (queue.Count > 0) IncompleteLists.Add(key);
+                    TestLists.Clear(); TestLists[key] = found;
+                });
+            }
+            return new JObject { ["status"] = "pending", ["mode"] = modeName, ["retryAfterSeconds"] = 1, ["reason"] = "discovering" };
         }
         static void RequestCancel(string reason) {
             active["cancelReason"] = reason;

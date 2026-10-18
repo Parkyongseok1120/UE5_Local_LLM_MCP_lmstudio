@@ -135,6 +135,82 @@ export function verificationScopeNotice(history: Chat, finalText: string): strin
     + "사실 검증이 아니므로, 위의 '검증 완료' 표현은 소스·실행 근거로 다시 확인해야 합니다.";
 }
 
+// Wording that states absence or a confirmed defect. Locally negated forms
+// ("확인하지 못했", "not confirmed") are removed before matching.
+const ABSENCE_OR_CONFIRMED_WORDING = /어디에도[^.\n。]{0,60}?(?:없|않)|존재하지\s*않|설정되지\s*않|호출되지\s*않|대입되지\s*않|\bnever\s+(?:set|called|assigned|reached)\b|\bdoes\s+not\s+exist\b|\bnowhere\b|\bP[0-3]\s*(?:\(?\s*confirmed\b|확정)|확정(?:된)?\s*(?:결함|버그|P[0-3])|\bconfirmed\s+(?:defect|bug)\b/iu;
+const QUALIFIED_ABSENCE = /(?:확인|검증)(?:하지|되지)\s*(?:못|않)\S*|\bnot\s+(?:yet\s+)?(?:confirmed|verified)\b|미확인|미검증|의심/giu;
+
+type ResultRecord = Record<string, unknown>;
+function decodeToolResult(raw: unknown): ResultRecord | null {
+  let value: unknown = raw;
+  for (let depth = 0; depth < 3; depth++) {
+    if (typeof value === "string") {
+      try { value = JSON.parse(value); } catch { return null; }
+      continue;
+    }
+    if (Array.isArray(value) && value.length && typeof (value[0] as { text?: unknown })?.text === "string") {
+      value = value.map(block => String((block as { text?: unknown }).text ?? "")).join("");
+      continue;
+    }
+    break;
+  }
+  return value && typeof value === "object" && !Array.isArray(value) ? value as ResultRecord : null;
+}
+
+/** One deterministic footer when the answer states absence or a confirmed
+ * defect while a search in this user turn was partial and never completed.
+ * A partial search page is not evidence of absence; the answer text itself is
+ * never rewritten. */
+export function partialSearchScopeNotice(history: Chat, finalText: string): string | null {
+  const text = String(finalText || "").replace(QUALIFIED_ABSENCE, "");
+  if (!ABSENCE_OR_CONFIRMED_WORDING.test(text)) return null;
+  const messages = history.getMessagesArray();
+  let start = 0;
+  messages.forEach((message, index) => { if (message.getRole() === "user") start = index + 1; });
+  const requests = new Map<string, { name: string; args: ResultRecord }>();
+  const searches = new Map<string, { label: string; omitted: number | null; complete: boolean }>();
+  const limited: string[] = [];
+  for (const message of messages.slice(start)) {
+    for (const request of message.getToolCallRequests()) {
+      requests.set(String(request.id || ""), { name: request.name, args: (request.arguments || {}) as ResultRecord });
+    }
+    for (const result of message.getToolCallResults()) {
+      const request = requests.get(String(result.toolCallId || ""));
+      const value = request && decodeToolResult((result as { content?: unknown }).content);
+      if (!request || !value) continue;
+      const query = String(value.query ?? request.args.query ?? "").slice(0, 80);
+      if (request.name === "search_files") {
+        const key = JSON.stringify([query, String(request.args.path ?? ""), request.args.regex === true,
+          request.args.matchFileNames ?? null]);
+        const entry = searches.get(key) || { label: `search_files '${query}'`, omitted: null, complete: false };
+        // Unreal pages report coverage/matchesOmitted; Unity pages report
+        // items/total and whether the scan stopped early (incomplete).
+        const unityPage = value.coverage === undefined && Array.isArray(value.items);
+        const complete = unityPage ? value.truncated === false && value.incomplete === false
+          : value.coverage === "complete" && value.truncated !== true;
+        const partial = unityPage ? value.truncated === true || value.incomplete === true
+          : value.coverage === "partial" && (value.truncated === true || Number(value.matchesOmitted) > 0);
+        if (complete) entry.complete = true;
+        else if (partial) {
+          const omitted = unityPage ? Number(value.total) - (value.items as unknown[]).length : Number(value.matchesOmitted);
+          if (Number.isFinite(omitted) && omitted > 0) entry.omitted = Math.max(entry.omitted ?? 0, omitted);
+        } else continue;
+        searches.set(key, entry);
+      } else if (request.name === "unreal_symbol_lookup" && value.status === "coverage_limited") {
+        const coverage = (value.coverage || {}) as ResultRecord;
+        if (coverage.apiAbsenceVerified === false || value.apiAbsenceVerified === false) limited.push(`unreal_symbol_lookup '${query}'`);
+      }
+    }
+  }
+  const partial = [...searches.values()].filter(entry => !entry.complete)
+    .map(entry => entry.omitted ? `${entry.label}(${entry.omitted}건 생략)` : `${entry.label}(부분 결과)`);
+  const items = [...partial, ...limited.map(label => `${label}(범위 제한)`)];
+  if (!items.length) return null;
+  const shown = items.slice(0, 3).join(", ") + (items.length > 3 ? ` 외 ${items.length - 3}건` : "");
+  return `[검색 범위] 이번 답변의 근거에 끝까지 받지 않은 부분 검색이 있습니다: ${shown}. `
+    + "부분 결과는 부재의 증거가 아니므로, 위의 '없음·확정' 표현은 남은 결과(nextCursor)나 해당 정의·구현을 직접 읽어 확인해야 합니다.";
+}
+
 export type ExecutionObservation = {
   reportText: string;
   messages?: Array<ChatMessage>;

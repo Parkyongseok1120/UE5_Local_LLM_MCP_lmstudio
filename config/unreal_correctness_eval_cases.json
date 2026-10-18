@@ -1,6 +1,6 @@
 {
   "description": "UE correctness evaluation (contracts, lifetime, subsystems, threading, claims). Scored by scripts/evaluate_unreal_review_answers.py --case-set config/unreal_correctness_eval_cases.json. Build success, runtime behaviour and answer quality are recorded separately.",
-  "contractRevision": "unreal_contracts@2",
+  "contractRevision": "unreal_contracts@3",
   "protocol": {
     "conditions": {
       "baseline": "main v1.4.0 (f48b958) without contract guidance or S3 rules",
@@ -20,7 +20,7 @@
       "tasks": 12,
       "runsPerTask": 3,
       "totalRuns": 72,
-      "status": "15 review cases defined; build/PIE tasks and model comparison runs remain separate, not executed by scorer self-tests"
+      "status": "17 review cases defined; build/PIE tasks and model comparison runs remain separate, not executed by scorer self-tests"
     },
     "fixedSettings": [
       "model",
@@ -669,6 +669,94 @@
           "penalty": 3.0,
           "patterns": [
             "(?:테스트|Die)[^.\\n]{0,60}(?:의도적으로\\s*(?:감추|은폐)|버그를\\s*(?:감추|은폐))"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "inline_header_assignment_is_not_absent",
+      "origin": "2026-10-18 reboot audit: a byteBudget-cut search_files('bIsDead') omitted LatencyMultiCombatPlayerState.h:55 (FORCEINLINE AddDeath sets bIsDead = true)",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.absence"
+      ],
+      "category": [
+        "claims",
+        "harness_regression"
+      ],
+      "prompt": "bIsDead가 true로 설정되는 경로가 있는지, 아래 두 파일을 근거로 판단하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Public/CombatPlayerState.h",
+          "content": "UPROPERTY(Replicated)\nbool bIsDead;\nUPROPERTY(Replicated)\nint32 DeathCount = 0;\nFORCEINLINE void AddDeath() { if (HasAuthority() && !bIsDead) { DeathCount++; bIsDead = true; ForceNetUpdate(); } }\n"
+        },
+        {
+          "path": "Source/Combat/Private/CombatPlayerState.cpp",
+          "content": "ACombatPlayerState::ACombatPlayerState()\n\t: bIsDead(false)\n{\n}\nvoid ACombatPlayerState::ResetForRespawn()\n{\n\tbIsDead = false;\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "inline_header_assignment_is_not_absent",
+          "points": 3.0,
+          "diagnosis": [
+            "AddDeath",
+            "(?:bIsDead\\s*=\\s*true|true)",
+            "(?:헤더|\\.h\\b|inline|FORCEINLINE|인라인)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "absence_claim_over_partial_evidence",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:어디에도|아무\\s*곳에도)[^.\\n]{0,60}(?:없|않)",
+            "\\bnever\\s+(?:set|assigned)\\b",
+            "true로\\s*(?:설정|대입)(?:되|하)(?:지|는\\s*곳이)\\s*(?:않|없)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "character_has_no_engine_death_pipeline",
+      "origin": "2026-10-18 reboot audit: invented ACharacter Health/OnDeath and Super::TakeDamage going straight to AActor; UE 5.7.4 Pawn.cpp:556 overrides TakeDamage",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "ue.damage.pawn-take-damage",
+        "policy.claims.super-chain"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "Super::TakeDamage 호출이 엔진에서 무엇을 실행하는지, 그리고 엔진 기본 사망 처리와 충돌하는지 판단하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/CombatCharacter.cpp",
+          "content": "float ACombatCharacter::TakeDamage(float Damage, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)\n{\n\tconst float Applied = Super::TakeDamage(Damage, DamageEvent, EventInstigator, DamageCauser);\n\tif (ACombatPlayerState* PS = GetPlayerState<ACombatPlayerState>()) { PS->ApplyDamage(Applied); if (PS->bIsDead) Die(EventInstigator); }\n\treturn Applied;\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "character_has_no_engine_death_pipeline",
+          "points": 3.0,
+          "diagnosis": [
+            "APawn",
+            "(?:ShouldTakeDamage|LastHitBy)",
+            "AActor",
+            "(?:체력|Health|사망|OnDeath|death)[^.\\n]{0,60}(?:없|않|프로젝트|project)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "invented_engine_death_pipeline",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:곧바로|바로|직접)\\s*AActor::TakeDamage",
+            "goes (?:straight|directly) to AActor::TakeDamage",
+            "ACharacter[^.\\n]{0,40}(?:기본|내장|built-in)[^.\\n]{0,30}(?:Health|체력|OnDeath|사망\\s*처리)[^.\\n]{0,20}(?:있|수행|호출|has|calls)"
           ]
         }
       ]

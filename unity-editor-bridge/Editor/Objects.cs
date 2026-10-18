@@ -94,6 +94,15 @@ namespace EvidenceFirst.UnityBridge
             Receipts[key] = new Receipt { Target = Ref(target).ToString(Formatting.None), Digest = Fingerprint(target), Expires = DateTime.UtcNow.AddMinutes(15) };
             return key;
         }
+        internal static JObject RetainApprovalReceipt(string key) {
+            if (key == null || !Receipts.TryGetValue(key, out var receipt)) return null;
+            return new JObject { ["key"] = key, ["target"] = receipt.Target, ["digest"] = receipt.Digest, ["expires"] = receipt.Expires.ToString("O") };
+        }
+        internal static void RestoreApprovalReceipt(JObject saved) {
+            if (saved == null || !DateTime.TryParse((string)saved["expires"], null, System.Globalization.DateTimeStyles.RoundtripKind, out var expires) || expires.ToUniversalTime() <= DateTime.UtcNow) return;
+            string key = (string)saved["key"]; if (String.IsNullOrEmpty(key) || Receipts.Count >= 512) return;
+            Receipts[key] = new Receipt { Target = (string)saved["target"], Digest = (string)saved["digest"], Expires = expires.ToUniversalTime() };
+        }
         internal static void CheckReceipt(Object target, string key)
         {
             if (key == null || !Receipts.TryGetValue(key, out var receipt) || receipt.Expires < DateTime.UtcNow) throw new BridgeException("receipt_required", "A current Bridge-issued receipt is required");

@@ -85,3 +85,63 @@ def test_cli_writes_json_and_markdown(tmp_path):
     data = json.loads((tmp_path / "out" / "trace-123.json").read_text(encoding="utf-8"))
     assert data["turns"][0]["calls"][0]["failureKind"] == "outside_allowed_roots"
     assert "outside_allowed_roots" in (tmp_path / "out" / "trace-123.md").read_text(encoding="utf-8")
+
+
+def _assistant_steps(steps: list[dict]) -> dict:
+    return {"versions": [{"type": "multiStep", "role": "assistant", "steps": steps}], "currentlySelected": 0}
+
+
+def _event(payload: dict) -> dict:
+    return {"type": "debugInfoBlock", "debugInfo": json.dumps(payload)}
+
+
+def test_denied_calls_restore_state_and_rereads_are_recorded():
+    """The 2026-10-18 shape: restored window, a budget denial that never returns a
+    result, and the same partial read repeated after a projection."""
+    read = {"ok": True, "hasMore": True, "truncated": True, "nextOffsetBytes": 5988, "omissionReason": "byte_budget"}
+    args = {"path": "project://Source/G/GameMode.cpp", "byteBudget": 8192}
+    denial = {"event": "direct_round_observation", "roundIndex": 3, "toolTrace": {"runtime": [
+        {"toolName": "read_file", "validationState": "allowed"},
+        {"toolName": "read_file", "validationState": "denied_batch_budget", "budgetDenialReason": "held_reservations_insufficient",
+         "budgetAtDenial": {"capacity": 14252, "used": 12825, "available": 1427, "held": 12825, "entries": []}}]}}
+    steps = [_event({"event": "working_context_restore", "status": "restored_remeasure_required"}),
+             _event({"event": "resume_state", "priorTurnInterrupted": True, "partialProjections": 8}),
+             {"type": "contentBlock", "content": _call("1", "read_file", args, read)},
+             _event({"event": "working_context_projection", "changed": True, "reason": "measured_input_pressure"}),
+             {"type": "contentBlock", "content": _call("2", "read_file", args, read)},
+             _event(denial),
+             {"type": "contentBlock", "content": _call("3", "read_file", args, read)},
+             _event({"event": "execution_outcome", "executionOutcome": "canceled"})]
+    user = {"versions": [{"role": "user", "content": [{"type": "text", "text": "계속해"}]}], "currentlySelected": 0}
+    data = trace.parse_conversation({"messages": [user, _assistant_steps(steps)]})
+    turn = data["turns"][0]
+    assert [c.get("reread", {}).get("kind") for c in turn["calls"]] == [None, "reacquire_after_projection", "identical_reread"]
+    assert turn["deniedCalls"] == [{"toolName": "read_file", "validationState": "denied_batch_budget", "afterCall": 1,
+                                    "roundIndex": 3, "budgetDenialReason": "held_reservations_insufficient",
+                                    "budgetAtDenial": {"capacity": 14252, "used": 12825, "available": 1427, "held": 12825}}]
+    assert {e["event"]: e for e in turn["events"]}["resume_state"]["priorTurnInterrupted"] is True
+    summary = trace.summarize(data)
+    assert summary["rereads"] == {"reacquire_after_projection": 1, "identical_reread": 1}
+    assert summary["deniedCalls"] == {"held_reservations_insufficient": 1}
+    markdown = trace.render_markdown("x", data)
+    assert "working_context_restore=restored_remeasure_required" in markdown and "execution_outcome=canceled" in markdown
+    assert "denied_batch_budget held_reservations_insufficient" in markdown
+
+
+def test_partial_search_records_omitted_matches_and_cursor():
+    page = {"ok": True, "coverage": "partial", "truncated": True, "omissionReason": "response_budget",
+            "matchesReturned": 16, "matchesOmitted": 1, "absenceVerified": False, "nextCursor": "abc"}
+    blocks = _call("1", "search_files", {"path": "project://Source", "query": "bIsDead"}, page)
+    call = trace.parse_conversation(_conversation(blocks))["turns"][0]["calls"][0]
+    assert call["failureKind"] == "partial_result"
+    assert call["result"]["matchesOmitted"] == 1 and call["result"]["absenceVerified"] is False
+    assert call["result"]["nextCursor"] == "abc"
+
+
+def test_unity_trace_classification_and_fields():
+    for code in ("not_found", "editor_reloading", "editor_not_running", "edit_disabled"):
+        assert trace.failure_kind({"errorCode": code}) == code
+    assert trace.failure_kind({"reasonCode": "editor_reloading"}) == "editor_reloading"
+    assert trace.failure_kind({"errorCode": "path_denied"}) == "outside_allowed_roots"
+    assert {"action", "operationId", "compilationId", "indexVersion"} <= set(trace.ARG_FIELDS)
+    assert {"connection", "reasonCode", "compilationOutcome", "testStatus", "passed", "failed"} <= set(trace.RESULT_FLAGS)

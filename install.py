@@ -2413,6 +2413,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--unity-symbol-worker", type=Path, help="Existing compiled UnitySymbolWorker.dll; otherwise built during installation")
     parser.add_argument("--unity-mcp-config", type=Path, help="Explicit MCP config destination; default is isolated per-project managed config")
     parser.add_argument("--unity-replace-bridge", action="store_true", help="Explicitly replace a different existing Bridge package binding (backed up)")
+    parser.add_argument("--unity-allow-write", action="store_true",
+                        help="Allow Unity file/asset edits on the MCP server side (ALLOW_WRITE=1). Default: read-only. The Editor menu permission is still required.")
+    parser.add_argument("--unity-allow-commands", action="store_true",
+                        help="Allow Unity Play/compile/test execution on the MCP server side (ALLOW_COMMANDS=1). Default: off. The Editor menu permission is still required.")
     parser.add_argument("--yes", action="store_true", help="Use profile defaults without prompts.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(

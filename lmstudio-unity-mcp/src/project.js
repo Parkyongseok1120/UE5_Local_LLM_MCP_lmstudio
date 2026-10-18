@@ -1,6 +1,7 @@
 "use strict";
 const fs = require("node:fs");
 const path = require("node:path");
+const { fileNameSearchSuggestion, nearestExistingDirectory } = require("../../shared-tool-core/failure-guidance");
 const { fail, hash } = require("../../shared-tool-core/files");
 const WRITABLE = new Set([".cs", ".json", ".csv", ".txt", ".md", ".asmdef", ".asmref", ".shader", ".hlsl", ".cginc", ".uxml", ".uss"]);
 const PROTECTED = new Set([".prefab", ".unity", ".asset", ".meta"]);
@@ -9,6 +10,22 @@ const PROTECTED = new Set([".prefab", ".unity", ".asset", ".meta"]);
 const PACKAGE_URI = "package://";
 const PACKAGE_READABLE = new Set([".cs", ".asmdef", ".json", ".md", ".uss", ".uxml"]);
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const OBSERVABLE_ROOTS = ["Assets", "Packages", "ProjectSettings"];
+// A failure that names one safe next step. retryPath is an observed path the
+// same tool may be called with; suggestion is a different call. Neither ever
+// widens what the policy allows.
+function failWith(code, message, extra) {
+  try { fail(code, message); } catch (error) { throw Object.assign(error, extra); }
+}
+// Callers reach this only after validating every existing ancestor.
+function nearestExisting(base, prefix, segments) {
+  const found = nearestExistingDirectory(base, segments.join("/"), () => true);
+  return found ? prefix + found : null;
+}
+function notFound(display, searchPath, basename) {
+  failWith("not_found", `Not found: ${display}`, searchPath && basename
+    ? { suggestion: fileNameSearchSuggestion(searchPath, basename) } : {});
+}
 function packageDirectory(root, name) {
   let lock;
   try { lock = JSON.parse(fs.readFileSync(path.join(root, "Packages", "packages-lock.json"), "utf8").replace(/^\uFEFF/, "")); }
@@ -56,7 +73,12 @@ function resolvePackage(root, uri, write) {
   let current = realBase;
   for (const segment of inner) {
     current = path.join(current, segment);
-    const stat = fs.lstatSync(current);
+    let stat;
+    try { stat = fs.lstatSync(current); } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      const ancestor = nearestExisting(realBase, "", inner);
+      notFound(uri, `${PACKAGE_URI}${name}${ancestor ? `/${ancestor}` : ""}`, inner.at(-1));
+    }
     if (stat.isSymbolicLink()) fail("symlink_denied", "Symlink/junction components are forbidden");
     const rel = path.relative(realBase, fs.realpathSync(current));
     if (rel.startsWith(`..${path.sep}`) || rel === ".." || path.isAbsolute(rel)) fail("path_denied", "Real path escapes the package");
@@ -70,12 +92,36 @@ function projectPolicy(input) {
   if (!input || !path.isAbsolute(input)) fail("project_required", "UNITY_PROJECT_ROOT must be an absolute Unity project path");
   const root = fs.realpathSync.native(input);
   for (const marker of ["Assets", "Packages/manifest.json", "ProjectSettings/ProjectVersion.txt"]) if (!fs.existsSync(path.join(root, marker))) fail("not_unity_project", `Missing ${marker}`);
-  const resolve = (relative, write = false) => {
-    if (typeof relative === "string" && relative.startsWith(PACKAGE_URI)) return resolvePackage(root, relative, write);
-    if (typeof relative !== "string" || !relative || path.isAbsolute(relative) || relative.includes("\\") || relative.includes(":")) fail("invalid_path", "Use a project-relative slash-separated path");
+  // An absolute path inside the project names its project-relative form.
+  const projectRelative = value => {
+    if (typeof value !== "string" || !path.isAbsolute(value)) return null;
+    let real;
+    try { real = fs.realpathSync.native(value); } catch { return null; }
+    const rel = path.relative(root, real);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+    const slash = rel.split(path.sep).join("/");
+    return OBSERVABLE_ROOTS.includes(slash.split("/")[0]) ? slash : null;
+  };
+  const resolve = (input, write = false) => {
+    if (typeof input === "string" && input.startsWith(PACKAGE_URI)) return resolvePackage(root, input, write);
+    if (typeof input === "string" && path.isAbsolute(input)) {
+      const mapped = projectRelative(input);
+      failWith("invalid_path", "Use a project-relative slash-separated path, not an absolute host path",
+        { details: { allowedRoots: [...OBSERVABLE_ROOTS, PACKAGE_URI] }, ...(mapped ? { retryPath: mapped } : {}) });
+    }
+    if (typeof input !== "string" || !input || input.includes("\\") || input.includes(":")) fail("invalid_path", "Use a project-relative slash-separated path");
+    // One trailing slash names the same directory.
+    const relative = input.length > 1 && input.endsWith("/") && !input.endsWith("//") ? input.slice(0, -1) : input;
     const parts = relative.split("/");
-    if (parts.some(p => !p || p === "." || p === ".." || p.startsWith("."))) fail("invalid_path", "Hidden/traversal path segments are forbidden");
-    if (!["Assets", "Packages", "ProjectSettings"].includes(parts[0])) fail("path_denied", "Only Assets, Packages and ProjectSettings may be observed");
+    if (parts.some(p => !p)) fail("invalid_path", "Empty path segment; separate segments with a single '/'");
+    if (parts.some(p => p === "." || p === ".." || p.startsWith("."))) fail("invalid_path", "Hidden/traversal path segments are forbidden");
+    if (!OBSERVABLE_ROOTS.includes(parts[0])) {
+      const underAssets = `Assets/${relative}`;
+      let observed = false;
+      try { observed = !write && Boolean(resolve(underAssets, false)); } catch { observed = false; }
+      failWith("path_denied", "Only Assets, Packages and ProjectSettings may be observed",
+        { details: { allowedRoots: [...OBSERVABLE_ROOTS, PACKAGE_URI] }, ...(observed ? { retryPath: underAssets } : {}) });
+    }
     const ext = path.extname(relative).toLowerCase();
     if (write && (parts[0] !== "Assets" || !WRITABLE.has(ext) || PROTECTED.has(ext))) fail("path_denied", "Write requires an allowed text file inside Assets; Unity assets use the Bridge");
     let current = root;
@@ -84,6 +130,7 @@ function projectPolicy(input) {
       let stat;
       try { stat = fs.lstatSync(current); } catch (e) {
         if (e.code === "ENOENT" && write && i === parts.length - 1) break;
+        if (e.code === "ENOENT") notFound(relative, nearestExisting(root, "", parts), parts.at(-1));
         throw e;
       }
       if (stat.isSymbolicLink()) fail("symlink_denied", "Symlink/junction components are forbidden");
@@ -101,4 +148,4 @@ function projectPolicy(input) {
   }
   return { root, projectIdentity: hash(identity(root)), resolve, stateRoot: internal, discovery: path.join(internal, "bridge.json") };
 }
-module.exports = { projectPolicy, identity, PACKAGE_URI };
+module.exports = { projectPolicy, identity, OBSERVABLE_ROOTS, PACKAGE_URI };

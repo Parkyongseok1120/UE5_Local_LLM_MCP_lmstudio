@@ -45,6 +45,28 @@
 | 콜백·이벤트 등록 | 메서드 존재와 호출 가능성은 다름. 이름·인자를 바꾼 뒤 실제 연결 확인 |
 
 Unity 네트워크의 Spawn·권한·복제는 채택한 패키지에 맞춰 unity-networking.md를 참고한다. 다른 Unity 네트코드의 API를 섞지 않는다.
-- 도구의 applied, changed, dirty, saved를 따로 읽는다. Editor 메모리 변경은 저장 완료가 아니며 compile accepted는 컴파일 성공이 아니다. 테스트 completed는 종료 상태이므로 testStatus와 실패 개수·실행 범위를 확인한다.
-- Editor/Play Mode 테스트와 Player 빌드, host 단독과 실제 원격 client 검증의 범위를 구분한다. 소유권과 서버의 상태 결정 책임은 동일한 개념으로 취급하지 않는다.
 <!-- /guidance-section: api -->
+<!-- guidance-section: verification -->
+## 도구 결과와 검증 범위
+
+- 도구의 applied, changed, dirty, saved를 따로 읽는다. Editor 메모리 변경은 저장 완료가 아니다. compile 요청의 accepted는 성공이 아니므로 unity_operation get의 completed·failed·no_compilation_observed와 unity_logs(source=compiler)를 확인한다.
+- 테스트 completed는 종료 상태일 뿐이다. testStatus와 failed 개수·실행 범위를 확인한다. 실행할 이름은 unity_tests list(mode)로 찾는다.
+- Editor/Play Mode 테스트와 Player 빌드, host 단독과 실제 원격 client 검증의 범위를 구분한다. 소유권과 서버의 상태 결정 책임은 동일한 개념으로 취급하지 않는다.
+- 연결 실패 코드를 구분한다. editor_reloading만 잠시 뒤 재시도하고, editor_not_running·bridge_not_installed는 nextStep을 사용자에게 전한다. edit_disabled·execute_disabled·permission_denied는 꺼진 쪽(서버 플래그/Editor 메뉴)을 그대로 보고한다.
+- truncated나 omissionReason이 있는 결과는 suggestion(nextCursor·nextStartLine)으로 끝까지 읽기 전까지 일부다. 검색 결과 0건이나 부분 페이지는 부재 증명이 아니다(absenceVerified:false).
+- unity_symbols find는 단순·정규화 이름을 match(exact|prefix|contains)로 찾는다. 선언의 uri를 read_file이나 source로 읽고, stale 표시는 색인 뒤 바뀐 파일이다.
+<!-- contract-summary: verification -->
+프로젝트 정책 unity_contracts@1:
+- `unity.policy.claims.absence` (프로젝트 정책) 부분 검색·어휘 경고만으로 부재나 결함을 확정하지 않는다. 이어 읽기와 실제 구독·해제·취소·활성 상태를 확인한다.
+<!-- /contract-summary: verification -->
+<!-- /guidance-section: verification -->
+
+<!-- guidance-section: verified-lifetime -->
+## 로컬 Editor 문서로 확인한 수명 계약
+
+<!-- contract-summary: verified-lifetime -->
+엔진 계약 unity_contracts@1 (Unity 6000.3 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+- `unity.lifetime.destroy-token` (엔진 사실) destroyCancellationToken은 MonoBehaviour가 파괴될 때 취소되는 읽기 전용 토큰이다. 근거: Data/Managed/UnityEngine/UnityEngine.CoreModule.xml:undefined
+- `unity.lifetime.persistent-object` (엔진 사실) DontDestroyOnLoad는 새 Scene 로드 시 대상 Object를 파괴하지 않도록 한다. 근거: Data/Managed/UnityEngine/UnityEngine.CoreModule.xml:undefined
+<!-- /contract-summary: verified-lifetime -->
+<!-- /guidance-section: verified-lifetime -->

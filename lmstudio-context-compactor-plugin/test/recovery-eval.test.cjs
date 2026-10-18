@@ -236,3 +236,87 @@ test("an unrecorded follow-up result is incomplete, never successful evidence", 
   assert.equal(score.status, "incomplete");
   assert.equal(score.checks.find(check => check.id === "source_evidence").status, "not_recorded");
 });
+
+// 2026-10-18 shapes. Harness checks only: the scripts are fixed, so these
+// verify fixtures, recording, the harness footer and scoring, not a model.
+const READERS = "project://Source/Game/Readers";
+
+test("partial search: following nextCursor to the inline assignment passes; claiming absence fails with a search footer", async () => {
+  const first = () => ({ tool: "search_files", args: { path: READERS, query: "bIsDead", byteBudget: 2048 } });
+  // The last step repeats: follow each nextCursor until the search completes.
+  const good = await runScenario(scenario("partial_search_absence"), scenarios.fixture, scriptedModel([
+    first,
+    previous => previous.nextCursor ? { tool: previous.suggestion.tool, args: previous.suggestion.args }
+      : { text: "bIsDead = true는 ZPlayerState.h의 AddDeath()에 있다." },
+  ]));
+  assert.equal(good.calls.at(-1).result.coverage, "complete");
+  assert.equal(good.calls[0].result.absenceVerified, false);
+  assert.ok(good.calls[0].result.matchesOmitted > 0);
+  const goodScore = scoreRun(scenario("partial_search_absence"), good);
+  assert.equal(goodScore.status, "pass", JSON.stringify(goodScore.checks));
+
+  const bad = await runScenario(scenario("partial_search_absence"), scenarios.fixture, scriptedModel([
+    first,
+    () => ({ text: "코드 어디에도 bIsDead = true가 없다. ZPlayerState.h에도 선언만 있다." }),
+  ]));
+  assert.match(bad.answer, /^\[검색 범위\] .*search_files 'bIsDead'/mu);
+  const badScore = scoreRun(scenario("partial_search_absence"), bad);
+  assert.equal(badScore.status, "fail");
+  assert.deepEqual(badScore.checks.find(c => c.id === "harness_scope_footer"),
+    { id: "harness_scope_footer", status: "pass", detail: "footer present" });
+});
+
+test("Super chain: reading the APawn override passes; asserting AActor directly without it fails", async () => {
+  const good = await runScenario(scenario("super_chain"), scenarios.fixture, scriptedModel([
+    () => ({ tool: "read_file", args: { path: "engine://Engine/Source/Runtime/Engine/Classes/GameFramework/Character.h" } }),
+    () => ({ tool: "read_file", args: { path: "engine://Engine/Source/Runtime/Engine/Private/Pawn.cpp" } }),
+    () => ({ text: "Super::TakeDamage는 APawn::TakeDamage가 먼저 실행되고, 그 안에서 AActor 구현을 호출한다." }),
+  ]));
+  assert.equal(scoreRun(scenario("super_chain"), good).status, "pass", JSON.stringify(scoreRun(scenario("super_chain"), good).checks));
+  const bad = await runScenario(scenario("super_chain"), scenarios.fixture, scriptedModel([
+    () => ({ text: "APawn에는 재정의가 없으므로 Super::TakeDamage는 곧바로 AActor::TakeDamage로 간다." }),
+  ]));
+  const badScore = scoreRun(scenario("super_chain"), bad);
+  assert.equal(badScore.status, "fail");
+  assert.equal(badScore.checks.find(c => c.id === "source_evidence").status, "fail");
+  assert.equal(badScore.checks.some(c => c.id === "failure_reached"), false);
+});
+
+test("resume after an interrupted turn: the first input says so, and finishing the search passes", async () => {
+  const run = await runScenario(scenario("resume_after_cancel"), scenarios.fixture, scriptedModel([
+    () => ({ tool: "search_files", args: { path: READERS, query: "bIsDead" } }),
+    () => ({ text: "bIsDead = true는 ZPlayerState.h의 AddDeath()에서 설정된다." }),
+  ]));
+  assert.equal(run.priorCalls.length, 1);
+  assert.equal(run.priorCalls[0].result.coverage, "partial");
+  assert.match(run.inputs[0].text, /previous assistant turn ended after tool results without a final answer/u);
+  assert.ok(run.debugEvents.some(event => event.event === "resume_state" && event.priorTurnInterrupted === true));
+  const score = scoreRun(scenario("resume_after_cancel"), run);
+  assert.equal(score.status, "pass", JSON.stringify(score.checks));
+  const repeated = await runScenario(scenario("resume_after_cancel"), scenarios.fixture, scriptedModel([
+    () => ({ text: "앞서 확인한 대로 bIsDead는 어디에도 true로 설정되지 않는다." }),
+  ]));
+  assert.equal(scoreRun(scenario("resume_after_cancel"), repeated).status, "fail");
+});
+
+for (const [id, bad] of [["unity_wrong_path", "Assets/Missing/Player.cs"], ["unity_path_denied", "Scripts/Player.cs"]]) {
+ test(`${id}: actual Unity file runtime recovers`, async () => {
+  const run=await runScenario(scenario(id), scenarios.fixture, scriptedModel([
+   ()=>({tool:"read_file",args:{path:bad}}),
+   previous=>({tool:previous.suggestion.tool,args:previous.suggestion.args}),
+   previous=>previous.text ? {text:"UNITY_RECOVERY_SOURCE"} : {tool:"read_file",args:{path:previous.items[0].path}},
+   ()=>({text:"UNITY_RECOVERY_SOURCE"}),
+  ])); assert.equal(scoreRun(scenario(id),run).status,"pass",JSON.stringify(run.error || scoreRun(scenario(id),run)));
+ });
+}
+test("Unity budget recovery follows the actual cursor", async()=>{
+ const step=previous=>previous?.nextCursor ? {tool:"search_files",args:{query:"Player",byteBudget:2048,cursor:previous.nextCursor,limit:200}} : {text:"All collected pages read."};
+ const run=await runScenario(scenario("unity_search_budget"),scenarios.fixture,scriptedModel([()=>({tool:"search_files",args:{query:"Player",byteBudget:2048,limit:200}}),step]));
+ assert.ok(run.calls[0].result.nextCursor); assert.equal(scoreRun(scenario("unity_search_budget"),run).status,"pass",JSON.stringify(scoreRun(scenario("unity_search_budget"),run)));
+});
+test("Unity reload and compile completion are observed independently",async()=>{
+ for (const [id,steps] of [
+  ["unity_editor_reload",[()=>({tool:"unity_status",args:{}}),()=>({tool:"unity_status",args:{}}),()=>({text:"connected"})]],
+  ["unity_compile_result",[()=>({tool:"unity_editor",args:{action:"compile",operationId:"compile-123"}}),()=>({tool:"unity_operation",args:{action:"get",operationId:"compile-123"}}),()=>({text:"completed"})]],
+ ]) { const run=await runScenario(scenario(id),scenarios.fixture,scriptedModel(steps)); assert.equal(scoreRun(scenario(id),run).status,"pass",JSON.stringify(scoreRun(scenario(id),run))); }
+});

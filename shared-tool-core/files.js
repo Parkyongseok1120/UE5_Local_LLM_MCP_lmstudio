@@ -4,6 +4,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { budgetFields, fitPage } = require("./failure-guidance");
 const { readStableTextFile } = require("./direct-file-snapshot");
 const { withPathLock } = require("./write-locks");
 const { atomicWriteText, uniqueTempPath } = require("./atomic-io");
@@ -14,7 +15,9 @@ const { LINE_NUMBER_FORMAT, LINE_NUMBER_PATCH_ERROR, LINE_NUMBER_PATCH_MESSAGE, 
 function fail(code, message) { throw Object.assign(new Error(message), { code, status: "not_applied" }); }
 function hash(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function discoveryPath(value, fallback = "Assets") {
-  return value === "." || value === "./" || value === undefined ? fallback : value;
+  if (value === "." || value === "./" || value === undefined) return fallback;
+  // One trailing slash names the same directory; child paths are built from it.
+  return typeof value === "string" && value.length > 1 && value.endsWith("/") && !value.endsWith("//") ? value.slice(0, -1) : value;
 }
 const DEFAULT_BYTE_BUDGET = 65536;
 function bounded(payload, budget = DEFAULT_BYTE_BUDGET) {
@@ -34,6 +37,18 @@ function page(items, args, revision) {
   const result = items.slice(offset, offset + limit);
   return { items: result, total: items.length, revision, truncated: offset + result.length < items.length,
     nextCursor: offset + result.length < items.length ? Buffer.from(JSON.stringify({ revision, offset: offset + result.length })).toString("base64url") : null };
+}
+// The largest page of the requested size whose final envelope fits the
+// budget. A page cut by the budget says so and keeps a cursor to the rest;
+// only a single entry that cannot fit is still an error.
+function fittedPage(items, args, revision, render, budget = DEFAULT_BYTE_BUDGET) {
+  const fits = value => Buffer.byteLength(JSON.stringify(value)) <= budget;
+  const requested = page(items, args, revision);
+  const whole = render(requested);
+  if (fits(whole) || requested.items.length <= 1) return bounded(whole, budget);
+  const cut = count => render({ ...page(items, { ...args, limit: count }, revision),
+    omissionReason: "response_budget", requestedLimit: args.limit ?? 50 });
+  return fitPage(requested.items.slice(0, -1), cut, budget) || bounded(cut(1), budget);
 }
 
 class Files {
@@ -61,7 +76,7 @@ class Files {
   async snapshot(relative) {
     const target = this.policy.resolve(relative, false);
     const read = await readStableTextFile(target, this.maxBytes);
-    if (!read.ok) fail(read.errorCode, read.message);
+    if (!read.ok) fail(read.errorCode, `Cannot read ${relative}: ${read.errorCode}`);
     // Explicitly UTF-8 only. Reject lossy decode instead of changing the encoding.
     try { new TextDecoder("utf-8", { fatal: true }).decode(read.buffer); } catch { fail("unsupported_encoding", "Only UTF-8 (with optional BOM) is supported"); }
     return { ...read, target, receipt: this.receipt(relative, read.hash) };
@@ -79,12 +94,16 @@ class Files {
       const endLine = count > 0 ? start + count - 1 : null;
       const hasMore = start - 1 + count < lines.length;
       const shown = selected.slice(0, count);
+      const cut = count < selected.length;
       return envelope({ status: "observed", path: args.path, receipt: s.receipt, receiptScope: "entire_file_bytes", hash: s.hash,
         observedAt, startLine: start, endLine, returnedLineCount: count, totalLines: lines.length,
         text: (numbered ? numberLines(shown, start) : shown).join("\n"),
         ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
-        hasMore, nextStartLine: hasMore ? start + count : null, truncated: hasMore,
-        requestedRangeComplete: count === selected.length });
+        // truncated: the requested lines were not returned whole. A file that
+        // merely continues past them is moreLinesInFile, not truncation.
+        hasMore, nextStartLine: hasMore ? start + count : null, truncated: cut, moreLinesInFile: hasMore,
+        requestedRangeComplete: !cut,
+        ...budgetFields(args.byteBudget ?? DEFAULT_BYTE_BUDGET, cut ? "byte_budget" : hasMore ? "line_limit" : null) });
     };
     const budget = args.byteBudget ?? DEFAULT_BYTE_BUDGET;
     // Budget the actual transport envelope. Return whole lines with explicit
@@ -160,7 +179,7 @@ class Files {
       return result;
     }, false, options);
   }
-  list(args) {
+  list(args, envelope = value => value) {
     const relative = discoveryPath(args.path);
     const target = this.policy.resolve(relative, false);
     if (!fs.lstatSync(target).isDirectory()) fail("not_directory", "List target must be a directory");
@@ -177,10 +196,10 @@ class Files {
     });
     const revision = hash(JSON.stringify([this.session, this.policy.projectIdentity, "list_directory", relative, kind, items]));
     // Entries the path policy hides (links, hidden names) are counted, never silently dropped.
-    return bounded({ status: "observed", path: relative, ...page(items, args, revision), consistency: "per_file_observations",
-      absenceVerified: false, omittedByPathPolicy: policyOmitted }, args.byteBudget);
+    return fittedPage(items, args, revision, paged => envelope({ status: "observed", path: relative, ...paged,
+      consistency: "per_file_observations", absenceVerified: false, omittedByPathPolicy: policyOmitted }), args.byteBudget);
   }
-  async search(args) {
+  async search(args, envelope = value => value) {
     const extensions = args.extensions?.map(extension => extension.toLowerCase());
     if ((!args.query && !extensions?.length) || args.content === true && !args.query ||
       extensions && (extensions.length > 16 || extensions.some(extension => !/^\.[a-z0-9_-]+$/.test(extension))))
@@ -227,9 +246,9 @@ class Files {
       } else if (stat.isFile()) {
         scanned++;
         if (selectedExtensions && !selectedExtensions.has(path.extname(relative).toLowerCase())) return;
-        if (!args.query || relative.includes(args.query)) append({ path: relative, kind: "path" });
-        if (args.content === true && stat.size > this.maxBytes) skippedByReason.tooLarge++;
-        if (args.content === true && stat.size <= this.maxBytes) {
+        if (!args.query || (args.matchFileNames ? path.basename(relative) : relative).includes(args.query)) append({ path: relative, kind: "path" });
+        if (!args.matchFileNames && args.content === true && stat.size > this.maxBytes) skippedByReason.tooLarge++;
+        if (!args.matchFileNames && args.content === true && stat.size <= this.maxBytes) {
           try {
             const s = await this.snapshot(relative);
             const lines = s.content.split(/\r\n|\n|\r/);
@@ -240,14 +259,14 @@ class Files {
     };
     await walk(searchPath, searchRoot, rootStat);
     const revision = hash(JSON.stringify([this.session, this.policy.projectIdentity, "search_files", searchPath, args.query ?? null,
-      args.content === true, extensions ? [...new Set(extensions)].sort() : null, matches]));
+      args.content === true, args.matchFileNames === true, extensions ? [...new Set(extensions)].sort() : null, matches]));
     const skippedFiles = skippedByReason.tooLarge + skippedByReason.unreadableOrNonText;
-    return bounded({ status: "observed", ...page(matches, args, revision), scanned, incomplete, consistency: "per_file_observations",
-      skippedFiles, skippedByReason,
+    return fittedPage(matches, args, revision, paged => envelope({ status: "observed", ...paged, scanned, incomplete,
+      consistency: "per_file_observations", skippedFiles, skippedByReason,
       // No match means "not found in what was searched" - never "absent".
       absenceVerified: false,
-      searchScope: { path: searchPath, mode: args.content === true ? "path_and_utf8_content" : "path_only",
-        extensions: extensions ? [...new Set(extensions)].sort() : null, filesScanned: scanned, complete: !incomplete } }, args.byteBudget);
+      searchScope: { path: searchPath, mode: args.matchFileNames ? "file_name_only" : args.content === true ? "path_and_utf8_content" : "path_only",
+        extensions: extensions ? [...new Set(extensions)].sort() : null, filesScanned: scanned, complete: !incomplete } }), args.byteBudget);
   }
 }
-module.exports = { DEFAULT_BYTE_BUDGET, Files, fail, hash, page, bounded, discoveryPath };
+module.exports = { DEFAULT_BYTE_BUDGET, Files, fail, hash, page, fittedPage, bounded, discoveryPath };

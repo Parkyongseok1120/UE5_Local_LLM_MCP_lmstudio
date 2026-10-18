@@ -65,7 +65,7 @@
 - 객체 생존(GC), 게임플레이 활성(BeginPlay~EndPlay), 스레드 접근 가능성은 각각 따로 판단한다.
 
 <!-- contract-summary: lifetime -->
-엔진 계약 unreal_contracts@2 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+엔진 계약 unreal_contracts@3 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
 - `ue.uobject.lifecycle` (엔진 사실) PostInitProperties, PostLoad and BeginDestroy are UObject virtuals, so they are valid overrides on every UObject-derived type, including actors, components and subsystems. BeginDestroy runs as part of garbage-collection teardown; it is not a gameplay end-of-play hook. 근거: Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h:226 외 2
 - `ue.actor.lifecycle` (엔진 사실) AActor gameplay lifetime runs PostInitializeComponents, then BeginPlay, and ends with EndPlay. AActor::Destroyed calls RouteEndPlay(EEndPlayReason::Destroyed) first, so cleanup that must run on every end of play belongs in EndPlay. 근거: Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2125 외 4
 - `ue.component.lifecycle` (엔진 사실) UActorComponent registration (OnRegister/OnUnregister) is separate from initialization (InitializeComponent/UninitializeComponent) and from play (BeginPlay/EndPlay). TickComponent is the component tick override; Tick is an actor hook. 근거: Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h:830 외 5
@@ -81,7 +81,7 @@
 - Initialize·OnWorldBeginPlay에서 등록한 delegate·ticker·타이머는 Deinitialize·OnWorldEndPlay에서 해제한다.
 
 <!-- contract-summary: subsystems -->
-엔진 계약 unreal_contracts@2 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+엔진 계약 unreal_contracts@3 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
 - `ue.subsystem.lifecycle` (엔진 사실) A subsystem lives as long as its outer: Engine, GameInstance, World or LocalPlayer. ShouldCreateSubsystem gates creation, Initialize(FSubsystemCollectionBase&) and Deinitialize bracket its life. World subsystems also receive PostInitialize, OnWorldBeginPlay, OnWorldEndPlay and PreDeinitialize, and DoesSupportWorldType filters world types. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h:56 외 5
 - `ue.subsystem.initialize-dependency` (엔진 사실) FSubsystemCollectionBase::InitializeDependency forces another subsystem of the same collection to initialize first. It only orders subsystems within one collection. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/SubsystemCollection.h:35
 <!-- /contract-summary: subsystems -->
@@ -96,7 +96,7 @@
 - 자세한 패턴은 RAG 문서 34_Threading_And_Async_Contract.md에 있다.
 
 <!-- contract-summary: threads -->
-프로젝트 정책 unreal_contracts@2:
+프로젝트 정책 unreal_contracts@3:
 - `ue.thread.uobject-game-thread` (프로젝트 정책) Create, destroy, spawn and mutate UObjects, actors, components, worlds and timers on the game thread. Work on another thread uses copied plain data, and returns results with AsyncTask(ENamedThreads::GameThread, ...) after checking a TWeakObjectPtr is still valid. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:660
 - `policy.render.game-objects` (프로젝트 정책) A render command runs later on the rendering thread. Pass copied values or a render proxy into it; do not capture this or other gameplay UObjects and read or mutate them there.
 <!-- /contract-summary: threads -->
@@ -114,10 +114,12 @@
 - `hasMore`이거나 `omissionReason:"byte_budget"`이면 `nextOffsetBytes`·`nextStartLine`부터 이어 읽는다. byteBudget은 메타데이터를 포함한 응답 전체 크기다.
 
 <!-- contract-summary: verification -->
-프로젝트 정책 unreal_contracts@2:
+프로젝트 정책 unreal_contracts@3:
 - `policy.claims.build-evidence` (프로젝트 정책) A compile, link or UHT outcome is a claim about the build. Report it as confirmed only with build_unreal_project or static_validate_project evidence; otherwise state it as an unverified risk and name the evidence that would confirm it.
 - `policy.claims.engine-default-vs-project` (프로젝트 정책) Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text). Before stating what an engine function returns or does, read its implementation: sourceMode=engine_local lists .cpp definition candidates, and read_file_range reads engine://Engine/Source/... with line numbers.
-- `policy.claims.severity` (프로젝트 정책) Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error.
+- `policy.claims.severity` (프로젝트 정책) Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error. Call a finding confirmed only after reading the defect site and checking the counter-case (the code path that would make it correct); until then label it suspected.
+- `policy.claims.absence` (프로젝트 정책) A claim that something is never set, called or present needs a search whose coverage is complete. A partial or truncated search result is not absence: continue it with its nextCursor, and include declaration headers and inline (FORCEINLINE) definitions in the search scope before stating absence.
+- `policy.claims.super-chain` (프로젝트 정책) Super:: names the direct parent class, not the first engine class that declares the function. Before describing an engine call chain, read the override in each intermediate class (for example APawn between ACharacter and AActor).
 <!-- /contract-summary: verification -->
 <!-- /guidance-section: verification -->
 

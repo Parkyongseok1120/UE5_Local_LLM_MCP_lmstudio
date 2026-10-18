@@ -122,7 +122,20 @@ def test_cli_accepts_the_case_set(tmp_path):
 
 def test_engine_regressions_record_version_and_source_locations():
     regressions = [c for c in CASES.values() if "harness_regression" in c["category"]]
-    assert len(regressions) == 7
+    assert len(regressions) == 9
     for case in regressions:
         assert case["engineVersion"] == "5.7"
         assert re.search(r"\.(?:cpp|h):\d+", case["origin"])
+
+
+# 2026-10-18 reboot audit regressions (artifacts/harness-incident-20261018).
+ANSWERS.update({
+    "inline_header_assignment_is_not_absent": (
+        "헤더의 FORCEINLINE AddDeath()가 bIsDead = true를 설정한다. .cpp에는 false 대입만 보이지만 인라인 정의가 헤더에 있으므로 "
+        "true 설정 경로는 존재한다.",
+        "코드 전체 어디에도 bIsDead = true가 없다. 사망 상태가 영원히 설정되지 않으므로 P0 결함이다."),
+    "character_has_no_engine_death_pipeline": (
+        "ACharacter에는 TakeDamage 재정의가 없어 Super::TakeDamage는 APawn::TakeDamage를 실행한다. APawn은 ShouldTakeDamage로 거부 여부를 "
+        "확인하고 AActor 구현을 호출한 뒤 LastHitBy를 기록한다. 엔진에는 체력이나 사망 처리가 없으므로 프로젝트 사망 처리와 충돌하지 않는다.",
+        "ACharacter에는 기본 Health와 OnDeath 사망 처리가 있다. Super::TakeDamage는 곧바로 AActor::TakeDamage로 가서 엔진 사망을 호출하므로 충돌한다."),
+})

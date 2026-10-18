@@ -12,6 +12,9 @@ const root = process.argv[2];
 if (!root || !path.basename(root).startsWith("unity-bridge-test-") || !fs.existsSync(path.join(root, "smoke-result.json"))) throw new Error("Supply only an isolated test_unity_bridge.js fixture with completed smoke tests");
 const runtime = createRuntime({ UNITY_PROJECT_ROOT: root, ALLOW_WRITE: "1", ALLOW_COMMANDS: "1" });
 const results = [];
+let observedReloading = false;
+const reloadPoll = setInterval(() => { try { if (JSON.parse(fs.readFileSync(runtime.policy.discovery,"utf8")).state === "reloading") observedReloading = true; } catch {} }, 20);
+reloadPoll.unref();
 const id = () => crypto.randomUUID();
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function call(name, args) {
@@ -93,6 +96,10 @@ async function main() {
   await sleep(200);
   assert.equal(beforeReload.domainGeneration, initial.domainGeneration);
   results.push("two Play sessions with Domain Reload disabled");
+  const approvalRead = await call("unity_object_read", { target: newAsset.target, propertyPaths: ["number"] });
+  const pendingApproval = await call("unity_approval", { action: "request", method: "unity_asset", arguments: {
+    action: "delete", target: newAsset.target, receipt: approvalRead.receipt, operationId: id() } });
+  assert.equal(pendingApproval.status, "pending");
   const symbol = `Probe_${Date.now()}`;
   const probe = `Assets/Smoke/${symbol}.cs`;
   const created = await call("create_file", { path: probe, content: `#warning EvidenceFirst explicit reload probe\nnamespace EvidenceFirst.Tests { internal class ${symbol} {} }\n`, mustNotExist: true });
@@ -102,6 +109,11 @@ async function main() {
   if (imported.errorCode && imported.status !== "outcome_unknown") throw new Error(JSON.stringify(imported));
   const afterReload = await waitFor("compile + domain reload", s => s.domainGeneration > beforeReload.domainGeneration, 150000);
   assert.equal(afterReload.editorSessionId, initial.editorSessionId);
+  const restoredApproval = await call("unity_approval", { action: "status", approvalId: pendingApproval.approvalId });
+  assert.equal(restoredApproval.status, "pending"); assert.equal(restoredApproval.expiresAt, pendingApproval.expiresAt);
+  results.push("exact pending approval and original expiry survive real domain reload");
+  assert.equal(afterReload.compilationOutcome, "completed_without_observed_errors");
+  assert.equal(afterReload.lastCompilationId, afterReload.compilationId);
   const retainedSnapshot = await call("unity_snapshot", { action: "read", snapshotId: durableSnapshot.snapshotId, targetIndex: 0 });
   assert.equal(retainedSnapshot.values.items[0].value, "123");
   const retainedRecording = await call("unity_snapshot", { action: "record_status", recordingId: durableRecording.recordingId });
@@ -116,6 +128,22 @@ async function main() {
   const oldReceipt = await runtime.call("unity_object_patch", { ...patchArgs, operationId: id() });
   assert.equal(oldReceipt.errorCode, "receipt_required");
   results.push("old domain receipt rejected after reconnect");
+  const compileId = id();
+  const compile = await call("unity_editor", { action: "compile", operationId: compileId });
+  assert.equal(compile.status, "accepted");
+  await waitFor("explicit compile", s => s.domainGeneration > afterReload.domainGeneration, 150000);
+  const finished = await call("unity_operation", { action: "get", operationId: compileId });
+  assert.equal(finished.status, "completed"); assert.equal(finished.observedCompilation.errorsObserved, false);
+  assert.equal(finished.observedCompilation.logs.args.compilationId, finished.observedCompilation.compilationId);
+  const firstCompileStatus = await call("unity_status");
+  await call("unity_editor", { action: "compile", operationId: id() });
+  await waitFor("unrelated second compile", s => s.domainGeneration > firstCompileStatus.domainGeneration, 150000);
+  const retainedCompile = await call("unity_operation", { action: "get", operationId: compileId });
+  assert.deepEqual(retainedCompile.observedCompilation, finished.observedCompilation);
+  results.push("explicit compilation operation remains correlated after an unrelated second compilation");
+  assert.equal(observedReloading, true);
+  results.push("actual domain reload publishes the reloading discovery state before reconnecting");
+  clearInterval(reloadPoll);
   fs.writeFileSync(path.join(root, "rpc-result.json"), JSON.stringify({ status: "passed", editorVersion: afterReload.editorVersion, results }, null, 2));
   console.log(JSON.stringify({ status: "passed", results }, null, 2));
 }

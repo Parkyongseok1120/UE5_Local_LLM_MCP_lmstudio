@@ -14,7 +14,7 @@ import { resolveGenerationBudget } from "./context-budget";
 import { prepareRoundInput } from "./round-input";
 import { core, inputAvailability, modelNotes, workingContextModule, objectiveContinuity, continuityState } from "./context-ports";
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
-  verificationScopeNotice } from "./delivery-controller";
+  partialSearchScopeNotice, verificationScopeNotice } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
 import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
@@ -23,6 +23,7 @@ import { selectGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote } from "./execution-contracts";
 import { NotePersistence } from "./note-persistence";
 import { sealAndRelease } from "./terminal-persistence";
+import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupted } from "./resume-facts";
 import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
@@ -230,7 +231,19 @@ export function createPredictionLoopHandler(
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
-    const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure", string>();
+    const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "projection" | "prior_turn", string>();
+    // Resume view: what the restored input carries only in part, and whether
+    // the previous turn stopped before it reported. Derived, never stored.
+    const resumeProjection = partialProjectionFact(workingHistory.getMessagesArray());
+    const resumedAfterInterruption = priorTurnInterrupted(originalHistory.getMessagesArray());
+    if (!config.observeOnly) {
+      if (resumeProjection.fact) runtimeFacts.set("projection", resumeProjection.fact);
+      if (resumedAfterInterruption) runtimeFacts.set("prior_turn", PRIOR_TURN_INTERRUPTED_FACT);
+    }
+    if (config.showDebugInfo) ctl.debug({ event: "resume_state", executionId,
+      priorTurnInterrupted: resumedAfterInterruption, restoredWindow: restoredWindowApplied,
+      toolResults: workingHistory.getMessagesArray().reduce((n, m) => n + m.getToolCallResults().length, 0),
+      partialProjections: resumeProjection.count });
     const persistTerminalNote = () => {
       const result = notes.persist(activeNote, visibleTranscript.snapshot().getMessagesArray());
       if (result.status !== "skipped" && config.showDebugInfo) ctl.debug({ event: "assistant_note_persistence", ...result,
@@ -426,6 +439,13 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         const retainedIndexes = compactionCheckpoint?.retainedIndexes || [];
         const retainedIndexLimit = 64;
         const inputEvidence = messageEvidenceTelemetry(modelInput.getMessagesArray());
+        if (!config.observeOnly) {
+          // Kept current for the next input: a projection made for this round
+          // is listed from the next round on.
+          const projectionView = partialProjectionFact(modelInput.getMessagesArray());
+          if (projectionView.fact) runtimeFacts.set("projection", projectionView.fact);
+          else runtimeFacts.delete("projection");
+        }
         if (config.showDebugInfo) {
           // What the model input actually carries per tool result (no body text):
           // which results are partial projections, and whether each still has its
@@ -1344,6 +1364,11 @@ event: decision.trigger === "research_recovery_exhausted"
       if (scopeNotice) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(scopeNotice);
         if (config.showDebugInfo) ctl.debug({ event: "verification_scope_notice", executionId });
+      }
+      const searchNotice = partialSearchScopeNotice(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText);
+      if (searchNotice) {
+        visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(searchNotice);
+        if (config.showDebugInfo) ctl.debug({ event: "partial_search_scope_notice", executionId });
       }
     } catch (error) {
       executionFailure = error;

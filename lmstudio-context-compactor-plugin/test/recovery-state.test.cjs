@@ -8,7 +8,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { Chat, ChatMessage } = require("@lmstudio/sdk");
 const { ToolRoundStagnationDetector, messageEvidenceTelemetry } = require("../dist/evidence-telemetry");
-const { verificationScopeNotice } = require("../dist/delivery-controller");
+const { partialSearchScopeNotice, verificationScopeNotice } = require("../dist/delivery-controller");
 const notes = require("../src/continuity-model-notes.js");
 
 function exchange(id, name, args, result, history = Chat.empty()) {
@@ -135,3 +135,63 @@ for (const answer of ["검증 완료가 아닙니다.", "사실 확인 완료는
   test(`locally negated or structure-qualified wording needs no notice: ${answer}`, () => {
     assert.equal(verificationScopeNotice(turnWithValidation(structureOnly), answer), null);
   });
+
+// The 2026-10-18 run: a budget-cut search omitted the one assignment, and the
+// answer said the flag is set nowhere. The footer names the partial search.
+const partialSearch = { ok: true, query: "bIsDead", coverage: "partial", truncated: true, omissionReason: "response_budget",
+  matchesReturned: 16, matchesOmitted: 1, absenceVerified: false, nextCursor: "c1", results: [] };
+function auditTurn() {
+  const history = Chat.empty();
+  history.append(ChatMessage.from({ role: "user", content: "Audit" }));
+  return history;
+}
+
+test("an absence claim over a partial search gets one footer naming the search and its omitted matches", () => {
+  const history = exchange("s1", "search_files", { path: "project://Source", query: "bIsDead" }, partialSearch, auditTurn());
+  for (const answer of ["코드 전체 어디에도 bIsDead = true가 없습니다. P0 확정.", "bIsDead is never set, so the death loop is broken (P0 confirmed)."]) {
+    const notice = partialSearchScopeNotice(history, answer);
+    assert.match(notice, /search_files 'bIsDead'\(1건 생략\)/u, answer);
+    assert.match(notice, /부재의 증거가 아니므로/u);
+  }
+});
+
+test("no partial-search footer once the same search was paged to completion, or without absence wording", () => {
+  let history = exchange("s1", "search_files", { path: "project://Source", query: "bIsDead" }, partialSearch, auditTurn());
+  assert.equal(partialSearchScopeNotice(history, "bIsDead의 대입 위치를 정리했습니다."), null);
+  history = exchange("s2", "search_files", { path: "project://Source", query: "bIsDead", cursor: "c1" },
+    { ok: true, query: "bIsDead", coverage: "complete", truncated: false, results: [] }, history);
+  assert.equal(partialSearchScopeNotice(history, "어디에도 없습니다."), null);
+});
+
+test("qualified absence wording, other turns and complete searches need no partial-search footer", () => {
+  const history = exchange("s1", "search_files", { path: "project://Source", query: "bIsDead" }, partialSearch, auditTurn());
+  assert.equal(partialSearchScopeNotice(history, "설정 위치는 아직 확인하지 못했습니다(미확인)."), null);
+  const earlier = exchange("s1", "search_files", { path: "project://Source", query: "bIsDead" }, partialSearch, auditTurn());
+  earlier.append(ChatMessage.from({ role: "assistant", content: "earlier" }));
+  earlier.append(ChatMessage.from({ role: "user", content: "Next" }));
+  assert.equal(partialSearchScopeNotice(earlier, "어디에도 없습니다."), null);
+  const complete = exchange("s1", "search_files", { path: "project://Source", query: "x" },
+    { ok: true, query: "x", coverage: "complete", truncated: false, results: [] }, auditTurn());
+  assert.equal(partialSearchScopeNotice(complete, "x는 존재하지 않습니다."), null);
+});
+
+test("a coverage-limited symbol lookup without verified absence is named too", () => {
+  const history = exchange("l1", "unreal_symbol_lookup", { query: "ACharacter::OnDeath", sourceMode: "engine_local" },
+    { ok: true, status: "coverage_limited", query: "ACharacter::OnDeath", matchCount: 0,
+      coverage: { completeness: "partial", apiAbsenceVerified: false } }, auditTurn());
+  assert.match(partialSearchScopeNotice(history, "ACharacter::OnDeath는 존재하지 않습니다."),
+    /unreal_symbol_lookup 'ACharacter::OnDeath'\(범위 제한\)/u);
+});
+
+test("a Unity search page cut short or stopped early is named too; a complete Unity search is not", () => {
+  const unityPartial = { status: "observed", items: [{ path: "Assets/A.cs", line: 3, text: "x" }], total: 4, truncated: true,
+    nextCursor: "c", incomplete: false, absenceVerified: false };
+  const history = exchange("u1", "search_files", { path: "Assets", query: "isDead", content: true }, unityPartial, auditTurn());
+  assert.match(partialSearchScopeNotice(history, "isDead는 어디에도 true로 설정되지 않는다."), /search_files 'isDead'\(3건 생략\)/u);
+  const stopped = exchange("u2", "search_files", { path: "Assets", query: "isDead", content: true },
+    { ...unityPartial, total: 1, truncated: false, nextCursor: null, incomplete: true }, auditTurn());
+  assert.match(partialSearchScopeNotice(stopped, "존재하지 않는다."), /search_files 'isDead'\(부분 결과\)/u);
+  const complete = exchange("u3", "search_files", { path: "Assets", query: "isDead", content: true },
+    { ...unityPartial, total: 1, truncated: false, nextCursor: null, incomplete: false }, auditTurn());
+  assert.equal(partialSearchScopeNotice(complete, "존재하지 않는다."), null);
+});

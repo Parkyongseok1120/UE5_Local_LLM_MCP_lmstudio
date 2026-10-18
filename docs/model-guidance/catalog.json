@@ -426,6 +426,40 @@
               }
             ]
           }
+        },
+        {
+          "id": "verification",
+          "topics": [
+            "core",
+            "debugging",
+            "multiplayer"
+          ],
+          "priority": 25,
+          "signals": [
+            "diagnostic_present",
+            "compilation_pending"
+          ],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "verified-lifetime",
+          "topics": [
+            "design",
+            "debugging",
+            "lifecycle"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "engineVersions": [
+              "6000.3"
+            ]
+          }
         }
       ]
     },

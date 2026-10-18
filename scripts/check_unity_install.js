@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 "use strict";
+// Post-install diagnosis of one unity-tools MCP configuration. It reports what
+// is ready and, for anything that is not, the step that fixes it. A missing
+// Editor connection is a state to report, not an install failure; the
+// installer decides which findings block installation.
 const fs = require("node:fs");
 const { Client } = require("../lmstudio-unity-mcp/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/index.js");
 const { StdioClientTransport } = require("../lmstudio-unity-mcp/node_modules/@modelcontextprotocol/sdk/dist/cjs/client/stdio.js");
@@ -19,8 +23,27 @@ async function main() {
     }
     const status = (await client.callTool({ name: "unity_status", arguments: {} })).structuredContent;
     const symbols = (await client.callTool({ name: "unity_symbols", arguments: { action: "status" } })).structuredContent;
-    if (!symbols?.configured) throw Error("C# worker configuration missing");
-    console.log(JSON.stringify({ initialized: true, tools: list.tools.length, workerConfigured: true, connection: status.connection, reason: status.reason, modelConnection: "not_verified" }));
+    const workerPath = entry.env?.UNITY_SYMBOL_WORKER || "";
+    const worker = symbols?.configured && workerPath && fs.existsSync(workerPath)
+      ? { state: "configured" }
+      : { state: "missing", remedy: "Reinstall the Unity component so the C# symbol worker is built, or pass --unity-symbol-worker and --unity-dotnet." };
+    const connected = status.connection === "connected";
+    console.log(JSON.stringify({
+      initialized: true, tools: list.tools.length, modelConnection: "not_verified",
+      connection: status.connection, reason: status.reason, reasonCode: status.reasonCode || status.reason,
+      ...(status.nextStep ? { nextStep: status.nextStep } : {}),
+      serverPermissions: status.serverPermissions || { write: entry.env?.ALLOW_WRITE === "1", commands: entry.env?.ALLOW_COMMANDS === "1" },
+      ...(connected ? {
+        bridge: { version: status.bridgeVersion, protocolVersion: status.protocolVersion },
+        editorVersion: status.editorVersion,
+        editorPermissions: { edit: status.permissions?.edit === true, execute: status.permissions?.execute === true },
+        testFramework: status.capabilities?.testExecution === true ? "available" : "unavailable",
+        compilation: { compiling: status.compiling === true, outcome: status.compilationOutcome || "unknown" },
+      } : {}),
+      worker: worker.state, ...(worker.remedy ? { workerRemedy: worker.remedy } : {}),
+      // Kept for older installer reports.
+      workerConfigured: worker.state === "configured",
+    }));
   } finally { await client.close(); }
 }
 main().catch(e => { console.error(e.message); process.exitCode = 1; });

@@ -54,12 +54,27 @@ function createReadCapabilities(context) {
     return undefined;
   }
 
+  // Reader messages name the caller's URI, never the resolved host path.
+  function readMessage(read, args, resolution) {
+    if (read.errorCode === "NOT_FOUND") return `File not found: ${args.path}`;
+    const absolute = String(resolution.absolutePath || "");
+    let message = String(read.message || "");
+    if (absolute) for (const form of new Set([absolute, absolute.split(path.sep).join("/")])) message = message.split(form).join(String(args.path));
+    return message;
+  }
+
   // byteBudget bounds the whole serialized response (metadata included), not
   // the body; say so whenever it is what stopped the body early.
   function budgetFields(args, cutByBudget) {
     if (args.byteBudget === undefined) return cutByBudget ? { omissionReason: "response_budget" } : {};
     return { effectiveByteBudget: args.byteBudget, budgetScope: "whole_response",
       ...(cutByBudget ? { omissionReason: "byte_budget" } : {}) };
+  }
+
+  // The same read, continued: identity and budget kept, receipt dropped.
+  function continuationArgs(args, position) {
+    const { repeatReceipt: _receipt, project: _project, ...same } = args;
+    return { ...same, ...position };
   }
 
   async function listDirectory(args) {
@@ -140,7 +155,7 @@ function createReadCapabilities(context) {
     if (!initialStat.isFile()) return unavailable(resolution, "NOT_A_FILE", `Not a file: ${args.path}`);
     const stableRead = await readStableFileWindow(resolution.absolutePath, offset, maxBytes);
     if (!stableRead.ok) {
-      return unavailable(resolution, stableRead.errorCode, stableRead.message, { retryAllowed: true, retryMode: "after_state_change" });
+      return unavailable(resolution, stableRead.errorCode, readMessage(stableRead, args, resolution), { retryAllowed: true, retryMode: "after_state_change" });
     }
     if (isBinary(stableRead.buffer)) return unavailable(resolution, "BINARY_FILE", `File appears binary: ${args.path}`);
     const version = registerReadSnapshot(fileSnapshots, resolution, stableRead, requestContext);
@@ -158,6 +173,8 @@ function createReadCapabilities(context) {
         truncated: nextOffsetBytes < stableRead.stat.size,
         ...budgetFields(args, byteLength < stableRead.buffer.length),
         ...version,
+        ...(nextOffsetBytes < stableRead.stat.size ? { suggestion: { tool: "read_file",
+          args: projectScopedSuggestionArgs(args, continuationArgs(args, { offsetBytes: nextOffsetBytes })) } } : {}),
       });
     };
     const fitted = fitUtf8Prefix(stableRead.buffer, makePayload, args.byteBudget);
@@ -179,7 +196,7 @@ function createReadCapabilities(context) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) {
-      return unavailable(resolution, read.errorCode, read.message, {
+      return unavailable(resolution, read.errorCode, readMessage(read, args, resolution), {
         suggestion: read.errorCode === "NOT_FOUND" ? await notFoundSuggestion(args, resolution) : undefined,
       });
     }
@@ -209,6 +226,8 @@ function createReadCapabilities(context) {
         : args.byteBudget === undefined ? "response_budget" : "byte_budget" } : {}),
       ...budgetFields(args, end < maximumEnd),
       ...version,
+      ...(end < requestedEnd ? { suggestion: { tool: "read_file_range",
+        args: projectScopedSuggestionArgs(args, continuationArgs(args, { startLine: end + 1, endLine: requestedEnd })) } } : {}),
     });
     let low = start;
     let high = maximumEnd;
@@ -248,7 +267,7 @@ function createReadCapabilities(context) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) {
-      return unavailable(resolution, read.errorCode, read.message,
+      return unavailable(resolution, read.errorCode, readMessage(read, args, resolution),
         read.errorCode === "NOT_FOUND" ? { suggestion: await notFoundSuggestion(args, resolution) } : {});
     }
     const window = lexicalSymbolWindow(read.content, args.symbol, args.contextLines);
@@ -293,7 +312,7 @@ function createReadCapabilities(context) {
     read_file: readFile,
     read_file_range: readFileRange,
     read_symbol: readSymbol,
-    ...createSearchCapability(context),
+    ...createSearchCapability(context, { notFoundSuggestion }),
   };
 }
 

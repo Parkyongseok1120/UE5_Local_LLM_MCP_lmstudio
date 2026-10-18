@@ -131,7 +131,7 @@ function toolDefinitions() {
     },
     {
       name: "list_unreal_projects",
-      description: "Discover Unreal projects under configured search roots.",
+      description: "Find Unreal projects under configured search roots.",
       inputSchema: schema({ maxDepth: { type: "number", description: "Default 4, max 8." } }),
     },
     {
@@ -150,7 +150,7 @@ function toolDefinitions() {
     },
     {
       name: "detect_unreal_project",
-      description: "Resolve project, target, engine, platform and configuration.",
+      description: "Resolve project, target, engine, platform, configuration.",
       inputSchema: schema({
         hint: { type: "string" },
         project: { type: "string" },
@@ -174,7 +174,7 @@ function toolDefinitions() {
     },
     {
       name: "search_files",
-      description: "Search contents or basenames under workspace://, project:// or engine:// (default workspace://). Results carry a reusable uri; with project:// URIs pass the response's activeProject as project. Partial on deadline.",
+      description: "Search contents/basenames: workspace:// (default), project://, engine://. Results carry a reusable uri; for project:// pass activeProject as project. Partial ≠ absence: pass nextCursor as cursor.",
       inputSchema: schema(repeatable({
         query: { type: "string" },
         path: { type: "string" },
@@ -182,6 +182,7 @@ function toolDefinitions() {
         regex: { type: "boolean" },
         matchFileNames: { type: "boolean" },
         caseSensitive: { type: "boolean" },
+        cursor: { type: "string" },
         maxResults: { type: "number", description: "Default 100, max 1000." },
         maxFiles: { type: "number", description: "Default 5000, max 50000." },
         byteBudget: readByteBudget(),

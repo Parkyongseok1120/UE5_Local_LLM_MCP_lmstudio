@@ -472,3 +472,25 @@ def test_launcher_preserves_vm_model_and_does_not_execute_config(tmp_path):
     assert call[1] == "custom-vm" and model in call
     assert "runtime-python.path" in " ".join(call) and "3.12.13" not in " ".join(call)
     assert not injected.exists()
+
+
+@pytest.mark.parametrize("flags", [{}, {"unity_allow_write": True}, {"unity_allow_write": True, "unity_allow_commands": True}])
+def test_unity_server_permissions_are_explicit_flags_and_unready_install_names_next_steps(fixture, monkeypatch, flags):
+    u, i, project, args = fixture
+    args.dry_run = False
+    args.unity_mcp_config = args.state_home / "mcp.json"
+    for key, value in flags.items():
+        setattr(args, key, value)
+    def run(command, **kw):
+        if "check_unity_install.js" in " ".join(command):
+            return subprocess.CompletedProcess(command, 0, '{"connection":"disconnected","reasonCode":"editor_not_running"}', "")
+        return subprocess.CompletedProcess(command, 0, "v24.0.0", "")
+    monkeypatch.setattr(u, "run", run)
+    monkeypatch.setattr(u, "worker", lambda *a: (Path(sys.executable), ROOT / "fake-worker.dll"))
+    report = u.install_unity(args, ROOT, i.Transaction, i.InstallLock)
+    env = json.loads(args.unity_mcp_config.read_text(encoding="utf-8"))["mcpServers"]["unity-tools"]["env"]
+    assert env["ALLOW_WRITE"] == ("1" if flags.get("unity_allow_write") else "0")
+    assert env["ALLOW_COMMANDS"] == ("1" if flags.get("unity_allow_commands") else "0")
+    assert report["permissions"]["serverWrite"] is bool(flags.get("unity_allow_write"))
+    assert report["ready"] is False
+    assert any("Unity Editor" in step for step in report["nextSteps"])

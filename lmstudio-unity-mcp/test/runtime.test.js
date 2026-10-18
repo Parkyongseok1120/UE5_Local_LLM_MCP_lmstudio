@@ -194,7 +194,10 @@ test("read_file reports exact ranges and reads Unity package and project setting
   assert.equal(middle.totalLines, 5);
   assert.equal(middle.hasMore, true);
   assert.equal(middle.nextStartLine, 4);
-  assert.equal(middle.truncated, true);
+  // The requested lines 2-3 came back whole; the file merely continues.
+  assert.equal(middle.truncated, false);
+  assert.equal(middle.moreLinesInFile, true);
+  assert.deepEqual(middle.suggestion, { tool: "read_file", args: { path: "Assets/Code.cs", startLine: 4, limit: 2, lineNumbers: false } });
 
   const tail = await f.call("read_file", { path: "Assets/Code.cs", startLine: 4, limit: 2, lineNumbers: false });
   assert.equal(tail.text, "four\nfive");

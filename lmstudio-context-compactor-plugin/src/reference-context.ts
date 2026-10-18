@@ -209,7 +209,8 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       truncated: r.truncated === true || String(r.message || "").length > REFERENCE_LIMITS.textChars,
     }));
     add("diagnostics", { delivery: "returned", operationKind: "unity_script_compilation_observation",
-      operationStatus: value.compilationOutcome === "compiling" ? "pending" : value.compilationOutcome === "failed" ? "failed" : "unknown",
+      operationStatus: value.compilationOutcome === "compiling" ? "pending" : value.compilationOutcome === "failed" ? "failed" : value.compilationOutcome === "completed_without_observed_errors" ? "completed" : "unknown",
+      errorsObserved: value.compilationOutcome === "failed" ? true : value.compilationOutcome === "completed_without_observed_errors" ? false : "unknown",
       observedOutcome: text(value.compilationOutcome), compilationId: text(value.compilationId), session,
       diagnostics, sourceAssemblyVerification: "unknown", playerBuildVerification: "unknown",
       coverage: { scope: text(value.collectionScope), completeness: "partial", subscribedAt: text(value.subscribedAt),
@@ -228,10 +229,28 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
   } else if (engine === "unity" && tool === "unity_status") {
     runtime = true;
     add("project", { connection: text(value.connection), session: session || "unknown", editorVersion: text(value.editorVersion),
-      compiling: typeof value.compiling === "boolean" ? value.compiling : "unknown", compilationId: text(value.compilationId) },
+      compiling: typeof value.compiling === "boolean" ? value.compiling : "unknown", compilationId: text(value.compilationId),
+      compilationOutcome: text(value.compilationOutcome), lastCompilationId: text(value.lastCompilationId),
+      lastCompilationFinishedAt: text(value.lastCompilationFinishedAt), reasonCode: text(value.reasonCode) },
       { engineVersion: session && value.connection !== "disconnected" ? text(value.editorVersion, 64) : undefined,
         versionSource: "runtime", groupKey: JSON.stringify([pathIdentity(project), "unity_status"]) });
-  } else if (engine === "unity" && tool === "unity_operation" && args.action === "get") {
+  } else if (engine === "unity" && tool === "unity_tests") {
+    runtime = !value.operationId;
+    add("operation", { ...status, operationKind: "unity_tests", action: text(args.action),
+      operationId: text(value.operationId || args.operationId), originalOrigin: record(value.origin) || undefined,
+      testStatus: text(value.testStatus), passed: integer(value.passed), failed: integer(value.failed),
+      selectedCount: integer(value.selectedCount), mode: text(value.mode || args.mode),
+      verification: value.status === "completed" && value.failed === 0 && Number(value.passed) > 0 ? "selected_tests_passed" : "not_proven_passed",
+      coverage: { completeness: value.truncated === true ? "partial" : "selected_tests_only" } });
+  } else if (engine === "unity" && ["unity_symbols", "unity_find"].includes(tool)) {
+    runtime = tool === "unity_find";
+    const rows = Array.isArray(value.items) ? value.items : [];
+    add("project", { operationKind: tool, action: text(args.action || args.kind), indexVersion: text(value.indexVersion),
+      indexSource: text(value.indexSource), freshness: text(value.freshness), absenceVerified: false,
+      total: integer(value.total), returned: rows.length, nextOffset: integer(value.nextOffset), nextCursor: text(value.nextCursor),
+      searchedAssemblies: Array.isArray(value.searchedAssemblies) ? value.searchedAssemblies.slice(0, 32) : [],
+      coverage: { completeness: value.truncated === true || value.nextOffset != null || value.nextCursor ? "partial" : "scoped_only" } });
+} else if (engine === "unity" && tool === "unity_operation" && args.action === "get") {
     add("operation", { ...retainedEffectFacts(value), ...status, resultDelivery: record(value.delivery) || undefined, operationKind: "operation_lookup",
       operationId: text(value.operationId), originalOrigin: record(value.origin) || undefined,
       lookupSession: value.delivery?.editorSessionId ? `${value.delivery.editorSessionId}:${value.delivery.domainGeneration}` : "unknown", errorCode: text(value.errorCode) });
@@ -244,7 +263,8 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       requestFingerprint: digest(JSON.stringify([tool, args])) });
   }
   const fileTools = ENGINE_PROFILES[engine].fileTools;
-  if (fileTools.includes(tool)) {
+  const symbolSource = engine === "unity" && tool === "unity_symbols" && args.action === "source";
+  if (fileTools.includes(tool) || symbolSource) {
     const files = Array.isArray(value.files) ? value.files : [value];
     // Oversized/partial mutation results cannot leave earlier configuration
     // assertions active. A subsequent real read is needed to recover them.
@@ -266,7 +286,7 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       const shownBody = typeof raw.content === "string" ? raw.content : typeof raw.text === "string" ? raw.text : undefined;
       // Reads number their lines for display ("<n>\t<text>"); metadata parsers need the file text itself.
       const body = raw.lineNumbers === true && shownBody !== undefined ? shownBody.replace(/^\d+\t/gm, "") : shownBody;
-      const read = ["read_file", "read_file_range", "read_symbol"].includes(tool) && file.observationState === "observed";
+      const read = (["read_file", "read_file_range", "read_symbol"].includes(tool) || symbolSource) && file.observationState === "observed";
       const completeBytes = integer(raw.offsetBytes) === 0 && integer(raw.size) !== undefined
         && integer(raw.nextOffsetBytes) === raw.size;
       const complete = read && (file.readCoverageState === "complete" || completeBytes) && file.sha256AtObservation

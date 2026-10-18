@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "engine": "unreal",
-  "revision": 2,
+  "revision": 3,
   "description": "Single source for Unreal engine facts and project policies used by the static validators, the engine_local symbol lookup and the generated model guidance. Data only: analysis logic stays in the Python validators. Evidence paths are relative to the installed engine root.",
   "validatedEngineVersions": [
     "5.8"
@@ -655,6 +655,26 @@
     },
     {
       "id": "policy.claims.severity",
+      "revision": 2,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ]
+      },
+      "statement": "Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error. Call a finding confirmed only after reading the defect site and checking the counter-case (the code path that would make it correct); until then label it suspected.",
+      "preconditions": [
+        "A report assigns P0-P3 or error/warning severity, or calls a finding confirmed."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#verification"
+      ]
+    },
+    {
+      "id": "policy.claims.absence",
       "revision": 1,
       "kind": "project_policy",
       "topic": "verification",
@@ -663,15 +683,63 @@
           "*"
         ]
       },
-      "statement": "Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error.",
+      "statement": "A claim that something is never set, called or present needs a search whose coverage is complete. A partial or truncated search result is not absence: continue it with its nextCursor, and include declaration headers and inline (FORCEINLINE) definitions in the search scope before stating absence.",
       "preconditions": [
-        "A report assigns P0-P3 or error/warning severity."
+        "A finding says a value is never assigned, a function is never called, or a symbol does not exist."
       ],
       "exceptions": [],
       "evidenceRefs": [],
       "guidanceRefs": [
         "unreal.md#verification"
       ]
+    },
+    {
+      "id": "policy.claims.super-chain",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ]
+      },
+      "statement": "Super:: names the direct parent class, not the first engine class that declares the function. Before describing an engine call chain, read the override in each intermediate class (for example APawn between ACharacter and AActor).",
+      "preconditions": [
+        "A report describes what Super:: or an engine base implementation does."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#verification"
+      ]
+    },
+    {
+      "id": "ue.damage.pawn-take-damage",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "APawn",
+          "ACharacter"
+        ]
+      },
+      "statement": "APawn overrides TakeDamage: it returns 0 when ShouldTakeDamage rejects the hit, otherwise calls AActor::TakeDamage and records LastHitBy. ACharacter adds no TakeDamage override, so Super::TakeDamage in an ACharacter subclass runs APawn's. The engine has no built-in health, death or OnDeath handling on these classes.",
+      "preconditions": [
+        "Code overrides TakeDamage in an APawn or ACharacter subclass, or a report describes the engine damage chain."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/Pawn.cpp",
+          "symbol": "APawn::TakeDamage",
+          "line": 577
+        }
+      ],
+      "guidanceRefs": []
     }
   ]
 }

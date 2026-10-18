@@ -1,6 +1,6 @@
 # Recovery-behaviour evaluation
 
-This checks what a model does after a failed or partial tool result. It covers six failure shapes:
+This checks what a model does after a failed or partial tool result. It covers these shapes:
 
 - a wrong engine path that returns NOT_FOUND
 - an absolute engine path outside the allowed roots
@@ -8,6 +8,14 @@ This checks what a model does after a failed or partial tool result. It covers s
 - a small `byteBudget` that cuts the read short
 - a simulated partial projection
 - a structure-only packet validation
+- a budget-cut search that omits the one header inline assignment (`partial_search_absence`, from the 2026-10-18 audit)
+- an engine call chain with an intermediate override (`super_chain`: `APawn::TakeDamage` between `ACharacter` and `AActor`)
+- a `계속해` after a turn that stopped after its tool results without an answer (`resume_after_cancel`)
+
+Two shapes from that audit are not scenarios here:
+
+- **The shared read-budget denial.** The scripted harness calls tools directly, so the SDK guard that issues a denial never runs. `test/tool-round-lifecycle.test.cjs` covers the denial message instead.
+- **A real PC restart.** `resume_after_cancel` replays the interrupted turn in one process. It is not a restart test.
 
 `recovery-harness.cjs` runs the built prediction loop together with the in-process `unreal-agent` runtime. It uses a temporary engine and project, and it does not install anything. It records, for every run:
 
@@ -29,3 +37,6 @@ There are two different kinds of result, and they must not be confused:
   ```
 
   The score in `summary.json` describes only that model with those settings (temperature 0 and the given `--seed`). It is not a general capability claim.
+
+
+Unity recovery scenarios use the real in-process `createRuntime` file adapter and a scripted Bridge transport. They cover wrong paths, denied roots, budget paging, Editor reload and compile-result lookup. The Bridge replies are fixtures: these tests verify harness wiring and scoring, not a real Editor, model recovery ability or physical reboot. The separate Unity Editor smoke/RPC/Test Framework scripts exercise the native Bridge. `npm run unitycontract:check` checks the generated read-action profile against the Unity catalog.

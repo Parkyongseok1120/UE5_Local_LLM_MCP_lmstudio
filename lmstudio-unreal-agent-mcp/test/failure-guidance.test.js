@@ -135,6 +135,119 @@ test("read_file_range marks truncation only when the requested range was cut", a
   }
 });
 
+// The 2026-10-18 incident shape: a budget-cut search dropped the one match
+// that sets the flag, inside a header inline function, and the partial page
+// carried no way to continue. A partial page must count what it omitted and
+// hand back a cursor that reaches every match.
+function deathFlagProject(projectRoot) {
+  const dir = path.join(projectRoot, "Source", "Game");
+  for (let i = 0; i < 12; i++) {
+    fs.writeFileSync(path.join(dir, `A${String(i).padStart(2, "0")}.cpp`),
+      `// reader ${i}\nif (PlayerState->bIsDead && PlayerState->DeathCount > ${i}) { HandleDeadPlayerStateWithLongName(); }\n`, "utf8");
+  }
+  fs.writeFileSync(path.join(dir, "ZPlayerState.h"), ["#pragma once", "class AZPlayerState {", "\tbool bIsDead;",
+    "public:", "\tFORCEINLINE void AddDeath() { if (!bIsDead) { DeathCount++; bIsDead = true; } }", "};"].join("\n"), "utf8");
+}
+
+async function allPages(runtime, args) {
+  const pages = [];
+  let next = args;
+  for (let guard = 0; next && guard < 50; guard++) {
+    const page = await call(runtime, "search_files", next);
+    assert.equal(page.ok, true, JSON.stringify(page));
+    pages.push(page);
+    next = page.nextCursor ? page.suggestion.args : null;
+  }
+  return pages;
+}
+
+test("a budget-cut search counts omitted matches and its cursor reaches the header inline assignment", async (t) => {
+  const { runtime, projectRoot } = fixture(t);
+  deathFlagProject(projectRoot);
+  const full = await call(runtime, "search_files", { path: "project://Source", query: "bIsDead" });
+  assert.equal(full.coverage, "complete");
+  assert.equal(full.nextCursor, undefined);
+  assert.equal(full.absenceVerified, undefined);
+  assert.ok(full.results.some(r => /bIsDead = true/.test(r.text)));
+
+  const first = await call(runtime, "search_files", { path: "project://Source", query: "bIsDead", byteBudget: 2048 });
+  assert.equal(first.coverage, "partial");
+  assert.equal(first.truncated, true);
+  assert.equal(first.omissionReason, "response_budget");
+  assert.equal(first.absenceVerified, false);
+  assert.equal(first.matchesReturned, first.results.length);
+  assert.equal(first.matchesOmitted, full.results.length - first.results.length);
+  assert.ok(first.matchesOmitted > 0);
+  assert.ok(!first.results.some(r => /bIsDead = true/.test(r.text)), "the fixture must hide the assignment on page one");
+  assert.deepEqual(first.suggestion, { tool: "search_files",
+    args: { path: "project://Source", query: "bIsDead", byteBudget: 2048, cursor: first.nextCursor } });
+
+  const pages = await allPages(runtime, { path: "project://Source", query: "bIsDead", byteBudget: 2048 });
+  const collected = pages.flatMap(page => page.results);
+  assert.deepEqual(collected.map(r => `${r.uri}:${r.line}`), full.results.map(r => `${r.uri}:${r.line}`));
+  assert.ok(collected.some(r => /bIsDead = true/.test(r.text)));
+  const last = pages.at(-1);
+  assert.equal(last.nextCursor, undefined);
+  assert.equal(last.cursorOffset, collected.length - last.results.length);
+});
+
+test("a search cursor is rejected for another search and goes stale when files change", async (t) => {
+  const { runtime, projectRoot } = fixture(t);
+  deathFlagProject(projectRoot);
+  const first = await call(runtime, "search_files", { path: "project://Source", query: "bIsDead", byteBudget: 2048 });
+  const other = await call(runtime, "search_files", { path: "project://Source", query: "DeathCount", cursor: first.nextCursor });
+  assert.equal(other.errorCode, "INVALID_ARGUMENT");
+  const garbage = await call(runtime, "search_files", { path: "project://Source", query: "bIsDead", cursor: "not-a-cursor" });
+  assert.equal(garbage.errorCode, "INVALID_ARGUMENT");
+  fs.appendFileSync(path.join(projectRoot, "Source", "Game", "A00.cpp"), "// bIsDead edited\n", "utf8");
+  const stale = await call(runtime, "search_files", first.suggestion.args);
+  assert.equal(stale.errorCode, "CURSOR_STALE");
+  assert.deepEqual(stale.suggestion, { tool: "search_files",
+    args: { path: "project://Source", query: "bIsDead", byteBudget: 2048 } });
+});
+
+test("missing read and search targets name the caller's URI and an existing place to search", async (t) => {
+  const { runtime, engineRoot } = fixture(t);
+  const missing = "engine://Engine/Source/Runtime/Engine/Private/Characters/Character.cpp";
+  for (const [tool, args] of [["read_file_range", { path: missing, startLine: 1, endLine: 5 }],
+    ["read_symbol", { path: missing, symbol: "OnDeath" }], ["read_file", { path: missing }]]) {
+    const payload = await call(runtime, tool, args);
+    assert.equal(payload.errorCode, "NOT_FOUND", tool);
+    assert.equal(payload.message, `File not found: ${missing}`, tool);
+    assert.ok(!payload.message.includes(engineRoot), tool);
+  }
+  const engineSearch = await call(runtime, "search_files",
+    { path: "engine://Engine/Source/Runtime/Engine/Classes/Character.h", query: "bDie" });
+  assert.equal(engineSearch.errorCode, "NOT_FOUND");
+  assert.deepEqual(engineSearch.suggestion, { tool: "search_files",
+    args: { query: "Character.h", path: "engine://Engine/Source/Runtime/Engine", matchFileNames: true } });
+  const projectSearch = await call(runtime, "search_files", { path: "project://Source/Game/Missing.h", query: "x" });
+  assert.equal(projectSearch.errorCode, "NOT_FOUND");
+  assert.deepEqual(projectSearch.suggestion, { tool: "search_files",
+    args: { query: "Missing.h", path: "project://", matchFileNames: true } });
+});
+
+test("a read cut before the file or requested range ends names the exact continuation", async (t) => {
+  const { runtime, buildCs } = fixture(t);
+  const first = await call(runtime, "read_file", { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048 });
+  assert.equal(first.hasMore, true);
+  assert.deepEqual(first.suggestion, { tool: "read_file",
+    args: { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048, offsetBytes: first.nextOffsetBytes } });
+  const second = await call(runtime, "read_file", first.suggestion.args);
+  assert.equal(second.ok, true);
+  assert.equal(second.offsetBytes, first.nextOffsetBytes);
+  assert.equal(Buffer.from(buildCs, "utf8").subarray(first.nextOffsetBytes, second.nextOffsetBytes).toString("utf8"), second.content);
+  const lines = buildCs.split(/\r?\n/).length;
+  const cut = await call(runtime, "read_file_range",
+    { path: "project://Source/Game/Game.Build.cs", startLine: 1, endLine: lines, byteBudget: 2048 });
+  assert.equal(cut.truncated, true);
+  assert.deepEqual(cut.suggestion, { tool: "read_file_range", args: { path: "project://Source/Game/Game.Build.cs",
+    startLine: cut.endLine + 1, endLine: lines, byteBudget: 2048 } });
+  const whole = await call(runtime, "read_file_range", { path: "project://Source/Game/Lines.h", startLine: 1, endLine: 10 });
+  assert.equal(whole.moreLinesInFile, true);
+  assert.equal(whole.suggestion, undefined);
+});
+
 test("workspace info reports engine:// access and project:// browsing for a project outside the workspace", async (t) => {
   const { runtime } = fixture(t);
   const info = await call(runtime, "get_workspace_info", {});
@@ -145,4 +258,17 @@ test("workspace info reports engine:// access and project:// browsing for a proj
   assert.match(info.project.browseNote, /project:\/\/ URIs/);
   const listed = await call(runtime, "list_directory", { path: "project://Source/Game" });
   assert.equal(listed.ok, true);
+});
+
+test("search never issues a cursor beyond its continuation cap", async t=>{
+ const {runtime,projectRoot}=fixture(t);
+ fs.writeFileSync(path.join(projectRoot,"Source/Game/Large.txt"),"needle\n".repeat(21000));
+ let cursor, count=0, r;
+ for(let page=0;page<100;page++) {
+  r=await call(runtime,"search_files",{path:"project://Source/Game/Large.txt",query:"needle",maxResults:1000,byteBudget:65536,...(cursor?{cursor}:{})});
+  assert.equal(r.ok,true,JSON.stringify(r)); count+=r.results.length;
+  if(!r.nextCursor) break; cursor=r.nextCursor;
+  assert.ok(JSON.parse(Buffer.from(cursor,"base64url")).n < 20000);
+ }
+ assert.equal(count,20000); assert.equal(r.stopReason,"cursor_limit"); assert.equal(r.absenceVerified,false); assert.equal(r.coverage,"partial");
 });

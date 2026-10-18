@@ -142,7 +142,7 @@ test("unity_references, unity_snapshot and unity_symbols are read only per actio
   const expectations = {
     unity_references: { read: ["query"], write: ["collect", "release"] },
     unity_snapshot: { read: ["read", "diff", "record_status"], write: ["capture", "record_start", "record_stop", "release"] },
-    unity_symbols: { read: ["assemblies", "status", "find", "usages", "relations", "diagnostics", "omissions", "versions"], write: ["index"] },
+    unity_symbols: { read: ["assemblies", "status", "find", "source", "usages", "relations", "diagnostics", "omissions", "versions"], write: ["index"] },
   };
   for (const [name, { read, write }] of Object.entries(expectations)) {
     const original = { name, pluginIdentifier: "mcp/unity-tools", description: name,

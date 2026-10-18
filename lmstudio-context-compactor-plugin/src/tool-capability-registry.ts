@@ -1,3 +1,4 @@
+import { UNITY_OBSERVATION_TOOL_NAMES, UNITY_READ_OPERATIONS } from "./generated-unity-tool-contract";
 import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import {
   type Tool,
@@ -25,13 +26,7 @@ export const localObservationTools = new WeakSet<object>();
 // Mixed tools: only the listed actions are observations. unity_references collect/release,
 // unity_snapshot capture/record_start/record_stop/release and unity_symbols index start worker
 // processes or change retained state, so they are not read operations.
-const readOperations: Readonly<Record<string, readonly string[]>> = {
-  unity_scene: ["list"], unity_prefab: ["read", "contents", "overrides"],
-  unity_approval: ["status"], unity_operation: ["get"], unity_tests: ["status", "results"],
-  unity_references: ["query"],
-  unity_snapshot: ["read", "diff", "record_status"],
-  unity_symbols: ["assemblies", "status", "find", "usages", "relations", "diagnostics", "omissions", "versions"],
-};
+const readOperations: Readonly<Record<string, readonly string[]>> = UNITY_READ_OPERATIONS;
 export const readOnlyOperationProfiles = new WeakSet<object>();
 // Generated from config/stable_tool_manifest.json (the servers' effect SSOT);
 // never inferred from an arbitrary remote server's readOnlyHint.
@@ -42,19 +37,7 @@ export function hasReadCapability(tool: RemoteToolLike): boolean {
     || (tool.pluginIdentifier === ENGINE_PROFILES.unity.fileProvider && Boolean(readOperations[tool.name]));
 }
 
-export const UNITY_OBSERVATION_TOOLS = new Set([
-  "workspace_status", "git_status", "git_log", "git_changed_files", "git_diff_file", "git_read_file",
-  "unity_debug_query",
-  "unity_status",
-  "unity_git",
-  "list_directory",
-  "search_files",
-  "read_file",
-  "structured_data_read",
-  "unity_find",
-  "unity_object_read",
-  "unity_logs",
-]);
+export const UNITY_OBSERVATION_TOOLS = new Set(UNITY_OBSERVATION_TOOL_NAMES);
 
 export const UNREAL_OBSERVATION_TOOLS = new Set(UNREAL_AGENT_OBSERVATION_TOOL_NAMES);
 

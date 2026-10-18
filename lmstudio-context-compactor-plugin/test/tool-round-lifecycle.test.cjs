@@ -102,6 +102,29 @@ test('shared reservations distinguish pending peers from returned-result overrun
   assert.equal(reserveReadResult(batch,'e',tool,{}).denialReason,'batch_closed');
 });
 
+// The 2026-10-18 run: a parallel read was denied with one bare line. The model
+// must learn why, that delivered results stay, and the single next step.
+test('a denied read states its allowance and one next step without offering a limit that cannot fit', () => {
+  const { BatchReservation, reserveReadResult, readBudgetDenialMessage } = require('../dist/budget-broker');
+  const batch = new BatchReservation(14252);
+  for (const id of ['a','b','c']) assert.ok(batch.reserve(id,4200) > 0);
+  const tool = {name:'read_file',pluginIdentifier:'mcp/unreal-agent'};
+  const denied = reserveReadResult(batch,'d',tool,{byteBudget:8192});
+  assert.equal(denied.allowed,false);
+  assert.equal(denied.denialReason,'held_reservations_insufficient');
+  assert.equal(denied.allowance.availableTokens,batch.available);
+  assert.ok(denied.allowance.availableTokens < denied.allowance.minimumTokens);
+  const text = readBudgetDenialMessage(denied.denialReason, denied.allowance);
+  assert.match(text,/held_reservations_insufficient/);
+  assert.match(text,new RegExp(`About ${batch.available} of 14252 estimated tokens remain; this read needs at least ${denied.allowance.minimumTokens}`));
+  assert.match(text,/Results already returned in this round are kept/);
+  assert.match(text,/by itself in the next round/);
+  assert.doesNotMatch(text,/byteBudget\s*[<≤]/);
+  // A fresh batch has room for the same read again: the advice is reachable.
+  assert.equal(reserveReadResult(new BatchReservation(14252),'d',tool,{byteBudget:8192}).allowed,true);
+  assert.match(readBudgetDenialMessage('batch_closed'),/Split the read batch/);
+});
+
 test('mixed guard outcomes preserve the allowed and denied counts', () => {
   const { classifyToolCallBoundary } = require('../dist/tool-boundary');
   const result=classifyToolCallBoundary({rawToolIntent:false,structuredRequestCount:2,sdkStartedCount:2,

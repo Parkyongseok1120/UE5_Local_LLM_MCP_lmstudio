@@ -47,8 +47,8 @@ namespace EvidenceFirst.UnityBridge
         static Bridge()
         {
             EditorApplication.delayCall += Start;
-            AssemblyReloadEvents.beforeAssemblyReload += Stop;
-            EditorApplication.quitting += Stop;
+            AssemblyReloadEvents.beforeAssemblyReload += StopForReload;
+            EditorApplication.quitting += StopForQuit;
         }
         static void Start()
         {
@@ -80,7 +80,7 @@ namespace EvidenceFirst.UnityBridge
                 Snapshots.Recover();
                 Operations.Recover();
                 var discovery = new JObject {
-                    ["protocolVersion"] = ProtocolVersion, ["bridgeVersion"] = Version, ["projectIdentity"] = ProjectId,
+                    ["protocolVersion"] = ProtocolVersion, ["bridgeVersion"] = Version, ["state"] = "ready", ["projectIdentity"] = ProjectId,
                     ["canonicalProjectRoot"] = Root, ["editorSessionId"] = Session, ["domainGeneration"] = Generation,
                     ["processId"] = System.Diagnostics.Process.GetCurrentProcess().Id,
                     ["port"] = ((IPEndPoint)listener.LocalEndpoint).Port, ["token"] = token
@@ -89,7 +89,7 @@ namespace EvidenceFirst.UnityBridge
                 listenerThread = new Thread(Accept) { IsBackground = true, Name = "EvidenceFirst RPC" };
                 listenerThread.Start();
             }
-            catch (Exception error) { Stop(); Debug.LogError("Evidence First Bridge unavailable: " + error.GetType().Name); }
+            catch (Exception error) { Stop(false); Debug.LogError("Evidence First Bridge unavailable: " + error.GetType().Name); }
         }
         static void Accept()
         {
@@ -186,6 +186,7 @@ namespace EvidenceFirst.UnityBridge
             ["projectIdentity"] = ProjectId, ["canonicalProjectRoot"] = Root, ["editorVersion"] = Application.unityVersion,
             ["editorSessionId"] = Session, ["domainGeneration"] = Generation, ["playSessionId"] = PlaySession,
             ["compilationId"] = Observations.CompilationId, ["compiling"] = EditorApplication.isCompiling,
+            ["compilationOutcome"] = Observations.CompilationOutcome, ["lastCompilationId"] = Observations.CompilationId, ["lastCompilationFinishedAt"] = Observations.LastCompilationFinishedAt,
             ["importing"] = EditorApplication.isUpdating, ["playing"] = EditorApplication.isPlaying, ["paused"] = EditorApplication.isPaused,
             ["sourceAssemblyVerification"] = "unknown", ["permissions"] = new JObject { ["observe"] = true, ["edit"] = EditAllowed, ["execute"] = ExecuteAllowed, ["destructive"] = "per_request_editor_approval" },
             ["capabilities"] = new JObject { ["objectRead"] = true, ["serializedPatch"] = true, ["sceneEdit"] = true, ["scriptableObjects"] = true,
@@ -199,7 +200,12 @@ namespace EvidenceFirst.UnityBridge
             if (state == PlayModeStateChange.ExitingEditMode) NewPlaySession();
             if (state == PlayModeStateChange.EnteredEditMode) { PlaySession = ""; SessionState.SetString("EvidenceFirst.PlaySession", ""); Objects.ClearHandles(); }
         }
-        static void Stop()
+        static void StopForReload() { Stop(true); }
+        static void StopForQuit() { Stop(false); }
+        // A domain reload keeps the discovery file, marked "reloading" and
+        // without its token, so a client can tell a reload from a closed
+        // Editor. Start replaces it; quitting deletes it.
+        static void Stop(bool reloading)
         {
             stopping = true;
             EditorApplication.update -= Pump;
@@ -213,7 +219,25 @@ namespace EvidenceFirst.UnityBridge
             if (listenerThread != null && listenerThread.IsAlive) listenerThread.Join(200);
             if (StateDirectory != null)
             {
-                try { var file = Path.Combine(StateDirectory, "bridge.json"); if (File.Exists(file) && (string)JObject.Parse(File.ReadAllText(file))["token"] == token) File.Delete(file); } catch { }
+                try
+                {
+                    var file = Path.Combine(StateDirectory, "bridge.json");
+                    if (File.Exists(file))
+                    {
+                        var current = JObject.Parse(File.ReadAllText(file));
+                        if ((string)current["token"] == token)
+                        {
+                            if (!reloading) File.Delete(file);
+                            else
+                            {
+                                current.Remove("token"); current.Remove("port");
+                                current["state"] = "reloading"; current["reloadStartedAt"] = DateTime.UtcNow.ToString("O");
+                                PathSafety.WritePrivate(file, current.ToString(Formatting.None));
+                            }
+                        }
+                    }
+                }
+                catch { }
             }
         }
         internal static string Digest(string value) { using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-", "").ToLowerInvariant(); }

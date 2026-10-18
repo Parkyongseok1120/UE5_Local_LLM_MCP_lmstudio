@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "engine": "unity",
+  "revision": 1,
+  "description": "XML summaries verified against installed Editor 6000.3.14f1. No inferred lifecycle order, end-of-frame Destroy timing, inactive coroutine behavior or root-only persistence scope.",
+  "validatedEngineVersions": [
+    "6000.3"
+  ],
+  "lifecycle": {},
+  "contracts": [
+    {
+      "id": "unity.lifetime.destroy-token",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "lifecycle",
+      "applicability": {
+        "engineVersions": [
+          "6000.3"
+        ]
+      },
+      "statement": "destroyCancellationToken은 MonoBehaviour가 파괴될 때 취소되는 읽기 전용 토큰이다.",
+      "preconditions": [],
+      "exceptions": [],
+      "evidenceRefs": [
+        {
+          "path": "Data/Managed/UnityEngine/UnityEngine.CoreModule.xml",
+          "symbol": "P:UnityEngine.MonoBehaviour.destroyCancellationToken"
+        }
+      ],
+      "guidanceRefs": [
+        "unity.md#verified-lifetime"
+      ]
+    },
+    {
+      "id": "unity.lifetime.persistent-object",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "lifecycle",
+      "applicability": {
+        "engineVersions": [
+          "6000.3"
+        ]
+      },
+      "statement": "DontDestroyOnLoad는 새 Scene 로드 시 대상 Object를 파괴하지 않도록 한다.",
+      "preconditions": [],
+      "exceptions": [],
+      "evidenceRefs": [
+        {
+          "path": "Data/Managed/UnityEngine/UnityEngine.CoreModule.xml",
+          "symbol": "M:UnityEngine.Object.DontDestroyOnLoad(UnityEngine.Object)"
+        }
+      ],
+      "guidanceRefs": [
+        "unity.md#verified-lifetime"
+      ]
+    },
+    {
+      "id": "unity.policy.claims.absence",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": []
+      },
+      "statement": "부분 검색·어휘 경고만으로 부재나 결함을 확정하지 않는다. 이어 읽기와 실제 구독·해제·취소·활성 상태를 확인한다.",
+      "preconditions": [],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unity.md#verification"
+      ]
+    },
+    {
+      "id": "unity.policy.events",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": []
+      },
+      "statement": "이벤트 구독과 해제는 대상 개체의 필요한 수명에서 대응하는지 확인한다.",
+      "preconditions": [],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": []
+    },
+    {
+      "id": "unity.policy.async",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": []
+      },
+      "statement": "await 이후 개체 접근은 파괴·취소·재사용 조건을 확인한다.",
+      "preconditions": [],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": []
+    },
+    {
+      "id": "unity.policy.hot-loop",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": []
+      },
+      "statement": "Update·FixedUpdate의 반복 조회는 실행 빈도와 측정된 비용을 확인한다.",
+      "preconditions": [],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": []
+    },
+    {
+      "id": "unity.policy.coroutine",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": []
+      },
+      "statement": "StartCoroutine 호출 시 GameObject 활성 상태를 확인한다.",
+      "preconditions": [],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": []
+    }
+  ]
+}

@@ -4245,6 +4245,9 @@ function availabilityHistory() {
       path: "Assets/Code.cs", sha256: "a".repeat(64), startLine: 1, endLine: 2,
       returnedLineCount: 2, totalLines: 2, content: "line one\nline two",
     }) }] }));
+  // A completed turn answers after its tools; a turn ending on a tool result
+  // reads as interrupted and adds a resume fact these tests do not measure.
+  history.append("assistant", "Read both lines of Assets/Code.cs.");
   history.append("user", "Continue the review.");
   return history;
 }
@@ -4342,6 +4345,30 @@ test("T14 injected facts do not block a model-selected reread", async () => {
     { inputAvailabilityMode: "inject", projectEngine: "unity", projectIdentity: "C:\\Game" }, [tool]);
   await handlePredictionLoop(ctl);
   assert.equal(allowed, true);
+});
+
+test("resuming after a turn that ended on tool results tells the model its drafts are unverified", async () => {
+  const interrupted = availabilityHistory().getMessagesArray().filter(message =>
+    !(message.getRole() === "assistant" && message.getText() === "Read both lines of Assets/Code.cs."));
+  const history = Chat.empty();
+  for (const message of interrupted) history.append(message);
+  let receivedHistory;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, _tools, options) {
+      receivedHistory = chat;
+      options.onMessage(ChatMessage.create("assistant", "done"));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "off" });
+  await handlePredictionLoop(ctl);
+  assert.match(receivedHistory.toString(), /previous assistant turn ended after tool results without a final answer/u);
+  const resume = ctl.debugValues.find(value => value.event === "resume_state");
+  assert.equal(resume.priorTurnInterrupted, true);
+  assert.equal(resume.partialProjections, 0);
 });
 
 test("availability off mode leaves both model input and availability telemetry disabled", async () => {

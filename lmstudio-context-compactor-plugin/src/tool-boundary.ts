@@ -2,7 +2,7 @@ import type { LLMActionOpts, PredictionLoopHandlerController } from "@lmstudio/s
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { reserveReadResult, type BatchReservation } from "./budget-broker";
+import { readBudgetDenialMessage, reserveReadResult, type BatchReservation } from "./budget-broker";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import type { DirectConfig } from "./execution-contracts";
 import { type OutputLimitStage } from "./execution-contracts";
@@ -159,8 +159,9 @@ export function createToolGuard(options: {
         : { allowed: true, arguments: proposedArguments, reservedTokens: 0, bounded: false, denialReason: undefined, limit: undefined };
       if (!reservation.allowed) {
         traceCall(callId, { validationState: "denied_batch_budget", executionState: "not_executed",
-          budgetDenialReason: reservation.denialReason, budgetAtDenial: batchReservation?.snapshot(), readResultLimit: reservation.limit });
-        deny(`Shared read-result budget unavailable (${reservation.denialReason}). Split the read batch; use delivered results before requesting more.`);
+          budgetDenialReason: reservation.denialReason, budgetAtDenial: batchReservation?.snapshot(), readResultLimit: reservation.limit,
+          ...("allowance" in reservation ? { budgetAllowance: reservation.allowance } : {}) });
+        deny(readBudgetDenialMessage(String(reservation.denialReason), "allowance" in reservation ? reservation.allowance : undefined));
         return;
       }
       reservationIds.set(String(request.id), reservationId);

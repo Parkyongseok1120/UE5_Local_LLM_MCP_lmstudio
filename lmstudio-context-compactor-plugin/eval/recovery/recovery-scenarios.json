@@ -5,11 +5,32 @@
     "engineFiles": {
       "Engine/Source/Runtime/Engine/Private/PlayerController.cpp": "void APlayerController::PostLogin()\n{\n\t// RECOVERY_MARKER_POSTLOGIN\n\tInitInputSystem();\n}\n",
       "Engine/Source/Runtime/Engine/Private/GameModeBase.cpp": "AActor* AGameModeBase::ChoosePlayerStart_Implementation(AController* Player)\n{\n\t// RECOVERY_MARKER_CHOOSE\n\treturn nullptr;\n}\n",
-      "Engine/Source/Runtime/Engine/Classes/GameFramework/GameModeBase.h": "class ENGINE_API AGameModeBase : public AInfo\n{\npublic:\n\tUFUNCTION(BlueprintNativeEvent, Category=Game)\n\tAActor* ChoosePlayerStart(AController* Player);\n};\n"
+      "Engine/Source/Runtime/Engine/Classes/GameFramework/GameModeBase.h": "class ENGINE_API AGameModeBase : public AInfo\n{\npublic:\n\tUFUNCTION(BlueprintNativeEvent, Category=Game)\n\tAActor* ChoosePlayerStart(AController* Player);\n};\n",
+      "Engine/Source/Runtime/Engine/Private/Pawn.cpp": "float APawn::TakeDamage(float Damage, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)\n{\n\tif (!ShouldTakeDamage(Damage, DamageEvent, EventInstigator, DamageCauser))\n\t{\n\t\treturn 0.f;\n\t}\n\tconst float ActualDamage = Super::TakeDamage(Damage, DamageEvent, EventInstigator, DamageCauser);\n\tif (ActualDamage != 0.f && EventInstigator && EventInstigator != GetController())\n\t{\n\t\tLastHitBy = EventInstigator;\n\t}\n\treturn ActualDamage;\n}\n",
+      "Engine/Source/Runtime/Engine/Private/Character.cpp": "ACharacter::ACharacter(const FObjectInitializer& ObjectInitializer)\n\t: Super(ObjectInitializer)\n{\n}\n",
+      "Engine/Source/Runtime/Engine/Classes/GameFramework/Character.h": "class ENGINE_API ACharacter : public APawn\n{\n\tGENERATED_BODY()\n};\n",
+      "Engine/Source/Runtime/Engine/Classes/GameFramework/Pawn.h": "class ENGINE_API APawn : public AActor\n{\npublic:\n\tvirtual float TakeDamage(float Damage, struct FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;\n};\n"
     },
-    "engineVersion": { "MajorVersion": 5, "MinorVersion": 3, "PatchVersion": 0 },
+    "engineVersion": {
+      "MajorVersion": 5,
+      "MinorVersion": 3,
+      "PatchVersion": 0
+    },
     "projectFiles": {
-      "Source/Game/Game.Build.cs": "BUILD_CS_WITH_TRAILING_MARKER"
+      "Source/Game/Game.Build.cs": "BUILD_CS_WITH_TRAILING_MARKER",
+      "Source/Game/Readers/A00.cpp": "// reader 0\nif (PlayerState->bIsDead && PlayerState->DeathCount > 0) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A01.cpp": "// reader 1\nif (PlayerState->bIsDead && PlayerState->DeathCount > 1) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A02.cpp": "// reader 2\nif (PlayerState->bIsDead && PlayerState->DeathCount > 2) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A03.cpp": "// reader 3\nif (PlayerState->bIsDead && PlayerState->DeathCount > 3) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A04.cpp": "// reader 4\nif (PlayerState->bIsDead && PlayerState->DeathCount > 4) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A05.cpp": "// reader 5\nif (PlayerState->bIsDead && PlayerState->DeathCount > 5) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A06.cpp": "// reader 6\nif (PlayerState->bIsDead && PlayerState->DeathCount > 6) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A07.cpp": "// reader 7\nif (PlayerState->bIsDead && PlayerState->DeathCount > 7) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A08.cpp": "// reader 8\nif (PlayerState->bIsDead && PlayerState->DeathCount > 8) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A09.cpp": "// reader 9\nif (PlayerState->bIsDead && PlayerState->DeathCount > 9) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A10.cpp": "// reader 10\nif (PlayerState->bIsDead && PlayerState->DeathCount > 10) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/A11.cpp": "// reader 11\nif (PlayerState->bIsDead && PlayerState->DeathCount > 11) { HandleDeadPlayerStateWithLongName(); }\n",
+      "Source/Game/Readers/ZPlayerState.h": "#pragma once\nclass AZPlayerState {\n\tbool bIsDead;\npublic:\n\tFORCEINLINE void AddDeath() { if (!bIsDead) { DeathCount++; bIsDead = true; } }\n};"
     }
   },
   "scenarios": [
@@ -17,24 +38,72 @@
       "id": "wrong_engine_path",
       "failureKind": "not_found",
       "prompt": "엔진 파일 engine://Engine/Source/Runtime/Engine/Private/GameFramework/PlayerController.cpp 를 읽고 APlayerController::PostLogin 구현이 무엇을 호출하는지 보고하라.",
-      "faultCall": { "tool": "read_file", "pathIncludes": "Private/GameFramework/PlayerController.cpp" },
+      "faultCall": {
+        "tool": "read_file",
+        "pathIncludes": "Private/GameFramework/PlayerController.cpp"
+      },
       "expect": {
-        "followUp": { "tools": ["search_files", "list_directory", "read_file", "read_file_range", "read_symbol"], "pathPrefix": "engine://", "notIdentical": true },
-        "sourceEvidence": { "path": "engine://Engine/Source/Runtime/Engine/Private/PlayerController.cpp", "includes": ["InitInputSystem"] },
-        "finalRequires": ["InitInputSystem"],
-        "finalForbids": ["설치되지\\s*않", "미설치", "not installed", "소스가\\s*(없|제공되지)"]
+        "followUp": {
+          "tools": [
+            "search_files",
+            "list_directory",
+            "read_file",
+            "read_file_range",
+            "read_symbol"
+          ],
+          "pathPrefix": "engine://",
+          "notIdentical": true
+        },
+        "sourceEvidence": {
+          "path": "engine://Engine/Source/Runtime/Engine/Private/PlayerController.cpp",
+          "includes": [
+            "InitInputSystem"
+          ]
+        },
+        "finalRequires": [
+          "InitInputSystem"
+        ],
+        "finalForbids": [
+          "설치되지\\s*않",
+          "미설치",
+          "not installed",
+          "소스가\\s*(없|제공되지)"
+        ]
       }
     },
     {
       "id": "absolute_outside_root",
       "failureKind": "outside_allowed_roots",
       "prompt": "엔진 파일 {ENGINE_ROOT_ABS}/Engine/Source/Runtime/Engine/Private/PlayerController.cpp 를 읽고 PostLogin 구현이 무엇을 호출하는지 보고하라.",
-      "faultCall": { "tool": "read_file", "pathIncludes": "Private/PlayerController.cpp", "absolute": true },
+      "faultCall": {
+        "tool": "read_file",
+        "pathIncludes": "Private/PlayerController.cpp",
+        "absolute": true
+      },
       "expect": {
-        "followUp": { "tools": ["read_file", "read_file_range", "read_symbol"], "pathPrefix": "engine://", "notIdentical": true },
-        "sourceEvidence": { "path": "engine://Engine/Source/Runtime/Engine/Private/PlayerController.cpp", "includes": ["InitInputSystem"] },
-        "finalRequires": ["InitInputSystem"],
-        "finalForbids": ["읽을 수 없", "cannot (be )?read", "접근할 수 없"]
+        "followUp": {
+          "tools": [
+            "read_file",
+            "read_file_range",
+            "read_symbol"
+          ],
+          "pathPrefix": "engine://",
+          "notIdentical": true
+        },
+        "sourceEvidence": {
+          "path": "engine://Engine/Source/Runtime/Engine/Private/PlayerController.cpp",
+          "includes": [
+            "InitInputSystem"
+          ]
+        },
+        "finalRequires": [
+          "InitInputSystem"
+        ],
+        "finalForbids": [
+          "읽을 수 없",
+          "cannot (be )?read",
+          "접근할 수 없"
+        ]
       }
     },
     {
@@ -42,28 +111,88 @@
       "failureKind": "coverage_limited_zero",
       "prompt": "unreal_symbol_lookup(sourceMode=engine_local)으로 AGameModeBase::ChoosePlayerStart_Implementation 을 찾고, 그 구현이 무엇을 반환하는지 보고하라.",
       "simulatedTools": {
-        "unreal_symbol_lookup": { "ok": true, "status": "coverage_limited", "matchCount": 0, "matches": [],
-          "coverage": { "completeness": "partial", "scope": "bounded_public_header_candidates", "apiAbsenceVerified": false },
-          "suggestion": { "tool": "search_files", "args": { "path": "engine://Engine/Source/Runtime", "query": "AGameModeBase::ChoosePlayerStart_Implementation" } } }
+        "unreal_symbol_lookup": {
+          "ok": true,
+          "status": "coverage_limited",
+          "matchCount": 0,
+          "matches": [],
+          "coverage": {
+            "completeness": "partial",
+            "scope": "bounded_public_header_candidates",
+            "apiAbsenceVerified": false
+          },
+          "suggestion": {
+            "tool": "search_files",
+            "args": {
+              "path": "engine://Engine/Source/Runtime",
+              "query": "AGameModeBase::ChoosePlayerStart_Implementation"
+            }
+          }
+        }
       },
-      "faultCall": { "tool": "unreal_symbol_lookup" },
+      "faultCall": {
+        "tool": "unreal_symbol_lookup"
+      },
       "expect": {
-        "followUp": { "tools": ["search_files", "read_file", "read_file_range", "read_symbol"], "pathPrefix": "engine://", "notIdentical": true },
-        "sourceEvidence": { "path": "engine://Engine/Source/Runtime/Engine/Private/GameModeBase.cpp", "includes": ["ChoosePlayerStart_Implementation", "return nullptr;"] },
-        "finalRequires": ["nullptr"],
-        "finalForbids": ["존재하지\\s*않", "없는\\s*함수", "does not exist", "not (exist|available) in"]
+        "followUp": {
+          "tools": [
+            "search_files",
+            "read_file",
+            "read_file_range",
+            "read_symbol"
+          ],
+          "pathPrefix": "engine://",
+          "notIdentical": true
+        },
+        "sourceEvidence": {
+          "path": "engine://Engine/Source/Runtime/Engine/Private/GameModeBase.cpp",
+          "includes": [
+            "ChoosePlayerStart_Implementation",
+            "return nullptr;"
+          ]
+        },
+        "finalRequires": [
+          "nullptr"
+        ],
+        "finalForbids": [
+          "존재하지\\s*않",
+          "없는\\s*함수",
+          "does not exist",
+          "not (exist|available) in"
+        ]
       }
     },
     {
       "id": "small_byte_budget",
       "failureKind": "partial_result",
       "prompt": "project://Source/Game/Game.Build.cs 를 read_file로 byteBudget 2048을 지정해 읽고, 파일 끝의 마지막 주석에 적힌 표식을 그대로 보고하라.",
-      "faultCall": { "tool": "read_file", "pathIncludes": "Game.Build.cs" },
+      "faultCall": {
+        "tool": "read_file",
+        "pathIncludes": "Game.Build.cs"
+      },
       "expect": {
-        "followUp": { "tools": ["read_file", "read_file_range"], "pathIncludes": "Game.Build.cs", "continues": true, "notIdentical": true },
-        "sourceEvidence": { "path": "project://Source/Game/Game.Build.cs", "includes": ["RECOVERY_MARKER_BUILD_END"] },
-        "finalRequires": ["RECOVERY_MARKER_BUILD_END"],
-        "finalForbids": ["표식이\\s*없", "no marker"]
+        "followUp": {
+          "tools": [
+            "read_file",
+            "read_file_range"
+          ],
+          "pathIncludes": "Game.Build.cs",
+          "continues": true,
+          "notIdentical": true
+        },
+        "sourceEvidence": {
+          "path": "project://Source/Game/Game.Build.cs",
+          "includes": [
+            "RECOVERY_MARKER_BUILD_END"
+          ]
+        },
+        "finalRequires": [
+          "RECOVERY_MARKER_BUILD_END"
+        ],
+        "finalForbids": [
+          "표식이\\s*없",
+          "no marker"
+        ]
       }
     },
     {
@@ -71,12 +200,33 @@
       "failureKind": "partial_result",
       "simulation": "The first read returns a partial-projection shaped result (notice, bodyComplete:false). This simulates, but is not, a real compaction projection.",
       "prompt": "project://Source/Game/Game.Build.cs 를 읽고 파일 끝의 마지막 주석에 적힌 표식을 그대로 보고하라.",
-      "faultCall": { "tool": "read_file", "pathIncludes": "Game.Build.cs", "replaceFirstResult": "partial_projection" },
+      "faultCall": {
+        "tool": "read_file",
+        "pathIncludes": "Game.Build.cs",
+        "replaceFirstResult": "partial_projection"
+      },
       "expect": {
-        "followUp": { "tools": ["read_file", "read_file_range", "evidence_first_read_context"], "notIdentical": true },
-        "sourceEvidence": { "path": "project://Source/Game/Game.Build.cs", "includes": ["RECOVERY_MARKER_BUILD_END"] },
-        "finalRequires": ["RECOVERY_MARKER_BUILD_END"],
-        "finalForbids": ["전체(를|를 다)? 읽었", "read the (whole|entire) file"]
+        "followUp": {
+          "tools": [
+            "read_file",
+            "read_file_range",
+            "evidence_first_read_context"
+          ],
+          "notIdentical": true
+        },
+        "sourceEvidence": {
+          "path": "project://Source/Game/Game.Build.cs",
+          "includes": [
+            "RECOVERY_MARKER_BUILD_END"
+          ]
+        },
+        "finalRequires": [
+          "RECOVERY_MARKER_BUILD_END"
+        ],
+        "finalForbids": [
+          "전체(를|를 다)? 읽었",
+          "read the (whole|entire) file"
+        ]
       }
     },
     {
@@ -84,13 +234,325 @@
       "failureKind": "structure_only_validation",
       "prompt": "AGameModeBase::ChoosePlayerStart_Implementation 의 반환값에 대한 주장을 evidence_first_validate로 검증한 뒤 결과를 보고하라.",
       "simulatedTools": {
-        "evidence_first_validate": { "ok": true, "summary": "structure_valid; facts_not_verified",
-          "validationScope": "packet_structure_and_record_consistency", "factualEvidenceVerified": false, "wholeTaskVerified": false }
+        "evidence_first_validate": {
+          "ok": true,
+          "summary": "structure_valid; facts_not_verified",
+          "validationScope": "packet_structure_and_record_consistency",
+          "factualEvidenceVerified": false,
+          "wholeTaskVerified": false
+        }
       },
-      "faultCall": { "tool": "evidence_first_validate" },
+      "faultCall": {
+        "tool": "evidence_first_validate"
+      },
       "expect": {
-        "finalForbids": ["검증\\s*완료", "사실\\s*확인\\s*완료"],
+        "finalForbids": [
+          "검증\\s*완료",
+          "사실\\s*확인\\s*완료"
+        ],
         "harnessFooterWhenForbiddenWording": true
+      }
+    },
+    {
+      "id": "partial_search_absence",
+      "failureKind": "partial_result",
+      "simulation": "Reproduces the 2026-10-18 audit: a byteBudget-cut search omits the header inline assignment.",
+      "prompt": "project://Source/Game/Readers 에서 search_files로 bIsDead를 byteBudget 2048로 검색하고, bIsDead를 true로 설정하는 코드가 어느 파일에 있는지 보고하라.",
+      "faultCall": {
+        "tool": "search_files",
+        "queryIncludes": "bIsDead"
+      },
+      "expect": {
+        "followUp": {
+          "tools": [
+            "search_files",
+            "read_file",
+            "read_file_range",
+            "read_symbol"
+          ],
+          "notIdentical": true
+        },
+        "sourceEvidence": {
+          "path": "project://Source/Game/Readers/ZPlayerState.h",
+          "includes": [
+            "bIsDead = true"
+          ],
+          "searchLines": true
+        },
+        "finalRequires": [
+          "ZPlayerState.h"
+        ],
+        "finalForbids": [
+          "어디에도[^.\\n]{0,60}?없",
+          "설정(되|하)지\\s*않",
+          "존재하지\\s*않",
+          "never set",
+          "nowhere"
+        ],
+        "harnessFooterWhenForbiddenWording": "search"
+      }
+    },
+    {
+      "id": "super_chain",
+      "failureKind": "inheritance_chain",
+      "simulation": "No injected failure. The engine fixture has an APawn::TakeDamage override between ACharacter and AActor.",
+      "prompt": "ACharacter를 상속한 클래스의 TakeDamage에서 Super::TakeDamage를 호출하면 엔진의 어느 클래스 구현이 먼저 실행되는지 engine:// 소스로 확인해 보고하라.",
+      "expect": {
+        "sourceEvidence": {
+          "path": "engine://Engine/Source/Runtime/Engine/Private/Pawn.cpp",
+          "includes": [
+            "APawn::TakeDamage",
+            "Super::TakeDamage"
+          ]
+        },
+        "finalRequires": [
+          "APawn"
+        ],
+        "finalForbids": [
+          "(?:곧바로|바로|직접)\\s*AActor::TakeDamage",
+          "goes (?:straight|directly) to AActor::TakeDamage",
+          "OnDeath"
+        ]
+      }
+    },
+    {
+      "id": "resume_after_cancel",
+      "failureKind": "partial_result",
+      "simulation": "An earlier turn ran a budget-cut search and stopped without an answer; the user then says 계속해.",
+      "priorTurns": [
+        {
+          "user": "project://Source/Game/Readers 에서 bIsDead를 true로 설정하는 코드를 찾아라.",
+          "calls": [
+            {
+              "tool": "search_files",
+              "args": {
+                "path": "project://Source/Game/Readers",
+                "query": "bIsDead",
+                "byteBudget": 2048
+              }
+            }
+          ]
+        }
+      ],
+      "prompt": "계속해",
+      "expect": {
+        "firstInputIncludes": [
+          "previous assistant turn ended after tool results without a final answer"
+        ],
+        "sourceEvidence": {
+          "path": "project://Source/Game/Readers/ZPlayerState.h",
+          "includes": [
+            "bIsDead = true"
+          ],
+          "searchLines": true
+        },
+        "finalRequires": [
+          "ZPlayerState.h"
+        ],
+        "finalForbids": [
+          "어디에도[^.\\n]{0,60}?없",
+          "설정(되|하)지\\s*않",
+          "존재하지\\s*않",
+          "never set",
+          "nowhere"
+        ]
+      }
+    },
+    {
+      "engine": "unity",
+      "prompt": "Unity 프로젝트를 도구로 확인하고 실제 반환 근거만 보고하세요.",
+      "id": "unity_wrong_path",
+      "failureKind": "not_found",
+      "faultCall": {
+        "tool": "read_file",
+        "pathIncludes": "Assets/Missing/Player.cs"
+      },
+      "expect": {
+        "followUp": {
+          "tools": [
+            "read_file"
+          ],
+          "pathPrefix": "Assets/",
+          "notIdentical": true
+        },
+        "sourceEvidence": {
+          "path": "Assets/Scripts/Player.cs",
+          "includes": [
+            "UNITY_RECOVERY_SOURCE"
+          ]
+        },
+        "finalForbids": [
+          "source is absent"
+        ]
+      }
+    },
+    {
+      "engine": "unity",
+      "prompt": "Unity 프로젝트를 도구로 확인하고 실제 반환 근거만 보고하세요.",
+      "id": "unity_path_denied",
+      "failureKind": "outside_allowed_roots",
+      "faultCall": {
+        "tool": "read_file",
+        "pathIncludes": "Scripts/Player.cs"
+      },
+      "expect": {
+        "followUp": {
+          "tools": [
+            "read_file"
+          ],
+          "pathPrefix": "Assets/",
+          "notIdentical": true
+        },
+        "sourceEvidence": {
+          "path": "Assets/Scripts/Player.cs",
+          "includes": [
+            "UNITY_RECOVERY_SOURCE"
+          ]
+        },
+        "finalForbids": [
+          "source is absent"
+        ]
+      }
+    },
+    {
+      "engine": "unity",
+      "prompt": "Unity 프로젝트를 도구로 확인하고 실제 반환 근거만 보고하세요.",
+      "id": "unity_search_budget",
+      "failureKind": "partial_result",
+      "projectFiles": {
+        "Packages/manifest.json": "{}",
+        "ProjectSettings/ProjectVersion.txt": "m_EditorVersion: 6000.3.14f1",
+        "Assets/Scripts/Player00.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player01.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player02.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player03.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player04.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player05.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player06.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player07.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player08.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player09.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player10.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player11.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player12.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player13.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player14.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player15.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player16.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player17.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player18.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player19.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player20.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player21.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player22.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player23.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player24.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player25.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player26.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player27.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player28.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Assets/Scripts/Player29.cs": "class Player {} // xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "faultCall": {
+        "tool": "search_files",
+        "queryIncludes": "Player"
+      },
+      "expect": {
+        "followUp": {
+          "tools": [
+            "search_files"
+          ],
+          "notIdentical": true
+        },
+        "resultFacts": [
+          {
+            "tool": "search_files",
+            "fields": {
+              "truncated": false
+            }
+          }
+        ],
+        "finalForbids": [
+          "does not exist"
+        ]
+      }
+    },
+    {
+      "engine": "unity",
+      "prompt": "Unity 프로젝트를 도구로 확인하고 실제 반환 근거만 보고하세요.",
+      "id": "unity_editor_reload",
+      "failureKind": "editor_reloading",
+      "faultCall": {
+        "tool": "unity_status"
+      },
+      "bridgeReplies": {
+        "unity_status:": [
+          {
+            "throwCode": "editor_reloading"
+          },
+          {
+            "status": "observed",
+            "connection": "connected",
+            "compilationOutcome": "completed_without_observed_errors"
+          }
+        ]
+      },
+      "expect": {
+        "allowIdenticalRetry": true,
+        "resultFacts": [
+          {
+            "tool": "unity_status",
+            "fields": {
+              "connection": "reloading",
+              "reasonCode": "editor_reloading"
+            }
+          },
+          {
+            "tool": "unity_status",
+            "fields": {
+              "connection": "connected"
+            }
+          }
+        ],
+        "finalRequires": [
+          "connected"
+        ]
+      }
+    },
+    {
+      "engine": "unity",
+      "prompt": "Unity 프로젝트를 도구로 확인하고 실제 반환 근거만 보고하세요.",
+      "id": "unity_compile_result",
+      "failureKind": "none",
+      "bridgeReplies": {
+        "unity_editor:compile": [
+          {
+            "status": "accepted",
+            "operationId": "compile-123",
+            "compilationIdAtRequest": "c0"
+          }
+        ],
+        "unity_operation:get": [
+          {
+            "status": "completed",
+            "operationId": "compile-123",
+            "compilationOutcome": "completed_without_observed_errors"
+          }
+        ]
+      },
+      "expect": {
+        "resultFacts": [
+          {
+            "tool": "unity_operation",
+            "fields": {
+              "status": "completed",
+              "operationId": "compile-123"
+            }
+          }
+        ],
+        "finalRequires": [
+          "completed"
+        ]
       }
     }
   ]

@@ -217,7 +217,7 @@ test("Unity log rows cannot borrow the current compilation outcome or fabricate 
   assert.deepEqual(data.diagnostics.map(d => d.message), ["CURRENT"]);
   assert.equal(data.diagnostics[0].domainGeneration, "unknown");
   assert.equal(data.coverage.excludedRows, 1); assert.equal(data.coverage.droppedCount, 5);
-  assert.equal(data.operationStatus, "unknown"); assert.equal(data.sourceAssemblyVerification, "unknown");
+  assert.equal(data.operationStatus, "completed"); assert.equal(data.errorsObserved, false); assert.equal(data.sourceAssemblyVerification, "unknown");
 });
 
 test("a new domain/session invalidates runtime observations while retaining source observations", () => {
@@ -484,4 +484,19 @@ test("numbered reads still yield version and package metadata from the plain fil
   const numberedLock = packages.split("\n").map((line, index) => `${index + 1}\t${line}`).join("\n");
   f.ingest("read_file", read("Packages/packages-lock.json", numberedLock, { lineNumbers: true, text: numberedLock }));
   assert.equal(f.snapshot().applicability.packages["com.unity.netcode.gameobjects"], "2.7.1");
+});
+
+test("Unity tests retain failed verdict despite completed operation, and symbols retain scoped index facts",()=>{
+ const f=fixture(unity);
+ f.ingest("unity_tests",u({status:"completed",operationId:"tests-1",testStatus:"Failed",passed:2,failed:1,mode:"EditMode"}),{action:"status",operationId:"tests-1"});
+ let item=f.snapshot().items.find(i=>i.data.operationKind==="unity_tests"); assert.equal(item.data.operationStatus,"completed"); assert.equal(item.data.verification,"not_proven_passed"); assert.equal(item.data.failed,1);
+ f.ingest("unity_symbols",u({status:"observed",indexVersion:"i1",indexSource:"persisted",total:10,items:[{name:"A"}],nextOffset:1,searchedAssemblies:["Game"]}),{action:"find"});
+ item=f.snapshot().items.find(i=>i.data.operationKind==="unity_symbols"); assert.equal(item.data.coverage.completeness,"partial"); assert.equal(item.data.absenceVerified,false); assert.equal(item.data.indexSource,"persisted");
+ f.ingest("unity_find",u({status:"observed",editorSessionId:"s",domainGeneration:1,total:2,items:[{name:"A"}],nextCursor:"next"}),{kind:"objects"});
+ item=f.snapshot().items.find(i=>i.data.operationKind==="unity_find"); assert.equal(item.data.coverage.completeness,"partial");
+});
+
+test("Unity symbol source retains real returned file coverage",()=>{
+ const f=fixture(unity); f.ingest("unity_symbols",read("Assets/A.cs","class A {}"),{action:"source",indexVersion:"i1",symbolId:"A"});
+ assert.ok(f.snapshot().items.some(i=>i.kind==="file" && i.data.hash==="a".repeat(64)));
 });

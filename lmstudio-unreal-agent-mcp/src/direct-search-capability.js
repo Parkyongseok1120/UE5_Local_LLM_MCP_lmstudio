@@ -17,6 +17,9 @@ const DEFAULT_IGNORED_DIRS = new Set([
 ]);
 const SEARCH_READ_CONCURRENCY = 16;
 const MAX_REGEX_QUERY_CHARS = 512;
+// A cursor re-runs the same deterministic search and skips matches already
+// returned; this bounds how far a continuation may reach.
+const MAX_CURSOR_MATCHES = 20000;
 // A group that contains an unescaped quantifier and is itself quantified.
 const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)(?:[+*]|\{\d+,\d*\})/;
 const TEXT_EXTENSIONS = new Set([
@@ -26,8 +29,32 @@ const TEXT_EXTENSIONS = new Set([
   ".xml", ".yaml", ".yml", ".toml", ".cmake", ".build", ".target",
 ]);
 
-function createSearchCapability(context) {
-  const { dedupe, limits, payloadFits, resolveToolPath } = context;
+// The search a cursor belongs to: every argument that changes which matches
+// exist or their order. Paging and budget fields are excluded.
+function searchIdentity(args) {
+  return crypto.createHash("sha256").update(JSON.stringify([
+    String(args.query || ""), String(args.path || "workspace://"), String(args.project || ""),
+    args.regex === true, args.matchFileNames ?? null, args.caseSensitive === true,
+    args.maxFiles ?? null,
+  ])).digest("hex").slice(0, 16);
+}
+
+function encodeCursor(identity, treeState, offset) {
+  return Buffer.from(JSON.stringify({ v: 1, s: identity, t: treeState.slice(0, 16), n: offset }), "utf8")
+    .toString("base64url");
+}
+
+function decodeCursor(cursor) {
+  try {
+    const value = JSON.parse(Buffer.from(String(cursor), "base64url").toString("utf8"));
+    if (value?.v !== 1 || typeof value.s !== "string" || typeof value.t !== "string"
+      || !Number.isInteger(value.n) || value.n < 0 || value.n > MAX_CURSOR_MATCHES) return null;
+    return value;
+  } catch { return null; }
+}
+
+function createSearchCapability(context, helpers = {}) {
+  const { dedupe, limits, payloadFits, projectScopedSuggestionArgs, resolveToolPath } = context;
 
   // Search stops cooperatively: request cancellation fails the call, while the
   // overall deadline returns the facts gathered so far as a partial result.
@@ -77,10 +104,25 @@ function createSearchCapability(context) {
   async function searchFiles(args, requestContext = {}) {
     const query = String(args.query || "");
     if (!query) return failure("INVALID_ARGUMENT", "query is required", { retryAllowed: true });
+    const cursor = args.cursor === undefined ? null : decodeCursor(args.cursor);
+    if (args.cursor !== undefined && !cursor) {
+      return failure("INVALID_ARGUMENT", "cursor is not a search_files nextCursor.", { retryAllowed: true, retryMode: "different_arguments" });
+    }
+    const identity = searchIdentity(args);
+    if (cursor && cursor.s !== identity) {
+      return failure("INVALID_ARGUMENT", "cursor belongs to a different search; pass it with the same query, path and filters.",
+        { retryAllowed: true, retryMode: "different_arguments" });
+    }
     const resolution = await resolveToolPath(args.path || "workspace://", args.project);
     const rootStat = await statOrNull(resolution.absolutePath);
-    if (!rootStat) return failure("NOT_FOUND", `Search path not found: ${args.path || "."}`);
+    if (!rootStat) {
+      return failure("NOT_FOUND", `Search path not found: ${args.path || "."}`,
+        { retryAllowed: true, retryMode: "different_arguments", suggestion: await helpers.notFoundSuggestion?.(args, resolution) });
+    }
     const maxResults = clamp(args.maxResults, 100, 1, 1000);
+    const offset = cursor ? cursor.n : 0;
+    // Collect through the requested page; the matches before it are skipped.
+    const collectLimit = Math.min(offset + maxResults, MAX_CURSOR_MATCHES);
     const maxFiles = clamp(args.maxFiles, 5000, 1, 50000);
     const caseSensitive = args.caseSensitive === true;
     let matcher;
@@ -135,7 +177,7 @@ function createSearchCapability(context) {
       }
       if (isBinary(buffer)) return { found, skipped: "binary" };
       const lines = buffer.toString("utf8").split(/\r?\n/);
-      for (let index = 0; index < lines.length && found.length < maxResults; index += 1) {
+      for (let index = 0; index < lines.length && found.length < collectLimit; index += 1) {
         if (index % 1024 === 1023 && guard.reason()) return { found, read: true, interrupted: true };
         if (!matchesText(lines[index])) continue;
         found.push({ path: rel, uri: resultUri(rel), line: index + 1, text: lines[index].slice(0, 1200) });
@@ -143,7 +185,7 @@ function createSearchCapability(context) {
       return { found, read: true };
     }
 
-    for (let start = 0; start < files.length && !stopReason && results.length < maxResults; start += SEARCH_READ_CONCURRENCY) {
+    for (let start = 0; start < files.length && !stopReason && results.length < collectLimit; start += SEARCH_READ_CONCURRENCY) {
       const batch = await Promise.all(files.slice(start, start + SEARCH_READ_CONCURRENCY).map(scanFile));
       if (guard.reason() === "cancelled") return cancelled();
       for (const scanned of batch) {
@@ -151,33 +193,59 @@ function createSearchCapability(context) {
         if (scanned.skipped) skippedByReason[scanned.skipped]++;
         if (scanned.read) filesRead++;
         for (const result of scanned.found) {
-          if (results.length >= maxResults) break;
+          if (results.length >= collectLimit) break;
           results.push(result);
         }
         if (scanned.interrupted) stopReason = "deadline";
-        if (results.length >= maxResults || stopReason) break;
+        if (results.length >= collectLimit || stopReason) break;
       }
       stopReason = stopReason || guard.reason();
     }
     const treeState = crypto.createHash("sha256")
       .update(files.map(({ target, stat }) => `${relativeSlash(resolution.absolutePath, target)}:${statSignature(stat)}`).join("\n"))
       .digest("hex");
+    if (cursor && cursor.t !== treeState.slice(0, 16)) {
+      const { cursor: _stale, repeatReceipt: _receipt, ...fresh } = args;
+      return failure("CURSOR_STALE", "Files under the search path changed since this cursor was issued; search again from the start.", {
+        retryAllowed: true, retryMode: "different_arguments", suggestion: { tool: "search_files", args: fresh },
+      });
+    }
+    // The page after the matches a cursor already returned.
+    const page = results.slice(offset);
+    const limitReached = results.length >= collectLimit;
     const complete = filesRead === files.length && !discoveryErrors && !excludedEntries && files.length < maxFiles
-      && results.length < maxResults && !stopReason;
-    const makePayload = (list, omitted) => success({
-      path: rootUri,
-      ...pathMetadata(resolution),
-      query,
-      results: list,
-      filesScanned: files.length, // Legacy candidate count; filesRead is actual content coverage.
-      filesRead, filesSkipped: Object.values(skippedByReason).reduce((a, b) => a + b, 0),
-      readErrorCount: skippedByReason.read_error, discoveryErrorCount: discoveryErrors, excludedEntries, skippedByReason,
-      coverage: complete && !omitted ? "complete" : "partial",
-      maxFilesReached: files.length >= maxFiles,
-      truncated: results.length >= maxResults || omitted,
-      ...(stopReason ? { stopReason, filesUnvisited: files.length - filesVisited, deadlineMs: limits.searchDeadlineMs } : {}),
-      ...(omitted ? { omissionReason: "response_budget" } : {}),
-    });
+      && !limitReached && !stopReason;
+    const makePayload = (list, omitted) => {
+      const more = omitted || limitReached;
+      // A deadline stop rescans differently each time, so it is not resumable.
+      const cursorLimitReached = more && offset + list.length >= MAX_CURSOR_MATCHES;
+      const nextCursor = more && !stopReason && !cursorLimitReached ? encodeCursor(identity, treeState, offset + list.length) : null;
+      const { repeatReceipt: _receipt, cursor: _cursor, ...sameSearch } = args;
+      return success({
+        path: rootUri,
+        ...pathMetadata(resolution),
+        query,
+        results: list,
+        filesScanned: files.length, // Legacy candidate count; filesRead is actual content coverage.
+        filesRead, filesSkipped: Object.values(skippedByReason).reduce((a, b) => a + b, 0),
+        readErrorCount: skippedByReason.read_error, discoveryErrorCount: discoveryErrors, excludedEntries, skippedByReason,
+        coverage: complete && !omitted ? "complete" : "partial",
+        maxFilesReached: files.length >= maxFiles,
+        truncated: more,
+        ...(cursor ? { cursorOffset: offset } : {}),
+        ...(cursorLimitReached ? { stopReason: "cursor_limit", cursorMatchLimit: MAX_CURSOR_MATCHES,
+          nextStep: "Narrow the path or query and search again; the continuation match limit was reached." } : {}),
+        ...(stopReason ? { stopReason, filesUnvisited: files.length - filesVisited, deadlineMs: limits.searchDeadlineMs } : {}),
+        ...(omitted ? { omissionReason: "response_budget" } : {}),
+        // Matches that were found but not returned are counted, so a partial
+        // page is never read as the absence of further matches.
+        ...(more ? { matchesReturned: list.length, matchesOmitted: page.length - list.length,
+          moreMatchesPossible: limitReached || Boolean(stopReason) } : {}),
+        ...(complete && !omitted ? {} : { absenceVerified: false }),
+        ...(nextCursor ? { nextCursor,
+          suggestion: { tool: "search_files", args: projectScopedSuggestionArgs(args, { ...sameSearch, cursor: nextCursor }) } } : {}),
+      });
+    };
 
     // Measure the envelope once, then add each result's own compact size
     // instead of re-serializing the whole payload per result.
@@ -188,7 +256,7 @@ function createSearchCapability(context) {
     let chars = envelope.length;
     let bytes = Buffer.byteLength(envelope, "utf8");
     let fitted = 0;
-    for (const result of results) {
+    for (const result of page) {
       const text = renderModelJson(result);
       const separator = fitted ? 1 : 0;
       if (chars + text.length + separator > maxChars || bytes + Buffer.byteLength(text, "utf8") + separator > maxBytes) break;
@@ -196,12 +264,12 @@ function createSearchCapability(context) {
       bytes += Buffer.byteLength(text, "utf8") + separator;
       fitted++;
     }
-    let payload = makePayload(results.slice(0, fitted), fitted < results.length);
+    let payload = makePayload(page.slice(0, fitted), fitted < page.length);
     while (fitted > 0 && !payloadFits(payload, reserve, args.byteBudget)) {
       fitted--;
-      payload = makePayload(results.slice(0, fitted), true);
+      payload = makePayload(page.slice(0, fitted), true);
     }
-    if (!payloadFits(payload, reserve, args.byteBudget) || !payload.results.length && results.length)
+    if (!payloadFits(payload, reserve, args.byteBudget) || !payload.results.length && page.length)
       return failure("OUTPUT_LIMIT_EXCEEDED", "Search metadata or first match exceeds the response budget; increase byteBudget or narrow the search.", { retryAllowed: true });
     return dedupe("search_files", args, `${resolution.activeProject || ""}|${treeState}|${payload.coverage}|${filesRead}|${JSON.stringify(skippedByReason)}|${discoveryErrors}|${excludedEntries}|${stopReason}`, payload);
   }
@@ -209,4 +277,4 @@ function createSearchCapability(context) {
   return { search_files: searchFiles };
 }
 
-module.exports = { MAX_REGEX_QUERY_CHARS, NESTED_QUANTIFIER, SEARCH_READ_CONCURRENCY, createSearchCapability };
+module.exports = { MAX_CURSOR_MATCHES, MAX_REGEX_QUERY_CHARS, NESTED_QUANTIFIER, SEARCH_READ_CONCURRENCY, createSearchCapability };
