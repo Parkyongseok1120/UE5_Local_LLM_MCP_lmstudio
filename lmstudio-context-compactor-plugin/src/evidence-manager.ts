@@ -5,7 +5,8 @@ import {
   type ToolCallRequest
 } from "@lmstudio/sdk";
 import { inputAvailability, toolMemory, workingContextModule } from "./context-ports";
-import { telemetryFingerprint } from "./evidence-telemetry";
+import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
+export { repeatRequestKey };
 import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
 import { emptyReferenceState, ingestReferenceObservations, referenceSnapshot } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
@@ -166,6 +167,24 @@ hasMore: typeof value.pageHasMore === "boolean" ? value.pageHasMore : "unknown",
 }
 };
   }
+}
+
+/** repeatReceipts of successful results still verbatim in this input (not
+ * projected or archived). An identical read may send one; the server answers
+ * "no new information" only while the source is unchanged. */
+export function presentRepeatReceipts(history: Chat): Map<string, string> {
+  const present = new Map<string, string>();
+  const index = workingContextModule.exchangeIndex(history);
+  history.getMessagesArray().forEach((message, mi) => {
+    message.getToolCallResults().forEach((result, ri) => {
+      const request = index.matches.get(`${mi}:${ri}`);
+      const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
+      if (!request || !value || value.ok === false || typeof value.repeatReceipt !== "string" || !value.repeatReceipt) return;
+      if (["archived_tool_result_projection", "historical_evidence_index", "historical_evidence_range"].includes(String(value.kind || ""))) return;
+      present.set(repeatRequestKey(request.name, request.arguments || {}), value.repeatReceipt);
+    });
+  });
+  return present;
 }
 
 export function completedRequestFingerprints(history: Chat): Set<string> {

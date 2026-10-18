@@ -250,6 +250,8 @@ test("Git subprocess limits are configurable and clamped", t => {
   assert.deepEqual(gitLimits(), { timeoutMs: 30_000, maxBuffer: 64 * 1024 * 1024 });
 });
 
+// 16,384 since edits[], search contextLines/include and read_symbol view: each
+// removes whole rounds or file reads, costing about 100 schema tokens per round.
 test("published catalog stays inside the per-round schema budget", () => {
-  assert.ok(JSON.stringify(toolDefinitions()).length <= 16_000);
+  assert.ok(JSON.stringify(toolDefinitions()).length <= 16_384);
 });

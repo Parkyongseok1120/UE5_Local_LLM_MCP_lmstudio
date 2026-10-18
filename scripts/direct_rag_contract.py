@@ -60,7 +60,7 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "unreal_set_active_project",
-            "description": "Set or clear the shared active .uproject.",
+            "description": "Set/clear the active .uproject.",
             "inputSchema": _schema(
                 {
                     "projectPath": {"type": "string"},
@@ -70,7 +70,7 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "unreal_rag_search",
-            "description": "Ranked index evidence; not a preflight: a known file's direct read is authoritative. chunkId pages a match.",
+            "description": "Index evidence, not a preflight; direct read is authoritative. chunkId pages.",
             "inputSchema": _schema(
                 {
                     "query": bounded_string_schema(MAX_QUERY_CHARS, min_length=1),
@@ -115,7 +115,7 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
         {
             "name": "unreal_symbol_lookup",
             "description": (
-                "Unreal symbol declarations; sourceMode=engine_local reads engine headers without an index. "
+                "Declarations; engine_local reads installed headers. "
                 "Gaps never prove absence."
             ),
             "inputSchema": _schema(
@@ -132,6 +132,7 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
                     "expectedBaseType": bounded_string_schema(MAX_SYMBOL_HINT_CHARS),
                     "sourceMode": {"type": "string", "enum": ["index", "engine_local"], "default": "index"},
                     "owner": bounded_string_schema(128),
+                    "view": {"type": "string", "enum": ["signature", "full"], "default": "full"},
                     "directoryDomain": bounded_string_schema(MAX_SYMBOL_HINT_CHARS),
                     "detailLevel": detail_level,
                     "maxChars": max_chars_schema(),
@@ -166,6 +167,7 @@ def direct_rag_tool_definitions() -> list[dict[str, Any]]:
                         "type": "boolean",
                         "default": False,
                         "description": "Allow an Unreal Editor subprocess.",
+
                     },
                 }
             ),

@@ -20,6 +20,13 @@ export function canonicalTelemetryValue(value: unknown, semantic = false): unkno
     .map(([key, item]) => [key, canonicalTelemetryValue(item, semantic)]));
 }
 
+/** A read's identity for repeat detection: name and arguments, without the
+ * fields the harness itself sets or that do not change what is read. */
+export function repeatRequestKey(name: string, args: Record<string, unknown> = {}): string {
+  const { repeatReceipt: _receipt, ...same } = args || {};
+  return telemetryFingerprint({ name, arguments: same });
+}
+
 export function telemetryFingerprint(value: unknown, semantic = false): string {
   let parsed = value;
   if (typeof value === "string") {

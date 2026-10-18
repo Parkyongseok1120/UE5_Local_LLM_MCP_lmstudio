@@ -79,7 +79,7 @@ async function refusal(runtime, tool, args) {
 
 test("engine:// reads an implementation .cpp with the observed engine identity and no edit receipt", async (t) => {
   const { runtime } = fixture(t);
-  const read = payloadOf(await runtime.callTool("read_file", { path: "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp" }, owner));
+  const read = payloadOf(await runtime.callTool("read_file", { path: "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp" , maxBytes: 1024 }, owner));
   assert.equal(read.ok, true);
   assert.match(read.content, /ActualDamage = DamageAmount/);
   assert.equal(read.path, "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp");
@@ -103,7 +103,7 @@ test("engine:// reads an implementation .cpp with the observed engine identity a
 
 test("engine identity is reported unknown, not guessed, when Build.version is unreadable", async (t) => {
   const { runtime } = fixture(t, { buildVersion: null });
-  const read = payloadOf(await runtime.callTool("read_file", { path: "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp" }, owner));
+  const read = payloadOf(await runtime.callTool("read_file", { path: "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp" , maxBytes: 1024 }, owner));
   assert.equal(read.ok, true);
   assert.equal(read.engineIdentity.status, "unknown");
   assert.equal(read.engineIdentity.version, undefined);
@@ -111,7 +111,7 @@ test("engine identity is reported unknown, not guessed, when Build.version is un
 
 test("plugin source and Build.version are readable; plugin binaries, config and non-source files are not", async (t) => {
   const { runtime } = fixture(t);
-  const ok = async (p) => payloadOf(await runtime.callTool("read_file", { path: p }, owner));
+  const ok = async (p) => payloadOf(await runtime.callTool("read_file", { path: p, maxBytes: 1024 }, owner));
   assert.equal((await ok("engine://Engine/Plugins/Runtime/Demo/Source/Demo/Private/Demo.cpp")).ok, true);
   const version = await ok("engine://Engine/Build/Build.version");
   assert.equal(version.ok, true);
@@ -247,4 +247,33 @@ test("path policy accepts only readable engine source locations", () => {
   assert.equal(isAllowedEngineRelative("Engine/Build/Other.json", { isFile: true }), false);
   assert.equal(isAllowedEngineRelative("../Engine/Source/A.h", { isFile: true }), false);
   assert.equal(isAllowedEngineRelative("Engine/Source/Runtime/Core", { isFile: false }), true);
+});
+
+// The engine_local zero-match suggestion (scripts/direct_rag_engine_local.py) is
+// {path: <observed module>, query: String.raw`\b<Symbol>\b`, regex: true}; this is its consumer.
+test("engine_local token suggestion finds declaration and Private definition only in the observed module", async (t) => {
+  const { runtime, engineRoot } = fixture(t);
+  const module = path.join(engineRoot, "Engine", "Source", "Runtime", "Engine");
+  fs.mkdirSync(path.join(module, "Public"), { recursive: true });
+  fs.writeFileSync(path.join(module, "Public", "UserSettings.h"), [
+    "class UUserSettings {", "public:", " void ResolveOperation(int Value);", " int32 ResolveOperationEx;", "};",
+    "struct FModes { int32 ResolveOperation = 0; };", "enum class EMode : uint8 { ResolveOperation, Other };", "",
+  ].join("\n"), "utf8");
+  fs.writeFileSync(path.join(module, "Private", "UserSettings.cpp"),
+    "// 한글 🙂\r\nvoid UUserSettings::ResolveOperation(int Value)\r\n{\r\n}\r\n", "utf8");
+  fs.writeFileSync(path.join(engineRoot, "Engine", "Plugins", "Runtime", "Demo", "Source", "Demo", "Private", "Demo.cpp"),
+    "void ResolveOperation(int);\n", "utf8");
+  const search = payloadOf(await runtime.callTool("search_files", {
+    path: "engine://Engine/Source/Runtime/Engine", query: String.raw`\bResolveOperation\b`, regex: true,
+  }, owner));
+  assert.equal(search.ok, true);
+  // The fixture's Private/Notes.md is outside the engine read policy, so the scan is honestly partial.
+  assert.equal(search.excludedEntries, 1);
+  assert.equal(search.coverage, "partial");
+  assert.deepEqual(search.results.map((hit) => `${hit.uri}:${hit.line}`).sort(), [
+    "engine://Engine/Source/Runtime/Engine/Private/UserSettings.cpp:2",
+    "engine://Engine/Source/Runtime/Engine/Public/UserSettings.h:3",
+    "engine://Engine/Source/Runtime/Engine/Public/UserSettings.h:6",
+    "engine://Engine/Source/Runtime/Engine/Public/UserSettings.h:7",
+  ]);
 });

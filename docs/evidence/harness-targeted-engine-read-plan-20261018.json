@@ -1,0 +1,1166 @@
+{
+  "mode": "architecture",
+  "baselineHead": "fbff059979edc8980eab970e7a7bba9e0b1d5181",
+  "date": "2026-10-18 Asia/Seoul",
+  "plan": "docs/Harness_Targeted_Engine_Read_Plan_20261018.md",
+  "scope": "범위 읽기·Swift 로그 분석 계획에 작업 중 SSOT/SOLID/계약/수명/책임 경계, Claude Code 공식 자료 조사, 수정 파일 수와 의존 순서·background 검증 관리를 추가. 이번 산출물은 계획 MD와 근거 JSON이며 제품/게임/설정 변경 및 커밋 없음.",
+  "existing": [
+    "RAG의 engine_local은 정확한 프로젝트/엔진을 선택하고 bounded 타입 후보 및 상속 탐색 뒤 같은 예산에서 구현 후보를 붙인다.",
+    "Node 파일 MCP의 search_files, read_symbol, read_file_range와 NOT_FOUND의 모듈별 검색 안내를 재사용한다.",
+    "Compactor의 continuity memory, assistant note lifecycle, archive/catalog/readHandle 및 semantic handoff가 이미 연결되어 있다.",
+    "현재 버전 증명, 잠금 후 hash 검사 및 쓰기 결과 receipt를 통한 연속 수정 경로가 이미 있다.",
+    "기존 trace와 실모델 평가 runner, 모델 입력 측정 및 engine scope 필터가 있다.",
+    "병렬 read-result budget broker는 held reservation 거절과 다음 라운드 단독 재요청 안내 및 not_executed trace를 이미 제공한다.",
+    "raw-tool-intent 탐지, 제한된 tool replanning, 단일 reasoning recovery 및 report continuation/finalization이 이미 존재한다.",
+    "core.md/design.md에 이미 SSOT/SOLID/계약/수명 기준이 있으며 guidance generator는 Markdown/catalog와 engine contract의 정본을 구분한다.",
+    "NotePersistence는 history/window note의 복원 우선순위와 동기화를 관리한다. ExecutionState, RecoveryCoordinator, RoundTransaction, WorkingContext와 round-loop는 서로 다른 실행/근거 수명을 담당한다.",
+    "Unreal edit bundle에는 파일/patch/bytes/줄 상한, 정렬된 lock, 잠금 뒤 hash 검사, publication/rollback 및 종료 해제가 있다."
+  ],
+  "proposed": [
+    "E0: 기존 owner/범위 fixture와 Swift 수정 전 로그 S1-S10을 고정한다. 사용자 제공 모델명과 실제 model ID/quantization/context/runtime identity를 구분한다. 서술 기반 fixture와 structured event replay를 구분한다.",
+    "E1: 이미 확인한 타입 헤더의 모듈 위치를 작은 관찰 메타데이터로 전달하고, 함수 소속이 미확정이면 해당 모듈의 정확한 심볼 토큰 검색을 제안한다. 관찰되지 않은 위치나 소속을 만들지 않는다.",
+    "E2: 기존 구현 발췌와 envelope 잘림을 구분하고 확인된 후보 범위의 다음 읽기를 제공한다. 새 bundle 도구나 semantic parser를 만들지 않는다.",
+    "E3: partial projection 안내를 현재 질문에 빠진 근거만 확보하는 의미로 좁힌다. archive 위치가 불명확하면 좁은 fresh read를 허용하고 변경 권한 경계를 유지한다.",
+    "E4: 기존 가이던스의 source-first 판단, 반박 근거 재사용, 읽기/검토/실행 완료 범위와 보고 전환을 정리한다. XML 및 reasoning recovery는 기존 계약 replay부터 수행하고 trace로 입증된 결함만 기존 함수에서 최소 수정한다.",
+    "E5-E6: 식별된 Swift 1.5의 동일 조건 A/B로 첫 정확한 근거/첫 유용한 보고/최종 전달, 오류·재조사·실제 도구 이벤트를 함께 측정한다. R1-R23 및 관련 회귀 후 인계하며 실측 전 개선을 확정하지 않는다.",
+    "모든 E0-E6 변경에서 정본·writer·소비자·계약·수명·반례와 검사 결과를 확인하는 구현 기준을 적용한다. 신규 강제 정책 엔진이나 자동 설계 판정기는 만들지 않는다.",
+    "핵심 구현 4개, 직접 회귀 후보 4개, 파생 identity 1개의 9개 우선 변경 검토 대상을 기록한다. 조건부 계약/가이던스/버전/eval 파일과 실제 변경 수는 근거에 따라 확정한다.",
+    "W0-W5 의존 순서, 단일 파일 writer, baseline source 고정, 원본→generator→identity→build 순서 및 background 결과 provenance를 기존 작업 도구/계획 문서에서 관리한다."
+  ],
+  "doNotDuplicate": [
+    "기존 engine header catalog, owner resolution 및 definition candidate 탐색",
+    "기존 read_symbol, read_file_range, snapshot 및 edit bundle 해시 검증",
+    "기존 evidence archive, readHandle, continuity 및 semantic handoff",
+    "기존 engine profiles, project tool scope 및 권한 검사",
+    "새 작업 ledger, 영속 nextTool 명령, 요약 모델 계층 및 archive 함수 인덱스",
+    "새 엔진 본문 캐시, 서버 간 내부 MCP orchestration, 기본 멀티에이전트 또는 LSP 도입",
+    "budget broker/기본 예산 정책, raw tool intent 탐지와 재계획, 단일 reasoning recovery, report continuation 및 finalization",
+    "모듈 등록 전용 스캐너, XML 본문 자동 실행기, 추론 내용을 정규식으로 감시하는 새 판단 계층",
+    "기존 core/design 지침, engine contracts 및 generated guidance/tool contract/runtime identity의 정본-파생물 경로",
+    "NotePersistence writer, 실행 phase/recovery state, round fence, exact measurement admission, mutation lock/transaction/receipt",
+    "Claude 전용 hook 시스템, Task 도구 API의 무조건 복제, 별도 작업 scheduler/진행 DB/자동 SOLID 판정기"
+  ],
+  "invariants": [
+    "설치된 엔진과 프로젝트의 실제 식별자를 유지하며 검색 0건이나 잘린 결과를 부재 증명으로 바꾸지 않는다.",
+    "함수 본문만으로 판단할 수 없으면 선언, 매크로, 멤버 초기화, 직접 부모 구현, 호출부 및 종료 경로를 필요한 만큼 확장한다.",
+    "보관된 근거는 과거 자료이며 현재 파일 확인이나 변경 권한을 대신하지 않는다. 기존 expectedHash, snapshot 및 lock 검증을 유지한다.",
+    "전체 감사의 미확인 범위를 기록하며 일부 함수만 확인한 결과를 전체 검증 완료로 표시하지 않는다.",
+    "사용자 요청에 따라 커밋하지 않는다. 이 연구에서는 구현 또는 재설치를 수행하지 않는다.",
+    "owner 없는 engine_local을 전역 선언 역검색으로 설명하지 않는다.",
+    "과거 archive UTF-16 offset을 파일 줄 번호로 대체하지 않는다.",
+    "유효한 현재 쓰기 receipt의 연속 사용을 보존하며 매 수정마다 의무 재읽기를 추가하지 않는다.",
+    "파일 전체의 서버 내부 스캔/해시와 모델 입력에 전체 원문을 반환하는 비용을 구분한다.",
+    "현재 source, 기존 dist, fixture, 실제 모델 및 실제 설치 환경 검증을 구분한다.",
+    "필요한 원문 재획득의 좁은 예외는 기존 실행 지침에 통합하며 tool-planning retry 중복 차단이나 repeat cache를 전역 해제하지 않는다.",
+    "사용자 첨부 모델 서술의 읽기/압축/검색 횟수를 실제 request/result 실행 횟수로 바꾸지 않는다.",
+    "검색 완주와 검색 질의의 의미적 포괄성을 구분하며 private 경로 실패/다른 매크로 0건으로 모듈 부재를 확정하지 않는다.",
+    "Swift 1.5의 실제 모델/설정을 확인할 수 없으면 동일 조건 재현은 미확인으로 남기고 다른 모델로 조용히 대체하지 않는다.",
+    "현재 게임 소스와 로그 당시 소스의 hash 일치는 미확인이다. 현재 경로의 반대 근거를 역사적 실행의 완전한 증명으로 취급하지 않는다.",
+    "SSOT는 같은 사실의 갱신/복원 책임을 유지하는 원칙이며 파생 view나 관리되는 저장 사본을 무조건 제거하는 규칙이 아니다.",
+    "문서의 설계 지침, 실제 모델 입력, 모델 준수, 코드가 강제하는 계약을 구분한다. 사용자 설계 요구는 실행자가 모든 변경에서 적용하며 기존 설정을 임의 변경하지 않는다.",
+    "현재 파일 변경량과 호출 상한을 구분한다. Unreal source hard cap은 한 호출 최대 2파일/2patch이며 다른 문자/줄/bytes 제한도 함께 적용된다. 여러 호출을 하나의 atomic transaction으로 간주하지 않는다.",
+    "background 시작/계획 체크/실제 적용/검증 완료는 각각의 증거가 필요하다. test/build source identity가 바뀌면 이전 검증을 새 변경에 재사용하지 않는다.",
+    "단일 파일에 동시 writer를 두지 않고 동일 generated output이나 mutable dist를 사용하는 작업은 순차 실행한다.",
+    "작업 목록은 현재 제품에 새 schema를 추가하는 제안이 아니다. 현재 continuity task selection을 전체 dependency scheduler로 과장하지 않는다."
+  ],
+  "impactedSurfaces": [
+    "scripts/engine_header_evidence.py, direct_rag_engine_local.py 및 관련 Python 회귀 테스트",
+    "필요 시 engine_definition_evidence.py, direct_rag_contract.py의 출력/공개 계약",
+    "Compactor resume-facts.ts, execution-instructions.ts 및 필요한 경우 working-context.js의 짧은 안내",
+    "docs/model-guidance/unreal.md, 생성 guidance/tool contract와 버전/runtime identity",
+    "기존 eval-audit-pressure.cjs, eval-input-availability-ab.cjs 및 trace_lmstudio_run.py의 관측",
+    "기존 Node 범위 읽기/검색/snapshot과 Compactor 복원 회귀 테스트",
+    "기존 budget-broker/tool-boundary, raw-tool-intent 및 prediction-loop/reasoning-recovery의 회귀·관측. 제품 로직 수정은 trace에서 결함이 재현될 경우만 확정.",
+    "docs/Harness_Targeted_Engine_Read_Plan_20261018.md 2.3절과 S1-S10/R14-R23 추가 평가 사례",
+    "기존 core.md/design.md/unreal.md와 config contracts/catalog의 책임 연결; 내용 변경은 실제 누락/충돌 증거가 있을 때만",
+    "기존 note-persistence/execution-state/recovery-coordinator/round-loop/working-context 및 edit-bundle 수명 계약은 보존 대상. 변경 필요를 단정하지 않음.",
+    "인계 문서 §3.1-3.3 설계/수명 기준, §7 공식 연구, §8 파일 수/수정 순서/진행 기록"
+  ],
+  "validationPlan": [
+    "이 JSON 형식 검사와 MD 로컬 링크 존재 검사를 수행한다. 이를 의미적 사실 검증으로 표시하지 않는다.",
+    "구현 전후 R1-R31 시나리오를 관련 기존 테스트 파일에 추가/갱신한다.",
+    "관련 focused 검사 후 기존 전체 pytest 및 Node runner, guidance/toolcontract/unitycontract/identity checks를 수행한다.",
+    "baseline/new 동일 모델 및 환경, cold/warm 구분, 사례별 최소 3회가 가능한 실모델 평가로 정확도와 전체 지연을 함께 비교한다.",
+    "개선되지 않거나 회귀하는 변경은 해당 선택 정책만 되돌린다. archive/state/schema와 사용자 설정을 삭제하거나 초기화하지 않는다.",
+    "추가 요청에서 제품 suite/빌드/실모델 실행은 수행하지 않는다. 로그·관련 소스 대조와 문서/근거 형식 검사만 수행한다.",
+    "원시 SDK trace에서 structured request/dispatch/paired result/finish reason/actual input을 확인한다. 미기록은 unavailable로 유지한다.",
+    "R14/R21/R23 계약의 deterministic fixture/replay와 R15-R20/R22 판단·보고 품질의 실모델 평가를 구분한다.",
+    "R24-R31은 이번 변경이 건드리는 계약에 맞춰 기존 생성물/수명/파일 version 테스트를 재사용한다. 새 계층이나 모든 프로젝트에 강제하는 체크리스트를 만들지 않는다.",
+    "다중 파일 평가에서 실제 고유 파일 수, patch 호출 수, bytes/줄, 재읽기, 부분 실패, 대기 시간, source/build identity와 background completion을 측정한다.",
+    "이번 문서 추가 조사에서는 기존 generated guidance/tool/unity contract/runtime identity의 --check를 읽기 전용으로 수행하고 문서/JSON 구조와 링크를 확인한다. 제품 build 및 실모델 비교는 수행하지 않는다."
+  ],
+  "verificationPerformed": [
+    {
+      "command": "python -X utf8 -m pytest -q tests/test_direct_rag_engine_local.py tests/test_engine_definition_evidence.py tests/test_engine_header_evidence_identity.py",
+      "passed": 49,
+      "failed": 0,
+      "source": "current source",
+      "phase": "initial plan review, before Swift log addition"
+    },
+    {
+      "command": "node --test test/engine-source-read.test.js test/bounded-read.test.js",
+      "cwd": "lmstudio-unreal-agent-mcp",
+      "passed": 24,
+      "skipped": 1,
+      "failed": 0,
+      "skipReason": "symlink creation EPERM",
+      "source": "current source",
+      "phase": "initial plan review, before Swift log addition"
+    },
+    {
+      "command": "node --test test/failure-guidance.test.js test/file-snapshot-flow.test.js",
+      "cwd": "lmstudio-unreal-agent-mcp",
+      "passed": 25,
+      "failed": 0,
+      "source": "current source",
+      "phase": "initial plan review, before Swift log addition"
+    },
+    {
+      "command": "node --test test/working-context.test.cjs",
+      "cwd": "lmstudio-context-compactor-plugin",
+      "passed": 32,
+      "failed": 0,
+      "source": "current src direct imports; independent review",
+      "phase": "initial plan review, before Swift log addition"
+    },
+    {
+      "command": "node --test test/input-availability.test.js test/continuity-model-notes.test.js",
+      "cwd": "lmstudio-context-compactor-plugin",
+      "passed": 24,
+      "failed": 0,
+      "source": "mixed src and existing dist; not a freshly built current TS verification",
+      "phase": "initial plan review, before Swift log addition"
+    },
+    {
+      "artifact": "artifacts/context-efficiency-20261018/owner-probe.json",
+      "source": "temporary synthetic engine fixture",
+      "observation": "wrong owner 0; no owner 0; correct owner 1; all apiAbsenceVerified false",
+      "phase": "initial plan review, before Swift log addition"
+    },
+    {
+      "phase": "Swift log addition",
+      "source": "pasted log and selected current source ranges",
+      "observation": "로그 1,829줄 및 관련 하네스/게임 함수 대조. 제품 테스트, 빌드, 실모델 실행 없음."
+    },
+    {
+      "phase": "architecture and editing workflow addition",
+      "command": "node scripts/build-design-guidance.cjs --check",
+      "cwd": "lmstudio-context-compactor-plugin",
+      "exitCode": 0,
+      "scope": "existing generated artifact consistency only; no writes/build/model execution"
+    },
+    {
+      "phase": "architecture and editing workflow addition",
+      "command": "node scripts/build-tool-contract.cjs --check",
+      "cwd": "lmstudio-context-compactor-plugin",
+      "exitCode": 0,
+      "scope": "existing generated artifact consistency only; no writes/build/model execution"
+    },
+    {
+      "phase": "architecture and editing workflow addition",
+      "command": "node scripts/build-unity-tool-contract.cjs --check",
+      "cwd": "lmstudio-context-compactor-plugin",
+      "exitCode": 0,
+      "scope": "existing generated artifact consistency only; no writes/build/model execution"
+    },
+    {
+      "phase": "architecture and editing workflow addition",
+      "command": "node scripts/build-runtime-identity.cjs --check",
+      "cwd": "lmstudio-context-compactor-plugin",
+      "exitCode": 0,
+      "scope": "existing generated artifact consistency only; no writes/build/model execution"
+    }
+  ],
+  "claims": [
+    {
+      "claim": "engine_local의 owner 없는 조회는 함수 이름 기반 파일명 후보 탐색이며 전역 선언 역검색이 아니다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/engine_header_evidence.py:944",
+          "observation": "queue는 owner 또는 symbol에서 시작하고 _type_candidates로 파일명 후보를 고른다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/context-efficiency-20261018/owner-probe.json",
+          "observation": "임시 fixture에서 잘못된 owner와 owner 없음은 0건, 실제 타입 owner는 1건이었다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_engine_local.py:148",
+          "observation": "0건은 부재가 아니라 다른 search_files를 제안한다. 검색 자체를 실행하는 것은 아니다."
+        }
+      ],
+      "unknowns": [
+        "실제 전체 엔진에서의 탐색 시간이나 이 제안에 의한 모델 행동 비중은 미측정이다."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "선언+구현 근거 묶음과 제한된 다음 읽기의 기반은 이미 존재한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/engine_header_evidence.py:1032",
+          "observation": "선언 검색 뒤 같은 deadline/files/bytes 예산에서 구현 후보를 찾는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/engine_definition_evidence.py:25",
+          "observation": "구현 발췌는 40줄/3200자, 후보는 최대 3개로 제한된다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:266",
+          "observation": "read_symbol은 후보 범위와 continuation 및 lexical 한계를 반환한다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_evidence.py:132",
+          "observation": "최종 envelope fitting은 evidence 문자열을 다시 줄일 수 있어 개별 excerpt 완전성과 다르다."
+        }
+      ],
+      "unknowns": [
+        "효율적인 다음 읽기 필드의 최종 출력 크기와 모델 사용률은 구현 후 측정해야 한다."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "새 작업 ledger 없이 기존 continuity와 note를 재사용할 수 있다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-memory.js:195",
+          "observation": "objective, task selection, interrupted calls, historical evidence 및 unresolved 상태를 구성한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:22",
+          "observation": "decisions/rejectedHypotheses/openQuestions와 제한된 명시적 스냅샷 계약이 있다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:215",
+          "observation": "현재 모델 입력에 note와 task data를 합성한다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-model-notes.js:19",
+          "observation": "note는 4항목/1500자 한계이며 assistant 판단이지 검증된 도구 사실이 아니다."
+        }
+      ],
+      "unknowns": [
+        "기존 note 한도가 첨부 모델 반복의 주원인이라는 근거는 없다."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "archive 부분 복원은 존재하지만 함수/파일 줄을 직접 선택하는 도구는 아니다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:570",
+          "observation": "startOffset은 선택한 표현의 UTF-16 offset이다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:600",
+          "observation": "보관된 body/envelope 페이지와 source range 메타데이터를 반환한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/working-context.test.cjs",
+          "observation": "현재 src 직접 참조 32개 테스트가 통과했고 여러 차례 압축 뒤 복원 및 범위 계약을 포함한다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:504",
+          "observation": "projection은 currentFile:false 및 grantsMutation:false 경계를 유지한다."
+        }
+      ],
+      "unknowns": [
+        "whole file archive에서 필요한 위치를 모르는 경우 archive 복원과 fresh 범위 읽기 중 무엇이 빠른지는 사례별로 다르다."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "유효한 쓰기 결과 receipt로 연속 수정하는 기존 경로를 유지해야 한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-preflight.js:16",
+          "observation": "잠금 후 현재 snapshot과 기대 hash를 검사한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/file-snapshot-flow.test.js:207",
+          "observation": "중간 재읽기 없이 첫 patch receipt로 두 번째 patch가 성공하고 옛 receipt는 거절되는 테스트가 이번 실행에서 통과했다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/file-snapshot-flow.test.js:187",
+          "observation": "외부 변경은 FILE_VERSION_CONFLICT로 거절된다."
+        }
+      ],
+      "unknowns": [
+        "과거 archive 자료는 현재 receipt를 발급하거나 갱신하지 않는다."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "부분 projection 안내를 현재 질문의 부족한 근거에만 적용하도록 좁히는 변경을 제안한다.",
+      "claimType": "architecture",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P3",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/resume-facts.ts:43",
+          "observation": "생략 본문을 page하거나 source range를 다시 읽으라는 안내가 있다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:234",
+          "observation": "해당 안내를 runtime fact로 연결하며 다음 라운드에도 갱신한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-instructions.ts:48",
+          "observation": "성공한 동일 범위/버전 읽기 반복을 제한하므로 현재 질문의 원문 재획득 예외와 일치시키는 문구 검토가 필요하다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/input-availability.js:447",
+          "observation": "현재 입력 원문 존재 메타데이터도 재읽기/완료 판단 자체를 강제하지 않는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts:149",
+          "observation": "동일 호출을 거절하는 runtime 경계는 tool-planning retry의 특정 fingerprint 경로다. 일반 재획득 안내를 이유로 전역 해제하면 안 된다."
+        }
+      ],
+      "unknowns": [
+        "Swift 로그 1724줄은 현재 문구를 전체 재읽기 이유로 인용하지만, 실제 모델 입력/통제된 대조 실행이 없어 인과 효과는 확정하지 못했다.",
+        "효과는 동일 조건 실모델 비교 전까지 확정하지 않는다."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "공유 읽기 예산 거절에는 이미 다음 라운드 단독 재요청 안내와 실제 실행되지 않았다는 trace가 있다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:253",
+          "observation": "held_reservations_insufficient 분기에서 Request this read again by itself in the next round를 안내한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts:155",
+          "observation": "거절은 validationState denied_batch_budget, executionState not_executed 및 budget metadata로 기록한다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:74",
+          "observation": "배치 내 held/consumed를 추적한다. 거절 메시지 하나는 reservation 누수의 증명이 아니다."
+        }
+      ],
+      "unknowns": [
+        "로그 97줄의 단독 재시도+Tests 조회 서술이 실제로 어떤 batch 인자로 실행됐는지 미확인."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "본문 tool_call 탐지와 한 번의 reasoning recovery 및 보고 복구는 기존 소유자에 구현되어 있다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts:14",
+          "observation": "XML tool_call wrapper를 raw tool intent 패턴으로 탐지한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:839",
+          "observation": "조건이 맞는 raw intent에 제한된 fresh planning retry를 허용한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1225",
+          "observation": "reasoning recovery 재시도에서 불완전하면 partial delivery 후 종료하고 eligible한 최초 복구는 이전 workingHistory를 유지한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-instructions.ts:3",
+          "observation": "복구에서는 전체 설계 재분석보다 짧은 다음 행동을 지시한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1284",
+          "observation": "기존 output recovery가 작성된 본문을 보존하고 report continuation으로 연결한다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1340",
+          "observation": "raw intent가 복구 불가능하면 partial 상태로 전달한다. 모든 XML이 재시도/실행되는 계약이 아니다."
+        }
+      ],
+      "unknowns": [
+        "실행 당시 설정·빌드·이벤트 trace가 없어 첨부 XML이 탐지/dispatch되었는지 확정할 수 없다.",
+        "현재 소스 연결은 당시 reasoning output-limit 상태의 정확한 토큰 수와 실제 모델 준수를 증명하지 않는다."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "SSOT/SOLID/계약/수명 지침과 정본에서 생성되는 가이던스/도구 계약 경로가 이미 있다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/model-guidance/core.md:6",
+          "observation": "상태 결정권자/변경 지점/종료 책임과 원본·파생 상태 구분을 지시한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "docs/model-guidance/design.md:16",
+          "observation": "SSOT를 모든 값을 전역 객체로 모으는 것과 구분하며 22줄부터 SOLID 판단 기준을 제공한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs:70",
+          "observation": "engine_fact의 검증 버전과 section 적용 버전의 일치 검사."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/scripts/build-design-guidance.cjs:222",
+          "observation": "각 config engine contract set을 로드하고 generated summary/bundle을 생성한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/scripts/build-tool-contract.cjs:36",
+          "observation": "stable_tool_manifest에서 generated-tool-contract를 생성/검사한다."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:165",
+          "observation": "입력은 선택·버전·section 제한을 거치므로 원문 파일의 존재가 모델 전달/준수 증거는 아니다."
+        }
+      ],
+      "unknowns": [
+        "Swift 당시 실제 입력에 어느 지침이 전달됐는지는 미확인.",
+        "공개 인자 schema와 모든 런타임 계약이 stable manifest 한 파일에 있다는 뜻이 아니다."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "NotePersistence와 실행/복구/라운드/근거 상태의 수명은 기존 소유자로 나누어 관리된다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/note-persistence.ts:16",
+          "observation": "history와 window note의 복원 우선순위/동기화/종료 저장을 담당."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:9",
+          "observation": "허용 phase 전이와 reasoning recovery 수명 카운터 소유."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:15",
+          "observation": "복구 계획과 episode 진행/재계획 카운터 소유."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:75",
+          "observation": "RoundTransaction은 planning commit과 반환 근거의 보존을 구분."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:249",
+          "observation": "closed fence, listener 제거 및 소유 signal 종료."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:641",
+          "observation": "exact measured commit과 terminal seal은 다른 계약."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:725",
+          "observation": "terminal_unmeasured seal은 remeasureRequired이며 다음 dispatch 승인이 아니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:9",
+          "observation": "FINAL_DELIVERY→TOOL_REPLAN은 기존 허용 전이이므로 문구로 전면 금지하면 계약이 바뀐다."
+        }
+      ],
+      "unknowns": [
+        "이번 요청에서는 해당 수명 테스트를 다시 실행하지 않았다.",
+        "관련 소스 확인은 전체 시스템의 SOLID 준수나 모든 race 부재를 증명하지 않는다."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "claim": "Unreal MCP의 파일 수정에는 호출별 크기 상한과 기존 lock/hash/publication/rollback 경계가 있다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-mutation-limits.js:3",
+          "observation": "hard cap maxFilesPerEdit 2, maxBundleOperations 2, maxPatchLines 32, maxBundleChangedLines 64와 문자/byte 제한."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-plan.js:110",
+          "observation": "고유 파일 수와 aggregate 변경량을 검사."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle.js:70",
+          "observation": "대상 경로 정렬 후 lock 취득, baseline capture와 hash 검사 뒤 commit."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-commit.js:123",
+          "observation": "publication 전 취소 검사, 이후 기존 적용/복구 의미 유지."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle.js:158",
+          "observation": "finally에서 획득 lock 역순 release."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle.js:113",
+          "observation": "archive 기록 실패만으로 이미 적용한 commit을 되돌리지 않는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-mutation-limits.js:79",
+          "observation": "환경 설정은 source hard cap 안에서 한도를 좁힐 수 있다."
+        }
+      ],
+      "unknowns": [
+        "설치본의 현재 활성 limit/settings는 이번 연구에서 재조회하지 않았다.",
+        "이 상한이 Swift 지연의 주원인인지는 실제 patch trace/A-B 없이는 미확인.",
+        "여러 호출 전체에 대한 원자성이나 Claude Code Edit의 동일 상한을 뜻하지 않는다."
+      ],
+      "behaviorPath": []
+    }
+  ],
+  "independentReview": {
+    "scope": "Compactor 호출 경로 및 최종 계획 E3의 기존 지침 충돌/중복 구현 여부",
+    "resolved": [
+      "새 continuity ledger 제안 제거",
+      "archive 줄/offset 자동매핑 가정 제거",
+      "유효 receipt의 연속 사용 유지",
+      "필요 원문 재획득과 기존 반복 금지 문구 정합성 명시",
+      "기존 개별 notice와 bounded runtime 요약 보존"
+    ],
+    "swiftLogAddition": {
+      "scope": "첨부 232-579 및 900-1829줄의 독립 검토, 주 검토자의 나머지 구간/현재 소스 대조와 합침",
+      "findingsIntegrated": [
+        "source-first 판단 및 반박된 가설 재등장",
+        "모듈 absence 질의 범위",
+        "archive 사용 반대 근거",
+        "완료 범위 과장",
+        "XML과 실제 dispatch 구분",
+        "reasoning limit 호스트 안내와 복구 후 전체 재분석",
+        "최종 보고 미관찰의 한계"
+      ],
+      "productEditsByReviewer": false
+    },
+    "architectureAddition": {
+      "scope": "관련 Compactor 소유자/상태 수명에 대한 독립 함수 범위 검토",
+      "proofLevel": "SourceVerified",
+      "findingsIntegrated": [
+        "NotePersistence priority/mirror single owner",
+        "ExecutionState vs RecoveryCoordinator",
+        "exact commit vs unmeasured terminal seal",
+        "returned evidence vs incomplete planning",
+        "archive scope lineage version lease",
+        "batch held consumed released lifecycle",
+        "acquire-release/fence/cleanup boundaries"
+      ],
+      "testsRun": false,
+      "productEdits": false
+    }
+  },
+  "logAnalysis": {
+    "source": "C:\\Users\\sster\\.codex\\attachments\\cf833b63-6e4b-4cb1-a130-45d9458f42c1\\붙여넣은 텍스트.txt",
+    "bytes": 164923,
+    "lineCount": 1829,
+    "sha256": "c1bdff416b0f8a367accc870354a4da03642af486cbaa1ce8d1a5e1ea6d0de7d",
+    "lineNumberBase": 1,
+    "modelAttribution": {
+      "name": "Swift 1.5",
+      "providedBy": "user",
+      "stage": "before requested improvements, as stated by user",
+      "exactModelId": null,
+      "quantization": null,
+      "contextSettings": null,
+      "runtimeBuild": null
+    },
+    "evidenceBoundary": "주로 모델 분석 서술과 일부 표시된 호스트 안내. 실제 요청/dispatch/result/각 라운드 모델 입력 이벤트의 짝이 없어 RuntimeVerified 성능 진단으로 취급하지 않음.",
+    "observations": [
+      {
+        "id": "S1",
+        "lineRanges": [
+          [
+            53,
+            83
+          ],
+          [
+            93,
+            97
+          ]
+        ],
+        "observation": "전체 파일 배치 읽기 의도와 held reservation 거절 안내. 단독 재시도를 말하며 다른 조회도 추가한다고 서술.",
+        "counterEvidenceAndLimit": "93줄은 표시된 호스트 거절 안내. 나머지는 실행 인자 아닌 모델 서술. 작은 프로젝트 전체 감사의 최초 전체 읽기는 합리적일 수 있음.",
+        "planMapping": [
+          "E0",
+          "E3",
+          "E5",
+          "R14"
+        ]
+      },
+      {
+        "id": "S2",
+        "lineRanges": [
+          [
+            135,
+            227
+          ],
+          [
+            505,
+            505
+          ],
+          [
+            1065,
+            1067
+          ],
+          [
+            1478,
+            1507
+          ]
+        ],
+        "observation": "직접 소스 없이 RPC/OnRep와 가상 wrapper를 추측하며 결함 판단을 번복. 인용 조건과 아군 점수 결론도 불일치.",
+        "counterEvidenceAndLimit": "실제 게임 결함으로 채택하지 않음. 후보 탐색 자체는 정상이며 근거 없는 확정과 반박 후 재등장이 문제.",
+        "planMapping": [
+          "E2",
+          "E4",
+          "E5",
+          "R15"
+        ]
+      },
+      {
+        "id": "S3",
+        "lineRanges": [
+          [
+            268,
+            268
+          ],
+          [
+            510,
+            510
+          ],
+          [
+            760,
+            854
+          ],
+          [
+            948,
+            949
+          ]
+        ],
+        "observation": "처음 올바르게 설명한 owner를 AController로 바꾼 뒤 검색 실패를 소스 이상으로 해석.",
+        "counterEvidenceAndLimit": "나중에 다시 올바른 owner로 정정. 정확한 호출 이벤트는 미확인.",
+        "planMapping": [
+          "E1",
+          "E3",
+          "E4",
+          "R1",
+          "R10",
+          "R16"
+        ]
+      },
+      {
+        "id": "S4",
+        "lineRanges": [
+          [
+            1212,
+            1247
+          ],
+          [
+            1258,
+            1262
+          ]
+        ],
+        "observation": "Private 경로 부재를 모듈 등록 누락/시작 불가 P0로 추정한 후 루트 PRIMARY_GAME_MODULE 발견으로 철회.",
+        "counterEvidenceAndLimit": "실제 search literal/regex 인자는 없음. 파일 범위 완주와 질의 의미의 포괄성은 별개.",
+        "planMapping": [
+          "E1",
+          "E4",
+          "E5",
+          "R17"
+        ]
+      },
+      {
+        "id": "S5",
+        "lineRanges": [
+          [
+            930,
+            934
+          ],
+          [
+            984,
+            1018
+          ],
+          [
+            1721,
+            1724
+          ]
+        ],
+        "observation": "archive 복원 시도도 있지만 현재 본문 부재와 do not treat as fully read 문구로 여러 파일 전체 재읽기를 정당화.",
+        "counterEvidenceAndLimit": "archive 미사용이 아님. 자기 설명은 인과 효과 증명이 아니며 실제 모델 입력은 미확인.",
+        "planMapping": [
+          "E3",
+          "E5",
+          "R8",
+          "R9",
+          "R10",
+          "R18"
+        ]
+      },
+      {
+        "id": "S6",
+        "lineRanges": [
+          [
+            1315,
+            1319
+          ],
+          [
+            1386,
+            1386
+          ],
+          [
+            1686,
+            1700
+          ]
+        ],
+        "observation": "전체 엔진 API 검증/전체 파일 취득 선언과 일부 본문 생략 및 누락 내용 추정이 공존.",
+        "counterEvidenceAndLimit": "질문에 충분한 근거가 있으면 무관한 EOF를 강제할 필요 없음. 전체 완료와 충분성은 구분.",
+        "planMapping": [
+          "E4",
+          "E5",
+          "R13",
+          "R19"
+        ]
+      },
+      {
+        "id": "S7",
+        "lineRanges": [
+          [
+            235,
+            235
+          ],
+          [
+            474,
+            474
+          ],
+          [
+            563,
+            563
+          ],
+          [
+            689,
+            689
+          ],
+          [
+            1719,
+            1719
+          ],
+          [
+            1801,
+            1829
+          ]
+        ],
+        "observation": "이미 설명한 입력/RPC 경로를 다시 기억으로 추정하며 다른 symbol/reliability/byte range를 만듦.",
+        "counterEvidenceAndLimit": "후반에 관련 범위 확인으로 돌아가기도 함. 바이트 읽기 자체는 오류 아님. 현재 프로젝트 반대 근거는 당시 버전 증명이 아님.",
+        "planMapping": [
+          "E2",
+          "E3",
+          "R20"
+        ]
+      },
+      {
+        "id": "S8",
+        "lineRanges": [
+          [
+            1537,
+            1566
+          ]
+        ],
+        "observation": "본문 tool_call XML 두 블록 뒤 다른 파일을 확보했다고 서술.",
+        "counterEvidenceAndLimit": "SDK request/dispatch/result 짝이 없어 parser 실패나 오배달을 확정하지 않음. XML은 실행 증거가 아님.",
+        "planMapping": [
+          "E0",
+          "E4",
+          "E5",
+          "R21"
+        ]
+      },
+      {
+        "id": "S9",
+        "lineRanges": [
+          [
+            1320,
+            1320
+          ],
+          [
+            1686,
+            1702
+          ],
+          [
+            1794,
+            1794
+          ],
+          [
+            1829,
+            1829
+          ]
+        ],
+        "observation": "보고서 정리를 선언한 뒤 추가 취득/결함 후보로 되돌아가며 첨부는 추가 tail 읽기 의도로 종료.",
+        "counterEvidenceAndLimit": "첨부에 최종 보고가 없음만 확인. 실제 세션 완료/중단/크래시/무한 루프 여부는 미확인.",
+        "planMapping": [
+          "E4",
+          "E5",
+          "R22"
+        ]
+      },
+      {
+        "id": "S10",
+        "lineRanges": [
+          [
+            426,
+            439
+          ]
+        ],
+        "observation": "추론 생성 한도 및 tool request 부재로 한 번 재시도한다는 호스트 안내 뒤 파일별 전체 분석을 재개한다고 서술.",
+        "counterEvidenceAndLimit": "정확한 finish reason/토큰 수/실행 이벤트는 없음. 현재 코드의 기존 단일 복구를 먼저 replay/관측.",
+        "planMapping": [
+          "E0",
+          "E4",
+          "E5",
+          "R23"
+        ]
+      }
+    ],
+    "currentProjectComparison": [
+      {
+        "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Latency-Resilient-Multiplayer-Combat\\Source\\Latency_MultiCombat\\Private\\LatencyMultiCombatCharacter.cpp",
+        "bytes": 19285,
+        "sha256": "3cddf4aa2f729c08871761f329c366bc2ca9d40d9bd70826c5944204a873821d",
+        "lineRanges": [
+          [
+            85,
+            117
+          ],
+          [
+            163,
+            167
+          ],
+          [
+            188,
+            215
+          ],
+          [
+            415,
+            418
+          ]
+        ],
+        "observation": "Enhanced/legacy 입력, ShootPressed→FireWeapon, authority/server RPC 분기 및 HandleServerFire 권한 검사 뒤 탄약 변경.",
+        "proofLevel": "SourceVerified",
+        "historicalHashMatch": "unknown"
+      },
+      {
+        "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Latency-Resilient-Multiplayer-Combat\\Source\\Latency_MultiCombat\\Public\\LatencyMultiCombatCharacter.h",
+        "bytes": 4755,
+        "sha256": "262f333cc2080613fd21d1223794cecb85a5be8e22c94de53f6a536d882d026a",
+        "lineRanges": [
+          [
+            83,
+            92
+          ]
+        ],
+        "observation": "ServerFire는 Server,Reliable; ClientConfirmHit는 Client,Unreliable 선언.",
+        "proofLevel": "SourceVerified",
+        "historicalHashMatch": "unknown"
+      },
+      {
+        "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Latency-Resilient-Multiplayer-Combat\\Source\\Latency_MultiCombat\\Private\\LatencyMultiCombatGameMode.cpp",
+        "bytes": 6025,
+        "sha256": "9c130e06ee7abc235139870910dafc5b62a6c80f6963f5b2acc0b9dc1a454526",
+        "lineRanges": [
+          [
+            128,
+            139
+          ]
+        ],
+        "observation": "GameMode 멤버 RespawnPlayer 안에서 RestartPlayer(Controller) 호출.",
+        "proofLevel": "SourceVerified",
+        "historicalHashMatch": "unknown"
+      },
+      {
+        "path": "C:\\Users\\sster\\Documents\\Git\\UE5_Latency-Resilient-Multiplayer-Combat\\Source\\Latency_MultiCombat\\Latency_MultiCombat.cpp",
+        "bytes": 228,
+        "sha256": "b928d2936642f410c986f4a15b0935ee3fa327b7aa5fa16762573e9de5deada0",
+        "lineRanges": [
+          [
+            6,
+            6
+          ]
+        ],
+        "observation": "모듈 루트에 IMPLEMENT_PRIMARY_GAME_MODULE 등록 존재.",
+        "proofLevel": "SourceVerified",
+        "historicalHashMatch": "unknown"
+      }
+    ],
+    "unknowns": [
+      "정확한 모델 설정 및 당시 하네스 버전",
+      "실행 당시 게임/엔진 source hash",
+      "원시 tool request/dispatch/result 및 budget retry 인자",
+      "actual model inputs 및 token/compaction/latency totals",
+      "최종 보고의 후속 전달 여부 또는 세션 종료 사유"
+    ],
+    "notConcluded": [
+      "Compactor 단독 원인",
+      "budget reservation 누수",
+      "XML parser 또는 결과 routing 버그",
+      "엔진 소스 손상/삭제",
+      "모듈 등록 누락으로 게임 실행 불가",
+      "클라이언트 FireWeapon 일반 함수 호출만으로 권한 결함",
+      "전체 소스 및 모든 엔진 API 검증 완료"
+    ],
+    "evaluationPriority": [
+      "source/claim correctness",
+      "needed evidence selection and rejected hypothesis retention",
+      "first useful report and final delivery",
+      "latency and repeated source bytes under identical settings"
+    ]
+  },
+  "implementationGovernance": {
+    "userRequirement": "SSOT, SOLID, contracts, lifetime management, responsibility, boundaries and separation throughout work; investigate file edits/count and scheduling.",
+    "proofLevel": "Proposed",
+    "planSections": [
+      "3.1",
+      "3.2",
+      "3.3",
+      "7",
+      "8"
+    ],
+    "currentGuidanceAlreadyExists": true,
+    "newApprovalFlow": false,
+    "newRuntimeScheduler": false,
+    "priorityFileCandidates": [
+      {
+        "kind": "implementation",
+        "path": "scripts/engine_header_evidence.py"
+      },
+      {
+        "kind": "implementation",
+        "path": "scripts/direct_rag_engine_local.py"
+      },
+      {
+        "kind": "implementation",
+        "path": "lmstudio-context-compactor-plugin/src/resume-facts.ts"
+      },
+      {
+        "kind": "implementation",
+        "path": "lmstudio-context-compactor-plugin/src/execution-instructions.ts"
+      },
+      {
+        "kind": "regression_candidate",
+        "path": "tests/test_direct_rag_engine_local.py"
+      },
+      {
+        "kind": "regression_candidate",
+        "path": "tests/test_engine_header_evidence_identity.py"
+      },
+      {
+        "kind": "regression_candidate",
+        "path": "lmstudio-context-compactor-plugin/test/resume-facts.test.cjs"
+      },
+      {
+        "kind": "regression_candidate",
+        "path": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs"
+      },
+      {
+        "kind": "generated",
+        "path": "lmstudio-context-compactor-plugin/src/generated-runtime-identity.ts"
+      }
+    ],
+    "priorityCandidateCount": 9,
+    "mandatoryFinalChangedFileCount": null,
+    "countCaveat": "4 implementation + 4 regression candidates + 1 generated identity; existing tests may suffice. Conditional schema/guidance/version/eval changes and actual distinct modified files finalized from implementation evidence.",
+    "workSequence": [
+      "W0/E0 baseline source/settings/build identity fixed",
+      "W1/E1-E2 RAG metadata and consumer sequential on same file, focused checks",
+      "W2/E3 compactor instructions, build current TS then tests",
+      "W3/E4 source contracts/guidance/version then generators then identity then build",
+      "W4/E5 fixed-build model A/B sequential on shared model/GPU",
+      "W5/E6 integration checks and evidence handoff"
+    ],
+    "parallelPolicy": [
+      "independent read-only investigation permitted",
+      "one writer per file/output",
+      "baseline source not mutated while running unless exact isolated snapshot",
+      "generators/shared dist or fixture writers serialized",
+      "background ID is not completion proof"
+    ],
+    "progressRecord": "existing task tools when present, otherwise MD row: id/purpose/dependencies/files-functions/status/evidence-remaining question. No new product schema.",
+    "openResearch": [
+      "actual model instruction delivery versus compliance",
+      "actual final file count and conditional owners",
+      "patch cap/receipt/read costs in multi-file edit latency",
+      "raw request/process/result/source identity pairing",
+      "minimal changes without new state or scheduler"
+    ]
+  },
+  "claudeResearchAddition": {
+    "date": "2026-10-18",
+    "sourcePolicy": "official documentation and first-party engineering articles only",
+    "verificationBoundary": "documented behavior, not private Claude Code implementation or local runtime verification",
+    "sources": [
+      {
+        "url": "https://code.claude.com/docs/en/how-claude-code-works",
+        "observed": "agentic loop/model-tool/context responsibility split",
+        "localInference": "기존 수집-행동-검증 및 compaction/recovery 경계 재사용"
+      },
+      {
+        "url": "https://code.claude.com/docs/en/memory",
+        "observed": "instructions are context; scoped rules; imports can still consume startup context",
+        "localInference": "기존 정본/선택/입력 연결과 준수 여부를 구분; 전체 가이던스 강제 주입 없음"
+      },
+      {
+        "url": "https://code.claude.com/docs/en/hooks#posttooluse",
+        "observed": "post-tool observation occurs after effects; matching hooks can run in parallel",
+        "localInference": "실행 전 계약과 실행 후 관측 분리; 순서 필요한 검사는 기존 runner에서 순차"
+      },
+      {
+        "url": "https://www.anthropic.com/engineering/writing-tools-for-agents",
+        "observed": "distinct tools, relevant outputs, metrics plus raw trace and held-out evals",
+        "localInference": "기존 범위/bundle 도구 재사용 및 실제 trace 기반 평가"
+      },
+      {
+        "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+        "observed": "lightweight references and just-in-time retrieval",
+        "localInference": "locator/필요 함수 기반 취득과 archive/current 구분"
+      },
+      {
+        "url": "https://code.claude.com/docs/en/best-practices#explore-first-then-plan-then-code",
+        "observed": "multi-file change exploration, affected files, planning, verification",
+        "localInference": "계약 단위 작업 순서와 직접 검사; 사용자 금지한 커밋은 제외"
+      },
+      {
+        "url": "https://code.claude.com/docs/en/tools-reference#edit-tool-behavior",
+        "observed": "exact match edits with uniqueness; read/stale handling depends on model/version",
+        "localInference": "MCP hash/receipt를 보존; 매번 전체 재읽기라는 가정 제거"
+      },
+      {
+        "url": "https://code.claude.com/docs/en/tools-reference#task-tool-availability",
+        "observed": "task status/dependencies tools are not universal defaults",
+        "localInference": "실제 도구 가용성 확인; 없으면 MD 진행표 사용"
+      },
+      {
+        "url": "https://code.claude.com/docs/en/interactive-mode#task-list",
+        "observed": "checklist is separate from running shells/agents; background IDs and output files",
+        "localInference": "계획/프로세스/검증 상태와 source provenance 분리"
+      },
+      {
+        "url": "https://code.claude.com/docs/en/sub-agents",
+        "observed": "separate context and optional worktree isolation",
+        "localInference": "독립 검토 참고; 자동 멀티에이전트 런타임 도입 보류"
+      },
+      {
+        "url": "https://code.claude.com/docs/en/checkpointing#limitations",
+        "observed": "rewind does not cover all shell/external/subagent changes",
+        "localInference": "기존 MCP transaction 범위 준수; 전체 작업 rollback 보장 주장 금지"
+      },
+      {
+        "url": "https://www.anthropic.com/engineering/managed-agents",
+        "observed": "durable session storage separated from arbitrary context transformation",
+        "localInference": "archive/projection 경계의 별도 제품 참고이며 Claude Code 내부 구현 주장 아님"
+      }
+    ],
+    "notConcluded": [
+      "universal number of files changed per job",
+      "automatic SOLID/SSOT compliance",
+      "all reads are function-only",
+      "Task tools always present for Opus 5.5 or Swift",
+      "Claude checkpoint rolls back all external MCP edits",
+      "Managed Agents architecture is Claude Code internals"
+    ]
+  }
+}

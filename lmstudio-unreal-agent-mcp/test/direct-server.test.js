@@ -94,7 +94,7 @@ test("read envelope byte budgets preserve UTF-8, escaped text and contiguous who
     const p=payloadOf(response); assert.equal(p.ok,true,JSON.stringify(p));
     assert.equal(p.startLine,start); assert.equal(p.content,lines.slice(start-1,p.endLine).join('\n'));
     delivered.push(...p.content.split('\n'));
-    if (p.nextStartLine === null) break;
+    if (p.nextStartLine == null) break;
     assert.equal(p.nextStartLine,p.endLine+1); start=p.nextStartLine;
   }
   assert.deepEqual(delivered,lines);
@@ -300,10 +300,12 @@ test("mutation schemas expose focused per-round edit bounds", () => {
     { required: ["fileVersionReceipt"] },
     { required: ["expectedHash"] },
   ]);
-  assert.match(replace.description, /Emit the call immediately/u);
-  assert.match(replace.description, /4000 combined chars/u);
-  assert.match(replace.description, /next round with the returned receipt/u);
-  assert.match(replace.description, /never auto-selected/u);
+  assert.equal(replaceProperties.edits.maxItems, 8);
+  assert.match(replace.description, /4000 chars/u);
+  // Several regions of one file are one call; the result's receipt chains on.
+  assert.match(replace.description, /edits\[\]/u);
+  assert.match(replace.description, /no read-back needed/u);
+  assert.equal(replace.inputSchema.oneOf.length, 2);
   assert.match(replace.description, /Requires ALLOW_WRITE=1/u);
 
   const patches = bundle.inputSchema.properties.patches;
@@ -318,10 +320,10 @@ test("mutation schemas expose focused per-round edit bounds", () => {
     { required: ["fileVersionReceipt"] },
     { required: ["expectedHash"] },
   ]);
-  assert.match(bundle.description, /at most 2 distinct existing files/u);
-  assert.match(bundle.description, /unique paths, max 64 changed lines/u);
-  assert.match(bundle.description, /Same-file regions: replace_in_file/u);
-  assert.match(bundle.description, /Never creates files/u);
+  assert.equal(patches.items.properties.edits.maxItems, 8);
+  assert.match(bundle.description, /unique paths, ≤64 total lines/u);
+  assert.match(bundle.description, /Per-file edits/u);
+  assert.match(bundle.description, /existing files/u);
   assert.match(bundle.description, /Requires ALLOW_WRITE=1/u);
 
   const deletionFiles = proposeDelete.inputSchema.properties.files;
@@ -688,7 +690,7 @@ test("read_file_range reports the last line actually delivered and a lossless co
     assert.strictEqual(payload.endLine, startLine + delivered.length - 1);
     assert.ok(result.content[0].text.length <= 16000);
     received.push(...delivered);
-    if (payload.nextStartLine === null) break;
+    if (payload.nextStartLine == null) break;
     assert.strictEqual(payload.nextStartLine, payload.endLine + 1);
     assert.ok(payload.nextStartLine > startLine);
     startLine = payload.nextStartLine;

@@ -853,7 +853,7 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest["productVersion"] == "1.4.0"
-    assert packaged_installer_manifest["version"] == "2.1.26"
+    assert packaged_installer_manifest["version"] == "2.1.27"
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
     assert (output / "docs" / "Release_Notes_1_4_0.md").is_file()
     assert (output / "docs" / "Release_Notes_1_4_0_RC2.md").is_file()

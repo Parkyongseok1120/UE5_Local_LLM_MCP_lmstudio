@@ -22,13 +22,14 @@ from typing import Any
 
 ARG_FIELDS = ("action", "operationId", "compilationId", "indexVersion", "mode", "match", "symbolId", "path", "query", "sourceMode", "owner", "byteBudget", "maxBytes", "offsetBytes", "startLine",
               "endLine", "chunkId", "offset", "maxChars", "detailLevel", "matchFileNames", "namesOnly", "mode",
-              "project", "readHandle", "action", "symbol")
+              "project", "readHandle", "action", "symbol", "view", "contextLines", "include", "regex", "caseSensitive", "maxFiles", "maxResults")
 RESULT_FLAGS = ("connection", "reasonCode", "compilationOutcome", "testStatus", "passed", "failed", "indexSource", "ok", "status", "errorCode", "hasMore", "truncated", "nextOffsetBytes", "nextStartLine",
                 "matchCount", "bodyComplete", "notice", "suggestion", "validationScope", "factualEvidenceVerified",
                 "summary", "omissionReason", "effectiveByteBudget", "duplicate", "absenceVerified",
                 "apiAbsenceVerified", "evidenceEnvelopeTruncated", "matchesReturned", "matchesOmitted",
                 "moreMatchesPossible", "nextCursor", "cursorOffset")
 SOURCE_READS = {"read_file", "read_file_range", "read_symbol", "git_read_file"}
+MUTATIONS = {"replace_in_file", "write_file", "apply_edit_bundle", "patch_file"}
 KEPT_EVENTS = {"working_context_projection", "model_input_evidence_summary", "execution_outcome", "batch_budget",
                "working_context_restore", "resume_state", "partial_search_scope_notice", "verification_scope_notice"}
 KEPT_EVENT_FIELDS = ("event", "roundIndex", "reason", "changed", "disposition", "reportState", "executionOutcome",
@@ -130,6 +131,18 @@ def failure_kind(flags: dict[str, Any], tool: str = "") -> str | None:
     return None
 
 
+def lines_read(decoded: Any) -> int | None:
+    """Lines a successful source read returned: its startLine..endLine span, else
+    the line count of its content."""
+    if not isinstance(decoded, dict) or decoded.get("ok") is False or decoded.get("errorCode"):
+        return None
+    start, end = _find(decoded, "startLine"), _find(decoded, "endLine")
+    if isinstance(start, int) and isinstance(end, int) and end >= start:
+        return end - start + 1
+    content = _find(decoded, "content")
+    return content.count("\n") + 1 if isinstance(content, str) and content else None
+
+
 def _mark_complete_line_range(call: dict[str, Any]) -> None:
     """Older read_file_range results set truncated when the file merely continues
     past the requested range. A next line right after endLine means the
@@ -176,7 +189,7 @@ def _mark_rereads(calls: list[dict[str, Any]], events: list[dict[str, Any]]) -> 
         if call["name"] not in SOURCE_READS or call.get("failureKind") in {"not_found", "outside_allowed_roots",
                                                                           "error_other"}:
             continue
-        key = json.dumps([call["name"], call["args"]], sort_keys=True, ensure_ascii=False)
+        key = json.dumps([call["name"], call.get("argumentsFingerprint", call["args"])], sort_keys=True, ensure_ascii=False)
         if key in seen:
             earlier = seen[key]
             projected = any(earlier <= after < call["index"] for after in projections)
@@ -188,6 +201,13 @@ def _routing_args(params: Any) -> dict[str, Any]:
     if not isinstance(params, dict):
         return {}
     return {k: _short(params[k], 160) for k in ARG_FIELDS if k in params}
+
+
+def _request_fingerprint(params: Any) -> str:
+    # Keep every full argument affecting the read. A repeat receipt controls
+    # duplicate-body delivery, not which source/range was requested again.
+    identity = {k: v for k, v in params.items() if k != "repeatReceipt"} if isinstance(params, dict) else params
+    return sha256(json.dumps(identity or {}, sort_keys=True, ensure_ascii=False))
 
 
 def _relation(call: dict[str, Any], follow: dict[str, Any] | None) -> dict[str, Any]:
@@ -251,7 +271,8 @@ def parse_conversation(data: dict[str, Any]) -> dict[str, Any]:
                 kind = block.get("type")
                 if kind == "toolCallRequest":
                     call = {"index": call_index, "name": block.get("name"), "plugin": block.get("pluginIdentifier"),
-                            "args": _routing_args(block.get("parameters")), "result": None, "failureKind": None}
+                            "args": _routing_args(block.get("parameters")), "result": None, "failureKind": None,
+                            "argumentsFingerprint": _request_fingerprint(block.get("parameters"))}
                     call_index += 1
                     pending[str(block.get("toolCallRequestId"))] = call
                     turn["calls"].append(call)
@@ -259,7 +280,10 @@ def parse_conversation(data: dict[str, Any]) -> dict[str, Any]:
                 elif kind == "toolCallResult":
                     call = pending.get(str(block.get("toolCallRequestId")))
                     if call is not None:
-                        call["result"] = result_flags(_decode_result(block.get("content")))
+                        decoded = _decode_result(block.get("content"))
+                        call["result"] = result_flags(decoded)
+                        if call["name"] in SOURCE_READS:
+                            call["linesRead"] = lines_read(decoded)
                         call["failureKind"] = failure_kind(call["result"], str(call["name"] or ""))
                         _mark_complete_line_range(call)
                 elif kind == "text":
@@ -323,7 +347,31 @@ def summarize(trace: dict[str, Any]) -> dict[str, Any]:
             reason = str(item.get("budgetDenialReason") or item["validationState"])
             denied[reason] = denied.get(reason, 0) + 1
     return {"failureKinds": counts, "followUpRelations": relations,
-            "callCount": sum(len(t["calls"]) for t in trace["turns"]), "rereads": rereads, "deniedCalls": denied}
+            "callCount": sum(len(t["calls"]) for t in trace["turns"]), "rereads": rereads, "deniedCalls": denied,
+            "readShape": read_shape(trace)}
+
+
+def read_shape(trace: dict[str, Any]) -> dict[str, Any]:
+    """How wide the reads were and how many calls each edit cost. Which lines a
+    task actually needed is not recorded, so only what was read is counted."""
+    reads = [c for t in trace["turns"] for c in t["calls"] if c["name"] in SOURCE_READS]
+    edits = [c for t in trace["turns"] for c in t["calls"] if c["name"] in MUTATIONS]
+    ok_edits = [c for c in edits if c["failureKind"] is None and (c.get("result") or {}).get("ok") is True]
+    before_edit = []
+    for turn in trace["turns"]:
+        first = next((i for i, c in enumerate(turn["calls"]) if c["name"] in MUTATIONS), None)
+        if first is not None:
+            before_edit.append(sum(1 for c in turn["calls"][:first] if c["name"] in SOURCE_READS))
+    lines = [c.get("linesRead") or 0 for c in reads]
+    engine = [c.get("linesRead") or 0 for c in reads if str(c["args"].get("path") or "").startswith("engine://")]
+    repeated = sum(1 for c in reads if c.get("reread"))
+    calls = sum(len(t["calls"]) for t in trace["turns"])
+    return {"sourceReads": len(reads), "wholeFileReads": sum(1 for c in reads if c["name"] == "read_file"
+            and "offsetBytes" not in c["args"] and "maxBytes" not in c["args"]),
+            "linesRead": sum(lines), "engineLinesRead": sum(engine), "maxLinesPerRead": max(lines, default=0),
+            "repeatedReadRate": round(repeated / len(reads), 3) if reads else 0.0,
+            "readsBeforeFirstEdit": before_edit, "editCalls": len(edits), "successfulEdits": len(ok_edits),
+            "callsPerSuccessfulEdit": round(calls / len(ok_edits), 2) if ok_edits else None}
 
 
 def render_markdown(name: str, trace: dict[str, Any]) -> str:
@@ -335,7 +383,8 @@ def render_markdown(name: str, trace: dict[str, Any]) -> str:
              f"- calls: {summary['callCount']}; failure kinds: {json.dumps(summary['failureKinds'], ensure_ascii=False)}",
              f"- follow-up relations: {json.dumps(summary['followUpRelations'], ensure_ascii=False)}",
              f"- rereads: {json.dumps(summary['rereads'], ensure_ascii=False)}; "
-             f"denied calls: {json.dumps(summary['deniedCalls'], ensure_ascii=False)}", ""]
+             f"denied calls: {json.dumps(summary['deniedCalls'], ensure_ascii=False)}",
+             f"- read shape: {json.dumps(summary['readShape'], ensure_ascii=False)}", ""]
     for number, turn in enumerate(trace["turns"], 1):
         lines += [f"## Turn {number} (user sha256 {str(turn['userMessageSha256'])[:12]})", "",
                   "| # | tool | args | failure | key result fields | follow-up |", "|---|---|---|---|---|---|"]

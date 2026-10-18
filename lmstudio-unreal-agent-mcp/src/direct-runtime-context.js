@@ -37,6 +37,8 @@ function createDirectRuntimeContext(options = {}) {
   const limits = {
     ...resolveMutationLimits(env),
     maxReadBytes: clamp(env.MAX_READ_BYTES, 64 * 1024, 4096, 2 * 1024 * 1024),
+    // Larger engine:// files are read by symbol, search hit or line range, not whole.
+    wholeReadMaxBytes: clamp(env.DIRECT_WHOLE_READ_MAX_BYTES, 64 * 1024, 1024, 2 * 1024 * 1024),
     maxSourceBytes: clamp(env.DIRECT_MAX_SOURCE_FILE_BYTES, 8 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024),
     commandTimeoutMs: clamp(env.COMMAND_TIMEOUT_MS, 10 * 60 * 1000, 1000, 60 * 60 * 1000),
     maxResponseChars: clamp(env.DIRECT_MAX_RESPONSE_CHARS, DEFAULT_MAX_RESPONSE_CHARS, 16_000, 1_000_000),
@@ -183,7 +185,9 @@ function createDirectRuntimeContext(options = {}) {
     const duplicate = repeatCache.lookup(toolName, args, state);
     if (duplicate) return duplicate;
     const engineUri = error.details?.engineUri;
-    if (engineUri) error.suggestion = { tool: toolName, args: { ...args, path: engineUri } };
+    if (engineUri) error.suggestion = toolName === "read_file" && args.maxBytes === undefined && args.offsetBytes === undefined
+      ? { tool: "read_file_range", args: { path: engineUri, startLine: 1, endLine: 20, ...(args.project ? { project: args.project } : {}) } }
+      : { tool: toolName, args: { ...args, path: engineUri } };
     const payload = errorFromException(error);
     repeatCache.remember(toolName, args, state, payload);
     return payload;

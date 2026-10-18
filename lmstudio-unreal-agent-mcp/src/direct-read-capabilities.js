@@ -11,7 +11,7 @@ const { success, failure } = require("./direct-response.js");
 const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
 const { clamp, isBinary, statOrNull, statSignature } = require("./direct-runtime-shared.js");
 
-const { lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
+const { lexicalDeclarationWindow, lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
 const { LINE_NUMBER_FORMAT, numberLines } = require("../../shared-tool-core/line-numbering.js");
 
 const fsp = fs.promises;
@@ -153,6 +153,21 @@ function createReadCapabilities(context) {
       }));
     }
     if (!initialStat.isFile()) return unavailable(resolution, "NOT_A_FILE", `Not a file: ${args.path}`);
+    const explicitWindow = args.offsetBytes !== undefined || args.maxBytes !== undefined;
+    if (!explicitWindow && (resolution.resolvedRootType === "installed_engine"
+      || initialStat.size > limits.wholeReadMaxBytes)) {
+      return unavailable(resolution, "WHOLE_READ_TOO_LARGE",
+        `${args.path} is ${initialStat.size} bytes; engine source and large files require a targeted read. `
+        + "Search the symbol with context lines, read its declaration or body, or read the exact line range.", {
+          retryAllowed: true, retryMode: "different_arguments",
+          suggestion: { tool: "read_file_range", args: projectScopedSuggestionArgs(args, { path: args.path, startLine: 1, endLine: 20 }) },
+          details: { size: initialStat.size, alternatives: [
+            { tool: "search_files", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, query: "<symbol>", contextLines: 3 }) },
+            { tool: "read_symbol", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, symbol: "<symbol>", view: "declaration" }) },
+            { tool: "read_file_range", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, startLine: "<first>", endLine: "<last>" }) },
+          ] },
+        });
+    }
     const stableRead = await readStableFileWindow(resolution.absolutePath, offset, maxBytes);
     if (!stableRead.ok) {
       return unavailable(resolution, stableRead.errorCode, readMessage(stableRead, args, resolution), { retryAllowed: true, retryMode: "after_state_change" });
@@ -220,8 +235,10 @@ function createReadCapabilities(context) {
       truncated: end < requestedEnd,
       requestedEndLine: requestedEnd,
       requestedRangeComplete: end >= requestedEnd,
+      rangeComplete: end >= requestedEnd,
       moreLinesInFile: end < lines.length,
-      nextStartLine: end < lines.length ? end + 1 : null,
+      // Only a cut request continues; lines past a completed range are not owed.
+      ...(end < requestedEnd ? { nextStartLine: end + 1 } : {}),
       ...(end < requestedEnd ? { omissionReason: end >= maximumEnd ? "line_limit"
         : args.byteBudget === undefined ? "response_budget" : "byte_budget" } : {}),
       ...budgetFields(args, end < maximumEnd),
@@ -270,7 +287,14 @@ function createReadCapabilities(context) {
       return unavailable(resolution, read.errorCode, readMessage(read, args, resolution),
         read.errorCode === "NOT_FOUND" ? { suggestion: await notFoundSuggestion(args, resolution) } : {});
     }
-    const window = lexicalSymbolWindow(read.content, args.symbol, args.contextLines);
+    if (args.view !== undefined && !["body", "declaration", "member"].includes(args.view)) {
+      return failure("INVALID_ARGUMENT", "view must be body, declaration or member.", { retryAllowed: true, retryMode: "different_arguments" });
+    }
+    if (args.view === "member" && !/^[A-Za-z_]\w*::[A-Za-z_]\w*$/.test(String(args.symbol || ""))) {
+      return failure("INVALID_SYMBOL", "member view requires Owner::Name to select the class/struct scope.", { retryAllowed: true });
+    }
+    const declaration = args.view === "declaration" || args.view === "member";
+    const window = (declaration ? lexicalDeclarationWindow : lexicalSymbolWindow)(read.content, args.symbol, args.contextLines);
     if (!window.ok) return window;
     const { symbol, allLines, start, end, candidateCount } = window;
     const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
@@ -287,7 +311,7 @@ function createReadCapabilities(context) {
       nextStartLine: returnedEnd < end ? returnedEnd + 1 : null,
       hasMore: returnedEnd < end,
       truncated: returnedEnd < end,
-      representation: "lexical_body_candidate",
+      representation: declaration ? "lexical_declaration_candidate" : "lexical_body_candidate",
       candidateCount,
       candidateLines: window.candidateLines,
       selection: window.selection,

@@ -101,9 +101,11 @@ function bundleMutationUsage(bundle) {
   let bytes = 0;
   let changedLines = 0;
   for (const patch of bundle?.patches || []) {
-    bytes += Buffer.byteLength(patch.oldText, "utf8");
-    bytes += Buffer.byteLength(patch.newText, "utf8");
-    changedLines += textLineCount(patch.newText);
+    for (const edit of patch.edits || [patch]) {
+      bytes += Buffer.byteLength(edit.oldText, "utf8");
+      bytes += Buffer.byteLength(edit.newText, "utf8");
+      changedLines += textLineCount(edit.newText);
+    }
   }
   return { bytes, changedLines };
 }

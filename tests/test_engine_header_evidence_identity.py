@@ -144,3 +144,23 @@ def test_fields_include_reflection_context_and_do_not_invent_parent_resolution()
 @pytest.mark.parametrize("declaration,name", [("using Alias = int;", "Alias"), ("class Forward;", "Forward"), ("struct Forward;", "Forward"), ("typedef int Alias;", "Alias")])
 def test_type_declarations_are_not_fields(declaration, name):
     assert engine_header_evidence._bounded_declaration("class ADemo { public: " + declaration + " };", name, "ADemo") is None
+
+
+def test_long_signature_includes_balanced_parameters_and_trailing_qualifiers():
+    parameters = ",\n".join(f"    int Arg{index} = Factory(1, (2 + 3))" for index in range(12))
+    source = "class ADemo {\npublic:\nint Compute(\n" + parameters + "\n) const noexcept;\nint Unrelated;\n};"
+    result = engine_header_evidence._bounded_declaration(source, "Compute", "ADemo")
+    assert result["signatureComplete"] is True
+    assert result["excerptTruncated"] is False
+    assert "Arg11" in result["excerpt"]
+    assert ") const noexcept;" in result["excerpt"]
+    assert "Unrelated" not in result["excerpt"]
+
+
+@pytest.mark.parametrize("parameters", ["int Value" + " " * 2000 + ");", "int Value;\n"])
+def test_oversized_or_unterminated_signature_never_claims_completeness(parameters):
+    result = engine_header_evidence._bounded_declaration(
+        "class ADemo {\npublic:\nvoid Compute(" + parameters + "\n};", "Compute", "ADemo"
+    )
+    assert result["signatureComplete"] is False
+    assert result["excerptTruncated"] is True

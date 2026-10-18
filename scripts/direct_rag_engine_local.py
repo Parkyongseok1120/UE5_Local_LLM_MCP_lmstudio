@@ -19,6 +19,7 @@ from target_resolver import resolve_symbol_target
 from unreal_contracts import contract_revision, engine_version_validated, load_contracts_or_none, related_contracts
 from workspace_paths import resolve_engine_root_for_association
 
+_RUNTIME_DEFAULT_EXCLUDES = ("Engine/Source/Editor", "Engine/Source/Developer", "Engine/Source/Programs", "Engine/Plugins")
 
 def _related_contracts(symbol: str, owner: str, rows: list[dict[str, Any]], version: str) -> dict[str, Any] | None:
     """Ids and one-sentence summaries only; the contract file stays the source."""
@@ -47,6 +48,10 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
                                           "args": {"query": corrected, "sourceMode": "engine_local"}}} if corrected else {}))
     if owner and not re.fullmatch(r"[A-Za-z_]\w{0,127}", owner, re.ASCII):
         return failure("INVALID_TOOL_ARGUMENTS", "owner must be one exact type name.")
+    # signature returns declarations and proven implementation locators, without bodies.
+    view = str(arguments.get("view") or "full")
+    if view not in ("signature", "full"):
+        return failure("INVALID_TOOL_ARGUMENTS", "view must be signature or full.")
     if "::" in query:
         qualified_owner, symbol = query.split("::")
         if owner and owner != qualified_owner:
@@ -94,18 +99,22 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
     thunk = re.fullmatch(r"(\w+?)_(Implementation|Validate)", symbol, re.ASCII)
     declared_symbol = symbol
     source = lookup_engine_header_evidence(root, [{"symbol": symbol, "receiverType": owner}],
-                                          local_source_identity=identity["sha256"])
+                                          local_source_identity=identity["sha256"],
+                                          include_definitions=True)
     rows = list(source.get("results") or [])
     if thunk and not rows:
         fallback = lookup_engine_header_evidence(root, [{"symbol": thunk.group(1), "receiverType": owner}],
-                                                local_source_identity=identity["sha256"])
+                                                local_source_identity=identity["sha256"],
+                                                include_definitions=True)
         read_bytes = source.get("readBytes", 0) + fallback.get("readBytes", 0)
         rows = [{**row, "definitionCandidates": [candidate for candidate in row.get("definitionCandidates", [])
                                                  if candidate.get("symbol_name") == symbol]}
                 for row in fallback.get("results") or [] if symbol in reflection_thunk_names(row)]
         if rows:
             declared_symbol = thunk.group(1)
-            source = fallback
+            # The explicit suffixed lookup's limits still bound this answer.
+            reasons = {*source.get("coverage", {}).get("reasons", []), *fallback.get("coverage", {}).get("reasons", [])}
+            source = {**fallback, "coverage": {**fallback.get("coverage", {}), "reasons": sorted(reasons)}}
         source = {**source, "readBytes": read_bytes}
     if _build_identity(root) != identity:
         return scoped_failure("ENGINE_SOURCE_CHANGED", "Engine identity changed during the source observation.")
@@ -115,14 +124,16 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
                    "qualified_name": f"{owner}::{declared_symbol}" if owner else r["qualified_name"],
                    "filePath": r["source"], "line": r["line"]} for r in rows]
     target = resolve_symbol_target(f"{owner}::{declared_symbol}" if owner else declared_symbol, candidates, access="read")
-    evidence = "\n\n".join(f"{r['source']}:{r['line']}\n{r['excerpt']}" for r in rows)
+    declaration_blocks = [f"{r['source']}:{r['line']}\n{r['excerpt']}" for r in rows]
+    evidence = "\n\n".join(declaration_blocks)
     # Implementation bodies are evidence text; only their locators and
     # fingerprints are response metadata.
     definitions = [{k: v for k, v in c.items() if k != "excerpt"}
                    for r in rows for c in r.get("definitionCandidates", [])]
-    definition_text = "\n\n".join(f"[definition candidate] {c['source']}:{c['line']}\n{c['excerpt']}"
-                                  for r in rows for c in r.get("definitionCandidates", []))
-    if definition_text:
+    definition_blocks = [f"[definition candidate] {c['source']}:{c['line']}\n{c['excerpt']}"
+                         for r in rows for c in r.get("definitionCandidates", [])]
+    definition_text = "\n\n".join(definition_blocks)
+    if definition_text and view == "full":
         evidence = f"{evidence}\n\n{definition_text}" if evidence else definition_text
     matches = [{k: v for k, v in r.items() if k not in ("excerpt", "definitionCandidates")} for r in rows]
     payload: dict[str, Any] = {"ok": True, "query": query, "requestedOwner": owner,
@@ -138,8 +149,16 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
         # Finding a declaration on a parent is not proof that it is accessible
         # or callable from the requested owner (access, hiding, overloads).
         "callabilityVerification": "not_verified_access_overload_and_macro_expansion"}
+    if view == "signature":
+        payload["view"] = "signature"
+        payload["definitionBodiesOmitted"] = True
     if definitions:
-        payload["definitionCandidates"] = definitions
+        # In full view only a cut body needs continuation. Signature view
+        # omits every body but retains a targeted read when its end is proven.
+        payload["definitionCandidates"] = [
+            {**_with_range(c, root), "evidenceExcerpt": "omitted"} if view == "signature"
+            else _with_range(c, root) if c.get("excerptTruncated") else c
+            for c in definitions]
     if thunk and declared_symbol != symbol:
         payload["reflectionThunk"] = {
             "requestedSymbol": symbol, "declaredSymbol": declared_symbol, "suffix": f"_{thunk.group(2)}",
@@ -148,9 +167,21 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
     if not rows:
         # A bounded zero is not absence. Offer the one search that reads
         # engine text directly (the agent server's search_files over engine://).
-        payload["suggestion"] = {"tool": "search_files", "args": {
-            "path": "engine://Engine/Source/Runtime", "query": f"{owner}::{symbol}" if owner else f"{symbol}(",
-            "maxFiles": 50000}}
+        # The owner already failed, so search the bare token (any kind: function,
+        # field or enumerator) in the one module where an owner type was read.
+        modules = {t["moduleUri"] for t in payload["coverage"].get("observedTypeCandidates", []) if t.get("moduleUri")}
+        token = {"query": rf"\b{re.escape(symbol)}\b", "regex": True}
+        if len(modules) == 1:
+            payload["suggestion"] = {"tool": "search_files", "scope": "observed_owner_module",
+                                     "args": {"path": modules.pop(), **token}}
+        else:
+            # The header lookup also reads Editor and Plugins; this default does not.
+            limit_note: dict[str, Any] = {"excludes": list(_RUNTIME_DEFAULT_EXCLUDES)}
+            if modules:
+                limit_note["observedModules"] = len(modules)
+            payload["suggestion"] = {"tool": "search_files", "scope": "engine_runtime_default_module_unknown",
+                                     "scopeLimit": limit_note,
+                                     "args": {"path": "engine://Engine/Source/Runtime", **token, "maxFiles": 50000}}
     related = _related_contracts(symbol, owner, rows, identity["version"])
     if related:
         payload["relatedContracts"] = related
@@ -162,9 +193,61 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
     while payload["matches"] and not evidence_metadata_fits(payload, max_chars=limit):
         payload["matches"] = payload["matches"][:-1]
         payload["matchMetadataOmitted"] = len(rows) - len(payload["matches"])
+    observed = payload["coverage"].get("observedTypeCandidates")
+    if observed and not evidence_metadata_fits(payload, max_chars=limit):
+        # Whole items only: a clipped URI would name a path that was never read.
+        payload["coverage"] = {k: v for k, v in payload["coverage"].items() if k != "observedTypeCandidates"}
+        payload["coverage"]["observedTypeCandidatesOmitted"] = len(observed)
     if not evidence_metadata_fits(payload, max_chars=limit):
         return scoped_failure("OUTPUT_LIMIT_EXCEEDED", "Local source identity does not fit the configured result limit.")
     payload, truncated = fit_evidence_payload(payload, max_chars=limit - 64)
     if truncated:
         payload["evidenceEnvelopeTruncated"] = True
+        payload = _mark_clipped_evidence(payload, {"matches": declaration_blocks,
+                                                   "definitionCandidates": definition_blocks}, root, limit - 64)
     return CapabilityResult(payload, char_limit=limit)
+
+
+def _with_range(candidate: dict[str, Any], root: Path) -> dict[str, Any]:
+    """Add the whole-function read_file_range on engine:// when its end is proven."""
+    try:
+        uri = "engine://" + Path(candidate["source"]).relative_to(root).as_posix()
+    except ValueError:
+        return candidate
+    if not candidate.get("endLine"):
+        return candidate
+    return {**candidate, "rangeSuggestion": {"tool": "read_file_range", "args": {
+        "path": uri, "startLine": candidate["line"], "endLine": candidate["endLine"]}}}
+
+
+def _mark_clipped_evidence(payload: dict[str, Any], blocks: dict[str, list[str]], root: Path,
+                           max_chars: int) -> dict[str, Any]:
+    """Mark declaration and definition excerpts the envelope fit cut, so
+    excerptTruncated=false (the excerpt stage) is not read as the delivered
+    text being complete. Only a definition with a proven end gets a range."""
+    for _ in range(3):
+        evidence = str(payload.get("evidence") or "")
+        updated, changed = {}, False
+        for key, key_blocks in blocks.items():
+            if key not in payload:
+                continue
+            marked = []
+            for item, block in zip(payload[key] or [], key_blocks):
+                state = None if block in evidence else (
+                    "partial" if block.split("\n", 1)[0] + "\n" in evidence else "omitted")
+                if item.get("evidenceExcerpt") != state:
+                    changed = True
+                    item = {k: v for k, v in item.items() if k != "evidenceExcerpt"}
+                    if state:
+                        item = {**(_with_range(item, root) if key == "definitionCandidates" else item),
+                                "evidenceExcerpt": state}
+                marked.append(item)
+            updated[key] = marked
+        if not changed:
+            return payload
+        annotated = {**payload, **updated}
+        # The marks are metadata; never let them push the identity out of the cap.
+        if not evidence_metadata_fits(annotated, max_chars=max_chars, reserve_chars=0):
+            return payload
+        payload, _ = fit_evidence_payload(annotated, max_chars=max_chars)
+    return payload

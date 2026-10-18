@@ -107,7 +107,6 @@ function focusedPatchArguments() {
       type: "string",
       minLength: 1,
       maxLength: HARD_MUTATION_LIMITS.maxPatchOldTextChars,
-      description: "Exact current text of one region.",
     },
     newText: {
       type: "string",
@@ -119,6 +118,16 @@ function focusedPatchArguments() {
     },
     ...fileVersionArguments(),
   };
+}
+
+function multiPatchArguments() {
+  const single = focusedPatchArguments();
+  return { ...single, edits: { type: "array", minItems: 1, maxItems: 8,
+    items: schema({ oldText: single.oldText, newText: single.newText }, ["oldText", "newText"]) } };
+}
+
+function patchForms() {
+  return [{ required: ["oldText", "newText", "expectedOccurrences"] }, { required: ["edits"] }];
 }
 
 function toolDefinitions() {
@@ -163,7 +172,7 @@ function toolDefinitions() {
     },
     {
       name: "list_directory",
-      description: "List a workspace://, project:// or engine:// directory; page with offset=nextOffset.",
+      description: "List a workspace://, project:// or engine:// directory; page by offset=nextOffset.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
@@ -174,7 +183,7 @@ function toolDefinitions() {
     },
     {
       name: "search_files",
-      description: "Search contents/basenames: workspace:// (default), project://, engine://. Results carry a reusable uri; for project:// pass activeProject as project. Partial ≠ absence: pass nextCursor as cursor.",
+      description: "Search contents/names; reusable uri; activeProject as project. Partial ≠ absence; nextCursor continues.",
       inputSchema: schema(repeatable({
         query: { type: "string" },
         path: { type: "string" },
@@ -185,12 +194,14 @@ function toolDefinitions() {
         cursor: { type: "string" },
         maxResults: { type: "number", description: "Default 100, max 1000." },
         maxFiles: { type: "number", description: "Default 5000, max 50000." },
+        contextLines: { type: "number", description: "0-8 lines around hits" },
+        include: { type: "string", description: "Glob: *.h, **/Public/**" },
         byteBudget: readByteBudget(),
       }), ["query"]),
     },
     {
       name: "read_file",
-      description: "Read a UTF-8 byte window (maxBytes default 64 KiB; byteBudget caps the whole JSON reply); continue at nextOffsetBytes.",
+      description: "UTF-8; whole project ≤64 KiB. Engine/large files need ranges or explicit byte windows.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
@@ -201,7 +212,7 @@ function toolDefinitions() {
     },
     {
       name: "read_file_range",
-      description: "Read whole lines startLine..endLine; continue at nextStartLine. Hash/receipt prove version, not coverage.",
+      description: "Read lines startLine..endLine; nextStartLine only if truncated. Hash/receipt prove version, not coverage.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
@@ -213,11 +224,12 @@ function toolDefinitions() {
     },
     {
       name: "read_symbol",
-      description: "Lexical C/C++ body candidate, not a verified definition. Continue via read_file_range at nextStartLine.",
+      description: "Lexical C/C++ body (default), declaration, or member (requires Owner::Name).",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
         symbol: { type: "string" },
+        view: { type: "string", enum: ["body", "declaration", "member"] },
         contextLines: { type: "number" },
         lineNumbers: { type: "boolean" },
         byteBudget: readByteBudget(),
@@ -240,7 +252,7 @@ function toolDefinitions() {
     },
     {
       name: "write_file",
-      description: `Create one new file (max ${L.maxNewFileChars} chars, ${L.maxNewFileLines} lines) in project Source, Config, plugin Source or descriptor; never overwrites. Requires ALLOW_WRITE=1.`,
+      description: `Create one new file (≤${L.maxNewFileChars} chars, ${L.maxNewFileLines} lines) in project Source/Config/plugin Source/descriptor; never overwrites. Requires ALLOW_WRITE=1.`,
       inputSchema: schema({
         path: { type: "string", minLength: 1 },
         project: projectArgument(),
@@ -250,18 +262,19 @@ function toolDefinitions() {
     },
     {
       name: "replace_in_file",
-      description: `Atomically replace one exact region in project Source/Config/plugin files. Requires ALLOW_WRITE=1 and an explicit fileVersionReceipt or expectedHash (never auto-selected). Max ${L.maxPatchChars} combined chars, ${L.maxPatchLines} newText lines. Emit the call immediately; edit another region next round with the returned receipt.`,
+      description: `Atomic exact replacement or edits[]; ≤${L.maxPatchChars} chars/${L.maxPatchLines} new lines per region, ≤${L.maxBundleChangedLines} total lines. Requires ALLOW_WRITE=1 and version proof. Chain result receipt; no read-back needed.`,
       inputSchema: {
         ...schema({
-          ...focusedPatchArguments(),
+          ...multiPatchArguments(),
           project: projectArgument(),
-        }, ["path", "oldText", "newText", "expectedOccurrences"]),
+        }, ["path"]),
         anyOf: explicitFileVersionEvidence(),
+        oneOf: patchForms(),
       },
     },
     {
       name: "apply_edit_bundle",
-      description: `Atomically patch one region in each of at most ${L.maxBundleOperations} distinct existing files (unique paths, max ${L.maxBundleChangedLines} changed lines; replace_in_file limits and receipts per patch). Same-file regions: replace_in_file. Never creates files. Requires ALLOW_WRITE=1.`,
+      description: `Atomic patches for ≤${L.maxBundleOperations} existing files, unique paths, ≤${L.maxBundleChangedLines} total lines. Per-file edits[] allowed. Requires ALLOW_WRITE=1; same bounds/proof as replace_in_file.`,
       inputSchema: schema({
         project: projectArgument(),
         patches: {
@@ -270,10 +283,11 @@ function toolDefinitions() {
           maxItems: L.maxBundleOperations,
           items: {
             ...schema(
-              focusedPatchArguments(),
-              ["path", "oldText", "newText", "expectedOccurrences"],
+              multiPatchArguments(),
+              ["path"],
             ),
             anyOf: explicitFileVersionEvidence(),
+            oneOf: patchForms(),
           },
         },
       }, ["patches"]),

@@ -1,0 +1,8 @@
+[
+  {"owner":"FHit", "source":"struct FHit;\nstruct API_API FHit { float Amount; };", "found":true},
+  {"owner":"FHit", "source":"struct FHit { void Run() { if (true) {} } float Amount; };", "found":true},
+  {"owner":"FHit", "source":"// struct FHit {\nstruct FOther { const char* X = \"struct FHit {}\"; };", "found":false},
+  {"owner":"FHit", "source":"struct FHit { int A; }; struct FHit { int B; };", "found":false},
+  {"owner":"FHit", "source":"struct FHit { int A;", "found":false},
+  {"owner":"EHit", "source":"enum class EHit { None, Critical };", "found":true}
+]

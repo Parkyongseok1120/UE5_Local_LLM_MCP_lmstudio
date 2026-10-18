@@ -24,7 +24,8 @@ function committedChange(before, after, previousHash, nextHash) {
     const oldText = left.slice(lineStart, leftEnd), newText = right.slice(lineStart, rightEnd);
     const beforeStartLine = left.slice(0, lineStart).split("\n").length;
     const afterStartLine = right.slice(0, lineStart).split("\n").length;
-    if (oldText.length + newText.length > 768) return { ...base, omittedHunks: 1 };
+    // Large enough for one full focused patch (4000 chars), so an edit needs no read-back.
+    if (oldText.length + newText.length > 4096) return { ...base, omittedHunks: 1 };
     return { ...base, status: "changed", coverage: "complete_changed_region",
       hunks: [{ beforeStartLine, afterStartLine, before: oldText, after: newText }] };
   } catch { return undefined; }

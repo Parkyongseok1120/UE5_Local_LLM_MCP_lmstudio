@@ -10,7 +10,26 @@ const { assertReadChildContained, displayPath, pathMetadata } = require("./read-
 const { success, failure, renderModelJson } = require("./direct-response.js");
 const { clamp, isBinary, relativeSlash, statOrNull, statSignature } = require("./direct-runtime-shared.js");
 
+const { numberLines } = require("../../shared-tool-core/line-numbering.js");
+
 const fsp = fs.promises;
+const MAX_CONTEXT_LINES = 8;
+const MAX_CONTEXT_LINE_CHARS = 400;
+const MAX_INCLUDE_CHARS = 200;
+
+// A glob over the path relative to the search root: "*" and "?" stay inside one
+// segment, "**/" spans directories. Without a "/" it matches the basename.
+function includeMatcher(pattern) {
+  const glob = String(pattern || "").trim();
+  if (!glob) return null;
+  const DEEP = "\u0000", ANY = "\u0001";
+  const source = glob.replace(/[.+^${}()|[\]\\]/gu, "\\$&")
+    .replace(/\*\*\//gu, DEEP).replace(/\*\*/gu, ANY)
+    .replace(/\*/gu, "[^/]*").replace(/\?/gu, "[^/]")
+    .split(DEEP).join("(?:.*/)?").split(ANY).join(".*");
+  const regex = new RegExp(`^${source}$`, "iu");
+  return glob.includes("/") ? (rel) => regex.test(rel) : (rel) => regex.test(rel.split("/").pop());
+}
 const DEFAULT_IGNORED_DIRS = new Set([
   ".git", ".vs", ".idea", "Binaries", "DerivedDataCache", "Intermediate",
   "node_modules", ".gradle", ".cache", ".pytest_cache",
@@ -35,7 +54,7 @@ function searchIdentity(args) {
   return crypto.createHash("sha256").update(JSON.stringify([
     String(args.query || ""), String(args.path || "workspace://"), String(args.project || ""),
     args.regex === true, args.matchFileNames ?? null, args.caseSensitive === true,
-    args.maxFiles ?? null,
+    args.maxFiles ?? null, String(args.include || ""),
   ])).digest("hex").slice(0, 16);
 }
 
@@ -124,6 +143,11 @@ function createSearchCapability(context, helpers = {}) {
     // Collect through the requested page; the matches before it are skipped.
     const collectLimit = Math.min(offset + maxResults, MAX_CURSOR_MATCHES);
     const maxFiles = clamp(args.maxFiles, 5000, 1, 50000);
+    const contextLines = clamp(args.contextLines, 0, 0, MAX_CONTEXT_LINES);
+    if (args.include !== undefined && (typeof args.include !== "string" || args.include.length > MAX_INCLUDE_CHARS)) {
+      return failure("INVALID_ARGUMENT", `include must be a glob string of at most ${MAX_INCLUDE_CHARS} characters.`, { retryAllowed: true, retryMode: "different_arguments" });
+    }
+    const included = includeMatcher(args.include);
     const caseSensitive = args.caseSensitive === true;
     let matcher;
     if (args.regex === true) {
@@ -150,7 +174,12 @@ function createSearchCapability(context, helpers = {}) {
     const cancelled = () => failure("REQUEST_CANCELLED", "search_files was cancelled.", {
       details: { cancelled: true, executionState: "stopped" },
     });
-    const { files, discoveryErrors, excludedEntries } = await collectSearchFiles(resolution, maxFiles, guard);
+    const discovered = await collectSearchFiles(resolution, maxFiles, guard);
+    const { discoveryErrors, excludedEntries } = discovered;
+    // include narrows the scope itself; coverage then speaks for the included files only.
+    const files = included ? discovered.files.filter(({ target }) => included(
+      rootStat.isFile() ? path.basename(target) : relativeSlash(resolution.absolutePath, target),
+    )) : discovered.files;
     if (guard.reason() === "cancelled") return cancelled();
     const skippedByReason = { size: 0, unsupported_extension: 0, binary: 0, read_error: 0 };
     let filesRead = 0;
@@ -180,7 +209,10 @@ function createSearchCapability(context, helpers = {}) {
       for (let index = 0; index < lines.length && found.length < collectLimit; index += 1) {
         if (index % 1024 === 1023 && guard.reason()) return { found, read: true, interrupted: true };
         if (!matchesText(lines[index])) continue;
-        found.push({ path: rel, uri: resultUri(rel), line: index + 1, text: lines[index].slice(0, 1200) });
+        const first = Math.max(0, index - contextLines), last = Math.min(lines.length, index + contextLines + 1);
+        found.push({ path: rel, uri: resultUri(rel), line: index + 1, text: lines[index].slice(0, 1200),
+          ...(contextLines ? { contextStartLine: first + 1, contextEndLine: last,
+            context: numberLines(lines.slice(first, last).map((line) => line.slice(0, MAX_CONTEXT_LINE_CHARS)), first + 1).join("\n") } : {}) });
       }
       return { found, read: true };
     }
@@ -213,7 +245,8 @@ function createSearchCapability(context, helpers = {}) {
     // The page after the matches a cursor already returned.
     const page = results.slice(offset);
     const limitReached = results.length >= collectLimit;
-    const complete = filesRead === files.length && !discoveryErrors && !excludedEntries && files.length < maxFiles
+    const maxFilesReached = discovered.files.length >= maxFiles;
+    const complete = filesRead === files.length && !discoveryErrors && !excludedEntries && !maxFilesReached
       && !limitReached && !stopReason;
     const makePayload = (list, omitted) => {
       const more = omitted || limitReached;
@@ -227,10 +260,11 @@ function createSearchCapability(context, helpers = {}) {
         query,
         results: list,
         filesScanned: files.length, // Legacy candidate count; filesRead is actual content coverage.
+        ...(included ? { include: args.include, filesFilteredByInclude: discovered.files.length - files.length } : {}),
         filesRead, filesSkipped: Object.values(skippedByReason).reduce((a, b) => a + b, 0),
         readErrorCount: skippedByReason.read_error, discoveryErrorCount: discoveryErrors, excludedEntries, skippedByReason,
         coverage: complete && !omitted ? "complete" : "partial",
-        maxFilesReached: files.length >= maxFiles,
+        maxFilesReached,
         truncated: more,
         ...(cursor ? { cursorOffset: offset } : {}),
         ...(cursorLimitReached ? { stopReason: "cursor_limit", cursorMatchLimit: MAX_CURSOR_MATCHES,

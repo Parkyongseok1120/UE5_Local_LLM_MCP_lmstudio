@@ -144,3 +144,33 @@ test('round shutdown closes interrupted generation and unresolved read execution
   reading.tracker.finishPending();assert.equal(reading.tracker.hasUnfinished(),false);
   assert.equal(reading.statuses[0].state.status,'canceled');assert.match(reading.statuses[0].state.text,/완료 결과를 확인하지 못했습니다/);
 });
+
+// An identical read whose successful result is still verbatim in this input is
+// sent with that result's repeatReceipt: the server answers "no new
+// information" only while the file is unchanged, otherwise the fresh text.
+test('an identical read already present in the input carries its repeatReceipt to the server', async () => {
+  const {presentRepeatReceipts, repeatRequestKey} = require('../dist/evidence-manager');
+  const {ChatMessage} = require('@lmstudio/sdk');
+  const args = {path:'project://Source/A.cpp', project:'C:/Game', startLine:1, endLine:40};
+  const history = Chat.from([{role:'user', content:'Read A'}]);
+  history.append(ChatMessage.from({role:'assistant', content:[{type:'toolCallRequest', toolCallRequest:{type:'function', id:'r1', name:'read_file_range', arguments:args}}]}));
+  history.append(ChatMessage.from({role:'tool', content:[{type:'toolCallResult', toolCallId:'r1',
+    content:JSON.stringify({ok:true, path:args.path, content:'1\tint A;', startLine:1, endLine:1, repeatReceipt:'rr_live'})}]}));
+  history.append(ChatMessage.from({role:'assistant', content:[{type:'toolCallRequest', toolCallRequest:{type:'function', id:'r2', name:'read_file_range', arguments:{path:'project://Source/B.cpp', startLine:1, endLine:9}}}]}));
+  history.append(ChatMessage.from({role:'tool', content:[{type:'toolCallResult', toolCallId:'r2',
+    content:JSON.stringify({kind:'archived_tool_result_projection', bodyComplete:false, repeatReceipt:'rr_projected'})}]}));
+  const present = presentRepeatReceipts(history);
+  assert.equal(present.get(repeatRequestKey('read_file_range', args)), 'rr_live');
+  assert.equal(present.get(repeatRequestKey('read_file_range', {...args, byteBudget:8192})), undefined);
+  assert.equal(present.size, 1, 'a projection is not present verbatim');
+
+  const hit = fixture('read_file_range', 'mcp/unreal-agent', {}, {inputRepeatReceipts: present});
+  hit.request.arguments = {...args};
+  await hit.invoke();
+  assert.equal(hit.outcome.type, 'allow');
+  assert.equal(hit.outcome.args.repeatReceipt, 'rr_live');
+  const miss = fixture('read_file_range', 'mcp/unreal-agent', {}, {inputRepeatReceipts: present});
+  miss.request.arguments = {...args, endLine:80};
+  await miss.invoke();
+  assert.equal(miss.outcome.args.repeatReceipt, undefined);
+});

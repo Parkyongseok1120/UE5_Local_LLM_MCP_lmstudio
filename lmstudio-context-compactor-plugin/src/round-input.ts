@@ -100,7 +100,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     // summary success the only way to preserve historical bodies.
     if (low.changed && workingContext && !config.observeOnly) {
       const projected = evidenceManager.project(sourceHistory,
-        { executionId, roundIndex, modelInputId: candidateModelInputId, proofLevel: "returned_tool_result" },
+        { executionId, roundIndex, modelInputId: candidateModelInputId, proofLevel: "returned_tool_result", pinnedWorkingSetMaxChars: 0 },
         config.toolResultProjectionChars);
       if (projected.changed) {
         projectionApplied = true;
@@ -181,7 +181,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   if (assembledInput.measurement.remainingTokens < 0 && workingContext && !finalizing && !config.observeOnly) {
     for (const preserve of [FIRST_CONSUMER_RAW_GIT_MAX_CHARS, 0]) {
       const projected = evidenceManager.project(workingHistory,
-        { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result", preserveUnconsumedRawMaxChars: preserve },
+        { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result", preserveUnconsumedRawMaxChars: preserve,
+          pinnedWorkingSetMaxChars: 0 },
         config.toolResultProjectionChars);
       if (projected.changed) {
         workingHistory = projected.history; projectionApplied = true;

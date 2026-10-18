@@ -534,6 +534,8 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/direct-log-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-limits.js",
+    "lmstudio-unreal-agent-mcp/src/direct-mutation-arguments.js",
+    "lmstudio-unreal-agent-mcp/src/edit-region-locator.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-scope.js",
     "lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-response.js",

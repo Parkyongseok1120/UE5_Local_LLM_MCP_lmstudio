@@ -177,7 +177,7 @@ test("body and projection keep lexical limitations and final byte-window scope",
     history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest:
       { type: "function", id: "symbol", name: "read_symbol", arguments: { path: payload.path, symbol: "Foo" } } }] }));
     history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "symbol", content: JSON.stringify(payload) }] }));
-    const projected = wc.project(history, () => true, {}, 512);
+    const projected = wc.project(history, () => true, { pinnedWorkingSetMaxChars: 0 }, 512);
     const value = JSON.parse(projected.history.getMessagesArray().at(-1).getToolCallResults()[0].content);
     assert.equal(value.sourceFacts.candidateCount, 2);
     assert.equal(value.sourceFacts.signatureVerification, payload.signatureVerification);

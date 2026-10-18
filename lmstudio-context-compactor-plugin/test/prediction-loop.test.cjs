@@ -4371,6 +4371,43 @@ test("resuming after a turn that ended on tool results tells the model its draft
   assert.equal(resume.partialProjections, 0);
 });
 
+for (const observeOnly of [false, true]) test(`a partial projection in the restored chat reaches the SDK input as need-based guidance (observeOnly=${observeOnly})`, async () => {
+  const history = Chat.empty();
+  history.append(ChatMessage.from({ role: "user", content: "Audit GameMode." }));
+  const request = { type: "function", id: "p1", name: "read_file", arguments: { path: "project://Source/Game/GameMode.cpp" } };
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "p1",
+    content: JSON.stringify({ kind: "archived_tool_result_projection", originalCallId: "p1", toolName: "read_file",
+      sourceIdentity: { path: "project://Source/Game/GameMode.cpp" }, bodyTotalChars: 5988, bodyOmittedChars: 5476,
+      bodyComplete: false, archiveRef: { readHandle: "h-p1" }, notice: "PARTIAL BODY: chars 0-512 of 5988" }) }] }));
+  history.append(ChatMessage.from({ role: "assistant", content: "Partial findings." }));
+  history.append(ChatMessage.from({ role: "user", content: "계속해" }));
+  const inputs = [];
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, _tools, options) {
+      inputs.push(chat.toString());
+      options.onMessage(ChatMessage.create("assistant", "done"));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "off", observeOnly });
+  await handlePredictionLoop(ctl);
+  assert.equal(inputs.length, 1);
+  const resume = ctl.debugValues.find(value => value.event === "resume_state");
+  assert.equal(resume.partialProjections, 1);
+  if (observeOnly) {
+    assert.doesNotMatch(inputs[0], /present in this input only in part/u);
+  } else {
+    assert.match(inputs[0], /1 earlier tool result\(s\) are present in this input only in part/u);
+    assert.match(inputs[0], /readHandle=h-p1/u);
+    assert.match(inputs[0], /does not require restoring every omitted body/u);
+    assert.doesNotMatch(inputs[0], /Page the omitted body with/u);
+  }
+});
+
 test("availability off mode leaves both model input and availability telemetry disabled", async () => {
   const history = availabilityHistory();
   let receivedHistory;

@@ -341,7 +341,7 @@ test("bundle mutation results retain each modified path and hash", () => {
     "project://Source/B.h",
   ]);
   assert.equal(result.memory.modifiedOrObservedFiles[1].sha256AtObservation, "b".repeat(64));
-  assert.equal(result.memory.modifiedOrObservedFiles[1].mutationSnapshotState, "fresh_read_required");
+  assert.equal(result.memory.modifiedOrObservedFiles[1].mutationSnapshotState, "expectedHash_edit_ok");
 });
 
 test("hard compaction drops a top-level file receipt and keeps only non-actionable file facts", () => {
@@ -373,7 +373,7 @@ test("hard compaction drops a top-level file receipt and keeps only non-actionab
     observationState: "modified",
     sha256AtObservation: "a".repeat(64),
     lastObservedAt: "2026-08-22T01:23:45.000Z",
-    mutationSnapshotState: "fresh_read_required",
+    mutationSnapshotState: "expectedHash_edit_ok",
   }]);
 });
 
@@ -408,7 +408,7 @@ test("nested bundle results cannot preserve receipts or registry ordering counte
   assert.equal(result.memory.modifiedOrObservedFiles.length, 2);
   assert.deepEqual(
     result.memory.modifiedOrObservedFiles.map((item) => item.mutationSnapshotState),
-    ["fresh_read_required", "fresh_read_required"],
+    ["expectedHash_edit_ok", "expectedHash_edit_ok"],
   );
 });
 
@@ -583,7 +583,7 @@ test("emergency rendering budgets canonical observations instead of imposing a t
 
   assert.ok(parsed.currentWorkStatus.modifiedOrObservedFiles.length > 2);
   assert.ok(parsed.currentWorkStatus.modifiedOrObservedFiles.every((item) => (
-    item.canonicalProject === project && item.mutationSnapshotState === "fresh_read_required"
+    item.canonicalProject === project && item.mutationSnapshotState === "expectedHash_edit_ok"
   )));
   for (const legacyMirror of [
     "recentOlderToolOutcomes",
@@ -687,7 +687,7 @@ test("a per-call exact project keeps a write on that clone without changing the 
   assert.equal(result.memory.activeProject.descriptor, cloneA);
   assert.equal(created.canonicalProject, cloneB);
   assert.equal(created.canonicalPath, "C:\\Work\\CloneB\\Source\\New.cpp");
-  assert.equal(created.mutationSnapshotState, "fresh_read_required");
+  assert.equal(created.mutationSnapshotState, "expectedHash_edit_ok");
 });
 
 test("a per-call read cannot change active project or retarget the next unscoped write", () => {
@@ -1342,7 +1342,7 @@ test("registry registration order is discarded even when an unchanged hash is ob
   assertNoDurableFileCapability(result);
   assert.equal(result.memory.modifiedOrObservedFiles.length, 1);
   assert.equal(result.memory.modifiedOrObservedFiles[0].sha256AtObservation, "d".repeat(64));
-  assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+  assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "expectedHash_edit_ok");
 });
 
 test("partial independent mutation outcomes stay factual without preserving the reused capability", () => {
@@ -1371,7 +1371,7 @@ test("partial independent mutation outcomes stay factual without preserving the 
   assertNoDurableFileCapability(result);
   assert.match(JSON.stringify(result.memory.recentOlderToolOutcomes), /FILE_SNAPSHOT_SCOPE_MISMATCH/u);
   assert.equal(result.memory.modifiedOrObservedFiles[0].observationState, "modified");
-  assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+  assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "expectedHash_edit_ok");
 });
 
 test("the durable user copy strips raw capability payloads but keeps diagnostic identifiers", () => {
@@ -1419,7 +1419,7 @@ test("a retained file result stays raw and becomes durable only after it is omit
   assert.equal(agedResult.memory.modifiedOrObservedFiles.length, 1);
   assert.equal(agedResult.memory.modifiedOrObservedFiles[0].path, "project://Source/Next.cpp");
   assert.equal(agedResult.memory.modifiedOrObservedFiles[0].sha256AtObservation, "9".repeat(64));
-  assert.equal(agedResult.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+  assert.equal(agedResult.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "expectedHash_edit_ok");
   const agedCheckpoint = JSON.parse(agedResult.checkpoint.slice(agedResult.checkpoint.indexOf("{")));
   assert.equal(Object.hasOwn(agedCheckpoint, "modifiedOrObservedFiles"), false);
   assert.equal(agedCheckpoint.currentWorkStatus.modifiedOrObservedFiles.length, 1);
@@ -1457,7 +1457,7 @@ test("a simulated MCP restart inherits facts and objective but no prior runtime 
   assertNoDurableFileCapability(firstRuntime);
   assertNoDurableFileCapability(secondRuntime);
   assert.equal(secondRuntime.memory.activeObjective.text, "Implement and build the death pipeline.");
-  assert.equal(secondRuntime.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "fresh_read_required");
+  assert.equal(secondRuntime.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "expectedHash_edit_ok");
   assert.match(JSON.stringify(secondRuntime.memory.recentOlderToolOutcomes), /FILE_SNAPSHOT_INVALID/u);
 });
 
@@ -1492,7 +1492,7 @@ test("the minimized 5,692-line Qwen transcript replay keeps canonical facts thro
     assert.ok(round.result.memory.modifiedOrObservedFiles.every((item) => (
       item.canonicalProject === fixture.canonicalProject
       && item.canonicalPath.startsWith(fixtureProjectRoot)
-      && item.mutationSnapshotState === "fresh_read_required"
+      && item.mutationSnapshotState === "expectedHash_edit_ok"
     )));
   }
   const finalFiles = third.result.memory.modifiedOrObservedFiles;

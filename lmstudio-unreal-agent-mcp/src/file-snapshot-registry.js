@@ -67,6 +67,8 @@ class FileSnapshotRegistry {
   touch(receipt, entry) {
     this.entries.delete(receipt);
     entry.lastAccessedAt = this.now();
+    // Sliding lifetime: a receipt in use stays valid; the commit still re-checks the hash.
+    entry.expiresAt = entry.lastAccessedAt + this.ttlMs;
     this.entries.set(receipt, entry);
   }
 

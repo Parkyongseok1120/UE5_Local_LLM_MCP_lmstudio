@@ -6,6 +6,7 @@ const fsp = fs.promises;
 const { atomicWriteText } = require("./atomic-io");
 const {
   calculateReplacement,
+  calculateReplacements,
   replaceWithCAS,
   sha256Text,
   assertMutationActive,
@@ -143,7 +144,7 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
     const original = baseline.get(relativePath);
     if (!target || !original) throw new Error(`Unknown patch path: ${relativePath}`);
     const priorContent = await fsp.readFile(target.absolutePath, "utf8");
-    const planned = calculateReplacement({
+    const planned = item.edits ? calculateReplacements({ priorContent, edits: item.edits }) : calculateReplacement({
       priorContent,
       oldText: item.oldText,
       newText: item.newText,
@@ -182,6 +183,7 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
       readHash: patchedPaths.has(relativePath)
         ? priorHash
         : (item.expectedHash || original.preHash || null),
+      edits: item.edits,
     });
     if (!result.ok) throw patchFailure(result, relativePath, item);
     if (sha256Text(result.updated) !== postHash) {
@@ -203,7 +205,10 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
     postWriteHashes[relativePath] = postHash;
     // This optional calculation never throws into the transaction rollback.
     if (result.preHash === original.preHash) {
-      const evidence = committedChange(result.priorContent, result.updated, result.preHash, postHash);
+      const evidence = item.edits
+        ? { schemaVersion: 1, previousSha256: result.preHash, sha256: postHash,
+          status: result.preHash === postHash ? "no_change" : "changed", coverage: "complete_changed_regions", hunks: result.regions }
+        : committedChange(result.priorContent, result.updated, result.preHash, postHash);
       if (evidence) changeEvidenceByPath[relativePath] = evidence;
     }
     patchedPaths.add(relativePath);

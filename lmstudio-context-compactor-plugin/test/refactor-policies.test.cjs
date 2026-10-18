@@ -133,11 +133,11 @@ test('Git/File/Symbol/Log/Unity/Unreal share first-consumer, archive and coverag
     history.append(ChatMessage.from({role:'assistant',content:[{type:'toolCallRequest',toolCallRequest:{type:'function',id:'r',name:'read_file',arguments:{}}}]}));
     const payload={ok:true,kind:source+'_observation',path:'a',sha256:'v1',startLine:1,endLine:3,content:'BODY '+ 'z'.repeat(3000)};
     history.append(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:'r',content:JSON.stringify(payload)}]}));
-    assert.equal(manager.project(history,{preserveUnconsumedRawMaxChars:8192},256).changed,false);
+    assert.equal(manager.project(history,{preserveUnconsumedRawMaxChars:8192,pinnedWorkingSetMaxChars:0},256).changed,false);
     manager.captureExposure(history,'incomplete',false);
     assert.equal(store.consumedRawResults.size,0);
     manager.captureExposure(history,'completed',true);
-    const projected=manager.project(history,{preserveUnconsumedRawMaxChars:8192},256);
+    const projected=manager.project(history,{preserveUnconsumedRawMaxChars:8192,pinnedWorkingSetMaxChars:0},256);
     assert.equal(projected.changed,true);
     const value=JSON.parse(projected.history.getMessagesArray().at(-1).getToolCallResults()[0].content);
     assert.match(value.excerpt,/BODY/); assert.equal(value.fullRawProvided,false);

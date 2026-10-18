@@ -635,7 +635,7 @@
     },
     {
       "id": "policy.claims.engine-default-vs-project",
-      "revision": 2,
+      "revision": 3,
       "kind": "project_policy",
       "topic": "verification",
       "applicability": {
@@ -643,7 +643,7 @@
           "*"
         ]
       },
-      "statement": "Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text). Before stating what an engine function returns or does, read its implementation: sourceMode=engine_local lists .cpp definition candidates, and read_file_range reads engine://Engine/Source/... with line numbers.",
+      "statement": "Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text). For an engine function's parameters or return type, its declaration is the evidence (unreal_symbol_lookup view=signature, or read_symbol view=declaration). Read the implementation range only when the claim depends on what the body does: sourceMode=engine_local lists .cpp definition candidates, and read_file_range reads just those engine://Engine/Source/... lines.",
       "preconditions": [
         "A finding says an engine capability is absent or a configuration cannot be checked."
       ],
@@ -675,7 +675,7 @@
     },
     {
       "id": "policy.claims.absence",
-      "revision": 1,
+      "revision": 2,
       "kind": "project_policy",
       "topic": "verification",
       "applicability": {
@@ -683,7 +683,7 @@
           "*"
         ]
       },
-      "statement": "A claim that something is never set, called or present needs a search whose coverage is complete. A partial or truncated search result is not absence: continue it with its nextCursor, and include declaration headers and inline (FORCEINLINE) definitions in the search scope before stating absence.",
+      "statement": "Only a claim that something is never set, called or present needs a search whose coverage is complete; other answers do not. For such a claim a partial or truncated search result is not absence: continue it with its nextCursor, and include declaration headers and inline (FORCEINLINE) definitions in the search scope before stating absence.",
       "preconditions": [
         "A finding says a value is never assigned, a function is never called, or a symbol does not exist."
       ],
@@ -695,7 +695,7 @@
     },
     {
       "id": "policy.claims.super-chain",
-      "revision": 1,
+      "revision": 2,
       "kind": "project_policy",
       "topic": "verification",
       "applicability": {
@@ -703,7 +703,7 @@
           "*"
         ]
       },
-      "statement": "Super:: names the direct parent class, not the first engine class that declares the function. Before describing an engine call chain, read the override in each intermediate class (for example APawn between ACharacter and AActor).",
+      "statement": "Super:: names the direct parent class, not the first engine class that declares the function. Only when a claim describes an engine call chain, check each intermediate class for an override (for example APawn between ACharacter and AActor): search_files for the function name in that class, then read only the override's range.",
       "preconditions": [
         "A report describes what Super:: or an engine base implementation does."
       ],

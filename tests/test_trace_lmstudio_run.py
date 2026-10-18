@@ -145,3 +145,45 @@ def test_unity_trace_classification_and_fields():
     assert trace.failure_kind({"errorCode": "path_denied"}) == "outside_allowed_roots"
     assert {"action", "operationId", "compilationId", "indexVersion"} <= set(trace.ARG_FIELDS)
     assert {"connection", "reasonCode", "compilationOutcome", "testStatus", "passed", "failed"} <= set(trace.RESULT_FLAGS)
+
+
+def test_read_shape_counts_lines_whole_reads_and_calls_per_edit():
+    blocks = _call("1", "read_file", {"path": "engine://Engine/Source/A.cpp"},
+                   {"ok": True, "content": "a\nb\nc", "sha256": "x"}) \
+        + _call("2", "read_file_range", {"path": "project://Source/B.cpp", "startLine": 10, "endLine": 19},
+                {"ok": True, "startLine": 10, "endLine": 19}) \
+        + _call("3", "read_file_range", {"path": "project://Source/B.cpp", "startLine": 10, "endLine": 19},
+                {"ok": True, "startLine": 10, "endLine": 19}) \
+        + _call("4", "replace_in_file", {"path": "project://Source/B.cpp"}, {"ok": True, "operation": "replaced"})
+    shape = trace.summarize(trace.parse_conversation(_conversation(blocks)))["readShape"]
+    assert shape["sourceReads"] == 3 and shape["wholeFileReads"] == 1
+    assert shape["linesRead"] == 23 and shape["engineLinesRead"] == 3 and shape["maxLinesPerRead"] == 10
+    assert shape["repeatedReadRate"] == 0.333 and shape["readsBeforeFirstEdit"] == [3]
+    assert shape["successfulEdits"] == 1 and shape["callsPerSuccessfulEdit"] == 4.0
+
+
+def test_read_shape_does_not_count_byte_windows_or_unreturned_edits_as_success():
+    blocks = _call("1", "read_file", {"path": "project://A.cpp", "offsetBytes": 0, "maxBytes": 100},
+                   {"ok": True, "content": "a\nb"})
+    pending = _call("2", "replace_in_file", {"path": "project://A.cpp"}, {"ok": True})[0]
+    shape = trace.summarize(trace.parse_conversation(_conversation(blocks + [pending])))["readShape"]
+    assert shape["wholeFileReads"] == 0
+    assert shape["successfulEdits"] == 0
+
+
+def test_different_symbol_views_are_not_identical_rereads():
+    blocks = _call("1", "read_symbol", {"path": "project://A.cpp", "symbol": "F::Run", "view": "declaration"},
+                   {"ok": True, "content": "void Run();"})
+    blocks += _call("2", "read_symbol", {"path": "project://A.cpp", "symbol": "F::Run", "view": "body"},
+                    {"ok": True, "content": "void F::Run() {}"})
+    assert trace.summarize(trace.parse_conversation(_conversation(blocks)))["readShape"]["repeatedReadRate"] == 0
+
+
+def test_repeat_receipt_does_not_hide_a_repeated_read_in_metrics():
+    args = {"path": "project://A.cpp", "startLine": 10, "endLine": 12, "byteBudget": 4096}
+    blocks = _call("1", "read_file_range", args, {"ok": True, "content": "a\nb\nc"})
+    blocks += _call("2", "read_file_range", {**args, "repeatReceipt": "provider-receipt"},
+                    {"ok": True, "duplicate": True})
+    shape = trace.summarize(trace.parse_conversation(_conversation(blocks)))["readShape"]
+    assert shape["repeatedReadRate"] == 0.5
+    assert shape["linesRead"] == 3

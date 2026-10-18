@@ -444,6 +444,7 @@ def lookup_engine_header_evidence(
     max_header_chars: int = 1_000_000,
     host_platform: str | None = None,
     local_source_identity: str | None = None,
+    include_definitions: bool = True,
 ) -> dict[str, Any]:
     """Return exact source excerpts keyed by ``owner::symbol`` or symbol.
 
@@ -452,7 +453,8 @@ def lookup_engine_header_evidence(
     """
 
     if local_source_identity is not None:
-        return _bounded_local_lookup(engine_root, list(claims), local_source_identity, host_platform=host_platform)
+        return _bounded_local_lookup(engine_root, list(claims), local_source_identity, host_platform=host_platform,
+                                     include_definitions=include_definitions)
     root = Path(engine_root).expanduser().resolve() if engine_root else None
     if root is None or not root.is_dir():
         return {
@@ -733,6 +735,35 @@ def _without_reflection_annotations(prefix: str) -> str:
     return prefix
 
 
+def _declaration_end(masked: str, pos: int, kind: str, limit: int = 8192) -> int | None:
+    """Offset just past the declaration starting at ``pos`` in comment/string-masked
+    text: a method's balanced parameter list, qualifiers and its ``;`` or ``{``; a
+    field's ``;``; an enumerator's top-level ``,`` or ``}``. None when unproven."""
+    if kind not in ("method", "field", "enum_value"):
+        return None
+    index = masked.find("(", pos, pos + limit) if kind == "method" else pos
+    if index < 0:
+        return None
+    depth, seen_parameters = 0, kind != "method"
+    for offset in range(index, min(len(masked), index + limit)):
+        char = masked[offset]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            seen_parameters = True
+            if depth < 0:
+                return None
+        elif depth == 0 and seen_parameters:
+            if kind == "enum_value" and char in ",}":
+                return offset + (char == ",")
+            if kind != "enum_value" and char in ";{":
+                return offset + 1
+            if kind == "field" and char == "}":
+                return None
+    return None
+
+
 def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] | None:
     masked = _lexical_source(text)
     region = _owner_region(masked, owner or symbol)
@@ -774,7 +805,9 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
         return None
     pos = positions[0]
     line = text.count("\n", 0, pos) + 1
-    lines = text.splitlines()
+    # Line numbers count "\n"; splitlines() would also split \f and U+2028.
+    lines = [item.removesuffix("\r") for item in text.split("\n")]
+    terminator = _declaration_end(masked, pos, kinds[pos])
     excerpt_start = max(0, line - 2)
     # Include a preceding multiline reflection annotation when lexically
     # adjacent. This bounded window does not prove absence or macro expansion.
@@ -790,7 +823,10 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
             end_annotation += 1
         if depth == 0 and not re.search(r"[;{}]", lexical_prefix[end_annotation:]):
             excerpt_start = prefix_start + prefix.count("\n", 0, annotation.start())
-    excerpt = "\n".join(lines[excerpt_start:min(len(lines), line + 5)])
+    # The whole signature and nothing after it when its end is lexically proven;
+    # otherwise the fixed window, marked as not proven complete.
+    end_line = text.count("\n", 0, terminator) + 1 if terminator is not None else min(len(lines), line + 5)
+    excerpt = "\n".join(lines[excerpt_start:end_line])
     conditional = bool(re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif|define)\b", masked[:end], re.M))
     access = "public" if re.match(r"(?:struct|enum)\b", masked[start:opening]) else "private"
     for label in re.finditer(r"\b(public|protected|private)\s*:", masked[opening + 1:pos]):
@@ -799,7 +835,9 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
             access = label.group(1)
     bases = re.findall(r"\b(?:public|protected|private)\s+(?:virtual\s+)?([A-Za-z_]\w*(?:::\w+)*)", masked[start:opening])[:8]
     return {"line": line, "excerpt": excerpt[:1800], "excerptStartLine": excerpt_start + 1,
-            "excerptTruncated": len(excerpt) > 1800,
+            "excerptTruncated": len(excerpt) > 1800 or (terminator is None and kinds[pos] in ("method", "field", "enum_value")),
+            **({"declarationEndLine": end_line, "signatureComplete": len(excerpt) <= 1800} if terminator is not None
+               else {"signatureComplete": False}),
             "annotationVerification": "bounded_lexical_context; absence_and_expansion_unverified",
             "observedOwner": owner or symbol,
             "requestedOwner": owner or symbol, "declarationKind": kinds[pos],
@@ -888,6 +926,15 @@ def _module_owner(header: Path, root: Path) -> dict[str, Any]:
     return owner
 
 
+def _engine_uri(path: Path, root: Path, *, parent: bool = False) -> str:
+    """The read-only engine:// form of an observed path; empty if outside root."""
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return ""
+    return "engine://" + (relative.parent if parent else relative).as_posix()
+
+
 def _public_header_index(root: Path, identity: str, host_platform: str | None, generation: int,
                          reasons: set[str]) -> dict[str, list[Path]]:
     catalog_deadline = time.monotonic() + _PUBLIC_CATALOG_SECONDS
@@ -942,7 +989,7 @@ def _read_bounded_header(header: Path, root: Path, budget: int, limit: int = 262
 
 
 def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str, str]], identity: str,
-                          *, host_platform: str | None = None) -> dict[str, Any]:
+                          *, host_platform: str | None = None, include_definitions: bool = True) -> dict[str, Any]:
     generation = _LOCAL_CACHE_GENERATION
     root = Path(engine_root).expanduser().resolve() if engine_root else None
     if root is None or len(claims) != 1:
@@ -958,6 +1005,9 @@ def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str,
     visited: list[str] = []
     edges: list[list[str]] = []
     unresolved: list[str] = []
+    # Type definitions actually read on the owner chain. They locate where the
+    # requested member was not declared; they never prove where it is.
+    observed_types: list[dict[str, str]] = []
     stop = False
     # Breadth-first from the requested owner. The nearest declaration on a
     # branch hides that name in its parents, so a found branch stops there.
@@ -1017,6 +1067,11 @@ def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str,
             if owner and parents is None:
                 parents = _type_parents(text, type_name)
                 if parents is not None:
+                    observed = {"typeName": type_name, "headerUri": _engine_uri(header, root)}
+                    module = _module_owner(header, root)
+                    if module.get("status") == "observed":
+                        observed["moduleUri"] = _engine_uri(root / module["buildCs"], root, parent=True)
+                    observed_types.append({k: v for k, v in observed.items() if v})
                     break
         if declared_here or not owner or stop:
             continue
@@ -1030,7 +1085,7 @@ def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str,
             edges.append([type_name, parent])
             queue.append((parent, chain + [parent]))
     # Declaration -> implementation: share the same deadline, file and byte budget.
-    if results:
+    if results and include_definitions:
         budget = DefinitionBudget(deadline=deadline, max_files=_INHERITANCE_MAX_FILES, max_bytes=_READ_LIMIT_BYTES,
                                   inspected=inspected, read_bytes=read_bytes)
         attach_definition_candidates(results, root, budget, read_source=_read_bounded_header, lexical=_lexical_source)
@@ -1046,12 +1101,15 @@ def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str,
         row["inheritanceVerification"] = searched
     # Filename discovery is intentionally incomplete as a declaration search.
     # Even a complete catalog and zero hits cannot establish API absence.
+    coverage: dict[str, Any] = {"scope": "bounded_public_header_candidates", "completeness": "partial",
+                                "reasons": sorted(reasons), "apiAbsenceVerified": False,
+                                "inheritance": {"verification": searched, "visitedTypes": visited[:16],
+                                                "edges": edges[:16], "unresolvedTypes": unresolved[:8],
+                                                "ambiguity": "multiple_declaring_types" if len(declaring) > 1 else None,
+                                                "limits": {"depth": _INHERITANCE_MAX_DEPTH, "types": _INHERITANCE_MAX_TYPES,
+                                                           "files": _INHERITANCE_MAX_FILES}}}
+    if observed_types and not results:
+        coverage["observedTypeCandidates"] = [{**item, "meaning": "type_observed_member_not_found"}
+                                              for item in observed_types[:8]]
     return {"status": "ready" if results else "coverage_limited", "engineRoot": str(root),
-            "results": results, "readBytes": read_bytes, "inspectedFileCount": inspected,
-            "coverage": {"scope": "bounded_public_header_candidates", "completeness": "partial",
-                         "reasons": sorted(reasons), "apiAbsenceVerified": False,
-                         "inheritance": {"verification": searched, "visitedTypes": visited[:16],
-                                         "edges": edges[:16], "unresolvedTypes": unresolved[:8],
-                                         "ambiguity": "multiple_declaring_types" if len(declaring) > 1 else None,
-                                         "limits": {"depth": _INHERITANCE_MAX_DEPTH, "types": _INHERITANCE_MAX_TYPES,
-                                                    "files": _INHERITANCE_MAX_FILES}}}}
+            "results": results, "readBytes": read_bytes, "inspectedFileCount": inspected, "coverage": coverage}

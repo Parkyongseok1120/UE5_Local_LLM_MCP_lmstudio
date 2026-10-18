@@ -57,7 +57,7 @@ test("wrong engine path: following the suggestion passes; repeating and claiming
   const good = await runScenario(scenario("wrong_engine_path"), scenarios.fixture, scriptedModel([
     () => ({ tool: "read_file", args: { path: WRONG } }),
     previous => ({ tool: previous.suggestion.tool, args: previous.suggestion.args }),
-    previous => ({ tool: "read_file", args: { path: previous.results[0].uri } }),
+    previous => ({ tool: "read_file_range", args: { path: previous.results[0].uri, startLine: previous.results[0].line || 1, endLine: (previous.results[0].line || 1) + 12 } }),
     () => ({ text: "APlayerController::PostLogin은 InitInputSystem()을 호출한다." }),
   ]));
   const goodScore = scoreRun(scenario("wrong_engine_path"), good);
@@ -141,7 +141,7 @@ test("coverage-limited zero followed by an engine text search passes", async () 
   const run = await runScenario(scenario("coverage_limited_zero"), scenarios.fixture, scriptedModel([
     () => ({ tool: "unreal_symbol_lookup", args: { query: "AGameModeBase::ChoosePlayerStart_Implementation" } }),
     previous => ({ tool: "search_files", args: { ...previous.suggestion.args } }),
-    previous => ({ tool: "read_file", args: { path: previous.results[0].uri } }),
+    previous => ({ tool: "read_file_range", args: { path: previous.results[0].uri, startLine: previous.results[0].line || 1, endLine: (previous.results[0].line || 1) + 12 } }),
     () => ({ text: "구현은 nullptr를 반환한다 (GameModeBase.cpp)." }),
   ]));
   assert.equal(scoreRun(scenario("coverage_limited_zero"), run).status, "pass", JSON.stringify(scoreRun(scenario("coverage_limited_zero"), run).checks));
@@ -268,8 +268,8 @@ test("partial search: following nextCursor to the inline assignment passes; clai
 
 test("Super chain: reading the APawn override passes; asserting AActor directly without it fails", async () => {
   const good = await runScenario(scenario("super_chain"), scenarios.fixture, scriptedModel([
-    () => ({ tool: "read_file", args: { path: "engine://Engine/Source/Runtime/Engine/Classes/GameFramework/Character.h" } }),
-    () => ({ tool: "read_file", args: { path: "engine://Engine/Source/Runtime/Engine/Private/Pawn.cpp" } }),
+    () => ({ tool: "read_file_range", args: { path: "engine://Engine/Source/Runtime/Engine/Classes/GameFramework/Character.h", startLine: 1, endLine: 20 } }),
+    () => ({ tool: "read_file_range", args: { path: "engine://Engine/Source/Runtime/Engine/Private/Pawn.cpp", startLine: 1, endLine: 20 } }),
     () => ({ text: "Super::TakeDamage는 APawn::TakeDamage가 먼저 실행되고, 그 안에서 AActor 구현을 호출한다." }),
   ]));
   assert.equal(scoreRun(scenario("super_chain"), good).status, "pass", JSON.stringify(scoreRun(scenario("super_chain"), good).checks));

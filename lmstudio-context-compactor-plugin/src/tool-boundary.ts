@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readBudgetDenialMessage, reserveReadResult, type BatchReservation } from "./budget-broker";
-import { telemetryFingerprint } from "./evidence-telemetry";
+import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 import type { DirectConfig } from "./execution-contracts";
 import { type OutputLimitStage } from "./execution-contracts";
 import { createMessageEmitter, createToolGenerationTracker, toolPluginIdentifier } from "./prediction-ui";
@@ -111,6 +111,7 @@ export function createToolGuard(options: {
   toolGeneration: ReturnType<typeof createToolGenerationTracker>;
   traceCall: (id: number, values: Record<string, unknown>) => void;
   readApprovalPolicy?: () => HostToolApprovalPolicy;
+  inputRepeatReceipts?: Map<string, string>;
 }): RoundToolGuard {
   const { ctl, emitter, roundTools, config, scope, toolPlanningRetryRound, toolPlanningRetryBlockedFingerprints,
     batchReservation, reservationIds, toolGeneration, traceCall } = options;
@@ -154,6 +155,7 @@ export function createToolGuard(options: {
     }
     if (isObservationOnlyToolCall(allowedTool, { ...request, arguments: proposedArguments })) {
       const reservationId = String(callId);
+      // The same read is still verbatim in this input: let the server confirm it unchanged.
       const reservation = batchReservation
         ? reserveReadResult(batchReservation, reservationId, allowedTool, proposedArguments)
         : { allowed: true, arguments: proposedArguments, reservedTokens: 0, bounded: false, denialReason: undefined, limit: undefined };
@@ -164,6 +166,9 @@ export function createToolGuard(options: {
         deny(readBudgetDenialMessage(String(reservation.denialReason), "allowance" in reservation ? reservation.allowance : undefined));
         return;
       }
+      const repeatReceipt = reservation.arguments.repeatReceipt === undefined
+        ? options.inputRepeatReceipts?.get(repeatRequestKey(request.name, reservation.arguments)) : undefined;
+      if (repeatReceipt) reservation.arguments = { ...reservation.arguments, repeatReceipt };
       reservationIds.set(String(request.id), reservationId);
       toolGeneration.executing(callId);
       traceCall(callId, {
@@ -176,6 +181,7 @@ export function createToolGuard(options: {
         resultLimitBounded: reservation.bounded,
         readResultLimit: reservation.limit,
       });
+      if (repeatReceipt) traceCall(callId, { repeatReceiptAttached: true });
       if (boundArguments || reservation.arguments !== proposedArguments) controller.allowAndOverrideParameters(reservation.arguments);
       else controller.allow();
       return;

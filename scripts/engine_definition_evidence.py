@@ -80,7 +80,9 @@ def find_definitions(text: str, owner: str, symbol: str, lexical: Lexical) -> li
     if f"{owner}::{symbol}" not in re.sub(r"\s*::\s*", "::", text):
         return []
     masked = lexical(text)
-    lines = text.splitlines()
+    # Line numbers count "\n"; splitlines() also splits on \f, \x1c-\x1e and
+    # U+2028, which would shift the excerpt away from its own line numbers.
+    lines = [line.removesuffix("\r") for line in text.split("\n")]
     pattern = re.compile(r"(?<![\w:])" + re.escape(owner) + r"\s*::\s*" + re.escape(symbol) + r"\s*\(")
     found: list[dict[str, Any]] = []
     for match in pattern.finditer(masked):

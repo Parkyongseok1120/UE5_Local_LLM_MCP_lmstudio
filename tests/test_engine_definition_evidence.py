@@ -207,8 +207,8 @@ def test_zero_matches_offer_an_engine_text_search_not_an_absence(engine):
     result = lookup(engine, "AActor::NoSuchThing")
     assert result["ok"] and result["matchCount"] == 0
     assert result["coverage"]["apiAbsenceVerified"] is False
-    assert result["suggestion"] == {"tool": "search_files", "args": {
-        "path": "engine://Engine/Source/Runtime", "query": "AActor::NoSuchThing", "maxFiles": 50000}}
+    assert result["suggestion"] == {"tool": "search_files", "scope": "observed_owner_module", "args": {
+        "path": "engine://Engine/Source/Runtime/Engine", "query": r"\bNoSuchThing\b", "regex": True}}
 
 
 def test_space_separated_query_names_the_owner_symbol_form(engine):
@@ -288,3 +288,158 @@ def test_metadata_and_custom_names_do_not_imply_default_thunk_names(engine, spec
     result = lookup(engine, f"AActor::Ordinary_{suffix}")
     assert result["matchCount"] == 0
     assert "reflectionThunk" not in result
+
+
+ACTOR_URI = "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp"
+
+
+def _long_take_damage(engine, lines=60):
+    body = "".join(f"\tif (DamageAmount > {i}.f) {{ ActualDamage += {i}.f; }}\n" for i in range(lines))
+    (engine[3] / "Private/Actor.cpp").write_text(
+        "float AActor::TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, "
+        "AController* EventInstigator, AActor* DamageCauser)\n{\n\tfloat ActualDamage = DamageAmount;\n"
+        + body + "\treturn LateBranchResult;\n}\n")
+    return lines + 5
+
+
+def test_excerpt_limit_offers_the_exact_function_range_on_engine_uri(engine):
+    end = _long_take_damage(engine)
+    [candidate] = lookup(engine)["definitionCandidates"]
+    assert candidate["excerptTruncated"] is True and candidate["endLine"] == end
+    assert candidate["rangeSuggestion"] == {"tool": "read_file_range", "args": {
+        "path": ACTOR_URI, "startLine": 1, "endLine": end}}
+
+
+def test_short_complete_definition_gets_no_extra_read(engine):
+    [candidate] = lookup(engine)["definitionCandidates"]
+    assert candidate["excerptTruncated"] is False
+    assert "rangeSuggestion" not in candidate and "evidenceExcerpt" not in candidate
+
+
+def test_envelope_clipping_marks_the_cut_definition_instead_of_leaving_it_complete(engine):
+    from direct_rag_evidence import render_model_json
+    _long_take_damage(engine, lines=30)
+    full = lookup(engine)
+    assert full["definitionCandidates"][0]["excerptTruncated"] is False and "evidenceEnvelopeTruncated" not in full
+    result = lookup(engine, maxChars=len(render_model_json(full)) - 300)
+    assert result["evidenceEnvelopeTruncated"] is True
+    assert "return LateBranchResult;" not in result["evidence"]
+    [candidate] = result["definitionCandidates"]
+    assert candidate["evidenceExcerpt"] in ("partial", "omitted")
+    assert candidate["rangeSuggestion"]["args"] == {"path": ACTOR_URI, "startLine": candidate["line"],
+                                                    "endLine": candidate["endLine"]}
+
+
+def test_envelope_clipping_marks_a_cut_declaration_without_inventing_its_range(engine):
+    from direct_rag_evidence import render_model_json
+    long_doc = "\t/** " + "Long documentation text. " * 40 + "*/\n"
+    (engine[3] / "Classes/GameFramework/Actor.h").write_text(ACTOR_H.replace("\t/** Apply damage. */\n", long_doc))
+    headers.clear_engine_header_catalog_cache()
+    full = lookup(engine)
+    assert "evidenceExcerpt" not in full["matches"][0]
+    result = lookup(engine, maxChars=len(render_model_json(full)) - len(full["evidence"]) + 600)
+    assert result["evidenceEnvelopeTruncated"] is True
+    [row] = result["matches"]
+    assert row["evidenceExcerpt"] == "partial"
+    # A declaration has no proven end line, so no read range is guessed for it.
+    assert "rangeSuggestion" not in row
+    [candidate] = result["definitionCandidates"]
+    assert candidate["evidenceExcerpt"] == "omitted" and candidate["rangeSuggestion"]["args"]["path"] == ACTOR_URI
+
+
+def test_bom_file_keeps_definition_lines_and_excerpt_aligned(engine):
+    (engine[3] / "Private/Actor.cpp").write_bytes(b"\xef\xbb\xbf" + ACTOR_CPP.replace("\n", "\r\n").encode("utf-8"))
+    [candidate] = lookup(engine)["definitionCandidates"]
+    lines = ACTOR_CPP.split("\n")
+    assert lines[candidate["line"] - 1].startswith("float AActor::TakeDamage(")
+    assert lines[candidate["endLine"] - 1] == "}"
+    evidence = lookup(engine)["evidence"]
+    assert "﻿" not in evidence and f"Actor.cpp:{candidate['line']}\nfloat AActor::TakeDamage(" in evidence
+
+
+def test_multibyte_text_at_the_envelope_cut_stays_valid_and_is_marked(engine):
+    from direct_rag_evidence import render_model_json
+    from direct_rag_result import to_mcp_tool_result
+    body = "".join(f"\t// 한글 주석 🙂🙂 {i}\n\tActualDamage += {i}.f;\n" for i in range(15))
+    (engine[3] / "Private/Actor.cpp").write_text(
+        "float AActor::TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, "
+        "AController* EventInstigator, AActor* DamageCauser)\n{\n\tfloat ActualDamage = 0.f;\n"
+        + body + "\treturn ActualDamage;\n}\n", encoding="utf-8")
+    full = lookup(engine)
+    assert full["definitionCandidates"][0]["excerptTruncated"] is False
+    limit = len(render_model_json(full)) - 250
+    result = lookup(engine, maxChars=limit)
+    result["evidence"].encode("utf-8")  # no lone surrogate survives the cut
+    assert result["definitionCandidates"][0]["evidenceExcerpt"] == "partial"
+    rendered = to_mcp_tool_result(symbol.symbol_lookup_capability(engine[0], {
+        "query": "APawn::TakeDamage", "project": str(engine[2]), "sourceMode": "engine_local", "maxChars": limit}),
+        tool_name="unreal_symbol_lookup")
+    assert len(rendered["content"][0]["text"]) <= limit
+    json.loads(rendered["content"][0]["text"])
+
+
+@pytest.mark.parametrize("separator",["\u2028", "\x0c", "\x1e"])
+def test_excerpt_lines_use_the_same_newline_unit_as_line_numbers(engine, separator):
+    (engine[3] / "Private/Actor.cpp").write_text(
+        f"// note{separator}continued\r\n" + ACTOR_CPP.replace("\n", "\r\n"), encoding="utf-8", newline="")
+    [candidate] = lookup(engine)["definitionCandidates"]
+    lines = (engine[3] / "Private/Actor.cpp").read_bytes().decode("utf-8").split("\n")
+    assert lines[candidate["line"] - 1].startswith("float AActor::TakeDamage(")
+    assert f"{ACTOR_URI[9:].rsplit('/', 1)[-1]}:{candidate['line']}\nfloat AActor::TakeDamage(" in lookup(engine)["evidence"]
+
+
+def test_overloads_keep_each_locator_and_mark_only_the_bodies_that_were_cut(engine):
+    from direct_rag_evidence import render_model_json
+    filler = "".join(f"\tActualDamage += {i}.f;\n" for i in range(30))
+    (engine[3] / "Private/Actor.cpp").write_text(
+        "float AActor::TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, "
+        "AController* EventInstigator, AActor* DamageCauser)\n{\n\treturn FirstBody;\n}\n\n"
+        "float AActor::TakeDamage(float DamageAmount, int Unused)\n{\n\tfloat ActualDamage = 0.f;\n"
+        + filler + "\treturn SecondBody;\n}\n")
+    full = lookup(engine)
+    assert [c["line"] for c in full["definitionCandidates"]] == [1, 6]
+    result = lookup(engine, maxChars=len(render_model_json(full)) - 200)
+    first, second = result["definitionCandidates"]
+    assert "return FirstBody;" in result["evidence"] and "evidenceExcerpt" not in first
+    assert "rangeSuggestion" not in first
+    assert second["evidenceExcerpt"] in ("partial", "omitted") and second["line"] == 6
+    assert second["rangeSuggestion"]["args"] == {"path": ACTOR_URI, "startLine": 6, "endLine": second["endLine"]}
+
+
+def test_thunk_fallback_keeps_the_first_lookups_coverage_limits(engine, monkeypatch):
+    _with_game_mode(engine)
+    original = local.lookup_engine_header_evidence
+    calls = []
+    def first_limited(*args, **kwargs):
+        result = original(*args, **kwargs)
+        calls.append(result["readBytes"])
+        if len(calls) == 1:
+            result = {**result, "coverage": {**result["coverage"], "reasons": ["deadline"]}}
+        return result
+    monkeypatch.setattr(local, "lookup_engine_header_evidence", first_limited)
+    result = lookup(engine, "AGameModeBase::ChoosePlayerStart_Implementation")
+    assert result["matchCount"] == 1 and len(calls) == 2
+    assert result["readBytes"] == sum(calls)
+    # The explicit suffixed declaration was not searched to completion; the
+    # fallback's own coverage must not hide that.
+    assert "deadline" in result["coverage"]["reasons"]
+
+
+def test_signature_view_returns_declarations_and_proven_definition_ranges_without_bodies(engine):
+    full = lookup(engine)
+    assert full["definitionCandidates"]
+    result = lookup(engine, view="signature")
+    assert result["ok"] and result["matchCount"] == 1
+    assert result["view"] == "signature" and result["definitionBodiesOmitted"] is True
+    assert "[definition candidate]" not in result["evidence"]
+    assert "OnTookDamage" not in json.dumps(result)
+    [candidate] = result["definitionCandidates"]
+    assert candidate["evidenceExcerpt"] == "omitted"
+    assert candidate["rangeSuggestion"] == {"tool": "read_file_range", "args": {
+        "path": "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp",
+        "startLine": full["definitionCandidates"][0]["line"],
+        "endLine": full["definitionCandidates"][0]["endLine"],
+    }}
+    assert "virtual float TakeDamage(float DamageAmount" in result["evidence"]
+    assert len(result["evidence"]) < len(full["evidence"])
+    assert lookup(engine, view="bogus")["errorCode"] == "INVALID_TOOL_ARGUMENTS"

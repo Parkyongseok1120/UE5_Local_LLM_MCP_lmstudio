@@ -77,3 +77,23 @@ test("a previous turn that answered, a first turn, or a turn without tools is no
   chat.append(ChatMessage.from({ role: "user", content: "Again" }));
   assert.equal(priorTurnInterrupted(chat.getMessagesArray()), false);
 });
+
+test("the partial-projection fact asks for need-based recovery, not restoring every omitted body", () => {
+  const history = Chat.empty();
+  history.append(ChatMessage.from({ role: "user", content: "Audit" }));
+  exchange(history, "a", "read_file", {}, projection("a", "project://A.cpp", 4000, 512, "h-a"));
+  const { fact } = partialProjectionFact(history.getMessagesArray());
+  assert.match(fact, /does not require restoring every omitted body/);
+  assert.match(fact, /evidence already present when it answers the current question/);
+  // A needed body is still recoverable: archive first, focused current source when the handle is unavailable.
+  assert.match(fact, /page only that scope with evidence_first_read_context/);
+  assert.match(fact, /focused current source range if the handle is unavailable/);
+  assert.match(fact, /Do not claim whole-source review or absence from a partial body/);
+});
+
+test("reacquiring evidence missing from the input does not relax the fresh-retry identical-read ban", () => {
+  const { READ_ONLY_BATCH_INSTRUCTION, FRESH_TOOL_PLANNING_RETRY_INSTRUCTION } = require("../dist/execution-instructions");
+  assert.match(READ_ONLY_BATCH_INSTRUCTION, /Do not repeat an already successful read unless/);
+  assert.match(READ_ONLY_BATCH_INSTRUCTION, /needs text that read returned and this input no longer contains/);
+  assert.match(FRESH_TOOL_PLANNING_RETRY_INSTRUCTION, /Do not request writes, builds, mutations, or an already successful identical read\./);
+});

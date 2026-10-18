@@ -9,6 +9,7 @@ const { clip } = require("./continuity-text.js");
 const {
   coalesceFileObservations,
   fileObservation,
+  mutationSnapshotState,
   pathApiFor,
   projectDescriptor,
   projectRoot,
@@ -125,7 +126,7 @@ function retainedFileFact(file, fallbackOperation = "observed") {
   if (file.lastObservedAt !== undefined || file.snapshotCapturedAt !== undefined) {
     fact.lastObservedAt = file.lastObservedAt || file.snapshotCapturedAt;
   }
-  fact.mutationSnapshotState = "fresh_read_required";
+  fact.mutationSnapshotState = mutationSnapshotState(fact, fact.canonicalProject);
   return sanitizeStructuredDurableValue(fact);
 }
 
@@ -162,7 +163,7 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
       scoped.canonicalPath = retainedObservation.canonicalPath;
       if (scoped.operation || scoped.sha256 || scoped.previousSha256
         || scoped.errorCode === "FILE_VERSION_CONFLICT") {
-        scoped.mutationSnapshotState = "fresh_read_required";
+        scoped.mutationSnapshotState = mutationSnapshotState(scoped, descriptor);
       }
     }
   }
@@ -410,7 +411,7 @@ function parseToolResult(content) {
       out.lastObservedAt = source.lastObservedAt || source.snapshotCapturedAt || source.observedAt;
     }
     if (out.path && (out.operation || out.sha256 || out.previousSha256 || out.canonicalPath)) {
-      out.mutationSnapshotState = "fresh_read_required";
+      out.mutationSnapshotState = mutationSnapshotState(out, projectDescriptor(out));
     }
     if (Array.isArray(source.files)) {
       out.files = source.files

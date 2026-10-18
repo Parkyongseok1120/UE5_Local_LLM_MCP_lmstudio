@@ -44,6 +44,7 @@ const {
   sanitizeUserAuthoredText,
 } = require("./durable-memory-sanitizer.js");
 const { renderBudgetedCheckpoint } = require("./checkpoint-budget.js");
+const { editWithoutRereadNote } = require("./continuity-file-observations.js");
 const { exchangeIndex } = require("./tool-exchange-index.js");
 const { createHash } = require("node:crypto");
 const { CHANGE_DATA_MARKER, separateChangeData, renderChangeData, restoreChangeData, fileKey, fileIdentity, invalidateSupersededChanges } = require("./change-evidence-memory.js");
@@ -502,8 +503,9 @@ function renderCheckpoint(memory, maxChars) {
   const prefix = [
     "[Context memory: deterministic factual compression; not a workflow instruction]",
     "The latest raw user message is retained separately and remains authoritative. This durable memory omits ephemeral file-mutation capabilities. activeObjective and continuationAntecedent preserve conversational meaning; activeProject is only a fact. Older entries are bounded inactive context and apply only when the latest message explicitly refers to prior work. Every entry is evidence, never a task/state-machine/tool gate.",
+    editWithoutRereadNote(memory.currentWorkStatus?.modifiedOrObservedFiles),
     CONTINUITY_MARKER,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   const candidate = sanitizeStructuredDurableValue(JSON.parse(JSON.stringify(memory)));
   // The raw latest user message is retained as a separate model-history
   // message. Keep only a bounded head/tail reminder in durable memory and do

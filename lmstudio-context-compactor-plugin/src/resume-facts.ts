@@ -40,7 +40,10 @@ export function partialProjectionFact(messages: ChatMessage[]): { fact: string |
   return { count: views.length, fact: [
     `Runtime evidence observation: ${views.length} earlier tool result(s) are present in this input only in part (compacted).`,
     ...lines, ...more,
-    "Do not treat them as fully read. Page the omitted body with evidence_first_read_context(action=read, readHandle, view=body) or reread the source range.",
+    "Partial here does not mean the source was never read, and it does not require restoring every omitted body. "
+      + "Use the evidence already present when it answers the current question. When a specific claim needs omitted text, "
+      + "page only that scope with evidence_first_read_context(action=read, readHandle, view=body), or read the focused "
+      + "current source range if the handle is unavailable. Do not claim whole-source review or absence from a partial body.",
   ].join("\n") };
 }
 

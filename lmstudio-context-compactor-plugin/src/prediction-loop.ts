@@ -15,7 +15,7 @@ import { prepareRoundInput } from "./round-input";
 import { core, inputAvailability, modelNotes, workingContextModule, objectiveContinuity, continuityState } from "./context-ports";
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, verificationScopeNotice } from "./delivery-controller";
-import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
+import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, presentRepeatReceipts, seedRecoveryProgress } from "./evidence-manager";
 import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
@@ -708,7 +708,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             },
             guardToolCall: createToolGuard({
 ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
-              toolPlanningRetryBlockedFingerprints: recoveryCoordinator.blockedFingerprints, batchReservation, reservationIds, toolGeneration, traceCall, readApprovalPolicy
+              toolPlanningRetryBlockedFingerprints: recoveryCoordinator.blockedFingerprints, batchReservation, reservationIds, toolGeneration, traceCall, readApprovalPolicy,
+              inputRepeatReceipts: presentRepeatReceipts(modelInput),
 }),
           },
           { maxTokens: roundOutputReserve },

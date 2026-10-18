@@ -46,7 +46,7 @@ test("byte coverage and continuation survive a real checkpoint and subsequent pa
   const merged = coalesceFileObservations([...facts, bytes(4, 12)])[0];
   assert.equal(merged.readCoverageState, "complete");
   assert.deepEqual(merged.sourceCoverage.entries[0].ranges, [[0, 11]]);
-  assert.equal(merged.mutationSnapshotState, "fresh_read_required");
+  assert.equal(merged.mutationSnapshotState, "expectedHash_edit_ok");
 });
 
 test("coverage rejects cross-version, failed, empty, mismatched extent and cross-query completion", () => {
@@ -190,4 +190,32 @@ test("broker reports effective limit and separates body size without weakening r
     assert.ok(readBudgetFeedback([{ readResultLimit: clamped.limit }]).includes(String(requested)));
     roomy.settle("clamped", "returned"); roomy.close();
   }
+});
+
+// Like Claude Code's exact old_string check, an Unreal edit after compaction can
+// rely on the retained hash because the server re-checks it and the exact text;
+// only what that check cannot cover still needs a fresh read.
+test("retained observations allow an expectedHash edit only where the server can re-check it", () => {
+  const { mutationSnapshotState } = require("../src/continuity-file-observations.js");
+  const unreal = "C:\\Work\\Game\\Game.uproject";
+  const hash = "c".repeat(64);
+  assert.equal(mutationSnapshotState({ path: "project://Source/A.cpp", sha256: hash }, unreal), "expectedHash_edit_ok");
+  assert.equal(mutationSnapshotState({ path: "Assets/A.cs", sha256: hash }, "C:\\Work\\UnityGame"), "fresh_read_required");
+  for (const observationState of ["deleted", "unavailable", "conflict_observed"])
+    assert.equal(mutationSnapshotState({ path: "project://Source/A.cpp", sha256: hash, observationState }, unreal), "fresh_read_required");
+  assert.equal(mutationSnapshotState({ path: "project://Source/A.cpp", sha256: hash, errorCode: "FILE_VERSION_CONFLICT" }, unreal), "fresh_read_required");
+  assert.equal(mutationSnapshotState({ path: "project://Source/A.cpp" }, unreal), "fresh_read_required");
+  const message = (role, text, extra = {}) => ({ role, text, hasFiles: false, toolRequests: [], toolResults: [], ...extra });
+  // A latest-turn result stays raw; it becomes a durable observation once omitted.
+  const first = buildCheckpoint([
+    message("user", "Fix the health clamp."),
+    message("tool", "", { toolResults: [{ content: JSON.stringify({ ok: true, activeProject: unreal,
+      absolutePath: "C:\\Work\\Game\\Source\\Health.cpp", path: "project://Source/Health.cpp", sha256: hash,
+      fileVersionReceipt: "fvr1_live", snapshotVersion: 1 }) }] }),
+    message("user", "Continue."),
+  ], { recentCompleteTurns: 0 });
+  const result = buildCheckpoint([message("system", first.checkpoint), message("user", "Continue.")], { recentCompleteTurns: 0 });
+  assert.equal(result.memory.modifiedOrObservedFiles[0].mutationSnapshotState, "expectedHash_edit_ok");
+  assert.doesNotMatch(result.checkpoint, /fvr1_live/u);
+  assert.match(result.checkpoint, /expectedHash=sha256AtObservation and the exact oldText; the server re-checks both/u);
 });

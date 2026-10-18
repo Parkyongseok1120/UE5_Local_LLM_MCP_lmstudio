@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { replaceFileArgumentError } = require("./direct-mutation-arguments");
 const {
   bundleMutationUsage,
   constrainMutationLimits,
@@ -19,6 +20,7 @@ const PATCH_FIELDS = new Set([
   "expectedOccurrences",
   "expectedHash",
   "fileVersionReceipt",
+  "edits",
 ]);
 
 function assertFields(item, allowed, label) {
@@ -47,6 +49,11 @@ function assertOptionalString(item, field, label) {
 }
 
 function assertPatchTypes(patch) {
+  if (patch.edits !== undefined) {
+    const error = replaceFileArgumentError(patch);
+    if (error) throw new Error(`patch: ${error}`);
+    return;
+  }
   if (typeof patch.path !== "string" || !patch.path.trim()) {
     throw new Error("patch.path must be a non-empty string");
   }
@@ -90,14 +97,15 @@ function validateBundleLimits(bundle, values = {}) {
     );
   }
   for (const patch of patches) {
-    const { oldText, newText } = patch;
-    if (oldText.length > mutationLimits.maxPatchOldTextChars
-      || newText.length > mutationLimits.maxPatchNewTextChars
-      || oldText.length + newText.length > mutationLimits.maxPatchChars
-      || textLineCount(newText) > mutationLimits.maxPatchLines) {
-      throw new Error(
-        `apply_edit_bundle: patch exceeds the focused-region limits of ${mutationLimits.maxPatchOldTextChars} oldText characters, ${mutationLimits.maxPatchNewTextChars} newText characters, ${mutationLimits.maxPatchChars} combined characters, or ${mutationLimits.maxPatchLines} newText lines: ${patch.path}`,
-      );
+    for (const { oldText, newText } of patch.edits || [patch]) {
+      if (oldText.length > mutationLimits.maxPatchOldTextChars
+        || newText.length > mutationLimits.maxPatchNewTextChars
+        || oldText.length + newText.length > mutationLimits.maxPatchChars
+        || textLineCount(newText) > mutationLimits.maxPatchLines) {
+        throw new Error(
+          `apply_edit_bundle: patch exceeds the focused-region limits of ${mutationLimits.maxPatchOldTextChars} oldText characters, ${mutationLimits.maxPatchNewTextChars} newText characters, ${mutationLimits.maxPatchChars} combined characters, or ${mutationLimits.maxPatchLines} newText lines: ${patch.path}`,
+        );
+      }
     }
   }
 
@@ -105,7 +113,7 @@ function validateBundleLimits(bundle, values = {}) {
   const unique = new Set(relativePaths);
   const patchPathList = patches.map((item) => normalizedBundlePath(item, "patch"));
   if (new Set(patchPathList).size !== patchPathList.length) {
-    throw new Error("apply_edit_bundle: duplicate patches[] paths are not allowed; use one focused region per file and continue with the returned receipt in the next prediction round");
+    throw new Error("apply_edit_bundle: duplicate patches[] paths are not allowed; group same-file regions in one patch.edits[] against one version");
   }
   if (unique.size > mutationLimits.maxFilesPerEdit) {
     throw new Error(`apply_edit_bundle: too many files (max ${mutationLimits.maxFilesPerEdit})`);

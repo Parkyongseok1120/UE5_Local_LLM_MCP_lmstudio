@@ -138,6 +138,113 @@ def test_lookup_started_before_clear_cannot_repopulate_later_module_catalogs(sou
     assert cleared and not headers._LOCAL_CATALOGS
 
 
+# The default text search covers Runtime only; the header lookup also reads Editor and Plugins.
+RUNTIME_DEFAULT_EXCLUDES = ["Engine/Source/Editor", "Engine/Source/Developer", "Engine/Source/Programs", "Engine/Plugins"]
+
+
+def _wrong_owner_module(source, *, build_cs=True):
+    module = source[3].parent.parent
+    if build_cs:
+        (module / "EnhancedInput.Build.cs").write_text("// module rules\n")
+    (module / "Public/EnhancedInputUserSettings.h").write_text(
+        "class UEnhancedInputUserSettings {\npublic:\n void ResolveOperation(int value);\n};\n")
+    headers.clear_engine_header_catalog_cache()
+    return module
+
+
+def test_wrong_owner_zero_suggests_unqualified_token_search_in_the_observed_module(source):
+    _wrong_owner_module(source)
+    result = query(source, query="UEnhancedInputLocalPlayerSubsystem::ResolveOperation")
+    assert result["ok"] and result["matchCount"] == 0 and "declaredIn" not in json.dumps(result["matches"])
+    assert result["coverage"]["apiAbsenceVerified"] is False
+    assert result["coverage"]["observedTypeCandidates"] == [{
+        "typeName": "UEnhancedInputLocalPlayerSubsystem",
+        "headerUri": "engine://Engine/Plugins/EnhancedInput/Source/EnhancedInput/Public/EnhancedInputSubsystems.h",
+        "moduleUri": "engine://Engine/Plugins/EnhancedInput/Source/EnhancedInput",
+        "meaning": "type_observed_member_not_found"}]
+    # The failed owner is not repeated; the observed module is searched for the bare token.
+    assert result["suggestion"] == {"tool": "search_files", "scope": "observed_owner_module", "args": {
+        "path": "engine://Engine/Plugins/EnhancedInput/Source/EnhancedInput",
+        "query": r"\bResolveOperation\b", "regex": True}}
+
+
+def test_unobserved_owner_or_module_keeps_the_engine_runtime_scope_without_inventing_one(source):
+    _wrong_owner_module(source, build_cs=False)
+    result = query(source, query="UEnhancedInputLocalPlayerSubsystem::ResolveOperation")
+    [observed] = result["coverage"]["observedTypeCandidates"]
+    assert "moduleUri" not in observed and observed["headerUri"].endswith("/EnhancedInputSubsystems.h")
+    assert result["suggestion"] == {"tool": "search_files", "scope": "engine_runtime_default_module_unknown",
+        "scopeLimit": {"excludes": RUNTIME_DEFAULT_EXCLUDES}, "args": {
+        "path": "engine://Engine/Source/Runtime", "query": r"\bResolveOperation\b", "regex": True, "maxFiles": 50000}}
+    missing = query(source, query="UNoSuchOwner::ResolveOperation")
+    assert "observedTypeCandidates" not in missing["coverage"]
+    assert missing["suggestion"]["scope"] == "engine_runtime_default_module_unknown"
+    bare = query(source, query="ResolveOperation")
+    assert bare["matchCount"] == 0 and "observedTypeCandidates" not in bare["coverage"]
+    assert bare["suggestion"]["args"]["query"] == r"\bResolveOperation\b"
+
+
+def test_editor_module_owner_is_observed_with_its_own_module_uri(source):
+    module = source[1] / "Engine/Source/Editor/UnrealEd"
+    (module / "Public").mkdir(parents=True)
+    (module / "UnrealEd.Build.cs").write_text("// rules\n")
+    (module / "Public/EdOwner.h").write_text("class UEdOwner {\npublic:\n void Other();\n};\n")
+    headers.clear_engine_header_catalog_cache()
+    result = query(source, query="UEdOwner::ResolveOperation")
+    [observed] = result["coverage"]["observedTypeCandidates"]
+    assert observed["moduleUri"] == "engine://Engine/Source/Editor/UnrealEd"
+    assert result["suggestion"]["args"]["path"] == "engine://Engine/Source/Editor/UnrealEd"
+    assert "scopeLimit" not in result["suggestion"]
+
+
+def test_owner_chain_across_two_modules_keeps_the_default_scope_and_says_why(source):
+    _wrong_owner_module(source)
+    engine = source[1] / "Engine/Source/Runtime/Engine"
+    (engine / "Engine.Build.cs").write_text("// rules\n")
+    (engine / "Public/GameOwner.h").write_text(
+        "class UGameOwner : public UEnhancedInputLocalPlayerSubsystem {\npublic:\n void Own();\n};\n")
+    headers.clear_engine_header_catalog_cache()
+    result = query(source, query="UGameOwner::ResolveOperation")
+    observed = result["coverage"]["observedTypeCandidates"]
+    assert [item["typeName"] for item in observed] == ["UGameOwner", "UEnhancedInputLocalPlayerSubsystem"]
+    assert {item["moduleUri"] for item in observed} == {
+        "engine://Engine/Source/Runtime/Engine", "engine://Engine/Plugins/EnhancedInput/Source/EnhancedInput"}
+    suggestion = result["suggestion"]
+    assert suggestion["scope"] == "engine_runtime_default_module_unknown"
+    assert suggestion["scopeLimit"] == {"excludes": RUNTIME_DEFAULT_EXCLUDES, "observedModules": 2}
+
+
+def test_same_named_header_without_the_type_is_not_reported_as_observed(source):
+    _wrong_owner_module(source)
+    other = source[1] / "Engine/Plugins/Other/Source/Other/Public"
+    other.mkdir(parents=True)
+    (other / "EnhancedInputSubsystems.h").write_text("// no class here\n")
+    headers.clear_engine_header_catalog_cache()
+    result = query(source, query="UEnhancedInputLocalPlayerSubsystem::ResolveOperation")
+    [observed] = result["coverage"]["observedTypeCandidates"]
+    assert observed["headerUri"] == ("engine://Engine/Plugins/EnhancedInput/Source/EnhancedInput/Public/"
+                                     "EnhancedInputSubsystems.h")
+    assert "Other" not in json.dumps(result["coverage"]) and "Other" not in json.dumps(result["suggestion"])
+
+
+def test_found_member_keeps_its_result_without_observed_type_or_suggestion(source):
+    _wrong_owner_module(source)
+    result = query(source)
+    assert result["matchCount"] == 1 and "suggestion" not in result
+    assert "observedTypeCandidates" not in result["coverage"]
+
+
+def test_observed_type_metadata_is_dropped_whole_when_it_does_not_fit(source, monkeypatch):
+    _wrong_owner_module(source)
+    fits = local.evidence_metadata_fits
+    monkeypatch.setattr(local, "evidence_metadata_fits", lambda payload, max_chars: fits(payload, max_chars=max_chars)
+                        and "observedTypeCandidates" not in payload["coverage"])
+    result = query(source, query="UEnhancedInputLocalPlayerSubsystem::ResolveOperation")
+    assert result["ok"] and "observedTypeCandidates" not in result["coverage"]
+    assert result["coverage"]["observedTypeCandidatesOmitted"] == 1
+    assert result["suggestion"]["args"]["path"] == "engine://Engine/Plugins/EnhancedInput/Source/EnhancedInput"
+
+
 def test_related_contracts_are_ids_and_summaries_marked_unvalidated_for_other_engines(source):
     runtime, root, project, _ = source
     classes = root / "Engine/Source/Runtime/Engine/Classes/GameFramework"
@@ -153,3 +260,46 @@ def test_related_contracts_are_ids_and_summaries_marked_unvalidated_for_other_en
     assert [item["id"] for item in related["items"]] == ["ue.actor.lifecycle"]
     assert related["items"][0]["summary"].endswith(".") and "statement" not in related["items"][0]
     assert "relatedContracts" not in query(source)
+
+
+def test_declaration_excerpt_ends_at_the_balanced_signature(source):
+    source[3].write_text(
+        "class UEnhancedInputLocalPlayerSubsystem {\npublic:\n"
+        " UFUNCTION(BlueprintCallable, Category=\"Game|Damage\",\n   meta=(AutoCreateRefTerm=\"IgnoreActors\"))\n"
+        " static float ApplyRadialDamageWithFalloff(const UObject* WorldContextObject,\n"
+        "   float BaseDamage, float MinimumDamage, const FVector& Origin,\n"
+        "   float DamageInnerRadius, float DamageOuterRadius,\n"
+        "   float DamageFalloff, TSubclassOf<UDamageType> DamageTypeClass,\n"
+        "   const TArray<AActor*>& IgnoreActors,\n"
+        "   AActor* DamageCauser = NULL,\n"
+        "   AController* InstigatedByController = NULL,\n"
+        "   ECollisionChannel DamagePreventionChannel = ECC_Visibility);\n"
+        " void UnrelatedNextMember();\n};\n")
+    headers.clear_engine_header_catalog_cache()
+    result = query(source, query="UEnhancedInputLocalPlayerSubsystem::ApplyRadialDamageWithFalloff")
+    [row] = result["matches"]
+    assert row["signatureComplete"] is True and row["excerptTruncated"] is False
+    assert "ECollisionChannel DamagePreventionChannel = ECC_Visibility);" in result["evidence"]
+    assert "UFUNCTION(BlueprintCallable" in result["evidence"]
+    assert "UnrelatedNextMember" not in result["evidence"]
+    assert row["declarationEndLine"] == 12
+
+
+def test_field_and_enum_declarations_end_at_their_own_terminator(source):
+    source[3].write_text("class UEnhancedInputLocalPlayerSubsystem {\npublic:\n UPROPERTY(EditAnywhere)\n float\n   MaxHealth = 100.f;\n int32 Other;\n};\n"
+                         "enum class EMode : uint8 {\n Alpha UMETA(DisplayName=\"A, first\"),\n Beta\n};\n")
+    headers.clear_engine_header_catalog_cache()
+    field = query(source, query="UEnhancedInputLocalPlayerSubsystem::MaxHealth")
+    assert "MaxHealth = 100.f;" in field["evidence"] and "int32 Other" not in field["evidence"]
+    assert field["matches"][0]["declarationEndLine"] == 5
+
+
+@pytest.mark.parametrize("separator", [" ", "\x0c"])
+def test_declaration_excerpt_uses_newline_line_units(source, separator):
+    source[3].write_text(f"// note{separator}continued\nclass UEnhancedInputLocalPlayerSubsystem {{\npublic:\n void AddMappingContext(int value);\n}};\n",
+                         encoding="utf-8", newline="")
+    headers.clear_engine_header_catalog_cache()
+    result = query(source)
+    assert result["matches"][0]["line"] == 4
+    # The excerpt starts one line above the declaration (line 3), counted in "\n" units.
+    assert result["evidence"].split("\n")[1:3] == ["public:", " void AddMappingContext(int value);"]

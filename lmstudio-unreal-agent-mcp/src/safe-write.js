@@ -101,11 +101,61 @@ function calculateReplacement({
   return { ok: true, updated, occurrences, priorContent: content, preHash: sha256Buffer(raw) };
 }
 
+// Several exact, non-overlapping regions of one file, each found exactly once in
+// the same prior content, applied together. Returns each region's committed
+// lines (start lines in the prior and the updated text) as change evidence.
+function calculateReplacements({ priorContent, edits, normalizeLineEndings = true }) {
+  const raw = Buffer.isBuffer(priorContent) ? priorContent : Buffer.from(String(priorContent ?? ""), "utf8");
+  const hasCRLF = raw.includes(Buffer.from("\r\n"));
+  const content = raw.toString("utf8");
+  const norm = (value) => (normalizeLineEndings ? String(value).replace(/\r\n/g, "\n") : String(value));
+  const contentNorm = norm(content);
+  const spans = [];
+  for (const [editIndex, edit] of edits.entries()) {
+    const oldTextNorm = norm(edit.oldText);
+    // split() misses overlapping matches ("aaa" occurs twice in "aaaa").
+    let occurrences = 0;
+    for (let at = oldTextNorm ? contentNorm.indexOf(oldTextNorm) : -1; at >= 0;
+      at = contentNorm.indexOf(oldTextNorm, at + 1)) occurrences++;
+    if (occurrences === 0 && isLineNumberPrefixedPatch(oldTextNorm, contentNorm)) {
+      return { ok: false, errorCode: LINE_NUMBER_PATCH_ERROR, error: LINE_NUMBER_PATCH_MESSAGE, editIndex };
+    }
+    if (occurrences !== 1) {
+      return { ok: false, errorCode: "OCCURRENCE_MISMATCH", editIndex,
+        error: `edits[${editIndex}] occurrence mismatch: expected 1, found ${occurrences}` };
+    }
+    const start = contentNorm.indexOf(oldTextNorm);
+    spans.push({ editIndex, start, end: start + oldTextNorm.length, replacement: norm(edit.newText) });
+  }
+  const ordered = [...spans].sort((a, b) => a.start - b.start);
+  for (let index = 1; index < ordered.length; index++) {
+    if (ordered[index].start < ordered[index - 1].end) {
+      const later = Math.max(ordered[index].editIndex, ordered[index - 1].editIndex);
+      return { ok: false, errorCode: "EDITS_OVERLAP", editIndex: later,
+        error: `edits[${later}] overlaps another edit; merge them into one region.` };
+    }
+  }
+  let updatedNorm = "", cursor = 0, lineDelta = 0;
+  const regions = [];
+  for (const span of ordered) {
+    const beforeStartLine = contentNorm.slice(0, span.start).split("\n").length;
+    const before = contentNorm.slice(span.start, span.end);
+    regions.push({ beforeStartLine, afterStartLine: beforeStartLine + lineDelta, before, after: span.replacement });
+    lineDelta += span.replacement.split("\n").length - before.split("\n").length;
+    updatedNorm += contentNorm.slice(cursor, span.start) + span.replacement;
+    cursor = span.end;
+  }
+  updatedNorm += contentNorm.slice(cursor);
+  const updated = hasCRLF && normalizeLineEndings ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
+  return { ok: true, updated, occurrences: edits.length, regions, priorContent: content, preHash: sha256Buffer(raw) };
+}
+
 async function replaceWithCAS({
   targetPath,
   priorContent,
   oldText,
   newText,
+  edits,
   expectedOccurrences,
   readHash,
   normalizeLineEndings = true,
@@ -135,13 +185,15 @@ async function replaceWithCAS({
     }
   }
 
-  const replacement = calculateReplacement({
-    priorContent: raw,
-    oldText,
-    newText,
-    expectedOccurrences,
-    normalizeLineEndings,
-  });
+  const replacement = edits
+    ? calculateReplacements({ priorContent: raw, edits, normalizeLineEndings })
+    : calculateReplacement({
+      priorContent: raw,
+      oldText,
+      newText,
+      expectedOccurrences,
+      normalizeLineEndings,
+    });
   if (!replacement.ok) return replacement;
 
   assertMutationActive(signal);
@@ -164,6 +216,7 @@ module.exports = {
   verifyReadHash,
   assertPreCommitHash,
   calculateReplacement,
+  calculateReplacements,
   replaceWithCAS,
   createExclusive,
 };

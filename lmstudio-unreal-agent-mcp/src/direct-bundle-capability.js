@@ -2,7 +2,7 @@
 const { withBundleChangeEvidence } = require("./direct-change-evidence");
 
 const path = require("node:path");
-const { calculateReplacement } = require("./safe-write");
+const { calculateReplacement, calculateReplacements } = require("./safe-write");
 const { applyDirectEditBundle, validateBundleLimits } = require("./direct-edit-bundle");
 const { normalizedBundlePath } = require("./direct-edit-bundle-plan");
 const { readStableTextFile } = require("./direct-file-snapshot");
@@ -92,7 +92,7 @@ function createBundleCapability(context) {
         throw validationError("FILE_VERSION_CONFLICT", `${patch.path} changed after the selected read snapshot`);
       }
       patch.expectedHash = version.expectedHash;
-      const next = calculateReplacement({
+      const next = patch.edits ? calculateReplacements({ priorContent: read.content, edits: patch.edits }) : calculateReplacement({
         priorContent: read.content,
         oldText: patch.oldText,
         newText: patch.newText,

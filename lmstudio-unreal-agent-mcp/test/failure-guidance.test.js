@@ -61,8 +61,8 @@ test("absolute engine path outside the roots names its engine:// equivalent and 
   assert.equal(first.errorCode, "PATH_OUTSIDE_ALLOWED_ROOTS");
   assert.deepEqual(first.allowedSchemes, ["project://", "workspace://", "engine://"]);
   assert.equal(first.engineUri, "engine://Engine/Source/Runtime/Engine/Private/PlayerController.cpp");
-  assert.deepEqual(first.suggestion, { tool: "read_file", args: { path: first.engineUri } });
-  const followed = await call(runtime, "read_file", first.suggestion.args);
+  assert.deepEqual(first.suggestion, { tool: "read_file_range", args: { path: first.engineUri, startLine: 1, endLine: 20 } });
+  const followed = await call(runtime, first.suggestion.tool, first.suggestion.args);
   assert.equal(followed.ok, true);
   assert.match(followed.content, /APlayerController::PostLogin/);
   const repeated = await call(runtime, "read_file", { path: absolute });
@@ -123,7 +123,8 @@ test("read_file_range marks truncation only when the requested range was cut", a
   assert.equal(whole.truncated, false);
   assert.equal(whole.requestedRangeComplete, true);
   assert.equal(whole.moreLinesInFile, true);
-  assert.equal(whole.nextStartLine, 11);
+  // A complete targeted read offers no continuation; the file merely continues.
+  assert.equal(whole.nextStartLine, undefined);
   assert.equal(whole.omissionReason, undefined);
   const cut = await call(runtime, "read_file_range", { path: "project://Source/Game/Lines.h", startLine: 1, endLine: 30, byteBudget: 2048 });
   if (cut.endLine < 30) {
@@ -233,7 +234,7 @@ test("a read cut before the file or requested range ends names the exact continu
   assert.equal(first.hasMore, true);
   assert.deepEqual(first.suggestion, { tool: "read_file",
     args: { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048, offsetBytes: first.nextOffsetBytes } });
-  const second = await call(runtime, "read_file", first.suggestion.args);
+  const second = await call(runtime, first.suggestion.tool, first.suggestion.args);
   assert.equal(second.ok, true);
   assert.equal(second.offsetBytes, first.nextOffsetBytes);
   assert.equal(Buffer.from(buildCs, "utf8").subarray(first.nextOffsetBytes, second.nextOffsetBytes).toString("utf8"), second.content);
@@ -271,4 +272,154 @@ test("search never issues a cursor beyond its continuation cap", async t=>{
   assert.ok(JSON.parse(Buffer.from(cursor,"base64url")).n < 20000);
  }
  assert.equal(count,20000); assert.equal(r.stopReason,"cursor_limit"); assert.equal(r.absenceVerified,false); assert.equal(r.coverage,"partial");
+});
+
+test("a cut range still names nextStartLine inside the requested range only", async (t) => {
+  const { runtime } = fixture(t);
+  const cut = await call(runtime, "read_file_range", { path: "project://Source/Game/Game.Build.cs", startLine: 1, endLine: 400, byteBudget: 2048 });
+  assert.equal(cut.truncated, true);
+  assert.equal(cut.nextStartLine, cut.endLine + 1);
+  assert.equal(cut.suggestion.args.endLine, cut.requestedEndLine);
+});
+
+// Claude Code's Read refuses a whole oversized file and points at a portion or a
+// search; an engine source file is read by symbol, search hit or line range.
+test("whole read of a large engine file is refused with targeted alternatives; small files still read whole", async (t) => {
+  const { runtime, engineRoot } = fixture(t);
+  const header = path.join(engineRoot, "Engine", "Source", "Runtime", "Engine", "Private", "GameFramework", "Big.h");
+  fs.writeFileSync(header, Array.from({ length: 900 }, (_, i) => `\tint32 Field${i} = ${i}; // ${"x".repeat(20)}`).join("\n"), "utf8");
+  const refused = await call(runtime, "read_file", { path: "engine://Engine/Source/Runtime/Engine/Private/GameFramework/Big.h" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.errorCode, "WHOLE_READ_TOO_LARGE");
+  assert.ok(refused.size > 16384);
+  assert.deepEqual(refused.alternatives.map((item) => item.tool), ["search_files", "read_symbol", "read_file_range"]);
+  assert.equal(refused.alternatives[0].argsTemplate.path, "engine://Engine/Source/Runtime/Engine/Private/GameFramework/Big.h");
+  assert.equal(refused.alternatives[0].argsTemplate.contextLines, 3);
+  const small = await call(runtime, "read_file", { path: "engine://Engine/Source/Runtime/Engine/Private/PlayerController.cpp", maxBytes: 1024 });
+  assert.equal(small.ok, true);
+  const paged = await call(runtime, "read_file_range", {
+    path: "engine://Engine/Source/Runtime/Engine/Private/GameFramework/Big.h", startLine: 400, endLine: 402 });
+  assert.equal(paged.ok, true);
+  assert.match(paged.content, /Field399/);
+});
+
+test("edit failures suggest the lines around the intended region, not the file prefix", async (t) => {
+  const { runtime, projectRoot } = fixture(t);
+  const file = path.join(projectRoot, "Source", "Game", "Edit.cpp");
+  const lines = Array.from({ length: 200 }, (_, i) => `\tint32 Value${i} = ${i};`);
+  lines[149] = "\tHealth = FMath::Clamp(Health - Damage, 0.f, MaxHealth);";
+  lines[169] = "\tReturnValue = Total;";
+  lines[179] = "\tReturnValue = Total;";
+  fs.writeFileSync(file, lines.join("\n"), "utf8");
+  const read = await call(runtime, "read_file_range", { path: "project://Source/Game/Edit.cpp", startLine: 148, endLine: 152 });
+  const base = { path: "project://Source/Game/Edit.cpp", expectedOccurrences: 1, fileVersionReceipt: read.fileVersionReceipt };
+  const stale = await call(runtime, "replace_in_file", { ...base,
+    oldText: "\tHealth = FMath::Clamp(Health - Damage, 0.f, MaxHealth);\n\tbIsDead = true;", newText: "\t// x" });
+  // Zero matches are reported as an occurrence mismatch (found 0) by the existing contract.
+  assert.equal(stale.errorCode, "OCCURRENCE_MISMATCH");
+  assert.deepEqual(stale.candidateLines, [150]);
+  assert.deepEqual([stale.suggestion.args.startLine, stale.suggestion.args.endLine], [140, 161]);
+  const ambiguous = await call(runtime, "replace_in_file", { ...base, oldText: "\tReturnValue = Total;", newText: "\tReturnValue = 0;" });
+  assert.equal(ambiguous.errorCode, "OCCURRENCE_MISMATCH");
+  assert.deepEqual(ambiguous.candidateLines, [170, 180]);
+  const missing = await call(runtime, "replace_in_file", { path: "project://Source/Game/Edit.cpp", expectedOccurrences: 1,
+    oldText: "\tHealth = FMath::Clamp(Health - Damage, 0.f, MaxHealth);", newText: "\t// y" });
+  assert.equal(missing.errorCode, "FILE_SNAPSHOT_REQUIRED");
+  assert.deepEqual([missing.suggestion.args.startLine, missing.suggestion.args.endLine], [140, 160]);
+  assert.equal(missing.currentSha256, read.sha256);
+  const nowhere = await call(runtime, "replace_in_file", { ...base, oldText: "\tUnrelatedCall(Spline);", newText: "\t// z" });
+  assert.equal(nowhere.errorCode, "OCCURRENCE_MISMATCH");
+  assert.equal(nowhere.suggestion.tool, "search_files");
+  assert.equal(nowhere.suggestion.args.query, "UnrelatedCall");
+});
+
+// Claude Code's Grep -C: a hit with its surrounding lines, so a multi-line
+// signature or a struct member is read without a separate range guess.
+test("search_files returns numbered context lines and filters by include glob", async (t) => {
+  const { runtime, projectRoot } = fixture(t);
+  fs.mkdirSync(path.join(projectRoot, "Source", "Game", "Public"), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, "Source", "Game", "Public", "Damage.h"),
+    ["struct FHitInfo", "{", "\tfloat Amount;", "\tbool bCritical;", "};", "float ApplyDamage(AActor* Target,", "\tfloat Base,", "\tAController* By);"].join("\n"), "utf8");
+  fs.writeFileSync(path.join(projectRoot, "Source", "Game", "Damage.cpp"), "float ApplyDamage(AActor* Target, float Base, AController* By) { return Base; }\n", "utf8");
+  const hit = await call(runtime, "search_files", { path: "project://Source/Game", query: "ApplyDamage(", contextLines: 2, include: "*.h" });
+  assert.equal(hit.ok, true, JSON.stringify(hit));
+  assert.deepEqual(hit.results.map((r) => r.uri), ["project://Source/Game/Public/Damage.h"]);
+  const [row] = hit.results;
+  assert.equal(row.line, 6);
+  assert.equal(row.contextStartLine, 4);
+  assert.equal(row.contextEndLine, 8);
+  assert.equal(row.context, "4\t\tbool bCritical;\n5\t};\n6\tfloat ApplyDamage(AActor* Target,\n7\t\tfloat Base,\n8\t\tAController* By);");
+  assert.equal(hit.filesFilteredByInclude, 2); // Game.Build.cs and Damage.cpp
+  const plain = await call(runtime, "search_files", { path: "project://Source/Game", query: "ApplyDamage(" });
+  assert.equal(plain.results.length, 2);
+  assert.equal(plain.results[0].context, undefined);
+  const nested = await call(runtime, "search_files", { path: "project://Source", query: "bCritical", include: "**/Public/**" });
+  assert.equal(nested.results.length, 1);
+});
+
+test("read_symbol view=declaration returns only the prototype or member statement", async (t) => {
+  const { runtime, projectRoot } = fixture(t);
+  fs.writeFileSync(path.join(projectRoot, "Source", "Game", "Combat.h"), [
+    "#pragma once",
+    "UCLASS()",
+    "class GAME_API UCombatStatics : public UObject",
+    "{",
+    "\tGENERATED_BODY()",
+    "public:",
+    "\tUFUNCTION(BlueprintCallable, Category=\"Game|Damage\",",
+    "\t\tmeta=(WorldContext=\"WorldContextObject\"))",
+    "\tstatic float ApplyDamage(AActor* DamagedActor, float BaseDamage,",
+    "\t\tAController* EventInstigator, AActor* DamageCauser,",
+    "\t\tTSubclassOf<UDamageType> DamageTypeClass);",
+    "\tvoid Unrelated() { const float V = ApplyDamage(nullptr, 1.f, nullptr, nullptr, nullptr); }",
+    "\tUPROPERTY(EditAnywhere)",
+    "\tfloat MaxHealth = 100.f;",
+    "};",
+    "struct FOther { float MaxHealth; };",
+  ].join("\n"), "utf8");
+  const decl = await call(runtime, "read_symbol", { path: "project://Source/Game/Combat.h", symbol: "UCombatStatics::ApplyDamage", view: "declaration" });
+  assert.equal(decl.ok, true, JSON.stringify(decl));
+  assert.equal(decl.representation, "lexical_declaration_candidate");
+  assert.deepEqual([decl.startLine, decl.endLine], [7, 11]);
+  assert.match(decl.content, /TSubclassOf<UDamageType> DamageTypeClass\);$/u);
+  assert.doesNotMatch(decl.content, /Unrelated/u);
+  const field = await call(runtime, "read_symbol", { path: "project://Source/Game/Combat.h", symbol: "UCombatStatics::MaxHealth", view: "declaration" });
+  assert.deepEqual([field.startLine, field.endLine], [13, 14]);
+  const member = await call(runtime, "read_symbol", { path: "project://Source/Game/Combat.h", symbol: "UCombatStatics::MaxHealth", view: "member" });
+  assert.deepEqual([member.startLine, member.endLine], [13, 14]);
+  const unowned = await call(runtime, "read_symbol", { path: "project://Source/Game/Combat.h", symbol: "MaxHealth", view: "member" });
+  assert.equal(unowned.errorCode, "INVALID_SYMBOL");
+  const leaf = await call(runtime, "read_symbol", { path: "project://Source/Game/Combat.h", symbol: "ApplyDamage", view: "declaration" });
+  assert.deepEqual([leaf.startLine, leaf.endLine], [7, 11]);
+  assert.equal(leaf.candidateCount, 1);
+  const body = await call(runtime, "read_symbol", { path: "project://Source/Game/Combat.h", symbol: "Unrelated" });
+  assert.equal(body.representation, "lexical_body_candidate");
+  const none = await call(runtime, "read_symbol", { path: "project://Source/Game/Combat.h", symbol: "UCombatStatics::Missing", view: "declaration" });
+  assert.equal(none.errorCode, "SYMBOL_NOT_FOUND");
+});
+
+test("oversized project whole reads point to a narrow range while explicit byte windows remain available", async (t) => {
+  const { runtime, projectRoot } = fixture(t);
+  const file = "project://Source/Game/Large.cpp";
+  fs.writeFileSync(path.join(projectRoot, "Source/Game/Large.cpp"), "int Value;\n".repeat(8000));
+  const refused = await call(runtime, "read_file", { path: file });
+  assert.equal(refused.errorCode, "WHOLE_READ_TOO_LARGE");
+  assert.equal(refused.suggestion.tool, "read_file_range");
+  const window = await call(runtime, "read_file", { path: file, offsetBytes: 0, maxBytes: 100 });
+  assert.equal(window.ok, true);
+  const range = await call(runtime, "read_file_range", { path: file, startLine: 3, endLine: 4 });
+  assert.equal(range.rangeComplete, true);
+  assert.equal(range.nextStartLine, undefined);
+});
+
+test("include filtering cannot turn a discovery limit into complete absence", async (t) => {
+  const { runtime } = fixture(t);
+  const result = await call(runtime, "search_files", { path: "project://Source/Game", query: "Missing",
+    include: "*.h", maxFiles: 1 });
+  assert.equal(result.ok, true);
+  assert.equal(result.coverage, "partial");
+  assert.equal(result.maxFilesReached, true);
+  assert.equal(result.absenceVerified, false);
+  const file = await call(runtime, "search_files", { path: "project://Source/Game/Lines.h", query: "line 10", include: "*.h" });
+  assert.equal(file.results.length, 1);
 });

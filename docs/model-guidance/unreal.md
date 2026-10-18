@@ -37,7 +37,7 @@
 - ReplicatedUsing 선언, OnRep, 복제 등록, 객체의 복제 설정을 연결한다. 선언만으로 원격 호출을 증명하지 않는다. 관련 오류 사례는 debugging.md를 참고한다.
 - Delegate는 native/dynamic, single/multicast와 실제 바인딩을 대조한다. AddDynamic 대상의 UFUNCTION 등록·시그니처, 중복 등록·해제 책임·늦은 호출을 확인한다. BindUObject 등 native 바인딩에 UFUNCTION을 일괄 요구하지 않는다.
 - FORCEINLINE은 성능·정의 가시성·호출 위치·코드 크기 판단이다. 헤더 정의의 ODR을 위한 inline 여부와 최적화 강도를 구분한다. 작은 함수라는 이유로 FORCEINLINE을 필수로 취급하지 않는다.
-- 변경 후 실제 선언/diff와 연결을 확인한다. 필요한 UHT·빌드를 변경 단위로 검증하고, 빌드 성공과 실제 바인딩·복제·수명 동작을 구분한다.
+- 변경 후 쓰기 결과의 hunk(`changeEvidence`)가 실제 diff 근거다. 충돌·hunk 누락 때만 그 범위를 다시 읽는다. 필요한 UHT·빌드를 변경 단위로 검증하고, 빌드 성공과 실제 바인딩·복제·수명 동작을 구분한다.
 - Trace는 대상 Object Type, 채널 응답, 가림, 자신 제외, 판정 위치·시각을 같이 확인한다.
 - Build.cs 의존성과 Public/Private 노출, Runtime/Editor 경계를 구분한다. 헤더 경로를 추측하며 엔진 소스를 수정하지 않는다.
 - 빈 OnRep나 native override도 부모 호출·다른 소비자가 있으면 정상일 수 있다. 공개 필드·RPC·delegate를 제거/변경할 때 Blueprint·에셋·직렬화 호환성을 확인한다. C++ 검색 결과만으로 모든 사용처가 없다고 단정하지 않는다.
@@ -111,15 +111,16 @@
 - 엔진 절대 경로가 거부되면 `engine://Engine/Source/...`로 다시 읽는다. 작업 루트나 접근 범위를 넓히려 하지 않는다.
 - BlueprintNativeEvent와 RPC는 헤더에 `X`로 선언되고 .cpp에는 `Owner::X_Implementation`(검증 함수는 `X_Validate`)으로 정의된다.
 - engine_local의 `coverage_limited`·`matchCount 0`은 부재 증명이 아니다. 정의 후보나 엔진 텍스트 검색으로 확인하고, 확인하지 못하면 미확인으로 남긴다.
-- `hasMore`이거나 `omissionReason:"byte_budget"`이면 `nextOffsetBytes`·`nextStartLine`부터 이어 읽는다. byteBudget은 메타데이터를 포함한 응답 전체 크기다.
+- 엔진 인자는 `unreal_symbol_lookup` view=signature 또는 `read_symbol` view=declaration으로 확인한다. 타입 멤버는 view=member와 Owner::Name으로 좁힌다. 같은 파일의 여러 수정은 `edits[]`에 묶고 서버의 hash·정확 일치 검증을 사용한다.
+- `hasMore`이거나 `omissionReason:"byte_budget"`이고 필요한 줄이 반환 범위 밖에 있을 때만 `nextOffsetBytes`·`nextStartLine`부터 이어 읽는다. engine_local 후보가 `excerptTruncated`이거나 `evidenceExcerpt`가 partial/omitted면 그 후보의 `rangeSuggestion` 범위만 읽는다. byteBudget은 메타데이터를 포함한 응답 전체 크기다.
 
 <!-- contract-summary: verification -->
 프로젝트 정책 unreal_contracts@3:
 - `policy.claims.build-evidence` (프로젝트 정책) A compile, link or UHT outcome is a claim about the build. Report it as confirmed only with build_unreal_project or static_validate_project evidence; otherwise state it as an unverified risk and name the evidence that would confirm it.
-- `policy.claims.engine-default-vs-project` (프로젝트 정책) Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text). Before stating what an engine function returns or does, read its implementation: sourceMode=engine_local lists .cpp definition candidates, and read_file_range reads engine://Engine/Source/... with line numbers.
+- `policy.claims.engine-default-vs-project` (프로젝트 정책) Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text). For an engine function's parameters or return type, its declaration is the evidence (unreal_symbol_lookup view=signature, or read_symbol view=declaration). Read the implementation range only when the claim depends on what the body does: sourceMode=engine_local lists .cpp definition candidates, and read_file_range reads just those engine://Engine/Source/... lines.
 - `policy.claims.severity` (프로젝트 정책) Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error. Call a finding confirmed only after reading the defect site and checking the counter-case (the code path that would make it correct); until then label it suspected.
-- `policy.claims.absence` (프로젝트 정책) A claim that something is never set, called or present needs a search whose coverage is complete. A partial or truncated search result is not absence: continue it with its nextCursor, and include declaration headers and inline (FORCEINLINE) definitions in the search scope before stating absence.
-- `policy.claims.super-chain` (프로젝트 정책) Super:: names the direct parent class, not the first engine class that declares the function. Before describing an engine call chain, read the override in each intermediate class (for example APawn between ACharacter and AActor).
+- `policy.claims.absence` (프로젝트 정책) Only a claim that something is never set, called or present needs a search whose coverage is complete; other answers do not. For such a claim a partial or truncated search result is not absence: continue it with its nextCursor, and include declaration headers and inline (FORCEINLINE) definitions in the search scope before stating absence.
+- `policy.claims.super-chain` (프로젝트 정책) Super:: names the direct parent class, not the first engine class that declares the function. Only when a claim describes an engine call chain, check each intermediate class for an override (for example APawn between ACharacter and AActor): search_files for the function name in that class, then read only the override's range.
 <!-- /contract-summary: verification -->
 <!-- /guidance-section: verification -->
 

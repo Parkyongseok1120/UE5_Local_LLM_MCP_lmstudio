@@ -29,6 +29,7 @@ function evidenceSemanticFacts(payload) {
     "totalLines", "returnedCount", "total", "sourceMode", "evidenceSource", "coverage", "declarationProof",
     "matchCount", "matchMetadataOmitted", "readBytes", "offsetBytes", "nextOffsetBytes", "size",
     "rangeUnit", "truncated", "requestedEndLine", "nextStartLine", "representation", "symbol",
+    "rangeComplete", "requestedRangeComplete", "moreLinesInFile",
     "candidateCount", "candidateLines", "selection", "ambiguity", "signatureVerification", "absenceProof",
     // Projection and later historical indexes must retain the validator's
     // proof boundary even after its raw excerpt has been discarded.

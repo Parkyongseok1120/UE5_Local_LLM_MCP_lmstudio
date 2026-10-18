@@ -45,7 +45,7 @@ export const READ_ONLY_BATCH_INSTRUCTION = [
   "For independent read-only investigation, request a reasonable batch and consume its results before planning the next batch.",
   "Use the published read tool's limit, byteBudget, page, and cursor contract. Reserve the complete returned envelope for the next model input across the whole batch; after results arrive, the host will remeasure the exact template before another prediction.",
   "For large multi-file work, avoid generating an unnecessarily large set of tool arguments in one prediction.",
-  "Do not repeat an already successful read unless the required range or source version is different.",
+  "Do not repeat an already successful read unless the required range or source version is different, or the current question needs text that read returned and this input no longer contains.",
 ].join(" ");
 
 export const FRESH_TOOL_PLANNING_RETRY_INSTRUCTION = [
