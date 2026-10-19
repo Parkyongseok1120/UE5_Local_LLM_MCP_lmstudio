@@ -265,6 +265,7 @@ REQUIRED_RUNTIME_FILES = (
     "unity-editor-bridge/Editor/Snapshots.cs",
     "unity-editor-bridge/Editor/Snapshots.cs.meta",
     "lmstudio-unity-mcp/package.json",
+    "lmstudio-unity-mcp/package-lock.json",
     "lmstudio-unity-mcp/pnpm-lock.yaml",
     "lmstudio-unity-mcp/src/server.js",
     "lmstudio-unity-mcp/src/static-validate.js",

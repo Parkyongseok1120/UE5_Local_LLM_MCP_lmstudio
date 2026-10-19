@@ -855,6 +855,13 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
     source_installer_manifest = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
     assert packaged_installer_manifest == source_installer_manifest
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
+    # The Unity installer and UPDATE path use npm ci in the shipped adapter.
+    # A repository-only lockfile would make clean portable installs fail.
+    unity_lock = "lmstudio-unity-mcp/package-lock.json"
+    assert (output / unity_lock).read_bytes() == (ROOT / unity_lock).read_bytes()
+    unity_package = json.loads((output / "lmstudio-unity-mcp/package.json").read_text(encoding="utf-8"))
+    unity_locked = json.loads((output / unity_lock).read_text(encoding="utf-8"))
+    assert unity_locked["packages"][""]["dependencies"] == unity_package["dependencies"]
     release_notes = f"docs/Release_Notes_{source_installer_manifest['productVersion'].replace('.', '_')}.md"
     assert (output / release_notes).is_file()
     assert (output / "docs" / "Release_Notes_1_4_0.md").is_file()
