@@ -47,12 +47,12 @@
       "evidence": [
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/evaluations/harness-20261019/harness-compactor-final-tests.log",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-20261019/harness-compactor-final-tests.log",
           "observation": "855 tests passed; includes engine applicability, project conflicts, guidance selection and continuity."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/evaluations/harness-20261019/harness-unreal-final-tests.log",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-20261019/harness-unreal-final-tests.log",
           "observation": "337 tests passed, 2 skipped; includes actual stdio locator flow, stale hash, receipts and edit conflict regression checks."
         },
         {
@@ -171,7 +171,7 @@
     "independentReviewer": "/root/review_changes"
   },
   "artifacts": {
-    "root": "C:/Users/sster/.evidence-first/evaluations/harness-20261019",
+    "root": "$USERPROFILE/.evidence-first/evaluations/harness-20261019",
     "manifest": [
       {
         "file": "historical-78-v2.json",

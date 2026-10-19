@@ -717,6 +717,7 @@ PORTABLE_CONTENT_FILES = frozenset(
         "docs/Release_Notes_1_4_0_RC1.md",
         "docs/Release_Notes_1_4_0_RC2.md",
         "docs/Release_Notes_1_4_0_RC3.md",
+        "docs/Release_Notes_1_4_1.md",
         "docs/Rider_Cline_Smoke_Checklist.md",
         "docs/Safe_Agent_Mode.md",
         "docs/Troubleshooting.md",
@@ -971,6 +972,8 @@ def _sha256(path: Path) -> str:
 
 
 def _write_launchers(staging: Path) -> None:
+    product_version = json.loads((staging / "installer" / "manifest.json").read_text(encoding="utf-8"))["productVersion"]
+    release_notes = f"docs/Release_Notes_{product_version.replace('.', '_')}.md"
     shutil.copy2(ROOT / "INSTALL.bat", staging / "INSTALL.bat")
     shutil.copy2(ROOT / "UPDATE.bat", staging / "UPDATE.bat")
     shutil.copy2(ROOT / "scripts" / "portable_rag.ps1", staging / "rag.ps1")
@@ -1015,7 +1018,7 @@ def _write_launchers(staging: Path) -> None:
         '- Apple Silicon macOS: 실제 기기에서 FULL 설치, 실행 환경, 채팅 압축, LM Studio 플러그인 설치·고정, 언리얼 자동 탐색, 전체 검색 자료 생성과 MCP 기본 연결을 확인한 기록이 있습니다. 서명·공증 여부는 보장하지 않습니다.\n'
         '- Intel macOS: LM Studio·언리얼·채팅 압축 설치는 초기에 중단됩니다. CUSTOM의 Codex·공통 규칙·Cline만 설치하는 구성은 가능합니다.\n'
         '\n'
-        '확인 범위는 [1.4.0 정식 변경 사항](docs/Release_Notes_1_4_0.md)에 정리합니다.\n'
+        f'확인 범위는 [{product_version} 정식 변경 사항]({release_notes})에 정리합니다.\n'
         '\n'
         '## 검색 자료 관리\n'
         '\n'
